@@ -27,7 +27,7 @@ pytest -m integration
 
 ## gRPC 桩
 
-修改 `proto/.../remote_agent_rpc.proto` 后在仓库根执行：
+修改 `eidolon/proto/.../remote_agent_rpc.proto` 后在仓库根执行：
 
 ```bash
 ./scripts/gen_remote_agent_rpc.sh

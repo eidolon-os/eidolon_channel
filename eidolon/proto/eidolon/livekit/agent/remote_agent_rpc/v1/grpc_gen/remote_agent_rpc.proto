@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-// Python codegen: grpc_tools mirrors this path under --python_out as
+// Python codegen: from eidolon/proto/ as -I root; grpc_tools writes under --python_out to
 // eidolon/livekit/agent/remote_agent_rpc/v1/grpc_gen/*.py
 package eidolon.livekit.agent.remote_agent_rpc.v1.grpc_gen;
 

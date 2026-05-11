@@ -136,7 +136,7 @@ class LLMConfig:
 
 @dataclass
 class RemoteAgentRpcConfig:
-    """Remote companion / agent via ``RemoteAgent`` gRPC (see ``proto/.../remote_agent_rpc.proto``)."""
+    """Remote companion / agent via ``RemoteAgent`` gRPC (see ``eidolon/proto/.../remote_agent_rpc.proto``)."""
 
     # e.g. unix:///var/run/eidolon/remote_agent.sock or 127.0.0.1:50051
     target: str = ""

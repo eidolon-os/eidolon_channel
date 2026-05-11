@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run grpc_tools.protoc for one or more .proto files under proto/.
-# Each argument is a path relative to proto/ (the -I root), mirroring the
+# Run grpc_tools.protoc for one or more .proto files under eidolon/proto/.
+# Each argument is a path relative to eidolon/proto/ (the -I root), mirroring the
 # output tree under the repository root (same layout as remote_agent_rpc /
 # scout_api wrappers).
 #
@@ -10,16 +10,17 @@
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROTO_ROOT="$ROOT/eidolon/proto"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $(basename "$0") <proto_rel> [proto_rel ...]" >&2
-  echo "  Each proto_rel is relative to proto/, e.g. eidolon/agent/api/v1/grpc_gen/scout_api.proto" >&2
+  echo "  Each proto_rel is relative to eidolon/proto/, e.g. eidolon/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto" >&2
   exit 1
 fi
 
 for rel in "$@"; do
-  if [[ ! -f "$ROOT/proto/$rel" ]]; then
-    echo "Missing proto/$rel" >&2
+  if [[ ! -f "$PROTO_ROOT/$rel" ]]; then
+    echo "Missing eidolon/proto/$rel" >&2
     exit 1
   fi
 done
@@ -31,7 +32,7 @@ else
 fi
 
 (
-  cd "$ROOT/proto"
+  cd "$PROTO_ROOT"
   "$PY" -m grpc_tools.protoc \
     -I. \
     --python_out="$ROOT" \

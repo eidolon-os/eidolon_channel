@@ -59,6 +59,6 @@ disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["eidolon/channel/livekit/tests"]
+testpaths = ["eidolon/livekit/tests"]
 markers = ["integration: tests requiring external services or long runs"]
 addopts = "-m 'not integration'"

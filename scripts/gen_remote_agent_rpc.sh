@@ -6,4 +6,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 exec "$ROOT/scripts/gen_grpc_stubs.sh" \
-  "eidolon/channel/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto"
+  "eidolon/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto"

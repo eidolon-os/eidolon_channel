@@ -12,4 +12,4 @@ build/
 htmlcov/
 
 # Local test secrets
-eidolon/channel/livekit/tests/.env
+eidolon/livekit/tests/.env

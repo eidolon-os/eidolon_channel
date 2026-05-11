@@ -43,7 +43,7 @@ chmod +x deploy/run_livekit_channel.sh
 ./run_livekit_channel.sh
 ```
 
-脚本会设置 `EIDOLON_CHANNEL_LIVEKIT_ENV` 指向本目录的 `.livekit-channel.env`，并以 `EIDOLON_ENV=dev` 运行 `eidolon.channel.livekit.agent.server`。
+脚本会设置 `EIDOLON_CHANNEL_LIVEKIT_ENV` 指向本目录的 `.livekit-channel.env`，并以 `EIDOLON_ENV=dev` 运行 `eidolon.livekit.agent.server`。
 
 ## 配置加载
 
@@ -53,8 +53,8 @@ chmod +x deploy/run_livekit_channel.sh
 
 若设置 `REMOTE_AGENT_RPC_TARGET`（例如同机 `unix:///path/agent.sock`），语音流水线中的 LLM 将经 gRPC `RemoteAgent.Session` 转发到远端实现，而不再使用 `livekit-plugins-openai`。
 
-- **契约文件**：`proto/eidolon/channel/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto`
-- **生成 Python 桩代码**：在仓库根执行 `./scripts/gen_remote_agent_rpc.sh`，或 `./scripts/gen_grpc_stubs.sh eidolon/channel/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto`（依赖 `.venv` 中的 `grpcio-tools`）
+- **契约文件**：`proto/eidolon/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto`
+- **生成 Python 桩代码**：在仓库根执行 `./scripts/gen_remote_agent_rpc.sh`，或 `./scripts/gen_grpc_stubs.sh eidolon/livekit/agent/remote_agent_rpc/v1/grpc_gen/remote_agent_rpc.proto`（依赖 `.venv` 中的 `grpcio-tools`）
 - **入口说明**：`proto/remote_agent_rpc/v1/README.md`
 
 ## 故障排查

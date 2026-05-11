@@ -1,6 +1,6 @@
 # eidolon_channel
 
-独立仓库：Eidolon **LiveKit 语音 Channel**（`eidolon.channel.livekit`）—— Agent worker、STT/TTS/VAD/EOT 插件与测试。
+独立仓库：Eidolon **LiveKit 语音 Channel**（`eidolon.livekit`）—— Agent worker、STT/TTS/VAD/EOT 插件与测试。
 
 ## 本地开发
 
@@ -23,7 +23,7 @@ pytest
 pytest -m integration
 ```
 
-可选：在 `eidolon/channel/livekit/tests/.env` 放置与 `deploy/livekit-channel.env.template` 同结构的配置；否则测试使用 `tests/fixtures/minimal_test.env` 占位值。
+可选：在 `eidolon/livekit/tests/.env` 放置与 `deploy/livekit-channel.env.template` 同结构的配置；否则测试使用 `eidolon/livekit/tests/fixtures/minimal_test.env` 占位值。
 
 ## gRPC 桩
 

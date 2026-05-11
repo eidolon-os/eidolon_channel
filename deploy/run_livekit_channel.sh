@@ -37,4 +37,4 @@ fi
 
 EIDOLON_CHANNEL_LIVEKIT_ENV="$SCRIPT_DIR/.livekit-channel.env" \
 EIDOLON_ENV=dev PYTHONPATH="$PROJECT_DIR" \
-    "$PROJECT_DIR/.venv/bin/python" -m eidolon.channel.livekit.agent.server "$@"
+    "$PROJECT_DIR/.venv/bin/python" -m eidolon.livekit.agent.server "$@"

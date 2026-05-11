@@ -11,8 +11,8 @@
 #   3. 本目录下已配置 .livekit-channel.env（可由 livekit-channel.env.template 复制）
 #
 # 用法（在仓库根目录或任意目录）：
-#   ./deploy/channel/run_livekit_channel.sh
-#   或：cd deploy/channel && ./run_livekit_channel.sh
+#   ./deploy/run_livekit_channel.sh
+#   或：cd deploy && ./run_livekit_channel.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 

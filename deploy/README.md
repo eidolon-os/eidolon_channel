@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- 已在**本目录或其任意上级目录**中存在可执行的 `.venv/bin/python`（`run_livekit_channel.sh` 自 `deploy/channel` 向上逐级查找；常见为仓库根目录的 `.venv`，例如 `uv sync` 或 `pip install -e .`）
+- 已在**本目录或其任意上级目录**中存在可执行的 `.venv/bin/python`（`run_livekit_channel.sh` 自 `deploy` 向上逐级查找；常见为仓库根目录的 `.venv`，例如 `uv sync` 或 `pip install -e .`）
 - LiveKit Server 已可用（本地或远程）
 - 已准备好本目录下的 `.livekit-channel.env`
 
@@ -21,7 +21,7 @@
 从模板生成本地配置并编辑：
 
 ```bash
-cd /path/to/eidolon_channel/deploy/channel
+cd /path/to/eidolon_channel/deploy
 cp livekit-channel.env.template .livekit-channel.env
 vim .livekit-channel.env
 ```
@@ -33,11 +33,11 @@ vim .livekit-channel.env
 在项目根目录：
 
 ```bash
-chmod +x deploy/channel/run_livekit_channel.sh
-./deploy/channel/run_livekit_channel.sh
+chmod +x deploy/run_livekit_channel.sh
+./deploy/run_livekit_channel.sh
 ```
 
-或在 `deploy/channel` 下：
+或在 `deploy` 下：
 
 ```bash
 ./run_livekit_channel.sh
@@ -59,5 +59,5 @@ chmod +x deploy/channel/run_livekit_channel.sh
 
 ## 故障排查
 
-- **找不到 Python**：自 `deploy/channel` 向上直到 `/` 均未发现 `.venv/bin/python`；在某一上级目录（多为仓库根）创建虚拟环境并安装依赖。
+- **找不到 Python**：自 `deploy` 向上直到 `/` 均未发现 `.venv/bin/python`；在某一上级目录（多为仓库根）创建虚拟环境并安装依赖。
 - **连接 / 鉴权失败**：检查 `.livekit-channel.env` 中 LiveKit 与各云厂商 Key 是否与当前环境一致。

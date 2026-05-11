@@ -9,7 +9,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-启动 Agent 与配置说明见 [deploy/channel/README.md](deploy/channel/README.md)。
+启动 Agent 与配置说明见 [deploy/README.md](deploy/README.md)。
 
 ## 测试
 
@@ -23,7 +23,7 @@ pytest
 pytest -m integration
 ```
 
-可选：在 `eidolon/channel/livekit/tests/.env` 放置与 `deploy/channel/livekit-channel.env.template` 同结构的配置；否则测试使用 `tests/fixtures/minimal_test.env` 占位值。
+可选：在 `eidolon/channel/livekit/tests/.env` 放置与 `deploy/livekit-channel.env.template` 同结构的配置；否则测试使用 `tests/fixtures/minimal_test.env` 占位值。
 
 ## gRPC 桩
 

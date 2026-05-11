@@ -56,7 +56,7 @@ def _bootstrap_dotenv() -> None:
         raise ValueError(
             "EIDOLON_CHANNEL_LIVEKIT_ENV is not set or is empty. "
             "Set it to the path of your LiveKit channel env file (for example "
-            "deploy/channel/.livekit-channel.env)."
+            "deploy/.livekit-channel.env)."
         )
 
     env_path = Path(str(raw).strip())

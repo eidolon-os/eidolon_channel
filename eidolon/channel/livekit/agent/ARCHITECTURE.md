@@ -643,17 +643,17 @@ except ImportError:
 
 ## 10. 启动命令
 
-日常本地开发推荐用仓库里的启动脚本（会设置 `EIDOLON_CHANNEL_LIVEKIT_ENV`、`EIDOLON_ENV=dev`、`PYTHONPATH`），详见 [`deploy/channel/README.md`](../../../../deploy/channel/README.md)：
+日常本地开发推荐用仓库里的启动脚本（会设置 `EIDOLON_CHANNEL_LIVEKIT_ENV`、`EIDOLON_ENV=dev`、`PYTHONPATH`），详见 [`deploy/README.md`](../../../../deploy/README.md)：
 
 ```bash
-./deploy/channel/run_livekit_channel.sh
+./deploy/run_livekit_channel.sh
 ```
 
 也可在项目根手动激活虚拟环境后直接跑模块；**必须**设置 `EIDOLON_CHANNEL_LIVEKIT_ENV` 指向已存在的 env 文件，否则 `AgentConfig.from_env()` 会抛 `ValueError`（未设置或路径非文件均失败）：
 
 ```bash
 cd eidolon_daemon && source .venv/bin/activate
-export EIDOLON_CHANNEL_LIVEKIT_ENV=/path/to/deploy/channel/.livekit-channel.env
+export EIDOLON_CHANNEL_LIVEKIT_ENV=/path/to/deploy/.livekit-channel.env
 python -m eidolon.channel.livekit.agent.server
 ```
 

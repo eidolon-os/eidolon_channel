@@ -6,9 +6,9 @@ runs either StreamingPipeline (streaming mode, default) or BatchPipeline (manual
 mode, configured via AGENT_MODE env var).
 
 Recommended local startup (sets ``EIDOLON_CHANNEL_LIVEKIT_ENV``,
-``EIDOLON_ENV=dev``, ``PYTHONPATH``) — see ``deploy/channel/README.md``::
+``EIDOLON_ENV=dev``, ``PYTHONPATH``) — see ``deploy/README.md``::
 
-    ./deploy/channel/run_livekit_channel.sh
+    ./deploy/run_livekit_channel.sh
 
 Manual module run (``EIDOLON_CHANNEL_LIVEKIT_ENV`` is **required** and must
 point to an existing env file, or ``AgentConfig.from_env()`` raises ``ValueError``)::

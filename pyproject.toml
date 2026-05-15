@@ -62,3 +62,12 @@ asyncio_mode = "auto"
 testpaths = ["eidolon/livekit/tests"]
 markers = ["integration: tests requiring external services or long runs"]
 addopts = "-m 'not integration'"
+
+[tool.uv]
+# Apple Silicon must remain a supported install target. Without this, uv's universal resolver
+# can pick package versions that ship only Linux/Windows wheels (e.g. onnxruntime 1.26.0
+# dropped darwin x86_64 entirely, which causes uv to drop darwin from the supported matrix).
+# Intel Macs are intentionally not listed — onnxruntime no longer ships darwin x86_64 wheels.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]

@@ -79,7 +79,6 @@ eidolon/livekit/
 │   ├── streaming.py        # StreamingPipeline: 实时流式音频处理
 │   ├── batch.py           # BatchPipeline: 批量音频 blob 处理
 │   ├── __init__.py
-│   ├── .env               # 默认配置 (LIVEKIT_URL, LLM_BASE_URL, STT_URI, ...)
 │   └── pipeline/
 │       ├── pipeline.py    # VoicePipeline: 统一编排器 (包含 streaming + manual 两种模式)
 │       ├── stt.py         # SttStage: 封装 BailianFunASRSTT
@@ -620,24 +619,20 @@ except ImportError:
 
 ## 9. 配置项说明
 
-| 配置项 | 环境变量 | 默认值 | 说明 |
-|---|---|---|---|
-| LiveKit URL | `LIVEKIT_URL` | `ws://localhost:7880` | LiveKit Server 地址 |
-| API Key | `LIVEKIT_API_KEY` | `devkey` | LiveKit 认证 |
-| API Secret | `LIVEKIT_API_SECRET` | `devkey_secret` | LiveKit 认证 |
-| Host | `AGENT_HOST` | `0.0.0.0` | Agent Server 监听地址 |
-| Port | `AGENT_PORT` | `8766` | Agent Server 监听端口 |
-| Agent Mode | `AGENT_MODE` | `streaming` | `streaming` 或 `batch` |
-| LLM Base URL | `LLM_BASE_URL` | (空) | OpenAI 兼容 API 地址 |
-| LLM Model | `LLM_MODEL` | `gpt-4o-mini` | LLM 模型名 |
-| LLM API Key | `LLM_API_KEY` | (空) | LLM API 密钥 |
-| STT URI | `STT_URI` | (空) | Bailian FunASR WebSocket 地址 |
-| STT API Key | `STT_API_KEY` | (空) | Bailian API 密钥 |
-| TTS WebSocket URL | `TTS_BASE_WEBSOCKET_API_URL` | SenseAudio 地址 | SenseTime TTS 地址 |
-| TTS API Key | `TTS_API_KEY` | (空) | SenseTime API 密钥 |
-| TTS Voice | `TTS_VOICE` | `female_0033_a` | TTS 音色 |
-| VAD Provider | `VAD_PROVIDER` | `silero` | `firered`/`silero`/`none` |
-| Agent Instructions | `AGENT_INSTRUCTIONS` | 通用助手提示词 | Agent 系统指令 |
+**单一真相源**：所有 env 变量、默认值与注释见 [`deploy/livekit-channel.env.template`](../../../deploy/livekit-channel.env.template)。下面只列核心运行时分组，详细 plugin-specific 配置请直接读 template。
+
+| 分组 | 关键变量 | 说明 |
+|---|---|---|
+| LiveKit 连接 | `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | 连接 LiveKit Server 的鉴权三元组 |
+| Agent 监听 | `AGENT_HOST` / `AGENT_PORT` / `AGENT_MODE` | Agent server 绑定地址与流水线模式（`streaming` \| `batch`） |
+| Agent 行为 | `AGENT_INSTRUCTIONS` / `AGENT_WELCOME_MESSAGE` / `AGENT_FALSE_INTERRUPTION_TIMEOUT` / `AGENT_AUDIO_SAMPLE_RATE` | 系统提示、欢迎语、误打断恢复阈值、链路采样率 |
+| Provider 选择 | `STT_PROVIDER` / `TTS_PROVIDER` / `VAD_PROVIDER` | 选择哪一家插件——`bailian` \| `sensetime` / `firered_pvad` \| `firered` \| `silero` \| `none` |
+| LLM (OpenAI 兼容) | `OPENAI_LLM_BASE_URL` / `OPENAI_LLM_MODEL` / `OPENAI_LLM_API_KEY` | LLM provider 的 endpoint、模型名与密钥 |
+| Remote Agent (可选) | `REMOTE_AGENT_RPC_TARGET` / `REMOTE_AGENT_RPC_LOCALE` | 非空时走 gRPC `RemoteAgent.Session`，绕过上面的 OpenAI 兼容 LLM |
+| Plugin-specific | `BAILIAN_STT_*` / `BAILIAN_TTS_*` / `SENSETIME_STT_*` / `SENSETIME_TTS_*` | 各 provider 的 URL、密钥、采样率、池大小、聚合阈值等——详见 template |
+| 模型路径覆盖 | `EIDOLON_EOT_MODEL_DIR` / `EIDOLON_FIRERED_PVAD_MODEL_DIR` / `EIDOLON_EOT_DEBUG_LOG` | 留空使用插件自带 bundled 模型 |
+
+**命名约定**：`<PROVIDER>_<STAGE>_<FIELD>` 用于 plugin 配置；`<STAGE>_PROVIDER` 选择激活的 provider；`LIVEKIT_*` / `AGENT_*` 用于平台与 agent 身份。所有 env 文件值都可被 shell 环境变量覆盖（优先级更高）。
 
 ---
 

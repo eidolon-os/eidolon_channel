@@ -13,3 +13,6 @@ htmlcov/
 
 # Local test secrets
 eidolon/livekit/tests/.env
+
+# macOS Finder metadata
+.DS_Store

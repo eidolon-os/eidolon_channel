@@ -123,6 +123,16 @@ class AgentBehaviorConfig:
     # next user transcript).
     false_interruption_timeout: float | None = 6.0
 
+    # G9 fix (2026-05-17): framework's ``AgentSession(aec_warmup_duration=3.0)``
+    # disables interruptions for the first N seconds of agent speech to
+    # prevent echo from triggering false interrupts. Default 3.0s only
+    # covers ~2/3 of a typical 23-char Chinese welcome — the remainder is
+    # quietly interruptible, surprising users. Expose as env so deployments
+    # can pick: 0 / None = always interruptible (power-user); 0.5-1.0 =
+    # brief protect; longer = full welcome protected. ``None`` is the
+    # "disable" sentinel per framework.
+    aec_warmup_duration: float | None = 1.0
+
     # F1 fix (2026-05-16): framework's ``commit_user_turn(transcript_timeout=2.0)``
     # default was too short for Bailian FunASR FINAL latency on long Chinese
     # sentences (observed 2.0s+ end-to-end). The framework promoted the latest
@@ -242,6 +252,14 @@ class AgentConfig:
                 audio_sample_rate=int(get("AGENT_AUDIO_SAMPLE_RATE", "16000")),
                 stt_commit_transcript_timeout=float(
                     get("AGENT_STT_COMMIT_TIMEOUT", "5.0")
+                ),
+                # G9 (2026-05-17): "" or "none"/"off"/"disabled" → None
+                # (= disable AEC warmup, welcome immediately interruptible).
+                aec_warmup_duration=(
+                    None
+                    if get("AGENT_AEC_WARMUP_DURATION", "1.0").lower()
+                    in ("none", "off", "disabled", "")
+                    else float(get("AGENT_AEC_WARMUP_DURATION", "1.0"))
                 ),
             ),
             llm=LLMConfig(

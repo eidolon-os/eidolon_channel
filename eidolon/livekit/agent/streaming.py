@@ -113,6 +113,7 @@ class StreamingPipeline(BasePipeline):
         false_interruption_timeout: float | None = 6.0,
         audio_sample_rate: int = 16000,
         stt_commit_transcript_timeout: float = 5.0,
+        aec_warmup_duration: float | None = 1.0,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         self._instructions = instructions
@@ -132,6 +133,9 @@ class StreamingPipeline(BasePipeline):
         # has enough time to arrive before framework promotes the latest INTERIM
         # to a FINAL (which causes a doomed LLM call + cancel).
         self._stt_commit_transcript_timeout = stt_commit_transcript_timeout
+        # G9 (2026-05-17): seconds the framework will ignore user audio after
+        # the first agent-speaking transition. None / 0 disables.
+        self._aec_warmup_duration = aec_warmup_duration
 
         self._session: AgentSession | None = None
         # Set when AgentSession emits "close" event (e.g. participant disconnect).
@@ -242,6 +246,11 @@ class StreamingPipeline(BasePipeline):
                     "preemptive_tts": False,  # belt + suspenders
                 },
             },
+            # G9 (2026-05-17): framework public API. Default 3.0s only covers
+            # ~2/3 of a typical Chinese welcome; we expose this via env so
+            # deployments can pick: 0/None = always interruptible; 0.5-1.0 =
+            # brief protect; longer = full welcome protected.
+            aec_warmup_duration=self._aec_warmup_duration,
         )
         self._session = session
 
@@ -585,29 +594,45 @@ class StreamingPipeline(BasePipeline):
 
                 self._callbacks.on_user_ended_speaking()
                 if self._session is not None:
-                    # Record turn BEFORE reset so dialogue history captures this turn.
+                    # G8 fix (2026-05-17): only commit a user turn if STT
+                    # actually produced text. Without this guard, every
+                    # VAD-end (including AEC-warmup-suppressed audio, brief
+                    # noise, or STT hiccups) triggers commit_user_turn → the
+                    # framework waits ``transcript_timeout`` for a FINAL that
+                    # will never come, then promotes whatever INTERIM is
+                    # currently in ``_audio_interim_transcript`` (a global
+                    # string, not VAD-segment-scoped). That INTERIM is often
+                    # from the NEXT user utterance, producing a ghost LLM
+                    # call with cross-segment-contaminated text.
                     if self._latest_asr_text:
+                        # Record turn BEFORE reset so dialogue history captures it.
                         eot_model.record_turn(
                             self._latest_asr_text,
                             is_complete=True,
                             eot_score=eot_model._current_eot_score,
                         )
-                    # Reset per-turn state, then commit — this ordering ensures
-                    # the framework sees clean state if it calls predict_end_of_turn.
-                    eot_model.reset()
-                    self._inject_interrupted_context()
-                    # F1 fix (2026-05-16): framework default is 2.0s, too short
-                    # for Bailian FunASR FINAL on long Chinese sentences. Pass our
-                    # configured timeout so framework gives STT enough headroom
-                    # before promoting INTERIM→FINAL and firing a doomed LLM call.
-                    self._session.commit_user_turn(
-                        transcript_timeout=self._stt_commit_transcript_timeout,
-                    )
-                    if (
-                        self._filler is not None
-                        and self._session.output.audio is not None
-                    ):
-                        self._filler.inject(self._session.output.audio)
+                        eot_model.reset()
+                        self._inject_interrupted_context()
+                        # F1 fix (2026-05-16): framework default is 2.0s, too
+                        # short for Bailian FunASR FINAL on long Chinese
+                        # sentences. Pass our configured timeout.
+                        self._session.commit_user_turn(
+                            transcript_timeout=self._stt_commit_transcript_timeout,
+                        )
+                        if (
+                            self._filler is not None
+                            and self._session.output.audio is not None
+                        ):
+                            self._filler.inject(self._session.output.audio)
+                    else:
+                        # G8 (2026-05-17): VAD-end with no STT text. Reset
+                        # EOT state but skip commit — see comment above.
+                        eot_model.reset()
+                        logger.info(
+                            "[StreamingPipeline] VAD-end with empty ASR — "
+                            "skipping commit_user_turn (AEC window / noise / "
+                            "STT hiccup)"
+                        )
 
                 self._latest_asr_text = ""
 

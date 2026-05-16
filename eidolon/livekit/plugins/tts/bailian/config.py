@@ -115,6 +115,21 @@ class BailianTTSConfig:
     aggregator_idle_ms: int = field(
         default_factory=lambda: int(os.environ.get("BAILIAN_TTS_AGGREGATOR_IDLE_MS", "300"))
     )
+    # G5 (2026-05-16): optional first-sentence aggressive flush. Helps when
+    # the LLM body bursts in within ~200ms — the default soft_min=12 misses
+    # early-punct flush opportunities and TTS first-byte ends up tied to
+    # LLM-end. Empty / 0 → disabled (use ``aggregator_soft_min_chars``).
+    aggregator_first_sentence_soft_min_chars: int = field(
+        default_factory=lambda: int(
+            os.environ.get("BAILIAN_TTS_AGGREGATOR_FIRST_SENTENCE_SOFT_MIN_CHARS", "0")
+        )
+    )
+    aggregator_first_sentence_flush_any_punct: bool = field(
+        default_factory=lambda: os.environ.get(
+            "BAILIAN_TTS_AGGREGATOR_FIRST_SENTENCE_FLUSH_ANY_PUNCT", "false"
+        ).lower()
+        == "true"
+    )
     log_audio_diag: bool = field(
         default_factory=lambda: os.environ.get("BAILIAN_TTS_LOG_AUDIO_DIAG", "true").lower()
         == "true"

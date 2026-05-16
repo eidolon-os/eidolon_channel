@@ -265,13 +265,24 @@ class StreamingPipeline(BasePipeline):
             await self._filler.warmup()
 
         logger.info("[StreamingPipeline] calling session.start()...")
+        # G3 (2026-05-16): migrated from deprecated RoomInputOptions/
+        # RoomOutputOptions to the new RoomOptions schema. Equivalent
+        # behaviour:
+        #   * audio_input / text_input / text_output left NOT_GIVEN → framework
+        #     defaults (all enabled), matching the old RoomInputOptions() and
+        #     RoomOutputOptions(transcription_enabled=True) behaviour.
+        #   * audio_output overridden only to set the sample rate (we want
+        #     to align the entire chain to the TTS native rate, avoiding
+        #     unnecessary resampling in the framework).
+        from livekit.agents.voice.room_io import RoomOptions, AudioOutputOptions
+
         await session.start(
             agent=agent,
             room=room,
-            room_input_options=la.RoomInputOptions(),
-            room_output_options=la.RoomOutputOptions(
-                transcription_enabled=True,
-                audio_sample_rate=self._audio_sample_rate,
+            room_options=RoomOptions(
+                audio_output=AudioOutputOptions(
+                    sample_rate=self._audio_sample_rate,
+                ),
             ),
         )
         # Disable framework's built-in audio-activity auto-interrupt so EOT
@@ -1025,7 +1036,18 @@ class StreamingPipeline(BasePipeline):
         if self._session is None:
             return
         try:
-            messages = self._session.history.messages
+            # G2 fix (2026-05-16): framework's ChatContext.messages is a
+            # method, not a property — calling without () left ``messages``
+            # as a method object and reversed() raised TypeError. The error
+            # was latent until F3 lowered the VAD gate enough to let the EOT
+            # cancel path actually fire (which is the only caller).
+            #
+            # Architectural follow-up (G6, plan doc): the current "last
+            # assistant message in session.history" is only an approximation
+            # of what was interrupted — it doesn't know how much of the audio
+            # was actually played to the user before the cancel. Proper fix
+            # would consult TtsStage + DuckingMixer state.
+            messages = self._session.history.messages()
             for msg in reversed(messages):
                 if msg.role == "assistant" and msg.text_content:
                     self._last_interrupted_context = {

@@ -404,11 +404,19 @@ class BailianSynthesizeStream(SynthesizeStream):
                 else:
                     raise
 
+        # G5 (2026-05-16): optionally override first-sentence behaviour
+        # to flush more eagerly on fast LLMs. ``0`` (default) → leave unset
+        # → aggregator uses its standard soft_min for all sentences.
+        first_min = self._config.aggregator_first_sentence_soft_min_chars or None
         aggregator = SentenceAggregator(
             emit_segment,
             soft_min_chars=self._config.aggregator_soft_min_chars,
             hard_max_chars=self._config.aggregator_hard_max_chars,
             idle_ms=self._config.aggregator_idle_ms,
+            first_sentence_soft_min_chars=first_min,
+            first_sentence_flush_any_punct=(
+                self._config.aggregator_first_sentence_flush_any_punct
+            ),
         )
         try:
             try:

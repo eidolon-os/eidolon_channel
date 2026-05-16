@@ -69,6 +69,19 @@ def _bootstrap_dotenv() -> None:
     load_dotenv(env_path, override=False)
 
 
+# G4 (2026-05-16): tiny helpers for "env var unset/empty → None" semantics.
+# Used by LLMConfig fields where ``None`` means "let the underlying plugin
+# decide its own default" (NOT_GIVEN passthrough).
+def _optional_float(raw: str) -> float | None:
+    s = (raw or "").strip()
+    return float(s) if s else None
+
+
+def _optional_int(raw: str) -> int | None:
+    s = (raw or "").strip()
+    return int(s) if s else None
+
+
 _DEFAULT_INSTRUCTIONS = (
     "You are a helpful, friendly voice assistant. Keep responses concise."
 )
@@ -141,6 +154,12 @@ class LLMConfig:
     base_url: str = ""
     model: str = "gpt-4o-mini"
     api_key: str = ""
+    # G4 (2026-05-16): expose tunables that ``lk_openai.LLM`` already
+    # supports but we never plumbed through. ``None`` means "use the
+    # plugin's NOT_GIVEN default", letting the framework decide.
+    temperature: float | None = None
+    timeout: float | None = None
+    max_completion_tokens: int | None = None
 
 
 @dataclass
@@ -229,6 +248,13 @@ class AgentConfig:
                 base_url=get("OPENAI_LLM_BASE_URL", ""),
                 model=get("OPENAI_LLM_MODEL", "gpt-4o-mini"),
                 api_key=get("OPENAI_LLM_API_KEY", ""),
+                # G4 (2026-05-16): None when env unset/empty, letting the
+                # OpenAI plugin's NOT_GIVEN defaults apply.
+                temperature=_optional_float(get("OPENAI_LLM_TEMPERATURE", "")),
+                timeout=_optional_float(get("OPENAI_LLM_TIMEOUT", "")),
+                max_completion_tokens=_optional_int(
+                    get("OPENAI_LLM_MAX_TOKENS", "")
+                ),
             ),
             remote_agent_rpc=RemoteAgentRpcConfig(
                 target=get("REMOTE_AGENT_RPC_TARGET", "").strip(),

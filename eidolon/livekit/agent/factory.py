@@ -163,10 +163,25 @@ class SharedStageFactory:
             )
             return None
 
+        # G4 (2026-05-16): pass tunables through only if the user actually
+        # set them. None → omit the kwarg entirely so framework's NOT_GIVEN
+        # default applies. (Mixing NOT_GIVEN/None semantics with **kwargs
+        # filtering keeps us decoupled from the plugin's sentinel API.)
+        extra_kwargs: dict[str, Any] = {}
+        if cfg.llm.temperature is not None:
+            extra_kwargs["temperature"] = cfg.llm.temperature
+        if cfg.llm.timeout is not None:
+            import httpx
+
+            extra_kwargs["timeout"] = httpx.Timeout(cfg.llm.timeout)
+        if cfg.llm.max_completion_tokens is not None:
+            extra_kwargs["max_completion_tokens"] = cfg.llm.max_completion_tokens
+
         return lk_openai.LLM(
             model=cfg.llm.model,
             api_key=cfg.llm.api_key or None,
             base_url=cfg.llm.base_url or None,
+            **extra_kwargs,
         )
 
     @staticmethod

@@ -257,3 +257,89 @@ async def test_callback_exception_propagates_to_caller():
         assert call_count == 1
     finally:
         await agg.aclose()
+
+
+# ---------------------------------------------------------------------------
+# G5 (2026-05-16): first-sentence aggressive flush
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_first_sentence_flush_any_punct_only_applies_once() -> None:
+    """G5: with ``first_sentence_flush_any_punct=True``, the first soft
+    punctuation in the buffer triggers a hard flush regardless of length.
+    Subsequent flushes revert to the standard thresholds."""
+    on_segment, segments = _make_collector()
+
+    agg = SentenceAggregator(
+        on_segment,
+        soft_min_chars=12,
+        hard_max_chars=80,
+        idle_ms=2000,
+        first_sentence_flush_any_punct=True,
+    )
+    try:
+        # First fragment: too short for default soft_flush (12 chars), but
+        # aggressive mode flushes on the trailing ',' anyway.
+        await agg.feed("你好，")
+        assert segments == ["你好，"], segments
+
+        # Second fragment: aggressive mode no longer active. The trailing
+        # '，' alone with only 3 chars is below soft_min=12 → no flush.
+        await agg.feed("再见，")
+        assert segments == ["你好，"], "no second flush expected: %r" % segments
+
+        # Adding more text + hard punct flushes normally.
+        await agg.feed("好的。")
+        assert segments == ["你好，", "再见，好的。"], segments
+    finally:
+        await agg.aclose()
+
+
+@pytest.mark.asyncio
+async def test_first_sentence_soft_min_chars_overrides_only_first_flush() -> None:
+    """G5: ``first_sentence_soft_min_chars=4`` makes the first soft-punct
+    flush eligible at >=4 chars instead of 12. Subsequent flushes go back
+    to the global soft_min."""
+    on_segment, segments = _make_collector()
+
+    agg = SentenceAggregator(
+        on_segment,
+        soft_min_chars=12,
+        hard_max_chars=80,
+        idle_ms=2000,
+        first_sentence_soft_min_chars=4,
+    )
+    try:
+        # 5 chars + ',' → triggers soft_flush under the first-sentence
+        # threshold of 4.
+        await agg.feed("你好世界啊，")
+        assert segments == ["你好世界啊，"], segments
+
+        # 5 chars + ',' now subject to default threshold of 12 → no flush.
+        await agg.feed("我说话，")
+        assert segments == ["你好世界啊，"], segments
+    finally:
+        await agg.aclose()
+
+
+@pytest.mark.asyncio
+async def test_first_sentence_defaults_off_preserves_legacy_behavior() -> None:
+    """G5 backward compat: leaving the new params None/False yields exactly
+    the same behaviour as a pre-G5 aggregator (no early soft flushes)."""
+    on_segment, segments = _make_collector()
+
+    agg = SentenceAggregator(
+        on_segment,
+        soft_min_chars=12,
+        hard_max_chars=80,
+        idle_ms=2000,
+    )
+    try:
+        await agg.feed("你好，")  # 3 chars, ',' soft punct, below 12 → hold
+        assert segments == []
+        await agg.feed("再见。")  # '。' hard punct → flush both fragments
+        assert segments == ["你好，再见。"]
+    finally:
+        await agg.aclose()
+

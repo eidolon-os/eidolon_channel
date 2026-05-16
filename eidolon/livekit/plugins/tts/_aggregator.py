@@ -110,6 +110,8 @@ class SentenceAggregator:
         soft_min_chars: int = 12,
         hard_max_chars: int = 60,
         idle_ms: int = 300,
+        first_sentence_soft_min_chars: int | None = None,
+        first_sentence_flush_any_punct: bool = False,
     ) -> None:
         if soft_min_chars <= 0 or hard_max_chars <= 0:
             raise ValueError("char thresholds must be positive")
@@ -117,11 +119,22 @@ class SentenceAggregator:
             raise ValueError("soft_min_chars must be ≤ hard_max_chars")
         if idle_ms <= 0:
             raise ValueError("idle_ms must be positive")
+        if first_sentence_soft_min_chars is not None and first_sentence_soft_min_chars <= 0:
+            raise ValueError("first_sentence_soft_min_chars must be positive when set")
 
         self._on_segment = on_segment
         self._soft_min_chars = soft_min_chars
         self._hard_max_chars = hard_max_chars
         self._idle_sec = idle_ms / 1000.0
+        # G5 (2026-05-16): first-sentence aggressive flush — when LLM body
+        # arrives in fast bursts (sub-second TTFB on fast endpoints), the
+        # default 12-char soft_min misses early punct opportunities and the
+        # whole reply ends up as one ``explicit`` flush, defeating the
+        # streaming TTS design. These two knobs are scoped to the FIRST
+        # flush of the stream so subsequent sentences keep clean batching.
+        self._first_sentence_soft_min_chars = first_sentence_soft_min_chars
+        self._first_sentence_flush_any_punct = first_sentence_flush_any_punct
+        self._first_emit_done: bool = False
 
         self._buf: list[str] = []
         self._buf_len: int = 0
@@ -180,11 +193,27 @@ class SentenceAggregator:
         joined = "".join(self._buf)
         last_char = joined[-1] if joined else ""
 
+        # G5 (2026-05-16): first-sentence aggressive mode. Only applies
+        # BEFORE the first successful flush of this stream; after that,
+        # standard thresholds resume so subsequent sentences batch cleanly.
+        if not self._first_emit_done:
+            if self._first_sentence_flush_any_punct and last_char in (
+                _HARD_PUNCT + _SOFT_PUNCT
+            ):
+                return "hard_flush"
+            soft_min = (
+                self._first_sentence_soft_min_chars
+                if self._first_sentence_soft_min_chars is not None
+                else self._soft_min_chars
+            )
+        else:
+            soft_min = self._soft_min_chars
+
         if last_char in _HARD_PUNCT:
             return "hard_flush"
         if self._buf_len >= self._hard_max_chars:
             return "hard_flush"
-        if last_char in _SOFT_PUNCT and self._buf_len >= self._soft_min_chars:
+        if last_char in _SOFT_PUNCT and self._buf_len >= soft_min:
             return "soft_flush"
         return "hold"
 
@@ -204,6 +233,11 @@ class SentenceAggregator:
         logger.debug(
             "[SentenceAggregator] flush reason=%s text=%r", reason, text,
         )
+        # G5 (2026-05-16): mark first emit done so subsequent classifications
+        # revert to standard thresholds. Done BEFORE the callback so even if
+        # the callback raises (F2 propagation), we don't replay the aggressive
+        # mode for the retry — it had its chance.
+        self._first_emit_done = True
         # F2 (2026-05-16): propagate on_segment failures instead of swallowing.
         # Previously this except-Exception caught BailianTTSError("WebSocket
         # disconnected") and silently dropped the segment text — the framework

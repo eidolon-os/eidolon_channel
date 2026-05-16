@@ -227,20 +227,33 @@ async def test_validates_thresholds():
 
 
 @pytest.mark.asyncio
-async def test_callback_exception_does_not_break_aggregator():
-    """If the callback raises, the aggregator should log and continue."""
+async def test_callback_exception_propagates_to_caller():
+    """If the callback raises, the aggregator must propagate the exception
+    so the upstream synthesize stream sees the failure.
+
+    F2 fix (2026-05-16): previously the aggregator caught Exception, logged
+    it, and continued — which silently dropped TTS segments on transient
+    WebSocket failures (e.g. ``BailianTTSError("WebSocket disconnected",
+    recoverable=True)``). The framework had no way to know the TTS turn
+    failed, so the user got silence for the rest of the reply.
+
+    The new contract: ``on_segment`` failures bubble up to whoever called
+    ``feed()`` / ``flush()`` / the idle-timer task, so the
+    ``SynthesizeStream._task_failed_error`` gets set and the run loop
+    raises ``APIError``. The framework then logs at ERROR and can decide
+    whether to retry the segment.
+    """
     call_count = 0
 
     async def on_segment(text: str) -> None:
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
-            raise RuntimeError("simulated callback failure")
+        raise RuntimeError("simulated callback failure")
 
     agg = SentenceAggregator(on_segment, idle_ms=2000)
     try:
-        await agg.feed("Sentence one.")    # callback raises (logged, swallowed)
-        await agg.feed("Sentence two.")    # should still work
-        assert call_count == 2
+        with pytest.raises(RuntimeError, match="simulated callback failure"):
+            await agg.feed("Sentence one.")  # callback raises — must propagate
+        assert call_count == 1
     finally:
         await agg.aclose()

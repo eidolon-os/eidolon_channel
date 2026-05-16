@@ -114,9 +114,24 @@ class DuckingMixer(lk_io.AudioOutput):
         buffer_max_sec: float = 2.0,
         sample_rate: int | None = None,
     ) -> None:
+        # F4 (2026-05-16): advertise pause=True so framework's
+        # ``resume_false_interruption`` mechanism actually runs. Previously
+        # DuckingMixer declared pause=False, which caused framework to log
+        # a warning and silently ignore the configured ``false_interruption_timeout``
+        # (e.g. 6.0s). With pause=True the base-class pause/resume methods
+        # (``AudioOutput.pause`` / ``resume``) cascade through to the inner
+        # sink (TranscriptSynchronizer → RoomIO), which physically pauses
+        # the rtc.AudioSource playback queue — frames already queued are
+        # resumed-from-where-left-off when the framework calls resume().
+        #
+        # Coexistence with DuckingMixer's own duck/unduck state machine:
+        # the framework calls pause() only when ``agent_state != "speaking"``
+        # (agent_activity.py:1684), and (after F3) DuckingMixer.duck() only
+        # runs when ``agent_state == speaking``. The two paths are mutually
+        # exclusive, no double-pause race.
         super().__init__(
             label=f"DuckingMixer→{inner.label}",
-            capabilities=lk_io.AudioOutputCapabilities(pause=False),
+            capabilities=lk_io.AudioOutputCapabilities(pause=True),
             next_in_chain=inner,
             sample_rate=sample_rate or inner.sample_rate,
         )

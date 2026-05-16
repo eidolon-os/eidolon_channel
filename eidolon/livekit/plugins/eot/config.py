@@ -14,7 +14,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -57,7 +58,17 @@ class EidolonEOTConfig:
     # real speech). Requires the VAD inference callback to be wired (G6).
     # 0.0 disables the gate (default for backward compatibility).
     # Recommended value for noisy environments after pilot testing: 0.50–0.65.
-    min_avg_vad_confidence: float = 0.55
+    #
+    # F3 (2026-05-16): default lowered from 0.55 → 0.40. Production multi-turn
+    # log showed real Chinese interrupts ("我不相信你啊") with VAD avg 0.42 —
+    # the 0.55 gate rejected them, leaving the user unable to interrupt agent
+    # speech at all. 0.40 admits these while still gating echo (typically
+    # < 0.30). Override via env ``EIDOLON_EOT_MIN_VAD_CONFIDENCE``.
+    min_avg_vad_confidence: float = field(
+        default_factory=lambda: float(
+            os.environ.get("EIDOLON_EOT_MIN_VAD_CONFIDENCE", "0.40")
+        )
+    )
 
     vad_confidence_window_sec: float = 2.0
 
@@ -143,7 +154,13 @@ class EidolonEOTConfig:
     bound memory. In normal operation the suspend window (0.8 s) is well
     below this limit. If exceeded, excess frames are dropped."""
 
-    duck_suspend_timeout_sec: float = 0.8
+    # F5 (2026-05-16): duck timing knobs exposed as env vars so deployments
+    # can tune them without code edits. Defaults unchanged.
+    duck_suspend_timeout_sec: float = field(
+        default_factory=lambda: float(
+            os.environ.get("EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC", "0.8")
+        )
+    )
     """Maximum time to stay in SUSPENDED before auto-unduck if early-resume
     watcher emits no decision. Should be ≥ Bailian interim latency P95
     (typically 200-400 ms after VAD start). 0.8 s gives ASR more room to
@@ -151,14 +168,22 @@ class EidolonEOTConfig:
     "no-interim → default unduck" cycles. Below 0.3 s risks "always
     default-resume"."""
 
-    duck_early_cancel_score_threshold: float = 0.7
+    duck_early_cancel_score_threshold: float = field(
+        default_factory=lambda: float(
+            os.environ.get("EIDOLON_EOT_DUCK_EARLY_CANCEL_SCORE", "0.7")
+        )
+    )
     """Score threshold during the suspend window above which we call
     ``cancel()`` immediately (don't wait for final). Lower than the
     non-ducking ``hard_interrupt_score_threshold`` because we already
     paid the duck overhead — once we're suspended, we want decisive
     cancel rather than another wait cycle."""
 
-    duck_early_resume_score_threshold: float = 0.2
+    duck_early_resume_score_threshold: float = field(
+        default_factory=lambda: float(
+            os.environ.get("EIDOLON_EOT_DUCK_EARLY_RESUME_SCORE", "0.2")
+        )
+    )
     """Score threshold during the suspend window below which we call
     ``unduck()`` immediately, classifying as false interrupt. Backchannels
     ("嗯", "好的") usually score < 0.1 via semantic_completeness_score's

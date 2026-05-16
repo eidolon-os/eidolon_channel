@@ -784,9 +784,12 @@ class TestSenseTimeTTSPersistentConnection:
         # Each warm conn in the queue should have its heartbeat task running.
         # The pool exposes warm_count but not the conns directly; iterate
         # via internal queue (test-only inspection).
-        warm_conns = list(tts._pool._ready._queue)  # internal, but stable
-        assert len(warm_conns) == 2
-        for c in warm_conns:
+        # F2 fix (2026-05-16): pool queue now holds (conn, created_at) tuples
+        # for acquire-time staleness eviction; unpack accordingly.
+        warm_entries = list(tts._pool._ready._queue)  # internal, but stable
+        assert len(warm_entries) == 2
+        for entry in warm_entries:
+            c, _created_at = entry
             assert c._heartbeat_task is not None
             assert not c._heartbeat_task.done()
 

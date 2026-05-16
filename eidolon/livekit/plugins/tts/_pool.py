@@ -70,11 +70,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Awaitable, Callable, Generic, Optional, TypeVar
 
 logger = logging.getLogger("plugins.tts.pool")
 
 T = TypeVar("T")
+
+# F2 (2026-05-16): cap on acquire-time stale-conn eviction. If the pool
+# somehow gives us > this many stale conns in a row, fall through to the
+# original slow path (inline warm or wait-for-refill) instead of looping
+# forever. In practice this should never fire — even with max_idle_sec=25s
+# and a 30s server timeout, at most ``pool_size`` conns can be stale at once.
+_MAX_STALE_EVICTIONS_PER_ACQUIRE = 8
 
 
 class TTSConnectionPool(Generic[T]):
@@ -121,6 +129,7 @@ class TTSConnectionPool(Generic[T]):
         refill_failure_backoff: float = 1.0,
         acquire_wait_timeout: float | None = None,
         enable_inline_slow_path: bool = True,
+        max_idle_sec: float | None = None,
     ) -> None:
         if size < 1:
             raise ValueError(f"pool size must be ≥ 1, got {size}")
@@ -131,12 +140,20 @@ class TTSConnectionPool(Generic[T]):
         self._refill_failure_backoff = refill_failure_backoff
         self._acquire_wait_timeout = acquire_wait_timeout
         self._enable_inline_slow_path = enable_inline_slow_path
+        # F2 (2026-05-16): acquire-time staleness eviction. If a warm conn
+        # has been sitting in the queue longer than ``max_idle_sec``, drop it
+        # and grab/warm a fresh one instead. Set to None to disable (back-
+        # compat default). Provider-specific deployments should set this just
+        # below the server-side WS idle timeout (e.g. 25s for dashscope's 30s).
+        self._max_idle_sec = max_idle_sec
 
-        # The "ready" queue holds warm conns. We cap it generously to avoid
-        # spurious blocking on transient overshoot (race between concurrent
-        # mark_dirty calls and inline acquire-warm); the size invariant is
-        # maintained by checking ``qsize()`` before inserting.
-        self._ready: asyncio.Queue[T] = asyncio.Queue(maxsize=size + 4)
+        # The "ready" queue holds (conn, created_at_monotonic) tuples. We cap
+        # generously to avoid spurious blocking on transient overshoot (race
+        # between concurrent mark_dirty and inline acquire-warm); the size
+        # invariant is maintained by checking ``qsize()`` before inserting.
+        self._ready: asyncio.Queue[tuple[T, float]] = asyncio.Queue(
+            maxsize=size + 4
+        )
 
         self._closed: bool = False
         # Track in-flight refill tasks so shutdown can wait for them.
@@ -144,18 +161,29 @@ class TTSConnectionPool(Generic[T]):
 
     # ── Lifecycle ───────────────────────────────────────────────
 
-    async def warmup(self) -> None:
-        """Open ``size`` connections in parallel. Idempotent.
+    async def warmup(self, *, count: int | None = None) -> None:
+        """Open up to ``count`` connections in parallel (default = ``size``). Idempotent.
 
-        Raises only if ALL ``size`` factories fail. Partial failures are
-        logged and the pool starts with whatever connections succeeded;
-        ``acquire`` will warm more inline as needed.
+        Args:
+            count: Number of conns to open synchronously. If None or > size,
+                opens up to ``size`` (the full target). If < size, the pool
+                starts with fewer warm conns; the background refill brings
+                it up to ``size`` after the first acquire/mark_dirty.
+
+        Raises only if ALL factories fail. Partial failures are logged and
+        the pool starts with whatever connections succeeded; ``acquire``
+        will warm more inline as needed.
+
+        F5 (2026-05-16): the ``count`` parameter supports the bootstrap-vs-
+        target split — e.g. open 3 conns synchronously at startup but
+        target 4 in steady state. Cold-start ~3.5s instead of ~5.1s.
         """
         if self._closed:
             raise RuntimeError(f"[{self._label}] cannot warmup a closed pool")
 
         already_ready = self._ready.qsize()
-        needed = max(0, self._size - already_ready)
+        target_now = self._size if count is None else max(0, min(int(count), self._size))
+        needed = max(0, target_now - already_ready)
         if needed == 0:
             return
 
@@ -170,6 +198,7 @@ class TTSConnectionPool(Generic[T]):
             return_exceptions=True,
         )
 
+        now = time.monotonic()
         succeeded = 0
         for r in results:
             if isinstance(r, BaseException):
@@ -177,7 +206,7 @@ class TTSConnectionPool(Generic[T]):
                                self._label, r)
                 continue
             try:
-                self._ready.put_nowait(r)
+                self._ready.put_nowait((r, now))
                 succeeded += 1
             except asyncio.QueueFull:
                 # Shouldn't happen because we sized the queue with headroom,
@@ -213,7 +242,7 @@ class TTSConnectionPool(Generic[T]):
         # Drain and dispose remaining warm conns.
         while not self._ready.empty():
             try:
-                conn = self._ready.get_nowait()
+                conn, _created_at = self._ready.get_nowait()
             except asyncio.QueueEmpty:
                 break
             await self._safe_dispose(conn)
@@ -237,17 +266,46 @@ class TTSConnectionPool(Generic[T]):
         if self._closed:
             raise RuntimeError(f"[{self._label}] acquire on a closed pool")
 
-        try:
-            conn = self._ready.get_nowait()
+        # F2 (2026-05-16): staleness eviction. Pop conns until we find a
+        # fresh one or the queue empties. Each evicted conn is disposed
+        # asynchronously and triggers a refill. Bounded to prevent any
+        # pathological loop (see _MAX_STALE_EVICTIONS_PER_ACQUIRE).
+        evicted = 0
+        while evicted < _MAX_STALE_EVICTIONS_PER_ACQUIRE:
+            try:
+                conn, created_at = self._ready.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if self._is_stale(created_at):
+                evicted += 1
+                age = time.monotonic() - created_at
+                logger.info(
+                    "[%s] acquire: evicting stale conn (age=%.1fs > "
+                    "max_idle=%.1fs); disposing + refilling",
+                    self._label, age, self._max_idle_sec or 0.0,
+                )
+                # Best-effort async dispose; don't block acquire on it.
+                dispose_task = asyncio.create_task(self._safe_dispose(conn))
+                self._refill_tasks.add(dispose_task)
+                dispose_task.add_done_callback(self._refill_tasks.discard)
+                self._maybe_refill()
+                continue
             logger.debug(
                 "[%s] acquire: fast path (%d remaining in pool, "
-                "%d refills in flight)",
-                self._label, self._ready.qsize(), self.in_flight_refills,
+                "%d refills in flight, age=%.1fs)",
+                self._label, self._ready.qsize(),
+                self.in_flight_refills, time.monotonic() - created_at,
             )
             self._maybe_refill()
             return conn
-        except asyncio.QueueEmpty:
-            pass
+
+        if evicted >= _MAX_STALE_EVICTIONS_PER_ACQUIRE:
+            logger.warning(
+                "[%s] acquire: hit stale-eviction cap (%d); falling through "
+                "to slow path. Check max_idle_sec setting vs server idle "
+                "timeout.",
+                self._label, _MAX_STALE_EVICTIONS_PER_ACQUIRE,
+            )
 
         # Hard-cap mode: don't create inline overflow connections.
         # Wait for a refilled warm connection within timeout.
@@ -255,9 +313,11 @@ class TTSConnectionPool(Generic[T]):
             timeout = self._acquire_wait_timeout
             try:
                 if timeout is None:
-                    conn = await self._ready.get()
+                    conn, _created_at = await self._ready.get()
                 else:
-                    conn = await asyncio.wait_for(self._ready.get(), timeout=timeout)
+                    conn, _created_at = await asyncio.wait_for(
+                        self._ready.get(), timeout=timeout
+                    )
                 logger.debug(
                     "[%s] acquire: waited for refill (pool=%d in_flight=%d)",
                     self._label, self._ready.qsize(), self.in_flight_refills,
@@ -283,6 +343,12 @@ class TTSConnectionPool(Generic[T]):
         finally:
             self._maybe_refill()
         return conn
+
+    def _is_stale(self, created_at: float) -> bool:
+        """Return True if a conn warmed at ``created_at`` exceeds ``max_idle_sec``."""
+        if self._max_idle_sec is None:
+            return False
+        return (time.monotonic() - created_at) > self._max_idle_sec
 
     async def mark_dirty(self, conn: T) -> None:
         """Discard ``conn``; refill is handled by ``acquire``-time scheduling.
@@ -402,7 +468,7 @@ class TTSConnectionPool(Generic[T]):
             return
 
         try:
-            self._ready.put_nowait(new_conn)
+            self._ready.put_nowait((new_conn, time.monotonic()))
             logger.debug(
                 "[%s] refill: added 1 conn (pool now %d/%d)",
                 self._label, self._ready.qsize(), self._size,

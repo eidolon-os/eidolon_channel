@@ -112,6 +112,7 @@ class StreamingPipeline(BasePipeline):
         welcome_message: str = "",
         false_interruption_timeout: float | None = 6.0,
         audio_sample_rate: int = 16000,
+        stt_commit_transcript_timeout: float = 5.0,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         self._instructions = instructions
@@ -127,6 +128,10 @@ class StreamingPipeline(BasePipeline):
         # STT enough headroom.
         self._false_interruption_timeout = false_interruption_timeout
         self._audio_sample_rate = audio_sample_rate
+        # F1 fix (2026-05-16): pass to session.commit_user_turn() so STT FINAL
+        # has enough time to arrive before framework promotes the latest INTERIM
+        # to a FINAL (which causes a doomed LLM call + cancel).
+        self._stt_commit_transcript_timeout = stt_commit_transcript_timeout
 
         self._session: AgentSession | None = None
         # Set when AgentSession emits "close" event (e.g. participant disconnect).
@@ -580,7 +585,13 @@ class StreamingPipeline(BasePipeline):
                     # the framework sees clean state if it calls predict_end_of_turn.
                     eot_model.reset()
                     self._inject_interrupted_context()
-                    self._session.commit_user_turn()
+                    # F1 fix (2026-05-16): framework default is 2.0s, too short
+                    # for Bailian FunASR FINAL on long Chinese sentences. Pass our
+                    # configured timeout so framework gives STT enough headroom
+                    # before promoting INTERIM→FINAL and firing a doomed LLM call.
+                    self._session.commit_user_turn(
+                        transcript_timeout=self._stt_commit_transcript_timeout,
+                    )
                     if (
                         self._filler is not None
                         and self._session.output.audio is not None
@@ -888,6 +899,17 @@ class StreamingPipeline(BasePipeline):
         to prevent "volume yo-yo" from rapid VAD toggling.
         """
         if self._duck_mixer is None:
+            return
+        # F3 (2026-05-16): skip duck when agent isn't actually speaking.
+        # Previously, every ``user_state: listening → speaking`` armed a duck
+        # cycle even when ``agent_state=listening`` (idle), wasting fade-out/
+        # fade-in compute and producing misleading "duck NORMAL→SUSPENDED" log
+        # noise. The duck only has work to do when the agent is mid-utterance.
+        if self._state != PipelineState.SPEAKING:
+            logger.debug(
+                "[StreamingPipeline] duck skipped — agent not speaking (state=%s)",
+                self._state.name if hasattr(self._state, "name") else self._state,
+            )
             return
         cfg = self._get_eot_model()._config
         if self._filler is not None and self._filler.is_playing:

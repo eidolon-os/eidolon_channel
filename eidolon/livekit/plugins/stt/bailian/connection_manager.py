@@ -69,6 +69,23 @@ def _build_run_task_payload(
     itn: bool = True,
     language_hints: str | None = None,
 ) -> dict[str, Any]:
+    # F5 fix (2026-05-16): wire ``language_hints`` into the DashScope payload.
+    # Previously the parameter was accepted by every caller but **never**
+    # serialized into the run-task message, so DashScope FunASR fell back to
+    # auto language detection — producing English misrecognitions like "You"
+    # and "That" at the start of Chinese utterances. The DashScope FunASR
+    # protocol expects ``language_hints`` as a list of language codes
+    # (e.g. ``["zh"]`` to force Chinese; ``["zh","en"]`` for code-switching).
+    parameters: dict[str, Any] = {
+        "sample_rate": sample_rate,
+        "itn": str(itn).lower(),
+    }
+    if language_hints:
+        # Support both ``"zh"`` and ``"zh,en"`` env-style inputs by splitting
+        # on commas. Single-language case yields a 1-element list.
+        hints = [h.strip() for h in language_hints.split(",") if h.strip()]
+        if hints:
+            parameters["language_hints"] = hints
     return {
         "header": {
             "action": "run-task",
@@ -81,10 +98,7 @@ def _build_run_task_payload(
             "function": "recognition",
             "model": model,
             "input": {},
-            "parameters": {
-                "sample_rate": sample_rate,
-                "itn": str(itn).lower(),
-            },
+            "parameters": parameters,
         },
     }
 

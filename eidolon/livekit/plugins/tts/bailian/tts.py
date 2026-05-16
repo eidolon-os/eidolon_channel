@@ -77,6 +77,9 @@ class BailianTTS(TTS):
             refill_failure_backoff=self._config.pool_refill_backoff,
             acquire_wait_timeout=self._config.pool_acquire_timeout,
             enable_inline_slow_path=False,
+            # F2 (2026-05-16): evict stale conns before handing them out.
+            # dashscope server idles WS after ~30s; 25s gives 5s safety margin.
+            max_idle_sec=self._config.pool_max_idle_sec,
         )
         self._stream_lock = asyncio.Lock()
         self._stream_active = False
@@ -131,11 +134,22 @@ class BailianTTS(TTS):
     async def warmup(self) -> None:
         if self._pool.warm_count >= self._config.pool_size:
             return
+        # F5 (2026-05-16): synchronously open only ``pool_size_bootstrap``
+        # conns (default 3); background refill brings pool up to ``pool_size``
+        # after warmup returns. Cuts cold-start from ~5s to ~3.5s while still
+        # reaching full pool target within ~1-2s of first turn.
+        bootstrap = min(self._config.pool_size_bootstrap, self._config.pool_size)
         logger.info(
-            "[BailianTTS] warming up pool target=%d",
-            self._config.pool_size,
+            "[BailianTTS] warming up pool bootstrap=%d target=%d",
+            bootstrap, self._config.pool_size,
         )
-        await self._pool.warmup()
+        await self._pool.warmup(count=bootstrap)
+        # Kick background refill so the pool fills to ``pool_size`` while
+        # the first turn is happening. acquire() also triggers this, but
+        # being explicit avoids a corner case where warmup completes and
+        # nothing else acquires for a while (e.g. silent room).
+        if bootstrap < self._config.pool_size:
+            self._pool._maybe_refill()  # type: ignore[attr-defined]
 
     async def shutdown(self) -> None:
         await self._pool.shutdown()

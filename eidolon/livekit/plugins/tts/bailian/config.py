@@ -54,6 +54,16 @@ class BailianTTSConfig:
     pool_size: int = field(
         default_factory=lambda: int(os.environ.get("BAILIAN_TTS_POOL_SIZE", "8"))
     )
+    # F5 (2026-05-16): how many conns to warm SYNCHRONOUSLY at startup before
+    # accepting the first turn. After warmup completes, the pool's background
+    # refill brings it up to ``pool_size``. Lets cold-start finish faster
+    # (e.g. 3 × 1.3s ≈ 3.5s instead of 4 × 1.3s ≈ 5.1s) while still keeping
+    # the steady-state pool target high. Set equal to ``pool_size`` to disable.
+    pool_size_bootstrap: int = field(
+        default_factory=lambda: int(
+            os.environ.get("BAILIAN_TTS_POOL_SIZE_BOOTSTRAP", "3")
+        )
+    )
     pool_refill_backoff: float = field(
         default_factory=lambda: float(
             os.environ.get("BAILIAN_TTS_POOL_REFILL_BACKOFF", "1.5")
@@ -62,6 +72,14 @@ class BailianTTSConfig:
     pool_acquire_timeout: float = field(
         default_factory=lambda: float(
             os.environ.get("BAILIAN_TTS_POOL_ACQUIRE_TIMEOUT", "12.0")
+        )
+    )
+    # F2 (2026-05-16): acquire-time staleness eviction window. Pool conns
+    # idle longer than this are dropped before being handed out. Dashscope's
+    # server-side WS idle timeout is ~30s; 25s leaves a 5s safety margin.
+    pool_max_idle_sec: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_TTS_POOL_MAX_IDLE_SEC", "25.0")
         )
     )
     task_started_timeout: float = field(

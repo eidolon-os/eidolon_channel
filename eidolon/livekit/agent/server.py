@@ -168,6 +168,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             welcome_message=cfg.behavior.welcome_message,
             false_interruption_timeout=cfg.behavior.false_interruption_timeout,
             audio_sample_rate=cfg.behavior.audio_sample_rate,
+            stt_commit_transcript_timeout=cfg.behavior.stt_commit_transcript_timeout,
         )
 
     from livekit import api as lk_api

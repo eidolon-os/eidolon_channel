@@ -204,12 +204,15 @@ class SentenceAggregator:
         logger.debug(
             "[SentenceAggregator] flush reason=%s text=%r", reason, text,
         )
-        try:
-            await self._on_segment(text)
-        except Exception as e:
-            logger.exception(
-                "[SentenceAggregator] on_segment callback failed: %s", e,
-            )
+        # F2 (2026-05-16): propagate on_segment failures instead of swallowing.
+        # Previously this except-Exception caught BailianTTSError("WebSocket
+        # disconnected") and silently dropped the segment text — the framework
+        # had no way to know the TTS turn failed, so the user heard nothing
+        # for the rest of the reply. By raising, the failure surfaces to the
+        # SynthesizeStream's _task_failed_error, which raises APIError, which
+        # at minimum gets logged at ERROR level and lets the framework cancel
+        # the doomed audio segment cleanly.
+        await self._on_segment(text)
 
     def _reset_idle_timer(self) -> None:
         """Restart the idle timer; schedules a flush if no new feed within ``idle_ms``."""

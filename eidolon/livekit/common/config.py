@@ -110,6 +110,15 @@ class AgentBehaviorConfig:
     # next user transcript).
     false_interruption_timeout: float | None = 6.0
 
+    # F1 fix (2026-05-16): framework's ``commit_user_turn(transcript_timeout=2.0)``
+    # default was too short for Bailian FunASR FINAL latency on long Chinese
+    # sentences (observed 2.0s+ end-to-end). The framework promoted the latest
+    # INTERIM to FINAL, fired a doomed LLM call, then cancelled it when the real
+    # FINAL arrived 100-500ms later. Bump to 5.0s; the framework's own EOT
+    # detection still gates the actual turn commit, so this just widens the
+    # patience window for STT to deliver.
+    stt_commit_transcript_timeout: float = 5.0
+
     # Room audio I/O sample rate (Hz). Unifies the entire audio output chain
     # — RoomIO, DuckingMixer, filler injection — at a single rate. Setting
     # this to match the TTS provider's native rate (e.g. 16000 for BailianTTS)
@@ -212,6 +221,9 @@ class AgentConfig:
                     else float(get("AGENT_FALSE_INTERRUPTION_TIMEOUT", "6.0"))
                 ),
                 audio_sample_rate=int(get("AGENT_AUDIO_SAMPLE_RATE", "16000")),
+                stt_commit_transcript_timeout=float(
+                    get("AGENT_STT_COMMIT_TIMEOUT", "5.0")
+                ),
             ),
             llm=LLMConfig(
                 base_url=get("OPENAI_LLM_BASE_URL", ""),

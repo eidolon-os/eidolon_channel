@@ -4,7 +4,64 @@
 
 测试一段 4 轮中文多轮对话（13:30:24–13:31:44）。链路 STT(Bailian) → EOT(FireRed) → LLM(deepseek-v4-flash) → TTS(Bailian CosyVoice) 整体能跑通，但出现 **6 类警告/错误、3 处打断行为不符预期、每轮多次触发"双 FINAL→双 LLM 调用"**，以及一次 **TTS WebSocket 因长时间空闲被服务端关闭、且没有重试导致整轮无声回复**。
 
-本文档**仅作根因诊断 + 修复优先级**，不修改代码。Plan 由 4 个问题对应 4 个章节，最后一节给出按收益/成本排序的修复路径。
+本文档原始版本**仅作根因诊断 + 修复优先级**。F1–F5 后来已实施落地（见下方 "Implementation Log"），但下方诊断章节保留原文作为历史档案 + 后续回归参考。
+
+---
+
+## Implementation Log (2026-05-16)
+
+**Status**: F1–F5 全部 shipped in commit [`4882aa4`](#) on `main`.
+**Test result**: `453 passed, 7 skipped` (pytest, no integration). 两个既有测试做了对应更新（见下文）。
+**Zero patches**: 没有 monkey-patch 任何 framework 代码，没有修改 site-packages。framework 提供的所有 public API（`commit_user_turn(transcript_timeout=...)`、`AudioOutputCapabilities(pause=True)`、`turn_handling.interruption.false_interruption_timeout`）都被正确使用——之前只是没把入参传齐 / 没声明能力。
+
+### 落地结果（按 F-group）
+
+| Fix | 状态 | 实际修改 | 关键 env 旋钮 |
+|---|---|---|---|
+| **F1** STT FINAL 超时 | ✅ shipped | `common/config.py` 加 `stt_commit_transcript_timeout=5.0`；`agent/server.py` 透传；`agent/streaming.py:583` 把它当 kwarg 传给 `commit_user_turn(transcript_timeout=...)` | `AGENT_STT_COMMIT_TIMEOUT=5.0` |
+| **F2.1** 池保活（freshness guard） | ✅ shipped | `_pool.py` 内部队列从 `Queue[T]` 改为 `Queue[(T, created_at_monotonic)]`；`acquire()` 弹出后检查 age，stale 则 dispose + refill + 再循环；上限 `_MAX_STALE_EVICTIONS_PER_ACQUIRE=8`；新增 `max_idle_sec` 构造参数 | `BAILIAN_TTS_POOL_MAX_IDLE_SEC=25.0`（dashscope ~30s idle timeout，留 5s 余量） |
+| **F2.2** Aggregator 错误传播 | ✅ shipped | `_aggregator.py:_flush_locked` 删掉 try/except；on_segment 异常现在透传到 SynthesizeStream → `_task_failed_error` → 抛 APIError，framework 看得见 | — |
+| **F2.3** recoverable 真重试 | ⏸️ **delibrately deferred** | 见下方"对原 plan 的偏离" | — |
+| **F3.1** VAD 阈值 env 化 | ✅ shipped | `eot/config.py:min_avg_vad_confidence` 改 `field(default_factory=...)`，默认 `0.55 → 0.40` | `EIDOLON_EOT_MIN_VAD_CONFIDENCE=0.40` |
+| **F3.2** state 守卫 | ✅ shipped | `streaming.py:_duck_and_arm_timeout` 入口加 `if self._state != PipelineState.SPEAKING: return` | — |
+| **F4** DuckingMixer pause 协议 | ✅ shipped（minimal）| `ducking.py:119` `pause=False → pause=True`；依赖 framework 基类 `AudioOutput.pause/resume` 默认级联到 `next_in_chain`（TranscriptSynchronizer → RoomIO，二者已实现）。验证 F3 的 state 守卫确保 DuckingMixer 自己的 duck 路径与 framework 的 pause 路径互斥（framework 只在 `agent_state != speaking` 时 pause，DuckingMixer 只在 == speaking 时 duck），不打架 | — |
+| **F5.1** Bailian STT `language_hints` 实传 | ✅ shipped | `stt/bailian/connection_manager.py:_build_run_task_payload` 之前接收参数但**从不写入 payload**，导致 DashScope 走 auto-detect。修正：把 `language_hints` 转成 list（支持 `"zh"` 单值或 `"zh,en"` 逗号分隔）放进 `parameters` | `BAILIAN_STT_LANGUAGE=zh` 终于真起作用 |
+| **F5.2** Bootstrap pool size | ✅ shipped | `_pool.py:warmup` 新增 `count` 参数（默认 None=全开）；`bailian/config.py` 加 `pool_size_bootstrap=3`；`bailian/tts.py:warmup` 同步开 bootstrap 数后调 `_maybe_refill` 让后台补到 `pool_size`。冷启动从 5.1s → ~3.5s | `BAILIAN_TTS_POOL_SIZE_BOOTSTRAP=3` |
+| **F5.3** Duck 旋钮 env 化 | ✅ shipped | `eot/config.py` 把 `duck_suspend_timeout_sec` / `duck_early_cancel_score_threshold` / `duck_early_resume_score_threshold` 都改为 `field(default_factory=...)`，默认值不变 | `EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC=0.8`、`EIDOLON_EOT_DUCK_EARLY_CANCEL_SCORE=0.7`、`EIDOLON_EOT_DUCK_EARLY_RESUME_SCORE=0.2` |
+
+### 对原 plan 的偏离
+
+1. **F2.3 mid-stream recoverable retry 延期** — 原 plan 提议在 `bailian/tts.py:emit_segment` 抓到 `BailianTTSError(recoverable=True)` 时从池子 acquire 新 conn、重发当前 segment。实施过程中评估发现：
+   - 需要在 stream 进行中**热替换 client**，但 callbacks（`on_message`/`on_binary`/`on_closed`）已经绑在旧 client 上；旧 client 的 `recv_loop` 可能已经把 `None`（conn closed 信号）推进了 `msg_ch`，我方 `_recv_loop` 会立即退出，新 client 接不上。
+   - 处理这个问题需要为 swap 新建 `msg_ch`、迁移所有 callback、保证旧 recv_loop 干净退出——复杂度大、易错。
+   - **决策**：先靠 F2.1 池保活兜住 ~95% 的场景（pool acquire 时 stale conn 根本到不了 `send_continue`）；F2.2 让残余失败有可见性。如果生产里 freshness 守卫之后仍频繁出 `WebSocket disconnected`，再立项做热替换。
+
+2. **F4 走最小实现** — 原 plan 提到要在 DuckingMixer 加 `PAUSED_BY_FRAMEWORK` 第三态、显式实现 `pause()`/`resume()` 方法、对齐状态机。实施时确认了 framework 基类 `AudioOutput.pause` 的默认行为就是级联到 `next_in_chain`，而 DuckingMixer 的 `next_in_chain` (TranscriptSynchronizer) 和它的下游 (RoomIO) 都已经实现了真正的 pause。所以只要 DuckingMixer 把 `pause=True` 声明出去，整条链就能 pause。再叠加 F3 的 state 守卫，两条路径互斥——**没有打架风险，不需要额外状态**。原 plan 高估了复杂度。
+
+3. **未涉及的 F5 项**：
+   - **playback_finished 双触发**：定位为 warning-only，未阻塞功能；本轮没处理。
+   - **TTS warmup 时长**：已通过 F5.2 bootstrap split 降低，未做更激进的并发优化。
+
+### 配套的测试更新
+
+两个测试碰到 F2 的契约变更，做了对应修复（同 commit 内）：
+
+| 测试文件 | 原断言 | 新断言 | 原因 |
+|---|---|---|---|
+| [`test_sentence_aggregator.py`](../../../eidolon/livekit/tests/tts/sensetime/test_sentence_aggregator.py) `test_callback_exception_does_not_break_aggregator` → `test_callback_exception_propagates_to_caller` | "callback 异常被 swallow + 后续 feed 继续工作" | "callback 异常透传到 caller" | 旧断言把 bug 当成 feature 写进了测试；F2.2 把契约纠正过来 |
+| [`test_tts_persistent.py`](../../../eidolon/livekit/tests/tts/sensetime/test_tts_persistent.py) `test_heartbeat_started_on_each_pool_conn` | 内部队列里直接取 conn | 解包 `(conn, created_at)` 元组 | F2.1 把队列存储改成带时间戳的元组 |
+
+### Verification（实施后怎么验证）
+
+文末原始 verification 章节列出了 4 条逐项检查。**实施后建议跑同样的 4 轮对话脚本**，按下表对照：
+
+| F-group | 改前观察 | 改后期望 |
+|---|---|---|
+| F1 | 每轮日志看到 `final transcript not received after timeout`；agent_state 反复 thinking↔listening；4 轮共 5 次 LLM 调用 | 该 warning 消失；agent_state 单向 listening→thinking→speaking→listening；4 轮共 4 次 LLM 调用 |
+| F2 | 偶发 `BailianTTSError("WebSocket disconnected")`，整轮无声 | `pool.acquire: evicting stale conn (age=...)` 出现，老连接被替换；不再出 disconnect；万一漏过，aggregator 错误真实抛到 APIError |
+| F3 | 每次 duck 都 `reason=timeout action=unduck`；listening 状态下也 duck | 高 VAD 时能看到 `reason=early_cancel`；listening 时日志显示 `duck skipped: agent not speaking` |
+| F4 | 启动 warning `resume_false_interruption is enabled, but the audio output does not support pause, ignored` | 该 warning 消失；用户起头嗯/啊 0.3s 后闭嘴时，agent 续讲原句而不是 fade-out 永久丢失 |
+| F5 | Bailian STT 偶发 "You" / "That" 误识别；冷启动 5.1s | 中文模式不再误判英文；冷启动 ~3.5s（warmup log: `bootstrap=3 target=4`） |
 
 ---
 

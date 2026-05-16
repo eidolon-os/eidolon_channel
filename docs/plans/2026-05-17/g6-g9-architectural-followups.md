@@ -4,6 +4,72 @@
 
 G1–G5（[../2026-05-16/g1-g6-post-f5-fixes.md](../2026-05-16/g1-g6-post-f5-fixes.md)）落地并跑了 multi-turn 回归后，**新暴露了 4 个更深层的架构 / 协议问题**。本文档把它们做成 G6–G9 一批 plan，**全部走 framework public API + 我们模块内重构，零新增 monkey-patch**（现存 `_framework_patches.py` 那一项仍按原状保留——它的职责与本批互不相干，见 § Q3）。
 
+---
+
+## Implementation Log (2026-05-17)
+
+**Status**: G6–G9 全部 shipped。
+**Total commits**: 3（按 ROI / 风险面分组）
+**Test result**: `493 passed, 7 skipped, 39 deselected` —— 在 G1-G5 时的 485 基础上 +8 G6 用例。
+
+| Commit | 涵盖 Item | 实施摘要 |
+|---|---|---|
+| `9981867` | **G8** + **G9** | P0 双拼，1-行级 fix |
+| `fabbdd7` | **G7** | scope 缩减——见下方"偏离" |
+| `5cb9f4f` | **G6** | minimal 版本——见下方"偏离" |
+
+### 落地结果
+
+| Fix | 状态 | 实际改动 |
+|---|---|---|
+| **G6** Interrupted-context enriched with `played_seconds` | ✅ shipped (minimal) | `agent/ducking.py` 加 `played_seconds` property + sample counter；`agent/streaming.py` 的 `_snapshot_interrupted_context` + `_inject_interrupted_context` 消费它做 LLM hint 增强 |
+| **G7** Bailian STT raise APIError on abrupt close | ✅ shipped | `plugins/stt/bailian/speech_stream.py` `_run` 追踪 `_recv_error`，对 unclean exit 抛 `APIError(retryable=True)`——触发 framework `RecognizeStream._main_task` 的 retry 路径 |
+| **G8** No-ASR commit guard | ✅ shipped | `agent/streaming.py:587` 把 `commit_user_turn` 包到 `if self._latest_asr_text:` 里 |
+| **G9** `aec_warmup_duration` env | ✅ shipped | `common/config.py` 加字段 + env 解析（含 `none/off/disabled` 哨兵）；`agent/server.py` + `agent/streaming.py` 透传；`AgentSession(aec_warmup_duration=...)` 是 framework public kwarg |
+
+### 对原 plan 的偏离
+
+1. **G7 缩减为"raise APIError 触发 framework retry"，不做 per-utterance + 自建池**
+   - 发现 framework `RecognizeStream._main_task` ([`stt.py:372-411`](.venv/...)) **已经内置 stream-level retry**——`_run()` 抛 `APIError` 就会按 `APIConnectOptions.max_retry`（默认 3）自动重连。
+   - 我们旧代码 `_emit_error` 后**不 re-raise**，framework 看到 `_run` 正常返回 → 永不重试 → 整个 session 的 STT 永久挂掉。
+   - 真正缺的是"把异常抛出来"。一行级修法即可让 framework 自带 retry 路径生效。
+   - 原计划的 per-utterance 模式还会跟 framework 的 stream-per-session 契约冲突（`stream()` 一个 session 只调一次）；自建 STT 池也属过度工程。
+   - 决策：先做一行级 fix，把 per-utterance + pool 留作生产观测到 retry latency 卡 turn-start 时的次次批 follow-up。
+
+2. **G6 缩减为只加 `played_seconds`，不做完整 `InterruptedContextTracker` 跨模块融合**
+   - 原计划提出 fuse `BailianSynthesizeStream._emitted_chars` + `DuckingMixer.played_seconds` + 每 provider 的 chars-per-second，估算"用户实际听到的文本"。
+   - 实施时评估：chars/sec 模型是 provider-specific（Bailian CosyVoice vs SenseTime SenseAudio 差不少），而且 `played_seconds + 全文文本` 给 LLM 已经够它判断"复述/继续/略过"。
+   - 决策：只加 `played_seconds`，让 hint 里说"用户实际听到了前 X.X 秒"，比之前的"你说了什么"已经丰富很多。如果生产里 LLM 续接还是不顺，再升级到 chars/sec 估算。
+
+### 配套测试
+
+| 文件 | 用例数 | 覆盖点 |
+|---|---|---|
+| `tests/agent/test_commit_guard.py` | 3 | G8 空 ASR 跳过 commit / 非空 commit / `_latest_asr_text` 归零 |
+| `tests/common/test_aec_warmup_env.py` | 10 | G9 数值 / 哨兵串 / 默认值 / 大小写 / 错误输入 / 构造器签名 |
+| `tests/stt/bailian/test_stt_retry.py` | 1 | G7 abrupt close 必须抛 APIError（framework retry 的前置条件）|
+| `tests/agent/test_ducking_played_seconds.py` | 5 | G6 零值 / 正常计数 / duck 复位 / 抑制 buffered / 含 drained-on-unduck |
+| `tests/agent/test_interrupted_context.py` | +3（G6 新增）| `played_seconds` 在快照里被记录 / 无 mixer 时 None / 0.0 保留 |
+
+合计新增 **22 个用例**。Full suite 493 passed。
+
+### 不打 monkey-patch 的保证
+
+- 全部用 framework public API：`AgentSession(aec_warmup_duration=...)`、`APIError`（让 `RecognizeStream._main_task` 自动 retry）、`ChatContext.messages()`
+- `_framework_patches.py` **不动**（独立职责：disable framework 自动 interrupt）
+- site-packages 下零修改
+
+### Verification（实测要点）
+
+启动 agent 后跑一段对话，对照：
+
+| Fix | 改前观察（已用日志验证）| 改后期望（待跑回归确认）|
+|---|---|---|
+| G8 | VAD-end 但 STT 空 → framework 等 5s 超时 → 用下一句 INTERIM 当 FINAL → 幽灵 LLM call | log: `VAD-end with empty ASR — skipping commit_user_turn`；不再有"final transcript not received after timeout"虚报 |
+| G9 | 欢迎语前 3s 不可打断（半保护，最后 1.5s 漏的） | env 设 0 → 全程可打断；设较大值 → 完全保护；启动 log `aec warmup active, disabling interruptions for X.XXs` 与设置一致 |
+| G7 | Bailian WS server-side close 后整 session STT 死 | log: `_run: unclean exit (recv_error=...) — raising APIError to trigger framework retry`；framework 自动重连 |
+| G6 | 用户打断后 LLM 续接基于"你说了 X"（不知道用户听了多少） | log: `interrupted context captured: text=... played=X.XXs`；hint 含"用户实际听到了前 X.X 秒" |
+
 ### 暴露问题来源
 
 回归运行（2026-05-17 00:05–00:06）日志要点：

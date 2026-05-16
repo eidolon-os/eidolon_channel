@@ -36,6 +36,7 @@ from .models import (
     parse_funasr_message,
 )
 
+from livekit.agents import APIError
 from livekit.agents import stt as lk_stt
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.stt.stt import RecognizeStream
@@ -115,16 +116,31 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._last_interim_text: str = ""
         self._finished: bool = False
         self._conn: "BailianConnectionManager | None" = None
+        # G7 (2026-05-17): track recv_loop errors so we can re-raise from
+        # _run() and let the framework's RecognizeStream._main_task retry
+        # mechanism kick in. Without this, an unexpected WS close exits
+        # both loops silently and the whole session loses STT for good.
+        self._recv_error: Exception | None = None
 
     # ------------------------------------------------------------------
     # _run: called by RecognizeStream._main_task with retry logic
     # ------------------------------------------------------------------
 
     async def _run(self) -> None:
-        """Main body of the receive loop. Called by _main_task in a retry loop."""
+        """Main body of the receive loop. Called by _main_task in a retry loop.
+
+        G7 (2026-05-17): converts unexpected WS close into ``APIError``
+        re-raise so the framework's RecognizeStream._main_task retry loop
+        kicks in. Without that, server-side close (which DOES happen on
+        DashScope FunASR — observed in production after AEC warmup
+        windows) silently kills STT for the rest of the session.
+        Clean termination paths (``self._finished=True`` via TASK_FINISHED
+        or framework CancelledError) still return normally.
+        """
         self._parser_confirmed.clear()
         self._last_interim_text = ""
         self._finished = False
+        self._recv_error = None
 
         conn = BailianConnectionManager(
             api_url=self._stt_ref.api_url,
@@ -223,7 +239,12 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             except Exception as e:
                 if not self._finished:
                     logger.exception("[Bailian STT] recv_loop error")
-                    self._emit_error(e, recoverable=True)
+                    # G7 (2026-05-17): record the error so _run can re-raise
+                    # and trigger framework retry. The legacy _emit_error
+                    # call only sent an "error" event but kept the run
+                    # silently completing — framework saw success and never
+                    # retried.
+                    self._recv_error = e
 
         try:
             logger.info(
@@ -257,13 +278,54 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                 e,
                 e.recoverable,
             )
-            self._emit_error(e, recoverable=e.recoverable)
+            # G7 (2026-05-17): wrap as APIError and re-raise so framework's
+            # RecognizeStream._main_task retry loop kicks in. Recoverable
+            # → retryable=True triggers retry; non-recoverable → False
+            # bypasses retry and surfaces immediately.
+            try:
+                await conn.close()
+            except Exception:
+                pass
+            raise APIError(
+                str(e),
+                body=None,
+                retryable=bool(e.recoverable),
+            ) from e
+        except asyncio.CancelledError:
+            # Framework asked us to stop (e.g. session closing). Let it bubble.
+            await conn.close()
+            raise
         except Exception as e:
             logger.exception("[Bailian STT] _run: unexpected error")
-            self._emit_error(e, recoverable=True)
-        finally:
-            await conn.close()
+            try:
+                await conn.close()
+            except Exception:
+                pass
+            raise APIError(str(e), body=None, retryable=True) from e
+        else:
+            # Loops completed without exception. Decide clean vs recoverable
+            # based on whether we got server's TASK_FINISHED (self._finished)
+            # or recv_loop recorded an error mid-flight.
+            try:
+                await conn.close()
+            except Exception:
+                pass
             logger.info("[Bailian STT] _run: connection closed")
+            if self._recv_error is not None and not self._finished:
+                # G7 (2026-05-17): server-side WS close mid-session — without
+                # this re-raise, framework saw _run return normally and
+                # never retried, killing STT for the rest of the session.
+                err = self._recv_error
+                logger.warning(
+                    "[Bailian STT] _run: unclean exit (recv_error=%s) — "
+                    "raising APIError to trigger framework retry",
+                    err,
+                )
+                raise APIError(
+                    f"Bailian STT WS closed unexpectedly: {err}",
+                    body=None,
+                    retryable=True,
+                ) from err
 
     # ------------------------------------------------------------------
     # Message dispatch

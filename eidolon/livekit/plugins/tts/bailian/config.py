@@ -74,12 +74,23 @@ class BailianTTSConfig:
             os.environ.get("BAILIAN_TTS_POOL_ACQUIRE_TIMEOUT", "12.0")
         )
     )
-    # F2 (2026-05-16): acquire-time staleness eviction window. Pool conns
-    # idle longer than this are dropped before being handed out. Dashscope's
-    # server-side WS idle timeout is ~30s; 25s leaves a 5s safety margin.
+    # F2 (2026-05-16) → G13 (2026-05-17): acquire-time staleness eviction
+    # window. Default lowered from 25.0 to 15.0 after observing dashscope
+    # going "silently dead" by age ~20s (round-2 incident). G10 WS heartbeat
+    # is the primary defense now; this is belt + suspenders.
     pool_max_idle_sec: float = field(
         default_factory=lambda: float(
-            os.environ.get("BAILIAN_TTS_POOL_MAX_IDLE_SEC", "25.0")
+            os.environ.get("BAILIAN_TTS_POOL_MAX_IDLE_SEC", "15.0")
+        )
+    )
+    # G10 (2026-05-17): WS-level heartbeat interval. aiohttp sends a PING
+    # every N seconds; PONG must arrive within N/2 seconds or ws.closed=True.
+    # 15s/7.5s strikes balance — most utterances complete before first PING,
+    # but dashscope server-side death (~20s observed) is detected within
+    # 22.5s. Set to 0 / negative to disable (not recommended in production).
+    ws_heartbeat_sec: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_TTS_WS_HEARTBEAT_SEC", "15.0")
         )
     )
     task_started_timeout: float = field(
@@ -95,6 +106,16 @@ class BailianTTSConfig:
     first_token_timeout: float = field(
         default_factory=lambda: float(
             os.environ.get("BAILIAN_TTS_FIRST_TOKEN_TIMEOUT", "15.0")
+        )
+    )
+    # G11 (2026-05-17): max wall-clock between consecutive LLM tokens. The
+    # framework's input_ch may not yield StopAsyncIteration cleanly when
+    # LLM stream ends (observed in round-2 incident); without this timeout
+    # _input_loop hangs forever. 10s is generous — typical inter-token gap
+    # is < 200ms even on the slowest LLMs.
+    inter_token_timeout: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_TTS_INTER_TOKEN_TIMEOUT", "10.0")
         )
     )
     no_first_audio_timeout: float = field(

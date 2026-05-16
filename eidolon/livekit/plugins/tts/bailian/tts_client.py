@@ -39,6 +39,7 @@ class BailianTTSClient:
         task_started_timeout: float = 12.0,
         task_finished_timeout: float = 20.0,
         http_session: aiohttp.ClientSession | None = None,
+        ws_heartbeat_sec: float = 15.0,
     ) -> None:
         self._uri = uri
         self._api_key = api_key
@@ -52,6 +53,8 @@ class BailianTTSClient:
         self._task_started_timeout = task_started_timeout
         self._task_finished_timeout = task_finished_timeout
         self._http_session = http_session
+        # G10 (2026-05-17): aiohttp ws heartbeat parameter. 0 / negative disables.
+        self._ws_heartbeat_sec = ws_heartbeat_sec if ws_heartbeat_sec > 0 else None
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._lock = asyncio.Lock()
@@ -79,8 +82,17 @@ class BailianTTSClient:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         try:
             session = self._ensure_session()
+            # G10 (2026-05-17): heartbeat = WS-level PING/PONG keepalive.
+            # aiohttp source (client_ws.py:104-167) confirms: PING every
+            # heartbeat seconds; PONG must arrive within heartbeat/2 or
+            # _pong_not_received → ws.closed=True → next send raises.
+            # This is the actual root-cause fix for round-2 silent-death.
             self._ws = await asyncio.wait_for(
-                session.ws_connect(self._uri, headers=headers),
+                session.ws_connect(
+                    self._uri,
+                    headers=headers,
+                    heartbeat=self._ws_heartbeat_sec,
+                ),
                 timeout=self.CONNECT_TIMEOUT,
             )
         except Exception as e:

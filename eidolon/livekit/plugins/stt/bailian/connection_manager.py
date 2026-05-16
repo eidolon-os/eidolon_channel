@@ -79,6 +79,14 @@ def _build_run_task_payload(
     parameters: dict[str, Any] = {
         "sample_rate": sample_rate,
         "itn": str(itn).lower(),
+        # G7-A (2026-05-17): protocol-level keepalive flag. Per FunASR docs:
+        # "若启用 heartbeat 参数，即使发送静音音频也能保持连接开放".
+        # Even though we currently push continuous mic audio (so server sees
+        # constant traffic), this flag is the canonical way to signal
+        # "long-lived session" intent — important for edge cases like AEC
+        # warmup windows (1-3s of skip_stt) and the future VAD-gate mode
+        # (G16) where silence audio is sent at 1Hz instead of 20Hz.
+        "heartbeat": True,
     }
     if language_hints:
         # Support both ``"zh"`` and ``"zh,en"`` env-style inputs by splitting

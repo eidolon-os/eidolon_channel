@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -112,6 +113,7 @@ class BailianTTS(TTS):
             task_started_timeout=self._config.task_started_timeout,
             task_finished_timeout=self._config.task_finished_timeout,
             http_session=self._ensure_http_session(),
+            ws_heartbeat_sec=self._config.ws_heartbeat_sec,
         )
 
     async def _factory_warm_conn(self) -> BailianTTSClient:
@@ -202,6 +204,10 @@ class BailianSynthesizeStream(SynthesizeStream):
         self._conn_closed = False
         self._pcm_total_bytes = 0
         self._log_audio_diag = self._config.log_audio_diag
+        # G12 (2026-05-17): wall-clock marker for the no-audio guard.
+        # Set on first successful send_continue. None means "no text sent
+        # yet" — the guard ignores this state.
+        self._first_send_continue_time: float | None = None
 
     def _convert_audio(self, raw_data: bytes) -> bytes:
         fmt = self._config.audio_format.lower()
@@ -238,6 +244,7 @@ class BailianSynthesizeStream(SynthesizeStream):
         self._input_done = asyncio.Event()
         self._conn_closed = False
         self._pcm_total_bytes = 0
+        self._first_send_continue_time = None  # G12 reset per-stream
 
         output_emitter.initialize(
             request_id=uuid.uuid4().hex[:16],
@@ -394,6 +401,11 @@ class BailianSynthesizeStream(SynthesizeStream):
                 else:
                     await client.send_continue(cleaned)
                 self._text_sent = True
+                # G12 (2026-05-17): wall-clock marker for the no-audio
+                # watchdog. Set on FIRST send_continue only — subsequent
+                # ones don't shift the deadline.
+                if self._first_send_continue_time is None:
+                    self._first_send_continue_time = time.monotonic()
             except BailianTTSError as e:
                 if e.recoverable and (self._conn_closed or self._exit_event.is_set()):
                     # Connection closed during interrupt — expected, not an error.
@@ -430,7 +442,28 @@ class BailianSynthesizeStream(SynthesizeStream):
                 logger.warning("[BailianSynthesizeStream] first token timeout")
                 return
 
-            async for token in self._input_ch:
+            # G11 (2026-05-17): inter-token timeout. Previously the
+            # ``async for`` had no timeout — if the framework's input_ch
+            # didn't propagate ``StopAsyncIteration`` after the LLM stream
+            # ended, this loop hung indefinitely (observed in 2026-05-17
+            # round-2: input_loop blocked, _input_done never set, the
+            # no-audio guard waited on it forever).
+            inter_token_timeout = self._config.inter_token_timeout
+            while True:
+                try:
+                    token = await asyncio.wait_for(
+                        self._input_ch.__anext__(),
+                        timeout=inter_token_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[BailianSynthesizeStream] inter-token timeout "
+                        "(%.1fs) — assuming LLM stream ended, force-flushing",
+                        inter_token_timeout,
+                    )
+                    break
+                except StopAsyncIteration:
+                    break
                 if isinstance(token, SynthesizeStream._FlushSentinel):
                     await aggregator.flush()
                     continue
@@ -447,19 +480,39 @@ class BailianSynthesizeStream(SynthesizeStream):
             self._input_done.set()
 
     async def _no_first_audio_guard(self) -> None:
+        """G12 (2026-05-17): wall-clock watchdog. Previously waited on
+        ``self._input_done``, which never fires when ``_input_loop`` hangs
+        (the exact failure mode of the round-2 incident). Now uses an
+        independent wall-clock timer: as soon as the FIRST send_continue
+        succeeds, we have ``no_first_audio_timeout`` seconds to see at
+        least one PCM byte. If not — abort and let framework retry.
+        """
         try:
-            await self._input_done.wait()
-            await asyncio.sleep(self._config.no_first_audio_timeout)
-            if (
-                self._text_sent
-                and self._pcm_total_bytes == 0
-                and not self._task_finished
-                and self._task_failed_error is None
-            ):
-                self._task_failed_error = BailianTTSError(
-                    "no audio received before timeout",
-                    recoverable=True,
-                )
-                self._exit_event.set()
+            no_audio_timeout = self._config.no_first_audio_timeout
+            while not self._exit_event.is_set():
+                try:
+                    await asyncio.sleep(1.0)
+                except asyncio.CancelledError:
+                    return
+                if self._first_send_continue_time is None:
+                    continue  # No text sent yet
+                if self._task_finished or self._task_failed_error is not None:
+                    return  # Already concluded
+                if self._pcm_total_bytes > 0:
+                    return  # Got audio — watchdog done
+                elapsed = time.monotonic() - self._first_send_continue_time
+                if elapsed > no_audio_timeout:
+                    logger.warning(
+                        "[BailianSynthesizeStream] no audio %.1fs after "
+                        "first send_continue (likely dashscope task death) "
+                        "— aborting",
+                        elapsed,
+                    )
+                    self._task_failed_error = BailianTTSError(
+                        f"no audio {elapsed:.1f}s after first text sent",
+                        recoverable=True,
+                    )
+                    self._exit_event.set()
+                    return
         except asyncio.CancelledError:
             return

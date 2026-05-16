@@ -161,6 +161,12 @@ class DuckingMixer(lk_io.AudioOutput):
         self._total_buffer_frames_dropped: int = 0
         self._duck_start_time: float = 0.0
         self._total_suspend_ms: float = 0.0
+        # G6 (2026-05-17): track audio actually forwarded to the inner sink
+        # during the current agent turn. Used by ``_snapshot_interrupted_context``
+        # to compute how much of the agent's reply the user actually heard
+        # before a cancel. Reset on each ``duck()`` (which fires at the start
+        # of each user-speech window, marking a potential turn boundary).
+        self._played_samples_this_turn: int = 0
 
         logger.info(
             "[DuckingMixer] init  fade_out=%dms  fade_in=%dms  "
@@ -189,6 +195,19 @@ class DuckingMixer(lk_io.AudioOutput):
     @property
     def buffered_frames(self) -> int:
         return len(self._buffer)
+
+    @property
+    def played_seconds(self) -> float:
+        """G6 (2026-05-17): seconds of audio actually forwarded to the inner
+        sink since the last ``duck()`` reset. Approximates "how much of the
+        agent's reply the user heard before the interruption point".
+
+        Sub-frame attribution: frames that went through during fade-out
+        count fully (the user heard them, just faded); frames buffered in
+        SUSPENDED do NOT count (we held them back, user heard silence).
+        """
+        sr = self._sample_rate or 16000
+        return self._played_samples_this_turn / sr
 
     def get_metrics(self) -> dict:
         """Session-lifetime ducking metrics for telemetry."""
@@ -222,6 +241,10 @@ class DuckingMixer(lk_io.AudioOutput):
         self._duck_start_time = time.monotonic()
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
+        # G6 (2026-05-17): each duck marks a potential turn boundary; reset
+        # the per-turn played-sample counter so ``played_seconds`` reflects
+        # only this turn's audio rather than session-cumulative.
+        self._played_samples_this_turn = 0
         self._begin_ramp(target=self._suspend_volume, duration_ms=self._fade_ms)
         logger.info(
             "[DuckingMixer] duck  %s→SUSPENDED  target_vol=%.2f  "
@@ -340,6 +363,9 @@ class DuckingMixer(lk_io.AudioOutput):
         if self._ramp_samples_remaining > 0:
             scaled = self._scale_frame(frame)
             await self._inner.capture_frame(scaled)
+            # G6 (2026-05-17): fade-out frames ARE played (just attenuated)
+            # — the user heard them. Count toward played_seconds.
+            self._played_samples_this_turn += frame.samples_per_channel
         else:
             sr = frame.sample_rate or self._sample_rate or 16000
             frame_sec = frame.samples_per_channel / sr
@@ -380,9 +406,14 @@ class DuckingMixer(lk_io.AudioOutput):
             and abs(self._volume_current - 1.0) < 1e-6
         ):
             await self._inner.capture_frame(frame)
+            # G6 (2026-05-17): count frames actually played to user.
+            self._played_samples_this_turn += frame.samples_per_channel
             return
         scaled = self._scale_frame(frame)
         await self._inner.capture_frame(scaled)
+        # G6 (2026-05-17): fade-in frames count too — user hears them at
+        # ramp-up volume but they ARE played.
+        self._played_samples_this_turn += frame.samples_per_channel
 
     def _begin_ramp(self, *, target: float, duration_ms: int | None = None) -> None:
         """Set up a linear ramp from ``_volume_current`` to ``target``."""

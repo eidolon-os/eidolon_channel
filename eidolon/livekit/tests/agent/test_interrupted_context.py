@@ -31,6 +31,10 @@ def _make_pipeline_with_history(messages: list) -> "StreamingPipeline":
     pipeline._session = MagicMock()
     pipeline._session.history.messages = MagicMock(return_value=messages)
     pipeline._last_interrupted_context = None
+    # G6 (2026-05-17): _snapshot_interrupted_context now consults
+    # self._duck_mixer.played_seconds when available; set None for these
+    # legacy tests that pre-date G6.
+    pipeline._duck_mixer = None
 
     # Stub _get_eot_model() → cfg with interrupted_context_enabled=True
     cfg = SimpleNamespace(interrupted_context_enabled=True)
@@ -117,3 +121,67 @@ def test_disabled_config_is_noop() -> None:
 
     pipeline._session.history.messages.assert_not_called()
     assert pipeline._last_interrupted_context is None
+
+
+# ---------------------------------------------------------------------------
+# G6 (2026-05-17): played_seconds enrichment
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_with_duck_mixer(
+    *, played_seconds: float | None
+) -> "StreamingPipeline":
+    """Pipeline with a stub duck mixer reporting ``played_seconds``."""
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._session = MagicMock()
+    pipeline._session.history.messages = MagicMock(
+        return_value=[_msg("assistant", "你好世界，今天天气不错")]
+    )
+    pipeline._last_interrupted_context = None
+
+    cfg = SimpleNamespace(interrupted_context_enabled=True)
+    pipeline._get_eot_model = MagicMock(
+        return_value=SimpleNamespace(_config=cfg)
+    )
+
+    if played_seconds is None:
+        pipeline._duck_mixer = None
+    else:
+        mixer = MagicMock()
+        type(mixer).played_seconds = property(lambda self: played_seconds)
+        pipeline._duck_mixer = mixer
+
+    return pipeline
+
+
+def test_snapshot_records_played_seconds_when_duck_mixer_present() -> None:
+    """G6: when DuckingMixer is available, played_seconds gets captured."""
+    pipeline = _make_pipeline_with_duck_mixer(played_seconds=1.5)
+    pipeline._snapshot_interrupted_context()
+    ctx = pipeline._last_interrupted_context
+    assert ctx is not None
+    assert ctx["played_seconds"] == 1.5
+    assert ctx["text"] == "你好世界，今天天气不错"
+
+
+def test_snapshot_records_none_played_seconds_when_no_duck_mixer() -> None:
+    """G6: without DuckingMixer (e.g. tests / non-streaming pipelines),
+    played_seconds is None, not crash."""
+    pipeline = _make_pipeline_with_duck_mixer(played_seconds=None)
+    pipeline._snapshot_interrupted_context()
+    ctx = pipeline._last_interrupted_context
+    assert ctx is not None
+    assert ctx["played_seconds"] is None
+    assert ctx["text"] == "你好世界，今天天气不错"
+
+
+def test_snapshot_played_seconds_zero_is_preserved() -> None:
+    """G6: 0.0 played-seconds (cancel fired before any audio) is meaningful
+    and must not be collapsed to None — the LLM hint differentiates."""
+    pipeline = _make_pipeline_with_duck_mixer(played_seconds=0.0)
+    pipeline._snapshot_interrupted_context()
+    ctx = pipeline._last_interrupted_context
+    assert ctx is not None
+    assert ctx["played_seconds"] == 0.0

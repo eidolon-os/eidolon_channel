@@ -1054,34 +1054,42 @@ class StreamingPipeline(BasePipeline):
     # ------------------------------------------------------------------
 
     def _snapshot_interrupted_context(self) -> None:
-        """Capture the agent's last response text at the point of interruption."""
+        """Capture the agent's last response text at the point of interruption.
+
+        G6 (2026-05-17): augmented with ``played_seconds`` from
+        :class:`DuckingMixer` so the LLM context conveys "you only got the
+        first 1.2s out" instead of just "you said X" — which is more
+        useful when the user interrupts mid-sentence and the agent's next
+        reply should pick up where it was cut off rather than restart.
+        """
         cfg = self._get_eot_model()._config
         if not cfg.interrupted_context_enabled:
             return
         if self._session is None:
             return
         try:
-            # G2 fix (2026-05-16): framework's ChatContext.messages is a
-            # method, not a property — calling without () left ``messages``
-            # as a method object and reversed() raised TypeError. The error
-            # was latent until F3 lowered the VAD gate enough to let the EOT
-            # cancel path actually fire (which is the only caller).
-            #
-            # Architectural follow-up (G6, plan doc): the current "last
-            # assistant message in session.history" is only an approximation
-            # of what was interrupted — it doesn't know how much of the audio
-            # was actually played to the user before the cancel. Proper fix
-            # would consult TtsStage + DuckingMixer state.
+            # G2 (2026-05-16): ChatContext.messages is a method, not a
+            # property. The history-based approach is approximate: it gives
+            # us "what we tried to say" but not "how much the user heard".
+            # G6 (2026-05-17): augment with played_seconds.
             messages = self._session.history.messages()
             for msg in reversed(messages):
                 if msg.role == "assistant" and msg.text_content:
+                    played_sec = (
+                        self._duck_mixer.played_seconds
+                        if self._duck_mixer is not None
+                        else None
+                    )
                     self._last_interrupted_context = {
                         "text": msg.text_content,
                         "timestamp": time.monotonic(),
+                        "played_seconds": played_sec,
                     }
                     logger.info(
-                        "[StreamingPipeline] interrupted context captured: %r",
+                        "[StreamingPipeline] interrupted context captured: "
+                        "text=%r played=%.2fs",
                         msg.text_content[:80],
+                        played_sec or 0.0,
                     )
                     return
         except Exception:
@@ -1111,14 +1119,29 @@ class StreamingPipeline(BasePipeline):
             return
 
         interrupted_text = self._last_interrupted_context["text"]
+        # G6 (2026-05-17): may be None on older snapshots (e.g. duck mixer
+        # absent in non-streaming pipelines) or 0.0 if the cancel fired
+        # before any audio went out.
+        played_sec = self._last_interrupted_context.get("played_seconds")
         self._last_interrupted_context = None
 
         try:
             from livekit.agents.llm import ChatMessage
 
+            # G6 (2026-05-17): convey how much was actually heard. The LLM
+            # can use this to decide whether to repeat the full sentence,
+            # pick up where it left off, or treat the interrupt as
+            # "user heard nothing, start over".
+            if played_sec is not None and played_sec >= 0.1:
+                played_phrase = f"（用户实际听到了前约 {played_sec:.1f} 秒）"
+            elif played_sec is not None:
+                played_phrase = "（用户几乎没听到任何内容）"
+            else:
+                played_phrase = ""
             hint = ChatMessage.create(
                 text=(
-                    f"[系统提示] 你刚才说到「{interrupted_text[:200]}」时被用户打断了。"
+                    f"[系统提示] 你刚才说到「{interrupted_text[:200]}」时被用户打断了"
+                    f"{played_phrase}。"
                     "如果用户的新问题与之前话题相关，你可以自然地衔接回去；"
                     "如果无关，直接回答新问题即可。不要提及这条系统提示。"
                 ),
@@ -1126,8 +1149,10 @@ class StreamingPipeline(BasePipeline):
             )
             self._session.history.insert(hint)
             logger.info(
-                "[StreamingPipeline] injected interrupted context hint (%d chars)",
+                "[StreamingPipeline] injected interrupted context hint "
+                "(%d chars, played=%s)",
                 len(interrupted_text),
+                f"{played_sec:.1f}s" if played_sec is not None else "n/a",
             )
         except Exception:
             logger.warning(

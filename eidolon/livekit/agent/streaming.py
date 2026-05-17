@@ -476,6 +476,17 @@ class StreamingPipeline(BasePipeline):
                 return  # e.g. Silero plugin
 
             eot_model = self._get_eot_model()
+            # G16 (2026-05-17): also bridge VAD signal to the STT plugin
+            # if it exposes a notify_vad_state hook. Used by Bailian STT's
+            # cost-saving gate (BAILIAN_STT_GATE_ENABLED=true). Duck-typed —
+            # other STT plugins are unaffected.
+            stt_stage = getattr(self._factory, "stt", None)
+            stt_plugin = getattr(stt_stage, "stt", None) if stt_stage else None
+            stt_notify = (
+                getattr(stt_plugin, "notify_vad_state", None)
+                if stt_plugin is not None
+                else None
+            )
 
             def _on_inference(probability: float, speaking: bool) -> None:
                 # Inference thread → keep this lightweight.
@@ -484,11 +495,23 @@ class StreamingPipeline(BasePipeline):
                 except Exception:
                     # Don't let pipeline state errors stall VAD inference.
                     pass
+                # G16: forward to STT gate. ``speaking`` is the boolean
+                # threshold-pass result from FireRed pVAD; we synthesize an
+                # RMS estimate by mapping probability to a coarse fallback
+                # (the gate has its own RMS threshold for ground-truth audio,
+                # but the VAD callback doesn't carry raw frame bytes — so we
+                # pass 0.0 and rely on the gate's vad_high primary path).
+                if stt_notify is not None:
+                    try:
+                        stt_notify(probability, 0.0)
+                    except Exception:
+                        pass
 
             raw_vad.register_inference_callback(_on_inference)
             logger.info(
                 "[StreamingPipeline] VAD inference callback registered "
-                "(per-frame probability → EOT state)"
+                "(per-frame probability → EOT state%s)",
+                " + STT gate" if stt_notify else "",
             )
         except Exception:
             logger.exception(

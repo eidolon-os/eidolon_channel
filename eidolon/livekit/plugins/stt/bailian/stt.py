@@ -90,6 +90,7 @@ class BailianFunASRSTT(stt.STT):
         )
 
         if config is not None:
+            self._config = config
             self._model = config.model
             self._language = config.language
             self._api_key = config.api_key
@@ -97,6 +98,16 @@ class BailianFunASRSTT(stt.STT):
             self._sample_rate = config.sample_rate
             self._itn = config.itn
         else:
+            # G16 (2026-05-17): build a default config so gate / future
+            # features can access typed fields uniformly. Honors env vars.
+            self._config = BailianSTTConfig(
+                model=model,
+                language=language,
+                api_key=api_key or os.environ.get("DASHSCOPE_API_KEY", ""),
+                api_url=api_url,
+                sample_rate=sample_rate,
+                itn=itn,
+            )
             self._model = model
             self._language = language
             self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
@@ -105,6 +116,11 @@ class BailianFunASRSTT(stt.STT):
             self._itn = itn
 
         self._conn_options = conn_options or livekit.agents.types.DEFAULT_API_CONNECT_OPTIONS
+        # G16 (2026-05-17): track the most-recently-created stream so the
+        # caller (streaming.py's VAD inference callback) can route per-frame
+        # VAD signal into the gate inside the active stream. weakref-style
+        # — only one stream is "current" at a time per session.
+        self._current_stream: "BailianFunASRSpeechStream | None" = None
 
         if not self._api_key:
             logger.warning(
@@ -175,12 +191,27 @@ class BailianFunASRSTT(stt.STT):
             async for ev in stream:
                 print(ev.alternatives[0].text)
         """
-        return BailianFunASRSpeechStream(
+        s = BailianFunASRSpeechStream(
             stt=self,
             conn_options=conn_options or self._conn_options,
             sample_rate=self._sample_rate,
             language=language or self._language,
         )
+        # G16: register as current so external VAD-signal callers route here.
+        self._current_stream = s
+        return s
+
+    # G16 (2026-05-17): VAD signal bridge. streaming.py invokes this once
+    # per VAD inference frame; we delegate to the active stream's gate.
+    def notify_vad_state(self, probability: float, rms: float) -> None:
+        """Forward per-frame VAD probability + RMS energy to the current
+        SpeechStream's gate. No-op if no active stream or gate disabled."""
+        s = self._current_stream
+        if s is not None:
+            try:
+                s.notify_vad_state(probability, rms)
+            except Exception as e:
+                logger.debug("[BailianSTT] notify_vad_state failed: %s", e)
 
     # ------------------------------------------------------------------
     # Batch recognition

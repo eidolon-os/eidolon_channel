@@ -55,6 +55,52 @@ class BailianSTTConfig:
         default_factory=lambda: os.environ.get("BAILIAN_STT_ITN", "true").lower() == "true"
     )
     language_hints: str | None = None
+
+    # G16 (2026-05-17): VAD-gated audio forwarding for cost reduction.
+    # Defaults OFF (gate_enabled=False) — current operators see no behavior
+    # change until they explicitly opt in via env. See ../_gate.py for the
+    # full design. Quick summary:
+    #   - GATED: silence period, only sends 1Hz silence keepalive
+    #   - FORWARDING: speech period, normal audio passthrough
+    #   - Preroll buffer captures pre-VAD-trigger audio (no first-word loss)
+    #   - Energy fallback covers VAD false negatives
+    gate_enabled: bool = field(
+        default_factory=lambda: os.environ.get("BAILIAN_STT_GATE_ENABLED", "false").lower()
+        == "true"
+    )
+    gate_preroll_ms: int = field(
+        default_factory=lambda: int(os.environ.get("BAILIAN_STT_GATE_PREROLL_MS", "500"))
+    )
+    gate_tail_window_ms: int = field(
+        default_factory=lambda: int(
+            os.environ.get("BAILIAN_STT_GATE_TAIL_MS", "1500")
+        )
+    )
+    gate_keepalive_interval_sec: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_STT_GATE_KEEPALIVE_INTERVAL_SEC", "1.0")
+        )
+    )
+    gate_keepalive_frame_ms: int = field(
+        default_factory=lambda: int(
+            os.environ.get("BAILIAN_STT_GATE_KEEPALIVE_FRAME_MS", "100")
+        )
+    )
+    gate_vad_high_threshold: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_STT_GATE_VAD_HIGH", "0.6")
+        )
+    )
+    gate_vad_low_threshold: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_STT_GATE_VAD_LOW", "0.3")
+        )
+    )
+    gate_rms_threshold: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_STT_GATE_RMS", "500")
+        )
+    )
     # conn_options is intentionally omitted here — it is a LiveKit runtime
     # object that does not belong in a plain dataclass; the STT class
     # accepts it as a separate __init__ keyword argument.

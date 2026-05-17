@@ -54,7 +54,8 @@ if TYPE_CHECKING:
     from livekit.rtc import Room
 
 from . import _framework_patches
-from .ducking import DuckingMixer
+from .interrupt_decider import Action, Decision, InterruptDecider
+from .output_controller import OutputController
 from .factory import SharedStageFactory
 from .filler import FillerManager
 from .pipeline.base import BasePipeline
@@ -174,7 +175,7 @@ class StreamingPipeline(BasePipeline):
         # so the AudioOutput chain is fully assembled. The timeout task is
         # started on every VAD-start (user_state listening → speaking) and
         # cancelled the moment EOT decides to cancel/unduck.
-        self._duck_mixer: DuckingMixer | None = None
+        self._duck_mixer: OutputController | None = None
         self._duck_timeout_task: asyncio.Task | None = None
         self._last_unduck_time: float = 0.0
         self._duck_suspend_start: float = 0.0
@@ -451,6 +452,45 @@ class StreamingPipeline(BasePipeline):
                 event.new_state,
             )
             self._cancel_soft_interrupt()
+
+        # G22 (2026-05-18): on transition to SPEAKING, reset the duck mixer's
+        # per-turn played-sample counter. This was previously reset inside
+        # ``DuckingMixer.duck()`` — that fired multiple times per turn
+        # (backchannels, echo) and clobbered the count, so the interrupted
+        # context snapshot under-reported "how much the user heard". The
+        # speaking-transition is the true turn boundary.
+        if event.new_state == "speaking" and self._duck_mixer is not None:
+            try:
+                self._duck_mixer.on_agent_started_speaking()
+            except AttributeError:
+                # Older DuckingMixer build without the new hook — silently
+                # tolerate; observed in tests that pin a frozen mixer.
+                pass
+
+        # G22-fix (2026-05-18): when a new agent turn starts (transition to
+        # ``thinking``), reset the mixer state if it was left in CANCELLED
+        # by a previous interrupt. Without this, OutputController.cancel()
+        # leaves state="CANCELLED" forever — every subsequent TTS frame
+        # gets dropped, agent_state never transitions to "speaking" (the
+        # framework gates that on first audio frame reaching the inner
+        # sink), and we deadlock with TTS generating audio that the user
+        # never hears.
+        #
+        # Production manifestation (round-2 interrupt log 2026-05-18):
+        # 1st interrupt cancelled TTS; 2nd user utterance produced FINAL +
+        # LLM response + 17s of TTS audio, but no `agent_state → speaking`
+        # and no audio playback. Symptom: "second interrupt then TTS not
+        # playing".
+        if event.new_state == "thinking" and self._duck_mixer is not None:
+            try:
+                if self._duck_mixer.state == "CANCELLED":
+                    self._duck_mixer.reset()
+                    logger.info(
+                        "[StreamingPipeline] OutputController CANCELLED→NORMAL "
+                        "(new turn starting — clearing prior-interrupt state)"
+                    )
+            except AttributeError:
+                pass
 
     def _register_vad_inference_callback(self) -> None:
         """Round 7 G6: bridge per-frame VAD probability to EOT state.
@@ -751,40 +791,19 @@ class StreamingPipeline(BasePipeline):
         score = eot_model.current_eot_score
 
         # ──────────────────────────────────────────────────────────
-        # Duck-active path: resolve SUSPENDED state based on score
+        # Duck-active path: delegate to InterruptDecider (G18b)
         # ──────────────────────────────────────────────────────────
         if duck_active:
-            # High score — confirm cancel (real interrupt).
-            if score >= cfg.duck_early_cancel_score_threshold:
-                suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
-                logger.info(
-                    "[StreamingPipeline] EOT(duck): score=%.2f ≥ %.2f → cancel "
-                    "(suspend_ms=%.0f). text=%r",
-                    score, cfg.duck_early_cancel_score_threshold,
-                    suspend_ms, text[:80],
-                )
-                self._duck_cancel_and_interrupt()
-                return
-            # Low score — confirm false interrupt, resume.
-            # Note: only treat 0 < score ≤ threshold as positively-low.
-            # A score of exactly 0 means "no signal yet" (text too short
-            # for ONNX inference), in which case we wait for more interim.
-            if 0 < score <= cfg.duck_early_resume_score_threshold:
-                suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
-                logger.info(
-                    "[StreamingPipeline] EOT(duck): score=%.2f ≤ %.2f → unduck "
-                    "(false, suspend_ms=%.0f). text=%r",
-                    score, cfg.duck_early_resume_score_threshold,
-                    suspend_ms, text[:80],
-                )
-                self._duck_unduck_if_suspended(reason="eot_low_score")
-                return
-            # Mid-band — leave SUSPENDED; either next interim resolves
-            # us or the suspend timeout fallback unducks.
+            decider = self._get_interrupt_decider()
+            decision = decider.on_stt_interim(text, score)
+            suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
             logger.info(
-                "[StreamingPipeline] EOT(duck): score=%.2f mid-band, holding SUSPENDED. text=%r",
-                score, text[:80],
+                "[StreamingPipeline] EOT(duck): decision=%s reason=%s "
+                "suspend_ms=%.0f score=%.2f text=%r",
+                decision.action.value, decision.reason,
+                suspend_ms, score, text[:80],
             )
+            self._apply_decision(decision)
             return
 
         # ──────────────────────────────────────────────────────────
@@ -923,7 +942,7 @@ class StreamingPipeline(BasePipeline):
                 "soft/hard interrupt only)"
             )
             return
-        mixer = DuckingMixer(
+        mixer = OutputController(
             inner,
             fade_ms=cfg.duck_fade_ms,
             fade_in_ms=cfg.duck_fade_in_ms,
@@ -999,32 +1018,72 @@ class StreamingPipeline(BasePipeline):
         )
 
     async def _duck_suspend_timeout_fallback(self, timeout_sec: float) -> None:
-        """Fallback: if no EOT decision arrives in ``timeout_sec``, unduck.
-
-        Conservative choice — defaulting to unduck means a real interrupt
-        that didn't produce STT text in time gets resumed. The alternative
-        (default-cancel) would be more disruptive on noise / echo / dropped
-        STT. Real interrupts almost always produce text within 300-500 ms
-        on Bailian streaming, so the timeout normally fires only for
-        genuine false positives.
-        """
+        """500ms decision-budget deadline. Delegates the branch decision
+        to :class:`InterruptDecider` so the policy stays in one place
+        (G18b)."""
         try:
             await asyncio.sleep(timeout_sec)
             if self._duck_mixer is not None and self._duck_mixer.state == "SUSPENDED":
                 suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
                 buffered = self._duck_mixer.buffered_frames
                 buffered_sec = self._duck_mixer.buffered_sec
+
+                vad_still_active = (
+                    self._session is not None
+                    and self._session.user_state == "speaking"
+                )
+                decider = self._get_interrupt_decider()
+                decision = decider.on_decision_deadline(vad_still_active)
                 logger.info(
-                    "[StreamingPipeline] duck resolved  reason=timeout  "
-                    "action=unduck  suspend_ms=%.0f  "
+                    "[StreamingPipeline] duck resolved  reason=deadline  "
+                    "decision=%s decider_reason=%s  suspend_ms=%.0f  "
                     "buffered=%d frames (%.3fs)  timeout=%.2fs",
+                    decision.action.value, decision.reason,
                     suspend_ms, buffered, buffered_sec, timeout_sec,
                 )
-                self._duck_mixer.unduck()
-                self._last_unduck_time = time.monotonic()
-                self._callbacks.on_duck_resolved("timeout")
+                self._apply_decision(decision, resolved_reason="timeout")
         except asyncio.CancelledError:
             pass
+
+    # ------------------------------------------------------------------
+    # G18b (2026-05-18) — decider integration
+    # ------------------------------------------------------------------
+
+    def _get_interrupt_decider(self) -> InterruptDecider:
+        """Lazy-build the decider from current EOT config. Rebuilt each
+        time so config env changes during the session are honored
+        (negligible cost — just stores 3 floats)."""
+        cfg = self._get_eot_model()._config
+        return InterruptDecider(
+            min_interim_chars=cfg.interrupt_min_interim_chars,
+            early_cancel_score_threshold=cfg.duck_early_cancel_score_threshold,
+            early_resume_score_threshold=cfg.duck_early_resume_score_threshold,
+        )
+
+    def _apply_decision(
+        self, decision: Decision, *, resolved_reason: str | None = None
+    ) -> None:
+        """Execute the side effects implied by a :class:`Decision`.
+
+        Args:
+            decision: The decider's verdict.
+            resolved_reason: If set, override the on_duck_resolved
+                callback's reason string (used by the timeout path so
+                metrics show "timeout" rather than the decider's
+                internal classification).
+        """
+        if decision.action is Action.CANCEL:
+            # Real interrupt: snapshot context, cancel mixer, interrupt TTS.
+            self._duck_cancel_and_interrupt()
+            return
+        if decision.action is Action.ROLLBACK:
+            self._duck_unduck_if_suspended(
+                reason=resolved_reason or decision.reason,
+                drop_buffered=decision.rollback_drop_buffered,
+            )
+            return
+        # HOLD / NONE — no-op; let next interim or deadline drive.
+        return
 
     def _cancel_duck_timeout(self) -> None:
         """Cancel the suspend-window fallback task if active. Safe to call any time."""
@@ -1053,8 +1112,17 @@ class StreamingPipeline(BasePipeline):
         self._callbacks.on_duck_resolved("cancel")
         self._interrupt_current_turn()
 
-    def _duck_unduck_if_suspended(self, reason: str = "user_silent") -> None:
-        """Resume the agent's TTS if we're SUSPENDED. No-op otherwise."""
+    def _duck_unduck_if_suspended(
+        self, reason: str = "user_silent", *, drop_buffered: bool = False
+    ) -> None:
+        """Resume the agent's TTS if we're SUSPENDED. No-op otherwise.
+
+        Args:
+            reason: log + telemetry reason string.
+            drop_buffered: passed through to ``OutputController.unduck``.
+                True for the timeout-deadline (G17a) path where the
+                buffered frames are stale.
+        """
         if self._duck_mixer is None:
             return
         self._cancel_duck_timeout()
@@ -1064,11 +1132,12 @@ class StreamingPipeline(BasePipeline):
             buffered_sec = self._duck_mixer.buffered_sec
             logger.info(
                 "[StreamingPipeline] duck resolved  reason=%s  "
-                "action=unduck  suspend_ms=%.0f  "
+                "action=unduck(drop_buffered=%s)  suspend_ms=%.0f  "
                 "buffered=%d frames (%.3fs)",
-                reason, suspend_ms, buffered, buffered_sec,
+                reason, drop_buffered,
+                suspend_ms, buffered, buffered_sec,
             )
-            self._duck_mixer.unduck()
+            self._duck_mixer.unduck(drop_buffered=drop_buffered)
             self._last_unduck_time = time.monotonic()
             self._callbacks.on_duck_resolved("unduck")
 
@@ -1081,9 +1150,15 @@ class StreamingPipeline(BasePipeline):
 
         G6 (2026-05-17): augmented with ``played_seconds`` from
         :class:`DuckingMixer` so the LLM context conveys "you only got the
-        first 1.2s out" instead of just "you said X" — which is more
-        useful when the user interrupts mid-sentence and the agent's next
-        reply should pick up where it was cut off rather than restart.
+        first 1.2s out" instead of just "you said X".
+
+        G21 (2026-05-18): primary source is the TTS plugin's in-flight
+        ``current_pushed_text`` — captures exactly what the agent was
+        synthesizing at the cancel moment. ``session.history`` is the
+        fallback for the (rare) case where TTS doesn't expose the
+        property: history is only updated AFTER speech_handle winds down,
+        which is AFTER our cancel snapshot runs, so we'd otherwise capture
+        the PREVIOUS turn's assistant text rather than the in-flight one.
         """
         cfg = self._get_eot_model()._config
         if not cfg.interrupted_context_enabled:
@@ -1091,26 +1166,62 @@ class StreamingPipeline(BasePipeline):
         if self._session is None:
             return
         try:
-            # G2 (2026-05-16): ChatContext.messages is a method, not a
-            # property. The history-based approach is approximate: it gives
-            # us "what we tried to say" but not "how much the user heard".
-            # G6 (2026-05-17): augment with played_seconds.
+            played_sec = (
+                self._duck_mixer.played_seconds
+                if self._duck_mixer is not None
+                else None
+            )
+
+            # G21: primary path — read in-flight TTS text directly from
+            # the plugin instance. Both our TTS plugins (Bailian, SenseTime)
+            # expose ``current_pushed_text``; plugins that don't (e.g.
+            # third-party) fall through to the history-based fallback.
+            in_flight_text = ""
+            tts_plugin = None
+            try:
+                if self._factory is not None and self._factory.tts is not None:
+                    tts_plugin = self._factory.tts.tts
+                    in_flight_text = getattr(
+                        tts_plugin, "current_pushed_text", ""
+                    ) or ""
+            except Exception:
+                logger.debug(
+                    "[StreamingPipeline] could not read TTS current_pushed_text",
+                    exc_info=True,
+                )
+
+            if in_flight_text and in_flight_text.strip():
+                self._last_interrupted_context = {
+                    "text": in_flight_text,
+                    "timestamp": time.monotonic(),
+                    "played_seconds": played_sec,
+                    "source": "tts_in_flight",
+                }
+                logger.info(
+                    "[StreamingPipeline] interrupted context captured "
+                    "(source=tts_in_flight): text=%r played=%.2fs",
+                    in_flight_text[:80],
+                    played_sec or 0.0,
+                )
+                return
+
+            # Fallback: walk session.history for the most-recent assistant
+            # message with text. May be the PREVIOUS turn rather than the
+            # in-flight one (see G21 docstring above) — used when the TTS
+            # plugin doesn't expose current_pushed_text.
+            # G2 (2026-05-16): ChatContext.messages is a method, not a property.
             messages = self._session.history.messages()
             for msg in reversed(messages):
                 if msg.role == "assistant" and msg.text_content:
-                    played_sec = (
-                        self._duck_mixer.played_seconds
-                        if self._duck_mixer is not None
-                        else None
-                    )
                     self._last_interrupted_context = {
                         "text": msg.text_content,
                         "timestamp": time.monotonic(),
                         "played_seconds": played_sec,
+                        "source": "session_history_fallback",
                     }
                     logger.info(
-                        "[StreamingPipeline] interrupted context captured: "
-                        "text=%r played=%.2fs",
+                        "[StreamingPipeline] interrupted context captured "
+                        "(source=history_fallback): text=%r played=%.2fs",
                         msg.text_content[:80],
                         played_sec or 0.0,
                     )
@@ -1161,14 +1272,17 @@ class StreamingPipeline(BasePipeline):
                 played_phrase = "（用户几乎没听到任何内容）"
             else:
                 played_phrase = ""
-            hint = ChatMessage.create(
-                text=(
+            # G20 (2026-05-18): ChatMessage in livekit-agents 1.5.x is a
+            # pydantic model with no `.create()` classmethod; construct directly
+            # with `content` as a list of strings/parts per the schema.
+            hint = ChatMessage(
+                role="system",
+                content=[
                     f"[系统提示] 你刚才说到「{interrupted_text[:200]}」时被用户打断了"
                     f"{played_phrase}。"
                     "如果用户的新问题与之前话题相关，你可以自然地衔接回去；"
                     "如果无关，直接回答新问题即可。不要提及这条系统提示。"
-                ),
-                role="system",
+                ],
             )
             self._session.history.insert(hint)
             logger.info(

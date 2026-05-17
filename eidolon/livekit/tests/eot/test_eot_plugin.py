@@ -1023,41 +1023,65 @@ class TestG5ConversationPhase:
 
 
 class TestG2bMinSpeakingDurationVadGate:
-    """Round 7 G2b — VAD probability gate in MinSpeakingDurationPolicy.
+    """G18c (2026-05-18) — VAD probability gate fully retired.
 
-    Default behavior (gate disabled, min_avg_vad_confidence=0.0) preserves
-    backward compatibility. When enabled, low VAD probability blocks cuts
-    even if speech_duration is long enough.
+    The original Round 7 G2b gate (lowered to default 0.0 in Phase 1)
+    is now a no-op even when constructor arguments request it: the
+    ``check()`` method no longer reads ``min_avg_vad_confidence``.
+
+    The constructor still accepts the parameters (backward compat) but
+    nothing inside the gate enforces them. These tests document the
+    new contract and guard against accidental re-introduction of the
+    latency-inducing ramp-wait logic.
     """
 
     def _setup_state(self, vad_active=True, speech_duration=1.0):
-        """Helper: build a state where VAD is active and speech_duration met."""
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
 
         sm = TurnDetectionStateManager()
         if vad_active:
             sm.update_vad(True)
-            # Backdate active_since so get_speech_duration returns >0
             sm._vad.active_since = time.time() - speech_duration
         return sm
 
     def test_default_disabled(self):
-        """Default min_avg_vad_confidence=0.0 → gate disabled, abstains."""
+        """Default behaviour unchanged — abstains."""
         from eidolon.livekit.plugins.eot import (
             MinSpeakingDurationPolicy, TurnEndPolicy,
         )
 
-        policy = MinSpeakingDurationPolicy()  # default args
+        policy = MinSpeakingDurationPolicy()
         sm = self._setup_state(vad_active=True, speech_duration=1.0)
-        # Push some low samples (would trigger gate if enabled)
+        for _ in range(5):
+            sm.update_vad_probability(0.3)
+        assert policy.check(sm, TurnEndPolicy()) is None
+
+    def test_low_confidence_no_longer_blocks(self):
+        """G18c regression: even configured high, the gate doesn't fire.
+
+        Pre-G18c, ``min_avg_vad_confidence=0.6`` + avg=0.3 would have
+        returned a blocking CutDecision. Post-G18c, the gate abstains
+        (returns None) so the chain can advance to score-based policies.
+        """
+        from eidolon.livekit.plugins.eot import (
+            MinSpeakingDurationPolicy, TurnEndPolicy,
+        )
+
+        policy = MinSpeakingDurationPolicy(
+            min_speech_duration_sec=0.15,
+            min_avg_vad_confidence=0.6,
+        )
+        sm = self._setup_state(vad_active=True, speech_duration=1.0)
         for _ in range(5):
             sm.update_vad_probability(0.3)
 
         result = policy.check(sm, TurnEndPolicy())
-        # Gate disabled → abstains (returns None)
-        assert result is None
+        assert result is None, (
+            "G18c: VAD confidence gate must be no-op (was: blocked cuts)"
+        )
 
-    def test_low_confidence_blocks_when_enabled(self):
+    def test_high_confidence_still_abstains(self):
+        """Symmetric: high confidence also returns None (same as low)."""
         from eidolon.livekit.plugins.eot import (
             MinSpeakingDurationPolicy, TurnEndPolicy,
         )
@@ -1068,44 +1092,22 @@ class TestG2bMinSpeakingDurationVadGate:
         )
         sm = self._setup_state(vad_active=True, speech_duration=1.0)
         for _ in range(5):
-            sm.update_vad_probability(0.3)  # low — likely echo/noise
+            sm.update_vad_probability(0.9)
+        assert policy.check(sm, TurnEndPolicy()) is None
 
+    def test_min_speech_duration_still_enforced(self):
+        """The OTHER half of MinSpeakingDurationPolicy (short-utterance
+        filter) is unchanged — must still block sub-threshold speech."""
+        from eidolon.livekit.plugins.eot import (
+            MinSpeakingDurationPolicy, TurnEndPolicy,
+        )
+
+        policy = MinSpeakingDurationPolicy(min_speech_duration_sec=0.15)
+        sm = self._setup_state(vad_active=True, speech_duration=0.05)
         result = policy.check(sm, TurnEndPolicy())
         assert result is not None
         assert result.should_cut is False
-        assert "Low VAD confidence" in result.reason
-
-    def test_high_confidence_passes_through(self):
-        from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
-        )
-
-        policy = MinSpeakingDurationPolicy(
-            min_speech_duration_sec=0.15,
-            min_avg_vad_confidence=0.6,
-        )
-        sm = self._setup_state(vad_active=True, speech_duration=1.0)
-        for _ in range(5):
-            sm.update_vad_probability(0.9)  # high — real speech
-
-        result = policy.check(sm, TurnEndPolicy())
-        assert result is None  # abstain
-
-    def test_no_samples_does_not_block(self):
-        """Avg=0.0 (no samples yet) must NOT block — that's the 'unknown'
-        case. Otherwise startup transient would falsely trigger the gate."""
-        from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
-        )
-
-        policy = MinSpeakingDurationPolicy(
-            min_speech_duration_sec=0.15,
-            min_avg_vad_confidence=0.6,
-        )
-        sm = self._setup_state(vad_active=True, speech_duration=1.0)
-        # No samples pushed at all
-        result = policy.check(sm, TurnEndPolicy())
-        assert result is None  # 0.0 is treated as "unknown", not blocking
+        assert "too short" in result.reason.lower()
 
     def test_speech_duration_check_still_runs_first(self):
         """Speech-too-short check has higher priority than VAD confidence gate."""

@@ -7,6 +7,7 @@ import io
 import logging
 import unicodedata
 import uuid
+import weakref
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -141,6 +142,9 @@ class SenseTimeTTS(TTS):
         # Track the most recently acquired conn for tests/debug parity with
         # the old "self._conn" introspection. Not used by production code.
         self._conn: SenseTimeTTSClient | None = None
+        # G21 (2026-05-18): weakref for the in-flight synth stream, so the
+        # interrupted-context snapshot can read its ``_pushed_text``.
+        self._current_stream: weakref.ReferenceType["SenseTimeSynthesizeStream"] | None = None
 
         # Serialises stream() callers (defense-in-depth — at most one
         # SynthesizeStream should be active per session under LiveKit).
@@ -276,9 +280,24 @@ class SenseTimeTTS(TTS):
         self, *, conn_options: APIConnectOptions | None = None
     ) -> "SenseTimeSynthesizeStream":
         """Create a streaming synthesis session."""
-        return SenseTimeSynthesizeStream(
+        s = SenseTimeSynthesizeStream(
             tts=self, conn_options=conn_options or self._conn_options
         )
+        # G21 (2026-05-18): expose stream weakref for interrupted-context.
+        self._current_stream = weakref.ref(s)
+        return s
+
+    @property
+    def current_pushed_text(self) -> str:
+        """G21 (2026-05-18): see BailianTTS.current_pushed_text — same
+        contract: the text currently being synthesized by the in-flight
+        stream, or empty string if no active stream."""
+        if self._current_stream is None:
+            return ""
+        stream = self._current_stream()
+        if stream is None:
+            return ""
+        return getattr(stream, "_pushed_text", "") or ""
 
     async def shutdown(self) -> None:
         """Drain the connection pool, dispose all warm conns, close HTTP session."""

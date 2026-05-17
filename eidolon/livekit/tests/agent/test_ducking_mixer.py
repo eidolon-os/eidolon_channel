@@ -24,7 +24,7 @@ import pytest
 from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
-from eidolon.livekit.agent.ducking import DuckingMixer
+from eidolon.livekit.agent.output_controller import OutputController as DuckingMixer
 
 SAMPLE_RATE = 32000
 FRAME_MS = 10  # standard livekit frame duration

@@ -1,10 +1,16 @@
-"""G6: ``DuckingMixer.played_seconds`` tracks audio actually forwarded to
-the inner sink, used by ``_snapshot_interrupted_context`` to enrich the
-LLM context with "how much the user heard before the cancel".
+"""G6 + G22: ``DuckingMixer.played_seconds`` tracks audio actually
+forwarded to the inner sink, used by ``_snapshot_interrupted_context``
+to enrich the LLM context with "how much the user heard before the
+cancel".
 
-Counter resets on each ``duck()`` (= new user-speech window, marking a
-potential turn boundary). Buffered-during-SUSPENDED frames do NOT count
-(user heard silence for those).
+G22 (2026-05-18) — counter reset moved from ``duck()`` to the new
+``on_agent_started_speaking()`` hook. Reason: ``duck()`` fires multiple
+times per agent turn (backchannels, echo dips), each one clobbering
+the counter, so by the time a real interrupt landed it only showed the
+LAST duck cycle's frames rather than the cumulative played audio. The
+``speaking`` agent-state transition is the genuine turn boundary.
+
+Buffered-during-SUSPENDED frames do NOT count (user heard silence).
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ import pytest
 from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
-from eidolon.livekit.agent.ducking import DuckingMixer
+from eidolon.livekit.agent.output_controller import OutputController as DuckingMixer
 
 
 def _silent_frame(samples: int = 800, sample_rate: int = 16000) -> rtc.AudioFrame:
@@ -69,16 +75,72 @@ async def test_played_seconds_counts_normal_flow() -> None:
 
 
 @pytest.mark.asyncio
-async def test_played_seconds_resets_on_duck() -> None:
-    """Each duck() marks a turn boundary; counter must reset so the value
-    reflects "this turn's audio" not "session-cumulative"."""
+async def test_played_seconds_NOT_reset_on_duck() -> None:
+    """G22 regression: duck() must NOT reset the played counter.
+
+    Previously the counter reset on every duck cycle, but real turns
+    often contain multiple duck cycles (user backchannel, echo, brief
+    cross-talk), each clobbering the counter. After this fix the value
+    accumulates across duck cycles and resets only at the speaking
+    transition (next test)."""
+    inner = _StubInnerSink()
+    mixer = DuckingMixer(inner, sample_rate=16000)
+    for _ in range(3):
+        await mixer.capture_frame(_silent_frame(800))
+    before_duck = mixer.played_seconds
+    assert before_duck > 0
+
+    mixer.duck()
+
+    # G22: counter is preserved across the duck transition
+    assert mixer.played_seconds == before_duck
+
+
+@pytest.mark.asyncio
+async def test_played_seconds_resets_on_speaking_transition() -> None:
+    """G22: ``on_agent_started_speaking()`` is the new reset trigger,
+    fired by StreamingPipeline on agent_state→speaking transitions
+    (= true turn boundary)."""
     inner = _StubInnerSink()
     mixer = DuckingMixer(inner, sample_rate=16000)
     for _ in range(3):
         await mixer.capture_frame(_silent_frame(800))
     assert mixer.played_seconds > 0
-    mixer.duck()
+
+    mixer.on_agent_started_speaking()
+
     assert mixer.played_seconds == 0.0
+
+
+@pytest.mark.asyncio
+async def test_played_seconds_accumulates_across_multiple_ducks() -> None:
+    """G22 core scenario: 1 turn, 3 duck cycles (backchannels), played
+    seconds should reflect the TOTAL audio across all 3 windows, not
+    just the last one."""
+    inner = _StubInnerSink()
+    mixer = DuckingMixer(inner, fade_ms=5, fade_in_ms=5, sample_rate=16000)
+
+    # Cycle 1: 2 normal frames, then duck/unduck
+    await mixer.capture_frame(_silent_frame(800))  # +50ms
+    await mixer.capture_frame(_silent_frame(800))  # +50ms
+    mixer.duck()
+    mixer.unduck()  # default drains nothing (no buffer yet)
+    await mixer.capture_frame(_silent_frame(800))  # +50ms (drain trigger + live)
+
+    # Cycle 2: 2 more frames, then duck/unduck
+    mixer.duck()
+    await mixer.capture_frame(_silent_frame(800))  # fade-out, counted
+    mixer.unduck()
+    await mixer.capture_frame(_silent_frame(800))  # +50ms
+
+    after = mixer.played_seconds
+
+    # Without G22 fix this would be ~50ms (only last duck cycle).
+    # With G22 fix we expect ~250ms total (5 frames × 50ms each).
+    assert after > 0.15, (
+        f"G22 regression: played_seconds={after}; expected accumulation "
+        f"across duck cycles (target ≥0.15s)"
+    )
 
 
 @pytest.mark.asyncio

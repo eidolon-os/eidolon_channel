@@ -57,16 +57,21 @@ class EidolonEOTConfig:
     # probability is below this threshold (likely echo / noise rather than
     # real speech). Requires the VAD inference callback to be wired (G6).
     # 0.0 disables the gate (default for backward compatibility).
-    # Recommended value for noisy environments after pilot testing: 0.50–0.65.
     #
-    # F3 (2026-05-16): default lowered from 0.55 → 0.40. Production multi-turn
-    # log showed real Chinese interrupts ("我不相信你啊") with VAD avg 0.42 —
-    # the 0.55 gate rejected them, leaving the user unable to interrupt agent
-    # speech at all. 0.40 admits these while still gating echo (typically
-    # < 0.30). Override via env ``EIDOLON_EOT_MIN_VAD_CONFIDENCE``.
+    # G18a (2026-05-18): default dropped from 0.40 → 0.0 (gate disabled).
+    # The "wait for VAD avg to ramp" was the largest single contributor to
+    # the 5s production interrupt delay: rolling-avg confidence needs ~1s
+    # of frame accumulation to cross any non-trivial threshold, by which
+    # time the interrupt opportunity has passed. We now rely on the
+    # ≤500ms decision window in ``_duck_suspend_timeout_fallback`` plus
+    # backchannel filtering on the first STT INTERIM to distinguish real
+    # interrupts from echo/noise — much faster signal sources.
+    # Phase 2 (G18c) will remove the gate code from MinSpeakingDurationPolicy
+    # entirely. For Phase 1, default to 0.0 (no-op) but leave the env
+    # available for emergency rollback.
     min_avg_vad_confidence: float = field(
         default_factory=lambda: float(
-            os.environ.get("EIDOLON_EOT_MIN_VAD_CONFIDENCE", "0.40")
+            os.environ.get("EIDOLON_EOT_MIN_VAD_CONFIDENCE", "0.0")
         )
     )
 
@@ -133,16 +138,22 @@ class EidolonEOTConfig:
     duck_enabled: bool = True
     """Master switch. False → keep current (post-2ec587b) EOT-only path."""
 
-    duck_fade_ms: int = 50
-    """Linear-ramp duration for fade-out (NORMAL→SUSPENDED). 50 ms is
-    short enough not to feel like a "dip" yet long enough to avoid
-    clicks from instantaneous gain change."""
+    duck_fade_ms: int = 30
+    """Linear-ramp duration for fade-out (NORMAL→SUSPENDED).
 
-    duck_fade_in_ms: int = 200
-    """Linear-ramp duration for fade-in (SUSPENDED→NORMAL). Longer than
-    ``duck_fade_ms`` for a more natural, gradual recovery — mimics how
-    humans raise their voice back after yielding ("slow in, fast out").
-    200 ms smooths the unduck without feeling sluggish."""
+    G17c (2026-05-18): reduced 50 → 30 ms. The previous value was sized
+    for the original "audible duck" model where fade-out was part of the
+    user experience. After G18a moved decisions onto a 500 ms budget,
+    fade-out is just anti-click on a hard mute — 30 ms is the minimum
+    that prevents pop/click and keeps interrupt latency low."""
+
+    duck_fade_in_ms: int = 30
+    """Linear-ramp duration for fade-in (SUSPENDED→NORMAL).
+
+    G17c (2026-05-18): reduced 200 → 30 ms for the same reason as
+    ``duck_fade_ms``. The previous "gradual recovery" was a holdover
+    from the soft-duck design; in the current model (G18a + G17a) we
+    want unduck to be immediate when it happens at all."""
 
     duck_suspend_volume: float = 0.0
     """Target volume at the end of fade-out. ``0.0`` = full silence.
@@ -154,19 +165,40 @@ class EidolonEOTConfig:
     bound memory. In normal operation the suspend window (0.8 s) is well
     below this limit. If exceeded, excess frames are dropped."""
 
-    # F5 (2026-05-16): duck timing knobs exposed as env vars so deployments
-    # can tune them without code edits. Defaults unchanged.
+    # G18a (2026-05-18): unified the 500ms decision budget for both the
+    # SUSPENDED-window timeout and the maximum time before forcing a
+    # cancel/rollback verdict. Override via ``EIDOLON_INTERRUPT_DECISION_MS``
+    # (preferred new name) or ``EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC`` (legacy,
+    # interpreted as seconds; kept for backward-compat through Phase 1).
     duck_suspend_timeout_sec: float = field(
-        default_factory=lambda: float(
-            os.environ.get("EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC", "0.8")
+        default_factory=lambda: (
+            float(os.environ["EIDOLON_INTERRUPT_DECISION_MS"]) / 1000
+            if os.environ.get("EIDOLON_INTERRUPT_DECISION_MS")
+            else float(os.environ.get("EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC", "0.5"))
         )
     )
-    """Maximum time to stay in SUSPENDED before auto-unduck if early-resume
-    watcher emits no decision. Should be ≥ Bailian interim latency P95
-    (typically 200-400 ms after VAD start). 0.8 s gives ASR more room to
-    deliver a first interim before the timeout fires, reducing spurious
-    "no-interim → default unduck" cycles. Below 0.3 s risks "always
-    default-resume"."""
+    """Hard decision budget — the maximum time the mixer stays SUSPENDED
+    before forcing a verdict (cancel-on-still-active-VAD or rollback-on-no-INTERIM).
+
+    Lowered from 0.8s → 0.5s in G18a to align with the industry-standard
+    interrupt latency target. Bailian INTERIM P50 is ~300ms, P95 ~450ms,
+    so a 500ms budget lets the first INTERIM trigger an early decision in
+    >95% of cases. The remaining 5% (slow STT, very short utterance) hit
+    the timeout — at which point VAD-still-active is treated as a real
+    interrupt rather than passively unducking and praying."""
+
+    interrupt_min_interim_chars: int = field(
+        default_factory=lambda: int(
+            os.environ.get("EIDOLON_INTERRUPT_MIN_INTERIM_CHARS", "2")
+        )
+    )
+    """G18a (2026-05-18): minimum character count in the first STT INTERIM
+    that triggers an immediate cancel during the SUSPENDED window
+    (bypassing the EOT-score-based path). ≥2 filters single-char vocalizations
+    and aligns with industry pre-filters (Pipecat ``interrupt_min_words``,
+    LiveKit ``min_words``). Combined with ``BACKCHANNEL_WORDS`` rejection
+    in ``_run_eot_check``, this is the fast-path "real interrupt confirmed
+    by semantic signal" trigger."""
 
     duck_early_cancel_score_threshold: float = field(
         default_factory=lambda: float(

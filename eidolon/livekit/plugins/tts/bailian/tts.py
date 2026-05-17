@@ -7,6 +7,7 @@ import io
 import logging
 import time
 import uuid
+import weakref
 from typing import Any
 
 import aiohttp
@@ -85,6 +86,12 @@ class BailianTTS(TTS):
         self._stream_lock = asyncio.Lock()
         self._stream_active = False
         self._conn: BailianTTSClient | None = None
+        # G21 (2026-05-18): weakref to the currently-active synth stream so
+        # callers (StreamingPipeline._snapshot_interrupted_context) can read
+        # ``_pushed_text`` for the in-flight reply — session.history only
+        # gets the assistant message AFTER the speech_handle winds down,
+        # which is AFTER our cancel snapshot fires.
+        self._current_stream: weakref.ReferenceType["BailianSynthesizeStream"] | None = None
 
     @property
     def provider(self) -> str:
@@ -179,10 +186,30 @@ class BailianTTS(TTS):
     def stream(
         self, *, conn_options: APIConnectOptions | None = None
     ) -> "BailianSynthesizeStream":
-        return BailianSynthesizeStream(
+        s = BailianSynthesizeStream(
             tts=self,
             conn_options=conn_options or self._conn_options,
         )
+        # G21 (2026-05-18): register weakref so _snapshot_interrupted_context
+        # can find this stream's _pushed_text even before session.history
+        # gets the assistant message.
+        self._current_stream = weakref.ref(s)
+        return s
+
+    @property
+    def current_pushed_text(self) -> str:
+        """G21 (2026-05-18): the text currently being synthesized by the
+        in-flight synth stream, if any. Empty string if no active stream
+        or the stream has been GC'd. Used by the interrupted-context
+        snapshot to capture exactly what the agent was saying at the
+        moment of cancellation, rather than the older session.history
+        which only commits the message after speech winds down."""
+        if self._current_stream is None:
+            return ""
+        stream = self._current_stream()
+        if stream is None:
+            return ""
+        return getattr(stream, "_pushed_text", "") or ""
 
 
 class BailianSynthesizeStream(SynthesizeStream):

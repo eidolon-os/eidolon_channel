@@ -256,23 +256,29 @@ class MinSpeakingDurationPolicy(CutPolicy):
     Filters out coughs, sneezes, ambient noise, and other non-intentional vocalizations
     that are shorter than min_speech_duration_sec.
 
-    Round 7 G2b: also blocks cuts when the recent **average VAD probability**
-    is suspiciously low (likely echo / room noise / mic feedback rather than
-    real speech). Requires the VAD inference callback to be wired in (G6);
-    when no probability samples are available (zero), the gate is disabled
-    so this remains backward-compatible.
+    G18c (2026-05-18) — the original Round 7 G2b "average VAD probability"
+    gate was removed. It required ≥1s of frame accumulation to stabilise,
+    which made it the single largest contributor to the multi-second
+    interrupt-delay problem fixed by G18a's first-signal triggers. The
+    InterruptDecider's first-INTERIM + backchannel filter handles echo /
+    noise classification with no latency penalty.
+
+    The ``min_avg_vad_confidence`` and ``confidence_window_sec`` constructor
+    arguments remain for backward compatibility but are NO LONGER USED
+    by ``check()``. They will be removed in a follow-up release once
+    callers (and tests) have been migrated.
     """
 
     def __init__(
         self,
         min_speech_duration_sec: float = 0.15,
-        min_avg_vad_confidence: float = 0.0,
-        confidence_window_sec: float = 2.0,
+        min_avg_vad_confidence: float = 0.0,  # G18c: unused, kept for compat
+        confidence_window_sec: float = 2.0,  # G18c: unused, kept for compat
     ):
         self.min_speech_duration_sec = min_speech_duration_sec
-        # 0.0 = gate disabled (no probability samples or feature off).
-        # Recommended in production: 0.5–0.65 for noisy environments
-        # (pilot test before raising — false negatives hurt UX).
+        # G18c (2026-05-18): these fields are kept as no-op attributes for
+        # the deprecation transition. Reading them is fine; their values
+        # have no effect on cut decisions.
         self.min_avg_vad_confidence = min_avg_vad_confidence
         self.confidence_window_sec = confidence_window_sec
 
@@ -291,25 +297,9 @@ class MinSpeakingDurationPolicy(CutPolicy):
                 reason=f"Speech too short {speech_duration:.3f}s < {self.min_speech_duration_sec}s",
                 silence_duration=0.0,
             )
-
-        # Round 7 G2b: VAD probability gate (only when configured AND data
-        # is available). 0.0 from recent_avg_vad_confidence means "no
-        # samples yet" (callback not wired or just started) — treat as
-        # unknown and don't block.
-        if self.min_avg_vad_confidence > 0.0:
-            avg = state.recent_avg_vad_confidence(
-                window_sec=self.confidence_window_sec
-            )
-            if 0.0 < avg < self.min_avg_vad_confidence:
-                return CutDecision(
-                    should_cut=False,
-                    reason=(
-                        f"Low VAD confidence avg={avg:.2f} < "
-                        f"{self.min_avg_vad_confidence:.2f} "
-                        f"(window={self.confidence_window_sec}s) — likely echo/noise"
-                    ),
-                    silence_duration=0.0,
-                )
+        # G18c: no more VAD-confidence-ramp gate. Returning None hands the
+        # decision back to the chain (subsequent policies, EOT semantic
+        # score, then InterruptDecider).
         return None
 
 

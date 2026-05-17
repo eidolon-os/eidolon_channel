@@ -142,6 +142,19 @@ class AgentBehaviorConfig:
     # patience window for STT to deliver.
     stt_commit_transcript_timeout: float = 5.0
 
+    # G23 (2026-05-18): cross-turn transcript contamination filter. See
+    # ``eidolon/livekit/plugins/stt/_transcript_gate.py`` for the full
+    # rationale. When enabled, wraps the active STT plugin with a decorator
+    # that drops INTERIM/FINAL events arriving within
+    # ``stt_gate_suppress_window_ms`` of a prior FINAL — preventing the
+    # framework's ``audio_recognition`` from concatenating next-turn
+    # transcripts onto the just-finished turn (the bug that produced
+    # phantom ``"嗯，听到了。"`` responses + wasted LLM calls in production).
+    # Default OFF until real-world regression confirms suppressed_count
+    # distribution is healthy.
+    stt_transcript_gate_enabled: bool = False
+    stt_gate_suppress_window_ms: int = 200
+
     # Room audio I/O sample rate (Hz). Unifies the entire audio output chain
     # — RoomIO, DuckingMixer, filler injection — at a single rate. Setting
     # this to match the TTS provider's native rate (e.g. 16000 for BailianTTS)
@@ -260,6 +273,14 @@ class AgentConfig:
                     if get("AGENT_AEC_WARMUP_DURATION", "1.0").lower()
                     in ("none", "off", "disabled", "")
                     else float(get("AGENT_AEC_WARMUP_DURATION", "1.0"))
+                ),
+                # G23 (2026-05-18): STT transcript gate. Default off.
+                stt_transcript_gate_enabled=(
+                    get("EIDOLON_STT_TRANSCRIPT_GATE_ENABLED", "false").lower()
+                    in ("true", "1", "yes", "on")
+                ),
+                stt_gate_suppress_window_ms=int(
+                    get("EIDOLON_STT_GATE_SUPPRESS_WINDOW_MS", "200")
                 ),
             ),
             llm=LLMConfig(

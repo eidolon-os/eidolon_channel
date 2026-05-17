@@ -212,6 +212,22 @@ class SharedStageFactory:
                 f"Unknown STT provider: {provider!r} "
                 f"(supported: 'bailian', 'sensetime')"
             )
+
+        # G23 (2026-05-18): wrap with STTTranscriptGate when enabled.
+        # The gate is provider-agnostic — it filters cross-turn transcript
+        # events from any STT (Bailian, SenseTime, future Azure/Google/…).
+        # See ``eidolon/livekit/plugins/stt/_transcript_gate.py`` for the
+        # full rationale.
+        if cfg.behavior.stt_transcript_gate_enabled:
+            from eidolon.livekit.plugins.stt._transcript_gate import (
+                STTTranscriptGate,
+            )
+
+            stt = STTTranscriptGate(
+                stt,
+                suppress_window_ms=cfg.behavior.stt_gate_suppress_window_ms,
+            )
+
         return SttStage(stt, params=params)
 
     @staticmethod

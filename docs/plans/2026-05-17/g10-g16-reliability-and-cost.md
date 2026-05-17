@@ -1,5 +1,48 @@
 # G7-A / G10–G13 / G16 — TTS WS 可靠性 + STT 成本优化
 
+## Implementation Log (2026-05-17)
+
+**Status**: G7-A / G10 / G11 / G12 / G13 / G16 全部 shipped。
+**Commits**: 2 个（按 ROI / 风险分组）：
+- [`220b1bf`](#) — G7-A + G10 + G11 + G12 + G13（P0/P1 防御层）
+- [`3e2279b`](#) — G16（STT VAD gate，feature-flagged off by default）
+
+**Test result**: `503 passed, 7 skipped, 39 deselected`（G1-G5 时 485 → G6-G9 时 493 → 本批 +10 G16 用例 = 503）。
+
+| Item | 状态 | 主要文件 |
+|---|---|---|
+| **G7-A** STT heartbeat:true | ✅ | `connection_manager.py:_build_run_task_payload` |
+| **G10** TTS aiohttp heartbeat=15 | ✅ | `tts_client.py:75-92`, `config.py` 加 `ws_heartbeat_sec` |
+| **G11** input_loop inter-token timeout | ✅ | `bailian/tts.py:_input_loop`, `config.py` 加 `inter_token_timeout` |
+| **G12** wall-clock no-audio guard | ✅ | `bailian/tts.py:_no_first_audio_guard` 整段重写 |
+| **G13** max_idle_sec 25→15 | ✅ | `config.py` + env files |
+| **G16** STT VAD gate | ✅ feature-flagged off | 新模块 `_gate.py` + `speech_stream.py` + `stt.py` + `streaming.py` 桥接 |
+
+### 偏离原计划
+
+无偏离——计划与实现 1:1 对应。aiohttp `heartbeat` 参数语义通过读源码（`client_ws.py:104-167`）确认无误：PING 间隔 N 秒，PONG 7.5 秒超时，超时即 `ws.closed=True` + `ServerTimeoutError`。
+
+### G16 安全发布建议
+
+1. **默认 OFF** — env 文件 `BAILIAN_STT_GATE_ENABLED=false`
+2. **小流量灰度**：先在低 QPS 实例打开，对比 transcription 准确率 vs baseline
+3. **可观测信号**：日志中找 `[SttGate] GATED→FORWARDING` 和 `preroll flushed` 行
+4. **回滚**：env 改回 false，重启 worker
+
+### 验证回归（实测应该看到）
+
+| Fix | 改前 | 改后预期 |
+|---|---|---|
+| G7-A | run-task payload 缺 heartbeat 字段 | `{'parameters': {'sample_rate': 16000, 'itn': 'true', 'heartbeat': True, 'language_hints': ['zh']}}` |
+| G10 | round-2 TTS 卡 25 秒 | 22.5 秒内 `aiohttp.ServerTimeoutError` → APIError → framework retry |
+| G11 | 极端情况下 input_loop 永等 | 10s 后超时退出 + warning |
+| G12 | 看门狗依赖 _input_done | 现在用 wall-clock，独立于 _input_loop 状态 |
+| G13 | age=20.6s 灰色区漏过 | 15s 阈值卡掉 |
+| G16 OFF | STT 100% 计费 | 同 baseline |
+| G16 ON | 同 OFF | `[SttGate]` 日志出现；STT 计费 reduced 55-65% |
+
+---
+
 ## Context
 
 回归 2026-05-17 02:20:30–02:21:00 的 round 2 故障（用户说"你叫什么"，TTS 整段无声 25 秒）暴露了一组**叠加 bug**，根本原因是 **TTS WS 没有 heartbeat**——一旦 dashscope 服务端单边停止处理 task，我方 WS 完全感知不到，从此沦为"哑连接"。

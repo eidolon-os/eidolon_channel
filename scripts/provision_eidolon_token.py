@@ -10,9 +10,12 @@ Run from the eidolon_channel repository root::
 
     python scripts/provision_eidolon_token.py \\
         --admin-base-url http://127.0.0.1:8081 \\
-        --grpc-target 127.0.0.1:50051 \\
+        --grpc-target 127.0.0.1:50052 \\
         --tenant-id demo --user-id alice \\
         --device-name livekit-dev
+
+Defaults assume eidolon_agent's stock dev config (admin HTTP on :8081,
+gRPC on :50052 — note 50052, not 50051, per config/config.yaml).
 
 Requires ``grpcio`` and ``httpx`` (both already in pyproject deps).
 """
@@ -72,7 +75,7 @@ async def provision(
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--admin-base-url", default="http://127.0.0.1:8081")
-    p.add_argument("--grpc-target", default="127.0.0.1:50051")
+    p.add_argument("--grpc-target", default="127.0.0.1:50052")
     p.add_argument("--tenant-id", required=True)
     p.add_argument("--user-id", required=True)
     p.add_argument("--device-id", default="livekit-channel")

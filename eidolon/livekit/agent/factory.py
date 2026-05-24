@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from livekit.agents import llm as lk_llm
     from livekit.agents import vad as lk_vad
-    from livekit.rtc import Room
 
     from eidolon.livekit.common.config import AgentConfig
 
@@ -85,7 +84,7 @@ class SharedStageFactory:
         cfg: "AgentConfig",
         *,
         prebuilt_vad: "lk_vad.VAD | None" = None,
-        livekit_room: "Room | None" = None,
+        livekit_session_key: str = "",
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -95,8 +94,11 @@ class SharedStageFactory:
                 instance is used instead of building a fresh one. Useful when
                 a worker process loads the VAD model once at startup and
                 reuses it across jobs.
-            livekit_room: When ``REMOTE_AGENT_RPC_TARGET`` is set, used to
-                build ``session_id`` for the remote agent (``livekit:<sid>``).
+            livekit_session_key: When ``REMOTE_AGENT_RPC_TARGET`` is set, used
+                to build the brain-side ``conversation_id`` as
+                ``<prefix>:<session_key>``. Caller must resolve it (``Room.sid``
+                is async on livekit-agents 1.5+, so the factory cannot fetch it).
+                Falls back to ``"unknown"`` when empty.
 
         Returns:
             A fully wired :class:`SharedStageFactory`.
@@ -107,23 +109,24 @@ class SharedStageFactory:
                 ``cfg._validate()`` at config-load time.
         """
         if cfg.remote_agent_rpc.target:
-            from eidolon.livekit.agent.remote_agent_rpc.grpc_llm import (
-                RemoteAgentGrpcLlm,
+            from eidolon.livekit.agent.eidolon_agent_rpc import (
+                EidolonAgentGrpcLlm,
             )
 
-            sid = getattr(livekit_room, "sid", "") if livekit_room is not None else ""
-            name = getattr(livekit_room, "name", "") if livekit_room is not None else ""
-            session_key = sid or name or "unknown"
-            llm = RemoteAgentGrpcLlm(
+            session_key = livekit_session_key.strip() or "unknown"
+            conversation_id = (
+                f"{cfg.remote_agent_rpc.conversation_id_prefix}:{session_key}"
+            )
+            llm = EidolonAgentGrpcLlm(
                 target=cfg.remote_agent_rpc.target,
-                session_id=f"livekit:{session_key}",
-                locale=cfg.remote_agent_rpc.locale,
-                display_model=cfg.llm.model or "remote_agent_rpc",
+                device_token=cfg.remote_agent_rpc.device_token,
+                conversation_id=conversation_id,
+                display_model=cfg.llm.model or "eidolon_agent",
             )
             logger.info(
-                "[SharedStageFactory] using RemoteAgentGrpcLlm target=%r session_id=%s",
+                "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r conversation_id=%s",
                 cfg.remote_agent_rpc.target,
-                f"livekit:{session_key}",
+                conversation_id,
             )
         else:
             llm = cls._build_llm(cfg)

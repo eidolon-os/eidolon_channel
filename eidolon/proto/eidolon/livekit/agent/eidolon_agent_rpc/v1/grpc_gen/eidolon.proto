@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package eidolon.agent.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// The EidolonAgent service is the brain that LiveKit voice agents (and other
+// callers — web, IoT, desktop) invoke instead of a raw LLM. It bundles
+// streaming chat, signal ingest, proactive subscription, and the pairing
+// handshake into one connection.
+service EidolonAgent {
+  // Primary: bidirectional streaming chat. The client sends ChatRequest
+  // frames (initial + optional cancels + optional signals); the server emits
+  // a stream of TurnEvent frames. Both directions stay open for the duration
+  // of a session (multiple turns share the connection).
+  rpc Chat(stream ChatRequest) returns (stream TurnEvent);
+
+  // One-shot non-streaming call. Useful for simple text-only callers that
+  // don't need barge-in. Equivalent to a single ChatRequest + collected reply.
+  rpc ChatOnce(ChatOnceRequest) returns (ChatOnceResponse);
+
+  // Push realtime signals (emotion, prosody, vision tags) for the current
+  // session without driving a turn. The server fuses these and uses them in
+  // the next compile pass.
+  rpc PushSignal(SignalRequest) returns (Ack);
+
+  // Server-stream of proactive utterances the agent decides to initiate.
+  // Caller subscribes once and decides on its side whether to barge-in.
+  rpc SubscribeProactive(SubscribeRequest) returns (stream ProactiveEvent);
+
+  // Trade a pairing_code for a long-lived device_token. THIS IS THE ONLY
+  // RPC that does NOT require Authorization metadata.
+  rpc ExchangePairingCode(ExchangeRequest) returns (ExchangeResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Turn protocol
+// ---------------------------------------------------------------------------
+
+message ChatRequest {
+  oneof payload {
+    StartTurn start = 1;
+    CancelTurn cancel = 2;
+    PushSignalInline signal = 3;
+  }
+}
+
+message StartTurn {
+  string turn_id = 1;          // uuid7; server dedupes on this
+  string conversation_id = 2;
+  string text = 3;
+  google.protobuf.Struct realtime = 4; // optional pre-fused digest
+  google.protobuf.Struct metadata = 5;
+}
+
+message CancelTurn { string turn_id = 1; }
+
+message PushSignalInline {
+  string modality = 1;
+  string label = 2;
+  double confidence = 3;
+  google.protobuf.Struct raw = 4;
+  google.protobuf.Timestamp ts = 5;
+}
+
+message TurnEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    STATE = 1;
+    DELTA = 2;
+    TOOL_CALL = 3;
+    TOOL_RESULT = 4;
+    CITATION = 5;
+    USAGE = 6;
+    DONE = 7;
+    ERROR = 8;
+    ACK = 9;
+    PROGRESS = 10;
+    HANDOFF = 11;
+  }
+  string turn_id = 1;
+  uint64 seq = 2;
+  Kind kind = 3;
+  google.protobuf.Struct data = 4;
+  double ts = 5;
+}
+
+// ---------------------------------------------------------------------------
+// One-shot
+// ---------------------------------------------------------------------------
+
+message ChatOnceRequest {
+  string turn_id = 1;
+  string conversation_id = 2;
+  string text = 3;
+  google.protobuf.Struct metadata = 4;
+}
+
+message ChatOnceResponse {
+  string turn_id = 1;
+  string assistant_text = 2;
+  string triage = 3;
+  uint64 latency_first_delta_ms = 4;
+  google.protobuf.Struct metadata = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Signals
+// ---------------------------------------------------------------------------
+
+message SignalRequest {
+  string session_id = 1;
+  PushSignalInline signal = 2;
+}
+
+message Ack { bool accepted = 1; string note = 2; }
+
+// ---------------------------------------------------------------------------
+// Proactive
+// ---------------------------------------------------------------------------
+
+message SubscribeRequest {
+  string instance_id = 1; // optional; empty = subscribe to all instances for the caller's user
+}
+
+message ProactiveEvent {
+  string instance_id = 1;
+  string intent = 2;
+  string text = 3;
+  string style_hint = 4;
+  google.protobuf.Timestamp ts = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+// ---------------------------------------------------------------------------
+
+message ExchangeRequest {
+  string pairing_code = 1;
+  string device_name = 2;
+  string device_id = 3; // optional; server generates if empty
+}
+
+message ExchangeResponse {
+  string device_id = 1;
+  string device_token = 2;
+  string tenant_id = 3;
+  string user_id = 4;
+  string default_template_id = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}

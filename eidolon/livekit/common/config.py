@@ -187,11 +187,19 @@ class LLMConfig:
 
 @dataclass
 class RemoteAgentRpcConfig:
-    """Remote companion / agent via ``RemoteAgent`` gRPC (see ``eidolon/proto/.../remote_agent_rpc.proto``)."""
+    """Remote companion-brain via ``EidolonAgent.Chat`` gRPC.
 
-    # e.g. unix:///var/run/eidolon/remote_agent.sock or 127.0.0.1:50051
+    Authoritative proto: ``eidolon/proto/eidolon/livekit/agent/eidolon_agent_rpc/v1/grpc_gen/eidolon.proto``
+    (package ``eidolon.agent.v1``). A non-empty ``device_token`` is required —
+    obtain one via ``scripts/provision_eidolon_token.py``.
+    """
+
+    # e.g. unix:///var/run/eidolon/eidolon_agent.sock or 127.0.0.1:50051
     target: str = ""
     locale: str = "zh"
+    device_token: str = ""
+    # conversation_id sent to the brain is "<prefix>:<livekit_room_sid>".
+    conversation_id_prefix: str = "livekit"
 
 
 @dataclass
@@ -298,6 +306,11 @@ class AgentConfig:
             remote_agent_rpc=RemoteAgentRpcConfig(
                 target=get("REMOTE_AGENT_RPC_TARGET", "").strip(),
                 locale=(get("REMOTE_AGENT_RPC_LOCALE", "zh").strip() or "zh"),
+                device_token=get("REMOTE_AGENT_RPC_DEVICE_TOKEN", "").strip(),
+                conversation_id_prefix=(
+                    get("REMOTE_AGENT_RPC_CONVERSATION_ID_PREFIX", "livekit").strip()
+                    or "livekit"
+                ),
             ),
             stt_provider=get("STT_PROVIDER", "sensetime").lower(),
             tts_provider=get("TTS_PROVIDER", "sensetime").lower(),

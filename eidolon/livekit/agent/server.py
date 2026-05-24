@@ -154,8 +154,17 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
 
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
     room = ctx.room
+    # Room.sid is async on livekit-agents 1.5+; resolve here so the factory
+    # receives a plain string and the brain gets a stable conversation_id.
+    session_key = ""
+    try:
+        session_key = await room.sid
+    except Exception as exc:
+        logger.warning("[Agent] room.sid resolve failed: %r — falling back to room.name", exc)
+    if not session_key:
+        session_key = getattr(room, "name", "") or ""
     factory = SharedStageFactory.from_config(
-        cfg, prebuilt_vad=prebuilt_vad, livekit_room=room
+        cfg, prebuilt_vad=prebuilt_vad, livekit_session_key=session_key
     )
 
     if cfg.behavior.agent_mode == "batch":

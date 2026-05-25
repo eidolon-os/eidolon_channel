@@ -1,10 +1,10 @@
 # Channel settings — copy to config/settings.yaml
-# Secret fields must stay empty; values from config/.env (provider plugin keys stay in .env only)
+# Secret placeholders = env var names; provider plugin keys stay in config/.env only
 
 core:
   livekit_url: ws://127.0.0.1:7880
-  api_key: ""       # env: LIVEKIT_API_KEY
-  api_secret: ""    # env: LIVEKIT_API_SECRET
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
   host: 0.0.0.0
   port: 8766
 
@@ -14,7 +14,7 @@ behavior:
 llm:
   base_url: ""
   model: gpt-4o-mini
-  api_key: ""       # env: OPENAI_LLM_API_KEY
+  api_key: OPENAI_LLM_API_KEY
 
 providers:
   stt_provider: sensetime
@@ -24,5 +24,5 @@ providers:
 remote_agent_rpc:
   target: ""
   locale: zh
-  device_token: ""  # env: REMOTE_AGENT_RPC_DEVICE_TOKEN
+  device_token: REMOTE_AGENT_RPC_DEVICE_TOKEN
   conversation_id_prefix: livekit

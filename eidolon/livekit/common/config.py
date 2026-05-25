@@ -17,7 +17,7 @@ can switch providers via env var without restarting the agent.
 Loading order (highest priority first):
 1. Existing ``os.environ`` entries (shell, container, process manager, etc.)
 2. ``config/.env`` via ``EIDOLON_CHANNEL_ENV_FILE`` / ``EIDOLON_CHANNEL_LIVEKIT_ENV``
-3. ``config/settings.yaml`` (structured fields; secret keys must be empty placeholders)
+3. ``config/settings.yaml`` (structured fields; secret placeholders = env var names)
 4. Code defaults on each dataclass
 
 Plugin provider keys (STT/TTS API keys, etc.) remain in ``config/.env`` only.
@@ -97,11 +97,12 @@ def _yaml_section(data: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _yaml_secret(section: dict[str, Any], field: str, env_var: str) -> str:
-    """YAML placeholder must be empty; value from environment."""
+    """YAML placeholder is ``env_var``; value from environment."""
     val = str(section.get(field) or "").strip()
-    if val:
+    if val and val != env_var:
         raise ValueError(
-            f"{field} must stay empty in settings.yaml; set {env_var} in config/.env"
+            f"{field} must be empty or the placeholder {env_var}; "
+            f"set {env_var} in config/.env"
         )
     return os.environ.get(env_var, "").strip()
 

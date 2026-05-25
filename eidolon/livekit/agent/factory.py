@@ -96,8 +96,7 @@ class SharedStageFactory:
                 reuses it across jobs.
             livekit_session_key: When ``REMOTE_AGENT_RPC_TARGET`` is set, used
                 to build the brain-side ``conversation_id`` as
-                ``<prefix>:<session_key>``. Caller must resolve it (``Room.sid``
-                is async on livekit-agents 1.5+, so the factory cannot fetch it).
+                ``<prefix>:<session_key>`` (typically ``Room.name`` from the job).
                 Falls back to ``"unknown"`` when empty.
 
         Returns:

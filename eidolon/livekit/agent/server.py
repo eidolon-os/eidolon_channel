@@ -5,22 +5,17 @@ agent participant. When a user joins a room, this worker dispatches a job that
 runs either StreamingPipeline (streaming mode, default) or BatchPipeline (manual
 mode, configured via AGENT_MODE env var).
 
-Recommended local startup (sets ``EIDOLON_CHANNEL_LIVEKIT_ENV``,
-``EIDOLON_ENV=dev``, ``PYTHONPATH``) — see ``deploy/README.md``::
+Recommended local startup: ``eidolon_admin`` supervisord / ``./deploy/dev/run_all.sh``
+(loads ``config/.env`` via ``with-env.sh``).
 
-    ./deploy/run_livekit_channel.sh
-
-Manual module run (``EIDOLON_CHANNEL_LIVEKIT_ENV`` is **required** and must
-point to an existing env file, or ``AgentConfig.from_env()`` raises ``ValueError``)::
+Standalone worker after ``./deploy/dev/init.sh``::
 
     cd <repository-root> && source .venv/bin/activate
-    export EIDOLON_CHANNEL_LIVEKIT_ENV=/path/to/.livekit-channel.env
-    python -m eidolon.livekit.agent.server
+    EIDOLON_ENV=dev python -m eidolon.livekit.agent.server
 
-For ad-hoc devmode (0 warm processes, easier to debug) without the shell
-script, still export the env file path::
+Optional override of the env file path::
 
-    export EIDOLON_CHANNEL_LIVEKIT_ENV=/path/to/.livekit-channel.env
+    export EIDOLON_CHANNEL_ENV_FILE=/path/to/config/.env
     EIDOLON_ENV=dev python -m eidolon.livekit.agent.server
 """
 

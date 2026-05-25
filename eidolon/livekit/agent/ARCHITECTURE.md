@@ -619,7 +619,7 @@ except ImportError:
 
 ## 9. 配置项说明
 
-**单一真相源**：所有 env 变量、默认值与注释见 [`deploy/livekit-channel.env.template`](../../../deploy/livekit-channel.env.template)。下面只列核心运行时分组，详细 plugin-specific 配置请直接读 template。
+**单一真相源**：所有 env 变量、默认值与注释见 [`config/.env.example`](../../../config/.env.example)。下面只列核心运行时分组，详细 plugin-specific 配置请直接读该文件。
 
 | 分组 | 关键变量 | 说明 |
 |---|---|---|
@@ -629,7 +629,7 @@ except ImportError:
 | Provider 选择 | `STT_PROVIDER` / `TTS_PROVIDER` / `VAD_PROVIDER` | 选择哪一家插件——`bailian` \| `sensetime` / `firered_pvad` \| `firered` \| `silero` \| `none` |
 | LLM (OpenAI 兼容) | `OPENAI_LLM_BASE_URL` / `OPENAI_LLM_MODEL` / `OPENAI_LLM_API_KEY` | LLM provider 的 endpoint、模型名与密钥 |
 | Remote Agent (可选) | `REMOTE_AGENT_RPC_TARGET` / `REMOTE_AGENT_RPC_LOCALE` | 非空时走 gRPC `RemoteAgent.Session`，绕过上面的 OpenAI 兼容 LLM |
-| Plugin-specific | `BAILIAN_STT_*` / `BAILIAN_TTS_*` / `SENSETIME_STT_*` / `SENSETIME_TTS_*` | 各 provider 的 URL、密钥、采样率、池大小、聚合阈值等——详见 template |
+| Plugin-specific | `BAILIAN_STT_*` / `BAILIAN_TTS_*` / `SENSETIME_STT_*` / `SENSETIME_TTS_*` | 各 provider 的 URL、密钥、采样率、池大小、聚合阈值等——详见 `config/.env.example` |
 | 模型路径覆盖 | `EIDOLON_EOT_MODEL_DIR` / `EIDOLON_FIRERED_PVAD_MODEL_DIR` / `EIDOLON_EOT_DEBUG_LOG` | 留空使用插件自带 bundled 模型 |
 
 **命名约定**：`<PROVIDER>_<STAGE>_<FIELD>` 用于 plugin 配置；`<STAGE>_PROVIDER` 选择激活的 provider；`LIVEKIT_*` / `AGENT_*` 用于平台与 agent 身份。所有 env 文件值都可被 shell 环境变量覆盖（优先级更高）。
@@ -638,18 +638,13 @@ except ImportError:
 
 ## 10. 启动命令
 
-日常本地开发推荐用仓库里的启动脚本（会设置 `EIDOLON_CHANNEL_LIVEKIT_ENV`、`EIDOLON_ENV=dev`、`PYTHONPATH`），详见 [`deploy/README.md`](../../../deploy/README.md)：
+日常本地开发推荐通过 **eidolon_admin** 的 supervisord（`deploy/supervisor/available/channel.conf` + `with-env.sh` 加载 `config/.env`），或全栈 `./deploy/dev/run_all.sh`。
+
+单独调试 worker（须先 `./deploy/dev/init.sh` 生成 `config/.env`）：
 
 ```bash
-./deploy/run_livekit_channel.sh
+cd eidolon_channel && source .venv/bin/activate
+EIDOLON_ENV=dev python -m eidolon.livekit.agent.server
 ```
 
-也可在项目根手动激活虚拟环境后直接跑模块；**必须**设置 `EIDOLON_CHANNEL_LIVEKIT_ENV` 指向已存在的 env 文件，否则 `AgentConfig.from_env()` 会抛 `ValueError`（未设置或路径非文件均失败）：
-
-```bash
-cd eidolon_daemon && source .venv/bin/activate
-export EIDOLON_CHANNEL_LIVEKIT_ENV=/path/to/deploy/.livekit-channel.env
-python -m eidolon.livekit.agent.server
-```
-
-配置加载顺序见上文「8.6 配置优先级」；仅当设置了 `EIDOLON_CHANNEL_LIVEKIT_ENV` 且文件存在时，才通过 `load_dotenv` 合并该文件；否则只依赖已有 `os.environ` 与代码默认值。
+配置加载顺序见上文「8.6 配置优先级」；默认读取 `config/.env`，也可用 `EIDOLON_CHANNEL_ENV_FILE` 覆盖路径。

@@ -41,7 +41,6 @@ from eidolon.livekit.plugins.tts.sensetime.config import SenseTimeTTSConfig
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
 _DEFAULT_ENV = _REPO_ROOT / "config" / ".env"
-_LEGACY_ENV = _REPO_ROOT / "deploy" / ".livekit-channel.env"
 
 
 def _resolve_settings_yaml() -> Path:
@@ -70,8 +69,6 @@ def _resolve_env_file() -> Path:
         return p.resolve()
     if _DEFAULT_ENV.is_file():
         return _DEFAULT_ENV.resolve()
-    if _LEGACY_ENV.is_file():
-        return _LEGACY_ENV.resolve()
     raise FileNotFoundError(
         f"channel env not found: {_DEFAULT_ENV}. Run ./deploy/dev/init.sh"
     )

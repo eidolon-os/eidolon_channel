@@ -1,7 +1,0 @@
-# Runtime config (contains secrets)
-.livekit-channel.env
-
-# Build artifacts
-.venv/
-__pycache__/
-*.pyc

@@ -11,6 +11,10 @@ build/
 .coverage
 htmlcov/
 
+# Local dev config (templates are committed)
+config/.env
+config/settings.yaml
+
 # Local test secrets
 eidolon/livekit/tests/.env
 

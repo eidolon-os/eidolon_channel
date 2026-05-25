@@ -16,12 +16,11 @@ can switch providers via env var without restarting the agent.
 
 Loading order (highest priority first):
 1. Existing ``os.environ`` entries (shell, container, process manager, etc.)
-2. Values merged from the file at ``EIDOLON_CHANNEL_LIVEKIT_ENV`` (required;
-   ``load_dotenv(..., override=False)`` so existing env entries win over file)
-3. Code defaults declared on each config dataclass
+2. ``config/.env`` via ``EIDOLON_CHANNEL_ENV_FILE`` / ``EIDOLON_CHANNEL_LIVEKIT_ENV``
+3. ``config/settings.yaml`` (structured fields; secret keys must be empty placeholders)
+4. Code defaults on each dataclass
 
-``EIDOLON_CHANNEL_LIVEKIT_ENV`` must name an **existing regular file**; otherwise
-:func:`AgentConfig.from_env` raises ``ValueError``.
+Plugin provider keys (STT/TTS API keys, etc.) remain in ``config/.env`` only.
 """
 
 from __future__ import annotations
@@ -29,6 +28,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from eidolon.livekit.plugins.stt.bailian.config import BailianSTTConfig
 from eidolon.livekit.plugins.stt.sensetime.config import SenseTimeSTTConfig
@@ -36,37 +38,75 @@ from eidolon.livekit.plugins.tts.bailian.config import BailianTTSConfig
 from eidolon.livekit.plugins.tts.sensetime.config import SenseTimeTTSConfig
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
+_DEFAULT_ENV = _REPO_ROOT / "config" / ".env"
+_LEGACY_ENV = _REPO_ROOT / "deploy" / ".livekit-channel.env"
+
+
+def _resolve_settings_yaml() -> Path:
+    explicit = os.environ.get("EIDOLON_CHANNEL_SETTINGS_YAML", "").strip()
+    if explicit:
+        p = Path(explicit).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"EIDOLON_CHANNEL_SETTINGS_YAML missing: {p}")
+        return p.resolve()
+    if _DEFAULT_YAML.is_file():
+        return _DEFAULT_YAML.resolve()
+    raise FileNotFoundError(
+        f"channel settings not found: {_DEFAULT_YAML}. Run ./deploy/dev/init.sh"
+    )
+
+
+def _resolve_env_file() -> Path:
+    raw = (
+        os.environ.get("EIDOLON_CHANNEL_ENV_FILE", "").strip()
+        or os.environ.get("EIDOLON_CHANNEL_LIVEKIT_ENV", "").strip()
+    )
+    if raw:
+        p = Path(raw).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"channel env file missing: {p}")
+        return p.resolve()
+    if _DEFAULT_ENV.is_file():
+        return _DEFAULT_ENV.resolve()
+    if _LEGACY_ENV.is_file():
+        return _LEGACY_ENV.resolve()
+    raise FileNotFoundError(
+        f"channel env not found: {_DEFAULT_ENV}. Run ./deploy/dev/init.sh"
+    )
+
+
 def _bootstrap_dotenv() -> None:
-    """Load the env file at ``EIDOLON_CHANNEL_LIVEKIT_ENV`` into ``os.environ``.
-
-    Raises:
-        ValueError: If ``EIDOLON_CHANNEL_LIVEKIT_ENV`` is unset/empty or the
-            path is not an existing regular file.
-
-    Idempotent and non-destructive: existing ``os.environ`` entries take
-    priority (host environment > .env file on disk). Plugin configs
-    (``BailianSTTConfig`` etc.) read directly from ``os.environ`` via their
-    own ``default_factory``, so they pick up these values automatically once
-    bootstrap has run.
-    """
+    """Load config/.env (secrets + provider keys) into os.environ."""
     from dotenv import load_dotenv
 
-    raw = os.environ.get("EIDOLON_CHANNEL_LIVEKIT_ENV")
-    if raw is None or not str(raw).strip():
-        raise ValueError(
-            "EIDOLON_CHANNEL_LIVEKIT_ENV is not set or is empty. "
-            "Set it to the path of your LiveKit channel env file (for example "
-            "deploy/.livekit-channel.env)."
-        )
-
-    env_path = Path(str(raw).strip())
-    if not env_path.is_file():
-        raise ValueError(
-            f"EIDOLON_CHANNEL_LIVEKIT_ENV={str(env_path)!r} must point to an "
-            f"existing regular file."
-        )
-
+    env_path = _resolve_env_file()
+    os.environ.setdefault("EIDOLON_CHANNEL_LIVEKIT_ENV", str(env_path))
+    os.environ.setdefault("EIDOLON_CHANNEL_ENV_FILE", str(env_path))
     load_dotenv(env_path, override=False)
+
+
+def _load_yaml() -> dict[str, Any]:
+    data = yaml.safe_load(_resolve_settings_yaml().read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError("channel settings.yaml must be a mapping")
+    return data
+
+
+def _yaml_section(data: dict[str, Any], key: str) -> dict[str, Any]:
+    sec = data.get(key) or {}
+    return sec if isinstance(sec, dict) else {}
+
+
+def _yaml_secret(section: dict[str, Any], field: str, env_var: str) -> str:
+    """YAML placeholder must be empty; value from environment."""
+    val = str(section.get(field) or "").strip()
+    if val:
+        raise ValueError(
+            f"{field} must stay empty in settings.yaml; set {env_var} in config/.env"
+        )
+    return os.environ.get(env_var, "").strip()
 
 
 # G4 (2026-05-16): tiny helpers for "env var unset/empty → None" semantics.
@@ -241,27 +281,46 @@ class AgentConfig:
         4. Run light validation; warn (not fail) on missing optional values
         """
         _bootstrap_dotenv()
+        y = _load_yaml()
+        core_y = _yaml_section(y, "core")
+        behavior_y = _yaml_section(y, "behavior") or _yaml_section(y, "agent_behavior")
+        llm_y = _yaml_section(y, "llm")
+        rpc_y = _yaml_section(y, "remote_agent_rpc")
+        prov_y = _yaml_section(y, "providers")
 
         def get(key: str, fallback: str) -> str:
-            return os.environ.get(key, fallback)
+            env_val = os.environ.get(key, "").strip()
+            return env_val if env_val else fallback
 
+        port_raw = get("AGENT_PORT", str(core_y.get("port", 8766)))
         try:
-            port = int(get("AGENT_PORT", "8766"))
+            port = int(port_raw)
         except ValueError as e:
-            raise ValueError(
-                f"AGENT_PORT must be an integer, got {get('AGENT_PORT', '')!r}"
-            ) from e
+            raise ValueError(f"AGENT_PORT must be an integer, got {port_raw!r}") from e
+
+        lk_key = _yaml_secret(core_y, "api_key", "LIVEKIT_API_KEY") or get(
+            "LIVEKIT_API_KEY", "devkey"
+        )
+        lk_secret = _yaml_secret(core_y, "api_secret", "LIVEKIT_API_SECRET") or get(
+            "LIVEKIT_API_SECRET", "devkey_secret"
+        )
 
         cfg = cls(
             core=CoreConfig(
-                livekit_url=get("LIVEKIT_URL", "ws://localhost:7880"),
-                api_key=get("LIVEKIT_API_KEY", "devkey"),
-                api_secret=get("LIVEKIT_API_SECRET", "devkey_secret"),
-                host=get("AGENT_HOST", "0.0.0.0"),
+                livekit_url=get(
+                    "LIVEKIT_URL",
+                    str(core_y.get("livekit_url") or "ws://localhost:7880"),
+                ),
+                api_key=lk_key,
+                api_secret=lk_secret,
+                host=get("AGENT_HOST", str(core_y.get("host", "0.0.0.0"))),
                 port=port,
             ),
             behavior=AgentBehaviorConfig(
-                agent_mode=get("AGENT_MODE", "streaming").lower(),
+                agent_mode=get(
+                    "AGENT_MODE",
+                    str(behavior_y.get("agent_mode", "streaming")),
+                ).lower(),
                 instructions=get("AGENT_INSTRUCTIONS", _DEFAULT_INSTRUCTIONS),
                 welcome_message=get("AGENT_WELCOME_MESSAGE", _DEFAULT_WELCOME),
                 false_interruption_timeout=(
@@ -292,9 +351,16 @@ class AgentConfig:
                 ),
             ),
             llm=LLMConfig(
-                base_url=get("OPENAI_LLM_BASE_URL", ""),
-                model=get("OPENAI_LLM_MODEL", "gpt-4o-mini"),
-                api_key=get("OPENAI_LLM_API_KEY", ""),
+                base_url=get(
+                    "OPENAI_LLM_BASE_URL",
+                    str(llm_y.get("base_url") or ""),
+                ),
+                model=get(
+                    "OPENAI_LLM_MODEL",
+                    str(llm_y.get("model") or "gpt-4o-mini"),
+                ),
+                api_key=_yaml_secret(llm_y, "api_key", "OPENAI_LLM_API_KEY")
+                or get("OPENAI_LLM_API_KEY", ""),
                 # G4 (2026-05-16): None when env unset/empty, letting the
                 # OpenAI plugin's NOT_GIVEN defaults apply.
                 temperature=_optional_float(get("OPENAI_LLM_TEMPERATURE", "")),
@@ -304,17 +370,38 @@ class AgentConfig:
                 ),
             ),
             remote_agent_rpc=RemoteAgentRpcConfig(
-                target=get("REMOTE_AGENT_RPC_TARGET", "").strip(),
-                locale=(get("REMOTE_AGENT_RPC_LOCALE", "zh").strip() or "zh"),
-                device_token=get("REMOTE_AGENT_RPC_DEVICE_TOKEN", "").strip(),
+                target=get(
+                    "REMOTE_AGENT_RPC_TARGET",
+                    str(rpc_y.get("target") or ""),
+                ).strip(),
+                locale=(
+                    get("REMOTE_AGENT_RPC_LOCALE", str(rpc_y.get("locale") or "zh")).strip()
+                    or "zh"
+                ),
+                device_token=(
+                    _yaml_secret(rpc_y, "device_token", "REMOTE_AGENT_RPC_DEVICE_TOKEN")
+                    or get("REMOTE_AGENT_RPC_DEVICE_TOKEN", "").strip()
+                ),
                 conversation_id_prefix=(
-                    get("REMOTE_AGENT_RPC_CONVERSATION_ID_PREFIX", "livekit").strip()
+                    get(
+                        "REMOTE_AGENT_RPC_CONVERSATION_ID_PREFIX",
+                        str(rpc_y.get("conversation_id_prefix") or "livekit"),
+                    ).strip()
                     or "livekit"
                 ),
             ),
-            stt_provider=get("STT_PROVIDER", "sensetime").lower(),
-            tts_provider=get("TTS_PROVIDER", "sensetime").lower(),
-            vad_provider=get("VAD_PROVIDER", "firered").lower(),
+            stt_provider=get(
+                "STT_PROVIDER",
+                str(prov_y.get("stt_provider") or "sensetime"),
+            ).lower(),
+            tts_provider=get(
+                "TTS_PROVIDER",
+                str(prov_y.get("tts_provider") or "sensetime"),
+            ).lower(),
+            vad_provider=get(
+                "VAD_PROVIDER",
+                str(prov_y.get("vad_provider") or "firered"),
+            ).lower(),
             # bailian_stt / sensetime_stt / sensetime_tts: default_factory
             # triggers their own env-driven init when this AgentConfig is
             # instantiated.

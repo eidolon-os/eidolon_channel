@@ -28,8 +28,14 @@ from livekit.agents.types import (
 )
 
 from eidolon.livekit.agent.eidolon_agent_rpc.session import (
+    CitationPayload,
+    DeltaPayload,
     EidolonAgentSession,
+    HandoffPayload,
+    StatePayload,
+    ToolCallPayload,
     TurnError,
+    UsagePayload,
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
@@ -160,19 +166,53 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         llm_v: EidolonAgentGrpcLlm = self._llm  # type: ignore[assignment]
         session = await llm_v._get_session()
         user_text = _last_user_text(self._chat_ctx)
-        turn_id, deltas = await session.start_turn(
+        turn_id, payloads = await session.start_turn(
             text=user_text,
             conversation_id=llm_v._conversation_id,
         )
         req_id = f"eidolon-{turn_id}"
         try:
-            async for chunk in deltas:
-                self._event_ch.send_nowait(
-                    llm.ChatChunk(
-                        id=req_id,
-                        delta=llm.ChoiceDelta(content=chunk),
+            async for payload in payloads:
+                # Dispatch by payload type. Adding a new brain event kind only
+                # needs an elif here + a payload dataclass in session.py.
+                if isinstance(payload, DeltaPayload):
+                    self._event_ch.send_nowait(
+                        llm.ChatChunk(
+                            id=req_id,
+                            delta=llm.ChoiceDelta(content=payload.text),
+                        )
                     )
-                )
+                elif isinstance(payload, UsagePayload):
+                    # LiveKit's _metrics_monitor_task aggregates ChatChunk.usage
+                    # into LLMMetrics; surfacing this brings token/cost metrics
+                    # back into the framework's observability pipeline.
+                    self._event_ch.send_nowait(
+                        llm.ChatChunk(
+                            id=req_id,
+                            usage=llm.CompletionUsage(
+                                prompt_tokens=payload.prompt_tokens,
+                                completion_tokens=payload.completion_tokens,
+                                total_tokens=payload.total_tokens,
+                            ),
+                        )
+                    )
+                elif isinstance(payload, StatePayload):
+                    # UX hook (future): pipeline can subscribe to drive a
+                    # "thinking..." indicator. For now we just log so the
+                    # signal isn't lost.
+                    logger.info(
+                        "[EidolonAgentGrpcLlmStream] state=%s turn=%s",
+                        payload.state, turn_id,
+                    )
+                elif isinstance(payload, (ToolCallPayload, CitationPayload, HandoffPayload)):
+                    # Channel doesn't surface tools / citations / handoff yet
+                    # — log at DEBUG so future work has a hook to grep for.
+                    logger.debug(
+                        "[EidolonAgentGrpcLlmStream] %s turn=%s payload=%r",
+                        type(payload).__name__, turn_id, payload,
+                    )
+                # else: unknown payload type — ignore (forward-compat with new
+                # session.py additions).
         except asyncio.CancelledError:
             # Barge-in or job teardown: tell the brain to stop generating
             # without closing the underlying bidi stream. Use session.spawn

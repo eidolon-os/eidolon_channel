@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass, field
 from typing import AsyncIterator
 
 import grpc
@@ -54,7 +55,82 @@ _CHANNEL_OPTIONS: list[tuple[str, int | str]] = [
 ]
 
 
-_QUEUE_SENTINEL_DONE = object()
+# Typed inbox payloads (C, plan Phase C).
+#
+# The per-turn queue now carries one of these payload types (or a BaseException
+# for fatal stream errors). EidolonAgentGrpcLlmStream._run dispatches by type:
+#   DeltaPayload  -> ChatChunk(delta=…)
+#   UsagePayload  -> ChatChunk(usage=CompletionUsage(…))
+#   StatePayload  -> INFO log (UX feedback hook, future)
+#   ToolCallPayload / CitationPayload / HandoffPayload -> DEBUG log
+#   _DonePayload  -> end of turn (queue closes; consumer returns)
+#
+# This keeps a single event channel for all turn-scoped signals — a side channel
+# would require coordinating cancel/reconnect across two queues, complicating
+# the existing single-queue demux by turn_id.
+
+
+@dataclass(frozen=True, slots=True)
+class DeltaPayload:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class UsagePayload:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    model: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class StatePayload:
+    state: str  # "thinking" | "speaking" | …
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallPayload:
+    name: str
+    args: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class CitationPayload:
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffPayload:
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class _DonePayload:
+    """Sentinel marking end-of-turn. Consumer returns when it sees this."""
+
+
+_DONE = _DonePayload()
+
+
+# Union of everything the inbox queue can carry to a turn consumer.
+TurnPayload = (
+    DeltaPayload
+    | UsagePayload
+    | StatePayload
+    | ToolCallPayload
+    | CitationPayload
+    | HandoffPayload
+    | _DonePayload
+)
+
+
+def _s_field(fields, name: str) -> str:
+    """Helper: read string field from a Struct.fields mapping, default empty.
+    Module-scope so dispatch elif branches stay readable; protobuf Struct
+    field access is verbose enough that an indirection helps."""
+    if fields is not None and name in fields:
+        return fields[name].string_value
+    return ""
 
 
 class TurnError(RuntimeError):
@@ -100,12 +176,14 @@ class EidolonAgentSession:
 
     async def start_turn(
         self, *, text: str, conversation_id: str
-    ) -> tuple[str, AsyncIterator[str]]:
-        """Begin a new turn. Returns ``(turn_id, delta_iterator)``.
+    ) -> tuple[str, AsyncIterator[TurnPayload]]:
+        """Begin a new turn. Returns ``(turn_id, payload_iterator)``.
 
-        The iterator yields text fragments from ``DELTA`` events until a
-        ``DONE`` event closes the turn. On ``ERROR`` events it raises
-        :class:`TurnError`.
+        The iterator yields :data:`TurnPayload` values (``DeltaPayload``,
+        ``UsagePayload``, ``StatePayload``, ...) and returns when the brain
+        emits ``DONE``. On ``ERROR`` events it raises :class:`TurnError`.
+        Callers (typically :class:`EidolonAgentGrpcLlmStream`) dispatch on
+        payload type.
         """
         if self._closed:
             raise RuntimeError("EidolonAgentSession is closed")
@@ -261,34 +339,71 @@ class EidolonAgentSession:
             )
             return
         kind = ev.kind
+        data_fields = ev.data.fields if ev.data is not None else None
+
         if kind == pb.TurnEvent.DELTA:
-            text = ""
-            if ev.data is not None:
-                text = ev.data.fields["text"].string_value if "text" in ev.data.fields else ""
+            text = (
+                data_fields["text"].string_value
+                if data_fields is not None and "text" in data_fields
+                else ""
+            )
             if text:
-                q.put_nowait(text)
+                q.put_nowait(DeltaPayload(text=text))
         elif kind == pb.TurnEvent.DONE:
-            q.put_nowait(_QUEUE_SENTINEL_DONE)
+            q.put_nowait(_DONE)
         elif kind == pb.TurnEvent.ERROR:
             code = (
-                ev.data.fields["code"].string_value
-                if ev.data and "code" in ev.data.fields
+                data_fields["code"].string_value
+                if data_fields is not None and "code" in data_fields
                 else "unknown"
             )
             message = (
-                ev.data.fields["message"].string_value
-                if ev.data and "message" in ev.data.fields
+                data_fields["message"].string_value
+                if data_fields is not None and "message" in data_fields
                 else ""
             )
             fatal = (
-                ev.data.fields["fatal"].bool_value
-                if ev.data and "fatal" in ev.data.fields
+                data_fields["fatal"].bool_value
+                if data_fields is not None and "fatal" in data_fields
                 else False
             )
             q.put_nowait(TurnError(code, message, fatal))
+        elif kind == pb.TurnEvent.USAGE:
+            # Brain emits prompt/completion/total token counts + model name.
+            # Forward so LiveKit's metrics_monitor_task can aggregate them.
+            def _i(name: str) -> int:
+                if data_fields is not None and name in data_fields:
+                    return int(data_fields[name].number_value)
+                return 0
+            def _s(name: str) -> str:
+                if data_fields is not None and name in data_fields:
+                    return data_fields[name].string_value
+                return ""
+            q.put_nowait(UsagePayload(
+                prompt_tokens=_i("prompt_tokens"),
+                completion_tokens=_i("completion_tokens"),
+                total_tokens=_i("total_tokens"),
+                model=_s("model"),
+            ))
+        elif kind == pb.TurnEvent.STATE:
+            state = (
+                data_fields["state"].string_value
+                if data_fields is not None and "state" in data_fields
+                else ""
+            )
+            if state:
+                q.put_nowait(StatePayload(state=state))
+        elif kind == pb.TurnEvent.TOOL_CALL:
+            name = _s_field(data_fields, "name")
+            args_raw = data_fields["args"] if data_fields is not None and "args" in data_fields else None
+            args = dict(args_raw.struct_value) if (args_raw is not None and args_raw.HasField("struct_value")) else {}
+            q.put_nowait(ToolCallPayload(name=name, args=args))
+        elif kind == pb.TurnEvent.CITATION:
+            q.put_nowait(CitationPayload(raw=dict(ev.data) if ev.data is not None else {}))
+        elif kind == pb.TurnEvent.HANDOFF:
+            q.put_nowait(HandoffPayload(raw=dict(ev.data) if ev.data is not None else {}))
         else:
-            # STATE / TOOL_CALL / TOOL_RESULT / CITATION / USAGE / ACK /
-            # PROGRESS / HANDOFF — not surfaced to LiveKit yet.
+            # TOOL_RESULT / ACK / PROGRESS / KIND_UNSPECIFIED — not surfaced.
             logger.debug(
                 "[EidolonAgentSession] ignoring %s event (turn=%s)",
                 pb.TurnEvent.Kind.Name(kind),
@@ -301,14 +416,14 @@ class EidolonAgentSession:
 
     async def _consume(
         self, turn_id: str, queue: asyncio.Queue
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[TurnPayload]:
         try:
             while True:
                 item = await queue.get()
-                if item is _QUEUE_SENTINEL_DONE:
+                if isinstance(item, _DonePayload):
                     return
                 if isinstance(item, BaseException):
                     raise item
-                yield item  # type: ignore[misc]
+                yield item
         finally:
             self._inbox.pop(turn_id, None)

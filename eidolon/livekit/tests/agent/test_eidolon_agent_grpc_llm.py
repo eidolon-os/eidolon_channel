@@ -53,6 +53,21 @@ def _error(turn_id: str, seq: int, code: str, message: str, fatal: bool) -> pb.T
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.ERROR, data=data)
 
 
+def _usage(turn_id: str, seq: int, prompt: int, completion: int, total: int, model: str) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["prompt_tokens"] = prompt
+    data["completion_tokens"] = completion
+    data["total_tokens"] = total
+    data["model"] = model
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.USAGE, data=data)
+
+
+def _state(turn_id: str, seq: int, state: str) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["state"] = state
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.STATE, data=data)
+
+
 class _ScriptedServicer(pbg.EidolonAgentServicer):
     """Replays a canned DELTA+DONE per StartTurn. Records cancels for assertions.
 
@@ -103,6 +118,25 @@ class _ScriptedServicer(pbg.EidolonAgentServicer):
                 await drain_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+
+
+class _UsageStateServicer(pbg.EidolonAgentServicer):
+    """Emits STATE(thinking) → DELTA → USAGE → DONE.
+    Used to verify C-phase typed-payload dispatch in EidolonAgentGrpcLlmStream."""
+
+    def __init__(self) -> None:
+        self.starts: list[pb.StartTurn] = []
+
+    async def Chat(self, request_iterator, context):  # type: ignore[override]
+        async for req in request_iterator:
+            if req.WhichOneof("payload") == "start":
+                self.starts.append(req.start)
+                tid = req.start.turn_id
+                yield _state(tid, 1, "thinking")
+                yield _delta(tid, 2, "ok")
+                yield _usage(tid, 3, prompt=12, completion=3, total=15, model="brain-test")
+                yield _done(tid, 4)
+                return
 
 
 class _ErrorServicer(pbg.EidolonAgentServicer):
@@ -211,6 +245,50 @@ async def test_cancel_writes_cancel_turn() -> None:
 async def _wait_until(predicate, *, interval: float = 0.05) -> None:
     while not predicate():
         await asyncio.sleep(interval)
+
+
+@pytest.mark.asyncio
+async def test_state_and_usage_events_surface(caplog) -> None:
+    """C: typed inbox payloads.
+
+    USAGE → ChatChunk(usage=CompletionUsage(...)) so LiveKit's metrics
+    monitor can aggregate token counts.
+    STATE → INFO log (UX hook surface, no ChatChunk emitted).
+    """
+    import logging
+
+    servicer = _UsageStateServicer()
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id="livekit:cphase",
+        )
+        try:
+            with caplog.at_level(logging.INFO, logger="eidolon_agent_rpc.grpc_llm"):
+                stream = adapter.chat(chat_ctx=_ctx("trigger usage"))
+                delta_chunks: list[str] = []
+                usage_chunk = None
+                async for chunk in stream:
+                    if chunk.delta and chunk.delta.content:
+                        delta_chunks.append(chunk.delta.content)
+                    if chunk.usage is not None:
+                        usage_chunk = chunk.usage
+
+            assert delta_chunks == ["ok"], f"unexpected deltas: {delta_chunks}"
+            assert usage_chunk is not None, "USAGE event should produce a ChatChunk.usage"
+            assert usage_chunk.prompt_tokens == 12
+            assert usage_chunk.completion_tokens == 3
+            assert usage_chunk.total_tokens == 15
+
+            # STATE event surfaces as INFO log with state=thinking
+            state_logs = [r for r in caplog.records if "state=thinking" in r.getMessage()]
+            assert state_logs, f"expected STATE INFO log, got: {[r.getMessage() for r in caplog.records]}"
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
 
 
 # A4: ERROR.code → exception mapping.

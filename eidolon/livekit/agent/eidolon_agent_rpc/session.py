@@ -86,6 +86,12 @@ class EidolonAgentSession:
         self._open_lock = asyncio.Lock()
         # turn_id -> queue receiving TurnEvent payloads (or sentinel/exception)
         self._inbox: dict[str, asyncio.Queue] = {}
+        # Background tasks owned by this session (cancel_turn fire-and-forget,
+        # reader task). Held as strong refs so Python's GC doesn't collect them
+        # mid-flight — `asyncio.create_task` returns a task whose only reference
+        # would otherwise be on the event loop's ready queue, which is not
+        # guaranteed across all cancellation paths.
+        self._background_tasks: set[asyncio.Task] = set()
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -136,6 +142,32 @@ class EidolonAgentSession:
         except Exception as exc:  # noqa: BLE001
             logger.debug("[EidolonAgentSession] cancel_turn(%s) ignored: %r", turn_id, exc)
 
+    def spawn(self, coro, *, name: str | None = None) -> asyncio.Task:
+        """Create a session-owned background task that won't be GC'd.
+
+        Use this instead of ``asyncio.create_task`` for any fire-and-forget
+        work scheduled from within the session (e.g. cancel writes during
+        barge-in). The session holds a strong ref until the task completes;
+        a centralized done-callback logs any unexpected exception so silent
+        crashes don't go unnoticed.
+        """
+        task = asyncio.create_task(coro, name=name)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return task
+
+    def _on_background_task_done(self, task: asyncio.Task) -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning(
+                "[EidolonAgentSession] background task %r ended with exception: %r",
+                task.get_name(),
+                exc,
+            )
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -151,6 +183,13 @@ class EidolonAgentSession:
                 await self._reader_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        # Cancel any in-flight background tasks (e.g. unfinished cancel_turn
+        # writes) and give them a brief window to settle before tearing down
+        # the channel. Bounded wait to avoid blocking shutdown on a hung task.
+        if self._background_tasks:
+            for t in list(self._background_tasks):
+                t.cancel()
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
         if self._channel is not None:
             await self._channel.close()
         # Drain any pending consumers.
@@ -179,7 +218,9 @@ class EidolonAgentSession:
             )
             stub = pbg.EidolonAgentStub(self._channel)
             self._call = stub.Chat(metadata=self._metadata)
-            self._reader_task = asyncio.create_task(
+            # Reader runs through spawn() to share the unified done-callback
+            # diagnostic path with other background tasks (cancel writes etc.).
+            self._reader_task = self.spawn(
                 self._reader_loop(self._call), name="eidolon-agent-reader"
             )
             logger.info("[EidolonAgentSession] opened Chat() target=%s", self._target)

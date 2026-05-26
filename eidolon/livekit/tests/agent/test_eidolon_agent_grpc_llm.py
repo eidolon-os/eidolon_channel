@@ -164,6 +164,18 @@ async def test_cancel_writes_cancel_turn() -> None:
                 _wait_until(lambda: len(servicer.cancels) == 1), timeout=2.0
             )
             assert servicer.cancels[0] == servicer.starts[0].turn_id
+
+            # A2 regression guard: the cancel write is spawned through
+            # session.spawn (not raw create_task) so we keep a strong ref
+            # while it runs, and the centralized done-callback discards it
+            # afterwards. The set must therefore be empty by now (cancel
+            # has completed, reader is still running for the reader task —
+            # filter to only background tasks named like the cancel).
+            cancel_tasks_left = [
+                t for t in adapter._session._background_tasks  # type: ignore[union-attr]
+                if t.get_name().startswith("eidolon-cancel-")
+            ]
+            assert cancel_tasks_left == [], f"leaked cancel tasks: {cancel_tasks_left}"
         finally:
             await adapter.aclose()
     finally:

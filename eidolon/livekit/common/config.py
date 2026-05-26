@@ -241,6 +241,13 @@ class RemoteAgentRpcConfig:
     # LiveKit job's room name (sync, available pre-connect) rather than Room.sid
     # (async, blocks until session.start()).
     conversation_id_prefix: str = "livekit"
+    # TLS (D2, plan Phase D). Mode: "off" (insecure, default — loopback / UDS),
+    # "tls" (server cert verified; provide ca_path if not in system trust store),
+    # "mtls" (server + client cert; client_cert_path + client_key_path required).
+    tls_mode: str = "off"
+    tls_ca_path: str = ""
+    tls_client_cert_path: str = ""
+    tls_client_key_path: str = ""
 
 
 @dataclass
@@ -390,6 +397,24 @@ class AgentConfig:
                     ).strip()
                     or "livekit"
                 ),
+                tls_mode=(
+                    get("REMOTE_AGENT_RPC_TLS_MODE", str(rpc_y.get("tls_mode") or "off"))
+                    .strip()
+                    .lower()
+                    or "off"
+                ),
+                tls_ca_path=get(
+                    "REMOTE_AGENT_RPC_TLS_CA_PATH",
+                    str(rpc_y.get("tls_ca_path") or ""),
+                ).strip(),
+                tls_client_cert_path=get(
+                    "REMOTE_AGENT_RPC_TLS_CLIENT_CERT_PATH",
+                    str(rpc_y.get("tls_client_cert_path") or ""),
+                ).strip(),
+                tls_client_key_path=get(
+                    "REMOTE_AGENT_RPC_TLS_CLIENT_KEY_PATH",
+                    str(rpc_y.get("tls_client_key_path") or ""),
+                ).strip(),
             ),
             stt_provider=get(
                 "STT_PROVIDER",

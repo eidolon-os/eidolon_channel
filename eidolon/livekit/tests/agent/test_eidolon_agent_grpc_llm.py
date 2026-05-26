@@ -247,6 +247,53 @@ async def _wait_until(predicate, *, interval: float = 0.05) -> None:
         await asyncio.sleep(interval)
 
 
+def test_tls_config_validation_unknown_mode() -> None:
+    """D2: bogus tls_mode must fail loud at construction, not silently fall back."""
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
+    with pytest.raises(ValueError, match="unrecognized"):
+        EidolonAgentGrpcLlm(
+            target="127.0.0.1:1",
+            device_token="x",
+            conversation_id="livekit:test",
+            tls=TlsConfig(mode="please-no"),
+        )
+
+
+def test_tls_config_validation_mtls_missing_cert(tmp_path) -> None:
+    """D2: mTLS mode without client cert/key paths must fail loud."""
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
+    with pytest.raises(ValueError, match="mtls"):
+        EidolonAgentGrpcLlm(
+            target="127.0.0.1:1",
+            device_token="x",
+            conversation_id="livekit:test",
+            tls=TlsConfig(mode="mtls"),  # no client cert paths set
+        )
+
+
+def test_tls_config_validation_missing_ca_file(tmp_path) -> None:
+    """D2: configured CA path that doesn't exist must fail loud (no silent skip)."""
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
+    with pytest.raises(ValueError, match="ca_path"):
+        EidolonAgentGrpcLlm(
+            target="127.0.0.1:1",
+            device_token="x",
+            conversation_id="livekit:test",
+            tls=TlsConfig(mode="tls", ca_path=str(tmp_path / "nope.pem")),
+        )
+
+
+def test_tls_off_no_credentials_built() -> None:
+    """D2: mode='off' yields no ChannelCredentials — same path as before D2."""
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import EidolonAgentSession, TlsConfig
+    s = EidolonAgentSession(
+        target="127.0.0.1:1",
+        device_token="x",
+        tls=TlsConfig(mode="off"),
+    )
+    assert s._credentials is None
+
+
 @pytest.mark.asyncio
 async def test_state_and_usage_events_surface(caplog) -> None:
     """C: typed inbox payloads.

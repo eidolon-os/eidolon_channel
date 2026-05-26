@@ -111,21 +111,30 @@ class SharedStageFactory:
             from eidolon.livekit.agent.eidolon_agent_rpc import (
                 EidolonAgentGrpcLlm,
             )
+            from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
 
             session_key = livekit_session_key.strip() or "unknown"
             conversation_id = (
                 f"{cfg.remote_agent_rpc.conversation_id_prefix}:{session_key}"
+            )
+            tls = TlsConfig(
+                mode=cfg.remote_agent_rpc.tls_mode,
+                ca_path=cfg.remote_agent_rpc.tls_ca_path,
+                client_cert_path=cfg.remote_agent_rpc.tls_client_cert_path,
+                client_key_path=cfg.remote_agent_rpc.tls_client_key_path,
             )
             llm = EidolonAgentGrpcLlm(
                 target=cfg.remote_agent_rpc.target,
                 device_token=cfg.remote_agent_rpc.device_token,
                 conversation_id=conversation_id,
                 display_model=cfg.llm.model or "eidolon_agent",
+                tls=tls,
             )
             logger.info(
-                "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r conversation_id=%s",
+                "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r conversation_id=%s tls_mode=%s",
                 cfg.remote_agent_rpc.target,
                 conversation_id,
+                cfg.remote_agent_rpc.tls_mode,
             )
         else:
             llm = cls._build_llm(cfg)

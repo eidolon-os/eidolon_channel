@@ -33,9 +33,11 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
     EidolonAgentSession,
     HandoffPayload,
     StatePayload,
+    TlsConfig,
     ToolCallPayload,
     TurnError,
     UsagePayload,
+    _build_channel_credentials,
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
@@ -99,6 +101,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         device_token: str,
         conversation_id: str,
         display_model: str = "eidolon_agent",
+        tls: TlsConfig | None = None,
     ) -> None:
         super().__init__()
         if not target.strip():
@@ -113,6 +116,13 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._device_token = device_token.strip()
         self._conversation_id = conversation_id
         self._display_model = display_model
+        # D2: validate TLS config eagerly at construction (fail loud) — same
+        # contract as the device_token-empty raise above. We discard the
+        # credentials object here; EidolonAgentSession will recompute it when
+        # it lazily opens the channel.
+        if tls is not None and tls.mode != "off":
+            _build_channel_credentials(tls)
+        self._tls = tls
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
 
@@ -131,6 +141,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
                     self._session = EidolonAgentSession(
                         target=self._target,
                         device_token=self._device_token,
+                        tls=self._tls,
                     )
         return self._session
 

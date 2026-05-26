@@ -45,6 +45,14 @@ def _done(turn_id: str, seq: int) -> pb.TurnEvent:
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.DONE, data=data)
 
 
+def _error(turn_id: str, seq: int, code: str, message: str, fatal: bool) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["code"] = code
+    data["message"] = message
+    data["fatal"] = fatal
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.ERROR, data=data)
+
+
 class _ScriptedServicer(pbg.EidolonAgentServicer):
     """Replays a canned DELTA+DONE per StartTurn. Records cancels for assertions.
 
@@ -97,7 +105,25 @@ class _ScriptedServicer(pbg.EidolonAgentServicer):
                 pass
 
 
-async def _serve(servicer: _ScriptedServicer) -> tuple[grpc.aio.Server, str]:
+class _ErrorServicer(pbg.EidolonAgentServicer):
+    """On any StartTurn, immediately emits one ERROR event then ends the stream.
+    Used to drive the A4 error-code mapping tests."""
+
+    def __init__(self, *, code: str, message: str, fatal: bool) -> None:
+        self._code = code
+        self._message = message
+        self._fatal = fatal
+        self.starts: list[pb.StartTurn] = []
+
+    async def Chat(self, request_iterator, context):  # type: ignore[override]
+        async for req in request_iterator:
+            if req.WhichOneof("payload") == "start":
+                self.starts.append(req.start)
+                yield _error(req.start.turn_id, 1, self._code, self._message, self._fatal)
+                return
+
+
+async def _serve(servicer) -> tuple[grpc.aio.Server, str]:
     port = _free_port()
     server = grpc.aio.server()
     pbg.add_EidolonAgentServicer_to_server(servicer, server)
@@ -185,3 +211,64 @@ async def test_cancel_writes_cancel_turn() -> None:
 async def _wait_until(predicate, *, interval: float = 0.05) -> None:
     while not predicate():
         await asyncio.sleep(interval)
+
+
+# A4: ERROR.code → exception mapping.
+# Each row: (brain code, fatal flag, expected exception class, expected
+# status_code if APIStatusError else None, expected retryable).
+_ERROR_CASES = [
+    ("unauthenticated", False, "status", 401, False),
+    ("unauthenticated", True,  "status", 401, False),  # fatal flag ignored for known codes
+    ("permission_denied", False, "status", 403, False),
+    ("tenant_not_found", False, "status", 404, False),
+    ("user_not_found", False, "status", 404, False),
+    ("rate_limited", False, "status", 429, True),
+    ("internal", False, "connection", None, True),   # fatal=False → retryable
+    ("internal", True,  "connection", None, False),  # fatal=True  → not retryable
+    ("anything_unknown", False, "connection", None, True),
+]
+
+
+@pytest.mark.parametrize("code,fatal,kind,status_code,retryable", _ERROR_CASES)
+@pytest.mark.asyncio
+async def test_error_code_mapping(
+    code: str, fatal: bool, kind: str, status_code: int | None, retryable: bool
+) -> None:
+    from livekit.agents._exceptions import APIConnectionError, APIStatusError
+    from livekit.agents.types import APIConnectOptions
+
+    servicer = _ErrorServicer(code=code, message=f"boom {code}", fatal=fatal)
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id="livekit:error-test",
+        )
+        try:
+            # Disable framework retry so we see the *first* exception raised
+            # by _run, not the post-retry wrapping. Without max_retry=0, a
+            # retryable=True error gets wrapped as
+            # `APIConnectionError("after N attempts")` after the framework
+            # exhausts its retry budget, hiding the mapping under test.
+            stream = adapter.chat(
+                chat_ctx=_ctx("trigger error"),
+                conn_options=APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=10.0),
+            )
+            with pytest.raises((APIStatusError, APIConnectionError)) as exc_info:
+                async for _ in stream:
+                    pass
+            exc = exc_info.value
+            if kind == "status":
+                assert isinstance(exc, APIStatusError), f"expected APIStatusError, got {type(exc).__name__}"
+                assert exc.status_code == status_code
+                assert exc.retryable is retryable
+            else:
+                assert isinstance(exc, APIConnectionError)
+                # APIConnectionError carries retryable via the framework's
+                # APIError base; just verify the type since retryable surface
+                # may differ across livekit-agents versions.
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)

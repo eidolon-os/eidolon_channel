@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from livekit.agents import llm
-from livekit.agents._exceptions import APIConnectionError
+from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.chat_context import ChatMessage
 from livekit.agents.llm.tool_context import Tool
@@ -33,6 +33,42 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
+
+
+# Brain ERROR.code → LiveKit exception mapping (A4, plan Phase A).
+#
+# Without this mapping, every TurnError became APIConnectionError(retryable=True)
+# and the LiveKit framework would retry up to max_retry attempts — including
+# auth failures that will never succeed by retry, burning quota and adding
+# latency. The table below maps the known brain codes to HTTP-shaped status
+# errors so the framework can short-circuit on permanent failures.
+#
+# Anything unknown / `internal` / `unknown` keeps the previous
+# APIConnectionError behavior (respect the brain's `fatal` flag for retryability).
+_ERROR_CODE_MAP: dict[str, tuple[int, bool]] = {
+    # code: (HTTP status code, retryable)
+    "unauthenticated": (401, False),
+    "permission_denied": (403, False),
+    "tenant_not_found": (404, False),
+    "user_not_found": (404, False),
+    "rate_limited": (429, True),
+}
+
+
+def _map_turn_error(exc: "TurnError") -> Exception:
+    """Translate a brain ERROR event into a LiveKit framework-friendly exception."""
+    mapped = _ERROR_CODE_MAP.get(exc.code)
+    if mapped is not None:
+        status_code, retryable = mapped
+        return APIStatusError(
+            f"eidolon_agent {exc.code}: {exc}",
+            status_code=status_code,
+            retryable=retryable,
+        )
+    return APIConnectionError(
+        f"eidolon_agent error {exc.code}: {exc}",
+        retryable=not exc.fatal,
+    )
 
 
 def _last_user_text(chat_ctx: ChatContext) -> str:
@@ -149,10 +185,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             )
             raise
         except TurnError as exc:
-            raise APIConnectionError(
-                f"eidolon_agent error {exc.code}: {exc}",
-                retryable=not exc.fatal,
-            ) from exc
+            raise _map_turn_error(exc) from exc
         except Exception as exc:
             raise APIConnectionError(
                 f"eidolon_agent stream failed: {exc}",

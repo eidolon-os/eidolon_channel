@@ -149,11 +149,16 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
 
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
     room = ctx.room
-    # Use room.name for gRPC conversation_id. Room.sid is async and only available
-    # after connect(); session.start() performs connect — awaiting sid here deadlocks.
+    # session_key still passed as a synchronous fallback (Room.sid is async,
+    # Room.name is set pre-connect). D1: also pass the room reference so the
+    # remote-agent adapter can lazily build conversation_id="<prefix>:<participant_identity>:<room_name>"
+    # at chat() time, when the user has connected and we know who they are.
     session_key = room.name or ""
     factory = SharedStageFactory.from_config(
-        cfg, prebuilt_vad=prebuilt_vad, livekit_session_key=session_key
+        cfg,
+        prebuilt_vad=prebuilt_vad,
+        livekit_session_key=session_key,
+        livekit_room=room,
     )
 
     if cfg.behavior.agent_mode == "batch":

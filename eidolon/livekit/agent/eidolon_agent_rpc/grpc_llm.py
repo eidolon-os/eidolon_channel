@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
@@ -99,10 +99,23 @@ class EidolonAgentGrpcLlm(llm.LLM):
         *,
         target: str,
         device_token: str,
-        conversation_id: str,
+        conversation_id: str | Callable[[], str],
         display_model: str = "eidolon_agent",
         tls: TlsConfig | None = None,
     ) -> None:
+        """Construct an EidolonAgent LLM adapter.
+
+        ``conversation_id`` accepts either:
+          - a static string ("livekit:my-room") — eagerly fixed at construction.
+          - a zero-arg callable returning a string — resolved lazily on each
+            chat() call. This is the path used in production so the brain
+            sees a participant-aware id (e.g.
+            "livekit:<participant_identity>:<room_name>"), since LiveKit
+            participants are only known after session.start() — strictly
+            later than factory.from_config() runs.
+
+        D1, plan Phase D.
+        """
         super().__init__()
         if not target.strip():
             raise ValueError("EidolonAgentGrpcLlm: target must be non-empty")
@@ -114,7 +127,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
             )
         self._target = target.strip()
         self._device_token = device_token.strip()
-        self._conversation_id = conversation_id
+        self._conversation_id: str | Callable[[], str] = conversation_id
         self._display_model = display_model
         # D2: validate TLS config eagerly at construction (fail loud) — same
         # contract as the device_token-empty raise above. We discard the
@@ -177,9 +190,25 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         llm_v: EidolonAgentGrpcLlm = self._llm  # type: ignore[assignment]
         session = await llm_v._get_session()
         user_text = _last_user_text(self._chat_ctx)
+        # D1: resolve conversation_id at chat() time so the resolver can
+        # consult LiveKit room state (participant identity etc.) that wasn't
+        # available when the adapter was constructed by the factory.
+        cid_src = llm_v._conversation_id
+        if callable(cid_src):
+            try:
+                conversation_id = cid_src()
+            except Exception as exc:
+                logger.warning(
+                    "[EidolonAgentGrpcLlm] conversation_id resolver raised; "
+                    "falling back to literal display_model. exc=%r",
+                    exc,
+                )
+                conversation_id = f"livekit:{llm_v._display_model}"
+        else:
+            conversation_id = cid_src
         turn_id, payloads = await session.start_turn(
             text=user_text,
-            conversation_id=llm_v._conversation_id,
+            conversation_id=conversation_id,
         )
         req_id = f"eidolon-{turn_id}"
         try:

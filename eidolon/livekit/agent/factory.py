@@ -85,6 +85,7 @@ class SharedStageFactory:
         *,
         prebuilt_vad: "lk_vad.VAD | None" = None,
         livekit_session_key: str = "",
+        livekit_room: "Any | None" = None,
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -94,10 +95,22 @@ class SharedStageFactory:
                 instance is used instead of building a fresh one. Useful when
                 a worker process loads the VAD model once at startup and
                 reuses it across jobs.
-            livekit_session_key: When ``REMOTE_AGENT_RPC_TARGET`` is set, used
-                to build the brain-side ``conversation_id`` as
-                ``<prefix>:<session_key>`` (typically ``Room.name`` from the job).
+            livekit_session_key: When ``REMOTE_AGENT_RPC_TARGET`` is set and
+                ``livekit_room`` is None, used as the static brain-side
+                ``conversation_id`` as ``<prefix>:<session_key>``. Mainly for
+                tests; production should pass ``livekit_room`` instead.
                 Falls back to ``"unknown"`` when empty.
+            livekit_room: D1 (plan Phase D) — pass the LiveKit ``Room`` so the
+                factory builds a *lazy* ``conversation_id`` resolver that
+                includes the first remote participant's identity. The
+                resolver runs on every chat() call — by then participants
+                have connected (session.start() has run, the user has spoken).
+                Composes as ``<prefix>:<participant_identity>:<room.name>`` so
+                the brain isolates history per (user, session) and a fresh
+                room name no longer triggers a cold start for an already-warm
+                user. Falls back to ``<prefix>:<room.name>`` when no
+                participant is connected yet (defensive — shouldn't happen at
+                chat() time since the user has already spoken).
 
         Returns:
             A fully wired :class:`SharedStageFactory`.
@@ -113,10 +126,45 @@ class SharedStageFactory:
             )
             from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
 
+            prefix = cfg.remote_agent_rpc.conversation_id_prefix
             session_key = livekit_session_key.strip() or "unknown"
-            conversation_id = (
-                f"{cfg.remote_agent_rpc.conversation_id_prefix}:{session_key}"
-            )
+
+            # D1: conversation_id is either lazy (when we hold a room ref —
+            # production path) or static (tests / fallback when called without
+            # a room). The resolver runs once per chat() call; cost is a dict
+            # lookup + a format string, no caching needed.
+            if livekit_room is not None:
+                room_ref = livekit_room  # closed over by the resolver
+                room_name_static = (
+                    getattr(room_ref, "name", None) or session_key
+                )
+
+                def _resolve_cid() -> str:
+                    try:
+                        participants = list(
+                            getattr(room_ref, "remote_participants", {}).values()
+                        )
+                        room_name = (
+                            getattr(room_ref, "name", None) or room_name_static
+                        )
+                        if participants:
+                            ident = getattr(participants[0], "identity", "") or "anon"
+                            return f"{prefix}:{ident}:{room_name}"
+                        # Defensive — no participant yet (very early in job
+                        # lifecycle, before user speech). Brain will still
+                        # accept; once the participant connects, subsequent
+                        # turns get the identity-bearing id.
+                        return f"{prefix}:{room_name}"
+                    except Exception:
+                        # Never let a resolver bug block a turn.
+                        return f"{prefix}:{room_name_static}"
+
+                conversation_id: "str | Any" = _resolve_cid
+                log_cid_descr = f"<lazy:participant + {room_name_static}>"
+            else:
+                conversation_id = f"{prefix}:{session_key}"
+                log_cid_descr = conversation_id
+
             tls = TlsConfig(
                 mode=cfg.remote_agent_rpc.tls_mode,
                 ca_path=cfg.remote_agent_rpc.tls_ca_path,
@@ -133,7 +181,7 @@ class SharedStageFactory:
             logger.info(
                 "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r conversation_id=%s tls_mode=%s",
                 cfg.remote_agent_rpc.target,
-                conversation_id,
+                log_cid_descr,
                 cfg.remote_agent_rpc.tls_mode,
             )
         else:

@@ -283,6 +283,75 @@ def test_tls_config_validation_missing_ca_file(tmp_path) -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_conversation_id_lazy_resolver_called_per_chat() -> None:
+    """D1: when conversation_id is a callable, it's resolved on each chat() —
+    the captured value lands on the wire in StartTurn.conversation_id."""
+    servicer = _ScriptedServicer(deltas=["ok"])
+    server, target = await _serve(servicer)
+    try:
+        call_log: list[str] = []
+
+        def resolver() -> str:
+            # Simulate "first participant connects between chat()s" — value
+            # changes turn-to-turn, proving lazy resolution.
+            ident = f"alice-{len(call_log) + 1}"
+            cid = f"livekit:{ident}:smoke-room"
+            call_log.append(cid)
+            return cid
+
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id=resolver,
+        )
+        try:
+            # First chat() — should consult resolver
+            async for _ in adapter.chat(chat_ctx=_ctx("第一通")):
+                pass
+            # Second chat() — should consult resolver again
+            async for _ in adapter.chat(chat_ctx=_ctx("第二通")):
+                pass
+
+            assert call_log == [
+                "livekit:alice-1:smoke-room",
+                "livekit:alice-2:smoke-room",
+            ], f"resolver call log: {call_log}"
+            assert [s.conversation_id for s in servicer.starts] == call_log
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+async def test_conversation_id_resolver_failure_falls_back() -> None:
+    """D1: resolver bug must not block a turn — fall back to a sentinel id."""
+    servicer = _ScriptedServicer(deltas=["ok"])
+    server, target = await _serve(servicer)
+    try:
+        def broken_resolver() -> str:
+            raise RuntimeError("resolver intentionally broken")
+
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id=broken_resolver,
+            display_model="brain-test-model",
+        )
+        try:
+            async for _ in adapter.chat(chat_ctx=_ctx("hello")):
+                pass
+            assert len(servicer.starts) == 1
+            # Fallback uses display_model in the id so logs / brain history
+            # don't carry the raw exception text.
+            assert servicer.starts[0].conversation_id == "livekit:brain-test-model"
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
 def test_tls_off_no_credentials_built() -> None:
     """D2: mode='off' yields no ChannelCredentials — same path as before D2."""
     from eidolon.livekit.agent.eidolon_agent_rpc.session import EidolonAgentSession, TlsConfig

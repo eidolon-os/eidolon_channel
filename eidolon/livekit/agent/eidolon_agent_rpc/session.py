@@ -31,6 +31,29 @@ from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
 logger = logging.getLogger("eidolon_agent_rpc.session")
 
 
+# Channel-level gRPC options.
+#
+# Keepalive (A3, plan Phase A):
+#   - Loopback never times out, but cross-host / via-LB deployments silently
+#     drop idle long-conns. Probe every 10s, fail after 5s no-ACK.
+#   - permit_without_calls=1 + max_pings_without_data=0 let us ping even on a
+#     stream with no active turn (e.g. between voice turns).
+#
+# Latency hints (F3, plan Phase F):
+#   - optimization_target=latency: tell gRPC C-core to prefer p99 latency over
+#     throughput. Voice TTFD is the metric we care about, not bulk bytes/sec.
+#   - bdp_probe=1: auto-adjust HTTP/2 BDP for bursty streaming (LLM token
+#     emission is bursty), keeping flow control windows out of the critical path.
+_CHANNEL_OPTIONS: list[tuple[str, int | str]] = [
+    ("grpc.keepalive_time_ms", 10_000),
+    ("grpc.keepalive_timeout_ms", 5_000),
+    ("grpc.keepalive_permit_without_calls", 1),
+    ("grpc.http2.max_pings_without_data", 0),
+    ("grpc.optimization_target", "latency"),
+    ("grpc.http2.bdp_probe", 1),
+]
+
+
 _QUEUE_SENTINEL_DONE = object()
 
 
@@ -151,7 +174,9 @@ class EidolonAgentSession:
                     pass
             if self._channel is not None:
                 await self._channel.close()
-            self._channel = grpc.aio.insecure_channel(self._target)
+            self._channel = grpc.aio.insecure_channel(
+                self._target, options=_CHANNEL_OPTIONS
+            )
             stub = pbg.EidolonAgentStub(self._channel)
             self._call = stub.Chat(metadata=self._metadata)
             self._reader_task = asyncio.create_task(

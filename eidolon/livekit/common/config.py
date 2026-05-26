@@ -232,11 +232,14 @@ class RemoteAgentRpcConfig:
     obtain one via ``scripts/provision_eidolon_token.py``.
     """
 
-    # e.g. unix:///var/run/eidolon/eidolon_agent.sock or 127.0.0.1:50051
+    # e.g. unix:///var/run/eidolon/eidolon_agent.sock or 127.0.0.1:45051
+    # (eidolon_agent's stock dev config binds gRPC to :45051; see its config/config.yaml)
     target: str = ""
     locale: str = "zh"
     device_token: str = ""
-    # conversation_id sent to the brain is "<prefix>:<livekit_room_sid>".
+    # conversation_id sent to the brain is "<prefix>:<room.name>" — using the
+    # LiveKit job's room name (sync, available pre-connect) rather than Room.sid
+    # (async, blocks until session.start()).
     conversation_id_prefix: str = "livekit"
 
 

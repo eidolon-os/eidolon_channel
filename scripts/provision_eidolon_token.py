@@ -10,7 +10,7 @@ Run from the eidolon_channel repository root::
 
     python scripts/provision_eidolon_token.py \\
         --admin-base-url http://127.0.0.1:8081 \\
-        --grpc-target 127.0.0.1:50052 \\
+        --grpc-target 127.0.0.1:45051 \\
         --tenant-id demo --user-id alice \\
         --device-name livekit-dev
 

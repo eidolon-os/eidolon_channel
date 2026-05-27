@@ -138,6 +138,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._tls = tls
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
+        self._pending_turn_control_metadata: dict[str, Any] | None = None
 
     @property
     def model(self) -> str:
@@ -157,6 +158,15 @@ class EidolonAgentGrpcLlm(llm.LLM):
                         tls=self._tls,
                     )
         return self._session
+
+    def set_turn_control_metadata(self, metadata: dict[str, Any]) -> None:
+        """Attach channel-side turn-control metadata to the next StartTurn."""
+        self._pending_turn_control_metadata = dict(metadata)
+
+    def pop_turn_control_metadata(self) -> dict[str, Any] | None:
+        metadata = self._pending_turn_control_metadata
+        self._pending_turn_control_metadata = None
+        return metadata
 
     def chat(
         self,
@@ -209,6 +219,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         turn_id, payloads = await session.start_turn(
             text=user_text,
             conversation_id=conversation_id,
+            metadata={"turn_control": turn_control}
+            if (turn_control := llm_v.pop_turn_control_metadata())
+            else None,
         )
         req_id = f"eidolon-{turn_id}"
         try:

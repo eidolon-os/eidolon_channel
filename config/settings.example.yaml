@@ -10,9 +10,10 @@ core:
 
 behavior:
   agent_mode: streaming
+  audio_sample_rate: 16000
 
 llm:
-  base_url: ""
+  base_url: https://api.openai.com/v1
   model: gpt-4o-mini
   api_key: OPENAI_LLM_API_KEY
 
@@ -20,9 +21,43 @@ providers:
   stt_provider: sensetime
   tts_provider: sensetime
   vad_provider: firered
+  brain_provider: direct_llm
 
 remote_agent_rpc:
   target: ""
   locale: zh
   device_token: REMOTE_AGENT_RPC_DEVICE_TOKEN
   conversation_id_prefix: livekit
+
+turn_policy:
+  profile: balanced_semantic
+  vad:
+    activation_threshold: 0.50
+    prefix_padding_ms: 300
+    min_speech_duration_ms: 100
+    min_silence_duration_ms: 500
+  eot:
+    eot_unlikely_threshold: 0.50
+    tail_hang_silence_ms: 2000
+  interrupt:
+    decision_timeout_ms: 500
+    min_interim_chars: 2
+    early_cancel_score_threshold: 0.70
+    early_resume_score_threshold: 0.20
+    hard_stop_lexicon: ["停", "停一下", "别说了", "不要说了", "打住", "闭嘴", "先别讲了"]
+    topic_switch_lexicon: ["换个话题", "不聊这个", "别聊这个", "说点别的", "刚才那个不用了"]
+    correction_lexicon: ["不是", "等一下", "我不是这个意思", "我刚才说错了"]
+  ducking:
+    enabled: true
+    fade_out_ms: 30
+    fade_in_ms: 30
+    suspend_volume: 0.0
+    buffer_max_ms: 2000
+    cooldown_ms: 800
+  idle:
+    followup_timeout_ms: 15000
+
+observability:
+  structured_logs: true
+  metrics_enabled: true
+  timeline_debug_path: ""

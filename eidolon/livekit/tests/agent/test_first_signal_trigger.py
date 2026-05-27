@@ -17,9 +17,7 @@ Together these limit worst-case interrupt latency to ``duck_suspend_timeout_sec`
 
 from __future__ import annotations
 
-import asyncio
 import time
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -121,17 +119,20 @@ def test_first_signal_skips_single_char() -> None:
     pipeline._duck_mixer.cancel.assert_not_called()
 
 
-def test_first_signal_respects_min_chars_env(monkeypatch) -> None:
-    """``EIDOLON_INTERRUPT_MIN_INTERIM_CHARS`` env raises the threshold."""
-    monkeypatch.setenv("EIDOLON_INTERRUPT_MIN_INTERIM_CHARS", "5")
+def test_first_signal_respects_turn_policy_min_chars() -> None:
+    """``turn_policy.interrupt.min_interim_chars`` raises the threshold."""
+    from dataclasses import replace
+
+    from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
+    from eidolon.livekit.common.config import InterruptPolicyConfig, TurnPolicyConfig
+
     pipeline = _make_pipeline()
-    # Override cfg to pick up the new env (the fixture built it before
-    # monkeypatch ran). Build a fresh cfg now.
-    from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
-    pipeline._get_eot_model().return_value._config = EidolonEOTConfig()
-    # re-wire just the cfg via the existing mock chain
-    eot_model = pipeline._get_eot_model.return_value
-    eot_model._config = EidolonEOTConfig()
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), min_interim_chars=5),
+    )
+    pipeline._turn_policy = policy
+    pipeline._turn_runtime = TurnPolicyRuntime(policy)
 
     pipeline._run_eot_check("你好世", is_final=False)  # 3 chars < new 5
 
@@ -196,58 +197,54 @@ async def test_timeout_noop_if_already_resolved() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Config plumbing — env knobs land correctly
+# 3. Config plumbing — turn_policy knobs land correctly
 # ---------------------------------------------------------------------------
 
 
-def test_decision_ms_env_overrides_default(monkeypatch) -> None:
-    """``EIDOLON_INTERRUPT_DECISION_MS=750`` → 0.75s timeout."""
-    monkeypatch.setenv("EIDOLON_INTERRUPT_DECISION_MS", "750")
-    from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
-    cfg = EidolonEOTConfig()
-    assert cfg.duck_suspend_timeout_sec == pytest.approx(0.75)
+def test_turn_policy_decision_ms_maps_to_eot_timeout() -> None:
+    """``turn_policy.interrupt.decision_timeout_ms`` feeds the EOT timeout."""
+    from dataclasses import replace
+
+    from eidolon.livekit.agent.streaming import _eot_kwargs_from_turn_policy
+    from eidolon.livekit.common.config import InterruptPolicyConfig, TurnPolicyConfig
+
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), decision_timeout_ms=750),
+    )
+
+    assert _eot_kwargs_from_turn_policy(policy)["duck_suspend_timeout_sec"] == pytest.approx(0.75)
 
 
-def test_decision_ms_legacy_env_still_works(monkeypatch) -> None:
-    """Legacy ``EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC=0.6`` still honored."""
-    monkeypatch.delenv("EIDOLON_INTERRUPT_DECISION_MS", raising=False)
-    monkeypatch.setenv("EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC", "0.6")
-    from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
-    cfg = EidolonEOTConfig()
-    assert cfg.duck_suspend_timeout_sec == pytest.approx(0.6)
+def test_fast_profile_has_shorter_decision_budget() -> None:
+    """The e2e-like profile is more eager than the balanced default."""
+    from eidolon.livekit.common.config.profiles import profile_defaults
 
+    balanced = profile_defaults("balanced_semantic")
+    fast = profile_defaults("fast_e2e_like")
 
-def test_decision_ms_takes_precedence_over_legacy(monkeypatch) -> None:
-    """When both env vars are set, the new one wins."""
-    monkeypatch.setenv("EIDOLON_INTERRUPT_DECISION_MS", "400")
-    monkeypatch.setenv("EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC", "1.5")
-    from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
-    cfg = EidolonEOTConfig()
-    assert cfg.duck_suspend_timeout_sec == pytest.approx(0.4)
+    assert balanced.interrupt.decision_timeout_ms == 500
+    assert fast.interrupt.decision_timeout_ms < balanced.interrupt.decision_timeout_ms
 
 
 def test_default_decision_budget_is_500ms() -> None:
-    """Sanity: with no env set, the default lands at 0.5s — the G18a target."""
-    import os
-    for key in ("EIDOLON_INTERRUPT_DECISION_MS", "EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC"):
-        os.environ.pop(key, None)
+    """Sanity: plugin default still lands at the 0.5s G18a target."""
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
+
     cfg = EidolonEOTConfig()
     assert cfg.duck_suspend_timeout_sec == pytest.approx(0.5)
 
 
 def test_default_min_chars_is_2() -> None:
-    import os
-    os.environ.pop("EIDOLON_INTERRUPT_MIN_INTERIM_CHARS", None)
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
+
     cfg = EidolonEOTConfig()
     assert cfg.interrupt_min_interim_chars == 2
 
 
 def test_default_vad_confidence_gate_disabled() -> None:
     """G18a: default ``min_avg_vad_confidence`` is now 0.0 (gate off)."""
-    import os
-    os.environ.pop("EIDOLON_EOT_MIN_VAD_CONFIDENCE", None)
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
+
     cfg = EidolonEOTConfig()
     assert cfg.min_avg_vad_confidence == 0.0

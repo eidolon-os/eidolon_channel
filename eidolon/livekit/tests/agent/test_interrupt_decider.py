@@ -72,17 +72,17 @@ def test_first_signal_cancel_on_substantive_interim() -> None:
 
 
 def test_first_signal_skips_backchannel() -> None:
-    """Backchannel-only first INTERIM falls through to HOLD."""
+    """Backchannel-only first INTERIM rolls back instead of cancelling."""
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯", score=0.0)
-    assert decision.action is Action.HOLD
+    assert decision.action is Action.ROLLBACK
 
 
 def test_first_signal_skips_compound_backchannel() -> None:
-    """Compound backchannel like '嗯嗯' is in the set → HOLD."""
+    """Compound backchannel like '嗯嗯' is in the set → ROLLBACK."""
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯嗯", score=0.0)
-    assert decision.action is Action.HOLD
+    assert decision.action is Action.ROLLBACK
 
 
 def test_first_signal_below_min_chars_is_hold() -> None:
@@ -96,7 +96,7 @@ def test_first_signal_strips_punctuation_before_length_check() -> None:
     """Backchannel + punctuation ('嗯。') is recognized after strip."""
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯。", score=0.0)
-    assert decision.action is Action.HOLD
+    assert decision.action is Action.ROLLBACK
 
 
 def test_first_signal_respects_min_chars_setting() -> None:
@@ -111,29 +111,27 @@ def test_first_signal_respects_min_chars_setting() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_high_score_cancels_even_on_backchannel_text() -> None:
-    """If text is backchannel but EOT score is high (rare), the score
-    path still triggers cancel — the strong-EOT-score path is a fallback
-    for the slow-STT case where text might be misleading."""
+def test_backchannel_rolls_back_even_with_high_score() -> None:
+    """Explicit backchannel/noise classification wins over EOT score."""
     d = InterruptDecider(early_cancel_score_threshold=0.7)
     decision = d.on_stt_interim("嗯", score=0.85)
-    assert decision.action is Action.CANCEL
-    assert "eot_score_high" in decision.reason
+    assert decision.action is Action.ROLLBACK
+    assert "intent:" in decision.reason
 
 
 def test_low_score_rollback_only_when_positive() -> None:
     """Score in (0, resume_thr] → ROLLBACK with drain (drop_buffered=False)."""
     d = InterruptDecider(early_resume_score_threshold=0.2)
-    decision = d.on_stt_interim("嗯", score=0.1)
+    decision = d.on_stt_interim("你", score=0.1)
     assert decision.action is Action.ROLLBACK
     assert decision.rollback_drop_buffered is False
     assert "eot_score_low" in decision.reason
 
 
 def test_zero_score_means_no_signal_yet_holds() -> None:
-    """Score exactly 0.0 = 'text too short for ONNX' → HOLD, not rollback."""
+    """Single-char non-backchannel with score 0.0 holds."""
     d = InterruptDecider(early_resume_score_threshold=0.2)
-    decision = d.on_stt_interim("嗯", score=0.0)
+    decision = d.on_stt_interim("你", score=0.0)
     assert decision.action is Action.HOLD
 
 
@@ -143,9 +141,23 @@ def test_mid_band_score_holds() -> None:
         early_cancel_score_threshold=0.7,
         early_resume_score_threshold=0.2,
     )
-    decision = d.on_stt_interim("嗯", score=0.5)
+    decision = d.on_stt_interim("你", score=0.5)
     assert decision.action is Action.HOLD
     assert "eot_score_mid" in decision.reason
+
+
+def test_topic_switch_cancels_with_hint() -> None:
+    d = InterruptDecider()
+    decision = d.on_stt_interim("换个话题吧", score=0.0)
+    assert decision.action is Action.CANCEL
+    assert decision.topic_switch_hint is True
+
+
+def test_correction_cancels_with_hint() -> None:
+    d = InterruptDecider()
+    decision = d.on_stt_interim("不是，我的意思是", score=0.0)
+    assert decision.action is Action.CANCEL
+    assert decision.correction_hint is True
 
 
 # ---------------------------------------------------------------------------

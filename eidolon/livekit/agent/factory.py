@@ -20,7 +20,7 @@ Adding a new STT/TTS provider only requires editing the corresponding
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from livekit.agents import llm as lk_llm
@@ -120,7 +120,7 @@ class SharedStageFactory:
                 config) — STT/TTS provider mismatches surface from
                 ``cfg._validate()`` at config-load time.
         """
-        if cfg.remote_agent_rpc.target:
+        if cfg.providers.brain_provider == "eidolon_agent":
             from eidolon.livekit.agent.eidolon_agent_rpc import (
                 EidolonAgentGrpcLlm,
             )
@@ -202,7 +202,10 @@ class SharedStageFactory:
             stt=stt,
             tts=tts,
             vad=vad,
-            llm_params=LlmParams(model=cfg.llm.model, temperature=0.6),
+            llm_params=LlmParams(
+                model=cfg.llm.model,
+                temperature=cfg.llm.temperature or 0.6,
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -246,7 +249,7 @@ class SharedStageFactory:
     @staticmethod
     def _build_stt(cfg: "AgentConfig") -> SttStage:
         """Build the STT stage based on ``cfg.stt_provider``."""
-        provider = cfg.stt_provider
+        provider = cfg.providers.stt_provider
         if provider == "bailian":
             from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT
 
@@ -272,27 +275,12 @@ class SharedStageFactory:
                 f"(supported: 'bailian', 'sensetime')"
             )
 
-        # G23 (2026-05-18): wrap with STTTranscriptGate when enabled.
-        # The gate is provider-agnostic — it filters cross-turn transcript
-        # events from any STT (Bailian, SenseTime, future Azure/Google/…).
-        # See ``eidolon/livekit/plugins/stt/_transcript_gate.py`` for the
-        # full rationale.
-        if cfg.behavior.stt_transcript_gate_enabled:
-            from eidolon.livekit.plugins.stt._transcript_gate import (
-                STTTranscriptGate,
-            )
-
-            stt = STTTranscriptGate(
-                stt,
-                suppress_window_ms=cfg.behavior.stt_gate_suppress_window_ms,
-            )
-
         return SttStage(stt, params=params)
 
     @staticmethod
     def _build_tts(cfg: "AgentConfig") -> TtsStage:
         """Build the TTS stage based on ``cfg.tts_provider``."""
-        provider = cfg.tts_provider
+        provider = cfg.providers.tts_provider
         if provider == "sensetime":
             from eidolon.livekit.plugins.tts.sensetime import SenseTimeTTS
 
@@ -327,15 +315,18 @@ class SharedStageFactory:
         Returns ``None`` for ``"none"`` / ``"disabled"`` providers, or when
         the chosen provider is unavailable in the runtime environment.
         """
-        provider = cfg.vad_provider.lower()
+        provider = cfg.providers.vad_provider.lower()
+        vad_cfg = cfg.turn_policy.vad
 
         if provider in ("firered", "firered_pvad"):
             try:
                 from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
                 return FireredPvadVAD.load(
-                    min_speech_duration=0.2,
-                    min_silence_duration=0.5,
-                    activation_threshold=0.55,
+                    min_speech_duration=vad_cfg.min_speech_duration_ms / 1000.0,
+                    min_silence_duration=vad_cfg.min_silence_duration_ms / 1000.0,
+                    prefix_padding_duration=vad_cfg.prefix_padding_ms / 1000.0,
+                    max_buffered_speech=vad_cfg.max_buffered_speech_ms / 1000.0,
+                    activation_threshold=vad_cfg.activation_threshold,
                 )
             except Exception as e:
                 logger.warning("[SharedStageFactory] FireRed VAD not available: %s", e)

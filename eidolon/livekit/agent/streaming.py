@@ -53,8 +53,14 @@ if TYPE_CHECKING:
     from livekit.agents.voice import AgentSession
     from livekit.rtc import Room
 
+from eidolon.livekit.common.config import (
+    ObservabilityConfig,
+    TurnPolicyConfig,
+)
+
 from . import _framework_patches
-from .interrupt_decider import Action, Decision, InterruptDecider
+from .turn_policy import Action, Decision, TurnPolicyRuntime
+from .observability import TurnTimeline
 from .output_controller import OutputController
 from .factory import SharedStageFactory
 from .filler import FillerManager
@@ -68,20 +74,48 @@ logger = logging.getLogger("agent")
 # All StreamingPipeline instances share the same ChineseModel instance, which in turn
 # shares the same EotManager singleton (and thus the same ONNX session).
 _eot_model_cache: Any = None
+_eot_model_cache_key: tuple | None = None
 
 
-def _get_shared_eot_model() -> Any:
+def _eot_kwargs_from_turn_policy(turn_policy: TurnPolicyConfig | None) -> dict[str, Any]:
+    if turn_policy is None:
+        return {}
+    return {
+        "eot_unlikely_threshold": turn_policy.eot.eot_unlikely_threshold,
+        "tail_hang_silence_sec": turn_policy.eot.tail_hang_silence_ms / 1000.0,
+        "min_speech_duration_sec": turn_policy.vad.min_speech_duration_ms / 1000.0,
+        "duck_enabled": turn_policy.ducking.enabled,
+        "duck_fade_ms": turn_policy.ducking.fade_out_ms,
+        "duck_fade_in_ms": turn_policy.ducking.fade_in_ms,
+        "duck_suspend_volume": turn_policy.ducking.suspend_volume,
+        "duck_buffer_max_sec": turn_policy.ducking.buffer_max_ms / 1000.0,
+        "duck_suspend_timeout_sec": turn_policy.interrupt.decision_timeout_ms / 1000.0,
+        "interrupt_min_interim_chars": turn_policy.interrupt.min_interim_chars,
+        "duck_early_cancel_score_threshold": (
+            turn_policy.interrupt.early_cancel_score_threshold
+        ),
+        "duck_early_resume_score_threshold": (
+            turn_policy.interrupt.early_resume_score_threshold
+        ),
+        "duck_cooldown_sec": turn_policy.ducking.cooldown_ms / 1000.0,
+    }
+
+
+def _get_shared_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
     """Lazily create and cache the shared ChineseModel instance.
 
     The EotManager inside ChineseModel is a thread-safe singleton that holds
     the ONNX session, so all callers share the same model weights in memory.
     """
-    global _eot_model_cache
-    if _eot_model_cache is None:
+    global _eot_model_cache, _eot_model_cache_key
+    kwargs = _eot_kwargs_from_turn_policy(turn_policy)
+    key = tuple(sorted(kwargs.items()))
+    if _eot_model_cache is None or _eot_model_cache_key != key:
         from eidolon.livekit.plugins.eot import ChineseModel
 
         logger.info("[StreamingPipeline] loading EOT model...")
-        _eot_model_cache = ChineseModel()
+        _eot_model_cache = ChineseModel(**kwargs)
+        _eot_model_cache_key = key
         logger.info("[StreamingPipeline] EOT model loaded")
     return _eot_model_cache
 
@@ -115,8 +149,14 @@ class StreamingPipeline(BasePipeline):
         audio_sample_rate: int = 16000,
         stt_commit_transcript_timeout: float = 5.0,
         aec_warmup_duration: float | None = 1.0,
+        turn_policy: TurnPolicyConfig | None = None,
+        observability: ObservabilityConfig | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
+        self._turn_policy = turn_policy or TurnPolicyConfig()
+        self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
+        self._observability = observability or ObservabilityConfig()
+        self._timeline: TurnTimeline | None = None
         self._instructions = instructions
         self._allow_interruptions = allow_interruptions
         # Round 8 R8.9: fixed welcome (instead of LLM-generated). LLM with
@@ -168,7 +208,7 @@ class StreamingPipeline(BasePipeline):
         self._soft_interrupt_timer: asyncio.Task | None = None
 
         # Read timeout from EOT model config (can be overridden per-pipeline via arg).
-        self._soft_interrupt_timeout: float = self._get_eot_model().soft_interrupt_timeout
+        self._soft_interrupt_timeout: float = self._turn_runtime.decision_timeout_sec
 
         # DuckingMixer + suspend-window timeout fallback task. Both lazy.
         # Mixer is installed in ``run()`` after ``session.start()`` returns,
@@ -197,16 +237,31 @@ class StreamingPipeline(BasePipeline):
         # Eagerly trigger EOT model loading so the ONNX session is ready before
         # the first user audio frame arrives. This avoids cold-start delay after
         # session.start() is called.
-        _get_shared_eot_model()
+        _get_shared_eot_model(self._turn_policy)
 
     def _get_eot_model(self) -> Any:
         """Return the shared EOT model instance."""
-        return _get_shared_eot_model()
+        return _get_shared_eot_model(self._turn_policy)
+
+    def _ensure_runtime_defaults(self) -> None:
+        """Ensure new runtime helpers exist on test-built pipeline objects.
+
+        Some focused unit tests instantiate ``StreamingPipeline`` via
+        ``__new__`` to avoid LiveKit setup. Keep that fast path working while
+        the production constructor remains the single source of defaults.
+        """
+        if not hasattr(self, "_turn_policy"):
+            self._turn_policy = TurnPolicyConfig()
+        if not hasattr(self, "_turn_runtime"):
+            self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
+        if not hasattr(self, "_observability"):
+            self._observability = ObservabilityConfig()
+        if not hasattr(self, "_timeline"):
+            self._timeline = None
 
     async def run(self, room: Room) -> None:
         """Start the streaming pipeline. Blocks until room disconnects."""
-        import livekit.agents as la
-        from livekit.agents.voice import Agent, AgentSession
+        from livekit.agents.voice import AgentSession
 
         logger.info("[StreamingPipeline] starting room=%s", room.name)
         self._room = room
@@ -438,6 +493,7 @@ class StreamingPipeline(BasePipeline):
         also patches the *default* flag, so the disable is permanent for
         the session and we no longer need this hot path.
         """
+        self._ensure_runtime_defaults()
         super()._on_agent_state_changed(event)
 
         # If agent starts thinking or speaking (e.g. after a new user transcript), cancel
@@ -592,6 +648,7 @@ class StreamingPipeline(BasePipeline):
             )
 
     def _on_user_state_changed(self, event: Any) -> None:
+        self._ensure_runtime_defaults()
         try:
             old = event.old_state
             new = event.new_state
@@ -617,6 +674,8 @@ class StreamingPipeline(BasePipeline):
             if new == "speaking":
                 self._callbacks.on_user_started_speaking()
                 self._user_speaking_start_time = time.time()
+                self._timeline = TurnTimeline(generate_turn_id())
+                self._timeline.mark("speech_started_at")
                 # Immediately clear stale text so EOT only sees text from THIS speech turn.
                 self._latest_asr_text = ""
 
@@ -635,6 +694,8 @@ class StreamingPipeline(BasePipeline):
 
             elif old == "speaking" and new == "listening":
                 self._user_speaking_start_time = None
+                if self._timeline is not None:
+                    self._timeline.mark("speech_stopped_at")
 
                 # Feed VAD silence signal into EOT model.
                 eot_model = self._get_eot_model()
@@ -676,6 +737,8 @@ class StreamingPipeline(BasePipeline):
                         )
                         eot_model.reset()
                         self._inject_interrupted_context()
+                        if self._timeline is not None:
+                            self._timeline.mark("turn_committed_at")
                         # F1 fix (2026-05-16): framework default is 2.0s, too
                         # short for Bailian FunASR FINAL on long Chinese
                         # sentences. Pass our configured timeout.
@@ -715,8 +778,14 @@ class StreamingPipeline(BasePipeline):
              check synchronously (event-driven, replacing the old
              polling approach).
         """
+        self._ensure_runtime_defaults()
         if event.transcript:
             self._latest_asr_text = event.transcript
+            if self._timeline is not None:
+                if event.is_final:
+                    self._timeline.mark("transcript_final_at")
+                else:
+                    self._timeline.mark("transcript_interim_first_at")
             # Round 8 R8.5.c: drive phase tracking + ONNX-debounced
             # scoring on every ASR event (interim + final). The 200ms
             # debounce inside update_asr coexists with EotManager's 50ms
@@ -753,10 +822,9 @@ class StreamingPipeline(BasePipeline):
         """
         if not text or not text.strip():
             return
+        self._ensure_runtime_defaults()
 
         eot_model = self._get_eot_model()
-
-        cfg = eot_model._config
 
         # Phase C duck-mixer path takes priority when a mixer is installed
         # AND we're in the suspend window (mixer state == SUSPENDED). The
@@ -773,6 +841,11 @@ class StreamingPipeline(BasePipeline):
                 "[StreamingPipeline] EOT: strong interrupt intent, text=%r",
                 text[:50],
             )
+            decision = self._turn_runtime.decider.on_strong_intent()
+            signal = self._turn_runtime.control_signal_from_decision(decision)
+            self._publish_turn_control(signal.as_metadata())
+            if self._timeline is not None:
+                self._timeline.set_attr("turn_control", signal.as_metadata())
             if duck_active:
                 self._duck_cancel_and_interrupt()
             else:
@@ -794,8 +867,12 @@ class StreamingPipeline(BasePipeline):
         # Duck-active path: delegate to InterruptDecider (G18b)
         # ──────────────────────────────────────────────────────────
         if duck_active:
-            decider = self._get_interrupt_decider()
-            decision = decider.on_stt_interim(text, score)
+            decision = self._turn_runtime.decide_from_transcript(
+                text,
+                score,
+                vad_active=vad_active,
+                agent_speaking=True,
+            )
             suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
             logger.info(
                 "[StreamingPipeline] EOT(duck): decision=%s reason=%s "
@@ -808,7 +885,7 @@ class StreamingPipeline(BasePipeline):
 
         # ──────────────────────────────────────────────────────────
         # Fallback path (mixer not installed, or duck disabled):
-        # the legacy two-stage soft/hard interrupt machinery.
+        # use the soft/hard interrupt machinery without output ducking.
         # ──────────────────────────────────────────────────────────
 
         # Already in soft interrupt: stay in the waiting state until timeout or silence.
@@ -1004,6 +1081,8 @@ class StreamingPipeline(BasePipeline):
         self._cancel_duck_timeout()
         self._duck_suspend_start = now
         self._duck_mixer.duck()
+        if self._timeline is not None:
+            self._timeline.mark("interrupt_started_at")
         self._callbacks.on_duck_started()
         vad_to_duck_ms = 0.0
         if self._user_speaking_start_time is not None:
@@ -1022,6 +1101,7 @@ class StreamingPipeline(BasePipeline):
         to :class:`InterruptDecider` so the policy stays in one place
         (G18b)."""
         try:
+            self._ensure_runtime_defaults()
             await asyncio.sleep(timeout_sec)
             if self._duck_mixer is not None and self._duck_mixer.state == "SUSPENDED":
                 suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
@@ -1032,8 +1112,7 @@ class StreamingPipeline(BasePipeline):
                     self._session is not None
                     and self._session.user_state == "speaking"
                 )
-                decider = self._get_interrupt_decider()
-                decision = decider.on_decision_deadline(vad_still_active)
+                decision = self._turn_runtime.decider.on_decision_deadline(vad_still_active)
                 logger.info(
                     "[StreamingPipeline] duck resolved  reason=deadline  "
                     "decision=%s decider_reason=%s  suspend_ms=%.0f  "
@@ -1049,17 +1128,6 @@ class StreamingPipeline(BasePipeline):
     # G18b (2026-05-18) — decider integration
     # ------------------------------------------------------------------
 
-    def _get_interrupt_decider(self) -> InterruptDecider:
-        """Lazy-build the decider from current EOT config. Rebuilt each
-        time so config env changes during the session are honored
-        (negligible cost — just stores 3 floats)."""
-        cfg = self._get_eot_model()._config
-        return InterruptDecider(
-            min_interim_chars=cfg.interrupt_min_interim_chars,
-            early_cancel_score_threshold=cfg.duck_early_cancel_score_threshold,
-            early_resume_score_threshold=cfg.duck_early_resume_score_threshold,
-        )
-
     def _apply_decision(
         self, decision: Decision, *, resolved_reason: str | None = None
     ) -> None:
@@ -1072,11 +1140,20 @@ class StreamingPipeline(BasePipeline):
                 metrics show "timeout" rather than the decider's
                 internal classification).
         """
+        self._ensure_runtime_defaults()
         if decision.action is Action.CANCEL:
             # Real interrupt: snapshot context, cancel mixer, interrupt TTS.
+            signal = self._turn_runtime.control_signal_from_decision(decision)
+            self._publish_turn_control(signal.as_metadata())
+            if self._timeline is not None:
+                self._timeline.set_attr("turn_control", signal.as_metadata())
             self._duck_cancel_and_interrupt()
             return
         if decision.action is Action.ROLLBACK:
+            signal = self._turn_runtime.control_signal_from_decision(decision)
+            self._publish_turn_control(signal.as_metadata())
+            if self._timeline is not None:
+                self._timeline.set_attr("turn_control", signal.as_metadata())
             self._duck_unduck_if_suspended(
                 reason=resolved_reason or decision.reason,
                 drop_buffered=decision.rollback_drop_buffered,
@@ -1084,6 +1161,19 @@ class StreamingPipeline(BasePipeline):
             return
         # HOLD / NONE — no-op; let next interim or deadline drive.
         return
+
+    def _publish_turn_control(self, metadata: dict[str, object]) -> None:
+        """Attach control hints to the next remote-brain turn when supported."""
+        try:
+            llm_plugin = getattr(self._factory.llm, "llm", None)
+            setter = getattr(llm_plugin, "set_turn_control_metadata", None)
+            if setter is not None:
+                setter(metadata)
+        except Exception:
+            logger.debug(
+                "[StreamingPipeline] failed to publish turn_control metadata",
+                exc_info=True,
+            )
 
     def _cancel_duck_timeout(self) -> None:
         """Cancel the suspend-window fallback task if active. Safe to call any time."""
@@ -1093,6 +1183,7 @@ class StreamingPipeline(BasePipeline):
 
     def _duck_cancel_and_interrupt(self) -> None:
         """Confirm interrupt: discard buffer + cancel TTS generation."""
+        self._ensure_runtime_defaults()
         self._cancel_duck_timeout()
         suspend_ms = 0.0
         buffered = 0
@@ -1110,6 +1201,10 @@ class StreamingPipeline(BasePipeline):
         if self._duck_mixer is not None:
             self._duck_mixer.cancel()
         self._callbacks.on_duck_resolved("cancel")
+        if self._timeline is not None:
+            self._timeline.mark("interrupt_resolved_at")
+            self._timeline.set_attr("cancel_reason", "eot_cancel")
+            self._timeline.append_debug_jsonl(self._observability.timeline_debug_path)
         self._interrupt_current_turn()
 
     def _duck_unduck_if_suspended(
@@ -1123,6 +1218,7 @@ class StreamingPipeline(BasePipeline):
                 True for the timeout-deadline (G17a) path where the
                 buffered frames are stale.
         """
+        self._ensure_runtime_defaults()
         if self._duck_mixer is None:
             return
         self._cancel_duck_timeout()
@@ -1140,6 +1236,12 @@ class StreamingPipeline(BasePipeline):
             self._duck_mixer.unduck(drop_buffered=drop_buffered)
             self._last_unduck_time = time.monotonic()
             self._callbacks.on_duck_resolved("unduck")
+            if self._timeline is not None:
+                self._timeline.mark("interrupt_resolved_at")
+                self._timeline.set_attr("rollback_reason", reason)
+                self._timeline.append_debug_jsonl(
+                    self._observability.timeline_debug_path
+                )
 
     # ------------------------------------------------------------------
     # Interrupted content tracking (Phase 3)

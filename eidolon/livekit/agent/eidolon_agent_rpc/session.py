@@ -21,6 +21,7 @@ from typing import AsyncIterator
 
 import grpc
 import grpc.aio
+from google.protobuf import struct_pb2
 
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
     eidolon_pb2 as pb,
@@ -239,7 +240,11 @@ class EidolonAgentSession:
     # ------------------------------------------------------------------
 
     async def start_turn(
-        self, *, text: str, conversation_id: str
+        self,
+        *,
+        text: str,
+        conversation_id: str,
+        metadata: dict | None = None,
     ) -> tuple[str, AsyncIterator[TurnPayload]]:
         """Begin a new turn. Returns ``(turn_id, payload_iterator)``.
 
@@ -258,12 +263,16 @@ class EidolonAgentSession:
 
         await self._ensure_open()
         try:
+            md = struct_pb2.Struct()
+            if metadata:
+                md.update(metadata)
             await self._write(
                 pb.ChatRequest(
                     start=pb.StartTurn(
                         turn_id=turn_id,
                         conversation_id=conversation_id,
                         text=text,
+                        metadata=md,
                     )
                 )
             )

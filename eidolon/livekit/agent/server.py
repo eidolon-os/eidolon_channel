@@ -111,11 +111,17 @@ def _prewarm(proc) -> None:
 
     try:
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
+        from eidolon.livekit.common.config import load_effective_config
+
+        cfg = load_effective_config()
+        vad_cfg = cfg.turn_policy.vad
 
         proc.userdata["vad"] = FireredPvadVAD.load(
-            min_speech_duration=0.2,
-            min_silence_duration=0.5,
-            activation_threshold=0.55,
+            min_speech_duration=vad_cfg.min_speech_duration_ms / 1000.0,
+            min_silence_duration=vad_cfg.min_silence_duration_ms / 1000.0,
+            prefix_padding_duration=vad_cfg.prefix_padding_ms / 1000.0,
+            max_buffered_speech=vad_cfg.max_buffered_speech_ms / 1000.0,
+            activation_threshold=vad_cfg.activation_threshold,
         )
         logger.info("[Agent] prewarm: FireRed pVAD loaded")
     except Exception as e:
@@ -142,9 +148,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         "[Agent] starting room=%s mode=%s stt=%s tts=%s vad=%s",
         ctx.room.name,
         cfg.behavior.agent_mode,
-        cfg.stt_provider,
-        cfg.tts_provider,
-        cfg.vad_provider,
+        cfg.providers.stt_provider,
+        cfg.providers.tts_provider,
+        cfg.providers.vad_provider,
     )
 
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
@@ -169,10 +175,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             instructions=cfg.behavior.instructions,
             allow_interruptions=True,
             welcome_message=cfg.behavior.welcome_message,
-            false_interruption_timeout=cfg.behavior.false_interruption_timeout,
             audio_sample_rate=cfg.behavior.audio_sample_rate,
-            stt_commit_transcript_timeout=cfg.behavior.stt_commit_transcript_timeout,
-            aec_warmup_duration=cfg.behavior.aec_warmup_duration,
+            turn_policy=cfg.turn_policy,
+            observability=cfg.observability,
         )
 
     from livekit import api as lk_api
@@ -217,7 +222,10 @@ async def _on_session(ctx) -> None:
         _agent_config = cfg
         logger.info(
             "[_on_session] config reloaded: llm=%s vad=%s stt=%s tts=%s",
-            cfg.llm.model, cfg.vad_provider, cfg.stt_provider, cfg.tts_provider,
+            cfg.llm.model,
+            cfg.providers.vad_provider,
+            cfg.providers.stt_provider,
+            cfg.providers.tts_provider,
         )
     else:
         logger.info("[_on_session] using cached _agent_config")
@@ -232,15 +240,21 @@ def _validate_config(cfg: AgentConfig) -> None:
         errors.append("LIVEKIT_URL is not set")
     if not cfg.core.api_key:
         errors.append("LIVEKIT_API_KEY is not set")
-    if not cfg.llm.base_url:
-        errors.append("LLM base_url is not set")
-    if not cfg.llm.model:
-        errors.append("LLM model is not set")
-    if not cfg.stt_provider:
+    if cfg.providers.brain_provider == "direct_llm":
+        if not cfg.llm.base_url:
+            errors.append("LLM base_url is not set")
+        if not cfg.llm.model:
+            errors.append("LLM model is not set")
+    else:
+        if not cfg.remote_agent_rpc.target:
+            errors.append("REMOTE_AGENT_RPC target is not set")
+        if not cfg.remote_agent_rpc.device_token:
+            errors.append("REMOTE_AGENT_RPC device_token is not set")
+    if not cfg.providers.stt_provider:
         errors.append("STT_PROVIDER is not set")
-    if not cfg.tts_provider:
+    if not cfg.providers.tts_provider:
         errors.append("TTS_PROVIDER is not set")
-    if not cfg.vad_provider:
+    if not cfg.providers.vad_provider:
         errors.append("VAD_PROVIDER is not set")
 
     if errors:
@@ -325,7 +339,6 @@ def main() -> None:
 
     loop = asyncio.new_event_loop()
     server_task: asyncio.Task | None = None
-    shutdown_event = asyncio.Event()
 
     async def _run():
         nonlocal server_task

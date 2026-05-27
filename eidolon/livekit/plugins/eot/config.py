@@ -14,8 +14,7 @@
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -56,7 +55,7 @@ class EidolonEOTConfig:
     # When > 0, MinSpeakingDurationPolicy blocks cuts if recent average VAD
     # probability is below this threshold (likely echo / noise rather than
     # real speech). Requires the VAD inference callback to be wired (G6).
-    # 0.0 disables the gate (default for backward compatibility).
+    # 0.0 disables the gate; turn_policy now owns runtime tuning.
     #
     # G18a (2026-05-18): default dropped from 0.40 → 0.0 (gate disabled).
     # The "wait for VAD avg to ramp" was the largest single contributor to
@@ -69,11 +68,7 @@ class EidolonEOTConfig:
     # Phase 2 (G18c) will remove the gate code from MinSpeakingDurationPolicy
     # entirely. For Phase 1, default to 0.0 (no-op) but leave the env
     # available for emergency rollback.
-    min_avg_vad_confidence: float = field(
-        default_factory=lambda: float(
-            os.environ.get("EIDOLON_EOT_MIN_VAD_CONFIDENCE", "0.0")
-        )
-    )
+    min_avg_vad_confidence: float = 0.0
 
     vad_confidence_window_sec: float = 2.0
 
@@ -165,18 +160,7 @@ class EidolonEOTConfig:
     bound memory. In normal operation the suspend window (0.8 s) is well
     below this limit. If exceeded, excess frames are dropped."""
 
-    # G18a (2026-05-18): unified the 500ms decision budget for both the
-    # SUSPENDED-window timeout and the maximum time before forcing a
-    # cancel/rollback verdict. Override via ``EIDOLON_INTERRUPT_DECISION_MS``
-    # (preferred new name) or ``EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC`` (legacy,
-    # interpreted as seconds; kept for backward-compat through Phase 1).
-    duck_suspend_timeout_sec: float = field(
-        default_factory=lambda: (
-            float(os.environ["EIDOLON_INTERRUPT_DECISION_MS"]) / 1000
-            if os.environ.get("EIDOLON_INTERRUPT_DECISION_MS")
-            else float(os.environ.get("EIDOLON_DUCK_SUSPEND_TIMEOUT_SEC", "0.5"))
-        )
-    )
+    duck_suspend_timeout_sec: float = 0.5
     """Hard decision budget — the maximum time the mixer stays SUSPENDED
     before forcing a verdict (cancel-on-still-active-VAD or rollback-on-no-INTERIM).
 
@@ -187,11 +171,7 @@ class EidolonEOTConfig:
     the timeout — at which point VAD-still-active is treated as a real
     interrupt rather than passively unducking and praying."""
 
-    interrupt_min_interim_chars: int = field(
-        default_factory=lambda: int(
-            os.environ.get("EIDOLON_INTERRUPT_MIN_INTERIM_CHARS", "2")
-        )
-    )
+    interrupt_min_interim_chars: int = 2
     """G18a (2026-05-18): minimum character count in the first STT INTERIM
     that triggers an immediate cancel during the SUSPENDED window
     (bypassing the EOT-score-based path). ≥2 filters single-char vocalizations
@@ -200,22 +180,14 @@ class EidolonEOTConfig:
     in ``_run_eot_check``, this is the fast-path "real interrupt confirmed
     by semantic signal" trigger."""
 
-    duck_early_cancel_score_threshold: float = field(
-        default_factory=lambda: float(
-            os.environ.get("EIDOLON_EOT_DUCK_EARLY_CANCEL_SCORE", "0.7")
-        )
-    )
+    duck_early_cancel_score_threshold: float = 0.7
     """Score threshold during the suspend window above which we call
     ``cancel()`` immediately (don't wait for final). Lower than the
     non-ducking ``hard_interrupt_score_threshold`` because we already
     paid the duck overhead — once we're suspended, we want decisive
     cancel rather than another wait cycle."""
 
-    duck_early_resume_score_threshold: float = field(
-        default_factory=lambda: float(
-            os.environ.get("EIDOLON_EOT_DUCK_EARLY_RESUME_SCORE", "0.2")
-        )
-    )
+    duck_early_resume_score_threshold: float = 0.2
     """Score threshold during the suspend window below which we call
     ``unduck()`` immediately, classifying as false interrupt. Backchannels
     ("嗯", "好的") usually score < 0.1 via semantic_completeness_score's

@@ -140,14 +140,20 @@ class BailianTTSConfig:
     # the LLM body bursts in within ~200ms — the default soft_min=12 misses
     # early-punct flush opportunities and TTS first-byte ends up tied to
     # LLM-end. Empty / 0 → disabled (use ``aggregator_soft_min_chars``).
+    # Default tuned for first-audio latency (2026-05-30): flush the FIRST TTS
+    # segment as soon as a short prefix + any punctuation is available, instead
+    # of waiting for the full soft_min (12). Real-room A/B: commit->first_audio
+    # 820->759 p50 / 960->804 p95 (into the top-tier target band), 5/5 pass.
+    # Trade-off: the first spoken segment is short; raise these for smoother
+    # first-segment prosody at the cost of a later first byte.
     aggregator_first_sentence_soft_min_chars: int = field(
         default_factory=lambda: int(
-            os.environ.get("BAILIAN_TTS_AGGREGATOR_FIRST_SENTENCE_SOFT_MIN_CHARS", "0")
+            os.environ.get("BAILIAN_TTS_AGGREGATOR_FIRST_SENTENCE_SOFT_MIN_CHARS", "4")
         )
     )
     aggregator_first_sentence_flush_any_punct: bool = field(
         default_factory=lambda: os.environ.get(
-            "BAILIAN_TTS_AGGREGATOR_FIRST_SENTENCE_FLUSH_ANY_PUNCT", "false"
+            "BAILIAN_TTS_AGGREGATOR_FIRST_SENTENCE_FLUSH_ANY_PUNCT", "true"
         ).lower()
         == "true"
     )

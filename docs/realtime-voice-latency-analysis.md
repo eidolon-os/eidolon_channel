@@ -306,12 +306,20 @@ preemption: lowering FunASR `max_sentence_silence` 800→400ms collapsed the FIN
 wait **961→96ms** and **commit→first_audio 1574→820 p50 / 960 p95** — into the
 top-tier band (p95 meets the ≤1100 target tier), still 5/5 / 0 flaky.
 
-Net Phase 2: **commit→first_audio 1718 → 820ms p50 (~52%)**, top-tier band, via
-STT PREFLIGHT (hide brain) + faster STT endpointing (cut FINAL wait). Remaining
-lever: **TTS TTFB (~649ms)** — now the single largest residual on the critical
-path (commit→first_audio ≈ FINAL 96 + brain/overlap + TTS 649). Caveat: eos=400
-is aggressive for hesitant mid-utterance pauses; validate against varied/real
-audio and consider 500–600 in production.
+Then the TTS first-sentence flush (`aggregator_first_sentence_flush_any_punct`):
+sending the first TTS segment on an early prefix+punctuation instead of waiting
+for the 12-char soft-min cut it further to **759 p50 / 804 p95**.
+
+Net Phase 2: **commit→first_audio 1718 → 759ms p50 / 804 p95 (~56%)** — both now
+inside the industry top-tier *target* tier (p50 ≤800, p95 ≤1100), via STT
+PREFLIGHT (hide brain) + faster STT endpointing (cut FINAL wait) + TTS
+first-sentence flush. (n=5 indicative; run `--repeat 20` to harden the gate.)
+Caveats: eos=400 is aggressive for hesitant mid-utterance pauses, and the
+first-flush makes the first spoken segment short — validate both against
+varied/real audio; `max_sentence_silence` 500–600 and a larger first-sentence
+min are the conservative dials. Residual TTS provider TTFB (~500–600ms synthesis)
+is now the main floor; cutting it needs a faster provider path, not channel
+tuning.
 
 ## Short-Term Targets
 

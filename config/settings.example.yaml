@@ -1,5 +1,7 @@
-# Channel settings — copy to config/settings.yaml
-# Secret placeholders = env var names; provider plugin keys stay in config/.env only
+# Channel structured settings — TEMPLATE.
+# Copy to config/settings.yaml and adjust. Secret fields hold the ENV VAR NAME
+# as a placeholder (resolved from config/.env / the environment); real secrets
+# never live here. Field set mirrors config/settings.yaml.
 
 core:
   livekit_url: ws://127.0.0.1:7880
@@ -10,21 +12,25 @@ core:
 
 behavior:
   agent_mode: streaming
+  instructions: You are a helpful, friendly voice assistant. Keep responses concise.
+  welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
   audio_sample_rate: 16000
 
 llm:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
+  base_url: http://your-llm-gateway/v1
+  model: your-model-name
   api_key: OPENAI_LLM_API_KEY
+  temperature: 0.7
+  timeout: 120
 
 providers:
-  stt_provider: sensetime
-  tts_provider: sensetime
-  vad_provider: firered
-  brain_provider: direct_llm
+  stt_provider: bailian
+  tts_provider: bailian
+  vad_provider: firered_pvad
+  brain_provider: eidolon_agent
 
 remote_agent_rpc:
-  target: ""
+  target: 127.0.0.1:45051
   locale: zh
   device_token: REMOTE_AGENT_RPC_DEVICE_TOKEN
   conversation_id_prefix: livekit
@@ -57,10 +63,6 @@ turn_policy:
   idle:
     followup_timeout_ms: 15000
   preemptive:
-    # Speculative brain generation: start the brain on a stable interim
-    # transcript before commit, hiding the STT-final wait. The framework
-    # reuses it if the final transcript matches, else cancels via gRPC
-    # CancelTurn. preemptive_tts=false keeps audio output gated by commit.
     enabled: true
     preemptive_tts: false
 
@@ -69,9 +71,8 @@ observability:
   metrics_enabled: true
   timeline_debug_path: ""
 
-# Bailian STT/TTS provider config (non-secret). API keys live in .env only:
-#   BAILIAN_STT_API_KEY=...   (or DASHSCOPE_API_KEY)
-#   BAILIAN_TTS_API_KEY=...
+# Bailian STT/TTS provider config (non-secret). API keys stay in .env
+# (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).
 bailian_stt:
   api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
   model: fun-asr-realtime-2026-02-28
@@ -79,28 +80,72 @@ bailian_stt:
   language: zh
   itn: true
   # Endpointing: silence (ms) before FINAL. 400 (vs provider default 800) cuts
-  # first-audio latency; validated not to worsen mid-utterance splits.
+  # first-audio latency; validated not to worsen mid-utterance splits. 500-600 = safer.
   max_sentence_silence_ms: 400
   gate_enabled: false
+  gate_preroll_ms: 500
+  gate_tail_window_ms: 1500
+  gate_keepalive_interval_sec: 1.0
+  gate_keepalive_frame_ms: 100
+  gate_vad_high_threshold: 0.6
+  gate_vad_low_threshold: 0.3
+  gate_rms_threshold: 500.0
 
 bailian_tts:
   api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
   model: cosyvoice-v3-flash
   voice: longanyang
+  audio_format: pcm
   sample_rate: 16000
+  speech_rate: 1.0
+  volume: 50
+  pitch: 1.0
+  pool_size: 4
+  pool_size_bootstrap: 3
+  pool_refill_backoff: 1.5
+  pool_acquire_timeout: 12.0
+  pool_max_idle_sec: 15.0
+  ws_heartbeat_sec: 15.0
+  task_started_timeout: 15.0
+  task_finished_timeout: 20.0
+  first_token_timeout: 15.0
+  inter_token_timeout: 10.0
+  no_first_audio_timeout: 5.0
+  aggregator_soft_min_chars: 12
+  aggregator_hard_max_chars: 80
+  aggregator_idle_ms: 300
   # first-audio TTFB tuning: flush first segment on early prefix+punctuation
   aggregator_first_sentence_soft_min_chars: 4
   aggregator_first_sentence_flush_any_punct: true
+  log_audio_diag: true
 
+# SenseTime STT/TTS provider config (non-secret). API keys stay in .env
+# (SENSETIME_STT_API_KEY / SENSETIME_TTS_API_KEY).
 sensetime_stt:
   api_url: wss://api.senseaudio.cn/ws/v1/audio/transcriptions
   model: senseaudio-asr-deepthink-1.5-260319
   sample_rate: 16000
   language: zh
+  max_stream_retries: 3
+  min_speech_duration_ms: 300
   silence_duration_ms: 800
+  log_audio_diag: true
 
 sensetime_tts:
   api_url: wss://api.senseaudio.cn/ws/v1/t2a_v2
   model: senseaudio-tts-1.5-260319
   voice: female_0033_a
+  audio_format: pcm
   sample_rate: 32000
+  bitrate: 128000
+  channel: 1
+  speed: 1.0
+  vol: 1.0
+  pitch: 0
+  pool_size: 4
+  first_token_timeout: 15.0
+  no_first_audio_timeout: 5.0
+  aggregator_soft_min_chars: 12
+  aggregator_hard_max_chars: 60
+  aggregator_idle_ms: 300
+  log_audio_diag: true

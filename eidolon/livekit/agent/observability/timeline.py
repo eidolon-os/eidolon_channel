@@ -28,6 +28,7 @@ TIMELINE_FIELDS = (
     "brain_request_sent_at",
     "brain_first_delta_at",
     "brain_done_at",
+    "brain_cancelled_at",
     "tts_request_started_at",
     "tts_provider_first_audio_at",
     "tts_first_audio_at",

@@ -48,6 +48,16 @@ logger = logging.getLogger("bailian.stt_stream")
 # 100 ms of 16 kHz mono PCM = 1600 samples
 _CHUNK_SAMPLES = 1600
 
+# Preemptive generation support: when an interim transcript has been stable
+# (unchanged) for this long and is at least this many chars, emit a
+# PREFLIGHT_TRANSCRIPT so the framework can start brain generation before the
+# (late) FINAL arrives. Bailian's FINAL lands ~1s after speech stop, so this is
+# what actually hides that wait. The FINAL may still differ (punctuation/ITN);
+# the framework then discards the speculative turn and regenerates — clean, just
+# without the speedup for that turn.
+_PREFLIGHT_STABLE_MS = 320
+_PREFLIGHT_MIN_CHARS = 2
+
 
 class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
     """LiveKit RecognizeStream implementation for Bailian FunASR.
@@ -118,6 +128,9 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._first_partial_seen = False
         self._first_final_seen = False
         self._turn_audio_observation: dict[str, Any] | None = None
+        # Preflight (preemptive-generation) state.
+        self._preflight_task: asyncio.Task | None = None
+        self._preflight_sent_text: str | None = None
         # G7 (2026-05-17): track recv_loop errors so we can re-raise from
         # _run() and let the framework's RecognizeStream._main_task retry
         # mechanism kick in. Without this, an unexpected WS close exits
@@ -147,6 +160,8 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._last_interim_text = ""
         self._finished = False
         self._recv_error = None
+        self._cancel_preflight()
+        self._preflight_sent_text = None
 
         conn = BailianConnectionManager(
             api_url=self._stt_ref.api_url,
@@ -155,6 +170,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             sample_rate=self._sample_rate,
             itn=self._stt_ref.itn,
             language_hints=self._language,
+            max_sentence_silence_ms=self._stt_ref.max_sentence_silence_ms,
         )
         self._conn = conn
 
@@ -472,6 +488,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             return
 
         if latest.sentence_end:
+            self._cancel_preflight()
             self._emit_provider_event_once(
                 "stt_provider_final",
                 "_first_final_seen",
@@ -536,11 +553,62 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                         ],
                     )
                 )
+                # Interim changed -> (re)arm the stability timer. If it goes
+                # quiet for _PREFLIGHT_STABLE_MS we emit a PREFLIGHT_TRANSCRIPT
+                # so the framework can start the brain before the late FINAL.
+                self._arm_preflight(text, latest)
+
+    def _arm_preflight(self, text: str, latest: FunASRSentence) -> None:
+        self._cancel_preflight()
+        if len(text.strip()) < _PREFLIGHT_MIN_CHARS or text == self._preflight_sent_text:
+            return
+        self._preflight_task = asyncio.create_task(
+            self._emit_preflight_after_stable(text, latest)
+        )
+
+    async def _emit_preflight_after_stable(
+        self, text: str, latest: FunASRSentence
+    ) -> None:
+        try:
+            await asyncio.sleep(_PREFLIGHT_STABLE_MS / 1000.0)
+        except asyncio.CancelledError:
+            return
+        # Still the latest interim, not finalized, not already sent.
+        if (
+            self._finished
+            or text != self._last_interim_text
+            or text == self._preflight_sent_text
+        ):
+            return
+        self._preflight_sent_text = text
+        logger.info("[Bailian STT] PREFLIGHT_TRANSCRIPT text=%r", text)
+        self._push_event(
+            self._SpeechEvent(
+                type=self._SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                alternatives=[
+                    self._SpeechData(
+                        language=self._language,
+                        text=text,
+                        start_time=latest.begin_time / 1000.0,
+                        end_time=latest.end_time / 1000.0,
+                        confidence=1.0,
+                        words=self._build_timed_strings(latest),
+                    )
+                ],
+            )
+        )
+
+    def _cancel_preflight(self) -> None:
+        task = self._preflight_task
+        self._preflight_task = None
+        if task is not None and not task.done():
+            task.cancel()
 
     async def _handle_task_finished(self, _: FunASRTaskFinished) -> None:
         """Server confirmed end of task."""
         logger.info("[Bailian STT] TASK_FINISHED received")
         self._finished = True
+        self._cancel_preflight()
         self._push_event(self._SpeechEvent(type=self._SpeechEventType.END_OF_SPEECH))
 
     async def _handle_task_failed(self, failed: FunASRTaskFailed) -> None:

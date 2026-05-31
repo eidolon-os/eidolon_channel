@@ -73,12 +73,18 @@ def summarize_timeline_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     flush_reasons: dict[str, int] = {}
     cases: dict[str, int] = {}
     record_summaries: list[dict[str, Any]] = []
+    preemptive = {"triggered": 0, "reused": 0, "discarded": 0}
 
     for record in records:
         attrs = _mapping(record.get("attrs"))
         case_id = _case_id_from_room_name(attrs.get("room_name"))
         if case_id:
             cases[case_id] = cases.get(case_id, 0) + 1
+
+        pre = _preemptive_outcome(record)
+        if pre is not None:
+            preemptive["triggered"] += 1
+            preemptive["discarded" if pre == "discarded" else "reused"] += 1
         durations = _mapping(record.get("durations_ms"))
         provider_latency = _mapping(attrs.get("provider_latency_ms"))
         for key, value in {**durations, **provider_latency}.items():
@@ -123,11 +129,21 @@ def summarize_timeline_records(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "interrupt_action": attrs.get("interrupt_action", ""),
                 "intent": _intent(attrs),
                 "segments": segments,
+                "preemptive": _preemptive_outcome(record) or "",
             }
         )
 
+    triggered = preemptive["triggered"]
+    preemptive["reuse_rate"] = (
+        preemptive["reused"] / triggered if triggered else None
+    )
+    preemptive["waste_rate"] = (
+        preemptive["discarded"] / triggered if triggered else None
+    )
+
     return {
         "count": len(records),
+        "preemptive": preemptive,
         "latencies": {
             key: _aggregate_values(values)
             for key, values in sorted(latency_samples.items())
@@ -195,6 +211,26 @@ def _duration_ms(timestamps: dict[str, Any], start: str, end: str) -> float | No
     ):
         return None
     return (float(end_value) - float(start_value)) * 1000
+
+
+def _preemptive_outcome(record: dict[str, Any]) -> str | None:
+    """Derive the preemptive-generation outcome from timeline marks.
+
+    A turn is "preemptive" when the brain request started BEFORE the turn was
+    committed (the framework fired generation on a stable interim). If that
+    speculative turn was later cancelled (``brain_cancelled_at`` present) it was
+    discarded; otherwise it was reused. Returns None when the brain started at
+    or after commit (no preemption — the normal post-commit path).
+    """
+
+    ts = _mapping(record.get("timestamps"))
+    started = ts.get("brain_request_started_at")
+    committed = ts.get("turn_committed_at")
+    if not isinstance(started, (int, float)) or not isinstance(committed, (int, float)):
+        return None
+    if started >= committed:
+        return None
+    return "discarded" if "brain_cancelled_at" in ts else "reused"
 
 
 def _intent(attrs: dict[str, Any]) -> str:

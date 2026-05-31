@@ -198,6 +198,10 @@ class BailianFunASRSTT(stt.STT):
         return self._itn
 
     @property
+    def max_sentence_silence_ms(self) -> int:
+        return self._config.max_sentence_silence_ms
+
+    @property
     def language(self) -> str:
         return self._language
 

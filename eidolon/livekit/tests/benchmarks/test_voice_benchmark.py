@@ -496,6 +496,36 @@ def test_enforcement_failures_only_required_hard_fails() -> None:
     assert enforcement_failures(advisory) == []
 
 
+def test_timeline_preemptive_outcomes(tmp_path) -> None:
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        "\n".join(
+            [
+                # reused: brain started before commit, not cancelled
+                '{"turn_id":"a","timestamps":{"brain_request_started_at":1.0,'
+                '"turn_committed_at":2.0},"attrs":{}}',
+                # discarded: brain started before commit, then cancelled
+                '{"turn_id":"b","timestamps":{"brain_request_started_at":1.0,'
+                '"turn_committed_at":2.0,"brain_cancelled_at":1.5},"attrs":{}}',
+                # not preemptive: brain started after commit
+                '{"turn_id":"c","timestamps":{"turn_committed_at":1.0,'
+                '"brain_request_started_at":2.0},"attrs":{}}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_timeline_records(load_timeline_records(timeline_path))
+    pre = summary["preemptive"]
+    assert pre["triggered"] == 2
+    assert pre["reused"] == 1
+    assert pre["discarded"] == 1
+    assert pre["reuse_rate"] == 0.5
+    assert pre["waste_rate"] == 0.5
+    outcomes = {r["turn_id"]: r["preemptive"] for r in summary["record_summaries"]}
+    assert outcomes == {"a": "reused", "b": "discarded", "c": ""}
+
+
 def test_timeline_exposes_tts_and_endpoint_segments(tmp_path) -> None:
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(

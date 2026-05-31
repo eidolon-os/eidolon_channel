@@ -56,6 +56,13 @@ turn_policy:
     cooldown_ms: 800
   idle:
     followup_timeout_ms: 15000
+  preemptive:
+    # Speculative brain generation: start the brain on a stable interim
+    # transcript before commit, hiding the STT-final wait. The framework
+    # reuses it if the final transcript matches, else cancels via gRPC
+    # CancelTurn. preemptive_tts=false keeps audio output gated by commit.
+    enabled: true
+    preemptive_tts: false
 
 observability:
   structured_logs: true

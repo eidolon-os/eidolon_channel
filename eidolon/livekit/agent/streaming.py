@@ -278,6 +278,7 @@ class StreamingPipeline(BasePipeline):
             "brain_request_sent": "brain_request_sent_at",
             "brain_first_delta": "brain_first_delta_at",
             "brain_done": "brain_done_at",
+            "brain_cancelled": "brain_cancelled_at",
         }
 
         def _on_provider_event(event: Any) -> None:
@@ -529,21 +530,21 @@ class StreamingPipeline(BasePipeline):
                     "discard_audio_if_uninterruptible": True,
                     "false_interruption_timeout": self._false_interruption_timeout,
                 },
-                # Round 8 R8.12.c: disable preemptive generation entirely.
-                # Production logs (2026-05-07) showed:
-                #     "preemptive generation enabled but chat context or
-                #      tools have changed after on_user_turn_completed"
-                # The framework was firing LLM calls based on STT interim
-                # transcripts; when later STT chunks changed the user's
-                # message, the preemptive call was wasted (and sometimes
-                # its TTS partial leaked through). For Chinese workloads
-                # with frequent server-VAD-driven segmentation (R8.12.a),
-                # context-changed is the common case, not the exception.
-                # Trade-off: ~500-1000ms slower first audio, far more
-                # consistent state.
+                # Phase 2 (2026-05-30): preemptive (speculative) brain
+                # generation, config-gated via turn_policy.preemptive.
+                # Hides the ~990ms STT-final wait by starting the brain on a
+                # stable interim/preflight transcript; the framework reuses it
+                # if the final transcript matches, else cancels via our gRPC
+                # CancelTurn (clean: stops the upstream LLM, no orphan tokens,
+                # no history mutation). ``preemptive_tts`` stays False so audio
+                # output is still gated by our commit (no partial-audio leak,
+                # which was the R8.12.c concern). Was hard-disabled in R8.12.c
+                # because _inject_interrupted_context() mutates chat_ctx before
+                # commit on *post-interruption* turns, breaking is_equivalent;
+                # normal turns do not diverge and now get the speedup.
                 "preemptive_generation": {
-                    "enabled": False,
-                    "preemptive_tts": False,  # belt + suspenders
+                    "enabled": self._turn_policy.preemptive.enabled,
+                    "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
                 },
             },
             # G9 (2026-05-17): framework public API. Default 3.0s only covers

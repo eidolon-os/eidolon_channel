@@ -132,6 +132,20 @@ class IdlePolicyConfig:
 
 
 @dataclass(frozen=True)
+class PreemptivePolicyConfig:
+    """Speculative brain generation (LiveKit native preemptive_generation).
+
+    Starts the brain on a stable interim/preflight transcript before commit;
+    the framework reuses it if the final transcript matches, else cancels via
+    our gRPC CancelTurn. ``preemptive_tts`` keeps output gated by our commit
+    when False (no partial-audio leak); only the LLM is pre-warmed.
+    """
+
+    enabled: bool = True
+    preemptive_tts: bool = False
+
+
+@dataclass(frozen=True)
 class TurnPolicyConfig:
     profile: TurnPolicyProfile = "balanced_semantic"
     vad: VadPolicyConfig = field(default_factory=VadPolicyConfig)
@@ -139,6 +153,7 @@ class TurnPolicyConfig:
     interrupt: InterruptPolicyConfig = field(default_factory=InterruptPolicyConfig)
     ducking: DuckingPolicyConfig = field(default_factory=DuckingPolicyConfig)
     idle: IdlePolicyConfig = field(default_factory=IdlePolicyConfig)
+    preemptive: PreemptivePolicyConfig = field(default_factory=PreemptivePolicyConfig)
 
 
 @dataclass(frozen=True)

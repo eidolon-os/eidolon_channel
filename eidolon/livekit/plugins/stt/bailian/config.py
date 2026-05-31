@@ -56,6 +56,17 @@ class BailianSTTConfig:
     )
     language_hints: str | None = None
 
+    # Silence (ms) FunASR waits before declaring sentence end (the FINAL). The
+    # DashScope default is 800ms, which dominates the post-speech-stop FINAL
+    # latency and gates playback scheduling. Lowering it makes the FINAL arrive
+    # sooner (and is bounded by the provider's 200-6000ms range). 0/None leaves
+    # it unset (provider default).
+    max_sentence_silence_ms: int = field(
+        default_factory=lambda: int(
+            os.environ.get("BAILIAN_STT_MAX_SENTENCE_SILENCE_MS", "400")
+        )
+    )
+
     # G16 (2026-05-17): VAD-gated audio forwarding for cost reduction.
     # Defaults OFF (gate_enabled=False) — current operators see no behavior
     # change until they explicitly opt in via env. See ../_gate.py for the

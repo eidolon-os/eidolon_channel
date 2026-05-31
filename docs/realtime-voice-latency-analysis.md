@@ -273,6 +273,46 @@ Every real-provider run must also pass real-call verification
 bytes, and per-turn brain-gRPC / STT-stream evidence. A run that cannot prove
 real calls fails instead of masquerading as a pass.
 
+## Phase 2 Results: Preemptive (Speculative) Generation
+
+Real-room A/B (`--repeat 5`, eidolon_agent + Bailian), 2026-05-30:
+
+| variant | commit→first_audio p50/p95 | preemptive trig/reuse/disc | notes |
+| --- | ---: | --- | --- |
+| OFF (baseline) | 1718 / 1755 | 0/0/0 | brain after commit |
+| native preemptive only | 1631 / 1758 | 0/0/0 | fires on the late FINAL → no gain |
+| **+ STT PREFLIGHT (shipped)** | **1574 / 1617** | 5/4/1 | brain fully hidden; 5/5, clean discard |
+| + preemptive_tts | 1721 / 1875 | 5/3/2 | no gain (see below); reverted |
+| **+ STT eos=400ms (shipped)** | **820 / 960** | 1/5 | STT FINAL 961→96ms; **top-tier band** |
+
+Findings:
+
+- Native `preemptive_generation` alone is a no-op for Bailian: its trigger is
+  gated on a stable transcript, and Bailian emits no preflight and its FINAL
+  lands ~1s after speech stop. Emitting `PREFLIGHT_TRANSCRIPT` on a stable
+  interim (`speech_stream.py`) is what makes preemption fire early.
+- With PREFLIGHT, the brain is **fully hidden** (~150ms saved → 1718→1574),
+  safely (5/5 pass, reuse 4/5, the 1 discard clean). Shipped: `turn_policy.
+  preemptive.enabled=true, preemptive_tts=false`.
+- `preemptive_tts=true` gives **no further gain**: playback (`tts_first_audio`)
+  is scheduled only at the framework's `on_end_of_turn`, which still waits for
+  the STT FINAL (~961ms). Preemptive_tts pre-*synthesizes* but plays only on
+  confirm, so it cannot beat the final-wait; it only added discards. Reverted.
+
+Bottom line: preemption pre-computes the response but **playback is gated on the
+STT FINAL**, so `commit→first_audio (1574) ≈ stt_final_after_commit (961) +
+TTS_TTFB (649)`. The win therefore came from cutting the gating cost, not more
+preemption: lowering FunASR `max_sentence_silence` 800→400ms collapsed the FINAL
+wait **961→96ms** and **commit→first_audio 1574→820 p50 / 960 p95** — into the
+top-tier band (p95 meets the ≤1100 target tier), still 5/5 / 0 flaky.
+
+Net Phase 2: **commit→first_audio 1718 → 820ms p50 (~52%)**, top-tier band, via
+STT PREFLIGHT (hide brain) + faster STT endpointing (cut FINAL wait). Remaining
+lever: **TTS TTFB (~649ms)** — now the single largest residual on the critical
+path (commit→first_audio ≈ FINAL 96 + brain/overlap + TTS 649). Caveat: eos=400
+is aggressive for hesitant mid-utterance pauses; validate against varied/real
+audio and consider 500–600 in production.
+
 ## Short-Term Targets
 
 ```text

@@ -68,6 +68,7 @@ def _build_run_task_payload(
     sample_rate: int = 16000,
     itn: bool = True,
     language_hints: str | None = None,
+    max_sentence_silence_ms: int = 0,
 ) -> dict[str, Any]:
     # F5 fix (2026-05-16): wire ``language_hints`` into the DashScope payload.
     # Previously the parameter was accepted by every caller but **never**
@@ -88,6 +89,11 @@ def _build_run_task_payload(
         # (G16) where silence audio is sent at 1Hz instead of 20Hz.
         "heartbeat": True,
     }
+    # Endpointing: tell FunASR to declare sentence-end after a shorter silence
+    # so the FINAL (which gates playback scheduling) arrives sooner. Bounded to
+    # the provider's documented 200-6000ms range; 0 leaves the provider default.
+    if max_sentence_silence_ms:
+        parameters["max_sentence_silence"] = max(200, min(6000, max_sentence_silence_ms))
     if language_hints:
         # Support both ``"zh"`` and ``"zh,en"`` env-style inputs by splitting
         # on commas. Single-language case yields a 1-element list.
@@ -156,6 +162,7 @@ class BailianConnectionManager:
         sample_rate: int = 16000,
         itn: bool = True,
         language_hints: str | None = None,
+        max_sentence_silence_ms: int = 0,
     ):
         self._api_url = api_url
         self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
@@ -163,6 +170,7 @@ class BailianConnectionManager:
         self._sample_rate = sample_rate
         self._itn = itn
         self._language_hints = language_hints
+        self._max_sentence_silence_ms = max_sentence_silence_ms
 
         self._ws: websockets.ClientProtocol | None = None
         self._connected: bool = False
@@ -238,6 +246,7 @@ class BailianConnectionManager:
                 sample_rate=self._sample_rate,
                 itn=self._itn,
                 language_hints=self._language_hints,
+                max_sentence_silence_ms=self._max_sentence_silence_ms,
             )
             await self._ws.send(json.dumps(payload))
             logger.debug("Sent run-task: %s", payload)

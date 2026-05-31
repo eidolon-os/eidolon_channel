@@ -506,6 +506,7 @@ def _timeline_section(runner: dict[str, Any]) -> str:
     return f"""<h2>{html.escape(runner["name"])} Turn Timeline</h2>
 <div class="section">
   <div class="meta">{count} turn timeline record(s)</div>
+  {_preemptive_line(timeline.get("preemptive"))}
   <h3>Case Coverage</h3>
   <table>
     <thead><tr><th>Case</th><th>Timeline Records</th></tr></thead>
@@ -547,6 +548,20 @@ def _timeline_section(runner: dict[str, Any]) -> str:
     <tbody>{flush_rows}</tbody>
   </table>
 </div>"""
+
+
+def _preemptive_line(preemptive: Any) -> str:
+    if not isinstance(preemptive, dict) or not preemptive.get("triggered"):
+        return ""
+    triggered = preemptive.get("triggered", 0)
+    reused = preemptive.get("reused", 0)
+    discarded = preemptive.get("discarded", 0)
+    reuse_rate = preemptive.get("reuse_rate")
+    rate_str = f"{reuse_rate:.0%}" if isinstance(reuse_rate, (int, float)) else "-"
+    return (
+        f'<div class="meta">preemptive: {triggered} triggered, '
+        f"{reused} reused / {discarded} discarded (reuse {rate_str})</div>"
+    )
 
 
 def _provider_segment_row(values: dict[str, Any]) -> str:

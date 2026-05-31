@@ -306,11 +306,18 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 request_id=req_id,
             )
         except asyncio.CancelledError:
-            # Barge-in or job teardown: tell the brain to stop generating
-            # without closing the underlying bidi stream. Use session.spawn
-            # rather than raw asyncio.create_task — keeps a strong ref so the
-            # task isn't GC'd mid-flight, and routes any unexpected failure
-            # through the session's centralized done-callback diagnostic.
+            # Barge-in, preemptive-generation discard, or job teardown: tell the
+            # brain to stop generating without closing the underlying bidi
+            # stream. Use session.spawn rather than raw asyncio.create_task —
+            # keeps a strong ref so the task isn't GC'd mid-flight, and routes
+            # any unexpected failure through the session's centralized
+            # done-callback diagnostic.
+            llm_v.emit_provider_event(
+                "brain_cancelled",
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                request_id=req_id,
+            )
             session.spawn(
                 session.cancel_turn(turn_id),
                 name=f"eidolon-cancel-{turn_id}",

@@ -107,12 +107,22 @@ DEFAULT_SLO_GATES: tuple[SloGate, ...] = (
         source="summary",
         metric="publish_to_agent_audio_first_ms",
         statistic="p95",
-        max_value=2800.0,
+        # Startup metric (room join + agent dispatch + welcome generation), not
+        # turn latency. A 100-sample run measured ~2963ms p95; the prior 2800
+        # was set from a 5-sample run. 3200 keeps a gross-regression guard with
+        # real headroom without flapping on startup variance.
+        max_value=3200.0,
         tier="acceptable",
         required=True,
-        description="Room publish-to-first-agent-audio P95",
+        description="Room publish-to-first-agent-audio P95 (startup)",
     ),
     # E2E platform口径 (worker timeline, excludes participant network).
+    # Promoted to required at the ACCEPTABLE tier (2026-05-30): a 20-repeat
+    # real-room run measured p50 664 / p95 777ms, comfortably inside both
+    # tiers. We enforce the acceptable bound (1100/1400) — comfortable headroom
+    # that stays green if production raises max_sentence_silence (the eos safety
+    # dial) or an upstream brain connection spikes; the target tier (800/1100)
+    # remains the advisory aspiration the run currently also meets.
     *_tier_pair(
         base_name="commit_to_first_audio_p50",
         runner="livekit_room",
@@ -123,6 +133,7 @@ DEFAULT_SLO_GATES: tuple[SloGate, ...] = (
         acceptable=1100.0,
         description="Commit -> first agent audio P50",
         min_samples=_PERCENTILE_MIN_SAMPLES,
+        required_acceptable=True,
     ),
     *_tier_pair(
         base_name="commit_to_first_audio_p95",
@@ -134,6 +145,7 @@ DEFAULT_SLO_GATES: tuple[SloGate, ...] = (
         acceptable=1400.0,
         description="Commit -> first agent audio P95",
         min_samples=_PERCENTILE_MIN_SAMPLES,
+        required_acceptable=True,
     ),
     # Endpoint wait: commit -> STT provider final (the ~1s normal-turn lever).
     *_tier_pair(

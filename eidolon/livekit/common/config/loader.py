@@ -21,6 +21,8 @@ from .schema import (
     ObservabilityConfig,
     ProvidersConfig,
     RemoteAgentRpcConfig,
+    SenseTimeSTTConfig,
+    SenseTimeTTSConfig,
     TurnPolicyConfig,
 )
 from .validators import validate_effective_config
@@ -165,6 +167,8 @@ def load_effective_config() -> EffectiveAgentConfig:
     obs_y = _section(y, "observability")
     bailian_stt_y = _section(y, "bailian_stt")
     bailian_tts_y = _section(y, "bailian_tts")
+    sensetime_stt_y = _section(y, "sensetime_stt")
+    sensetime_tts_y = _section(y, "sensetime_tts")
 
     cfg = EffectiveAgentConfig(
         core=CoreConfig(
@@ -220,6 +224,8 @@ def load_effective_config() -> EffectiveAgentConfig:
         # api_key — overrides only the non-secret fields).
         bailian_stt=_merge_dataclass(BailianSTTConfig(), bailian_stt_y),
         bailian_tts=_merge_dataclass(BailianTTSConfig(), bailian_tts_y),
+        sensetime_stt=_merge_dataclass(SenseTimeSTTConfig(), sensetime_stt_y),
+        sensetime_tts=_merge_dataclass(SenseTimeTTSConfig(), sensetime_tts_y),
     )
     validate_effective_config(cfg)
     logger.info("[AgentConfig] effective_config=%s", cfg.sanitized_dict())

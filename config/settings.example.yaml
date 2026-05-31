@@ -91,3 +91,16 @@ bailian_tts:
   # first-audio TTFB tuning: flush first segment on early prefix+punctuation
   aggregator_first_sentence_soft_min_chars: 4
   aggregator_first_sentence_flush_any_punct: true
+
+sensetime_stt:
+  api_url: wss://api.senseaudio.cn/ws/v1/audio/transcriptions
+  model: senseaudio-asr-deepthink-1.5-260319
+  sample_rate: 16000
+  language: zh
+  silence_duration_ms: 800
+
+sensetime_tts:
+  api_url: wss://api.senseaudio.cn/ws/v1/t2a_v2
+  model: senseaudio-tts-1.5-260319
+  voice: female_0033_a
+  sample_rate: 32000

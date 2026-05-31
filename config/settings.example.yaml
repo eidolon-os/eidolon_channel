@@ -68,3 +68,26 @@ observability:
   structured_logs: true
   metrics_enabled: true
   timeline_debug_path: ""
+
+# Bailian STT/TTS provider config (non-secret). API keys live in .env only:
+#   BAILIAN_STT_API_KEY=...   (or DASHSCOPE_API_KEY)
+#   BAILIAN_TTS_API_KEY=...
+bailian_stt:
+  api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
+  model: fun-asr-realtime-2026-02-28
+  sample_rate: 16000
+  language: zh
+  itn: true
+  # Endpointing: silence (ms) before FINAL. 400 (vs provider default 800) cuts
+  # first-audio latency; validated not to worsen mid-utterance splits.
+  max_sentence_silence_ms: 400
+  gate_enabled: false
+
+bailian_tts:
+  api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
+  model: cosyvoice-v3-flash
+  voice: longanyang
+  sample_rate: 16000
+  # first-audio TTFB tuning: flush first segment on early prefix+punctuation
+  aggregator_first_sentence_soft_min_chars: 4
+  aggregator_first_sentence_flush_any_punct: true

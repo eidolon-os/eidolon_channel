@@ -13,6 +13,8 @@ import yaml
 from .profiles import profile_defaults
 from .schema import (
     AgentBehaviorConfig,
+    BailianSTTConfig,
+    BailianTTSConfig,
     CoreConfig,
     EffectiveAgentConfig,
     LLMConfig,
@@ -161,6 +163,8 @@ def load_effective_config() -> EffectiveAgentConfig:
     rpc_y = _section(y, "remote_agent_rpc")
     turn_y = _section(y, "turn_policy")
     obs_y = _section(y, "observability")
+    bailian_stt_y = _section(y, "bailian_stt")
+    bailian_tts_y = _section(y, "bailian_tts")
 
     cfg = EffectiveAgentConfig(
         core=CoreConfig(
@@ -210,6 +214,12 @@ def load_effective_config() -> EffectiveAgentConfig:
         ),
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),
+        # Non-secret Bailian STT/TTS config lives in settings.yaml; the API key
+        # stays in .env (the BailianSTTConfig()/BailianTTSConfig() base reads it
+        # from env via default_factory, and the YAML section — which must omit
+        # api_key — overrides only the non-secret fields).
+        bailian_stt=_merge_dataclass(BailianSTTConfig(), bailian_stt_y),
+        bailian_tts=_merge_dataclass(BailianTTSConfig(), bailian_tts_y),
     )
     validate_effective_config(cfg)
     logger.info("[AgentConfig] effective_config=%s", cfg.sanitized_dict())

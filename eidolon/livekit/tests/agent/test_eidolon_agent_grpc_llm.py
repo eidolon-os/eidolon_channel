@@ -183,6 +183,8 @@ async def test_forwards_deltas_then_finishes() -> None:
             conversation_id="livekit:room-abc",
         )
         try:
+            provider_events: list[dict] = []
+            adapter.on("provider_event", provider_events.append)
             stream = adapter.chat(chat_ctx=_ctx("打个招呼"))
             collected: list[str] = []
             async for chunk in stream:
@@ -193,6 +195,13 @@ async def test_forwards_deltas_then_finishes() -> None:
             assert servicer.starts[0].text == "打个招呼"
             assert servicer.starts[0].conversation_id == "livekit:room-abc"
             assert servicer.starts[0].turn_id  # non-empty uuid hex
+            assert [event["event"] for event in provider_events] == [
+                "brain_request_started",
+                "brain_request_sent",
+                "brain_first_delta",
+                "brain_done",
+            ]
+            assert provider_events[-1]["request_id"].startswith("eidolon-")
         finally:
             await adapter.aclose()
     finally:

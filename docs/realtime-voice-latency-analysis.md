@@ -1,0 +1,295 @@
+# Realtime Voice Latency Analysis
+
+Last updated: 2026-05-29
+
+This document records the current latency diagnosis for the real
+`eidolon_agent` LiveKit-room benchmark and the concrete optimization plan.
+
+## Latest Run
+
+```text
+benchmarks/runs/stt-turn-audio-correction-room-final-20260529/livekit_room
+benchmarks/runs/stt-turn-audio-correction-room-final-20260529/dashboard-with-room.html
+```
+
+Result:
+
+```text
+5/5 passed
+```
+
+Covered cases:
+
+- `normal_single_turn_001`
+- `hard_interrupt_001`
+- `topic_switch_001`
+- `correction_001`
+- `backchannel_001`
+
+## Main Diagnosis
+
+The system is not uniformly slow. The current latency profile has three
+separate problems:
+
+- interrupt P95 is pulled up by one slow semantic-interrupt case;
+- normal-turn first audio is dominated by STT finalization and the gap before
+  the brain request starts;
+- current marks show where latency clusters, but not yet every provider-level
+  streaming sub-step.
+
+## Current Provider Segments
+
+Latest real-room values after adding brain RPC and STT streaming marks:
+
+```text
+STT turn first audio: 45.2-98.8 ms
+STT speech -> provider first partial: 207.1-357.5 ms
+STT provider partial -> LiveKit interim: 0.2-0.8 ms
+STT provider final -> LiveKit final: 0.5-0.7 ms
+LiveKit room benchmark: 5/5 passed
+```
+
+Important interpretation:
+
+```text
+STT is a long-lived websocket stream, not a per-turn request/response call.
+Therefore stream-open and stream-first-audio are diagnostic marks only.
+The experience-critical STT latency is measured per turn from speech start to
+provider first partial/final, then from provider event to LiveKit transcript.
+```
+
+This run shows LiveKit transcription propagation is effectively negligible
+inside the process boundary. The meaningful STT delay is provider-side partial
+recognition, usually a few hundred milliseconds for the current generated clips.
+
+## Normal Turn Breakdown
+
+For `normal_single_turn_001`:
+
+```text
+STT turn first audio: 95.4 ms
+STT first audio -> provider first partial: 195.0 ms
+STT speech -> provider first partial: 290.3 ms
+STT provider partial -> LiveKit interim: 0.8 ms
+STT final: 3191.4 ms
+speech stop -> commit: 0.3 ms
+commit -> brain RPC start: 1012.3 ms
+brain RPC start -> request sent: 8.5 ms
+brain request sent -> first delta: 258.6 ms
+brain first delta -> TTS first audio: 355.9 ms
+commit -> first audio: 1635.3 ms
+```
+
+The `eidolon_agent` stream itself is not the bottleneck. The request write and
+first delta are fast. The larger remaining gap is before the brain RPC starts,
+which currently includes waiting for final transcript / AgentSession turn
+progression after Channel commits the turn.
+
+## Completed In This Iteration
+
+Implemented:
+
+- `brain_request_started_at`
+- `brain_request_sent_at`
+- `brain_first_delta_at`
+- `brain_done_at`
+- `brain_rpc` timeline attrs with provider, turn id, request id, and
+  conversation id
+
+Also added STT-confusion canonicalization for hot-path semantic decisions:
+
+- `半个...` is treated as the common `换个...` topic-switch confusion;
+- `是我刚...` is treated as a correction cue for the `不是，我刚...` clip.
+- ambiguous `是我` correction-prefix fragments now `HOLD` for more interim
+  text instead of immediately cancelling as `normal_interrupt`.
+
+Latest validation:
+
+```text
+ruff check: passed
+pytest focused timeline/decider/classifier/benchmark/STT: 77 passed
+livekit_room + eidolon_agent: 5/5 passed
+```
+
+## Optimization Plan
+
+### 1. Add Provider-Level Brain RPC Marks
+
+Status: done.
+
+Add marks:
+
+```text
+brain_request_started_at
+brain_first_delta_at
+brain_done_at
+```
+
+Use these to distinguish:
+
+```text
+turn_committed_at -> llm_started_at
+llm_started_at -> brain_request_started_at
+brain_request_started_at -> brain_first_delta_at
+brain_request_started_at -> brain_done_at
+```
+
+This confirmed the gap is not inside the `eidolon_agent` generation stream:
+
+```text
+brain request sent -> first delta: 137.1 ms
+brain request sent -> done: 426.1 ms
+```
+
+The remaining normal-turn gap is earlier:
+
+```text
+turn committed -> brain RPC start: 931.5 ms
+```
+
+### 2. Add STT Streaming Marks
+
+Status: done.
+
+Goal: determine whether slow first interim is caused by audio delivery,
+provider partial latency, or LiveKit transcription propagation.
+
+Implemented marks:
+
+```text
+stt_stream_started_at
+stt_ws_connected_at
+stt_stream_first_audio_sent_at
+stt_first_audio_sent_at
+stt_flush_sent_at
+stt_provider_first_partial_at
+stt_provider_final_at
+transcript_interim_first_at
+transcript_final_at
+```
+
+Implementation note: `stt_first_audio_sent_at` is now the first provider audio
+chunk after Channel has opened a user turn. The raw websocket stream's first
+audio packet is recorded separately as `stt_stream_first_audio_sent_at`, because
+with a long-lived stream it may be silence/pre-roll and is not a valid turn
+latency anchor.
+
+### 3. Add TTS Streaming Marks
+
+Goal: separate provider first audio from LiveKit output playback.
+
+Planned marks:
+
+```text
+tts_request_started_at
+tts_stream_opened_at
+tts_provider_first_audio_at
+livekit_first_audio_published_at
+playback_started_at
+```
+
+### 4. Reduce Semantic Interrupt Tail Latency
+
+Focus case:
+
+```text
+correction_001
+```
+
+Likely strategy:
+
+- keep hard stop as the fastest, most aggressive path;
+- add a fast correction/topic-switch phrase-prefix path;
+- keep single-character or ambiguous fragments in `HOLD` to avoid false cancel;
+- add per-case SLO assertions for correction and topic switch.
+
+### 5. Repeat Benchmark Sampling
+
+Status: partially done.
+
+Single-run results are useful for diagnosis but not enough for stable SLOs.
+`--repeat N` now runs the whole suite N times and aggregates:
+
+```text
+./.venv/bin/python scripts/bench_voice.py --runner livekit_room --repeat 5 --run-id <id>
+```
+
+Implemented:
+
+- per-case p50/p95 and `stdev` (jitter) from N repeats;
+- pooled `summary.metrics` over every case x repeat sample for SLO gates;
+- per-case pass rate and a `flaky` count surfaced in the dashboard findings.
+
+Still open:
+
+- slowest segment ranking across repeats;
+- SLO trend over time;
+- regression diff against a pinned baseline for the `livekit_room` layer;
+- promote real-provider SLO gates from advisory to hard once >=5-repeat runs
+  show stable percentiles.
+
+## vs Industry Top-Tier
+
+Reference baseline, May 2026 (platform口径 = user stop -> first agent audio,
+excludes telephony network). Sources: Twilio Core-Latency 2025.11, OpenAI
+gpt-realtime, LiveKit pipeline blog, Gradium/Podcastle TTS 2026.
+
+Measured `eidolon_agent` + Bailian, real LiveKit room, `--repeat 5` (25 turns),
+2026-05-30:
+
+| Segment (metric) | Target p50/p95 | Measured p50/p95 | Verdict |
+| --- | ---: | ---: | --- |
+| STT final: commit -> provider final (`stt_final_after_commit_ms`) | 350 / 500 | **990 / 1042** | ❌ ~2.8x — #1 lever |
+| Brain TTFT: request sent -> first delta (`brain_request_to_first_delta`) | 375 / 750 | **152 / 159** | ✅ top-tier |
+| TTS TTFB: request -> provider audio (`tts_request_to_provider_first_audio_ms`) | 100 / 250 | **649 / 734** | ❌ ~6.5x — #2 lever (was a black box) |
+| TTS publish: provider audio -> agent audio (`tts_provider_first_audio_to_agent_audio_ms`) | 50 / 120 | **2 / 2** | ✅ negligible |
+| Interrupt: VAD start -> resolved (`vad_start_to_interrupt_resolved`) | 500 / 650 | 699 / 1424 | ⚠️ p95 pulled by 1 flaky correction case |
+| E2E commit -> first audio (`commit_to_tts_first_audio`) | 800 / 1100 | **1718 / 1755** | ❌ ~2.1x |
+
+Key data-backed findings:
+
+- The brain (`eidolon_agent`) is already **top-tier (~152ms TTFT)** — do not optimize it.
+- E2E 1718ms is almost entirely two segments: **STT finalization (~990ms)** and
+  **TTS TTFB (~649ms)**. TTS publish is ~2ms.
+- The TTS instrumentation added this iteration revealed TTS TTFB (~649ms) as the
+  #2 lever; it was previously folded into an opaque ~356ms brain->audio box.
+  Likely sentence-aggregation wait + provider first-audio; both tunable.
+- `correction_001` is flaky (4/5): one repeat the STT interim classified as
+  `normal_interrupt` instead of `correction` — a semantic-robustness issue, not
+  latency.
+
+These thresholds are encoded as tiered SLO gates (`target` + `acceptable`) in
+`eidolon/livekit/benchmarks/slo.py`. Provider micro-gates stay advisory until a
+run has `>= 20` repeats (`--repeat 20`), so a smoke run cannot claim or fail
+top-tier on a single sample.
+
+Milestone: `commit -> first_audio` 1635 ms -> p95 <= 1100 ms. The biggest lever
+is the ~1s endpoint wait now isolated as `stt_final_after_commit_ms`; closing it
+(interim-preemptive brain request, faster STT endpointing) plus driving TTS TTFB
+under 250 ms is **Phase 2** (runtime), measured by the new marks above.
+
+Every real-provider run must also pass real-call verification
+(`eidolon/livekit/benchmarks/realcall.py`): provider != mock, minimum audio
+bytes, and per-turn brain-gRPC / STT-stream evidence. A run that cannot prove
+real calls fails instead of masquerading as a pass.
+
+## Short-Term Targets
+
+```text
+interrupt_resolution P95 <= 900 ms
+stt_first_interim P95 <= 1000 ms
+commit_to_brain_rpc_started P95 <= 500 ms
+brain_rpc_first_delta P95 <= 500 ms
+tts_first_audio P95 <= 500 ms
+commit_to_first_audio P95 <= 1600 ms
+```
+
+## Mid-Term Targets
+
+```text
+hard_interrupt P95 <= 500-650 ms
+normal user stop -> first audio <= 1200 ms
+brain first delta <= 300-500 ms
+TTS first audio <= 300-500 ms
+backchannel false cancel <= 2%
+```

@@ -18,5 +18,9 @@ config/settings.yaml
 # Local test secrets
 eidolon/livekit/tests/.env
 
+# Benchmark run outputs are local artifacts; committed baselines live under
+# benchmarks/baselines.
+benchmarks/runs/
+
 # macOS Finder metadata
 .DS_Store

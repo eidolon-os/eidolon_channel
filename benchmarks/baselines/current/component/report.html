@@ -1,0 +1,320 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Voice Benchmark component-smoke-2</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 32px; }
+    pre { white-space: pre-wrap; background: #f7f7f8; padding: 16px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <pre># Voice Benchmark Report: component-smoke-2
+
+- runner: `component`
+- profile: `real_components:vad=firered_pvad,stt=bailian,tts=bailian,eot=balanced_semantic`
+- git_sha: `43f0302`
+- pass_rate: `20/20`
+
+## Metric Summary
+
+| metric | p50 | p95 | max | count |
+| --- | ---: | ---: | ---: | ---: |
+| elapsed_ms | 344.5 | 4235.9 | 4253.0 | 20 |
+| eot_elapsed_ms | 3.0 | 24.0 | 29.0 | 5 |
+| eot_expected_cancel | 1.0 | 1.0 | 1.0 | 5 |
+| eot_interrupt_count | 1.0 | 1.0 | 1.0 | 5 |
+| eot_max_score | 0.0 | 0.7 | 0.9 | 5 |
+| eot_step_count | 1.0 | 1.8 | 2.0 | 5 |
+| stt_elapsed_ms | 3702.0 | 4249.4 | 4253.0 | 5 |
+| stt_exact_match | 1.0 | 1.0 | 1.0 | 5 |
+| stt_expected_chars | 8.0 | 11.6 | 12.0 | 5 |
+| stt_nonempty | 1.0 | 1.0 | 1.0 | 5 |
+| stt_output_chars | 8.0 | 11.8 | 12.0 | 5 |
+| tts_audio_bytes | 74880.0 | 98432.0 | 99200.0 | 5 |
+| tts_elapsed_ms | 1236.0 | 1713.2 | 1754.0 | 5 |
+| tts_first_sample_rate | 16000.0 | 16000.0 | 16000.0 | 5 |
+| tts_frame_count | 17.0 | 20.0 | 20.0 | 5 |
+| tts_nonempty_audio | 1.0 | 1.0 | 1.0 | 5 |
+| vad_detected_speech | 1.0 | 1.0 | 1.0 | 5 |
+| vad_elapsed_ms | 127.0 | 174.6 | 180.0 | 5 |
+| vad_end_count | 0.0 | 1.0 | 1.0 | 5 |
+| vad_event_count | 235.0 | 308.8 | 311.0 | 5 |
+| vad_inference_count | 234.0 | 307.6 | 310.0 | 5 |
+| vad_max_probability | 1.0 | 1.0 | 1.0 | 5 |
+| vad_start_count | 1.0 | 1.0 | 1.0 | 5 |
+
+## Cases
+
+### normal_single_turn_001:vad - PASS
+
+```json
+{
+  &quot;vad_elapsed_ms&quot;: 153,
+  &quot;vad_event_count&quot;: 300,
+  &quot;vad_start_count&quot;: 1,
+  &quot;vad_end_count&quot;: 1,
+  &quot;vad_inference_count&quot;: 298,
+  &quot;vad_max_probability&quot;: 0.9973984451194036,
+  &quot;vad_detected_speech&quot;: true,
+  &quot;elapsed_ms&quot;: 153
+}
+```
+
+### normal_single_turn_001:stt - PASS
+
+```json
+{
+  &quot;stt_elapsed_ms&quot;: 4235,
+  &quot;stt_output_chars&quot;: 12,
+  &quot;stt_expected_chars&quot;: 12,
+  &quot;stt_exact_match&quot;: true,
+  &quot;stt_nonempty&quot;: true,
+  &quot;elapsed_ms&quot;: 4235
+}
+```
+
+### normal_single_turn_001:tts - PASS
+
+```json
+{
+  &quot;tts_elapsed_ms&quot;: 1754,
+  &quot;tts_frame_count&quot;: 20,
+  &quot;tts_audio_bytes&quot;: 95360,
+  &quot;tts_first_sample_rate&quot;: 16000,
+  &quot;tts_nonempty_audio&quot;: true,
+  &quot;elapsed_ms&quot;: 1754
+}
+```
+
+### hard_interrupt_001:vad - PASS
+
+```json
+{
+  &quot;vad_elapsed_ms&quot;: 109,
+  &quot;vad_event_count&quot;: 180,
+  &quot;vad_start_count&quot;: 1,
+  &quot;vad_end_count&quot;: 1,
+  &quot;vad_inference_count&quot;: 178,
+  &quot;vad_max_probability&quot;: 0.9986303747690342,
+  &quot;vad_detected_speech&quot;: true,
+  &quot;elapsed_ms&quot;: 109
+}
+```
+
+### hard_interrupt_001:stt - PASS
+
+```json
+{
+  &quot;stt_elapsed_ms&quot;: 3384,
+  &quot;stt_output_chars&quot;: 3,
+  &quot;stt_expected_chars&quot;: 3,
+  &quot;stt_exact_match&quot;: true,
+  &quot;stt_nonempty&quot;: true,
+  &quot;elapsed_ms&quot;: 3384
+}
+```
+
+### hard_interrupt_001:tts - PASS
+
+```json
+{
+  &quot;tts_elapsed_ms&quot;: 708,
+  &quot;tts_frame_count&quot;: 14,
+  &quot;tts_audio_bytes&quot;: 56960,
+  &quot;tts_first_sample_rate&quot;: 16000,
+  &quot;tts_nonempty_audio&quot;: true,
+  &quot;elapsed_ms&quot;: 708
+}
+```
+
+### topic_switch_001:vad - PASS
+
+```json
+{
+  &quot;vad_elapsed_ms&quot;: 180,
+  &quot;vad_event_count&quot;: 311,
+  &quot;vad_start_count&quot;: 1,
+  &quot;vad_end_count&quot;: 0,
+  &quot;vad_inference_count&quot;: 310,
+  &quot;vad_max_probability&quot;: 0.9965800733259145,
+  &quot;vad_detected_speech&quot;: true,
+  &quot;elapsed_ms&quot;: 180
+}
+```
+
+### topic_switch_001:stt - PASS
+
+```json
+{
+  &quot;stt_elapsed_ms&quot;: 4253,
+  &quot;stt_output_chars&quot;: 11,
+  &quot;stt_expected_chars&quot;: 10,
+  &quot;stt_exact_match&quot;: false,
+  &quot;stt_nonempty&quot;: true,
+  &quot;elapsed_ms&quot;: 4253
+}
+```
+
+### topic_switch_001:tts - PASS
+
+```json
+{
+  &quot;tts_elapsed_ms&quot;: 1550,
+  &quot;tts_frame_count&quot;: 20,
+  &quot;tts_audio_bytes&quot;: 99200,
+  &quot;tts_first_sample_rate&quot;: 16000,
+  &quot;tts_nonempty_audio&quot;: true,
+  &quot;elapsed_ms&quot;: 1550
+}
+```
+
+### correction_001:vad - PASS
+
+```json
+{
+  &quot;vad_elapsed_ms&quot;: 127,
+  &quot;vad_event_count&quot;: 235,
+  &quot;vad_start_count&quot;: 1,
+  &quot;vad_end_count&quot;: 0,
+  &quot;vad_inference_count&quot;: 234,
+  &quot;vad_max_probability&quot;: 0.9977082932056508,
+  &quot;vad_detected_speech&quot;: true,
+  &quot;elapsed_ms&quot;: 127
+}
+```
+
+### correction_001:stt - PASS
+
+```json
+{
+  &quot;stt_elapsed_ms&quot;: 3702,
+  &quot;stt_output_chars&quot;: 8,
+  &quot;stt_expected_chars&quot;: 8,
+  &quot;stt_exact_match&quot;: true,
+  &quot;stt_nonempty&quot;: true,
+  &quot;elapsed_ms&quot;: 3702
+}
+```
+
+### correction_001:tts - PASS
+
+```json
+{
+  &quot;tts_elapsed_ms&quot;: 1236,
+  &quot;tts_frame_count&quot;: 17,
+  &quot;tts_audio_bytes&quot;: 74880,
+  &quot;tts_first_sample_rate&quot;: 16000,
+  &quot;tts_nonempty_audio&quot;: true,
+  &quot;elapsed_ms&quot;: 1236
+}
+```
+
+### backchannel_001:vad - PASS
+
+```json
+{
+  &quot;vad_elapsed_ms&quot;: 60,
+  &quot;vad_event_count&quot;: 97,
+  &quot;vad_start_count&quot;: 1,
+  &quot;vad_end_count&quot;: 0,
+  &quot;vad_inference_count&quot;: 96,
+  &quot;vad_max_probability&quot;: 0.7866813598693231,
+  &quot;vad_detected_speech&quot;: true,
+  &quot;elapsed_ms&quot;: 60
+}
+```
+
+### backchannel_001:stt - PASS
+
+```json
+{
+  &quot;stt_elapsed_ms&quot;: 3481,
+  &quot;stt_output_chars&quot;: 1,
+  &quot;stt_expected_chars&quot;: 1,
+  &quot;stt_exact_match&quot;: true,
+  &quot;stt_nonempty&quot;: true,
+  &quot;elapsed_ms&quot;: 3481
+}
+```
+
+### backchannel_001:tts - PASS
+
+```json
+{
+  &quot;tts_elapsed_ms&quot;: 509,
+  &quot;tts_frame_count&quot;: 10,
+  &quot;tts_audio_bytes&quot;: 31040,
+  &quot;tts_first_sample_rate&quot;: 16000,
+  &quot;tts_nonempty_audio&quot;: true,
+  &quot;elapsed_ms&quot;: 509
+}
+```
+
+### normal_single_turn_001:eot - PASS
+
+```json
+{
+  &quot;eot_elapsed_ms&quot;: 29,
+  &quot;eot_step_count&quot;: 1,
+  &quot;eot_max_score&quot;: 0.9197000917949641,
+  &quot;eot_interrupt_count&quot;: 1,
+  &quot;eot_expected_cancel&quot;: false,
+  &quot;elapsed_ms&quot;: 29
+}
+```
+
+### hard_interrupt_001:eot - PASS
+
+```json
+{
+  &quot;eot_elapsed_ms&quot;: 4,
+  &quot;eot_step_count&quot;: 2,
+  &quot;eot_max_score&quot;: 0.0,
+  &quot;eot_interrupt_count&quot;: 1,
+  &quot;eot_expected_cancel&quot;: true,
+  &quot;elapsed_ms&quot;: 4
+}
+```
+
+### topic_switch_001:eot - PASS
+
+```json
+{
+  &quot;eot_elapsed_ms&quot;: 3,
+  &quot;eot_step_count&quot;: 1,
+  &quot;eot_max_score&quot;: 0.0,
+  &quot;eot_interrupt_count&quot;: 0,
+  &quot;eot_expected_cancel&quot;: true,
+  &quot;elapsed_ms&quot;: 3
+}
+```
+
+### correction_001:eot - PASS
+
+```json
+{
+  &quot;eot_elapsed_ms&quot;: 0,
+  &quot;eot_step_count&quot;: 1,
+  &quot;eot_max_score&quot;: 0.0,
+  &quot;eot_interrupt_count&quot;: 1,
+  &quot;eot_expected_cancel&quot;: true,
+  &quot;elapsed_ms&quot;: 0
+}
+```
+
+### backchannel_001:eot - PASS
+
+```json
+{
+  &quot;eot_elapsed_ms&quot;: 0,
+  &quot;eot_step_count&quot;: 1,
+  &quot;eot_max_score&quot;: 0.0,
+  &quot;eot_interrupt_count&quot;: 0,
+  &quot;eot_expected_cancel&quot;: false,
+  &quot;elapsed_ms&quot;: 0
+}
+```
+</pre>
+</body>
+</html>

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 import livekit
 from livekit.agents import stt
@@ -27,6 +28,9 @@ from .models import FunASREventType, FunASRResultGenerated, FunASRSentence, pars
 from .speech_stream import BailianFunASRSpeechStream
 
 logger = logging.getLogger("bailian.stt")
+
+if TYPE_CHECKING:
+    from livekit import rtc
 
 #: Default API key used when no explicit key or config is provided.
 #: Can be overridden via the DASHSCOPE_API_KEY environment variable.
@@ -127,6 +131,43 @@ class BailianFunASRSTT(stt.STT):
                 "No DASHSCOPE_API_KEY provided to BailianFunASRSTT. "
                 "Set the DASHSCOPE_API_KEY environment variable or pass api_key explicitly."
             )
+
+    def emit_provider_event(self, name: str, **payload: Any) -> None:
+        """Emit provider-level STT timing events for Channel observability."""
+
+        self.emit(
+            "provider_event",
+            {
+                "provider": self.provider,
+                "event": name,
+                "timestamp": time.monotonic(),
+                "model": self.model,
+                **payload,
+            },
+        )
+
+    def observe_next_audio_for_turn(
+        self,
+        *,
+        turn_id: str,
+        speech_started_at: float,
+    ) -> bool:
+        """Ask the active stream to mark the next provider audio chunk.
+
+        FunASR runs as a long-lived streaming websocket, so the stream's first
+        audio packet is often silence or pre-roll before VAD opens a user turn.
+        This hook lets the Channel mark the first packet sent after the turn is
+        known, which is the useful per-turn latency anchor.
+        """
+
+        stream = self._current_stream
+        if stream is None:
+            return False
+        stream.observe_next_audio_for_turn(
+            turn_id=turn_id,
+            speech_started_at=speech_started_at,
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Properties (LiveKit STT contract)

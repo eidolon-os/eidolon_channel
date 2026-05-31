@@ -1,0 +1,28 @@
+clips:
+  backchannel_en:
+    path: benchmarks/audio/generated/backchannel_en.wav
+    text: 嗯。
+  backchannel_ok:
+    path: benchmarks/audio/generated/backchannel_ok.wav
+    text: 好。
+  correction:
+    path: benchmarks/audio/generated/correction.wav
+    text: 不是，我刚才说错了。
+  hard_stop_dont:
+    path: benchmarks/audio/generated/hard_stop_dont.wav
+    text: 别说了。
+  hard_stop_stop:
+    path: benchmarks/audio/generated/hard_stop_stop.wav
+    text: 停一下。
+  noise_like_cough:
+    path: benchmarks/audio/generated/noise_like_cough.wav
+    text: 咳。
+  normal_ask_intro:
+    path: benchmarks/audio/generated/normal_ask_intro.wav
+    text: 帮我详细介绍一下这个方案。
+  normal_followup:
+    path: benchmarks/audio/generated/normal_followup.wav
+    text: 那它的主要风险是什么？
+  topic_switch:
+    path: benchmarks/audio/generated/topic_switch.wav
+    text: 换个话题，我们聊点别的。

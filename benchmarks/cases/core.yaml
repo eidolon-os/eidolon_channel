@@ -1,0 +1,131 @@
+suite_id: core_voice_baseline
+cases:
+  - case_id: normal_single_turn_001
+    suite: core_latency
+    description: 单轮正常问答，用户未打断 agent。
+    timeout_sec: 60
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+    agent_replies:
+      - when: 帮我详细介绍
+        reply: 这是一个用于实时语音对话的基准回答，用来测量首包和播放链路。
+    expect:
+      action: none
+      intent: uncertain
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: hard_interrupt_001
+    suite: interrupt
+    description: agent 正在长回答时，用户说“停一下”。
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: stop
+        text: 停一下。
+        path: benchmarks/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+      - text: 停一下
+        audio: stop
+        start_ms: 1650
+        duration_ms: 520
+        interims: ["停一下"]
+        final_delay_ms: 80
+        agent_speaking: true
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意很长，用来制造可打断窗口。
+      - when: 停一下
+        reply: 好的，我先停下。
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: topic_switch_001
+    suite: semantic_control
+    description: agent 正在回答时，用户要求换个话题。
+    audio_clips:
+      - id: topic_switch
+        text: 换个话题，我们聊点别的。
+        path: benchmarks/audio/generated/topic_switch.wav
+        intent: topic_switch
+    user_steps:
+      - text: 换个话题
+        audio: topic_switch
+        start_ms: 200
+        duration_ms: 900
+        interims: ["换个话题"]
+        final_delay_ms: 80
+        agent_speaking: true
+    expect:
+      action: cancel
+      intent: topic_switch
+      topic_switch_hint: true
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1
+
+  - case_id: correction_001
+    suite: semantic_control
+    description: 用户纠正上一轮意图。
+    audio_clips:
+      - id: correction
+        text: 不是，我刚才说错了。
+        path: benchmarks/audio/generated/correction.wav
+        intent: correction
+    user_steps:
+      - text: 不是，我刚才说错了
+        audio: correction
+        start_ms: 200
+        duration_ms: 900
+        interims: ["不是"]
+        final_delay_ms: 80
+        agent_speaking: true
+    expect:
+      action: cancel
+      intent: correction
+      correction_hint: true
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1
+
+  - case_id: backchannel_001
+    suite: false_interrupt
+    description: 用户只是“好的”附和，不应硬取消。
+    audio_clips:
+      - id: backchannel_ok
+        text: 好的。
+        path: benchmarks/audio/generated/backchannel_ok.wav
+        intent: backchannel
+    user_steps:
+      - text: 好的
+        audio: backchannel_ok
+        start_ms: 200
+        duration_ms: 1050
+        interims: ["好的"]
+        final_delay_ms: 80
+        agent_speaking: true
+    expect:
+      action: rollback
+      intent: backchannel
+      min_user_finals: 1

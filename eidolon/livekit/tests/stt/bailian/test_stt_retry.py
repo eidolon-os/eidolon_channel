@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
-from typing import Any
-from pathlib import Path
 import os
+import uuid
+from pathlib import Path
 
 import pytest
 import websockets
@@ -29,10 +28,10 @@ if str(_root) not in os.environ.get("PYTHONPATH", "").split(os.pathsep):
         str(_root) + os.pathsep + os.environ.get("PYTHONPATH", "")
     )
 
-from livekit.agents import APIError
-from livekit.agents.types import APIConnectOptions
+from livekit.agents import APIError  # noqa: E402
+from livekit.agents.types import APIConnectOptions  # noqa: E402
 
-from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT
+from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT  # noqa: E402
 
 
 class AbruptCloseServer:
@@ -46,7 +45,7 @@ class AbruptCloseServer:
         self.handler_invocations = 0
 
     async def start(self) -> None:
-        self._server = await websockets.serve(self._handler, "localhost", 0)
+        self._server = await websockets.serve(self._handler, "127.0.0.1", 0)
         self.port = self._server.sockets[0].getsockname()[1]
 
     async def stop(self) -> None:

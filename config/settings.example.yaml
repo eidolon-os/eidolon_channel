@@ -45,8 +45,8 @@ turn_policy:
     early_cancel_score_threshold: 0.70
     early_resume_score_threshold: 0.20
     hard_stop_lexicon: ["停", "停一下", "别说了", "不要说了", "打住", "闭嘴", "先别讲了"]
-    topic_switch_lexicon: ["换个话题", "不聊这个", "别聊这个", "说点别的", "刚才那个不用了"]
-    correction_lexicon: ["不是", "等一下", "我不是这个意思", "我刚才说错了"]
+    topic_switch_lexicon: ["换个话题", "不聊这个", "别聊这个", "说点别的", "聊点别的", "我们聊点", "刚才那个不用了"]
+    correction_lexicon: ["不是", "等一下", "我不是这个意思", "我刚才", "我刚才说", "我刚才说错了"]
   ducking:
     enabled: true
     fade_out_ms: 30

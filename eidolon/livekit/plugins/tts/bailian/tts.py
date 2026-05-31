@@ -101,6 +101,26 @@ class BailianTTS(TTS):
     def model(self) -> str:
         return self._config.model
 
+    def emit_provider_event(self, name: str, **payload: Any) -> None:
+        """Emit provider-level TTS timing events for Channel observability.
+
+        Mirrors ``BailianFunASRSTT.emit_provider_event`` so the StreamingPipeline
+        can bridge TTS provider truth (request start, first provider audio byte)
+        into the per-turn timeline, separately from the agent-state-driven
+        ``tts_first_audio_at`` experience mark.
+        """
+
+        self.emit(
+            "provider_event",
+            {
+                "provider": self.provider,
+                "event": name,
+                "timestamp": time.monotonic(),
+                "model": self.model,
+                **payload,
+            },
+        )
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
             self._http_session = aiohttp.ClientSession()
@@ -235,6 +255,8 @@ class BailianSynthesizeStream(SynthesizeStream):
         # Set on first successful send_continue. None means "no text sent
         # yet" — the guard ignores this state.
         self._first_send_continue_time: float | None = None
+        # Emit tts_provider_first_audio exactly once per stream.
+        self._first_provider_audio_emitted = False
 
     def _convert_audio(self, raw_data: bytes) -> bytes:
         fmt = self._config.audio_format.lower()
@@ -284,6 +306,7 @@ class BailianSynthesizeStream(SynthesizeStream):
 
         async with self._tts._stream_lock:
             client = await self._tts._acquire_conn()
+            self._tts.emit_provider_event("tts_request_started")
             self._tts._stream_active = True
             self._audio_byte_stream = AudioByteStream(
                 sample_rate=self._config.sample_rate,
@@ -391,6 +414,11 @@ class BailianSynthesizeStream(SynthesizeStream):
     ) -> None:
         if not chunk:
             return
+        if not self._first_provider_audio_emitted:
+            self._first_provider_audio_emitted = True
+            self._tts.emit_provider_event(
+                "tts_provider_first_audio", bytes=len(chunk)
+            )
         converted = self._convert_audio(chunk)
         byte_stream = self._audio_byte_stream
         if byte_stream is None:

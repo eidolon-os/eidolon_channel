@@ -18,6 +18,7 @@ To add a new STT provider:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -142,26 +143,25 @@ class SttStage:
         path that every LiveKit STT plugin must support. Slightly higher
         latency, but works with streaming-only plugins (e.g. SenseTime STT).
         """
-        from livekit import rtc
         from livekit.agents import stt as lk_stt
 
-        num_samples = len(audio) // 2
-        frame = rtc.AudioFrame(
-            data=audio,
-            sample_rate=self._params.sample_rate,
-            num_channels=1,
-            samples_per_channel=num_samples,
-        )
-
         stream = self._stt.stream()
-        stream.push_frame(frame)
-        stream.end_input()
-
         transcript_parts: list[str] = []
-        async for event in stream:
-            if event.type == lk_stt.SpeechEventType.FINAL_TRANSCRIPT:
-                if event.alternatives:
-                    transcript_parts.append(event.alternatives[0].text)
+        try:
+            for frame in _frames_from_pcm(audio, sample_rate=self._params.sample_rate):
+                stream.push_frame(frame)
+            stream.end_input()
+
+            async for event in stream:
+                if event.type == lk_stt.SpeechEventType.FINAL_TRANSCRIPT:
+                    if event.alternatives:
+                        transcript_parts.append(event.alternatives[0].text)
+                elif event.type == lk_stt.SpeechEventType.END_OF_SPEECH:
+                    break
+        finally:
+            if hasattr(stream, "aclose"):
+                with contextlib.suppress(Exception):
+                    await stream.aclose()
 
         return "".join(transcript_parts)
 
@@ -190,3 +190,34 @@ class SttStage:
             if event.alternatives:
                 return event.alternatives[0].text or ""
         return ""
+
+
+def _frames_from_pcm(
+    pcm: bytes,
+    *,
+    sample_rate: int,
+    frame_ms: int = 100,
+) -> list:
+    from livekit import rtc
+
+    if frame_ms <= 0:
+        raise ValueError("frame_ms must be > 0")
+    samples_per_frame = sample_rate * frame_ms // 1000
+    bytes_per_frame = samples_per_frame * 2
+    frames: list[rtc.AudioFrame] = []
+    for start in range(0, len(pcm), bytes_per_frame):
+        chunk = pcm[start : start + bytes_per_frame]
+        if not chunk:
+            continue
+        samples = len(chunk) // 2
+        if samples <= 0:
+            continue
+        frames.append(
+            rtc.AudioFrame(
+                data=chunk[: samples * 2],
+                sample_rate=sample_rate,
+                num_channels=1,
+                samples_per_channel=samples,
+            )
+        )
+    return frames

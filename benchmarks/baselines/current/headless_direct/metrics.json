@@ -1,0 +1,347 @@
+{
+  "run": {
+    "run_id": "baseline-direct-verify",
+    "git_sha": "43f0302",
+    "runner": "headless",
+    "profile": "headless_audio_replay:direct"
+  },
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "pass_rate": 1.0,
+    "metrics": {
+      "agent_message_count": {
+        "count": 5,
+        "avg": 0.4,
+        "p50": 0.0,
+        "p95": 1.0,
+        "max": 1.0
+      },
+      "audio_bytes": {
+        "count": 5,
+        "avg": 115328.0,
+        "p50": 0.0,
+        "p95": 304448.0,
+        "max": 315200.0
+      },
+      "cleared_segments": {
+        "count": 5,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "elapsed_ms": {
+        "count": 5,
+        "avg": 2910.0,
+        "p50": 1494.0,
+        "p95": 5570.0,
+        "max": 5751.0
+      },
+      "user_final_count": {
+        "count": 5,
+        "avg": 1.2,
+        "p50": 1.0,
+        "p95": 1.7999999999999998,
+        "max": 2.0
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "normal_single_turn_001",
+      "suite": "core_latency",
+      "runner": "headless",
+      "passed": true,
+      "metrics": {
+        "elapsed_ms": 5751,
+        "user_final_count": 1,
+        "agent_message_count": 1,
+        "audio_bytes": 261440,
+        "cleared_segments": 0,
+        "llm_call_count": null
+      },
+      "decisions": [],
+      "events": [
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 9
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 11
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 91
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 1191
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 1311
+        },
+        {
+          "type": "speech_created",
+          "timestamp_ms": 1312
+        },
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 1815
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 1815
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 5225
+        },
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 5489
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 5489
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case_id": "hard_interrupt_001",
+      "suite": "interrupt",
+      "runner": "headless",
+      "passed": true,
+      "metrics": {
+        "elapsed_ms": 4846,
+        "user_final_count": 2,
+        "agent_message_count": 1,
+        "audio_bytes": 315200,
+        "cleared_segments": 0,
+        "llm_call_count": null
+      },
+      "decisions": [],
+      "events": [
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 1
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 4
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 86
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 1185
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 1305
+        },
+        {
+          "type": "speech_created",
+          "timestamp_ms": 1305
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 1655
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 2174
+        },
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 2175
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 2175
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 2254
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 2257
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 2305
+        },
+        {
+          "type": "speech_created",
+          "timestamp_ms": 2305
+        },
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 2808
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 2808
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 4018
+        },
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 4587
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 4587
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case_id": "topic_switch_001",
+      "suite": "semantic_control",
+      "runner": "headless",
+      "passed": true,
+      "metrics": {
+        "elapsed_ms": 1494,
+        "user_final_count": 1,
+        "agent_message_count": 0,
+        "audio_bytes": 0,
+        "cleared_segments": 0,
+        "llm_call_count": null
+      },
+      "decisions": [],
+      "events": [
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 1
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 2
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 204
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 1103
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 1184
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 1235
+        },
+        {
+          "type": "speech_created",
+          "timestamp_ms": 1235
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case_id": "correction_001",
+      "suite": "semantic_control",
+      "runner": "headless",
+      "passed": true,
+      "metrics": {
+        "elapsed_ms": 1488,
+        "user_final_count": 1,
+        "agent_message_count": 0,
+        "audio_bytes": 0,
+        "cleared_segments": 0,
+        "llm_call_count": null
+      },
+      "decisions": [],
+      "events": [
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 1
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 2
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 202
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 1105
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 1182
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 1234
+        },
+        {
+          "type": "speech_created",
+          "timestamp_ms": 1234
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case_id": "backchannel_001",
+      "suite": "false_interrupt",
+      "runner": "headless",
+      "passed": true,
+      "metrics": {
+        "elapsed_ms": 971,
+        "user_final_count": 1,
+        "agent_message_count": 0,
+        "audio_bytes": 0,
+        "cleared_segments": 0,
+        "llm_call_count": null
+      },
+      "decisions": [],
+      "events": [
+        {
+          "type": "conversation_item_added",
+          "timestamp_ms": 1
+        },
+        {
+          "type": "agent_state_changed",
+          "timestamp_ms": 3
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 204
+        },
+        {
+          "type": "user_state_changed",
+          "timestamp_ms": 583
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 664
+        },
+        {
+          "type": "user_input_transcribed",
+          "timestamp_ms": 715
+        },
+        {
+          "type": "speech_created",
+          "timestamp_ms": 715
+        }
+      ],
+      "errors": []
+    }
+  ]
+}

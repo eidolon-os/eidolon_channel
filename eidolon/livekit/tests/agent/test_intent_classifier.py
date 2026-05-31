@@ -22,7 +22,13 @@ def classifier() -> LexiconInterruptClassifier:
         ("停一下", InterruptIntent.HARD_STOP),
         ("别说了我想换个", InterruptIntent.HARD_STOP),
         ("换个话题吧", InterruptIntent.TOPIC_SWITCH),
+        ("半个话题吧", InterruptIntent.TOPIC_SWITCH),
+        ("我们聊点", InterruptIntent.TOPIC_SWITCH),
         ("不是，我的意思是", InterruptIntent.CORRECTION),
+        ("我刚才说", InterruptIntent.CORRECTION),
+        ("我刚才", InterruptIntent.CORRECTION),
+        ("是我刚", InterruptIntent.CORRECTION),
+        ("是我", InterruptIntent.UNCERTAIN),
         ("嗯", InterruptIntent.BACKCHANNEL),
         ("咳咳", InterruptIntent.NOISE),
         ("帮我查一下天气", InterruptIntent.UNCERTAIN),
@@ -39,4 +45,3 @@ def test_lexicon_classifier_intents(
     )
     assert result.intent is intent
     assert result.source == "lexicon"
-

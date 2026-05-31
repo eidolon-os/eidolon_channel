@@ -1,0 +1,138 @@
+"""Typed schema for realtime voice benchmark cases and results."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+
+
+RunnerName = Literal["policy", "headless", "component", "livekit_room"]
+
+
+@dataclass(frozen=True)
+class AudioClip:
+    id: str
+    text: str
+    path: str
+    intent: str = "normal"
+
+
+@dataclass(frozen=True)
+class UserStep:
+    text: str
+    audio: str
+    start_ms: int
+    duration_ms: int = 700
+    interims: tuple[str, ...] = ()
+    final_delay_ms: int = 80
+    vad_probability: float = 0.9
+    agent_speaking: bool = True
+
+
+@dataclass(frozen=True)
+class AgentReply:
+    when: str
+    reply: str
+
+
+@dataclass(frozen=True)
+class Expectations:
+    action: str = "none"
+    intent: str = "uncertain"
+    topic_switch_hint: bool = False
+    correction_hint: bool = False
+    agent_audio_cancelled: bool = False
+    min_user_finals: int = 1
+    min_agent_messages: int = 0
+    max_interrupt_decision_ms: float | None = None
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    case_id: str
+    suite: str
+    description: str
+    audio_clips: tuple[AudioClip, ...]
+    user_steps: tuple[UserStep, ...]
+    agent_replies: tuple[AgentReply, ...] = ()
+    expectations: Expectations = field(default_factory=Expectations)
+    tags: tuple[str, ...] = ()
+    timeout_sec: float = 15.0
+
+
+@dataclass(frozen=True)
+class BenchmarkSuite:
+    suite_id: str
+    cases: tuple[BenchmarkCase, ...]
+
+
+@dataclass
+class CaseResult:
+    case_id: str
+    suite: str
+    runner: RunnerName
+    passed: bool
+    metrics: dict[str, float | int | str | bool | None] = field(default_factory=dict)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RunResult:
+    run_id: str
+    git_sha: str
+    runner: RunnerName
+    profile: str
+    cases: list[CaseResult]
+    provider_config: dict[str, str] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def write_jsonl(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            for case in self.cases:
+                f.write(json.dumps(asdict(case), ensure_ascii=False) + "\n")
+
+
+def _tuple_of(cls, raw: Any) -> tuple:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"expected list for {cls.__name__}, got {type(raw).__name__}")
+    return tuple(cls(**item) for item in raw)
+
+
+def load_suite(path: str | Path) -> BenchmarkSuite:
+    p = Path(path)
+    raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    cases: list[BenchmarkCase] = []
+    for case_raw in raw.get("cases", []):
+        expectations = Expectations(**(case_raw.get("expect") or {}))
+        cases.append(
+            BenchmarkCase(
+                case_id=case_raw["case_id"],
+                suite=case_raw.get("suite") or raw.get("suite_id") or p.stem,
+                description=case_raw.get("description", ""),
+                audio_clips=_tuple_of(AudioClip, case_raw.get("audio_clips")),
+                user_steps=_tuple_of(UserStep, case_raw.get("user_steps")),
+                agent_replies=_tuple_of(AgentReply, case_raw.get("agent_replies")),
+                expectations=expectations,
+                tags=tuple(case_raw.get("tags") or ()),
+                timeout_sec=float(case_raw.get("timeout_sec") or 15.0),
+            )
+        )
+    return BenchmarkSuite(
+        suite_id=raw.get("suite_id") or p.stem,
+        cases=tuple(cases),
+    )
+
+
+def load_suites(paths: list[str | Path]) -> list[BenchmarkSuite]:
+    return [load_suite(path) for path in paths]

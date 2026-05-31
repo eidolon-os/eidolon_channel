@@ -48,6 +48,27 @@ def normalize_interrupt_text(text: str) -> str:
     return text.strip().lower().rstrip("。.!？?！,， ")
 
 
+def canonicalize_interrupt_text(text: str) -> str:
+    """Normalize common hot-path STT confusions without changing raw logs."""
+
+    stripped = normalize_interrupt_text(text)
+    # Bailian/FunASR can briefly hear "换个..." as "半个..." in topic-switch
+    # clips. Canonicalize only for intent matching; timeline still records the
+    # original transcript preview for diagnosis.
+    if stripped.startswith("半个"):
+        return "换个" + stripped[2:]
+    # Correction clips such as "不是，我刚才..." may briefly lose the leading
+    # negation and arrive as "是我刚...". Treat that as a correction cue.
+    # The shorter "是我" fragment is ambiguous; canonicalize it to a correction
+    # prefix so the decider holds for one more interim instead of cancelling
+    # before "刚才说错" arrives.
+    if stripped == "是我":
+        return "我刚"
+    if stripped.startswith("是我刚"):
+        return "我刚才" + stripped[3:]
+    return stripped
+
+
 class LexiconInterruptClassifier(InterruptIntentClassifier):
     """Low-latency classifier based on high-precision lexical signals."""
 
@@ -68,7 +89,7 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
         agent_speaking: bool,
         eot_score: float,
     ) -> InterruptIntentResult:
-        stripped = normalize_interrupt_text(text)
+        stripped = canonicalize_interrupt_text(text)
         if not stripped:
             return InterruptIntentResult(
                 InterruptIntent.NOISE, 1.0, "lexicon", "empty_transcript"
@@ -137,4 +158,3 @@ class OnnxInterruptClassifier(InterruptIntentClassifier):
             "OnnxInterruptClassifier is a reserved integration point; "
             "train and validate the model in a separate task first."
         )
-

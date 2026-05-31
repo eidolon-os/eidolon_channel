@@ -71,11 +71,11 @@ def test_first_signal_cancel_on_substantive_interim() -> None:
     assert "first_signal" in decision.reason
 
 
-def test_first_signal_skips_backchannel() -> None:
-    """Backchannel-only first INTERIM rolls back instead of cancelling."""
+def test_first_signal_holds_single_char_backchannel() -> None:
+    """Single-char backchannel fragments wait for more speech evidence."""
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯", score=0.0)
-    assert decision.action is Action.ROLLBACK
+    assert decision.action is Action.HOLD
 
 
 def test_first_signal_skips_compound_backchannel() -> None:
@@ -92,11 +92,32 @@ def test_first_signal_below_min_chars_is_hold() -> None:
     assert decision.action is Action.HOLD
 
 
+def test_semantic_prefix_holds_for_more_interim() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+    decision = d.on_stt_interim("换个", score=0.0)
+    assert decision.action is Action.HOLD
+    assert "semantic_prefix" in decision.reason
+
+
+def test_topic_switch_confused_prefix_holds_for_more_interim() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+    decision = d.on_stt_interim("半个", score=0.0)
+    assert decision.action is Action.HOLD
+    assert "semantic_prefix" in decision.reason
+
+
+def test_correction_confused_prefix_holds_for_more_interim() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+    decision = d.on_stt_interim("是我", score=0.0)
+    assert decision.action is Action.HOLD
+    assert "semantic_prefix" in decision.reason
+
+
 def test_first_signal_strips_punctuation_before_length_check() -> None:
     """Backchannel + punctuation ('嗯。') is recognized after strip."""
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯。", score=0.0)
-    assert decision.action is Action.ROLLBACK
+    assert decision.action is Action.HOLD
 
 
 def test_first_signal_respects_min_chars_setting() -> None:
@@ -111,10 +132,10 @@ def test_first_signal_respects_min_chars_setting() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_backchannel_rolls_back_even_with_high_score() -> None:
+def test_compound_backchannel_rolls_back_even_with_high_score() -> None:
     """Explicit backchannel/noise classification wins over EOT score."""
     d = InterruptDecider(early_cancel_score_threshold=0.7)
-    decision = d.on_stt_interim("嗯", score=0.85)
+    decision = d.on_stt_interim("嗯嗯", score=0.85)
     assert decision.action is Action.ROLLBACK
     assert "intent:" in decision.reason
 
@@ -153,6 +174,13 @@ def test_topic_switch_cancels_with_hint() -> None:
     assert decision.topic_switch_hint is True
 
 
+def test_topic_switch_confused_transcript_cancels_with_hint() -> None:
+    d = InterruptDecider()
+    decision = d.on_stt_interim("半个话题吧", score=0.0)
+    assert decision.action is Action.CANCEL
+    assert decision.topic_switch_hint is True
+
+
 def test_correction_cancels_with_hint() -> None:
     d = InterruptDecider()
     decision = d.on_stt_interim("不是，我的意思是", score=0.0)
@@ -160,16 +188,55 @@ def test_correction_cancels_with_hint() -> None:
     assert decision.correction_hint is True
 
 
+def test_correction_confused_transcript_cancels_with_hint() -> None:
+    d = InterruptDecider()
+    decision = d.on_stt_interim("是我刚", score=0.0)
+    assert decision.action is Action.CANCEL
+    assert decision.correction_hint is True
+
+
 # ---------------------------------------------------------------------------
-# on_decision_deadline — VAD-active branch
+# on_decision_deadline — timeout branches
 # ---------------------------------------------------------------------------
 
 
-def test_deadline_vad_active_cancels_trust_vad() -> None:
+def test_deadline_vad_active_without_transcript_holds() -> None:
     d = InterruptDecider()
     decision = d.on_decision_deadline(vad_still_active=True)
+    assert decision.action is Action.HOLD
+    assert "wait_for_transcript" in decision.reason
+
+
+def test_deadline_vad_active_with_transcript_cancels() -> None:
+    d = InterruptDecider()
+    decision = d.on_decision_deadline(
+        vad_still_active=True,
+        has_transcript=True,
+        transcript="等我查一下",
+    )
     assert decision.action is Action.CANCEL
     assert "trust_vad" in decision.reason
+
+
+def test_deadline_vad_active_with_noise_fragment_holds() -> None:
+    d = InterruptDecider()
+    decision = d.on_decision_deadline(
+        vad_still_active=True,
+        has_transcript=True,
+        transcript="啊",
+    )
+    assert decision.action is Action.HOLD
+
+
+def test_deadline_vad_active_with_single_char_transcript_holds() -> None:
+    d = InterruptDecider()
+    decision = d.on_decision_deadline(
+        vad_still_active=True,
+        has_transcript=True,
+        transcript="听",
+    )
+    assert decision.action is Action.HOLD
+    assert "wait_for_more_transcript" in decision.reason
 
 
 def test_deadline_vad_idle_rollback_drop_buffered() -> None:
@@ -192,6 +259,14 @@ def test_user_silent_fast_rollback_drains() -> None:
     decision = d.on_user_silent()
     assert decision.action is Action.ROLLBACK
     assert decision.rollback_drop_buffered is False
+
+
+def test_user_silent_backchannel_keeps_intent() -> None:
+    d = InterruptDecider()
+    decision = d.on_user_silent("好")
+    assert decision.action is Action.ROLLBACK
+    assert decision.intent is not None
+    assert decision.intent.value == "backchannel"
 
 
 # ---------------------------------------------------------------------------

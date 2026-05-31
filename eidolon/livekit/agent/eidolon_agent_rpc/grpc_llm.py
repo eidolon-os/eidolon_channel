@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable
 
 from livekit.agents import llm
@@ -140,6 +141,19 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._session_lock = asyncio.Lock()
         self._pending_turn_control_metadata: dict[str, Any] | None = None
 
+    def emit_provider_event(self, name: str, **payload: Any) -> None:
+        """Emit provider-level timing events for Channel observability."""
+
+        self.emit(
+            "provider_event",
+            {
+                "provider": self.provider,
+                "event": name,
+                "timestamp": time.monotonic(),
+                **payload,
+            },
+        )
+
     @property
     def model(self) -> str:
         return self._display_model
@@ -216,6 +230,10 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 conversation_id = f"livekit:{llm_v._display_model}"
         else:
             conversation_id = cid_src
+        llm_v.emit_provider_event(
+            "brain_request_started",
+            conversation_id=conversation_id,
+        )
         turn_id, payloads = await session.start_turn(
             text=user_text,
             conversation_id=conversation_id,
@@ -224,11 +242,26 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             else None,
         )
         req_id = f"eidolon-{turn_id}"
+        llm_v.emit_provider_event(
+            "brain_request_sent",
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            request_id=req_id,
+        )
+        first_delta_seen = False
         try:
             async for payload in payloads:
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
                 if isinstance(payload, DeltaPayload):
+                    if not first_delta_seen:
+                        first_delta_seen = True
+                        llm_v.emit_provider_event(
+                            "brain_first_delta",
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            request_id=req_id,
+                        )
                     self._event_ch.send_nowait(
                         llm.ChatChunk(
                             id=req_id,
@@ -266,6 +299,12 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     )
                 # else: unknown payload type — ignore (forward-compat with new
                 # session.py additions).
+            llm_v.emit_provider_event(
+                "brain_done",
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                request_id=req_id,
+            )
         except asyncio.CancelledError:
             # Barge-in or job teardown: tell the brain to stop generating
             # without closing the underlying bidi stream. Use session.spawn

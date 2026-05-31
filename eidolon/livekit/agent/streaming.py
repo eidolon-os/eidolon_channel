@@ -59,7 +59,13 @@ from eidolon.livekit.common.config import (
 )
 
 from . import _framework_patches
-from .turn_policy import Action, Decision, TurnPolicyRuntime
+from .turn_policy import (
+    Action,
+    Decision,
+    InterruptIntent,
+    TurnPolicyRuntime,
+    eot_kwargs_from_turn_policy,
+)
 from .observability import TurnTimeline
 from .output_controller import OutputController
 from .factory import SharedStageFactory
@@ -77,30 +83,6 @@ _eot_model_cache: Any = None
 _eot_model_cache_key: tuple | None = None
 
 
-def _eot_kwargs_from_turn_policy(turn_policy: TurnPolicyConfig | None) -> dict[str, Any]:
-    if turn_policy is None:
-        return {}
-    return {
-        "eot_unlikely_threshold": turn_policy.eot.eot_unlikely_threshold,
-        "tail_hang_silence_sec": turn_policy.eot.tail_hang_silence_ms / 1000.0,
-        "min_speech_duration_sec": turn_policy.vad.min_speech_duration_ms / 1000.0,
-        "duck_enabled": turn_policy.ducking.enabled,
-        "duck_fade_ms": turn_policy.ducking.fade_out_ms,
-        "duck_fade_in_ms": turn_policy.ducking.fade_in_ms,
-        "duck_suspend_volume": turn_policy.ducking.suspend_volume,
-        "duck_buffer_max_sec": turn_policy.ducking.buffer_max_ms / 1000.0,
-        "duck_suspend_timeout_sec": turn_policy.interrupt.decision_timeout_ms / 1000.0,
-        "interrupt_min_interim_chars": turn_policy.interrupt.min_interim_chars,
-        "duck_early_cancel_score_threshold": (
-            turn_policy.interrupt.early_cancel_score_threshold
-        ),
-        "duck_early_resume_score_threshold": (
-            turn_policy.interrupt.early_resume_score_threshold
-        ),
-        "duck_cooldown_sec": turn_policy.ducking.cooldown_ms / 1000.0,
-    }
-
-
 def _get_shared_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
     """Lazily create and cache the shared ChineseModel instance.
 
@@ -108,7 +90,7 @@ def _get_shared_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
     the ONNX session, so all callers share the same model weights in memory.
     """
     global _eot_model_cache, _eot_model_cache_key
-    kwargs = _eot_kwargs_from_turn_policy(turn_policy)
+    kwargs = eot_kwargs_from_turn_policy(turn_policy)
     key = tuple(sorted(kwargs.items()))
     if _eot_model_cache is None or _eot_model_cache_key != key:
         from eidolon.livekit.plugins.eot import ChineseModel
@@ -157,6 +139,7 @@ class StreamingPipeline(BasePipeline):
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
         self._timeline: TurnTimeline | None = None
+        self._timeline_debug_flushed = False
         self._instructions = instructions
         self._allow_interruptions = allow_interruptions
         # Round 8 R8.9: fixed welcome (instead of LLM-generated). LLM with
@@ -238,10 +221,259 @@ class StreamingPipeline(BasePipeline):
         # the first user audio frame arrives. This avoids cold-start delay after
         # session.start() is called.
         _get_shared_eot_model(self._turn_policy)
+        self._install_provider_observers()
 
     def _get_eot_model(self) -> Any:
         """Return the shared EOT model instance."""
         return _get_shared_eot_model(self._turn_policy)
+
+    def _install_provider_observers(self) -> None:
+        self._install_llm_metrics_observer()
+        self._install_brain_provider_event_observer()
+        self._install_stt_provider_event_observer()
+        self._install_tts_provider_event_observer()
+
+    def _install_llm_metrics_observer(self) -> None:
+        """Bridge LiveKit LLM metrics into the active turn timeline."""
+        if getattr(self, "_llm_metrics_observer_installed", False):
+            return
+        llm_plugin = getattr(getattr(self._factory, "llm", None), "llm", None)
+        if llm_plugin is None or not hasattr(llm_plugin, "on"):
+            return
+
+        def _on_metrics_collected(metrics: Any) -> None:
+            timeline = self._timeline
+            if timeline is None:
+                return
+            ttft = getattr(metrics, "ttft", None)
+            duration = getattr(metrics, "duration", None)
+            if ttft is not None and ttft >= 0:
+                timeline.mark_after("llm_first_delta_at", "llm_started_at", ttft)
+            timeline.set_attr(
+                "llm_metrics",
+                {
+                    "request_id": getattr(metrics, "request_id", ""),
+                    "ttft_ms": ttft * 1000 if ttft is not None else None,
+                    "duration_ms": duration * 1000 if duration is not None else None,
+                    "completion_tokens": getattr(metrics, "completion_tokens", 0),
+                    "prompt_tokens": getattr(metrics, "prompt_tokens", 0),
+                    "total_tokens": getattr(metrics, "total_tokens", 0),
+                    "cancelled": getattr(metrics, "cancelled", False),
+                },
+            )
+
+        llm_plugin.on("metrics_collected", _on_metrics_collected)
+        self._llm_metrics_observer_installed = True
+
+    def _install_brain_provider_event_observer(self) -> None:
+        """Bridge provider-native brain RPC timing events into the timeline."""
+        if getattr(self, "_brain_provider_observer_installed", False):
+            return
+        llm_plugin = getattr(getattr(self._factory, "llm", None), "llm", None)
+        if llm_plugin is None or not hasattr(llm_plugin, "on"):
+            return
+
+        mark_by_event = {
+            "brain_request_started": "brain_request_started_at",
+            "brain_request_sent": "brain_request_sent_at",
+            "brain_first_delta": "brain_first_delta_at",
+            "brain_done": "brain_done_at",
+        }
+
+        def _on_provider_event(event: Any) -> None:
+            timeline = self._timeline
+            if timeline is None or not isinstance(event, dict):
+                return
+            mark = mark_by_event.get(str(event.get("event") or ""))
+            if mark is None:
+                return
+            timestamp = event.get("timestamp")
+            if isinstance(timestamp, (int, float)):
+                timeline.mark_at(mark, float(timestamp))
+                if mark == "brain_first_delta_at":
+                    timeline.mark_at("llm_first_delta_at", float(timestamp))
+            else:
+                timeline.mark(mark)
+                if mark == "brain_first_delta_at":
+                    timeline.mark("llm_first_delta_at")
+            brain_rpc = dict(timeline.attrs.get("brain_rpc") or {})
+            brain_rpc.update(
+                {
+                    "provider": event.get("provider", ""),
+                    "turn_id": event.get("turn_id", brain_rpc.get("turn_id", "")),
+                    "request_id": event.get(
+                        "request_id",
+                        brain_rpc.get("request_id", ""),
+                    ),
+                    "conversation_id": event.get(
+                        "conversation_id",
+                        brain_rpc.get("conversation_id", ""),
+                    ),
+                    "last_event": event.get("event", ""),
+                }
+            )
+            timeline.set_attr("brain_rpc", brain_rpc)
+
+        llm_plugin.on("provider_event", _on_provider_event)
+        self._brain_provider_observer_installed = True
+
+    def _install_tts_provider_event_observer(self) -> None:
+        """Bridge provider-native TTS streaming timing events into timeline.
+
+        These marks are provider truth (request opened, first audio byte from the
+        TTS provider), distinct from ``tts_first_audio_at`` which is the
+        agent-state experience mark. Together they split the brain-delta -> audio
+        gap into TTS TTFB vs publish, for industry latency comparison.
+        """
+        if getattr(self, "_tts_provider_observer_installed", False):
+            return
+        tts_plugin = getattr(getattr(self._factory, "tts", None), "tts", None)
+        if tts_plugin is None or not hasattr(tts_plugin, "on"):
+            return
+
+        mark_by_event = {
+            "tts_request_started": "tts_request_started_at",
+            "tts_provider_first_audio": "tts_provider_first_audio_at",
+        }
+
+        def _on_provider_event(event: Any) -> None:
+            timeline = self._timeline
+            if timeline is None or not isinstance(event, dict):
+                return
+            mark = mark_by_event.get(str(event.get("event") or ""))
+            if mark is None:
+                return
+            timestamp = event.get("timestamp")
+            if isinstance(timestamp, (int, float)):
+                timeline.mark_at(mark, float(timestamp))
+            else:
+                timeline.mark(mark)
+            tts_stream = dict(timeline.attrs.get("tts_stream") or {})
+            tts_stream.update(
+                {
+                    "provider": event.get("provider", ""),
+                    "model": event.get("model", tts_stream.get("model", "")),
+                    "last_event": event.get("event", ""),
+                }
+            )
+            timeline.set_attr("tts_stream", tts_stream)
+
+        tts_plugin.on("provider_event", _on_provider_event)
+        self._tts_provider_observer_installed = True
+
+    def _install_stt_provider_event_observer(self) -> None:
+        """Bridge provider-native STT streaming timing events into timeline."""
+        if getattr(self, "_stt_provider_observer_installed", False):
+            return
+        stt_plugin = getattr(getattr(self._factory, "stt", None), "stt", None)
+        if stt_plugin is None or not hasattr(stt_plugin, "on"):
+            return
+
+        def _on_provider_event(event: Any) -> None:
+            if not isinstance(event, dict):
+                return
+            if self._timeline is None:
+                self._remember_pending_stt_provider_event(event)
+                return
+            self._record_stt_provider_event(event)
+
+        stt_plugin.on("provider_event", _on_provider_event)
+        self._stt_provider_observer_installed = True
+
+    def _remember_pending_stt_provider_event(self, event: dict[str, Any]) -> None:
+        self._ensure_runtime_defaults()
+        timestamp = event.get("timestamp")
+        if not isinstance(timestamp, (int, float)):
+            return
+        pending = self._pending_stt_provider_events
+        pending.append(dict(event))
+        cutoff = float(timestamp) - 2.0
+        self._pending_stt_provider_events = [
+            item
+            for item in pending[-32:]
+            if isinstance(item.get("timestamp"), (int, float))
+            and float(item["timestamp"]) >= cutoff
+        ]
+
+    def _apply_pending_stt_provider_events(self) -> None:
+        if self._timeline is None:
+            return
+        speech_started_at = self._timeline.timestamps.get("speech_started_at")
+        if speech_started_at is None:
+            return
+        pending = list(self._pending_stt_provider_events)
+        self._pending_stt_provider_events = []
+        for event in pending:
+            timestamp = event.get("timestamp")
+            if not isinstance(timestamp, (int, float)):
+                continue
+            if float(timestamp) < speech_started_at - 0.5:
+                continue
+            self._record_stt_provider_event(event)
+
+    def _record_stt_provider_event(self, event: dict[str, Any]) -> None:
+        timeline = self._timeline
+        if timeline is None:
+            return
+        mark_by_event = {
+            "stt_stream_started": "stt_stream_started_at",
+            "stt_ws_connected": "stt_ws_connected_at",
+            "stt_first_audio_sent": "stt_stream_first_audio_sent_at",
+            "stt_turn_first_audio_sent": "stt_first_audio_sent_at",
+            "stt_flush_sent": "stt_flush_sent_at",
+            "stt_provider_first_partial": "stt_provider_first_partial_at",
+            "stt_provider_final": "stt_provider_final_at",
+        }
+        mark = mark_by_event.get(str(event.get("event") or ""))
+        if mark is None:
+            return
+        event_turn_id = event.get("turn_id")
+        if event_turn_id and event_turn_id != timeline.turn_id:
+            return
+        timestamp = event.get("timestamp")
+        if isinstance(timestamp, (int, float)):
+            timeline.mark_at(mark, float(timestamp))
+        else:
+            timeline.mark(mark)
+        stt_stream = dict(timeline.attrs.get("stt_stream") or {})
+        stt_stream.update(
+            {
+                "provider": event.get("provider", ""),
+                "model": event.get("model", stt_stream.get("model", "")),
+                "stream_id": event.get("stream_id", stt_stream.get("stream_id", "")),
+                "language": event.get("language", stt_stream.get("language", "")),
+                "last_event": event.get("event", ""),
+            }
+        )
+        text_preview = event.get("text_preview")
+        if isinstance(text_preview, str) and text_preview:
+            stt_stream["last_text_preview"] = text_preview
+        timeline.set_attr("stt_stream", stt_stream)
+
+    def _observe_stt_turn_audio(self) -> None:
+        timeline = self._timeline
+        if timeline is None:
+            return
+        speech_started_at = timeline.timestamps.get("speech_started_at")
+        if speech_started_at is None:
+            return
+        stt_stage = getattr(self._factory, "stt", None)
+        stt_plugin = getattr(stt_stage, "_stt", None) or getattr(stt_stage, "stt", None)
+        observer = getattr(stt_plugin, "observe_next_audio_for_turn", None)
+        if not callable(observer):
+            return
+        try:
+            observed = bool(
+                observer(
+                    turn_id=timeline.turn_id,
+                    speech_started_at=speech_started_at,
+                )
+            )
+            timeline.set_attr("stt_turn_audio_observer_installed", observed)
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] failed to arm STT turn-audio observer"
+            )
 
     def _ensure_runtime_defaults(self) -> None:
         """Ensure new runtime helpers exist on test-built pipeline objects.
@@ -258,6 +490,18 @@ class StreamingPipeline(BasePipeline):
             self._observability = ObservabilityConfig()
         if not hasattr(self, "_timeline"):
             self._timeline = None
+        if not hasattr(self, "_timeline_debug_flushed"):
+            self._timeline_debug_flushed = False
+        if not hasattr(self, "_latest_asr_text"):
+            self._latest_asr_text = ""
+        if not hasattr(self, "_llm_metrics_observer_installed"):
+            self._llm_metrics_observer_installed = False
+        if not hasattr(self, "_brain_provider_observer_installed"):
+            self._brain_provider_observer_installed = False
+        if not hasattr(self, "_stt_provider_observer_installed"):
+            self._stt_provider_observer_installed = False
+        if not hasattr(self, "_pending_stt_provider_events"):
+            self._pending_stt_provider_events = []
 
     async def run(self, room: Room) -> None:
         """Start the streaming pipeline. Blocks until room disconnects."""
@@ -481,6 +725,7 @@ class StreamingPipeline(BasePipeline):
             logger.info(
                 "[StreamingPipeline] session duck metrics: %s", metrics,
             )
+        self._append_timeline_debug("session_closed")
         self._session_closed_event.set()
 
     def _on_agent_state_changed(self, event: Any) -> None:
@@ -502,6 +747,17 @@ class StreamingPipeline(BasePipeline):
         if event.new_state in ("thinking", "speaking"):
             if self._filler is not None:
                 self._filler.cancel()
+        if self._timeline is not None:
+            if event.new_state == "thinking":
+                self._timeline.mark("llm_started_at")
+            elif event.new_state == "speaking":
+                self._timeline.mark("tts_first_audio_at")
+            elif event.old_state == "speaking" and event.new_state in (
+                "idle",
+                "listening",
+            ):
+                self._timeline.mark("agent_audio_playback_done_at")
+                self._append_timeline_debug("agent_audio_playback_done", clear=True)
         if event.new_state in ("thinking", "speaking") and self._soft_interrupt_active:
             logger.info(
                 "[StreamingPipeline] agent started %s, cancelling pending soft interrupt timer",
@@ -675,7 +931,12 @@ class StreamingPipeline(BasePipeline):
                 self._callbacks.on_user_started_speaking()
                 self._user_speaking_start_time = time.time()
                 self._timeline = TurnTimeline(generate_turn_id())
+                self._timeline_debug_flushed = False
+                if self._room is not None:
+                    self._timeline.set_attr("room_name", self._room.name or "")
                 self._timeline.mark("speech_started_at")
+                self._apply_pending_stt_provider_events()
+                self._observe_stt_turn_audio()
                 # Immediately clear stale text so EOT only sees text from THIS speech turn.
                 self._latest_asr_text = ""
 
@@ -713,8 +974,20 @@ class StreamingPipeline(BasePipeline):
                 # Phase C: if we're still SUSPENDED, the user finished
                 # speaking without producing a strong-enough interrupt
                 # signal — confirmed false interruption, resume agent
-                # output smoothly.
-                self._duck_unduck_if_suspended()
+                # output smoothly and record the rollback decision.
+                if (
+                    self._duck_mixer is not None
+                    and self._duck_mixer.state == "SUSPENDED"
+                ):
+                    decision = self._turn_runtime.decider.on_user_silent(
+                        self._latest_asr_text
+                    )
+                    self._apply_decision(
+                        decision,
+                        resolved_reason="user_silent",
+                        transcript=self._latest_asr_text,
+                        vad_active=False,
+                    )
 
                 self._callbacks.on_user_ended_speaking()
                 if self._session is not None:
@@ -804,7 +1077,15 @@ class StreamingPipeline(BasePipeline):
         # instead of polling for it. This ensures we analyze the CURRENT
         # speech turn's text, not a stale one from a previous turn.
         agent_is_speaking = self._state == PipelineState.SPEAKING
-        if agent_is_speaking and self._allow_interruptions and event.transcript:
+        interruption_timeline_active = (
+            self._timeline is not None
+            and "interrupt_started_at" in self._timeline.timestamps
+        )
+        if (
+            self._allow_interruptions
+            and event.transcript
+            and (agent_is_speaking or interruption_timeline_active)
+        ):
             self._run_eot_check(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
@@ -845,6 +1126,12 @@ class StreamingPipeline(BasePipeline):
             signal = self._turn_runtime.control_signal_from_decision(decision)
             self._publish_turn_control(signal.as_metadata())
             if self._timeline is not None:
+                self._record_decision_attrs(
+                    decision,
+                    source="strong_intent",
+                    transcript=text,
+                    vad_active=True,
+                )
                 self._timeline.set_attr("turn_control", signal.as_metadata())
             if duck_active:
                 self._duck_cancel_and_interrupt()
@@ -880,13 +1167,46 @@ class StreamingPipeline(BasePipeline):
                 decision.action.value, decision.reason,
                 suspend_ms, score, text[:80],
             )
-            self._apply_decision(decision)
+            self._apply_decision(
+                decision,
+                eot_score=score,
+                transcript=text,
+                vad_active=vad_active,
+            )
             return
 
         # ──────────────────────────────────────────────────────────
         # Fallback path (mixer not installed, or duck disabled):
         # use the soft/hard interrupt machinery without output ducking.
         # ──────────────────────────────────────────────────────────
+        semantic_decision = self._turn_runtime.decide_from_transcript(
+            text,
+            score,
+            vad_active=vad_active,
+            agent_speaking=True,
+        )
+        if semantic_decision.intent in (
+            InterruptIntent.HARD_STOP,
+            InterruptIntent.TOPIC_SWITCH,
+            InterruptIntent.CORRECTION,
+            InterruptIntent.BACKCHANNEL,
+            InterruptIntent.NOISE,
+        ):
+            logger.info(
+                "[StreamingPipeline] EOT(fallback semantic): decision=%s "
+                "reason=%s score=%.2f text=%r",
+                semantic_decision.action.value,
+                semantic_decision.reason,
+                score,
+                text[:80],
+            )
+            self._apply_decision(
+                semantic_decision,
+                eot_score=score,
+                transcript=text,
+                vad_active=vad_active,
+            )
+            return
 
         # Already in soft interrupt: stay in the waiting state until timeout or silence.
         if self._soft_interrupt_active:
@@ -905,6 +1225,16 @@ class StreamingPipeline(BasePipeline):
                     eot_model.hard_interrupt_score_threshold,
                     text[:80],
                 )
+                if self._timeline is not None:
+                    self._timeline.record_decision(
+                        action="cancel",
+                        reason="fallback_eot_hard_score",
+                        rollback_drop_buffered=False,
+                        source="eot_fallback",
+                        eot_score=score,
+                        transcript_preview=text[:120],
+                        vad_active=vad_active,
+                    )
                 self._interrupt_current_turn()
             else:
                 logger.info(
@@ -914,6 +1244,16 @@ class StreamingPipeline(BasePipeline):
                     self._soft_interrupt_timeout,
                     text[:80],
                 )
+                if self._timeline is not None:
+                    self._timeline.record_decision(
+                        action="hold",
+                        reason="fallback_eot_soft_interrupt",
+                        rollback_drop_buffered=False,
+                        source="eot_fallback",
+                        eot_score=score,
+                        transcript_preview=text[:120],
+                        vad_active=vad_active,
+                    )
                 self._enter_soft_interrupt()
         else:
             logger.info(
@@ -1112,15 +1452,26 @@ class StreamingPipeline(BasePipeline):
                     self._session is not None
                     and self._session.user_state == "speaking"
                 )
-                decision = self._turn_runtime.decider.on_decision_deadline(vad_still_active)
+                latest_asr_text = self._latest_asr_text.strip()
+                decision = self._turn_runtime.decider.on_decision_deadline(
+                    vad_still_active,
+                    has_transcript=bool(latest_asr_text),
+                    transcript=latest_asr_text,
+                )
                 logger.info(
                     "[StreamingPipeline] duck resolved  reason=deadline  "
-                    "decision=%s decider_reason=%s  suspend_ms=%.0f  "
-                    "buffered=%d frames (%.3fs)  timeout=%.2fs",
+                    "decision=%s decider_reason=%s  has_transcript=%s  "
+                    "suspend_ms=%.0f  buffered=%d frames (%.3fs)  timeout=%.2fs",
                     decision.action.value, decision.reason,
-                    suspend_ms, buffered, buffered_sec, timeout_sec,
+                    bool(latest_asr_text), suspend_ms, buffered, buffered_sec,
+                    timeout_sec,
                 )
-                self._apply_decision(decision, resolved_reason="timeout")
+                self._apply_decision(
+                    decision,
+                    resolved_reason="timeout",
+                    transcript=latest_asr_text,
+                    vad_active=vad_still_active,
+                )
         except asyncio.CancelledError:
             pass
 
@@ -1129,7 +1480,13 @@ class StreamingPipeline(BasePipeline):
     # ------------------------------------------------------------------
 
     def _apply_decision(
-        self, decision: Decision, *, resolved_reason: str | None = None
+        self,
+        decision: Decision,
+        *,
+        resolved_reason: str | None = None,
+        eot_score: float | None = None,
+        transcript: str = "",
+        vad_active: bool | None = None,
     ) -> None:
         """Execute the side effects implied by a :class:`Decision`.
 
@@ -1141,6 +1498,13 @@ class StreamingPipeline(BasePipeline):
                 internal classification).
         """
         self._ensure_runtime_defaults()
+        self._record_decision_attrs(
+            decision,
+            resolved_reason=resolved_reason,
+            eot_score=eot_score,
+            transcript=transcript,
+            vad_active=vad_active,
+        )
         if decision.action is Action.CANCEL:
             # Real interrupt: snapshot context, cancel mixer, interrupt TTS.
             signal = self._turn_runtime.control_signal_from_decision(decision)
@@ -1161,6 +1525,43 @@ class StreamingPipeline(BasePipeline):
             return
         # HOLD / NONE — no-op; let next interim or deadline drive.
         return
+
+    def _record_decision_attrs(
+        self,
+        decision: Decision,
+        *,
+        source: str = "turn_policy",
+        resolved_reason: str | None = None,
+        eot_score: float | None = None,
+        transcript: str = "",
+        vad_active: bool | None = None,
+    ) -> None:
+        if self._timeline is None:
+            return
+        self._timeline.record_decision(
+            action=decision.action.value,
+            reason=decision.reason,
+            rollback_drop_buffered=decision.rollback_drop_buffered,
+            intent=decision.intent.value if decision.intent is not None else None,
+            intent_source=decision.intent_source,
+            intent_confidence=decision.intent_confidence,
+            topic_switch_hint=decision.topic_switch_hint,
+            correction_hint=decision.correction_hint,
+            source=source,
+            resolved_reason=resolved_reason,
+            eot_score=eot_score,
+            transcript_preview=transcript[:120],
+            vad_active=vad_active,
+        )
+
+    def _append_timeline_debug(self, reason: str, *, clear: bool = False) -> None:
+        if self._timeline is None or self._timeline_debug_flushed:
+            return
+        self._timeline.set_attr("timeline_flush_reason", reason)
+        self._timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        self._timeline_debug_flushed = True
+        if clear:
+            self._timeline = None
 
     def _publish_turn_control(self, metadata: dict[str, object]) -> None:
         """Attach control hints to the next remote-brain turn when supported."""
@@ -1204,7 +1605,7 @@ class StreamingPipeline(BasePipeline):
         if self._timeline is not None:
             self._timeline.mark("interrupt_resolved_at")
             self._timeline.set_attr("cancel_reason", "eot_cancel")
-            self._timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+            self._append_timeline_debug("interrupt_cancel")
         self._interrupt_current_turn()
 
     def _duck_unduck_if_suspended(
@@ -1239,9 +1640,6 @@ class StreamingPipeline(BasePipeline):
             if self._timeline is not None:
                 self._timeline.mark("interrupt_resolved_at")
                 self._timeline.set_attr("rollback_reason", reason)
-                self._timeline.append_debug_jsonl(
-                    self._observability.timeline_debug_path
-                )
 
     # ------------------------------------------------------------------
     # Interrupted content tracking (Phase 3)

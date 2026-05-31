@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Voice Benchmark baseline-direct-verify</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 32px; }
+    pre { white-space: pre-wrap; background: #f7f7f8; padding: 16px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <pre># Voice Benchmark Report: baseline-direct-verify
+
+- runner: `headless`
+- profile: `headless_audio_replay:direct`
+- git_sha: `43f0302`
+- pass_rate: `5/5`
+
+## Metric Summary
+
+| metric | p50 | p95 | max | count |
+| --- | ---: | ---: | ---: | ---: |
+| agent_message_count | 0.0 | 1.0 | 1.0 | 5 |
+| audio_bytes | 0.0 | 304448.0 | 315200.0 | 5 |
+| cleared_segments | 0.0 | 0.0 | 0.0 | 5 |
+| elapsed_ms | 1494.0 | 5570.0 | 5751.0 | 5 |
+| user_final_count | 1.0 | 1.8 | 2.0 | 5 |
+
+## Cases
+
+### normal_single_turn_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 5751,
+  &quot;user_final_count&quot;: 1,
+  &quot;agent_message_count&quot;: 1,
+  &quot;audio_bytes&quot;: 261440,
+  &quot;cleared_segments&quot;: 0,
+  &quot;llm_call_count&quot;: null
+}
+```
+
+### hard_interrupt_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 4846,
+  &quot;user_final_count&quot;: 2,
+  &quot;agent_message_count&quot;: 1,
+  &quot;audio_bytes&quot;: 315200,
+  &quot;cleared_segments&quot;: 0,
+  &quot;llm_call_count&quot;: null
+}
+```
+
+### topic_switch_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 1494,
+  &quot;user_final_count&quot;: 1,
+  &quot;agent_message_count&quot;: 0,
+  &quot;audio_bytes&quot;: 0,
+  &quot;cleared_segments&quot;: 0,
+  &quot;llm_call_count&quot;: null
+}
+```
+
+### correction_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 1488,
+  &quot;user_final_count&quot;: 1,
+  &quot;agent_message_count&quot;: 0,
+  &quot;audio_bytes&quot;: 0,
+  &quot;cleared_segments&quot;: 0,
+  &quot;llm_call_count&quot;: null
+}
+```
+
+### backchannel_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 971,
+  &quot;user_final_count&quot;: 1,
+  &quot;agent_message_count&quot;: 0,
+  &quot;audio_bytes&quot;: 0,
+  &quot;cleared_segments&quot;: 0,
+  &quot;llm_call_count&quot;: null
+}
+```
+</pre>
+</body>
+</html>

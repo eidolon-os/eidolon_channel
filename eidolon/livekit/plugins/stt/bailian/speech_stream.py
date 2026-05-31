@@ -38,9 +38,6 @@ from .models import (
 
 from livekit.agents import APIError
 from livekit.agents import stt as lk_stt
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
-from livekit.agents.stt.stt import RecognizeStream
-from livekit.agents.utils import aio
 
 if TYPE_CHECKING:
     from livekit.agents.types import APIConnectOptions
@@ -116,6 +113,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._last_interim_text: str = ""
         self._finished: bool = False
         self._conn: "BailianConnectionManager | None" = None
+        self._stream_id = f"bailian-{id(self):x}"
+        self._first_audio_sent = False
+        self._first_partial_seen = False
+        self._first_final_seen = False
+        self._turn_audio_observation: dict[str, Any] | None = None
         # G7 (2026-05-17): track recv_loop errors so we can re-raise from
         # _run() and let the framework's RecognizeStream._main_task retry
         # mechanism kick in. Without this, an unexpected WS close exits
@@ -173,9 +175,18 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         if gate_enabled:
             from ._gate import SttGate
 
+            async def _send_audio_with_event(data: bytes) -> None:
+                self._emit_provider_event_once(
+                    "stt_first_audio_sent",
+                    "_first_audio_sent",
+                    bytes=len(data),
+                )
+                self._emit_turn_first_audio_if_needed(bytes_len=len(data))
+                await conn.send_audio(data)
+
             self._gate = SttGate(
                 sample_rate=self._sample_rate,
-                sender=conn.send_audio,
+                sender=_send_audio_with_event,
                 preroll_ms=gate_cfg.gate_preroll_ms,
                 tail_window_ms=gate_cfg.gate_tail_window_ms,
                 keepalive_interval_sec=gate_cfg.gate_keepalive_interval_sec,
@@ -199,6 +210,15 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         else:
             self._gate = None
 
+        async def send_audio(data: bytes) -> None:
+            self._emit_provider_event_once(
+                "stt_first_audio_sent",
+                "_first_audio_sent",
+                bytes=len(data),
+            )
+            self._emit_turn_first_audio_if_needed(bytes_len=len(data))
+            await conn.send_audio(data)
+
         async def send_loop() -> None:
             frames_sent = 0
             logger.info("[Bailian STT] send_loop started")
@@ -219,7 +239,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                             flushed_bytes += len(d)
                             # G16: flush bypasses the gate — at stream end we
                             # want every last byte sent regardless of VAD.
-                            await conn.send_audio(d)
+                            await send_audio(d)
                         logger.info(
                             "[Bailian STT] flush sentinel received — flushed %d audio chunks "
                             "(%d bytes), calling finish()",
@@ -227,6 +247,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                             flushed_bytes,
                         )
                         await conn.finish()
+                        self._emit_provider_event(
+                            "stt_flush_sent",
+                            flushed_chunks=len(remaining),
+                            flushed_bytes=flushed_bytes,
+                        )
                         break
 
                     frame: rtc.AudioFrame = item
@@ -239,7 +264,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                         if self._gate is not None:
                             await self._gate.feed(chunk_bytes)
                         else:
-                            await conn.send_audio(chunk_bytes)
+                            await send_audio(chunk_bytes)
                         frames_sent += 1
                     # Only log every 50 frames to avoid log spam
                     if frames_sent % 50 == 0:
@@ -296,6 +321,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                     self._recv_error = e
 
         try:
+            self._emit_provider_event("stt_stream_started")
             logger.info(
                 "[Bailian STT] _run: connecting to %s model=%s sample_rate=%d",
                 self._stt_ref.api_url,
@@ -303,22 +329,32 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                 self._sample_rate,
             )
             await conn.connect()
+            self._emit_provider_event("stt_ws_connected")
             send_task = asyncio.create_task(send_loop())
             recv_task = asyncio.create_task(recv_loop())
 
-            logger.info(
-                "[Bailian STT] _run: send_loop + recv_loop started, waiting for completion..."
-            )
-            done, pending = await asyncio.wait(
-                [send_task, recv_task],
-                return_when=asyncio.ALL_COMPLETED,
-            )
-            for t in pending:
-                t.cancel()
-                try:
-                    await t
-                except asyncio.CancelledError:
-                    pass
+            logger.info("[Bailian STT] _run: send_loop + recv_loop started")
+            pending: set[asyncio.Task[None]] = {send_task, recv_task}
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    await task
+
+                if recv_task in done:
+                    # In a streaming session the input side may stay open
+                    # indefinitely. If the server-side read loop ended first,
+                    # cancel the writer so recv errors can surface immediately.
+                    if send_task in pending:
+                        send_task.cancel()
+                        try:
+                            await send_task
+                        except asyncio.CancelledError:
+                            pass
+                        pending.discard(send_task)
+                    break
             logger.info("[Bailian STT] _run: both loops completed")
 
         except BailianConnectionError as e:
@@ -436,6 +472,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             return
 
         if latest.sentence_end:
+            self._emit_provider_event_once(
+                "stt_provider_final",
+                "_first_final_seen",
+                text_preview=text[:80],
+            )
             self._parser_confirmed.append(latest)
             confirmed_text = "".join(s.text for s in self._parser_confirmed)
             logger.debug("[STT-DBG] FINAL confirmed_text=%r", confirmed_text)
@@ -470,6 +511,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             self._parser_confirmed.clear()
         else:
             if text != self._last_interim_text:
+                self._emit_provider_event_once(
+                    "stt_provider_first_partial",
+                    "_first_partial_seen",
+                    text_preview=text[:80],
+                )
                 self._last_interim_text = text
                 logger.debug("[STT-DBG] INTERIM text=%r", text)
                 logger.info(
@@ -534,6 +580,48 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             self._event_ch.send_nowait(event)  # type: ignore[attr-defined]
         except asyncio.QueueFull:
             logger.warning("SpeechStream event queue full, dropping event")
+
+    def _emit_provider_event(self, name: str, **payload: Any) -> None:
+        self._stt_ref.emit_provider_event(
+            name,
+            stream_id=self._stream_id,
+            language=self._language,
+            **payload,
+        )
+
+    def _emit_provider_event_once(
+        self,
+        name: str,
+        flag_name: str,
+        **payload: Any,
+    ) -> None:
+        if getattr(self, flag_name):
+            return
+        setattr(self, flag_name, True)
+        self._emit_provider_event(name, **payload)
+
+    def observe_next_audio_for_turn(
+        self,
+        *,
+        turn_id: str,
+        speech_started_at: float,
+    ) -> None:
+        self._turn_audio_observation = {
+            "turn_id": turn_id,
+            "speech_started_at": speech_started_at,
+        }
+
+    def _emit_turn_first_audio_if_needed(self, *, bytes_len: int) -> None:
+        observation = self._turn_audio_observation
+        if observation is None:
+            return
+        self._turn_audio_observation = None
+        self._emit_provider_event(
+            "stt_turn_first_audio_sent",
+            turn_id=observation["turn_id"],
+            speech_started_at=observation["speech_started_at"],
+            bytes=bytes_len,
+        )
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         from livekit.agents.stt import STTError

@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Voice Benchmark baseline-smoke-2</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 32px; }
+    pre { white-space: pre-wrap; background: #f7f7f8; padding: 16px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <pre># Voice Benchmark Report: baseline-smoke-2
+
+- runner: `policy`
+- profile: `balanced_semantic`
+- git_sha: `43f0302`
+- pass_rate: `5/5`
+
+## Metric Summary
+
+| metric | p50 | p95 | max | count |
+| --- | ---: | ---: | ---: | ---: |
+| correction_hint | 0.0 | 0.8 | 1.0 | 5 |
+| elapsed_ms | 0.0 | 0.0 | 0.0 | 5 |
+| interrupt_decision_ms | 80.0 | 80.0 | 80.0 | 4 |
+| topic_switch_hint | 0.0 | 0.8 | 1.0 | 5 |
+
+## Cases
+
+### normal_single_turn_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 0,
+  &quot;interrupt_decision_ms&quot;: null,
+  &quot;expected_action&quot;: &quot;none&quot;,
+  &quot;actual_action&quot;: &quot;none&quot;,
+  &quot;expected_intent&quot;: &quot;uncertain&quot;,
+  &quot;actual_intent&quot;: &quot;uncertain&quot;,
+  &quot;topic_switch_hint&quot;: false,
+  &quot;correction_hint&quot;: false
+}
+```
+
+### hard_interrupt_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 0,
+  &quot;interrupt_decision_ms&quot;: 80,
+  &quot;expected_action&quot;: &quot;cancel&quot;,
+  &quot;actual_action&quot;: &quot;cancel&quot;,
+  &quot;expected_intent&quot;: &quot;hard_stop&quot;,
+  &quot;actual_intent&quot;: &quot;hard_stop&quot;,
+  &quot;topic_switch_hint&quot;: false,
+  &quot;correction_hint&quot;: false
+}
+```
+
+### topic_switch_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 0,
+  &quot;interrupt_decision_ms&quot;: 80,
+  &quot;expected_action&quot;: &quot;cancel&quot;,
+  &quot;actual_action&quot;: &quot;cancel&quot;,
+  &quot;expected_intent&quot;: &quot;topic_switch&quot;,
+  &quot;actual_intent&quot;: &quot;topic_switch&quot;,
+  &quot;topic_switch_hint&quot;: true,
+  &quot;correction_hint&quot;: false
+}
+```
+
+### correction_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 0,
+  &quot;interrupt_decision_ms&quot;: 80,
+  &quot;expected_action&quot;: &quot;cancel&quot;,
+  &quot;actual_action&quot;: &quot;cancel&quot;,
+  &quot;expected_intent&quot;: &quot;correction&quot;,
+  &quot;actual_intent&quot;: &quot;correction&quot;,
+  &quot;topic_switch_hint&quot;: false,
+  &quot;correction_hint&quot;: true
+}
+```
+
+### backchannel_001 - PASS
+
+```json
+{
+  &quot;elapsed_ms&quot;: 0,
+  &quot;interrupt_decision_ms&quot;: 80,
+  &quot;expected_action&quot;: &quot;rollback&quot;,
+  &quot;actual_action&quot;: &quot;rollback&quot;,
+  &quot;expected_intent&quot;: &quot;backchannel&quot;,
+  &quot;actual_intent&quot;: &quot;backchannel&quot;,
+  &quot;topic_switch_hint&quot;: false,
+  &quot;correction_hint&quot;: false
+}
+```
+</pre>
+</body>
+</html>

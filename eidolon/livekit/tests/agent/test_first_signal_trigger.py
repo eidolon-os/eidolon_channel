@@ -7,12 +7,12 @@ Unit tests for the two new behaviours in StreamingPipeline:
      immediate cancel — bypassing the slower EOT score path.
 
   2. In ``_duck_suspend_timeout_fallback``, when the timeout fires while
-     VAD is still active, the resolution is CANCEL (trust VAD) rather
-     than unduck. The user is clearly still speaking; brief unduck would
-     yo-yo the audio.
+     VAD is still active, the resolution depends on transcript evidence:
+     without transcript it holds the suspended output, with transcript it
+     confirms the interrupt.
 
-Together these limit worst-case interrupt latency to ``duck_suspend_timeout_sec``
-(now 0.5s default) without compromising real-interrupt correctness.
+Together these keep real interrupts responsive while avoiding transcript-free
+timeout cancels that are too aggressive in WebSocket streaming STT flows.
 """
 
 from __future__ import annotations
@@ -149,21 +149,44 @@ def test_first_signal_strips_punctuation() -> None:
     pipeline._duck_mixer.cancel.assert_not_called()
 
 
+def test_fallback_semantic_correction_cancels_after_late_interim() -> None:
+    """Late STT text after VAD-end still drives semantic turn control."""
+    pipeline = _make_pipeline(vad_user_state="listening")
+    pipeline._duck_mixer.state = "NORMAL"
+
+    pipeline._run_eot_check("我刚才说错了", is_final=False)
+
+    pipeline._duck_mixer.cancel.assert_called_once()
+    pipeline._interrupt_current_turn.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
-# 2. timeout-fallback: VAD-still-active → cancel
+# 2. timeout-fallback
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_timeout_with_vad_still_active_cancels() -> None:
-    """G18a: at the 0.5s deadline, if user is still speaking VAD-wise,
-    trust VAD and cancel (rather than unducking and praying)."""
+async def test_timeout_with_vad_still_active_without_transcript_holds() -> None:
+    """At the decision deadline, VAD alone is not enough evidence to cancel."""
     pipeline = _make_pipeline(vad_user_state="speaking")
     pipeline._cancel_duck_timeout = MagicMock()
 
     await pipeline._duck_suspend_timeout_fallback(0.01)
 
-    # Should have called cancel path, not unduck
+    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._duck_mixer.unduck.assert_not_called()
+    pipeline._interrupt_current_turn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_timeout_with_vad_still_active_and_transcript_cancels() -> None:
+    """If streaming STT has produced text by the deadline, timeout can confirm."""
+    pipeline = _make_pipeline(vad_user_state="speaking")
+    pipeline._latest_asr_text = "等一下"
+    pipeline._cancel_duck_timeout = MagicMock()
+
+    await pipeline._duck_suspend_timeout_fallback(0.01)
+
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._duck_mixer.unduck.assert_not_called()
     pipeline._interrupt_current_turn.assert_called_once()
@@ -205,7 +228,7 @@ def test_turn_policy_decision_ms_maps_to_eot_timeout() -> None:
     """``turn_policy.interrupt.decision_timeout_ms`` feeds the EOT timeout."""
     from dataclasses import replace
 
-    from eidolon.livekit.agent.streaming import _eot_kwargs_from_turn_policy
+    from eidolon.livekit.agent.turn_policy import eot_kwargs_from_turn_policy
     from eidolon.livekit.common.config import InterruptPolicyConfig, TurnPolicyConfig
 
     policy = replace(
@@ -213,7 +236,9 @@ def test_turn_policy_decision_ms_maps_to_eot_timeout() -> None:
         interrupt=replace(InterruptPolicyConfig(), decision_timeout_ms=750),
     )
 
-    assert _eot_kwargs_from_turn_policy(policy)["duck_suspend_timeout_sec"] == pytest.approx(0.75)
+    assert eot_kwargs_from_turn_policy(policy)[
+        "duck_suspend_timeout_sec"
+    ] == pytest.approx(0.75)
 
 
 def test_fast_profile_has_shorter_decision_budget() -> None:

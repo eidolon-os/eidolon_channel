@@ -159,6 +159,30 @@ class TestBatchPipeline:
         assert blob == b"\x01\x02\x03\x04\x05\x06\x07\x08"
 
 
+class TestSttStage:
+    @pytest.mark.asyncio
+    async def test_recognize_streaming_returns_on_end_of_speech(self):
+        from eidolon.livekit.agent.pipeline.stt import SttStage
+        from eidolon.livekit.tests._harness.mocks import (
+            MockSTT,
+            ScriptedTranscript,
+        )
+
+        pcm = make_pcm_frame(duration_ms=300)
+        stt = MockSTT.scripted(
+            [ScriptedTranscript(text="你好", after_pcm_bytes=len(pcm))]
+        )
+        stage = SttStage(stt)
+
+        transcript = await asyncio.wait_for(
+            stage.recognize_streaming(pcm),
+            timeout=1.0,
+        )
+
+        assert transcript == "你好"
+        assert stt.bytes_pushed == len(pcm)
+
+
 # ---------------------------------------------------------------------------
 # Test: BasePipeline shared behavior
 # ---------------------------------------------------------------------------

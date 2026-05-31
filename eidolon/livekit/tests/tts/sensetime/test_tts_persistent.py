@@ -28,14 +28,14 @@ _root = Path(__file__).resolve().parents[5]
 if str(_root) not in os.environ.get("PYTHONPATH", "").split(os.pathsep):
     os.environ["PYTHONPATH"] = str(_root) + os.pathsep + os.environ.get("PYTHONPATH", "")
 
-from livekit import rtc
+from livekit import rtc  # noqa: E402
 
-from eidolon.livekit.plugins.tts.sensetime import (
+from eidolon.livekit.plugins.tts.sensetime import (  # noqa: E402
     SenseTimeTTS,
     SenseTimeTTSConfig,
     SenseTimeTTSError,
 )
-from eidolon.livekit.plugins.tts.sensetime.tts_client import (
+from eidolon.livekit.plugins.tts.sensetime.tts_client import (  # noqa: E402
     TTSConnection,
 )
 
@@ -1258,7 +1258,7 @@ class TestEventDrivenExit:
         app.router.add_get("/ws", silent_handler)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "localhost", 0)
+        site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         await asyncio.sleep(0.05)

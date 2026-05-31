@@ -328,6 +328,28 @@ first-flush makes the first spoken segment short — a prosody/UX trade, raise t
 first-sentence dials if needed. Residual floor: TTS provider synthesis
 (~500–600ms TTFB), which needs a faster provider path, not channel tuning.
 
+### Preemptive on/off A/B — default OFF (2026-05-31)
+
+Same session, back-to-back, eos=400 fixed, only `turn_policy.preemptive.enabled`
+toggled (`--repeat 12` each):
+
+| arm | commit→first_audio p50/p95 | preemptive trig/reuse/discard |
+| --- | ---: | --- |
+| preemptive OFF | 725 / 880 | — |
+| preemptive ON | 736 / 847 | 15 / 11 / 4 (waste 27%) |
+
+The two are identical within noise (n≈12) — **preemptive adds no measurable
+first-audio benefit once eos is low**, because the fast FINAL (~96ms after
+commit) leaves nothing to overlap. Meanwhile it wastes 27–58% of speculative
+brain turns (clean cancels, but real upstream load). eos=400 and preemption are
+overlapping levers; lowering eos already captured the win, so preemption is
+**now default OFF** (`PreemptivePolicyConfig.enabled=False`). The machinery
+(STT PREFLIGHT, config gate, reuse/waste instrumentation) stays available —
+enable it only for deployments forced to keep a high endpointing silence (slow
+FINAL), where the overlap pays off. Earlier attempt to cut the waste by raising
+the stability window (320→550ms) backfired (waste 58→69%): a window longer than
+the eos silence overshoots the FINAL.
+
 ## Short-Term Targets
 
 ```text

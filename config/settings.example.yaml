@@ -63,7 +63,9 @@ turn_policy:
   idle:
     followup_timeout_ms: 15000
   preemptive:
-    enabled: true
+    # Default off — A/B showed no first-audio gain with low eos (see docs).
+    # Enable for high-endpointing-silence (slow FINAL) deployments.
+    enabled: false
     preemptive_tts: false
 
 observability:

@@ -139,9 +139,16 @@ class PreemptivePolicyConfig:
     the framework reuses it if the final transcript matches, else cancels via
     our gRPC CancelTurn. ``preemptive_tts`` keeps output gated by our commit
     when False (no partial-audio leak); only the LLM is pre-warmed.
+
+    Default OFF: a real-room A/B (2026-05-31) showed it adds no measurable
+    first-audio benefit once ``bailian_stt.max_sentence_silence_ms`` is low
+    (~400ms) — the fast FINAL leaves nothing to overlap — while still wasting
+    27-58% of speculative brain turns (clean cancels, but real upstream load).
+    Enable it for deployments that must keep a high endpointing silence (slow
+    FINAL), where the overlap pays off.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     preemptive_tts: bool = False
 
 

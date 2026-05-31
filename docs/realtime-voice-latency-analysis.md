@@ -310,16 +310,23 @@ Then the TTS first-sentence flush (`aggregator_first_sentence_flush_any_punct`):
 sending the first TTS segment on an early prefix+punctuation instead of waiting
 for the 12-char soft-min cut it further to **759 p50 / 804 p95**.
 
-Net Phase 2: **commit→first_audio 1718 → 759ms p50 / 804 p95 (~56%)** — both now
-inside the industry top-tier *target* tier (p50 ≤800, p95 ≤1100), via STT
-PREFLIGHT (hide brain) + faster STT endpointing (cut FINAL wait) + TTS
-first-sentence flush. (n=5 indicative; run `--repeat 20` to harden the gate.)
-Caveats: eos=400 is aggressive for hesitant mid-utterance pauses, and the
-first-flush makes the first spoken segment short — validate both against
-varied/real audio; `max_sentence_silence` 500–600 and a larger first-sentence
-min are the conservative dials. Residual TTS provider TTFB (~500–600ms synthesis)
-is now the main floor; cutting it needs a faster provider path, not channel
-tuning.
+Net Phase 2: **commit→first_audio 1718 → 664ms p50 / 777 p95 (~61%)** over a
+hardened 20-repeat run (100 sessions, 5/5 / 0 flaky) — both inside the industry
+top-tier *target* tier (p50 ≤800, p95 ≤1100), via STT PREFLIGHT (hide brain) +
+faster STT endpointing (cut FINAL wait) + TTS first-sentence flush. The
+`commit_to_first_audio` SLO gate is now `required` (acceptable tier) and passes
+under `--enforce-slo`.
+
+eos safety — validated: a paused-speech probe (mid-clause pause 300/500/700ms)
+splits into two finals **identically at eos=400/600/800**, so `max_sentence_silence`
+does NOT control mid-utterance splitting (FunASR's internal ~300ms segmentation
+does) — it only governs trailing-silence finalization (the measured win).
+Lowering eos to 400 therefore does **not** introduce or worsen premature splits;
+it is safe vs the default 800. (Probe uses synthesized speech + digital silence;
+real-audio sign-off for filled-pause hesitation is still worthwhile.) The
+first-flush makes the first spoken segment short — a prosody/UX trade, raise the
+first-sentence dials if needed. Residual floor: TTS provider synthesis
+(~500–600ms TTFB), which needs a faster provider path, not channel tuning.
 
 ## Short-Term Targets
 

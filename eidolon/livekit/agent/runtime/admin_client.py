@@ -91,6 +91,17 @@ class ResolvedContext:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "ResolvedContext":
+        # Admin wraps the fields in ``{"context": {...}}`` (the
+        # ResolveUserResponse / ResolveDeviceResponse envelope —
+        # eidolon_admin_server/app/registry/schemas/resolve.py). Unwrap
+        # here so callers can hand us either shape without each having
+        # to know the envelope. Reaching ``data["context"]`` first means
+        # we read the right fields instead of silently building an
+        # all-empty ResolvedContext (Phase 32.B regression hunt 2026-06-03:
+        # blank user_id flowed through to JWT → agent → memory.search
+        # missed every recall).
+        if isinstance(data.get("context"), dict):
+            data = data["context"]
         return cls(
             tenant_id=str(data.get("tenant_id") or ""),
             user_id=str(data.get("user_id") or ""),

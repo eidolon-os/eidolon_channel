@@ -83,14 +83,35 @@ async def _resolve_context(
     metadata: dict[str, Any],
 ) -> ResolvedContext:
     """Dispatch to /api/resolve/user or /api/resolve/device based on
-    metadata.kind. If kind is missing (legacy ESP32 firmware that hub
-    hasn't updated yet, or non-standard caller), assume device — the
-    safer default since Phase 25's ESP32 flow had no metadata at all.
+    ``metadata.kind``.
+
+    Accepted values: ``user`` | ``device``. Anything else (including
+    empty / missing) currently defaults to ``device`` to preserve
+    backward compatibility with legacy ESP32 firmware that hub hasn't
+    yet been updated to tag with ``kind=device``. The fallback is
+    explicitly logged at WARNING so it shows up in ops monitoring
+    — Phase 32.D removes the fallback once all callers are confirmed
+    setting ``kind`` (then unknown ``kind`` should raise).
+
+    This is the only piece of "soft" routing we accept in 32.B; the
+    rest of the resolver fails loud on bad input.
     """
     kind = str(metadata.get("kind") or "").strip().lower()
     if kind == "user":
         return await admin.resolve_user(identity)
-    # Default to device for legacy + unknown — Phase 25 ESP32 path.
+    if kind == "device":
+        return await admin.resolve_device(identity)
+    # TODO(32.D): tighten — raise DeviceTokenResolverError once all
+    # callers are confirmed setting kind. Defaulting to device for
+    # now keeps Phase 25 esp32 firmware working without flash updates.
+    _log.warning(
+        "runtime_admin resolver: participant.metadata.kind missing or "
+        "unknown (%r) for identity=%r — defaulting to /api/resolve/device. "
+        "All clients should set kind=user|device; remove this fallback "
+        "in Phase 32.D after the deployment confirms metadata coverage.",
+        kind,
+        identity,
+    )
     return await admin.resolve_device(identity)
 
 

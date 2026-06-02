@@ -91,20 +91,40 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     admin.resolve_user.assert_not_called()
 
 
-async def test_resolver_defaults_to_device_when_metadata_missing():
-    """Legacy ESP32 firmware sends NO metadata. Resolver assumes device
-    (the Phase 25 path) — preserves backward compat without forcing a
-    firmware update."""
+async def test_resolver_raises_when_metadata_missing_kind():
+    """Phase 33.A5 tightening: no silent device-fallback for missing
+    or unknown ``kind``. Both supported clients (hub web + esp32) now
+    tag kind explicitly (32.A / 32.B follow-up). A participant with no
+    ``kind`` is a misconfigured / pre-32-era client — surface it
+    loudly rather than guess."""
+    from eidolon.livekit.agent.runtime.resolver import DeviceTokenResolverError
+
     admin = _fake_admin()
-    admin.resolve_device.return_value = ResolvedContext(
-        "default", "u", "ag", "t", "http://x", "old-esp"
-    )
     room = _room_with(_participant("old-esp", metadata=""))
     resolve = make_device_token_resolver(
         room=room, admin=admin, jwt_secret="s",
     )
-    await resolve()
-    admin.resolve_device.assert_awaited_once_with("old-esp")
+    with pytest.raises(DeviceTokenResolverError) as exc_info:
+        await resolve()
+    # message mentions the missing-kind problem so ops can grep it
+    assert "kind" in str(exc_info.value)
+    admin.resolve_user.assert_not_called()
+    admin.resolve_device.assert_not_called()
+
+
+async def test_resolver_raises_when_kind_unknown():
+    """Same strictness for ``kind=anonymous`` or other bogus values."""
+    from eidolon.livekit.agent.runtime.resolver import DeviceTokenResolverError
+
+    admin = _fake_admin()
+    room = _room_with(_participant("x", '{"kind": "anonymous"}'))
+    resolve = make_device_token_resolver(
+        room=room, admin=admin, jwt_secret="s",
+    )
+    with pytest.raises(DeviceTokenResolverError):
+        await resolve()
+    admin.resolve_user.assert_not_called()
+    admin.resolve_device.assert_not_called()
 
 
 async def test_resolver_caches_token_across_calls():

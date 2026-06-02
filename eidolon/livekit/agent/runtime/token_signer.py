@@ -38,7 +38,26 @@ def resolve_shared_secret(env_value: str = "") -> str:
     argument, ``~/eidolon/run/jwt-secret`` file, empty string.
 
     Returning an empty string is intentional — callers (factory) decide
-    whether to hard-fail or fall back to the legacy static token path.
+    whether to hard-fail. After Phase 32.D there's no legacy fallback.
+
+    **Hot-reload semantics** (Phase 33.B2): this function reads the
+    file on every call. ``factory._build_device_token_source`` invokes
+    it once per LK job (= once per voice session). The result is then
+    captured in the resolver closure for that session's lifetime.
+
+    Implication:
+      * Rotating the secret file → next session uses new secret ✓
+      * Active session in progress at rotate-time → keeps using old
+        secret until session ends (LK reconnect / hang up). Active
+        token retains validity until ``exp``, which is fine because
+        agent's verifier also uses the SAME secret in-memory until
+        agent restart. Mismatch only matters across the agent↔channel
+        seam; while the file is consistent, both sides read it
+        identically.
+
+    To force ALL sessions onto a new secret immediately: rotate the
+    file, then restart agent + channel together (or use a token
+    revocation pass — Phase 33.B1).
     """
     val = env_value.strip()
     if val:

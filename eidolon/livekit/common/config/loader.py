@@ -206,9 +206,11 @@ def load_effective_config() -> EffectiveAgentConfig:
         remote_agent_rpc=RemoteAgentRpcConfig(
             target=str(rpc_y.get("target") or "").strip(),
             locale=str(rpc_y.get("locale") or "zh").strip() or "zh",
-            device_token=_secret(
-                rpc_y, "device_token", "REMOTE_AGENT_RPC_DEVICE_TOKEN"
-            ),
+            # Phase 32.D: device_token field removed; per-session token
+            # is signed by runtime_admin.resolver. If config/.env or
+            # settings.yaml still mentions the field, the loader silently
+            # ignores it — no deprecation warning needed because the
+            # field's gone from the dataclass.
             conversation_id_prefix=str(
                 rpc_y.get("conversation_id_prefix") or "livekit"
             ).strip()

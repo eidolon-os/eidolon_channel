@@ -57,14 +57,23 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class RemoteAgentRpcConfig:
+    """Static config for the gRPC channel to eidolon-agent.
+
+    ``device_token`` used to live here (Phase 25 era — channel signed
+    a single long-lived JWT into config/.env and used it for every
+    session). Phase 32.B introduced per-session token resolution via
+    admin's /api/resolve, and Phase 32.D (this commit) removed the
+    static fallback entirely. The runtime token now ALWAYS comes from
+    :class:`RuntimeAdminConfig` + the shared HMAC secret.
+
+    Reasoning: keeping a static fallback invited the "everyone is
+    alice" bug (the legacy token's payload pinned user_id=alice). 凡是
+    保留的 fallback 都会被某次匆忙的运维拿来用,然后忘了关。删掉
+    比记得关好。
+    """
+
     target: str = ""
     locale: str = "zh"
-    # ``device_token`` is the legacy static token (Phase 25 era). Phase
-    # 32.B replaced it with a per-session token resolver — see
-    # ``RuntimeAdminConfig`` below. Kept for now as a fallback path
-    # when the resolver is disabled / unreachable; Phase 32.D will
-    # remove it entirely once the resolver has been verified in prod.
-    device_token: str = ""
     conversation_id_prefix: str = "livekit"
     tls_mode: str = "off"
     tls_ca_path: str = ""

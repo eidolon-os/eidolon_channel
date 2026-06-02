@@ -41,50 +41,56 @@ def _build_device_token_source(
     cfg: "AgentConfig",
     livekit_room: "Any | None",
 ) -> "Any":
-    """Phase 32.B: pick a device_token source for the gRPC LLM.
+    """Build the per-session device-token resolver used by the gRPC LLM.
 
-    Returns one of:
-      - a zero-arg async callable (production / plan D) when
-        runtime_admin is enabled, has a usable secret, AND we hold a
-        LiveKit room ref to read participant identity from
-      - a static string (legacy Phase 25 fallback) otherwise — equal
-        to ``cfg.remote_agent_rpc.device_token``
+    Phase 32.D (this rewrite): the legacy static-token fallback is
+    gone. The only token source is the runtime resolver — which reads
+    ``participant.identity`` from the LiveKit room, dispatches to
+    admin's ``/api/resolve/{user|device}/{id}``, and signs a JWT with
+    the shared HMAC secret. If any prerequisite is missing (secret
+    absent, no room, runtime_admin disabled) we raise instead of
+    silently using "alice" — the operator must fix the config rather
+    than ship the wrong identity.
 
-    Always falls back gracefully rather than refusing to build: a
-    misconfigured runtime_admin block shouldn't take channel down,
-    operators get a clear warning in the log instead. Phase 32.D will
-    remove the static fallback once 32.B is verified.
+    Returns a zero-arg async callable (resolver). Raises ``RuntimeError``
+    when prerequisites are missing; the caller surfaces it through
+    log + session abort.
     """
     rt = cfg.runtime_admin
-    legacy = (cfg.remote_agent_rpc.device_token or "").strip()
 
     if not rt.enabled:
-        logger.info(
-            "[device_token] runtime_admin disabled → using legacy static "
-            "token from remote_agent_rpc.device_token"
+        # Pre-32.D, this branch returned a static legacy token. Now we
+        # refuse — the only way to disable runtime resolution is to
+        # rewrite the call site, which forces a code review.
+        raise RuntimeError(
+            "[device_token] runtime_admin.enabled=false but the static "
+            "fallback was removed in Phase 32.D. Set runtime_admin.enabled=true "
+            "and ensure PAIRING_JWT_SECRET (or ~/eidolon/run/jwt-secret) "
+            "is reachable."
         )
-        return legacy
 
     # Resolve secret: env (loaded via _secret() at config time) →
     # ~/eidolon/run/jwt-secret (shared with eidolon-agent).
     from eidolon.livekit.agent.runtime.token_signer import resolve_shared_secret
     secret = resolve_shared_secret(rt.jwt_secret)
     if not secret:
-        logger.warning(
+        raise RuntimeError(
             "[device_token] PAIRING_JWT_SECRET empty and "
-            "~/eidolon/run/jwt-secret missing — falling back to legacy "
-            "static token. Start eidolon-agent once so it persists the "
-            "secret, or set the env var explicitly."
+            "~/eidolon/run/jwt-secret missing. Start eidolon-agent once "
+            "so it persists the secret, or set the env var explicitly."
         )
-        return legacy
 
     if livekit_room is None:
-        logger.warning(
-            "[device_token] runtime_admin enabled but no LiveKit room "
-            "reference — falling back to legacy static token. (This path "
-            "is mostly hit by tests; production passes livekit_room.)"
+        # In production server.run_agent always passes ``ctx.room``,
+        # so this is a test-path guard. Tests that exercise the full
+        # gRPC LLM should use the resolver test doubles in
+        # eidolon/livekit/tests/agent/runtime/ instead of building the
+        # factory directly.
+        raise RuntimeError(
+            "[device_token] livekit_room is None — required to read "
+            "participant identity. Pass ``livekit_room=ctx.room`` from "
+            "the agent entrypoint."
         )
-        return legacy
 
     # Build the resolver. The httpx client lives for the resolver's
     # lifetime — same lifetime as the LLM, which is the LK job. We
@@ -246,11 +252,10 @@ class SharedStageFactory:
                 client_key_path=cfg.remote_agent_rpc.tls_client_key_path,
             )
 
-            # Phase 32.B: pick the device_token source.
-            #   * runtime_admin.enabled + room ref + secret resolvable
-            #     → per-session resolver (production / plan D)
-            #   * else: static cfg.remote_agent_rpc.device_token
-            #     (legacy fallback, will be deleted in 32.D)
+            # Phase 32.D: device_token is always the per-session resolver
+            # (the static fallback was deleted). _build_device_token_source
+            # raises RuntimeError if prerequisites are missing — operator
+            # sees a clear failure rather than silently chatting as "alice".
             device_token_source = _build_device_token_source(
                 cfg=cfg, livekit_room=livekit_room
             )
@@ -264,11 +269,10 @@ class SharedStageFactory:
             )
             logger.info(
                 "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r "
-                "conversation_id=%s tls_mode=%s device_token=%s",
+                "conversation_id=%s tls_mode=%s device_token=<resolver>",
                 cfg.remote_agent_rpc.target,
                 log_cid_descr,
                 cfg.remote_agent_rpc.tls_mode,
-                "<resolver>" if callable(device_token_source) else "<static>",
             )
         else:
             llm = cls._build_llm(cfg)

@@ -32,8 +32,8 @@ providers:
 remote_agent_rpc:
   target: 127.0.0.1:45051
   locale: zh
-  # Phase 25 静态 token,Phase 32.B 后改为 fallback;32.D 会删。
-  device_token: REMOTE_AGENT_RPC_DEVICE_TOKEN
+  # Phase 32.D 删了 device_token —— per-session 签发由下面的
+  # runtime_admin 块统一处理。
   conversation_id_prefix: livekit
 
 # Phase 32.B: per-session token via admin /api/resolve. jwt_secret 共享

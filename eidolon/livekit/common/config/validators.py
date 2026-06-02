@@ -36,8 +36,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     else:
         if not cfg.remote_agent_rpc.target:
             errors.append("remote_agent_rpc.target is required for eidolon_agent")
-        if not cfg.remote_agent_rpc.device_token:
-            errors.append("remote_agent_rpc.device_token is required for eidolon_agent")
+        # Phase 32.D: device_token check moved out — token signing
+        # belongs to runtime_admin now. server.run() does the
+        # PAIRING_JWT_SECRET-or-file check at startup; here we only
+        # require the gRPC target so this validator stays infrastructure-
+        # focused (vs runtime-secret-focused).
 
     vad = cfg.turn_policy.vad
     if not 0.0 < vad.activation_threshold < 1.0:

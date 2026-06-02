@@ -12,6 +12,12 @@ is empty).
 If you change the payload here, also change it in
 ``eidolon_agent/app/transport/pairing/token.py`` — and bump tests on
 both sides.
+
+**Drift sentinel** (Phase 33.A1): the cross-project contract is pinned
+by ``eidolon_admin/server/tests/test_runtime_token_contract.py``. That
+test loads THIS file and agent's verifier, signs+verifies, and asserts
+every field round-trips. If you break it, CI fails before the runtime
+breaks.
 """
 
 from __future__ import annotations

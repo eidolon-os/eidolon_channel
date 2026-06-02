@@ -125,6 +125,31 @@ def make_device_token_resolver(
     call — one admin lookup + one signing op per LK session, regardless
     of how many chat() turns happen. If the first call fails, the next
     one retries (we don't cache failures).
+
+    **Identity changes mid-session are NOT re-resolved.**
+
+    Once a session's first turn has bound the token to ``(user_id,
+    agent_id, tenant_id)``, that binding is sticky for the remainder of
+    the LiveKit room — even if the participant updates their metadata
+    or the operator switches the user's ``active_agent`` from the admin
+    UI. The reasons for "sticky" being the right default:
+
+      - LiveKit sessions are short-lived (a single conversation turn
+        sequence). Refreshing the token mid-turn would split an
+        audio/text stream between two different agent backends.
+      - Admin's ``set_active_agent`` semantics: switching ``active``
+        affects *future* sessions, not in-flight ones. This matches
+        what operators expect — the admin UI hint in Phase 33.B4 makes
+        that contract visible.
+      - Hot-rotating mid-session would require revalidating cached
+        prompts, memory threads, and audio context — a separate (and
+        much larger) feature. The escape hatch today is to revoke the
+        user's sessions (POST ``/api/admin/users/{id}/revoke-sessions``
+        in agent, see Phase 33.B1) which forces a reconnect.
+
+    If you need the new identity to take effect *now*: end the session
+    (close the LK room) and start a new one. The token will be
+    re-resolved on the next chat() call's first invocation.
     """
     cache: dict[str, str] = {}
 

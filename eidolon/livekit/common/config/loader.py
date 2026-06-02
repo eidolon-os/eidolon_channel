@@ -21,6 +21,7 @@ from .schema import (
     ObservabilityConfig,
     ProvidersConfig,
     RemoteAgentRpcConfig,
+    RuntimeAdminConfig,
     SenseTimeSTTConfig,
     SenseTimeTTSConfig,
     TurnPolicyConfig,
@@ -163,6 +164,7 @@ def load_effective_config() -> EffectiveAgentConfig:
     providers_y = _section(y, "providers")
     llm_y = _section(y, "llm")
     rpc_y = _section(y, "remote_agent_rpc")
+    rt_admin_y = _section(y, "runtime_admin")
     turn_y = _section(y, "turn_policy")
     obs_y = _section(y, "observability")
     bailian_stt_y = _section(y, "bailian_stt")
@@ -215,6 +217,19 @@ def load_effective_config() -> EffectiveAgentConfig:
             tls_ca_path=str(rpc_y.get("tls_ca_path") or "").strip(),
             tls_client_cert_path=str(rpc_y.get("tls_client_cert_path") or "").strip(),
             tls_client_key_path=str(rpc_y.get("tls_client_key_path") or "").strip(),
+        ),
+        runtime_admin=RuntimeAdminConfig(
+            enabled=bool(rt_admin_y.get("enabled", True)),
+            admin_api_url=str(
+                rt_admin_y.get("admin_api_url") or "http://127.0.0.1:9000"
+            ).strip(),
+            jwt_secret=_secret(
+                rt_admin_y, "jwt_secret", "PAIRING_JWT_SECRET"
+            ),
+            jwt_algorithm=str(rt_admin_y.get("jwt_algorithm") or "HS256").strip(),
+            device_token_ttl_seconds=int(
+                rt_admin_y.get("device_token_ttl_seconds") or 24 * 3600
+            ),
         ),
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),

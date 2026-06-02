@@ -248,8 +248,24 @@ def _validate_config(cfg: AgentConfig) -> None:
     else:
         if not cfg.remote_agent_rpc.target:
             errors.append("REMOTE_AGENT_RPC target is not set")
-        if not cfg.remote_agent_rpc.device_token:
-            errors.append("REMOTE_AGENT_RPC device_token is not set")
+        # Phase 32.B: either path must produce a usable token:
+        #   - runtime_admin.enabled + secret available (env or shared file)
+        #   - remote_agent_rpc.device_token (legacy static)
+        # If both empty, factory will refuse to open the gRPC session at
+        # first chat() — but we fail loud here at startup instead.
+        rt_admin_ok = (
+            cfg.runtime_admin.enabled
+            and (
+                cfg.runtime_admin.jwt_secret
+                or Path("~/eidolon/run/jwt-secret").expanduser().is_file()
+            )
+        )
+        if not rt_admin_ok and not cfg.remote_agent_rpc.device_token:
+            errors.append(
+                "no device_token source available: enable runtime_admin "
+                "(needs PAIRING_JWT_SECRET or ~/eidolon/run/jwt-secret) "
+                "or set REMOTE_AGENT_RPC_DEVICE_TOKEN in .env (legacy)"
+            )
     if not cfg.providers.stt_provider:
         errors.append("STT_PROVIDER is not set")
     if not cfg.providers.tts_provider:

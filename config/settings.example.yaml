@@ -32,8 +32,18 @@ providers:
 remote_agent_rpc:
   target: 127.0.0.1:45051
   locale: zh
+  # Phase 25 静态 token,Phase 32.B 后改为 fallback;32.D 会删。
   device_token: REMOTE_AGENT_RPC_DEVICE_TOKEN
   conversation_id_prefix: livekit
+
+# Phase 32.B: per-session token via admin /api/resolve. jwt_secret 共享
+# eidolon-agent (env PAIRING_JWT_SECRET, fallback ~/eidolon/run/jwt-secret).
+runtime_admin:
+  enabled: true
+  admin_api_url: http://127.0.0.1:9000
+  jwt_secret: PAIRING_JWT_SECRET
+  jwt_algorithm: HS256
+  device_token_ttl_seconds: 86400
 
 turn_policy:
   profile: balanced_semantic

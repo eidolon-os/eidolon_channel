@@ -36,6 +36,80 @@ from .pipeline.vad import VadStage
 logger = logging.getLogger("agent")
 
 
+def _build_device_token_source(
+    *,
+    cfg: "AgentConfig",
+    livekit_room: "Any | None",
+) -> "Any":
+    """Phase 32.B: pick a device_token source for the gRPC LLM.
+
+    Returns one of:
+      - a zero-arg async callable (production / plan D) when
+        runtime_admin is enabled, has a usable secret, AND we hold a
+        LiveKit room ref to read participant identity from
+      - a static string (legacy Phase 25 fallback) otherwise — equal
+        to ``cfg.remote_agent_rpc.device_token``
+
+    Always falls back gracefully rather than refusing to build: a
+    misconfigured runtime_admin block shouldn't take channel down,
+    operators get a clear warning in the log instead. Phase 32.D will
+    remove the static fallback once 32.B is verified.
+    """
+    rt = cfg.runtime_admin
+    legacy = (cfg.remote_agent_rpc.device_token or "").strip()
+
+    if not rt.enabled:
+        logger.info(
+            "[device_token] runtime_admin disabled → using legacy static "
+            "token from remote_agent_rpc.device_token"
+        )
+        return legacy
+
+    # Resolve secret: env (loaded via _secret() at config time) →
+    # ~/eidolon/run/jwt-secret (shared with eidolon-agent).
+    from eidolon.livekit.agent.runtime.token_signer import resolve_shared_secret
+    secret = resolve_shared_secret(rt.jwt_secret)
+    if not secret:
+        logger.warning(
+            "[device_token] PAIRING_JWT_SECRET empty and "
+            "~/eidolon/run/jwt-secret missing — falling back to legacy "
+            "static token. Start eidolon-agent once so it persists the "
+            "secret, or set the env var explicitly."
+        )
+        return legacy
+
+    if livekit_room is None:
+        logger.warning(
+            "[device_token] runtime_admin enabled but no LiveKit room "
+            "reference — falling back to legacy static token. (This path "
+            "is mostly hit by tests; production passes livekit_room.)"
+        )
+        return legacy
+
+    # Build the resolver. The httpx client lives for the resolver's
+    # lifetime — same lifetime as the LLM, which is the LK job. We
+    # close it lazily; one channel-worker handles one job at a time
+    # so leaks are bounded.
+    import httpx
+    from eidolon.livekit.agent.runtime import (
+        AdminResolveClient,
+        make_device_token_resolver,
+    )
+
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0, connect=3.0),
+        trust_env=False,  # avoid macOS Clash :7890 hijacking loopback
+    )
+    admin = AdminResolveClient(http_client, rt.admin_api_url)
+    return make_device_token_resolver(
+        room=livekit_room,
+        admin=admin,
+        jwt_secret=secret,
+        jwt_algorithm=rt.jwt_algorithm,
+        ttl_seconds=rt.device_token_ttl_seconds,
+    )
+
+
 class SharedStageFactory:
     """Constructs and owns shared stage instances for the voice pipeline.
 
@@ -171,18 +245,30 @@ class SharedStageFactory:
                 client_cert_path=cfg.remote_agent_rpc.tls_client_cert_path,
                 client_key_path=cfg.remote_agent_rpc.tls_client_key_path,
             )
+
+            # Phase 32.B: pick the device_token source.
+            #   * runtime_admin.enabled + room ref + secret resolvable
+            #     → per-session resolver (production / plan D)
+            #   * else: static cfg.remote_agent_rpc.device_token
+            #     (legacy fallback, will be deleted in 32.D)
+            device_token_source = _build_device_token_source(
+                cfg=cfg, livekit_room=livekit_room
+            )
+
             llm = EidolonAgentGrpcLlm(
                 target=cfg.remote_agent_rpc.target,
-                device_token=cfg.remote_agent_rpc.device_token,
+                device_token=device_token_source,
                 conversation_id=conversation_id,
                 display_model=cfg.llm.model or "eidolon_agent",
                 tls=tls,
             )
             logger.info(
-                "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r conversation_id=%s tls_mode=%s",
+                "[SharedStageFactory] using EidolonAgentGrpcLlm target=%r "
+                "conversation_id=%s tls_mode=%s device_token=%s",
                 cfg.remote_agent_rpc.target,
                 log_cid_descr,
                 cfg.remote_agent_rpc.tls_mode,
+                "<resolver>" if callable(device_token_source) else "<static>",
             )
         else:
             llm = cls._build_llm(cfg)

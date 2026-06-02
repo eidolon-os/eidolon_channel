@@ -59,12 +59,42 @@ class LLMConfig:
 class RemoteAgentRpcConfig:
     target: str = ""
     locale: str = "zh"
+    # ``device_token`` is the legacy static token (Phase 25 era). Phase
+    # 32.B replaced it with a per-session token resolver — see
+    # ``RuntimeAdminConfig`` below. Kept for now as a fallback path
+    # when the resolver is disabled / unreachable; Phase 32.D will
+    # remove it entirely once the resolver has been verified in prod.
     device_token: str = ""
     conversation_id_prefix: str = "livekit"
     tls_mode: str = "off"
     tls_ca_path: str = ""
     tls_client_cert_path: str = ""
     tls_client_key_path: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeAdminConfig:
+    """Phase 32.B: channel resolves participant identity → user / agent
+    / template by querying admin's ``/api/resolve`` aggregator, then
+    signs a device JWT using the shared HMAC secret.
+
+    ``enabled=false`` keeps the legacy code path (channel uses
+    ``remote_agent_rpc.device_token`` statically). Defaults to True on
+    fresh installs; set False if admin is down and you need channel to
+    still bring up demo sessions.
+
+    ``jwt_secret`` placeholder convention follows hub: the literal
+    string ``PAIRING_JWT_SECRET`` in YAML means "read the env var of
+    that name"; if both env and ~/eidolon/run/jwt-secret are empty,
+    the resolver fails loud and channel falls back to the legacy
+    static token (or refuses the session if that's also empty).
+    """
+
+    enabled: bool = True
+    admin_api_url: str = "http://127.0.0.1:9000"
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+    device_token_ttl_seconds: int = 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -177,6 +207,7 @@ class EffectiveAgentConfig:
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     remote_agent_rpc: RemoteAgentRpcConfig = field(default_factory=RemoteAgentRpcConfig)
+    runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
     turn_policy: TurnPolicyConfig = field(default_factory=TurnPolicyConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
 

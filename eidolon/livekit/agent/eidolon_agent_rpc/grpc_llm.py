@@ -12,9 +12,10 @@ without tearing it down.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Union
 
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
@@ -42,6 +43,15 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
+
+
+# Phase 32.B: ``device_token`` accepts either a static string (legacy
+# Phase 25 path, kept for fallback) or a zero-arg sync/async callable
+# that mints a fresh token per session. The resolver runs once at
+# ``_get_session`` time (first chat() call) — by then the LiveKit
+# participant has connected and we can read their identity from the
+# room. Cached for the LLM instance lifetime.
+DeviceTokenSource = Union[str, Callable[[], str], Callable[[], Awaitable[str]]]
 
 
 # Brain ERROR.code → LiveKit exception mapping (A4, plan Phase A).
@@ -99,7 +109,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self,
         *,
         target: str,
-        device_token: str,
+        device_token: DeviceTokenSource,
         conversation_id: str | Callable[[], str],
         display_model: str = "eidolon_agent",
         tls: TlsConfig | None = None,
@@ -115,19 +125,40 @@ class EidolonAgentGrpcLlm(llm.LLM):
             participants are only known after session.start() — strictly
             later than factory.from_config() runs.
 
+        ``device_token`` (Phase 32.B) accepts:
+          - a static string — legacy Phase 25 path (writes a fixed user_id
+            into agent's identity context). Kept as fallback only.
+          - a zero-arg sync OR async callable returning the token —
+            production path. Resolved once at first ``_get_session`` call
+            (which happens on first chat()) and cached. The resolver reads
+            ``participant.metadata`` for kind + identity, queries admin's
+            ``/api/resolve``, then signs a fresh JWT.
+
         D1, plan Phase D.
         """
         super().__init__()
         if not target.strip():
             raise ValueError("EidolonAgentGrpcLlm: target must be non-empty")
-        if not device_token.strip():
-            raise ValueError(
-                "EidolonAgentGrpcLlm: device_token is required. "
-                "Run scripts/provision_eidolon_token.py to obtain one and set "
-                "REMOTE_AGENT_RPC_DEVICE_TOKEN in your .env."
-            )
+        # When device_token is a static string, validate eagerly (preserves
+        # the Phase 25 fail-loud contract). Callables can't be validated
+        # at __init__ time; we surface their errors at _get_session.
+        if isinstance(device_token, str):
+            if not device_token.strip():
+                raise ValueError(
+                    "EidolonAgentGrpcLlm: device_token is required. "
+                    "Either pass a per-session resolver (Phase 32.B) or "
+                    "set REMOTE_AGENT_RPC_DEVICE_TOKEN in your .env."
+                )
+            self._device_token_source: DeviceTokenSource = device_token.strip()
+        else:
+            self._device_token_source = device_token
         self._target = target.strip()
-        self._device_token = device_token.strip()
+        # Concrete token resolved lazily — see ``_resolve_device_token``.
+        self._device_token: str | None = (
+            self._device_token_source
+            if isinstance(self._device_token_source, str)
+            else None
+        )
         self._conversation_id: str | Callable[[], str] = conversation_id
         self._display_model = display_model
         # D2: validate TLS config eagerly at construction (fail loud) — same
@@ -162,13 +193,42 @@ class EidolonAgentGrpcLlm(llm.LLM):
     def provider(self) -> str:
         return "eidolon_agent_rpc"
 
+    async def _resolve_device_token(self) -> str:
+        """Phase 32.B: if a callable was passed at __init__, invoke it
+        now (and cache). Static strings short-circuit to the cached
+        value set in __init__."""
+        if self._device_token is not None:
+            return self._device_token
+        source = self._device_token_source
+        if isinstance(source, str):
+            token = source  # cache miss but already a string — defensive
+        else:
+            try:
+                result = source()
+            except Exception as exc:
+                raise APIConnectionError(
+                    f"device_token resolver raised: {exc}"
+                ) from exc
+            if inspect.isawaitable(result):
+                token = await result
+            else:
+                token = result  # sync callable returned a string
+        if not isinstance(token, str) or not token.strip():
+            raise APIConnectionError(
+                "device_token resolver returned empty/non-string — refusing "
+                "to open gRPC session"
+            )
+        self._device_token = token.strip()
+        return self._device_token
+
     async def _get_session(self) -> EidolonAgentSession:
         if self._session is None:
             async with self._session_lock:
                 if self._session is None:
+                    token = await self._resolve_device_token()
                     self._session = EidolonAgentSession(
                         target=self._target,
-                        device_token=self._device_token,
+                        device_token=token,
                         tls=self._tls,
                     )
         return self._session

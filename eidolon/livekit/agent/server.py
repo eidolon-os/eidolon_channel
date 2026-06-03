@@ -167,6 +167,28 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         livekit_room=room,
     )
 
+    from livekit import api as lk_api
+    from livekit.api.twirp_client import TwirpError, TwirpErrorCode
+
+    async def _delete_room(context: str) -> None:
+        try:
+            await ctx.api.room.delete_room(lk_api.DeleteRoomRequest(room=room.name))
+            logger.info("[Agent] room=%s deleted (%s)", room.name, context)
+        except TwirpError as e:
+            if e.code == TwirpErrorCode.NOT_FOUND:
+                logger.debug(
+                    "[Agent] room=%s already deleted by LiveKit auto-cleanup",
+                    room.name,
+                )
+                return
+            logger.exception(
+                "[Agent] failed to delete room=%s (%s)", room.name, context
+            )
+        except Exception:
+            logger.exception(
+                "[Agent] failed to delete room=%s (%s)", room.name, context
+            )
+
     if cfg.behavior.agent_mode == "batch":
         pipeline = BatchPipeline(factory)
     else:
@@ -178,31 +200,15 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             turn_policy=cfg.turn_policy,
             observability=cfg.observability,
+            # Idle watchdog disconnect: delete the room so the still-connected
+            # client is actively kicked (ROOM_DELETED) and the job's
+            # shutdown_fut resolves — session.aclose() alone leaves the client
+            # in a dead room and the job hanging on shutdown_fut.
+            on_idle_disconnect=lambda: _delete_room("idle timeout"),
         )
 
-    from livekit import api as lk_api
-    from livekit.api.twirp_client import TwirpError, TwirpErrorCode
-
     async def _delete_room_cb(_reason: str) -> None:
-        try:
-            await ctx.api.room.delete_room(lk_api.DeleteRoomRequest(room=room.name))
-            logger.info("[Agent] room=%s deleted via shutdown callback", room.name)
-        except TwirpError as e:
-            if e.code == TwirpErrorCode.NOT_FOUND:
-                logger.debug(
-                    "[Agent] room=%s already deleted by LiveKit auto-cleanup",
-                    room.name,
-                )
-                return
-            logger.exception(
-                "[Agent] failed to delete room=%s via shutdown callback",
-                room.name,
-            )
-        except Exception:
-            logger.exception(
-                "[Agent] failed to delete room=%s via shutdown callback",
-                room.name,
-            )
+        await _delete_room("shutdown callback")
 
     ctx.add_shutdown_callback(_delete_room_cb)
     await pipeline.run(room)

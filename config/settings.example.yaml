@@ -72,6 +72,9 @@ turn_policy:
     cooldown_ms: 800
   idle:
     followup_timeout_ms: 15000
+    # Disconnect a session idle (no recognized speech / no agent activity)
+    # for this long, so a forgotten-open client stops streaming STT. 0 disables.
+    disconnect_after_idle_ms: 60000
   preemptive:
     # Default off — A/B showed no first-audio gain with low eos (see docs).
     # Enable for high-endpointing-silence (slow FINAL) deployments.

@@ -168,6 +168,12 @@ class DuckingPolicyConfig:
 @dataclass(frozen=True)
 class IdlePolicyConfig:
     followup_timeout_ms: int = 15_000
+    # Hard-disconnect a session that has gone idle (no recognized speech and
+    # no agent activity) for this long. Guards against a client that connects
+    # and is never closed — STT keeps streaming audio (and billing) for the
+    # whole connection even while silent. 0 (or negative) disables the
+    # watchdog entirely. Default 60s.
+    disconnect_after_idle_ms: int = 60_000
 
 
 @dataclass(frozen=True)

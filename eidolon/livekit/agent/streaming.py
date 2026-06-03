@@ -44,8 +44,10 @@ AgentSession config rather than override.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -133,6 +135,7 @@ class StreamingPipeline(BasePipeline):
         aec_warmup_duration: float | None = 1.0,
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
+        on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         self._turn_policy = turn_policy or TurnPolicyConfig()
@@ -166,6 +169,26 @@ class StreamingPipeline(BasePipeline):
         # run() awaits this instead of polling room.isconnected, so shutdown
         # fires within milliseconds of the framework deciding to close.
         self._session_closed_event: asyncio.Event = asyncio.Event()
+
+        # Idle-disconnect watchdog. A client that connects and is never closed
+        # keeps STT streaming (and billing) for the whole connection even while
+        # silent. The watchdog closes the session after
+        # ``idle.disconnect_after_idle_ms`` of no recognized speech and no agent
+        # activity. ``_last_activity_monotonic`` is refreshed by
+        # ``_mark_activity()`` on real ASR text and on agent thinking/speaking;
+        # raw VAD/noise (which yields empty ASR) deliberately does NOT count, so
+        # a silent-but-noisy room still disconnects. <=0 disables the watchdog.
+        self._idle_timeout_sec: float = (
+            self._turn_policy.idle.disconnect_after_idle_ms / 1000.0
+        )
+        self._idle_watchdog_task: asyncio.Task | None = None
+        self._last_activity_monotonic: float = 0.0
+        # Called when the idle timeout fires — deletes the room so the
+        # still-connected client is actively disconnected (see server.py).
+        self._on_idle_disconnect = on_idle_disconnect
+        # Grace between notifying the client and deleting the room, so the
+        # reliable data packet reaches the client before it is kicked.
+        self._idle_disconnect_grace_sec: float = 0.3
 
         # EOT semantic interruption check state
         self._user_speaking_start_time: float | None = None
@@ -626,6 +649,11 @@ class StreamingPipeline(BasePipeline):
         self._get_eot_model().start_session(room.name or generate_turn_id())
         logger.info("[StreamingPipeline] session started")
 
+        # Start the idle-disconnect watchdog (after session.start() so the
+        # welcome message — which counts as agent activity — has set the
+        # initial activity timestamp). See _idle_watchdog for the policy.
+        self._start_idle_watchdog()
+
         try:
             # Wait for AgentSession to close (e.g. participant disconnect →
             # framework auto-closes session via close_on_disconnect=True).
@@ -649,6 +677,7 @@ class StreamingPipeline(BasePipeline):
         # Cancel any pending soft interrupt / duck timeout before closing.
         self._cancel_soft_interrupt()
         self._cancel_duck_timeout()
+        self._stop_idle_watchdog()
         if self._session is not None:
             try:
                 await self._session.aclose()
@@ -729,6 +758,137 @@ class StreamingPipeline(BasePipeline):
         self._append_timeline_debug("session_closed")
         self._session_closed_event.set()
 
+    # ------------------------------------------------------------------
+    # Idle-disconnect watchdog
+    # ------------------------------------------------------------------
+
+    def _mark_activity(self) -> None:
+        """Record that the session is doing real work *right now*.
+
+        Refreshing this timestamp pushes back the idle-disconnect deadline.
+        Called on recognized ASR text and on agent thinking/speaking — never
+        on bare VAD/noise, so a connected-but-silent client still times out.
+        """
+        self._last_activity_monotonic = time.monotonic()
+
+    def _start_idle_watchdog(self) -> None:
+        if self._idle_timeout_sec <= 0:
+            logger.info(
+                "[StreamingPipeline] idle watchdog disabled "
+                "(disconnect_after_idle_ms<=0)"
+            )
+            return
+        self._mark_activity()
+        self._idle_watchdog_task = asyncio.create_task(self._idle_watchdog())
+        logger.info(
+            "[StreamingPipeline] idle watchdog armed (timeout=%.0fs)",
+            self._idle_timeout_sec,
+        )
+
+    def _stop_idle_watchdog(self) -> None:
+        if self._idle_watchdog_task is not None:
+            self._idle_watchdog_task.cancel()
+            self._idle_watchdog_task = None
+
+    async def _idle_watchdog(self) -> None:
+        """Close the session once it has been idle past the configured timeout.
+
+        Sleeps for the remaining time-to-deadline, then re-checks: activity
+        resets ``_last_activity_monotonic`` without waking this task, so a
+        wake that finds fresh activity simply sleeps again for the new
+        remaining window (self-correcting, no inter-task signalling needed).
+        """
+        timeout = self._idle_timeout_sec
+        try:
+            while not self._session_closed_event.is_set():
+                elapsed = time.monotonic() - self._last_activity_monotonic
+                remaining = timeout - elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                    continue
+                # Don't cut a turn that's live right now: state-change events
+                # only fire on transitions, so a long continuous agent reply or
+                # an in-progress user utterance wouldn't have refreshed
+                # ``_last_activity_monotonic``. Treat active states as activity
+                # and re-arm for another full window.
+                if self._session is not None and (
+                    self._session.agent_state in ("thinking", "speaking")
+                    or self._session.user_state == "speaking"
+                ):
+                    self._mark_activity()
+                    continue
+                logger.info(
+                    "[StreamingPipeline] idle for %.0fs ≥ %.0fs — "
+                    "disconnecting session (no speech/agent activity)",
+                    elapsed, timeout,
+                )
+                if self._timeline is not None:
+                    self._timeline.mark("idle_timeout_triggered_at")
+                await self._disconnect_idle()
+                return
+        except asyncio.CancelledError:
+            pass
+
+    async def _disconnect_idle(self) -> None:
+        """Disconnect an idle session: notify the client, then destroy the room.
+
+        Order matters:
+          1. Publish a ``session_control`` data message so the client can show
+             *why* it was dropped (a bare disconnect carries no reason).
+          2. Brief grace so the reliable packet reaches the client before it is
+             kicked.
+          3. Delete the room via ``on_idle_disconnect`` — this actively
+             disconnects the still-connected client (ROOM_DELETED) and resolves
+             the job's shutdown future. ``session.aclose()`` alone would NOT:
+             it leaves the client in a dead room and the job hanging.
+          4. Set the closed event so ``run()`` exits → ``shutdown()`` closes
+             STT/TTS (billing stops) even if room deletion is slow or fails.
+        """
+        await self._notify_client_idle_timeout()
+        if self._idle_disconnect_grace_sec > 0:
+            await asyncio.sleep(self._idle_disconnect_grace_sec)
+        if self._on_idle_disconnect is not None:
+            try:
+                await self._on_idle_disconnect()
+            except Exception:
+                logger.exception(
+                    "[StreamingPipeline] idle room-delete callback failed"
+                )
+        elif self._session is not None:
+            # No room-delete wiring (e.g. tests / standalone) — at least close
+            # the session so STT/TTS streaming and billing stop.
+            try:
+                await self._session.aclose()
+            except Exception:
+                logger.exception(
+                    "[StreamingPipeline] error closing idle session"
+                )
+        self._session_closed_event.set()
+
+    async def _notify_client_idle_timeout(self) -> None:
+        """Best-effort: tell the client it is being dropped for inactivity.
+
+        Sent on the ``session_control`` data topic; the web client surfaces it
+        as a friendly message instead of a silent disconnect.
+        """
+        room = self._room
+        local = getattr(room, "local_participant", None) if room else None
+        if local is None:
+            return
+        try:
+            payload = json.dumps(
+                {"type": "idle_timeout", "reason": "idle_timeout"}
+            ).encode("utf-8")
+            await local.publish_data(
+                payload, reliable=True, topic="session_control"
+            )
+            logger.info("[StreamingPipeline] notified client of idle timeout")
+        except Exception:
+            logger.debug(
+                "[StreamingPipeline] failed to notify client of idle timeout",
+                exc_info=True,
+            )
+
     def _on_agent_state_changed(self, event: Any) -> None:
         """Forward agent state change + cancel pending soft interrupts.
 
@@ -741,6 +901,11 @@ class StreamingPipeline(BasePipeline):
         """
         self._ensure_runtime_defaults()
         super()._on_agent_state_changed(event)
+
+        # Agent producing a reply (or speaking the welcome) is activity — keep
+        # the idle watchdog from firing while the agent holds the turn.
+        if event.new_state in ("thinking", "speaking"):
+            self._mark_activity()
 
         # If agent starts thinking or speaking (e.g. after a new user transcript), cancel
         # any pending soft interrupt timer. The timer was set for the PREVIOUS turn's
@@ -1054,6 +1219,10 @@ class StreamingPipeline(BasePipeline):
         """
         self._ensure_runtime_defaults()
         if event.transcript:
+            # Real recognized speech (interim or final) — keeps the session
+            # alive. Empty/noise transcripts deliberately don't, so a silent
+            # room still trips the idle watchdog.
+            self._mark_activity()
             self._latest_asr_text = event.transcript
             if self._timeline is not None:
                 if event.is_final:

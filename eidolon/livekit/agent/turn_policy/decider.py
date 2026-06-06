@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config import InterruptPolicyConfig
+from eidolon.livekit.common.config.defaults import (
+    DEFAULT_CORRECTION_LEXICON,
+    DEFAULT_TOPIC_SWITCH_LEXICON,
+)
 
 from .intent_classifier import (
     InterruptIntent,
@@ -81,13 +85,13 @@ class InterruptDecider:
                 ),
             )
         self._config = base
-        self._classifier = classifier or LexiconInterruptClassifier(base)
+        self._classifier = classifier or LexiconInterruptClassifier()
         self._evidence_gate = TranscriptEvidenceGate(base)
         self._semantic_prefixes = tuple(
             normalize_interrupt_text(item)
             for item in (
-                tuple(base.topic_switch_lexicon)
-                + tuple(base.correction_lexicon)
+                DEFAULT_TOPIC_SWITCH_LEXICON
+                + DEFAULT_CORRECTION_LEXICON
             )
         )
 

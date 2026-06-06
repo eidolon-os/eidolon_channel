@@ -46,7 +46,7 @@ class AttentionAdmission:
 
     def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config.attention
-        self._classifier = LexiconInterruptClassifier(config.interrupt)
+        self._classifier = LexiconInterruptClassifier()
 
     def decide(self, signal: AttentionInput) -> AttentionDecision:
         text = signal.transcript.strip()

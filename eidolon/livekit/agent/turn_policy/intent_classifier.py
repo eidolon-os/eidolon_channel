@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from eidolon.livekit.common.config import InterruptPolicyConfig
+from eidolon.livekit.common.config.defaults import (
+    DEFAULT_CORRECTION_LEXICON,
+    DEFAULT_HARD_STOP_LEXICON,
+    DEFAULT_TOPIC_SWITCH_LEXICON,
+)
 from eidolon.livekit.plugins.eot.impl.constants import (
     BACKCHANNEL_WORDS,
     NOISE_LIKE_TRANSCRIPTIONS,
@@ -70,13 +74,13 @@ def canonicalize_interrupt_text(text: str) -> str:
 class LexiconInterruptClassifier(InterruptIntentClassifier):
     """Low-latency classifier based on high-precision lexical signals."""
 
-    def __init__(self, config: InterruptPolicyConfig) -> None:
-        self._hard_stop = tuple(normalize_interrupt_text(x) for x in config.hard_stop_lexicon)
+    def __init__(self) -> None:
+        self._hard_stop = tuple(normalize_interrupt_text(x) for x in DEFAULT_HARD_STOP_LEXICON)
         self._topic_switch = tuple(
-            normalize_interrupt_text(x) for x in config.topic_switch_lexicon
+            normalize_interrupt_text(x) for x in DEFAULT_TOPIC_SWITCH_LEXICON
         )
         self._correction = tuple(
-            normalize_interrupt_text(x) for x in config.correction_lexicon
+            normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_LEXICON
         )
 
     def classify(

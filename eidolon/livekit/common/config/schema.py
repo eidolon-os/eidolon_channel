@@ -5,11 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-from eidolon.livekit.common.config.defaults import (
-    DEFAULT_CORRECTION_LEXICON,
-    DEFAULT_HARD_STOP_LEXICON,
-    DEFAULT_TOPIC_SWITCH_LEXICON,
-)
 from eidolon.livekit.plugins.stt.bailian.config import BailianSTTConfig
 from eidolon.livekit.plugins.stt.sensetime.config import SenseTimeSTTConfig
 from eidolon.livekit.plugins.tts.bailian.config import BailianTTSConfig
@@ -138,9 +133,6 @@ class InterruptPolicyConfig:
     weak_signal_followup_hold_ms: int = 1500
     correction_topic_stability_window_ms: int = 120
     normal_interrupt_stability_window_ms: int = 350
-    hard_stop_lexicon: tuple[str, ...] = DEFAULT_HARD_STOP_LEXICON
-    topic_switch_lexicon: tuple[str, ...] = DEFAULT_TOPIC_SWITCH_LEXICON
-    correction_lexicon: tuple[str, ...] = DEFAULT_CORRECTION_LEXICON
 
 
 @dataclass(frozen=True)

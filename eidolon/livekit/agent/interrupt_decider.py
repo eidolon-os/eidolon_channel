@@ -10,11 +10,7 @@ from eidolon.livekit.agent.turn_policy.intent_classifier import (
 
 
 def is_backchannel_text(text: str) -> bool:
-    cfg = __import__(
-        "eidolon.livekit.common.config",
-        fromlist=["InterruptPolicyConfig"],
-    ).InterruptPolicyConfig()
-    classifier = LexiconInterruptClassifier(cfg)
+    classifier = LexiconInterruptClassifier()
     result = classifier.classify(
         text,
         vad_active=True,

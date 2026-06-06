@@ -8,12 +8,11 @@ from eidolon.livekit.agent.turn_policy import (
     InterruptIntent,
     LexiconInterruptClassifier,
 )
-from eidolon.livekit.common.config import InterruptPolicyConfig
 
 
 @pytest.fixture
 def classifier() -> LexiconInterruptClassifier:
-    return LexiconInterruptClassifier(InterruptPolicyConfig())
+    return LexiconInterruptClassifier()
 
 
 @pytest.mark.parametrize(

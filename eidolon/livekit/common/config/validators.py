@@ -69,6 +69,14 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "turn_policy.interrupt.weak_signal_followup_hold_ms must be in [0, 5000]"
         )
+    if not 0 <= intr.correction_topic_stability_window_ms <= 1_000:
+        errors.append(
+            "turn_policy.interrupt.correction_topic_stability_window_ms must be in [0, 1000]"
+        )
+    if not 0 <= intr.normal_interrupt_stability_window_ms <= 2_000:
+        errors.append(
+            "turn_policy.interrupt.normal_interrupt_stability_window_ms must be in [0, 2000]"
+        )
     if not 0.0 <= intr.early_resume_score_threshold <= intr.early_cancel_score_threshold <= 1.0:
         errors.append(
             "turn_policy interrupt score thresholds must satisfy "

@@ -9,7 +9,7 @@ from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .attention import AttentionAdmission, AttentionDecision, AttentionInput
 from .decider import Action, Decision, InterruptDecider
-from .intent_classifier import InterruptIntent
+from .intent_classifier import InterruptIntent, canonicalize_interrupt_text
 
 
 @dataclass
@@ -49,6 +49,7 @@ class TurnPolicyRuntime:
         self.config = config
         self.decider = InterruptDecider(config.interrupt)
         self.attention = AttentionAdmission(config)
+        self._stable_signal = _StableSignalStabilizer(config)
         self._stabilizer = _WeakSignalFollowupStabilizer(config)
 
     @property
@@ -73,6 +74,14 @@ class TurnPolicyRuntime:
             is_final=is_final,
         )
         now_ms = event_time_ms if event_time_ms is not None else time.monotonic() * 1000
+        decision = self._stable_signal.apply(
+            decision,
+            text=text,
+            score=score,
+            vad_active=vad_active,
+            is_final=is_final,
+            now_ms=now_ms,
+        )
         return self._stabilizer.apply(decision, now_ms=now_ms)
 
     def admit_attention(self, signal: AttentionInput) -> AttentionDecision:
@@ -97,6 +106,203 @@ class TurnPolicyRuntime:
             played_seconds=played_seconds,
             latency_ms=latency_ms,
         )
+
+
+@dataclass
+class _StableCandidate:
+    intent: InterruptIntent
+    text: str
+    first_seen_ms: float
+    last_seen_ms: float
+    event_count: int = 1
+
+
+class _StableSignalStabilizer:
+    """Require short transcript stability for non-hard-stop hot-path cancels."""
+
+    def __init__(self, config: TurnPolicyConfig) -> None:
+        self._config = config
+        self._intent_candidate: _StableCandidate | None = None
+        self._normal_candidate: _StableCandidate | None = None
+
+    def apply(
+        self,
+        decision: Decision,
+        *,
+        text: str,
+        score: float,
+        vad_active: bool,
+        is_final: bool,
+        now_ms: float,
+    ) -> Decision:
+        if not vad_active:
+            self._clear()
+            return decision
+        if decision.intent is InterruptIntent.HARD_STOP:
+            self._clear()
+            return decision
+        if decision.action is Action.CANCEL and decision.intent in (
+            InterruptIntent.CORRECTION,
+            InterruptIntent.TOPIC_SWITCH,
+        ):
+            return self._stabilize_explicit_redirect(
+                decision,
+                text=text,
+                is_final=is_final,
+                now_ms=now_ms,
+            )
+        if self._is_normal_interrupt_wait(decision) and self._is_substantive_text(text):
+            return self._stabilize_normal_interrupt(
+                decision,
+                text=text,
+                score=score,
+                now_ms=now_ms,
+            )
+        if decision.action in (Action.CANCEL, Action.ROLLBACK):
+            self._clear()
+        return decision
+
+    def _stabilize_explicit_redirect(
+        self,
+        decision: Decision,
+        *,
+        text: str,
+        is_final: bool,
+        now_ms: float,
+    ) -> Decision:
+        window_ms = self._config.interrupt.correction_topic_stability_window_ms
+        if window_ms <= 0 or is_final:
+            self._intent_candidate = None
+            return decision
+        candidate = self._update_candidate(
+            self._intent_candidate,
+            intent=decision.intent or InterruptIntent.UNCERTAIN,
+            text=text,
+            now_ms=now_ms,
+        )
+        self._intent_candidate = candidate
+        age_ms = now_ms - candidate.first_seen_ms
+        if candidate.event_count >= 2 and age_ms >= window_ms:
+            self._intent_candidate = None
+            return decision
+        return Decision(
+            action=Action.HOLD,
+            reason=(
+                "stable_signal_wait "
+                f"intent={decision.intent.value if decision.intent else 'unknown'} "
+                f"age_ms={age_ms:.0f} window_ms={window_ms}"
+            ),
+            intent=InterruptIntent.UNCERTAIN,
+            intent_source=decision.intent_source or "stable_signal",
+            intent_confidence=0.0,
+            topic_switch_hint=decision.topic_switch_hint,
+            correction_hint=decision.correction_hint,
+        )
+
+    def _stabilize_normal_interrupt(
+        self,
+        decision: Decision,
+        *,
+        text: str,
+        score: float,
+        now_ms: float,
+    ) -> Decision:
+        window_ms = self._config.interrupt.normal_interrupt_stability_window_ms
+        if window_ms <= 0:
+            self._normal_candidate = None
+            return self._normal_cancel(decision, score=score, age_ms=0.0, window_ms=0)
+        candidate = self._update_candidate(
+            self._normal_candidate,
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+            text=text,
+            now_ms=now_ms,
+        )
+        self._normal_candidate = candidate
+        age_ms = now_ms - candidate.first_seen_ms
+        if candidate.event_count >= 2 and age_ms >= window_ms:
+            self._normal_candidate = None
+            return self._normal_cancel(
+                decision,
+                score=score,
+                age_ms=age_ms,
+                window_ms=window_ms,
+            )
+        return decision
+
+    @staticmethod
+    def _normal_cancel(
+        decision: Decision,
+        *,
+        score: float,
+        age_ms: float,
+        window_ms: int,
+    ) -> Decision:
+        return Decision(
+            action=Action.CANCEL,
+            reason=(
+                "stable_normal_interrupt "
+                f"age_ms={age_ms:.0f} window_ms={window_ms} "
+                f"score={score:.2f} base_reason={decision.reason}"
+            ),
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+            intent_source="stable_signal",
+            intent_confidence=max(0.70, score),
+        )
+
+    def _update_candidate(
+        self,
+        candidate: _StableCandidate | None,
+        *,
+        intent: InterruptIntent,
+        text: str,
+        now_ms: float,
+    ) -> _StableCandidate:
+        normalized = canonicalize_interrupt_text(text)
+        if (
+            candidate is None
+            or candidate.intent is not intent
+            or not self._is_text_consistent(candidate.text, normalized)
+        ):
+            return _StableCandidate(
+                intent=intent,
+                text=normalized,
+                first_seen_ms=now_ms,
+                last_seen_ms=now_ms,
+            )
+        return _StableCandidate(
+            intent=intent,
+            text=normalized if len(normalized) >= len(candidate.text) else candidate.text,
+            first_seen_ms=candidate.first_seen_ms,
+            last_seen_ms=now_ms,
+            event_count=candidate.event_count + 1,
+        )
+
+    @staticmethod
+    def _is_text_consistent(previous: str, current: str) -> bool:
+        if not previous or not current:
+            return False
+        return previous.startswith(current) or current.startswith(previous)
+
+    @staticmethod
+    def _is_normal_interrupt_wait(decision: Decision) -> bool:
+        return (
+            decision.action is Action.HOLD
+            and decision.reason.startswith("semantic_score_wait")
+        )
+
+    def _is_substantive_text(self, text: str) -> bool:
+        normalized = canonicalize_interrupt_text(text)
+        cjk = sum(1 for ch in normalized if "\u4e00" <= ch <= "\u9fff")
+        latin = sum(1 for ch in normalized if "a" <= ch.lower() <= "z")
+        intr = self._config.interrupt
+        return (
+            cjk >= intr.min_normal_interim_cjk_chars
+            or latin > intr.latin_artifact_hold_max_chars
+        )
+
+    def _clear(self) -> None:
+        self._intent_candidate = None
+        self._normal_candidate = None
 
 
 class _WeakSignalFollowupStabilizer:
@@ -142,6 +348,12 @@ class _WeakSignalFollowupStabilizer:
         if window_ms <= 0 or self._last_weak_signal_ms is None:
             return False
         if now_ms - self._last_weak_signal_ms > window_ms:
+            return False
+        if (
+            decision.intent_source == "eot"
+            and decision.intent_confidence
+            >= self._config.interrupt.early_cancel_score_threshold
+        ):
             return False
         return (
             decision.action is Action.CANCEL

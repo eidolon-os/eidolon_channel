@@ -57,18 +57,48 @@ def test_strong_intent_always_cancels() -> None:
 
 
 # ---------------------------------------------------------------------------
-# on_stt_interim — first-signal cancel
+# on_stt_interim — semantic-tiered first signal
 # ---------------------------------------------------------------------------
 
 
-def test_first_signal_cancel_on_substantive_interim() -> None:
-    """Substantive CJK interim still cancels quickly."""
+def test_substantive_interim_holds_until_semantic_score() -> None:
+    """Substantive CJK interim is evidence, not enough by itself to cancel."""
     d = InterruptDecider(min_interim_chars=2)
-    # Score 0 (no signal yet) — first-signal path is the only thing that
-    # could fire a cancel here, so this validates it bypasses the score.
+
     decision = d.on_stt_interim("我不相信", score=0.0)
+
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+
+
+def test_substantive_interim_cancels_with_high_semantic_score() -> None:
+    """Once EOT semantic confidence is high, the same interim can cancel."""
+    d = InterruptDecider(min_interim_chars=2, early_cancel_score_threshold=0.7)
+
+    decision = d.on_stt_interim("我不相信", score=0.82)
+
     assert decision.action is Action.CANCEL
-    assert "first_signal" in decision.reason
+    assert "eot_score_high" in decision.reason
+
+
+def test_dogfood_partial_prefix_holds_until_intent_forms() -> None:
+    """Real room: '啊那你' is too early to cancel before the intent appears."""
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("啊那你", score=0.0)
+
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+
+
+def test_dogfood_low_score_long_interim_holds_instead_of_rollback() -> None:
+    """Real room: low-score long interim should wait, not cancel or unduck."""
+    d = InterruptDecider(min_interim_chars=2, early_resume_score_threshold=0.2)
+
+    decision = d.on_stt_interim("嗯我给你弄了", score=0.07)
+
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
 
 
 def test_short_latin_artifact_holds_instead_of_cancel() -> None:
@@ -81,14 +111,26 @@ def test_short_latin_artifact_holds_instead_of_cancel() -> None:
     assert "short_latin_artifact" in decision.reason
 
 
-def test_final_short_latin_transcript_can_confirm_interrupt() -> None:
-    """The quality gate filters unstable interims, not provider finals."""
+def test_final_short_latin_transcript_still_waits_for_semantics() -> None:
+    """Provider finals prove ASR stability, not interrupt intent."""
     d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("If", score=0.0, is_final=True)
 
-    assert decision.action is Action.CANCEL
-    assert "final_transcript" in decision.reason
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert "final=true" in decision.reason
+
+
+def test_final_substantive_transcript_still_waits_for_semantics() -> None:
+    """Ordinary final text still needs EOT or explicit intent to cancel."""
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("我想问一下", score=0.0, is_final=True)
+
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert "final=true" in decision.reason
 
 
 def test_first_signal_holds_single_char_backchannel() -> None:
@@ -233,9 +275,22 @@ def test_deadline_vad_active_with_transcript_cancels() -> None:
         vad_still_active=True,
         has_transcript=True,
         transcript="等我查一下",
+        eot_score=0.8,
     )
     assert decision.action is Action.CANCEL
     assert "trust_vad" in decision.reason
+
+
+def test_deadline_vad_active_waits_for_semantic_score() -> None:
+    d = InterruptDecider()
+    decision = d.on_decision_deadline(
+        vad_still_active=True,
+        has_transcript=True,
+        transcript="啊那你",
+        eot_score=0.0,
+    )
+    assert decision.action is Action.HOLD
+    assert "wait_for_semantic_score" in decision.reason
 
 
 def test_deadline_vad_active_with_noise_fragment_holds() -> None:

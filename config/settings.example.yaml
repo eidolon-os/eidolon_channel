@@ -64,6 +64,8 @@ turn_policy:
     min_normal_interim_cjk_chars: 3
     latin_artifact_hold_max_chars: 4
     weak_signal_followup_hold_ms: 1500
+    correction_topic_stability_window_ms: 120
+    normal_interrupt_stability_window_ms: 350
     hard_stop_lexicon: ["停", "停一下", "别说了", "不要说了", "打住", "闭嘴", "先别讲了"]
     topic_switch_lexicon: ["换个话题", "不聊这个", "别聊这个", "说点别的", "聊点别的", "我们聊点", "刚才那个不用了"]
     correction_lexicon: ["不是", "等一下", "我不是这个意思", "我刚才", "我刚才说", "我刚才说错了"]

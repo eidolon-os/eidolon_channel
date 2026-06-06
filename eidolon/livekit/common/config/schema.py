@@ -131,6 +131,8 @@ class InterruptPolicyConfig:
     min_normal_interim_cjk_chars: int = 3
     latin_artifact_hold_max_chars: int = 4
     weak_signal_followup_hold_ms: int = 1500
+    correction_topic_stability_window_ms: int = 120
+    normal_interrupt_stability_window_ms: int = 350
     hard_stop_lexicon: tuple[str, ...] = (
         "停",
         "停一下",

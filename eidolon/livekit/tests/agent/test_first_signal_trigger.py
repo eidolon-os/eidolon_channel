@@ -1,24 +1,26 @@
-"""G18a (2026-05-18): first-signal cancel path + 500ms decision budget.
+"""G18a+ (2026-05-18): semantic-tiered first signal + decision budget.
 
 Unit tests for the two new behaviours in StreamingPipeline:
 
   1. In the duck-active branch of ``_run_eot_check``, a non-backchannel
-     STT INTERIM of ≥ ``interrupt_min_interim_chars`` chars triggers an
-     immediate cancel — bypassing the slower EOT score path.
+     STT INTERIM of ≥ ``interrupt_min_interim_chars`` chars is enough
+     transcript evidence to keep evaluating, but ordinary text still needs
+     EOT semantic confidence (or explicit intent) before canceling.
 
   2. In ``_duck_suspend_timeout_fallback``, when the timeout fires while
-     VAD is still active, the resolution depends on transcript evidence:
-     without transcript it holds the suspended output, with transcript it
-     confirms the interrupt.
+     VAD is still active, the resolution depends on transcript evidence
+     and EOT semantic score: without transcript or semantic confidence it
+     holds the suspended output; high-confidence transcript confirms.
 
 Together these keep real interrupts responsive while avoiding transcript-free
-timeout cancels that are too aggressive in WebSocket streaming STT flows.
+timeout cancels and early-interim cuts that are too aggressive in WebSocket
+streaming STT flows.
 """
 
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,7 +32,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_pipeline(*, vad_user_state: str = "listening"):
+def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0):
     """Build a stub pipeline with a SUSPENDED duck_mixer."""
     from eidolon.livekit.agent.streaming import StreamingPipeline
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
@@ -43,10 +45,9 @@ def _make_pipeline(*, vad_user_state: str = "listening"):
     eot_model._config = cfg
     # is_strong_interrupt_intent → return False so we exercise the score path
     eot_model._turn_end_policy.is_strong_interrupt_intent.return_value = False
-    # should_interrupt + current_eot_score are read in the score branch; the
-    # first-signal path should fire BEFORE these matter.
+    # should_interrupt + current_eot_score are read in the semantic-tiered path.
     eot_model.should_interrupt.return_value = False
-    eot_model.current_eot_score = 0.0
+    eot_model.current_eot_score = eot_score
     pipeline._get_eot_model = MagicMock(return_value=eot_model)
 
     # Mock duck mixer
@@ -73,18 +74,27 @@ def _make_pipeline(*, vad_user_state: str = "listening"):
 
 
 # ---------------------------------------------------------------------------
-# 1. first-signal cancel in _run_eot_check duck-active path
+# 1. semantic-tiered first signal in _run_eot_check duck-active path
 # ---------------------------------------------------------------------------
 
 
-def test_first_signal_cancel_on_substantive_interim() -> None:
-    """Substantive CJK INTERIM with enough evidence → immediate cancel."""
+def test_first_signal_holds_substantive_interim_without_semantic_score() -> None:
+    """Substantive CJK INTERIM waits for EOT semantics instead of raw length."""
     pipeline = _make_pipeline()
 
     pipeline._run_eot_check("我不相信你", is_final=False)
 
-    # Pipeline should have entered cancel path:
-    pipeline._snapshot_interrupted_context.assert_called_once()
+    pipeline._snapshot_interrupted_context.assert_not_called()
+    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._interrupt_current_turn.assert_not_called()
+
+
+def test_first_signal_cancel_on_high_semantic_score() -> None:
+    """High EOT semantic confidence keeps the quick cancel tier."""
+    pipeline = _make_pipeline(eot_score=0.82)
+
+    pipeline._run_eot_check("我不相信你", is_final=False)
+
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._interrupt_current_turn.assert_called_once()
 
@@ -181,18 +191,21 @@ async def test_timeout_with_vad_still_active_without_transcript_holds() -> None:
     pipeline = _make_pipeline(vad_user_state="speaking")
     pipeline._cancel_duck_timeout = MagicMock()
 
-    await pipeline._duck_suspend_timeout_fallback(0.01)
+    with patch("eidolon.livekit.agent.streaming.asyncio.create_task") as create_task:
+        await pipeline._duck_suspend_timeout_fallback(0.01)
 
     pipeline._duck_mixer.cancel.assert_not_called()
     pipeline._duck_mixer.unduck.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
+    create_task.assert_called_once()
+    create_task.call_args.args[0].close()
 
 
 @pytest.mark.asyncio
 async def test_timeout_with_vad_still_active_and_transcript_cancels() -> None:
-    """If streaming STT has produced text by the deadline, timeout can confirm."""
-    pipeline = _make_pipeline(vad_user_state="speaking")
-    pipeline._latest_asr_text = "等一下"
+    """At deadline, transcript + high semantic score can confirm interrupt."""
+    pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.82)
+    pipeline._latest_asr_text = "我不相信你"
     pipeline._cancel_duck_timeout = MagicMock()
 
     await pipeline._duck_suspend_timeout_fallback(0.01)
@@ -200,6 +213,42 @@ async def test_timeout_with_vad_still_active_and_transcript_cancels() -> None:
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._duck_mixer.unduck.assert_not_called()
     pipeline._interrupt_current_turn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_timeout_with_low_score_transcript_holds() -> None:
+    """A partial transcript at the deadline waits for the semantic tier."""
+    pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.0)
+    pipeline._latest_asr_text = "啊那你"
+    pipeline._cancel_duck_timeout = MagicMock()
+
+    with patch("eidolon.livekit.agent.streaming.asyncio.create_task") as create_task:
+        await pipeline._duck_suspend_timeout_fallback(0.01)
+
+    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._duck_mixer.unduck.assert_not_called()
+    pipeline._interrupt_current_turn.assert_not_called()
+    create_task.assert_called_once()
+    create_task.call_args.args[0].close()
+
+
+@pytest.mark.asyncio
+async def test_timeout_hold_rolls_back_after_max_suspend_budget() -> None:
+    """A HOLD deadline must not leave the duck mixer suspended forever."""
+    pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.0)
+    pipeline._latest_asr_text = "啊那你"
+    pipeline._duck_suspend_start = (
+        time.monotonic()
+        - pipeline._get_eot_model()._config.duck_buffer_max_sec
+        - 0.1
+    )
+    pipeline._cancel_duck_timeout = MagicMock()
+
+    await pipeline._duck_suspend_timeout_fallback(0.01)
+
+    pipeline._duck_mixer.unduck.assert_called_once_with(drop_buffered=True)
+    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._interrupt_current_turn.assert_not_called()
 
 
 @pytest.mark.asyncio

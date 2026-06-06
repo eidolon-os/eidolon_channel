@@ -1826,13 +1826,42 @@ class StreamingPipeline(BasePipeline):
                     and self._session.user_state == "speaking"
                 )
                 latest_asr_text = self._latest_asr_text.strip()
+                eot_model = self._get_eot_model()
                 decision = self._turn_runtime.decider.on_decision_deadline(
                     vad_still_active,
                     has_transcript=bool(latest_asr_text),
                     transcript=latest_asr_text,
+                    eot_score=eot_model.current_eot_score,
                 )
+                if decision.action is Action.HOLD:
+                    eot_config = getattr(eot_model, "_config", None)
+                    max_suspend_sec = max(
+                        timeout_sec,
+                        getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
+                    )
+                    suspend_sec = time.monotonic() - self._duck_suspend_start
+                    if suspend_sec >= max_suspend_sec:
+                        decision = Decision(
+                            action=Action.ROLLBACK,
+                            reason=(
+                                "deadline_hold_max_suspend_elapsed "
+                                f"suspend={suspend_sec:.2f}s>={max_suspend_sec:.2f}s "
+                                f"last_reason={decision.reason}"
+                            ),
+                            rollback_drop_buffered=True,
+                            intent=InterruptIntent.UNCERTAIN,
+                            intent_source="timeout",
+                            intent_confidence=0.0,
+                        )
+                    else:
+                        next_timeout = max(0.0, max_suspend_sec - suspend_sec)
+                        self._duck_timeout_task = asyncio.create_task(
+                            self._duck_suspend_timeout_fallback(
+                                min(timeout_sec, next_timeout)
+                            )
+                        )
                 logger.info(
-                    "[StreamingPipeline] duck resolved  reason=deadline  "
+                    "[StreamingPipeline] duck deadline  reason=deadline  "
                     "decision=%s decider_reason=%s  has_transcript=%s  "
                     "suspend_ms=%.0f  buffered=%d frames (%.3fs)  timeout=%.2fs",
                     decision.action.value, decision.reason,

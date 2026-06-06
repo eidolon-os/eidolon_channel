@@ -33,6 +33,8 @@ def profile_defaults(name: str) -> TurnPolicyConfig:
                 min_interim_chars=2,
                 early_cancel_score_threshold=0.60,
                 early_resume_score_threshold=0.15,
+                correction_topic_stability_window_ms=80,
+                normal_interrupt_stability_window_ms=250,
             ),
             ducking=DuckingPolicyConfig(
                 enabled=True,
@@ -58,6 +60,8 @@ def profile_defaults(name: str) -> TurnPolicyConfig:
                 min_interim_chars=2,
                 early_cancel_score_threshold=0.80,
                 early_resume_score_threshold=0.25,
+                correction_topic_stability_window_ms=150,
+                normal_interrupt_stability_window_ms=500,
             ),
             ducking=DuckingPolicyConfig(
                 enabled=True,

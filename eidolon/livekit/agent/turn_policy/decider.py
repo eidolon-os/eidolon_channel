@@ -145,15 +145,28 @@ class InterruptDecider:
                     intent_source=intent.source,
                     intent_confidence=0.0,
                 )
+            if score >= self._config.early_cancel_score_threshold:
+                return Decision(
+                    action=Action.CANCEL,
+                    reason=(
+                        "eot_score_high "
+                        f"score={score:.2f}>={self._config.early_cancel_score_threshold:.2f} "
+                        f"evidence={evidence.reason}"
+                    ),
+                    intent=InterruptIntent.NORMAL_INTERRUPT,
+                    intent_source="eot",
+                    intent_confidence=score,
+                )
             return Decision(
-                action=Action.CANCEL,
+                action=Action.HOLD,
                 reason=(
-                    f"first_signal_interim len={len(stripped)} "
-                    f"evidence={evidence.reason}"
+                    "semantic_score_wait "
+                    f"score={score:.2f} evidence={evidence.reason}"
+                    f"{' final=true' if is_final else ''}"
                 ),
-                intent=InterruptIntent.NORMAL_INTERRUPT,
+                intent=InterruptIntent.UNCERTAIN,
                 intent_source=intent.source,
-                intent_confidence=0.75,
+                intent_confidence=0.0,
             )
 
         if score >= self._config.early_cancel_score_threshold:
@@ -195,6 +208,7 @@ class InterruptDecider:
         *,
         has_transcript: bool = False,
         transcript: str = "",
+        eot_score: float = 0.0,
     ) -> Decision:
         if vad_still_active:
             if not has_transcript:
@@ -235,7 +249,11 @@ class InterruptDecider:
                     intent_source="lexicon",
                     intent_confidence=0.0,
                 )
-            evidence = self._evidence_gate.evaluate(text, is_final=False, eot_score=0.0)
+            evidence = self._evidence_gate.evaluate(
+                text,
+                is_final=False,
+                eot_score=eot_score,
+            )
             if not evidence.allow_cancel:
                 return Decision(
                     action=Action.HOLD,
@@ -247,12 +265,26 @@ class InterruptDecider:
                     intent_source="timeout",
                     intent_confidence=0.0,
                 )
+            if eot_score < self._config.early_cancel_score_threshold:
+                return Decision(
+                    action=Action.HOLD,
+                    reason=(
+                        "deadline_wait_for_semantic_score:"
+                        f"{evidence.reason} score={eot_score:.2f}"
+                    ),
+                    intent=InterruptIntent.UNCERTAIN,
+                    intent_source="timeout",
+                    intent_confidence=0.0,
+                )
             return Decision(
                 action=Action.CANCEL,
-                reason="deadline_trust_vad_with_transcript",
+                reason=(
+                    "deadline_trust_vad_with_transcript "
+                    f"score={eot_score:.2f} evidence={evidence.reason}"
+                ),
                 intent=InterruptIntent.NORMAL_INTERRUPT,
                 intent_source="timeout",
-                intent_confidence=0.70,
+                intent_confidence=max(0.70, eot_score),
             )
         return Decision(
             action=Action.ROLLBACK,

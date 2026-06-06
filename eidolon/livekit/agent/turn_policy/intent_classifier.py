@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config.defaults import (
+    DEFAULT_CORRECTION_EXCLUSION_LEXICON,
     DEFAULT_CORRECTION_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,
     DEFAULT_TOPIC_SWITCH_LEXICON,
@@ -82,6 +83,9 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
         self._correction = tuple(
             normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_LEXICON
         )
+        self._correction_exclusions = tuple(
+            normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_EXCLUSION_LEXICON
+        )
 
     def classify(
         self,
@@ -105,7 +109,9 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
             return InterruptIntentResult(
                 InterruptIntent.TOPIC_SWITCH, 0.95, "lexicon", "topic_switch"
             )
-        if self._contains_any(stripped, self._correction):
+        if self._contains_any(stripped, self._correction) and not self._starts_with_any(
+            stripped, self._correction_exclusions
+        ):
             return InterruptIntentResult(
                 InterruptIntent.CORRECTION, 0.85, "lexicon", "correction"
             )
@@ -132,6 +138,10 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
     @staticmethod
     def _contains_any(text: str, candidates: tuple[str, ...]) -> bool:
         return any(c and c in text for c in candidates)
+
+    @staticmethod
+    def _starts_with_any(text: str, candidates: tuple[str, ...]) -> bool:
+        return any(c and text.startswith(c) for c in candidates)
 
 
 class NoopModelInterruptClassifier(InterruptIntentClassifier):

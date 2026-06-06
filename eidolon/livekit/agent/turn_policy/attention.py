@@ -5,9 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.client_audio_state import (
+    PLAYBACK_STATE_AGENT_SPEAKING,
+    ClientAudioState,
+)
 from eidolon.livekit.common.config import TurnPolicyConfig
 
+from .constants import TRANSCRIPT_PREVIEW_MAX_CHARS
 from .intent_classifier import InterruptIntent, LexiconInterruptClassifier
 
 
@@ -46,18 +50,19 @@ class AttentionAdmission:
 
     def decide(self, signal: AttentionInput) -> AttentionDecision:
         text = signal.transcript.strip()
+        preview = _preview(text)
         if not self._config.enabled:
             return AttentionDecision(
                 AdmissionAction.DUCK_AND_DECIDE,
                 "attention_disabled",
-                transcript_preview=text[:80],
+                transcript_preview=preview,
                 client_state_used=signal.client_state is not None,
             )
         if not signal.agent_speaking:
             return AttentionDecision(
                 AdmissionAction.DUCK_AND_DECIDE,
                 "agent_not_speaking",
-                transcript_preview=text[:80],
+                transcript_preview=preview,
                 client_state_used=signal.client_state is not None,
             )
 
@@ -66,21 +71,21 @@ class AttentionAdmission:
             return AttentionDecision(
                 AdmissionAction.DUCK_AND_DECIDE,
                 "no_client_state",
-                transcript_preview=text[:80],
+                transcript_preview=preview,
             )
 
         if self._config.ignore_when_mic_muted and client.mic_muted:
             return AttentionDecision(
                 AdmissionAction.IGNORE,
                 "client_mic_muted",
-                transcript_preview=text[:80],
+                transcript_preview=preview,
                 client_state_used=True,
             )
         if client.manual_interrupt or client.ptt:
             return AttentionDecision(
                 AdmissionAction.HARD_INTERRUPT,
                 "explicit_client_interrupt",
-                transcript_preview=text[:80],
+                transcript_preview=preview,
                 client_state_used=True,
             )
 
@@ -95,31 +100,35 @@ class AttentionAdmission:
                 return AttentionDecision(
                     AdmissionAction.HARD_INTERRUPT,
                     "transcript_hard_stop",
-                    transcript_preview=text[:80],
+                    transcript_preview=preview,
                     client_state_used=True,
                 )
             if intent in (InterruptIntent.TOPIC_SWITCH, InterruptIntent.CORRECTION):
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,
                     f"transcript_{intent.value}",
-                    transcript_preview=text[:80],
+                    transcript_preview=preview,
                     client_state_used=True,
                 )
 
         if (
             self._config.require_direct_signal_during_playback
-            and client.playback_state == "agent_speaking"
+            and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
         ):
             return AttentionDecision(
                 AdmissionAction.OBSERVE,
                 "client_playback_active_without_direct_signal",
-                transcript_preview=text[:80],
+                transcript_preview=preview,
                 client_state_used=True,
             )
 
         return AttentionDecision(
             AdmissionAction.DUCK_AND_DECIDE,
             "client_playback_idle",
-            transcript_preview=text[:80],
+            transcript_preview=preview,
             client_state_used=True,
         )
+
+
+def _preview(text: str) -> str:
+    return text[:TRANSCRIPT_PREVIEW_MAX_CHARS]

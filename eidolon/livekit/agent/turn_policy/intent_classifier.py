@@ -6,9 +6,16 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config import InterruptPolicyConfig
-from eidolon.livekit.plugins.eot.impl.eot_policy import (
+from eidolon.livekit.plugins.eot.impl.constants import (
     BACKCHANNEL_WORDS,
     NOISE_LIKE_TRANSCRIPTIONS,
+)
+
+from .constants import (
+    ASR_EXACT_CANONICALIZATIONS,
+    ASR_PREFIX_CANONICALIZATIONS,
+    INTERRUPT_TEXT_TRAILING_CHARS,
+    REPEATED_NOISE_CHARS,
 )
 
 
@@ -45,27 +52,18 @@ class InterruptIntentClassifier:
 
 
 def normalize_interrupt_text(text: str) -> str:
-    return text.strip().lower().rstrip("。.!？?！,， ")
+    return text.strip().lower().rstrip(INTERRUPT_TEXT_TRAILING_CHARS)
 
 
 def canonicalize_interrupt_text(text: str) -> str:
     """Normalize common hot-path STT confusions without changing raw logs."""
 
     stripped = normalize_interrupt_text(text)
-    # Bailian/FunASR can briefly hear "换个..." as "半个..." in topic-switch
-    # clips. Canonicalize only for intent matching; timeline still records the
-    # original transcript preview for diagnosis.
-    if stripped.startswith("半个"):
-        return "换个" + stripped[2:]
-    # Correction clips such as "不是，我刚才..." may briefly lose the leading
-    # negation and arrive as "是我刚...". Treat that as a correction cue.
-    # The shorter "是我" fragment is ambiguous; canonicalize it to a correction
-    # prefix so the decider holds for one more interim instead of cancelling
-    # before "刚才说错" arrives.
-    if stripped == "是我":
-        return "我刚"
-    if stripped.startswith("是我刚"):
-        return "我刚才" + stripped[3:]
+    if stripped in ASR_EXACT_CANONICALIZATIONS:
+        return ASR_EXACT_CANONICALIZATIONS[stripped]
+    for source_prefix, target_prefix in ASR_PREFIX_CANONICALIZATIONS:
+        if stripped.startswith(source_prefix):
+            return target_prefix + stripped[len(source_prefix) :]
     return stripped
 
 
@@ -115,7 +113,11 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
             return InterruptIntentResult(
                 InterruptIntent.NOISE, 0.90, "lexicon", "noise_like"
             )
-        if 2 <= len(stripped) <= 6 and len(set(stripped)) == 1 and stripped[0] in "啊嗯哈咳哎哦唉":
+        if (
+            2 <= len(stripped) <= 6
+            and len(set(stripped)) == 1
+            and stripped[0] in REPEATED_NOISE_CHARS
+        ):
             return InterruptIntentResult(
                 InterruptIntent.NOISE, 0.85, "lexicon", "repeated_noise_char"
             )

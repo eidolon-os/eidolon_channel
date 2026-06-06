@@ -127,7 +127,7 @@ def run_policy_suite(
                         topic_switch_hint = decision.topic_switch_hint
                         correction_hint = decision.correction_hint
                         decision_start_ms = step.start_ms
-                        decision_at_ms = step.start_ms + step.final_delay_ms
+                        decision_at_ms = event_time_ms
                         break
                     if action is Action.NONE:
                         action = Action.HOLD

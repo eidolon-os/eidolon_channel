@@ -24,31 +24,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
+from .constants import (
+    ASR_TRAILING_PUNCTUATION,
+    BACKCHANNEL_COMPOUND_CHARS,
+    BACKCHANNEL_WORDS,
+    NOISE_LIKE_TRANSCRIPTIONS,
+    REPEATED_NOISE_CHARS,
+)
 from .state import TurnDetectionStateManager
 from .turn_end_policy import TurnEndPolicy
 from .utils import compute_text_hash, is_similar_text
-
-
-# Backchannel words: short acknowledgements that listeners utter while a
-# speaker continues — should NOT trigger a turn-cut when the agent is the
-# speaker. See BackchannelSuppressionPolicy below (Round 7 G1).
-BACKCHANNEL_WORDS: frozenset[str] = frozenset({
-    # Chinese acknowledgements
-    "嗯", "嗯嗯", "嗯哼", "哦", "哦哦", "啊", "啊啊",
-    "好", "好的", "好吧", "可以", "行", "行的",
-    "对", "对的", "是", "是的", "嗯对", "嗯好",
-    # English / Pinyin acknowledgements
-    "ok", "okay", "yes", "yeah", "yep", "uh-huh", "mhm", "right", "sure",
-})
-
-# ASR transcripts that look like vocalizations (cough / throat-clear / sigh /
-# laugh) rather than intentional speech. Filter these in
-# NoiseLikeTranscriptPolicy below (Round 7 G2a).
-NOISE_LIKE_TRANSCRIPTIONS: frozenset[str] = frozenset({
-    "啊", "嗯", "哈", "咳", "咳咳", "嗯哼",
-    "啊啊", "啊啊啊", "啊啊啊啊", "嗯啊", "哎", "哎呀",
-    "哦", "哦哦", "唉",
-})
 
 
 @dataclass
@@ -142,7 +127,7 @@ class BackchannelSuppressionPolicy(CutPolicy):
         if not text:
             return None
         # Strip end punctuation that ASR sometimes adds.
-        stripped = text.strip().rstrip("。.!？?！,，")
+        stripped = text.strip().rstrip(ASR_TRAILING_PUNCTUATION)
         if not stripped:
             return None
         if stripped.lower() in BACKCHANNEL_WORDS:
@@ -154,7 +139,7 @@ class BackchannelSuppressionPolicy(CutPolicy):
         # Compound backchannel like "嗯嗯好" / "嗯好的" — rare but seen in practice.
         # Only consider very short texts (≤ 4 chars) to avoid false positives.
         if 2 <= len(stripped) <= 4 and all(
-            stripped[i] in "嗯哦啊好对是" for i in range(len(stripped))
+            stripped[i] in BACKCHANNEL_COMPOUND_CHARS for i in range(len(stripped))
         ):
             return CutDecision(
                 should_cut=False,
@@ -188,7 +173,7 @@ class NoiseLikeTranscriptPolicy(CutPolicy):
         text = state.current_text
         if not text:
             return None
-        stripped = text.strip().rstrip("。.!？?！,，")
+        stripped = text.strip().rstrip(ASR_TRAILING_PUNCTUATION)
         if not stripped:
             return None
         if stripped in NOISE_LIKE_TRANSCRIPTIONS:
@@ -201,7 +186,7 @@ class NoiseLikeTranscriptPolicy(CutPolicy):
         # which are typical of coughs / sighs / extended noises.
         if 2 <= len(stripped) <= 6 and len(set(stripped)) == 1:
             char = stripped[0]
-            if char in "啊嗯哈咳哎哦唉":
+            if char in REPEATED_NOISE_CHARS:
                 return CutDecision(
                     should_cut=False,
                     reason=f"Repeated noise char: {stripped!r}",

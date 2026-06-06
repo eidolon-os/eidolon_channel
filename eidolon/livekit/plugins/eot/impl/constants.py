@@ -350,6 +350,7 @@ QUESTION_BOUND_FORMS_END = (
     "有没有",
     "可不可以",
 )
+ASR_TRAILING_PUNCTUATION = "。.!？?！,，"
 WAIT_PUNCTUATION = ("，", ",", ";", "；", "、", "—", "——")
 PUNCTUATION_RADIUS = 3
 
@@ -463,6 +464,63 @@ HESITATION_PATTERNS = (
 # -----------------------------------------------------------------------------
 # 8. VAD + EOT coordination (stepped threshold / interrupt / tail / noise)
 # -----------------------------------------------------------------------------
+BACKCHANNEL_WORDS: frozenset[str] = frozenset(
+    {
+        # Chinese acknowledgements
+        "嗯",
+        "嗯嗯",
+        "嗯哼",
+        "哦",
+        "哦哦",
+        "啊",
+        "啊啊",
+        "好",
+        "好的",
+        "好吧",
+        "可以",
+        "行",
+        "行的",
+        "对",
+        "对的",
+        "是",
+        "是的",
+        "嗯对",
+        "嗯好",
+        # English / Pinyin acknowledgements
+        "ok",
+        "okay",
+        "yes",
+        "yeah",
+        "yep",
+        "uh-huh",
+        "mhm",
+        "right",
+        "sure",
+    }
+)
+BACKCHANNEL_COMPOUND_CHARS = "嗯哦啊好对是"
+
+NOISE_LIKE_TRANSCRIPTIONS: frozenset[str] = frozenset(
+    {
+        "啊",
+        "嗯",
+        "哈",
+        "咳",
+        "咳咳",
+        "嗯哼",
+        "啊啊",
+        "啊啊啊",
+        "啊啊啊啊",
+        "嗯啊",
+        "哎",
+        "哎呀",
+        "哦",
+        "哦哦",
+        "唉",
+    }
+)
+REPEATED_NOISE_CHARS = "啊嗯哈咳哎哦唉"
+
 RAPID_REPEAT_INTERRUPT_WORDS = frozenset(
     {
         "停停停",

@@ -62,7 +62,13 @@ cases:
         audio: normal_followup
         start_ms: 260
         duration_ms: 1050
-        interims: ["那它的主要风险是什么"]
+        interims:
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
         final_delay_ms: 80
         vad_probability: 0.9
         agent_speaking: true

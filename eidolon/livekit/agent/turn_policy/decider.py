@@ -15,6 +15,11 @@ from .intent_classifier import (
     canonicalize_interrupt_text,
     normalize_interrupt_text,
 )
+from .constants import (
+    DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
+    SEMANTIC_SCORE_WAIT_REASON_PREFIX,
+    TRANSCRIPT_EVIDENCE_HOLD_REASON_PREFIX,
+)
 from .evidence import TranscriptEvidenceGate
 
 
@@ -138,7 +143,7 @@ class InterruptDecider:
                 return Decision(
                     action=Action.HOLD,
                     reason=(
-                        f"transcript_evidence_hold:{evidence.reason} "
+                        f"{TRANSCRIPT_EVIDENCE_HOLD_REASON_PREFIX}{evidence.reason} "
                         f"cjk={evidence.cjk_chars} latin={evidence.latin_chars}"
                     ),
                     intent=InterruptIntent.UNCERTAIN,
@@ -160,7 +165,7 @@ class InterruptDecider:
             return Decision(
                 action=Action.HOLD,
                 reason=(
-                    "semantic_score_wait "
+                    f"{SEMANTIC_SCORE_WAIT_REASON_PREFIX} "
                     f"score={score:.2f} evidence={evidence.reason}"
                     f"{' final=true' if is_final else ''}"
                 ),
@@ -258,7 +263,7 @@ class InterruptDecider:
                 return Decision(
                     action=Action.HOLD,
                     reason=(
-                        f"deadline_wait_for_better_transcript:{evidence.reason} "
+                        f"{DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX}{evidence.reason} "
                         f"cjk={evidence.cjk_chars} latin={evidence.latin_chars}"
                     ),
                     intent=InterruptIntent.UNCERTAIN,

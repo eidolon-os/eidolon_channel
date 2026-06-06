@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .attention import AttentionAdmission, AttentionDecision, AttentionInput
+from .constants import (
+    SEMANTIC_SCORE_WAIT_REASON_PREFIX,
+    STABLE_NORMAL_INTERRUPT_REASON_PREFIX,
+    STABLE_SIGNAL_WAIT_REASON_PREFIX,
+    WEAK_SIGNAL_HOLD_REASON_PREFIXES,
+)
 from .decider import Action, Decision, InterruptDecider
 from .intent_classifier import InterruptIntent, canonicalize_interrupt_text
 
@@ -188,7 +194,7 @@ class _StableSignalStabilizer:
         return Decision(
             action=Action.HOLD,
             reason=(
-                "stable_signal_wait "
+                f"{STABLE_SIGNAL_WAIT_REASON_PREFIX} "
                 f"intent={decision.intent.value if decision.intent else 'unknown'} "
                 f"age_ms={age_ms:.0f} window_ms={window_ms}"
             ),
@@ -240,7 +246,7 @@ class _StableSignalStabilizer:
         return Decision(
             action=Action.CANCEL,
             reason=(
-                "stable_normal_interrupt "
+                f"{STABLE_NORMAL_INTERRUPT_REASON_PREFIX} "
                 f"age_ms={age_ms:.0f} window_ms={window_ms} "
                 f"score={score:.2f} base_reason={decision.reason}"
             ),
@@ -287,7 +293,7 @@ class _StableSignalStabilizer:
     def _is_normal_interrupt_wait(decision: Decision) -> bool:
         return (
             decision.action is Action.HOLD
-            and decision.reason.startswith("semantic_score_wait")
+            and decision.reason.startswith(SEMANTIC_SCORE_WAIT_REASON_PREFIX)
         )
 
     def _is_substantive_text(self, text: str) -> bool:
@@ -307,13 +313,6 @@ class _StableSignalStabilizer:
 
 class _WeakSignalFollowupStabilizer:
     """Hold normal-interrupt candidates briefly after weak/noisy evidence."""
-
-    _WEAK_HOLD_REASON_PREFIXES = (
-        "transcript_evidence_hold:",
-        "deadline_wait_for_better_transcript:",
-        "intent:noise_",
-        "intent:backchannel_",
-    )
 
     def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config
@@ -341,7 +340,7 @@ class _WeakSignalFollowupStabilizer:
     def _is_weak_signal_hold(self, decision: Decision) -> bool:
         if decision.action is not Action.HOLD:
             return False
-        return decision.reason.startswith(self._WEAK_HOLD_REASON_PREFIXES)
+        return decision.reason.startswith(WEAK_SIGNAL_HOLD_REASON_PREFIXES)
 
     def _should_hold_after_weak_signal(self, decision: Decision, now_ms: float) -> bool:
         window_ms = self._config.interrupt.weak_signal_followup_hold_ms

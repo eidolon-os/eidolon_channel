@@ -9,6 +9,13 @@ from typing import Any, Literal
 
 
 CLIENT_AUDIO_STATE_TOPIC = "client.audio_state"
+INPUT_MODE_AUTO = "auto"
+INPUT_MODE_PTT = "ptt"
+INPUT_MODE_MANUAL = "manual"
+INPUT_MODE_UNKNOWN = "unknown"
+PLAYBACK_STATE_IDLE = "idle"
+PLAYBACK_STATE_AGENT_SPEAKING = "agent_speaking"
+PLAYBACK_STATE_UNKNOWN = "unknown"
 
 InputMode = Literal["auto", "ptt", "manual", "unknown"]
 PlaybackState = Literal["idle", "agent_speaking", "unknown"]
@@ -17,10 +24,10 @@ PlaybackState = Literal["idle", "agent_speaking", "unknown"]
 @dataclass(frozen=True)
 class ClientAudioState:
     participant_identity: str
-    input_mode: InputMode = "unknown"
+    input_mode: InputMode = INPUT_MODE_UNKNOWN
     ptt: bool = False
     manual_interrupt: bool = False
-    playback_state: PlaybackState = "unknown"
+    playback_state: PlaybackState = PLAYBACK_STATE_UNKNOWN
     mic_muted: bool = False
     rms: float | None = None
     snr_hint: float | None = None
@@ -69,15 +76,15 @@ def parse_client_audio_state(
 
 
 def _input_mode(value: Any) -> InputMode:
-    if value in ("auto", "ptt", "manual"):
+    if value in (INPUT_MODE_AUTO, INPUT_MODE_PTT, INPUT_MODE_MANUAL):
         return value
-    return "unknown"
+    return INPUT_MODE_UNKNOWN
 
 
 def _playback_state(value: Any) -> PlaybackState:
-    if value in ("idle", "agent_speaking"):
+    if value in (PLAYBACK_STATE_IDLE, PLAYBACK_STATE_AGENT_SPEAKING):
         return value
-    return "unknown"
+    return PLAYBACK_STATE_UNKNOWN
 
 
 def _optional_float(value: Any) -> float | None:

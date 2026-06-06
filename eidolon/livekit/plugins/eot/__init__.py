@@ -107,6 +107,8 @@ from .impl.eot_policy import (
     EOTScoreSemanticPolicy,
     BackchannelSuppressionPolicy,
     NoiseLikeTranscriptPolicy,
+)
+from .impl.constants import (
     BACKCHANNEL_WORDS,
     NOISE_LIKE_TRANSCRIPTIONS,
 )

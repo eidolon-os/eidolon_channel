@@ -76,7 +76,7 @@ cases:
         audio: topic_switch
         start_ms: 200
         duration_ms: 900
-        interims: ["换个话题"]
+        interims: ["换个话题", "换个话题", "换个话题"]
         final_delay_ms: 80
         agent_speaking: true
     expect:
@@ -99,7 +99,7 @@ cases:
         audio: correction
         start_ms: 200
         duration_ms: 900
-        interims: ["不是"]
+        interims: ["不是", "不是", "不是"]
         final_delay_ms: 80
         agent_speaking: true
     expect:

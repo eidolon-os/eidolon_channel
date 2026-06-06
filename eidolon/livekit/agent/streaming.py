@@ -61,8 +61,16 @@ from eidolon.livekit.common.config import (
 )
 
 from . import _framework_patches
+from .client_audio_state import (
+    CLIENT_AUDIO_STATE_TOPIC,
+    ClientAudioState,
+    parse_client_audio_state,
+)
 from .turn_policy import (
+    AdmissionAction,
     Action,
+    AttentionDecision,
+    AttentionInput,
     Decision,
     InterruptIntent,
     TurnPolicyRuntime,
@@ -76,6 +84,11 @@ from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 
 logger = logging.getLogger("agent")
+
+
+def _participant_identity_from_packet(packet: Any) -> str:
+    participant = getattr(packet, "participant", None)
+    return getattr(participant, "identity", "") or "unknown"
 
 
 # Module-level cache for the EOT model singleton.
@@ -165,6 +178,7 @@ class StreamingPipeline(BasePipeline):
         self._aec_warmup_duration = aec_warmup_duration
 
         self._session: AgentSession | None = None
+        self._client_audio_states: dict[str, ClientAudioState] = {}
         # Set when AgentSession emits "close" event (e.g. participant disconnect).
         # run() awaits this instead of polling room.isconnected, so shutdown
         # fires within milliseconds of the framework deciding to close.
@@ -526,6 +540,8 @@ class StreamingPipeline(BasePipeline):
             self._stt_provider_observer_installed = False
         if not hasattr(self, "_pending_stt_provider_events"):
             self._pending_stt_provider_events = []
+        if not hasattr(self, "_client_audio_states"):
+            self._client_audio_states = {}
 
     async def run(self, room: Room) -> None:
         """Start the streaming pipeline. Blocks until room disconnects."""
@@ -598,6 +614,7 @@ class StreamingPipeline(BasePipeline):
             await self._filler.warmup()
 
         logger.info("[StreamingPipeline] calling session.start()...")
+        self._install_room_data_observer(room)
         # G3 (2026-05-16): migrated from deprecated RoomInputOptions/
         # RoomOutputOptions to the new RoomOptions schema. Equivalent
         # behaviour:
@@ -687,6 +704,78 @@ class StreamingPipeline(BasePipeline):
         # Tear down persistent-connection stages (STT, TTS, etc.).
         await self._shutdown_stages()
         await super().shutdown()
+
+    def _install_room_data_observer(self, room: Room) -> None:
+        """Observe client-side audio hints for later admission policy use."""
+
+        logger.info(
+            "[StreamingPipeline] room data observer installed for topic=%s",
+            CLIENT_AUDIO_STATE_TOPIC,
+        )
+
+        @room.on("data_received")
+        def _on_data_received(packet: Any) -> None:
+            self._on_room_data_received(packet)
+
+    def _on_room_data_received(self, packet: Any) -> None:
+        topic = getattr(packet, "topic", None)
+        packet_count = getattr(self, "_room_data_packet_count", 0) + 1
+        self._room_data_packet_count = packet_count
+        if self._timeline is not None:
+            events = list(self._timeline.attrs.get("room_data_events") or ())
+            events.append(
+                {
+                    "topic": topic,
+                    "participant_identity": _participant_identity_from_packet(packet),
+                    "bytes": len(getattr(packet, "data", b"") or b""),
+                }
+            )
+            self._timeline.set_attr("room_data_events", events[-12:])
+            self._timeline.set_attr("room_data_packet_count", packet_count)
+        if packet_count <= 3 or topic == CLIENT_AUDIO_STATE_TOPIC:
+            logger.debug(
+                "[StreamingPipeline] room data received topic=%s identity=%s bytes=%d count=%d",
+                topic,
+                _participant_identity_from_packet(packet),
+                len(getattr(packet, "data", b"") or b""),
+                packet_count,
+            )
+        if topic != CLIENT_AUDIO_STATE_TOPIC:
+            return
+        identity = _participant_identity_from_packet(packet)
+        try:
+            state = parse_client_audio_state(
+                getattr(packet, "data", b""),
+                participant_identity=identity,
+            )
+        except ValueError:
+            logger.debug(
+                "[StreamingPipeline] ignored malformed client.audio_state packet",
+                exc_info=True,
+            )
+            return
+        self._client_audio_states[identity] = state
+        client_packet_count = getattr(self, "_client_audio_state_packet_count", 0) + 1
+        self._client_audio_state_packet_count = client_packet_count
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "client_audio_state",
+                state.as_timeline_attr(),
+            )
+            self._timeline.set_attr(
+                "client_audio_state_packet_count",
+                client_packet_count,
+            )
+        logger.info(
+            "[StreamingPipeline] client.audio_state received identity=%s "
+            "playback=%s mic_muted=%s manual_interrupt=%s ptt=%s count=%d",
+            state.participant_identity,
+            state.playback_state,
+            state.mic_muted,
+            state.manual_interrupt,
+            state.ptt,
+            client_packet_count,
+        )
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
@@ -1113,7 +1202,7 @@ class StreamingPipeline(BasePipeline):
                 # the suspend-window fallback. EOT decisions in
                 # ``_run_eot_check`` will resolve us out of SUSPENDED before
                 # the timeout fires in the typical case.
-                self._duck_and_arm_timeout()
+                self._handle_attention_on_speaking_started()
 
                 # If agent is speaking and interruptions are allowed, EOT check is
                 # triggered synchronously in _on_user_transcribed as soon as STT
@@ -1256,9 +1345,116 @@ class StreamingPipeline(BasePipeline):
             and event.transcript
             and (agent_is_speaking or interruption_timeline_active)
         ):
+            if not self._attention_allows_eot_check(
+                event.transcript,
+                speaker_id=getattr(event, "speaker_id", None),
+            ):
+                super()._on_user_transcribed(event)
+                return
             self._run_eot_check(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
+
+    def _handle_attention_on_speaking_started(self) -> None:
+        decision = self._decide_attention("")
+        self._record_attention_admission(decision)
+        if not self._turn_policy.attention.enforce:
+            self._duck_and_arm_timeout()
+            return
+        if decision.action is AdmissionAction.HARD_INTERRUPT:
+            if self._timeline is not None:
+                self._timeline.mark("interrupt_started_at")
+            self._interrupt_current_turn()
+            return
+        if decision.action is AdmissionAction.DUCK_AND_DECIDE:
+            self._duck_and_arm_timeout()
+            return
+        logger.info(
+            "[StreamingPipeline] attention admission: %s reason=%s — no duck",
+            decision.action.value,
+            decision.reason,
+        )
+
+    def _attention_allows_eot_check(
+        self,
+        transcript: str,
+        *,
+        speaker_id: str | None = None,
+    ) -> bool:
+        decision = self._decide_attention(transcript, participant_identity=speaker_id)
+        self._record_attention_admission(decision)
+        if not self._turn_policy.attention.enforce:
+            return True
+        if decision.action is AdmissionAction.HARD_INTERRUPT:
+            return True
+        if decision.action is AdmissionAction.DUCK_AND_DECIDE:
+            duck_active = (
+                self._duck_mixer is not None
+                and self._duck_mixer.state == "SUSPENDED"
+            )
+            if self._state == PipelineState.SPEAKING and not duck_active:
+                self._duck_and_arm_timeout()
+            return True
+        logger.info(
+            "[StreamingPipeline] attention admission: %s reason=%s — skip EOT",
+            decision.action.value,
+            decision.reason,
+        )
+        return False
+
+    def _decide_attention(
+        self,
+        transcript: str,
+        *,
+        participant_identity: str | None = None,
+    ) -> AttentionDecision:
+        self._ensure_runtime_defaults()
+        return self._turn_runtime.admit_attention(
+            AttentionInput(
+                agent_speaking=self._state == PipelineState.SPEAKING,
+                client_state=self._latest_client_audio_state(
+                    participant_identity=participant_identity
+                ),
+                transcript=transcript,
+            )
+        )
+
+    def _latest_client_audio_state(
+        self,
+        *,
+        participant_identity: str | None = None,
+    ) -> ClientAudioState | None:
+        self._ensure_runtime_defaults()
+        if not self._client_audio_states:
+            return None
+        max_age_sec = self._turn_policy.attention.client_state_max_age_ms / 1000.0
+        if participant_identity:
+            state = self._client_audio_states.get(participant_identity)
+            if state is not None and state.is_fresh(max_age_sec=max_age_sec):
+                return state
+        states = [
+            state
+            for state in self._client_audio_states.values()
+            if state.is_fresh(max_age_sec=max_age_sec)
+        ]
+        if not states:
+            return None
+        return max(states, key=lambda state: state.received_at)
+
+    def _record_attention_admission(self, decision: AttentionDecision) -> None:
+        if self._timeline is None:
+            return
+        payload = {
+            "action": decision.action.value,
+            "reason": decision.reason,
+            "transcript_preview": decision.transcript_preview,
+            "client_state_used": decision.client_state_used,
+            "enforced": self._turn_policy.attention.enforce,
+        }
+        self._timeline.set_attr("attention_admission", payload)
+        events = list(self._timeline.attrs.get("attention_admission_events") or ())
+        events.append(payload)
+        self._timeline.set_attr("attention_admission_events", events)
 
     def _run_eot_check(self, text: str, is_final: bool = False) -> None:
         """
@@ -1329,6 +1525,7 @@ class StreamingPipeline(BasePipeline):
                 score,
                 vad_active=vad_active,
                 agent_speaking=True,
+                is_final=is_final,
             )
             suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
             logger.info(
@@ -1354,6 +1551,7 @@ class StreamingPipeline(BasePipeline):
             score,
             vad_active=vad_active,
             agent_speaking=True,
+            is_final=is_final,
         )
         if semantic_decision.intent in (
             InterruptIntent.HARD_STOP,
@@ -1434,6 +1632,11 @@ class StreamingPipeline(BasePipeline):
     def _interrupt_current_turn(self) -> None:
         """Interrupt the currently in-progress agent turn via session.interrupt()."""
         if not self._allow_interruptions:
+            return
+        if self._duck_mixer is not None and self._duck_mixer.state == "CANCELLED":
+            logger.debug(
+                "[StreamingPipeline] interrupt skipped — output already CANCELLED"
+            )
             return
 
         if self._session is not None:
@@ -1755,6 +1958,12 @@ class StreamingPipeline(BasePipeline):
     def _duck_cancel_and_interrupt(self) -> None:
         """Confirm interrupt: discard buffer + cancel TTS generation."""
         self._ensure_runtime_defaults()
+        if self._duck_mixer is not None and self._duck_mixer.state == "CANCELLED":
+            logger.debug(
+                "[StreamingPipeline] duplicate duck cancel ignored — "
+                "output already CANCELLED"
+            )
+            return
         self._cancel_duck_timeout()
         suspend_ms = 0.0
         buffered = 0

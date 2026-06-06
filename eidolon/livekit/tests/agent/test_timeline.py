@@ -6,6 +6,10 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from eidolon.livekit.agent.client_audio_state import (
+    CLIENT_AUDIO_STATE_TOPIC,
+    parse_client_audio_state,
+)
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.config import ObservabilityConfig
@@ -373,3 +377,68 @@ def test_streaming_pipeline_flushes_unfinished_timeline_on_session_close(
     assert len(rows) == 1
     assert rows[0]["attrs"]["timeline_flush_reason"] == "session_closed"
     pipeline._session_closed_event.set.assert_called_once()
+
+
+def test_parse_client_audio_state_sanitizes_payload() -> None:
+    state = parse_client_audio_state(
+        b'{"type":"client.audio_state","input_mode":"auto","ptt":false,'
+        b'"manual_interrupt":true,"playback_state":"agent_speaking",'
+        b'"mic_muted":false,"rms":1.3,"snr_hint":"0.4","client_ts_ms":42}',
+        participant_identity="alice",
+        received_at=10.0,
+    )
+
+    assert state.participant_identity == "alice"
+    assert state.input_mode == "auto"
+    assert state.manual_interrupt is True
+    assert state.playback_state == "agent_speaking"
+    assert state.rms == 1.0
+    assert state.snr_hint == 0.4
+    assert state.is_fresh(now=11.0)
+
+
+def test_streaming_pipeline_observes_client_audio_state() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._client_audio_states = {}
+    pipeline._timeline = TurnTimeline("turn-1")
+
+    packet = SimpleNamespace(
+        topic=CLIENT_AUDIO_STATE_TOPIC,
+        data=(
+            b'{"type":"client.audio_state","input_mode":"auto",'
+            b'"playback_state":"idle","mic_muted":true}'
+        ),
+        participant=SimpleNamespace(identity="alice"),
+    )
+
+    pipeline._on_room_data_received(packet)
+
+    state = pipeline._client_audio_states["alice"]
+    assert state.mic_muted is True
+    assert pipeline._timeline.attrs["client_audio_state"][
+        "participant_identity"
+    ] == "alice"
+    assert pipeline._timeline.attrs["room_data_events"][-1] == {
+        "topic": CLIENT_AUDIO_STATE_TOPIC,
+        "participant_identity": "alice",
+        "bytes": len(packet.data),
+    }
+
+
+def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._duck_mixer = SimpleNamespace(state="CANCELLED")
+    pipeline._callbacks = MagicMock()
+    pipeline._cancel_duck_timeout = MagicMock()
+    pipeline._session = MagicMock()
+    pipeline._timeline = TurnTimeline("turn-duplicate-cancel")
+
+    pipeline._duck_cancel_and_interrupt()
+
+    pipeline._cancel_duck_timeout.assert_not_called()
+    pipeline._callbacks.on_duck_resolved.assert_not_called()
+    pipeline._session.interrupt.assert_not_called()

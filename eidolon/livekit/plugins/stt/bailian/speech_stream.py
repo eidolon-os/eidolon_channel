@@ -336,6 +336,8 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                     # retried.
                     self._recv_error = e
 
+        send_task: asyncio.Task | None = None
+        recv_task: asyncio.Task | None = None
         try:
             self._emit_provider_event("stt_stream_started")
             logger.info(
@@ -383,10 +385,6 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             # RecognizeStream._main_task retry loop kicks in. Recoverable
             # → retryable=True triggers retry; non-recoverable → False
             # bypasses retry and surfaces immediately.
-            try:
-                await conn.close()
-            except Exception:
-                pass
             raise APIError(
                 str(e),
                 body=None,
@@ -394,23 +392,14 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             ) from e
         except asyncio.CancelledError:
             # Framework asked us to stop (e.g. session closing). Let it bubble.
-            await conn.close()
             raise
         except Exception as e:
             logger.exception("[Bailian STT] _run: unexpected error")
-            try:
-                await conn.close()
-            except Exception:
-                pass
             raise APIError(str(e), body=None, retryable=True) from e
         else:
             # Loops completed without exception. Decide clean vs recoverable
             # based on whether we got server's TASK_FINISHED (self._finished)
             # or recv_loop recorded an error mid-flight.
-            try:
-                await conn.close()
-            except Exception:
-                pass
             logger.info("[Bailian STT] _run: connection closed")
             if self._recv_error is not None and not self._finished:
                 # G7 (2026-05-17): server-side WS close mid-session — without
@@ -427,15 +416,32 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                     body=None,
                     retryable=True,
                 ) from err
-        # G16: cleanup gate's keepalive task (idempotent / safe if absent).
-        if self._gate is not None:
+        finally:
+            for task in (send_task, recv_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            for task in (send_task, recv_task):
+                if task is None:
+                    continue
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             try:
-                metrics = self._gate.get_metrics()
-                logger.info("[Bailian STT] G16 gate final metrics: %s", metrics)
-                await self._gate.stop()
-            except Exception as e:
-                logger.warning("[Bailian STT] gate cleanup failed: %s", e)
-            self._gate = None
+                await conn.close()
+            except Exception:
+                pass
+            # G16: cleanup gate's keepalive task (idempotent / safe if absent).
+            if self._gate is not None:
+                try:
+                    metrics = self._gate.get_metrics()
+                    logger.info("[Bailian STT] G16 gate final metrics: %s", metrics)
+                    await self._gate.stop()
+                except Exception as e:
+                    logger.warning("[Bailian STT] gate cleanup failed: %s", e)
+                self._gate = None
 
     # G16: VAD signal bridge ------------------------------------------
     def notify_vad_state(self, probability: float, rms: float) -> None:

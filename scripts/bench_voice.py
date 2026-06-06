@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -47,7 +48,11 @@ from eidolon.livekit.common.config import load_effective_config
 
 
 def _default_cases() -> list[str]:
-    return [str(p) for p in sorted(Path("benchmarks/cases").glob("*.yaml"))]
+    return [
+        str(p)
+        for p in sorted(Path("benchmarks/cases").glob("*.yaml"))
+        if not p.name.endswith("_enforced.yaml")
+    ]
 
 
 async def _preflight_gate(
@@ -106,9 +111,16 @@ async def _run_headless(args: argparse.Namespace, suites) -> Path:
 
 def _run_policy(args: argparse.Namespace, suites) -> Path:
     output_dir = Path(args.output_dir) / args.run_id / "policy"
+    turn_policy = None
+    if args.attention_enforce:
+        cfg = load_effective_config()
+        turn_policy = replace(
+            cfg.turn_policy,
+            attention=replace(cfg.turn_policy.attention, enforce=True),
+        )
     runs = []
     for index in range(args.repeat):
-        run = run_policy_suite(suites, run_id=args.run_id)
+        run = run_policy_suite(suites, run_id=args.run_id, turn_policy=turn_policy)
         write_policy_outputs(run, _repeat_dir(output_dir, index, args.repeat))
         runs.append(run)
     write_repeated_reports(runs, output_dir)
@@ -172,9 +184,22 @@ def _isolate_loopback_proxy(livekit_url: str) -> None:
 
 async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
     output_dir = Path(args.output_dir) / args.run_id / "livekit_room"
-    _isolate_loopback_proxy(load_effective_config().core.livekit_url)
-    await _preflight_gate(args, output_dir, checks=("llm", "stt", "tts"))
-    timeline_source = load_effective_config().observability.timeline_debug_path
+    cfg = load_effective_config()
+    _isolate_loopback_proxy(cfg.core.livekit_url)
+    preflight_checks = (
+        ("stt", "tts")
+        if cfg.providers.brain_provider == "eidolon_agent"
+        else ("llm", "stt", "tts")
+    )
+    await _preflight_gate(args, output_dir, checks=preflight_checks)
+    if _suite_requires_runtime_identity(suites) and not args.livekit_participant_identity:
+        raise SystemExit(
+            "livekit_room cases expecting agent replies require "
+            "--livekit-participant-identity (or "
+            "EIDOLON_BENCH_LIVEKIT_PARTICIPANT_IDENTITY). The identity must "
+            "resolve through admin /api/resolve/{kind}/{identity}."
+        )
+    timeline_source = cfg.observability.timeline_debug_path
     runs = []
     for index in range(args.repeat):
         # Capture per repeat so each repeat's timeline expectations are checked
@@ -189,8 +214,12 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
                 settle_after_first_audio_sec=args.livekit_room_settle_sec,
                 agent_ready_timeout_sec=args.livekit_agent_ready_timeout_sec,
                 agent_name=args.livekit_agent_name,
+                participant_identity=args.livekit_participant_identity,
+                participant_kind=args.livekit_participant_kind,
             ),
         )
+        if args.livekit_timeline_flush_grace_sec > 0:
+            await asyncio.sleep(args.livekit_timeline_flush_grace_sec)
         repeat_dir = _repeat_dir(output_dir, index, args.repeat)
         timeline_path = repeat_dir / "turn_timeline.jsonl"
         timeline_capture.write_new_lines(timeline_path)
@@ -204,6 +233,14 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
         runs.append(run)
     write_repeated_reports(runs, output_dir)
     return output_dir
+
+
+def _suite_requires_runtime_identity(suites) -> bool:
+    return any(
+        case.expectations.min_agent_messages > 0
+        for suite in suites
+        for case in suite.cases
+    )
 
 
 def _slo_enforcement_failures(output_dir: Path) -> list[dict]:
@@ -233,6 +270,14 @@ async def _main() -> int:
     parser.add_argument("--cases", nargs="*", default=None)
     parser.add_argument("--output-dir", default="benchmarks/runs")
     parser.add_argument("--run-id", default=time.strftime("%Y%m%d-%H%M%S"))
+    parser.add_argument(
+        "--attention-enforce",
+        action="store_true",
+        help=(
+            "Policy-runner only: evaluate benchmark cases with "
+            "turn_policy.attention.enforce=true without changing settings.yaml."
+        ),
+    )
     parser.add_argument(
         "--repeat",
         type=int,
@@ -272,7 +317,30 @@ async def _main() -> int:
     parser.add_argument("--livekit-room-timeout-sec", type=float, default=45.0)
     parser.add_argument("--livekit-room-settle-sec", type=float, default=2.0)
     parser.add_argument("--livekit-agent-ready-timeout-sec", type=float, default=12.0)
+    parser.add_argument(
+        "--livekit-timeline-flush-grace-sec",
+        type=float,
+        default=5.0,
+        help=(
+            "After a real-room case disconnects, wait briefly before capturing "
+            "worker timeline JSONL so session_closed flushes are included."
+        ),
+    )
     parser.add_argument("--livekit-agent-name", default="eidolon")
+    parser.add_argument(
+        "--livekit-participant-identity",
+        default=os.getenv("EIDOLON_BENCH_LIVEKIT_PARTICIPANT_IDENTITY"),
+        help=(
+            "Registered admin user/device identity for real-room benchmarks "
+            "that trigger eidolon_agent replies."
+        ),
+    )
+    parser.add_argument(
+        "--livekit-participant-kind",
+        choices=["user", "device"],
+        default=os.getenv("EIDOLON_BENCH_LIVEKIT_PARTICIPANT_KIND", "user"),
+        help="LiveKit participant metadata.kind used by channel runtime resolver.",
+    )
     args = parser.parse_args()
     if args.repeat < 1:
         raise SystemExit("--repeat must be >= 1")

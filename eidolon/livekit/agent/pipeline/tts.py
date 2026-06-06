@@ -19,6 +19,7 @@ To add a new TTS provider:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncGenerator
@@ -112,9 +113,14 @@ class TtsStage:
         logger.debug("[TtsStage] synthesize() text=%r", text[:80])
 
         stream = self._tts.synthesize(text)
-
-        async for audio in stream:
-            yield audio.frame
+        try:
+            async for audio in stream:
+                yield audio.frame
+        finally:
+            await stream.aclose()
+            if getattr(stream, "done", False):
+                with contextlib.suppress(BaseException):
+                    _ = stream.exception
 
     async def synthesize_all(self, text: str) -> list["AudioFrame"]:
         """Synthesize text and return all audio frames as a list."""

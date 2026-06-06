@@ -9,6 +9,7 @@ from .loader import (
 from .schema import (
     AgentBehaviorConfig,
     AgentConfig,
+    AttentionPolicyConfig,
     CoreConfig,
     DuckingPolicyConfig,
     EffectiveAgentConfig,
@@ -27,6 +28,7 @@ from .schema import (
 __all__ = [
     "AgentBehaviorConfig",
     "AgentConfig",
+    "AttentionPolicyConfig",
     "CoreConfig",
     "DuckingPolicyConfig",
     "EffectiveAgentConfig",

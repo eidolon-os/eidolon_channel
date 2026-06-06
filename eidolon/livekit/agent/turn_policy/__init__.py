@@ -1,7 +1,9 @@
 """Turn intelligence layer for the LiveKit channel."""
 
+from .attention import AdmissionAction, AttentionAdmission, AttentionDecision, AttentionInput
 from .decider import Action, Decision, InterruptDecider
 from .eot_config import eot_kwargs_from_turn_policy
+from .evidence import TranscriptEvidence, TranscriptEvidenceGate
 from .intent_classifier import (
     InterruptIntent,
     InterruptIntentClassifier,
@@ -13,7 +15,11 @@ from .intent_classifier import (
 from .runtime import TurnControlSignal, TurnPolicyRuntime
 
 __all__ = [
+    "AdmissionAction",
     "Action",
+    "AttentionAdmission",
+    "AttentionDecision",
+    "AttentionInput",
     "Decision",
     "eot_kwargs_from_turn_policy",
     "InterruptDecider",
@@ -23,6 +29,8 @@ __all__ = [
     "LexiconInterruptClassifier",
     "NoopModelInterruptClassifier",
     "OnnxInterruptClassifier",
+    "TranscriptEvidence",
+    "TranscriptEvidenceGate",
     "TurnControlSignal",
     "TurnPolicyRuntime",
 ]

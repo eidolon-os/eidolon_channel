@@ -1,0 +1,76 @@
+suite_id: attention_admission_enforced
+cases:
+  - case_id: enforced_ambient_playback_speech_does_not_cancel_001
+    suite: attention_admission_enforced
+    description: attention.enforce=true 时，Web client 明确处于 agent_speaking 播放态，普通环境人声不应触发取消。
+    tags: ["attention_admission", "ambient_speech", "enforced", "false_interrupt"]
+    audio_clips:
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 260
+        duration_ms: 1050
+        interims: ["那它的主要风险是什么"]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: none
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 1
+
+  - case_id: enforced_hard_stop_still_cancels_001
+    suite: attention_admission_enforced
+    description: attention.enforce=true 时，播放态中的明确硬打断仍必须快速取消。
+    tags: ["attention_admission", "owner_directed", "hard_interrupt", "enforced"]
+    audio_clips:
+      - id: hard_stop_dont
+        text: 别说了。
+        path: benchmarks/audio/generated/hard_stop_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 别说了
+        audio: hard_stop_dont
+        start_ms: 240
+        duration_ms: 520
+        interims: ["别说了"]
+        final_delay_ms: 80
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1
+
+  - case_id: enforced_no_client_state_preserves_legacy_path_001
+    suite: attention_admission_enforced
+    description: attention.enforce=true 但没有 fresh client state 时，保留旧的 duck/decide 路径，避免 ESP32/旧客户端行为突然变化。
+    tags: ["attention_admission", "ambient_speech", "enforced", "legacy_compat"]
+    audio_clips:
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 260
+        duration_ms: 1050
+        interims: ["那它的主要风险是什么"]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: none
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1

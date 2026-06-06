@@ -314,8 +314,6 @@ class BailianConnectionManager:
     async def close(self, code: int = CLOSE_CODE_NORMAL) -> None:
         """Close the WebSocket connection."""
         async with self._lock:
-            if not self._connected:
-                return
             self._closed_by_us = True
             self._connected = False
             if self._ws:

@@ -57,6 +57,18 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.interrupt.decision_timeout_ms must be in [200, 1000]")
     if not 1 <= intr.min_interim_chars <= 12:
         errors.append("turn_policy.interrupt.min_interim_chars must be in [1, 12]")
+    if not 1 <= intr.min_normal_interim_cjk_chars <= 12:
+        errors.append(
+            "turn_policy.interrupt.min_normal_interim_cjk_chars must be in [1, 12]"
+        )
+    if not 0 <= intr.latin_artifact_hold_max_chars <= 12:
+        errors.append(
+            "turn_policy.interrupt.latin_artifact_hold_max_chars must be in [0, 12]"
+        )
+    if not 0 <= intr.weak_signal_followup_hold_ms <= 5_000:
+        errors.append(
+            "turn_policy.interrupt.weak_signal_followup_hold_ms must be in [0, 5000]"
+        )
     if not 0.0 <= intr.early_resume_score_threshold <= intr.early_cancel_score_threshold <= 1.0:
         errors.append(
             "turn_policy interrupt score thresholds must satisfy "
@@ -70,6 +82,12 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.ducking.fade_in_ms must be in [1, 500]")
     if not 0.0 <= duck.suspend_volume <= 1.0:
         errors.append("turn_policy.ducking.suspend_volume must be in [0, 1]")
+
+    attention = cfg.turn_policy.attention
+    if not 100 <= attention.client_state_max_age_ms <= 10_000:
+        errors.append(
+            "turn_policy.attention.client_state_max_age_ms must be in [100, 10000]"
+        )
 
     if errors:
         raise ValueError("EffectiveAgentConfig validation failed:\n  - " + "\n  - ".join(errors))

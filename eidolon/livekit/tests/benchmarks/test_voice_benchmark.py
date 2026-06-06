@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
 import statistics
+from dataclasses import replace
+from unittest.mock import AsyncMock
+
+import jwt
+import pytest
 
 from eidolon.livekit.benchmarks.compare import compare_metrics
 from eidolon.livekit.benchmarks.dashboard import DashboardRunner, write_dashboard
@@ -17,18 +25,21 @@ from eidolon.livekit.benchmarks.report import (
     write_repeated_reports,
 )
 from eidolon.livekit.benchmarks.schema import CaseResult, RunResult, load_suite
+from eidolon.livekit.benchmarks.policy_runner import run_policy_suite
 from eidolon.livekit.benchmarks.slo import (
     DEFAULT_SLO_GATES,
     SloGate,
     enforcement_failures,
     evaluate_slo_gates,
 )
+from eidolon.livekit.common.config import AttentionPolicyConfig, TurnPolicyConfig
 from eidolon.livekit.benchmarks.timeline import (
     TimelineCapture,
     load_timeline_records,
     summarize_timeline_records,
 )
 from eidolon.livekit.benchmarks.timeline_expectations import apply_timeline_expectations
+from scripts.bench_voice import _default_cases
 
 
 def test_load_core_benchmark_suite() -> None:
@@ -40,6 +51,90 @@ def test_load_core_benchmark_suite() -> None:
         "hard_interrupt_001",
         "backchannel_001",
     }
+
+
+def test_load_attention_admission_benchmark_suite() -> None:
+    suite = load_suite("benchmarks/cases/attention_admission_baseline.yaml")
+
+    assert suite.suite_id == "attention_admission_baseline"
+    assert {case.case_id for case in suite.cases} >= {
+        "owner_hard_stop_while_agent_speaking_001",
+        "ambient_normal_speech_currently_interrupts_001",
+        "normal_user_turn_when_agent_idle_001",
+        "cough_noise_then_ambient_speech_holds_001",
+    }
+    ambient_case = next(
+        case
+        for case in suite.cases
+        if case.case_id == "ambient_normal_speech_currently_interrupts_001"
+    )
+    assert ambient_case.expectations.action == "cancel"
+    assert "known_gap" in ambient_case.tags
+    cough_case = next(
+        case
+        for case in suite.cases
+        if case.case_id == "cough_noise_then_ambient_speech_holds_001"
+    )
+    assert cough_case.expectations.action == "any"
+    assert "cancel" in cough_case.expectations.forbid_actions
+    assert "known_gap" not in cough_case.tags
+    backchannel_case = next(
+        case
+        for case in suite.cases
+        if case.case_id == "short_backchannel_rolls_back_001"
+    )
+    assert backchannel_case.expectations.action == "rollback"
+    assert "cancel" in backchannel_case.expectations.forbid_actions
+
+
+def test_load_attention_admission_enforced_suite() -> None:
+    suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
+
+    assert suite.suite_id == "attention_admission_enforced"
+    assert {case.case_id for case in suite.cases} == {
+        "enforced_ambient_playback_speech_does_not_cancel_001",
+        "enforced_hard_stop_still_cancels_001",
+        "enforced_no_client_state_preserves_legacy_path_001",
+    }
+    ambient_case = next(
+        case
+        for case in suite.cases
+        if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
+    )
+    assert ambient_case.user_steps[0].client_playback_state == "agent_speaking"
+    assert ambient_case.expectations.action == "none"
+    assert "cancel" in ambient_case.expectations.forbid_actions
+
+
+def test_default_voice_benchmark_cases_skip_enforced_suites() -> None:
+    cases = [path.rsplit("/", 1)[-1] for path in _default_cases()]
+
+    assert "attention_admission_baseline.yaml" in cases
+    assert "attention_admission_enforced.yaml" not in cases
+
+
+def test_policy_runner_attention_enforced_suite() -> None:
+    suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
+    policy = TurnPolicyConfig(
+        attention=replace(AttentionPolicyConfig(), enforce=True),
+    )
+
+    run = run_policy_suite([suite], turn_policy=policy, run_id="test")
+
+    assert {case.case_id: case.passed for case in run.cases} == {
+        "enforced_ambient_playback_speech_does_not_cancel_001": True,
+        "enforced_hard_stop_still_cancels_001": True,
+        "enforced_no_client_state_preserves_legacy_path_001": True,
+    }
+    ambient = next(
+        case
+        for case in run.cases
+        if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
+    )
+    assert ambient.metrics["actual_action"] == "none"
+    assert ambient.decisions[0]["attention_admission"]["action"] == "observe"
+    assert ambient.decisions[0]["attention_admission"]["client_state_used"] is True
+    assert ambient.decisions[0]["decision"] is None
 
 
 def test_aggregate_case_metrics() -> None:
@@ -309,6 +404,106 @@ def test_livekit_room_state_marks_agent_connected() -> None:
     state.mark("participant_connected_at")
 
     assert state.agent_connected.is_set()
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_publishes_client_audio_state() -> None:
+    from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
+    from eidolon.livekit.benchmarks.livekit_room_runner import (
+        _publish_client_audio_state,
+    )
+
+    local_participant = AsyncMock()
+    events: list[dict] = []
+
+    await _publish_client_audio_state(
+        local_participant,
+        events=events,
+        started=0.0,
+        playback_state="agent_speaking",
+        ptt=True,
+        manual_interrupt=True,
+        mic_muted=True,
+    )
+
+    local_participant.publish_data.assert_awaited_once()
+    payload = json.loads(local_participant.publish_data.await_args.args[0])
+    assert payload["type"] == "client.audio_state"
+    assert payload["playback_state"] == "agent_speaking"
+    assert payload["ptt"] is True
+    assert payload["manual_interrupt"] is True
+    assert payload["mic_muted"] is True
+    assert local_participant.publish_data.await_args.kwargs == {
+        "reliable": False,
+        "topic": CLIENT_AUDIO_STATE_TOPIC,
+    }
+    assert events[-1]["type"] == "client_audio_state_published"
+    assert events[-1]["ptt"] is True
+    assert events[-1]["manual_interrupt"] is True
+    assert events[-1]["mic_muted"] is True
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_refreshes_client_audio_state_periodically() -> None:
+    from eidolon.livekit.benchmarks.livekit_room_runner import (
+        _refresh_client_audio_state,
+    )
+
+    local_participant = AsyncMock()
+    events: list[dict] = []
+
+    task = asyncio.create_task(
+        _refresh_client_audio_state(
+            local_participant,
+            events=events,
+            started=0.0,
+            playback_state="agent_speaking",
+            interval_sec=0.01,
+        )
+    )
+    await asyncio.sleep(0.035)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert local_participant.publish_data.await_count >= 2
+    assert {event["playback_state"] for event in events} == {"agent_speaking"}
+
+
+def test_livekit_dispatch_token_includes_participant_metadata() -> None:
+    from eidolon.livekit.benchmarks.livekit_room_runner import (
+        LiveKitRoomOptions,
+        _make_dispatch_token,
+        _participant_metadata,
+    )
+
+    metadata = _participant_metadata(
+        LiveKitRoomOptions(
+            participant_identity="manson",
+            participant_kind="user",
+            participant_metadata={"client": "bench"},
+        )
+    )
+    token = _make_dispatch_token(
+        api_key="devkey",
+        api_secret="test-secret-with-enough-entropy-32-bytes",
+        room_name="room-1",
+        participant="manson",
+        agent_name="eidolon",
+        metadata=metadata,
+    )
+
+    payload = jwt.decode(
+        token,
+        "test-secret-with-enough-entropy-32-bytes",
+        algorithms=["HS256"],
+    )
+
+    assert payload["sub"] == "manson"
+    assert json.loads(payload["metadata"]) == {
+        "client": "bench",
+        "kind": "user",
+    }
 
 
 def test_timeline_records_are_summarized(tmp_path) -> None:

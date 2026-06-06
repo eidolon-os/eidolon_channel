@@ -1,0 +1,159 @@
+suite_id: attention_admission_baseline
+cases:
+  - case_id: hard_stop_after_short_latin_artifact_001
+    suite: attention_admission
+    description: 真实房间复现：硬打断“别说了”前先出现短 latin-only interim “If”；低质量 interim 不应先 normal-cancel，后续 hard-stop 应升级取消。
+    tags: ["attention_admission", "owner_directed", "hard_interrupt", "asr_artifact"]
+    audio_clips:
+      - id: hard_stop_dont
+        text: 别说了。
+        path: benchmarks/audio/generated/hard_stop_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 别说了
+        audio: hard_stop_dont
+        start_ms: 240
+        duration_ms: 520
+        interims: ["If", "别说了"]
+        final_delay_ms: 160
+        vad_probability: 0.95
+        agent_speaking: true
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1
+
+  - case_id: owner_hard_stop_while_agent_speaking_001
+    suite: attention_admission
+    description: 主人明确说“别说了”，当前基线应快速取消 agent 输出。
+    tags: ["attention_admission", "owner_directed", "hard_interrupt"]
+    audio_clips:
+      - id: hard_stop_dont
+        text: 别说了。
+        path: benchmarks/audio/generated/hard_stop_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 别说了
+        audio: hard_stop_dont
+        start_ms: 240
+        duration_ms: 520
+        interims: ["别说了"]
+        final_delay_ms: 80
+        vad_probability: 0.95
+        agent_speaking: true
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1
+
+  - case_id: ambient_normal_speech_currently_interrupts_001
+    suite: attention_admission
+    description: agent 说话时环境里出现普通完整人声；Stage 0 冻结当前行为：会被视为普通打断。
+    tags: ["attention_admission", "ambient_speech", "known_gap"]
+    audio_clips:
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 260
+        duration_ms: 1050
+        interims: ["那它的主要风险是什么"]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 500
+      min_user_finals: 1
+
+  - case_id: short_backchannel_rolls_back_001
+    suite: attention_admission
+    description: agent 说话时用户只是短附和“好的”，当前基线不应硬取消。
+    tags: ["attention_admission", "backchannel", "false_interrupt"]
+    audio_clips:
+      - id: backchannel_ok
+        text: 好。
+        path: benchmarks/audio/generated/backchannel_ok.wav
+        intent: backchannel
+    user_steps:
+      - text: 好的
+        audio: backchannel_ok
+        start_ms: 220
+        duration_ms: 520
+        interims: ["好的"]
+        final_delay_ms: 80
+        vad_probability: 0.85
+        agent_speaking: true
+    expect:
+      action: rollback
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 1
+
+  - case_id: cough_noise_then_ambient_speech_holds_001
+    suite: attention_admission
+    description: 短噪声后接普通环境人声；Stage 2.2 期望先 hold，不因噪声或低置信环境声取消 agent 输出。
+    tags: ["attention_admission", "noise", "ambient_speech", "false_interrupt"]
+    audio_clips:
+      - id: noise_like_cough
+        text: 咳。
+        path: benchmarks/audio/generated/noise_like_cough.wav
+        intent: noise
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 咳
+        audio: noise_like_cough
+        start_ms: 180
+        duration_ms: 260
+        interims: ["咳"]
+        final_delay_ms: 80
+        vad_probability: 0.65
+        agent_speaking: true
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 740
+        duration_ms: 1050
+        interims: ["那它的主要风险是什么"]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+    expect:
+      action: any
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 2
+
+  - case_id: normal_user_turn_when_agent_idle_001
+    suite: attention_admission
+    description: agent 未说话时，正常用户输入仍应进入普通对话链路。
+    tags: ["attention_admission", "normal_turn", "no_regression"]
+    timeout_sec: 60
+    audio_clips:
+      - id: normal_ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: normal_ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+    agent_replies:
+      - when: 帮我详细介绍
+        reply: 这是 attention admission 基线中的正常回答，用来确认普通用户轮次不受影响。
+    expect:
+      action: none
+      intent: uncertain
+      min_user_finals: 1
+      min_agent_messages: 1

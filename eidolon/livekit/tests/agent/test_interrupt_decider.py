@@ -62,13 +62,33 @@ def test_strong_intent_always_cancels() -> None:
 
 
 def test_first_signal_cancel_on_substantive_interim() -> None:
-    """Non-backchannel + len ≥ min_chars → immediate cancel (G18a)."""
+    """Substantive CJK interim still cancels quickly."""
     d = InterruptDecider(min_interim_chars=2)
     # Score 0 (no signal yet) — first-signal path is the only thing that
     # could fire a cancel here, so this validates it bypasses the score.
     decision = d.on_stt_interim("我不相信", score=0.0)
     assert decision.action is Action.CANCEL
     assert "first_signal" in decision.reason
+
+
+def test_short_latin_artifact_holds_instead_of_cancel() -> None:
+    """Short latin-only ASR artifacts like 'If' must not hard-cancel audio."""
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("If", score=0.0)
+
+    assert decision.action is Action.HOLD
+    assert "short_latin_artifact" in decision.reason
+
+
+def test_final_short_latin_transcript_can_confirm_interrupt() -> None:
+    """The quality gate filters unstable interims, not provider finals."""
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("If", score=0.0, is_final=True)
+
+    assert decision.action is Action.CANCEL
+    assert "final_transcript" in decision.reason
 
 
 def test_first_signal_holds_single_char_backchannel() -> None:

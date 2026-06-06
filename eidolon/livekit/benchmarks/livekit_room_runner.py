@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import math
 import subprocess
 import time
@@ -21,6 +22,7 @@ from typing import Any
 from livekit import api as lk_api
 from livekit import rtc
 
+from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
@@ -38,6 +40,9 @@ class LiveKitRoomOptions:
     agent_speaking_wait_sec: float = 8.0
     agent_name: str = "eidolon"
     participant_prefix: str = "voice-bench"
+    participant_identity: str | None = None
+    participant_kind: str = "user"
+    participant_metadata: dict[str, Any] | None = None
     room_prefix: str = "voice-bench"
 
 
@@ -108,13 +113,17 @@ async def _run_room_case(
     events: list[dict[str, Any]] = []
     errors: list[str] = []
     room_name = f"{options.room_prefix}-{case.case_id}-{uuid.uuid4().hex[:8]}"
-    participant = f"{options.participant_prefix}-{uuid.uuid4().hex[:8]}"
+    participant = (
+        options.participant_identity
+        or f"{options.participant_prefix}-{uuid.uuid4().hex[:8]}"
+    )
     token = _make_dispatch_token(
         api_key=api_key,
         api_secret=api_secret,
         room_name=room_name,
         participant=participant,
         agent_name=options.agent_name,
+        metadata=_participant_metadata(options),
     )
 
     room = rtc.Room()
@@ -176,6 +185,12 @@ async def _run_room_case(
         publish_options.source = rtc.TrackSource.SOURCE_MICROPHONE
         await room.local_participant.publish_track(track, publish_options)
         state.mark("local_track_published_at")
+        await _publish_client_audio_state(
+            room.local_participant,
+            events=events,
+            started=started,
+            playback_state="idle",
+        )
 
         try:
             await asyncio.wait_for(
@@ -199,6 +214,7 @@ async def _run_room_case(
             started=started,
             state=state,
             options=options,
+            local_participant=room.local_participant,
         )
         state.mark("user_audio_done_at")
 
@@ -251,6 +267,7 @@ async def _feed_case_audio(
     started: float,
     state: "_RoomCaseState",
     options: LiveKitRoomOptions,
+    local_participant: Any | None = None,
 ) -> None:
     cursor_ms = 0
     clip_paths = {clip.id: clip.path for clip in case.audio_clips}
@@ -260,17 +277,40 @@ async def _feed_case_audio(
                 source,
                 synth_silence((step.start_ms - cursor_ms) / 1000),
             )
+        publish_client_state = step.client_playback_state != "none"
         if step.agent_speaking:
             await _wait_for_agent_speaking(
                 state,
                 timeout_sec=options.agent_speaking_wait_sec,
             )
+            playback_state = _step_playback_state(step, default="agent_speaking")
+            if publish_client_state:
+                await _publish_client_audio_state(
+                    local_participant,
+                    events=events,
+                    started=started,
+                    playback_state=playback_state,
+                    ptt=step.client_ptt,
+                    manual_interrupt=step.client_manual_interrupt,
+                    mic_muted=step.client_mic_muted,
+                )
         else:
             await _wait_for_agent_quiet(
                 state,
                 quiet_ms=options.agent_quiet_ms,
                 timeout_sec=options.agent_speaking_wait_sec,
             )
+            playback_state = _step_playback_state(step, default="idle")
+            if publish_client_state:
+                await _publish_client_audio_state(
+                    local_participant,
+                    events=events,
+                    started=started,
+                    playback_state=playback_state,
+                    ptt=step.client_ptt,
+                    manual_interrupt=step.client_manual_interrupt,
+                    mic_muted=step.client_mic_muted,
+                )
         rel = clip_paths.get(step.audio)
         if rel is None:
             raise ValueError(f"{case.case_id}: missing audio clip id {step.audio!r}")
@@ -283,7 +323,28 @@ async def _feed_case_audio(
                 "clip": step.audio,
             }
         )
-        clip_ms = await _capture_pcm(source, pcm, sample_rate=sample_rate)
+        refresh_task = (
+            asyncio.create_task(
+                _refresh_client_audio_state(
+                    local_participant,
+                    events=events,
+                    started=started,
+                    playback_state=playback_state,
+                    ptt=step.client_ptt,
+                    manual_interrupt=step.client_manual_interrupt,
+                    mic_muted=step.client_mic_muted,
+                )
+            )
+            if publish_client_state
+            else None
+        )
+        try:
+            clip_ms = await _capture_pcm(source, pcm, sample_rate=sample_rate)
+        finally:
+            if refresh_task is not None:
+                refresh_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await refresh_task
         events.append(
             {
                 "type": "user_audio_finished",
@@ -294,6 +355,77 @@ async def _feed_case_audio(
         )
         cursor_ms = max(cursor_ms, step.start_ms) + clip_ms
     await _capture_pcm(source, synth_silence(0.8))
+
+
+def _step_playback_state(step: Any, *, default: str) -> str:
+    if step.client_playback_state in ("idle", "agent_speaking"):
+        return step.client_playback_state
+    return default
+
+
+async def _publish_client_audio_state(
+    local_participant: Any | None,
+    *,
+    events: list[dict[str, Any]],
+    started: float,
+    playback_state: str,
+    input_mode: str = "auto",
+    ptt: bool = False,
+    manual_interrupt: bool = False,
+    mic_muted: bool = False,
+) -> None:
+    """Publish benchmark client audio hints through the real data channel."""
+    if local_participant is None:
+        return
+    payload = {
+        "type": "client.audio_state",
+        "input_mode": input_mode,
+        "ptt": ptt,
+        "manual_interrupt": manual_interrupt,
+        "playback_state": playback_state,
+        "mic_muted": mic_muted,
+        "client_ts_ms": int(time.time() * 1000),
+    }
+    await local_participant.publish_data(
+        json.dumps(payload).encode("utf-8"),
+        reliable=False,
+        topic=CLIENT_AUDIO_STATE_TOPIC,
+    )
+    events.append(
+        {
+            "type": "client_audio_state_published",
+            "timestamp_ms": _elapsed_ms(started),
+            "playback_state": playback_state,
+            "ptt": ptt,
+            "manual_interrupt": manual_interrupt,
+            "mic_muted": mic_muted,
+            "topic": CLIENT_AUDIO_STATE_TOPIC,
+        }
+    )
+
+
+async def _refresh_client_audio_state(
+    local_participant: Any | None,
+    *,
+    events: list[dict[str, Any]],
+    started: float,
+    playback_state: str,
+    ptt: bool = False,
+    manual_interrupt: bool = False,
+    mic_muted: bool = False,
+    interval_sec: float = 0.5,
+) -> None:
+    while True:
+        await asyncio.sleep(interval_sec)
+        await _publish_client_audio_state(
+            local_participant,
+            events=events,
+            started=started,
+            playback_state=playback_state,
+            ptt=ptt,
+            manual_interrupt=manual_interrupt,
+            mic_muted=mic_muted,
+        )
 
 
 async def _wait_for_agent_quiet(
@@ -378,10 +510,11 @@ def _make_dispatch_token(
     room_name: str,
     participant: str,
     agent_name: str,
+    metadata: dict[str, Any] | None = None,
 ) -> str:
     if not api_key or not api_secret:
         raise ValueError("LIVEKIT api_key/api_secret are required")
-    return (
+    token = (
         lk_api.AccessToken(api_key, api_secret)
         .with_identity(participant)
         .with_name(participant)
@@ -399,8 +532,18 @@ def _make_dispatch_token(
                 agents=[lk_api.RoomAgentDispatch(agent_name=agent_name)],
             )
         )
-        .to_jwt()
     )
+    if metadata:
+        token = token.with_metadata(json.dumps(metadata, ensure_ascii=False))
+    return token.to_jwt()
+
+
+def _participant_metadata(options: LiveKitRoomOptions) -> dict[str, Any]:
+    metadata = dict(options.participant_metadata or {})
+    kind = str(metadata.get("kind") or options.participant_kind or "").strip().lower()
+    if kind:
+        metadata["kind"] = kind
+    return metadata
 
 
 @dataclass

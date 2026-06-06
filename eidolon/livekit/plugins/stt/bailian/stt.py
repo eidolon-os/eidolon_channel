@@ -307,28 +307,32 @@ class BailianFunASRSTT(stt.STT):
                 pass
 
         start_time = time.monotonic()
-        await conn.connect(message_callback=collector)
-
-        # Spawn a receive loop so the collector processes responses and
-        # _connected is set to False when the server closes the connection.
-        recv_task = asyncio.create_task(conn.receive_loop(message_cb=collector))
-
-        await conn.send_audio(audio_bytes)
-        await conn.finish()
-
-        # Drain results with a timeout — the receive loop exits when the server closes
-        deadline = start_time + 30.0
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.1)
-            if not conn._connected:
-                break
-
-        recv_task.cancel()
+        recv_task: asyncio.Task | None = None
         try:
-            await recv_task
-        except asyncio.CancelledError:
-            pass
-        await conn.close()
+            await conn.connect(message_callback=collector)
+
+            # Spawn a receive loop so the collector processes responses and
+            # _connected is set to False when the server closes the connection.
+            recv_task = asyncio.create_task(conn.receive_loop(message_cb=collector))
+
+            await conn.send_audio(audio_bytes)
+            await conn.finish()
+
+            # Drain results with a timeout — the receive loop exits when the server closes
+            deadline = start_time + 30.0
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+                if not conn._connected:
+                    break
+        finally:
+            if recv_task is not None and not recv_task.done():
+                recv_task.cancel()
+            if recv_task is not None:
+                try:
+                    await recv_task
+                except asyncio.CancelledError:
+                    pass
+            await conn.close()
 
         # Build final transcript
         if not all_sentences:

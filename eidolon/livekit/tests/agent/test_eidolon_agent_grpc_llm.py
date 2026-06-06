@@ -209,6 +209,40 @@ async def test_forwards_deltas_then_finishes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_open_uses_connect_timeout() -> None:
+    from livekit.agents._exceptions import APIConnectionError
+    from livekit.agents.types import APIConnectOptions
+
+    async def _slow_token() -> str:
+        await asyncio.sleep(1.0)
+        return "test-token"
+
+    adapter = EidolonAgentGrpcLlm(
+        target="127.0.0.1:1",
+        device_token=_slow_token,
+        conversation_id="livekit:timeout-test",
+    )
+    try:
+        provider_events: list[dict] = []
+        adapter.on("provider_event", provider_events.append)
+        stream = adapter.chat(
+            chat_ctx=_ctx("会超时吗"),
+            conn_options=APIConnectOptions(
+                max_retry=0,
+                retry_interval=0.0,
+                timeout=0.05,
+            ),
+        )
+        with pytest.raises(APIConnectionError, match="session open timed out"):
+            async for _ in stream:
+                pass
+        assert provider_events
+        assert provider_events[0]["event"] == "brain_request_started"
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
 async def test_cancel_writes_cancel_turn() -> None:
     # Server emits one delta, then waits up to 5s — long enough that the
     # adapter's _run task gets cancelled (via stream.aclose) before DONE.

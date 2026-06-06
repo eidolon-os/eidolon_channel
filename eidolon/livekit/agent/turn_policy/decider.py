@@ -15,6 +15,7 @@ from .intent_classifier import (
     canonicalize_interrupt_text,
     normalize_interrupt_text,
 )
+from .evidence import TranscriptEvidenceGate
 
 
 class Action(Enum):
@@ -76,6 +77,7 @@ class InterruptDecider:
             )
         self._config = base
         self._classifier = classifier or LexiconInterruptClassifier(base)
+        self._evidence_gate = TranscriptEvidenceGate(base)
         self._semantic_prefixes = tuple(
             normalize_interrupt_text(item)
             for item in (
@@ -100,6 +102,7 @@ class InterruptDecider:
         *,
         vad_active: bool = True,
         agent_speaking: bool = True,
+        is_final: bool = False,
     ) -> Decision:
         intent = self._classifier.classify(
             text,
@@ -126,9 +129,28 @@ class InterruptDecider:
             )
 
         if len(stripped) >= self._config.min_interim_chars:
+            evidence = self._evidence_gate.evaluate(
+                stripped,
+                is_final=is_final,
+                eot_score=score,
+            )
+            if not evidence.allow_cancel:
+                return Decision(
+                    action=Action.HOLD,
+                    reason=(
+                        f"transcript_evidence_hold:{evidence.reason} "
+                        f"cjk={evidence.cjk_chars} latin={evidence.latin_chars}"
+                    ),
+                    intent=InterruptIntent.UNCERTAIN,
+                    intent_source=intent.source,
+                    intent_confidence=0.0,
+                )
             return Decision(
                 action=Action.CANCEL,
-                reason=f"first_signal_interim len={len(stripped)}",
+                reason=(
+                    f"first_signal_interim len={len(stripped)} "
+                    f"evidence={evidence.reason}"
+                ),
                 intent=InterruptIntent.NORMAL_INTERRUPT,
                 intent_source=intent.source,
                 intent_confidence=0.75,
@@ -211,6 +233,18 @@ class InterruptDecider:
                     reason=f"deadline_semantic_prefix text={text}",
                     intent=InterruptIntent.UNCERTAIN,
                     intent_source="lexicon",
+                    intent_confidence=0.0,
+                )
+            evidence = self._evidence_gate.evaluate(text, is_final=False, eot_score=0.0)
+            if not evidence.allow_cancel:
+                return Decision(
+                    action=Action.HOLD,
+                    reason=(
+                        f"deadline_wait_for_better_transcript:{evidence.reason} "
+                        f"cjk={evidence.cjk_chars} latin={evidence.latin_chars}"
+                    ),
+                    intent=InterruptIntent.UNCERTAIN,
+                    intent_source="timeout",
                     intent_confidence=0.0,
                 )
             return Decision(

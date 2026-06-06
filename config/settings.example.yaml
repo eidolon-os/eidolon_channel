@@ -60,6 +60,10 @@ turn_policy:
     min_interim_chars: 2
     early_cancel_score_threshold: 0.70
     early_resume_score_threshold: 0.20
+    transcript_evidence_gate_enabled: true
+    min_normal_interim_cjk_chars: 3
+    latin_artifact_hold_max_chars: 4
+    weak_signal_followup_hold_ms: 1500
     hard_stop_lexicon: ["停", "停一下", "别说了", "不要说了", "打住", "闭嘴", "先别讲了"]
     topic_switch_lexicon: ["换个话题", "不聊这个", "别聊这个", "说点别的", "聊点别的", "我们聊点", "刚才那个不用了"]
     correction_lexicon: ["不是", "等一下", "我不是这个意思", "我刚才", "我刚才说", "我刚才说错了"]
@@ -80,6 +84,14 @@ turn_policy:
     # Enable for high-endpointing-silence (slow FINAL) deployments.
     enabled: false
     preemptive_tts: false
+  attention:
+    # enabled=true records attention_admission decisions in timeline.
+    # enforce=false preserves existing interrupt behavior for rollout safety.
+    enabled: true
+    enforce: false
+    client_state_max_age_ms: 2000
+    require_direct_signal_during_playback: true
+    ignore_when_mic_muted: true
 
 observability:
   structured_logs: true

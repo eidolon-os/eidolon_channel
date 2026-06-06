@@ -16,7 +16,9 @@ as evidence.
 from __future__ import annotations
 
 import re
+import contextlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 
 from .schema import CaseResult, RunResult
@@ -275,10 +277,17 @@ async def preflight_real_stack(
     async def _check_tts(factory: Any) -> dict[str, Any]:
         await factory.tts.warmup()
         frames = []
-        async for frame in factory.tts.synthesize("你好，测试。"):
-            frames.append(frame)
-            if len(frames) >= 2:
-                break
+        stream = factory.tts.synthesize("你好，测试。")
+        try:
+            async for frame in stream:
+                frames.append(frame)
+                if len(frames) >= 2:
+                    break
+        finally:
+            await stream.aclose()
+            if getattr(stream, "done", False):
+                with contextlib.suppress(BaseException):
+                    _ = stream.exception
         if not frames:
             raise RuntimeError("TTS returned no audio frames")
         return {"frames": len(frames), "sample_rate": frames[0].sample_rate}
@@ -288,7 +297,14 @@ async def preflight_real_stack(
         return {"chars": len(text), "text": text[:80]}
 
     cfg = load_effective_config()
-    factory = SharedStageFactory.from_config(cfg)
+    if cfg.providers.brain_provider == "eidolon_agent" and "llm" not in checks:
+        factory = SimpleNamespace(
+            stt=SharedStageFactory._build_stt(cfg),
+            tts=SharedStageFactory._build_tts(cfg),
+            llm=SimpleNamespace(llm=None),
+        )
+    else:
+        factory = SharedStageFactory.from_config(cfg)
     fns: dict[str, tuple[Callable[[Any], Awaitable[dict[str, Any]]], float]] = {
         "llm": (_check_llm, llm_timeout_sec + 5.0),
         "tts": (_check_tts, tts_timeout_sec),
@@ -322,7 +338,9 @@ async def preflight_real_stack(
     finally:
         await factory.stt.shutdown()
         await factory.tts.shutdown()
-        if hasattr(factory.llm.llm, "aclose"):
+        if getattr(factory.llm, "llm", None) is not None and hasattr(
+            factory.llm.llm, "aclose"
+        ):
             await factory.llm.llm.aclose()
 
     return {

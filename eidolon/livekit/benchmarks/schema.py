@@ -31,6 +31,10 @@ class UserStep:
     final_delay_ms: int = 80
     vad_probability: float = 0.9
     agent_speaking: bool = True
+    client_playback_state: str = "unknown"
+    client_ptt: bool = False
+    client_manual_interrupt: bool = False
+    client_mic_muted: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class AgentReply:
 class Expectations:
     action: str = "none"
     intent: str = "uncertain"
+    forbid_actions: tuple[str, ...] = ()
     topic_switch_hint: bool = False
     correction_hint: bool = False
     agent_audio_cancelled: bool = False

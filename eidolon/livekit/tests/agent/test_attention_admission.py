@@ -1,0 +1,190 @@
+"""AttentionAdmission policy tests."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import replace
+from unittest.mock import MagicMock
+
+from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.turn_policy import (
+    AdmissionAction,
+    AttentionAdmission,
+    AttentionInput,
+    TurnPolicyRuntime,
+)
+from eidolon.livekit.common.config import AttentionPolicyConfig, TurnPolicyConfig
+
+
+def _client_state(**kwargs) -> ClientAudioState:
+    base = {
+        "participant_identity": "alice",
+        "input_mode": "auto",
+        "playback_state": "agent_speaking",
+        "received_at": time.monotonic(),
+    }
+    base.update(kwargs)
+    return ClientAudioState(**base)
+
+
+def test_attention_preserves_existing_path_without_client_state() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(agent_speaking=True, client_state=None, transcript="")
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "no_client_state"
+
+
+def test_attention_observes_browser_playback_without_direct_signal() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="那它的主要风险是什么",
+        )
+    )
+
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "client_playback_active_without_direct_signal"
+
+
+def test_attention_hard_stop_upgrades_during_playback() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="别说了",
+        )
+    )
+
+    assert decision.action is AdmissionAction.HARD_INTERRUPT
+    assert decision.reason == "transcript_hard_stop"
+
+
+def test_attention_explicit_client_interrupt_is_hard() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(manual_interrupt=True),
+        )
+    )
+
+    assert decision.action is AdmissionAction.HARD_INTERRUPT
+    assert decision.reason == "explicit_client_interrupt"
+
+
+def _turn_policy(*, enforce: bool) -> TurnPolicyConfig:
+    return replace(
+        TurnPolicyConfig(),
+        attention=replace(AttentionPolicyConfig(), enforce=enforce),
+    )
+
+
+def _pipeline_with_client_state(
+    state: ClientAudioState | None,
+    *,
+    enforce: bool = True,
+) -> StreamingPipeline:
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._turn_policy = _turn_policy(enforce=enforce)
+    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
+    pipeline._state = PipelineState.SPEAKING
+    pipeline._duck_mixer = None
+    pipeline._timeline = TurnTimeline("turn-1")
+    pipeline._client_audio_states = (
+        {state.participant_identity: state} if state is not None else {}
+    )
+    pipeline._duck_and_arm_timeout = MagicMock()
+    return pipeline
+
+
+def test_pipeline_attention_skips_eot_for_ambient_playback_speech() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+
+    allowed = pipeline._attention_allows_eot_check("那它的主要风险是什么")
+
+    assert allowed is False
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
+
+
+def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+
+    allowed = pipeline._attention_allows_eot_check("别说了")
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+
+
+def test_pipeline_attention_preserves_old_path_without_client_state() -> None:
+    pipeline = _pipeline_with_client_state(None)
+
+    allowed = pipeline._attention_allows_eot_check("那它的主要风险是什么")
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+
+
+def test_pipeline_attention_defaults_to_observe_only_rollout() -> None:
+    pipeline = _pipeline_with_client_state(_client_state(), enforce=False)
+
+    allowed = pipeline._attention_allows_eot_check("那它的主要风险是什么")
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
+    assert pipeline._timeline.attrs["attention_admission"]["enforced"] is False
+
+
+def test_pipeline_attention_records_decision_history() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+
+    pipeline._attention_allows_eot_check("那它的主要风险是什么")
+    pipeline._attention_allows_eot_check("别说了")
+
+    events = pipeline._timeline.attrs["attention_admission_events"]
+    assert [event["action"] for event in events] == ["observe", "hard_interrupt"]
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+
+
+def test_pipeline_attention_prefers_speaker_client_state() -> None:
+    now = time.monotonic()
+    alice = _client_state(
+        participant_identity="alice",
+        playback_state="agent_speaking",
+        received_at=now,
+    )
+    bob = _client_state(
+        participant_identity="bob",
+        playback_state="idle",
+        received_at=now - 0.2,
+    )
+    pipeline = _pipeline_with_client_state(alice)
+    pipeline._client_audio_states[bob.participant_identity] = bob
+
+    allowed = pipeline._attention_allows_eot_check(
+        "那它的主要风险是什么",
+        speaker_id="bob",
+    )
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "client_playback_idle"
+    )

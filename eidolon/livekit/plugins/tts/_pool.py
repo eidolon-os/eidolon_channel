@@ -224,17 +224,29 @@ class TTSConnectionPool(Generic[T]):
         )
 
     async def shutdown(self) -> None:
-        """Close all warm connections + wait for in-flight refills to finish."""
+        """Close all warm connections and stop background refill work.
+
+        Shutdown means "no more pre-warming". Refill tasks may be sitting inside
+        a slow provider factory (WS handshake + task_start); waiting for those
+        to finish can extend teardown by the provider timeout and can race with
+        framework-owned streams that are already unwinding. Cancel refill tasks
+        first, wait for all tracked cleanup tasks to settle, then drain warm
+        connections.
+        """
         if self._closed:
             return
         self._closed = True
         logger.info(
-            "[%s] shutdown: %d warm conns + %d in-flight refills",
+            "[%s] shutdown: %d warm conns + %d tracked background task(s)",
             self._label, self._ready.qsize(), len(self._refill_tasks),
         )
 
-        # Wait for any in-flight refill tasks to complete (or fail) so we
-        # don't leak background work or fight with them on conn close.
+        for task in list(self._refill_tasks):
+            if not task.done() and getattr(task, "_is_refill", False):
+                task.cancel()
+
+        # Wait for tracked tasks to complete/cancel so we don't leak background
+        # work or fight with dispose tasks on conn close.
         if self._refill_tasks:
             await asyncio.gather(*self._refill_tasks, return_exceptions=True)
             self._refill_tasks.clear()
@@ -419,7 +431,10 @@ class TTSConnectionPool(Generic[T]):
     @property
     def in_flight_refills(self) -> int:
         """Number of background refill tasks currently running."""
-        return len(self._refill_tasks)
+        return sum(
+            1 for t in self._refill_tasks
+            if not t.done() and getattr(t, "_is_refill", False)
+        )
 
     # ── Internals ───────────────────────────────────────────────
 
@@ -450,7 +465,8 @@ class TTSConnectionPool(Generic[T]):
             # Don't immediately retry on failure — back off briefly so
             # the next acquire can re-trigger refill via _maybe_refill.
             # A tight retry loop here would amplify network outages.
-            await asyncio.sleep(self._refill_failure_backoff)
+            if not self._closed:
+                await asyncio.sleep(self._refill_failure_backoff)
             return
 
         if self._closed:

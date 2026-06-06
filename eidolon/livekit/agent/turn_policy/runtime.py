@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from eidolon.livekit.common.config import TurnPolicyConfig
 
-from .decider import Decision, InterruptDecider
+from .attention import AttentionAdmission, AttentionDecision, AttentionInput
+from .decider import Action, Decision, InterruptDecider
+from .intent_classifier import InterruptIntent
 
 
 @dataclass
@@ -45,6 +48,8 @@ class TurnPolicyRuntime:
     def __init__(self, config: TurnPolicyConfig) -> None:
         self.config = config
         self.decider = InterruptDecider(config.interrupt)
+        self.attention = AttentionAdmission(config)
+        self._stabilizer = _WeakSignalFollowupStabilizer(config)
 
     @property
     def decision_timeout_sec(self) -> float:
@@ -57,13 +62,21 @@ class TurnPolicyRuntime:
         *,
         vad_active: bool,
         agent_speaking: bool,
+        is_final: bool = False,
+        event_time_ms: float | None = None,
     ) -> Decision:
-        return self.decider.on_stt_interim(
+        decision = self.decider.on_stt_interim(
             text,
             score,
             vad_active=vad_active,
             agent_speaking=agent_speaking,
+            is_final=is_final,
         )
+        now_ms = event_time_ms if event_time_ms is not None else time.monotonic() * 1000
+        return self._stabilizer.apply(decision, now_ms=now_ms)
+
+    def admit_attention(self, signal: AttentionInput) -> AttentionDecision:
+        return self.attention.decide(signal)
 
     @staticmethod
     def control_signal_from_decision(
@@ -85,3 +98,52 @@ class TurnPolicyRuntime:
             latency_ms=latency_ms,
         )
 
+
+class _WeakSignalFollowupStabilizer:
+    """Hold normal-interrupt candidates briefly after weak/noisy evidence."""
+
+    _WEAK_HOLD_REASON_PREFIXES = (
+        "transcript_evidence_hold:",
+        "deadline_wait_for_better_transcript:",
+        "intent:noise_",
+        "intent:backchannel_",
+    )
+
+    def __init__(self, config: TurnPolicyConfig) -> None:
+        self._config = config
+        self._last_weak_signal_ms: float | None = None
+
+    def apply(self, decision: Decision, *, now_ms: float) -> Decision:
+        if self._is_weak_signal_hold(decision):
+            self._last_weak_signal_ms = now_ms
+            return decision
+        if self._should_hold_after_weak_signal(decision, now_ms):
+            return Decision(
+                action=Action.HOLD,
+                reason=(
+                    "weak_signal_followup_hold "
+                    f"age_ms={now_ms - (self._last_weak_signal_ms or now_ms):.0f}"
+                ),
+                intent=InterruptIntent.UNCERTAIN,
+                intent_source=decision.intent_source or "runtime",
+                intent_confidence=0.0,
+            )
+        if decision.action is Action.CANCEL:
+            self._last_weak_signal_ms = None
+        return decision
+
+    def _is_weak_signal_hold(self, decision: Decision) -> bool:
+        if decision.action is not Action.HOLD:
+            return False
+        return decision.reason.startswith(self._WEAK_HOLD_REASON_PREFIXES)
+
+    def _should_hold_after_weak_signal(self, decision: Decision, now_ms: float) -> bool:
+        window_ms = self._config.interrupt.weak_signal_followup_hold_ms
+        if window_ms <= 0 or self._last_weak_signal_ms is None:
+            return False
+        if now_ms - self._last_weak_signal_ms > window_ms:
+            return False
+        return (
+            decision.action is Action.CANCEL
+            and decision.intent == InterruptIntent.NORMAL_INTERRUPT
+        )

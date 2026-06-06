@@ -45,7 +45,14 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
     actions = _actions(records)
     intents = _intents(records)
 
-    if expected.action == "none":
+    forbidden = set(expected.forbid_actions)
+    forbidden_seen = sorted(forbidden.intersection(actions))
+    if forbidden_seen:
+        errors.append(f"timeline saw forbidden actions={forbidden_seen}")
+
+    if expected.action in ("", "any"):
+        pass
+    elif expected.action == "none":
         unexpected = [action for action in actions if action in {"cancel", "rollback"}]
         if unexpected:
             errors.append(

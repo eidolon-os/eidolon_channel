@@ -127,6 +127,10 @@ class InterruptPolicyConfig:
     min_interim_chars: int = 2
     early_cancel_score_threshold: float = 0.70
     early_resume_score_threshold: float = 0.20
+    transcript_evidence_gate_enabled: bool = True
+    min_normal_interim_cjk_chars: int = 3
+    latin_artifact_hold_max_chars: int = 4
+    weak_signal_followup_hold_ms: int = 1500
     hard_stop_lexicon: tuple[str, ...] = (
         "停",
         "停一下",
@@ -198,6 +202,15 @@ class PreemptivePolicyConfig:
 
 
 @dataclass(frozen=True)
+class AttentionPolicyConfig:
+    enabled: bool = True
+    enforce: bool = False
+    client_state_max_age_ms: int = 2_000
+    require_direct_signal_during_playback: bool = True
+    ignore_when_mic_muted: bool = True
+
+
+@dataclass(frozen=True)
 class TurnPolicyConfig:
     profile: TurnPolicyProfile = "balanced_semantic"
     vad: VadPolicyConfig = field(default_factory=VadPolicyConfig)
@@ -206,6 +219,7 @@ class TurnPolicyConfig:
     ducking: DuckingPolicyConfig = field(default_factory=DuckingPolicyConfig)
     idle: IdlePolicyConfig = field(default_factory=IdlePolicyConfig)
     preemptive: PreemptivePolicyConfig = field(default_factory=PreemptivePolicyConfig)
+    attention: AttentionPolicyConfig = field(default_factory=AttentionPolicyConfig)
 
 
 @dataclass(frozen=True)

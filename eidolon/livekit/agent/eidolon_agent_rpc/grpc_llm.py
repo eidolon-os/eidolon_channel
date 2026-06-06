@@ -272,8 +272,19 @@ class EidolonAgentGrpcLlm(llm.LLM):
 class EidolonAgentGrpcLlmStream(llm.LLMStream):
     async def _run(self) -> None:
         llm_v: EidolonAgentGrpcLlm = self._llm  # type: ignore[assignment]
-        session = await llm_v._get_session()
         user_text = _last_user_text(self._chat_ctx)
+        llm_v.emit_provider_event(
+            "brain_request_started",
+            text_chars=len(user_text),
+        )
+        timeout = max(float(getattr(self._conn_options, "timeout", 10.0) or 10.0), 0.1)
+        try:
+            session = await asyncio.wait_for(llm_v._get_session(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise APIConnectionError(
+                f"eidolon_agent session open timed out after {timeout:.1f}s",
+                retryable=True,
+            ) from exc
         # D1: resolve conversation_id at chat() time so the resolver can
         # consult LiveKit room state (participant identity etc.) that wasn't
         # available when the adapter was constructed by the factory.
@@ -290,17 +301,22 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 conversation_id = f"livekit:{llm_v._display_model}"
         else:
             conversation_id = cid_src
-        llm_v.emit_provider_event(
-            "brain_request_started",
-            conversation_id=conversation_id,
-        )
-        turn_id, payloads = await session.start_turn(
-            text=user_text,
-            conversation_id=conversation_id,
-            metadata={"turn_control": turn_control}
-            if (turn_control := llm_v.pop_turn_control_metadata())
-            else None,
-        )
+        try:
+            turn_id, payloads = await asyncio.wait_for(
+                session.start_turn(
+                    text=user_text,
+                    conversation_id=conversation_id,
+                    metadata={"turn_control": turn_control}
+                    if (turn_control := llm_v.pop_turn_control_metadata())
+                    else None,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise APIConnectionError(
+                f"eidolon_agent StartTurn timed out after {timeout:.1f}s",
+                retryable=True,
+            ) from exc
         req_id = f"eidolon-{turn_id}"
         llm_v.emit_provider_event(
             "brain_request_sent",

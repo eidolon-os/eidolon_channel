@@ -85,6 +85,7 @@ class BailianTTS(TTS):
         )
         self._stream_lock = asyncio.Lock()
         self._stream_active = False
+        self._closing = False
         self._conn: BailianTTSClient | None = None
         # G21 (2026-05-18): weakref to the currently-active synth stream so
         # callers (StreamingPipeline._snapshot_interrupted_context) can read
@@ -161,6 +162,8 @@ class BailianTTS(TTS):
             logger.debug("[BailianTTS] dispose best-effort: %s", e)
 
     async def warmup(self) -> None:
+        if self._closing:
+            raise RuntimeError("[BailianTTS] cannot warmup after shutdown started")
         if self._pool.warm_count >= self._config.pool_size:
             return
         # F5 (2026-05-16): synchronously open only ``pool_size_bootstrap``
@@ -181,6 +184,7 @@ class BailianTTS(TTS):
             self._pool._maybe_refill()  # type: ignore[attr-defined]
 
     async def shutdown(self) -> None:
+        self._closing = True
         await self._pool.shutdown()
         self._conn = None
         if self._http_session is not None:
@@ -191,10 +195,12 @@ class BailianTTS(TTS):
             self._http_session = None
 
     async def _acquire_conn(self) -> BailianTTSClient:
+        if self._closing:
+            raise BailianTTSError("[BailianTTS] shutting down", recoverable=False)
         try:
             conn = await self._pool.acquire()
         except RuntimeError as e:
-            raise BailianTTSError(str(e), recoverable=True) from e
+            raise BailianTTSError(str(e), recoverable=not self._closing) from e
         self._conn = conn
         return conn
 
@@ -303,6 +309,12 @@ class BailianSynthesizeStream(SynthesizeStream):
             stream=True,
         )
         output_emitter.start_segment(segment_id=uuid.uuid4().hex[:16])
+
+        if self._tts._closing:
+            output_emitter.end_segment()
+            output_emitter.end_input()
+            logger.debug("[BailianSynthesizeStream] ignored stream during shutdown")
+            return
 
         async with self._tts._stream_lock:
             client = await self._tts._acquire_conn()

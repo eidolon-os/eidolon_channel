@@ -6,10 +6,16 @@ import subprocess
 import time
 from pathlib import Path
 
-from eidolon.livekit.agent.turn_policy import Action, TurnPolicyRuntime
+from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.turn_policy import (
+    AdmissionAction,
+    AttentionInput,
+    Action,
+    TurnPolicyRuntime,
+)
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
 
-from .schema import BenchmarkSuite, CaseResult, RunResult
+from .schema import BenchmarkSuite, CaseResult, RunResult, UserStep
 
 
 def _git_sha() -> str:
@@ -49,39 +55,92 @@ def run_policy_suite(
             for step in case.user_steps:
                 if not step.agent_speaking:
                     continue
-                text = step.interims[0] if step.interims else step.text
-                decision = runtime.decide_from_transcript(
-                    text,
-                    0.0,
-                    vad_active=True,
-                    agent_speaking=step.agent_speaking,
-                )
-                decisions.append(
-                    {
+                texts = step.interims or (step.text,)
+                for index, text in enumerate(texts):
+                    event_time_ms = step.start_ms + index * 80
+                    attention = runtime.admit_attention(
+                        AttentionInput(
+                            agent_speaking=step.agent_speaking,
+                            client_state=_client_audio_state(step),
+                            transcript=text,
+                        )
+                    )
+                    decision_record = {
                         "step_text": step.text,
+                        "interim_index": index,
                         "interim_text": text,
-                        "decision": {
-                            "action": decision.action.value,
-                            "reason": decision.reason,
-                            "intent": decision.intent.value if decision.intent else None,
-                            "intent_source": decision.intent_source,
-                            "intent_confidence": decision.intent_confidence,
-                            "topic_switch_hint": decision.topic_switch_hint,
-                            "correction_hint": decision.correction_hint,
-                            "rollback_drop_buffered": decision.rollback_drop_buffered,
+                        "attention_admission": {
+                            "action": attention.action.value,
+                            "reason": attention.reason,
+                            "client_state_used": attention.client_state_used,
                         },
+                        "decision": None,
                     }
-                )
-                if decision.action is not Action.HOLD:
-                    action = decision.action
-                    intent = decision.intent.value if decision.intent else "unknown"
-                    topic_switch_hint = decision.topic_switch_hint
-                    correction_hint = decision.correction_hint
-                    decision_start_ms = step.start_ms
-                    decision_at_ms = step.start_ms + step.final_delay_ms
+                    if policy.attention.enforce and attention.action in (
+                        AdmissionAction.IGNORE,
+                        AdmissionAction.OBSERVE,
+                    ):
+                        decisions.append(decision_record)
+                        continue
+                    if (
+                        policy.attention.enforce
+                        and attention.action is AdmissionAction.HARD_INTERRUPT
+                        and not text.strip()
+                    ):
+                        action = Action.CANCEL
+                        intent = "hard_stop"
+                        decision_start_ms = step.start_ms
+                        decision_at_ms = event_time_ms
+                        decision_record["decision"] = {
+                            "action": action.value,
+                            "reason": attention.reason,
+                            "intent": intent,
+                            "intent_source": "attention_admission",
+                            "intent_confidence": 1.0,
+                            "topic_switch_hint": False,
+                            "correction_hint": False,
+                            "rollback_drop_buffered": False,
+                        }
+                        decisions.append(decision_record)
+                        break
+                    decision = runtime.decide_from_transcript(
+                        text,
+                        0.0,
+                        vad_active=True,
+                        agent_speaking=step.agent_speaking,
+                        event_time_ms=event_time_ms,
+                    )
+                    decision_record["decision"] = {
+                        "action": decision.action.value,
+                        "reason": decision.reason,
+                        "intent": decision.intent.value if decision.intent else None,
+                        "intent_source": decision.intent_source,
+                        "intent_confidence": decision.intent_confidence,
+                        "topic_switch_hint": decision.topic_switch_hint,
+                        "correction_hint": decision.correction_hint,
+                        "rollback_drop_buffered": decision.rollback_drop_buffered,
+                    }
+                    decisions.append(decision_record)
+                    if decision.action is not Action.HOLD:
+                        action = decision.action
+                        intent = decision.intent.value if decision.intent else "unknown"
+                        topic_switch_hint = decision.topic_switch_hint
+                        correction_hint = decision.correction_hint
+                        decision_start_ms = step.start_ms
+                        decision_at_ms = step.start_ms + step.final_delay_ms
+                        break
+                    if action is Action.NONE:
+                        action = Action.HOLD
+                        intent = decision.intent.value if decision.intent else "unknown"
+                if action is not Action.NONE:
                     break
 
-            if action.value != case.expectations.action:
+            if action.value in case.expectations.forbid_actions:
+                errors.append(f"forbidden action={action.value}")
+            if (
+                case.expectations.action not in ("", "any")
+                and action.value != case.expectations.action
+            ):
                 errors.append(
                     f"expected action={case.expectations.action}, got {action.value}"
                 )
@@ -118,6 +177,7 @@ def run_policy_suite(
                 "interrupt_decision_ms": decision_latency_ms,
                 "expected_action": case.expectations.action,
                 "actual_action": action.value,
+                "forbid_actions": ",".join(case.expectations.forbid_actions),
                 "expected_intent": case.expectations.intent,
                 "actual_intent": intent,
                 "topic_switch_hint": topic_switch_hint,
@@ -141,6 +201,28 @@ def run_policy_suite(
         runner="policy",
         profile=policy.profile,
         cases=results,
+    )
+
+
+def _client_audio_state(step: UserStep) -> ClientAudioState | None:
+    if (
+        step.client_playback_state in ("unknown", "none")
+        and not step.client_ptt
+        and not step.client_manual_interrupt
+        and not step.client_mic_muted
+    ):
+        return None
+    return ClientAudioState(
+        participant_identity="benchmark-user",
+        playback_state=(
+            step.client_playback_state
+            if step.client_playback_state in ("idle", "agent_speaking")
+            else "unknown"
+        ),
+        ptt=step.client_ptt,
+        manual_interrupt=step.client_manual_interrupt,
+        mic_muted=step.client_mic_muted,
+        received_at=time.monotonic(),
     )
 
 

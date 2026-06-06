@@ -229,19 +229,47 @@ class TestPoolEdgeCases:
 
     @pytest.mark.asyncio
     async def test_shutdown_waits_for_inflight_refills(self):
-        """If a refill is mid-flight, shutdown should wait for it."""
-        # Use a slow disposer to ensure mark_dirty's bg task is alive
-        # when shutdown begins.
+        """Shutdown waits for dispose tasks, but stops refill pre-warming."""
         factory, opened = _make_factory()
         disposer, disposed = _make_disposer(slow_ms=50)
         pool = TTSConnectionPool(factory=factory, disposer=disposer, size=2)
         await pool.warmup()
         c = await pool.acquire()
         await pool.mark_dirty(c)
-        # Don't wait_until — directly shutdown so the in-flight refill is
-        # in progress.
         await pool.shutdown()
-        # All in-flight refills awaited.
+
+        assert pool.in_flight_refills == 0
+        assert c in disposed
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_slow_inflight_refill(self):
+        opened: list[FakeConn] = []
+        factory_started = asyncio.Event()
+        factory_cancelled = asyncio.Event()
+
+        async def factory():
+            factory_started.set()
+            try:
+                await asyncio.sleep(10.0)
+            except asyncio.CancelledError:
+                factory_cancelled.set()
+                raise
+            c = FakeConn()
+            opened.append(c)
+            return c
+
+        disposer, _ = _make_disposer()
+        pool = TTSConnectionPool(factory=factory, disposer=disposer, size=1)
+        pool._maybe_refill()  # type: ignore[attr-defined]
+        await asyncio.wait_for(factory_started.wait(), timeout=1.0)
+
+        started = asyncio.get_running_loop().time()
+        await pool.shutdown()
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed < 0.5
+        assert factory_cancelled.is_set()
+        assert opened == []
         assert pool.in_flight_refills == 0
 
     @pytest.mark.asyncio

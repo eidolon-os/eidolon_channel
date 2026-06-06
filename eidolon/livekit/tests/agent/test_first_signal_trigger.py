@@ -78,7 +78,7 @@ def _make_pipeline(*, vad_user_state: str = "listening"):
 
 
 def test_first_signal_cancel_on_substantive_interim() -> None:
-    """Non-backchannel INTERIM with len ≥ min_chars → immediate cancel."""
+    """Substantive CJK INTERIM with enough evidence → immediate cancel."""
     pipeline = _make_pipeline()
 
     pipeline._run_eot_check("我不相信你", is_final=False)
@@ -87,6 +87,16 @@ def test_first_signal_cancel_on_substantive_interim() -> None:
     pipeline._snapshot_interrupted_context.assert_called_once()
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._interrupt_current_turn.assert_called_once()
+
+
+def test_first_signal_holds_short_latin_artifact() -> None:
+    """Short latin-only ASR artifacts should not cancel the agent turn."""
+    pipeline = _make_pipeline()
+
+    pipeline._run_eot_check("If", is_final=False)
+
+    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._interrupt_current_turn.assert_not_called()
 
 
 def test_first_signal_skips_backchannel() -> None:

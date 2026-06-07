@@ -110,6 +110,7 @@ eidolon/livekit/agent/
 │   ├── ducking.py            # OutputDuckingController: duck 安装/状态迁移/timeout
 │   └── filler.py             # FillerManager: 填充语管理与播放
 ├── session/
+│   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── provider_events.py    # STT/TTS provider event 观测

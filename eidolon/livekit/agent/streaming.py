@@ -76,6 +76,7 @@ from .output import FillerManager, OutputController, OutputDuckingController
 from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from .session import (
+    AgentStateEffectHandler,
     AttentionEffectHandler,
     DecisionEffectApplier,
     IdleWatchdog,
@@ -158,6 +159,7 @@ class StreamingPipeline(BasePipeline):
         self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
         self._turn_committer = UserTurnCommitter()
+        self._agent_state_effects = self._build_agent_state_effect_handler()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -383,6 +385,25 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_turn_committer"):
             self._turn_committer = UserTurnCommitter()
 
+    def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
+        return AgentStateEffectHandler(
+            get_timeline=lambda: self._timeline,
+            mark_activity=lambda: self._mark_activity(),
+            cancel_soft_interrupt=lambda: self._cancel_soft_interrupt(),
+            soft_interrupt_active=lambda: self._soft_interrupt_active,
+            ducking=self._ducking,
+            get_filler=lambda: self._filler,
+            flush_timeline_debug=lambda reason, clear: self._append_timeline_debug(
+                reason,
+                clear=clear,
+            ),
+        )
+
+    def _ensure_agent_state_effect_handler(self) -> None:
+        handler = getattr(self, "_agent_state_effects", None)
+        if handler is None or getattr(handler, "_ducking", None) is not self._ducking:
+            self._agent_state_effects = self._build_agent_state_effect_handler()
+
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
@@ -488,6 +509,7 @@ class StreamingPipeline(BasePipeline):
         self._ensure_attention_effect_handler()
         self._ensure_session_signal_bridge()
         self._ensure_turn_committer()
+        self._ensure_agent_state_effect_handler()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -839,77 +861,11 @@ class StreamingPipeline(BasePipeline):
         )
 
     def _on_agent_state_changed(self, event: Any) -> None:
-        """Forward agent state change + cancel pending soft interrupts.
-
-        Round 8 cleanup: previously this also re-applied
-        ``disable_audio_activity_interruption`` on every agent
-        speech-start, because we only patched the runtime flag and
-        framework restored it on each transition. Now ``_framework_patches``
-        also patches the *default* flag, so the disable is permanent for
-        the session and we no longer need this hot path.
-        """
+        """Forward agent state changes through BasePipeline and session effects."""
         self._ensure_runtime_defaults()
         super()._on_agent_state_changed(event)
-
-        # Agent producing a reply (or speaking the welcome) is activity — keep
-        # the idle watchdog from firing while the agent holds the turn.
-        if event.new_state in ("thinking", "speaking"):
-            self._mark_activity()
-
-        # If agent starts thinking or speaking (e.g. after a new user transcript), cancel
-        # any pending soft interrupt timer. The timer was set for the PREVIOUS turn's
-        # interrupt; it must not fire and cancel the NEW agent response.
-        if event.new_state in ("thinking", "speaking"):
-            if self._filler is not None:
-                self._filler.cancel()
-        if self._timeline is not None:
-            if event.new_state == "thinking":
-                self._timeline.mark("llm_started_at")
-            elif event.new_state == "speaking":
-                self._timeline.mark("tts_first_audio_at")
-            elif event.old_state == "speaking" and event.new_state in (
-                "idle",
-                "listening",
-            ):
-                self._timeline.mark("agent_audio_playback_done_at")
-                self._append_timeline_debug("agent_audio_playback_done", clear=True)
-        if event.new_state in ("thinking", "speaking") and self._soft_interrupt_active:
-            logger.info(
-                "[StreamingPipeline] agent started %s, cancelling pending soft interrupt timer",
-                event.new_state,
-            )
-            self._cancel_soft_interrupt()
-
-        # G22 (2026-05-18): on transition to SPEAKING, reset the duck mixer's
-        # per-turn played-sample counter. This was previously reset inside
-        # ``DuckingMixer.duck()`` — that fired multiple times per turn
-        # (backchannels, echo) and clobbered the count, so the interrupted
-        # context snapshot under-reported "how much the user heard". The
-        # speaking-transition is the true turn boundary.
-        if event.new_state == "speaking":
-            # Older DuckingMixer builds without the hook are tolerated inside
-            # the controller; focused tests still pin such frozen mixers.
-            self._ducking.on_agent_started_speaking()
-
-        # G22-fix (2026-05-18): when a new agent turn starts (transition to
-        # ``thinking``), reset the mixer state if it was left in CANCELLED
-        # by a previous interrupt. Without this, OutputController.cancel()
-        # leaves state="CANCELLED" forever — every subsequent TTS frame
-        # gets dropped, agent_state never transitions to "speaking" (the
-        # framework gates that on first audio frame reaching the inner
-        # sink), and we deadlock with TTS generating audio that the user
-        # never hears.
-        #
-        # Production manifestation (round-2 interrupt log 2026-05-18):
-        # 1st interrupt cancelled TTS; 2nd user utterance produced FINAL +
-        # LLM response + 17s of TTS audio, but no `agent_state → speaking`
-        # and no audio playback. Symptom: "second interrupt then TTS not
-        # playing".
-        if event.new_state == "thinking" and self._ducking.reset_if_cancelled():
-            logger.info(
-                "[StreamingPipeline] OutputController CANCELLED→NORMAL "
-                "(new turn starting — clearing prior-interrupt state)"
-            )
+        self._ensure_agent_state_effect_handler()
+        self._agent_state_effects.handle(event)
 
     def _register_vad_inference_callback(self) -> None:
         self._ensure_session_signal_bridge()

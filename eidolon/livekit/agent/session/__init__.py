@@ -1,5 +1,6 @@
 """LiveKit session orchestration helpers."""
 
+from .agent_state import AgentStateEffectHandler
 from .attention_effects import AttentionEffectHandler
 from .decision_effects import DecisionEffectApplier
 from .idle import IdleWatchdog
@@ -10,6 +11,7 @@ from .signals import SessionSignalBridge
 from .turn_commit import UserTurnCommitter
 
 __all__ = [
+    "AgentStateEffectHandler",
     "AttentionEffectHandler",
     "DecisionEffectApplier",
     "IdleWatchdog",

@@ -78,6 +78,7 @@ from .output import FillerManager, OutputController, OutputDuckingController
 from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from .session import (
+    DecisionEffectApplier,
     IdleWatchdog,
     ProviderEventObserver,
     RoomDataHandler,
@@ -152,6 +153,7 @@ class StreamingPipeline(BasePipeline):
         self._observability = observability or ObservabilityConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
+        self._decision_effects = self._build_decision_effect_applier()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -322,6 +324,22 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_ducking"):
             self._ducking = OutputDuckingController()
 
+    def _build_decision_effect_applier(self) -> DecisionEffectApplier:
+        return DecisionEffectApplier(
+            factory=getattr(self, "_factory", None),
+            turn_runtime=self._turn_runtime,
+            get_timeline=lambda: self._timeline,
+            on_cancel=lambda: self._duck_cancel_and_interrupt(),
+            on_rollback=lambda reason, drop_buffered: self._duck_unduck_if_suspended(
+                reason=reason,
+                drop_buffered=drop_buffered,
+            ),
+        )
+
+    def _ensure_decision_effect_applier(self) -> None:
+        if not hasattr(self, "_decision_effects"):
+            self._decision_effects = self._build_decision_effect_applier()
+
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
@@ -423,6 +441,7 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_client_audio_states"):
             self._client_audio_states = {}
         self._ensure_ducking_controller()
+        self._ensure_decision_effect_applier()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -1682,33 +1701,14 @@ class StreamingPipeline(BasePipeline):
                 internal classification).
         """
         self._ensure_runtime_defaults()
-        self._record_decision_attrs(
+        self._ensure_decision_effect_applier()
+        self._decision_effects.apply(
             decision,
             resolved_reason=resolved_reason,
             eot_score=eot_score,
             transcript=transcript,
             vad_active=vad_active,
         )
-        if decision.action is Action.CANCEL:
-            # Real interrupt: snapshot context, cancel mixer, interrupt TTS.
-            signal = self._turn_runtime.control_signal_from_decision(decision)
-            self._publish_turn_control(signal.as_metadata())
-            if self._timeline is not None:
-                self._timeline.set_attr("turn_control", signal.as_metadata())
-            self._duck_cancel_and_interrupt()
-            return
-        if decision.action is Action.ROLLBACK:
-            signal = self._turn_runtime.control_signal_from_decision(decision)
-            self._publish_turn_control(signal.as_metadata())
-            if self._timeline is not None:
-                self._timeline.set_attr("turn_control", signal.as_metadata())
-            self._duck_unduck_if_suspended(
-                reason=resolved_reason or decision.reason,
-                drop_buffered=decision.rollback_drop_buffered,
-            )
-            return
-        # HOLD / NONE — no-op; let next interim or deadline drive.
-        return
 
     def _record_decision_attrs(
         self,
@@ -1720,23 +1720,13 @@ class StreamingPipeline(BasePipeline):
         transcript: str = "",
         vad_active: bool | None = None,
     ) -> None:
-        if self._timeline is None:
-            return
-        self._timeline.record_decision(
-            action=decision.action.value,
-            reason=decision.reason,
-            rollback_drop_buffered=decision.rollback_drop_buffered,
-            intent=decision.intent.value if decision.intent is not None else None,
-            intent_source=decision.intent_source,
-            intent_confidence=decision.intent_confidence,
-            topic_switch_hint=decision.topic_switch_hint,
-            correction_hint=decision.correction_hint,
-            tier=decision.tier or None,
-            tier_reason=decision.tier_reason or None,
+        self._ensure_decision_effect_applier()
+        self._decision_effects.record_decision_attrs(
+            decision,
             source=source,
             resolved_reason=resolved_reason,
             eot_score=eot_score,
-            transcript_preview=transcript[:120],
+            transcript=transcript,
             vad_active=vad_active,
         )
 
@@ -1751,16 +1741,8 @@ class StreamingPipeline(BasePipeline):
 
     def _publish_turn_control(self, metadata: dict[str, object]) -> None:
         """Attach control hints to the next remote-brain turn when supported."""
-        try:
-            llm_plugin = getattr(self._factory.llm, "llm", None)
-            setter = getattr(llm_plugin, "set_turn_control_metadata", None)
-            if setter is not None:
-                setter(metadata)
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] failed to publish turn_control metadata",
-                exc_info=True,
-            )
+        self._ensure_decision_effect_applier()
+        self._decision_effects.publish_turn_control(metadata)
 
     def _cancel_duck_timeout(self) -> None:
         """Cancel the suspend-window fallback task if active. Safe to call any time."""

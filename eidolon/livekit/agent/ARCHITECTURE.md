@@ -110,6 +110,7 @@ eidolon/livekit/agent/
 │   ├── ducking.py            # OutputDuckingController: duck 安装/状态迁移/timeout
 │   └── filler.py             # FillerManager: 填充语管理与播放
 ├── session/
+│   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── provider_events.py    # STT/TTS provider event 观测
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发

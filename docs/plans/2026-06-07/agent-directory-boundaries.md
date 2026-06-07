@@ -385,11 +385,20 @@ eidolon/livekit/agent/
 - 更新 `StreamingPipeline` 新代码 import 到 `agent.output`。
 - 新增 import boundary 测试，保护新旧路径一致性。
 
-下一步适合执行 Phase 2：
+### 2026-06-07 Phase 2 执行记录
 
-1. 从 `streaming.py` 中抽出 provider event observer。
-2. 再抽 idle watchdog。
-3. 再抽 room data/client audio state handler。
-4. 每一步独立 commit，保持行为不变。
+已完成第一块 `streaming.py` 职责抽取：
+
+- 新建 `session/`。
+- 新增 `session/provider_events.py`。
+- 将 LLM metrics、brain provider event、STT provider event、TTS provider event 归一化逻辑移入 `ProviderEventObserver`。
+- `StreamingPipeline` 保留薄 wrapper，兼容既有测试中的私有方法调用。
+- 新增 `ProviderEventObserver` 直接单测。
+
+下一步继续 Phase 2：
+
+1. 抽 idle watchdog。
+2. 抽 room data/client audio state handler。
+3. 每一步独立 commit，保持行为不变。
 
 这一步收益明确，风险较低，也能验证目录边界设计是否顺手。

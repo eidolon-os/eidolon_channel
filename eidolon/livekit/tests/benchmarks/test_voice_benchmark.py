@@ -7,6 +7,7 @@ import contextlib
 import json
 import statistics
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import jwt
@@ -557,6 +558,78 @@ def test_livekit_room_state_marks_agent_connected() -> None:
     state.mark("participant_connected_at")
 
     assert state.agent_connected.is_set()
+
+
+def test_livekit_room_retries_only_agent_missing_infrastructure_failure() -> None:
+    from eidolon.livekit.benchmarks.livekit_room_runner import _should_retry_room_case
+
+    missing_agent = CaseResult(
+        case_id="topic_switch_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        errors=["timed out waiting for agent participant before user audio"],
+    )
+    semantic_failure = CaseResult(
+        case_id="topic_switch_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        errors=["timeline expected intent=topic_switch, got ['<none>']"],
+    )
+
+    assert _should_retry_room_case(missing_agent) is True
+    assert _should_retry_room_case(semantic_failure) is False
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_case_retry_records_previous_attempt(monkeypatch) -> None:
+    from eidolon.livekit.benchmarks import livekit_room_runner
+    from eidolon.livekit.benchmarks.livekit_room_runner import (
+        LiveKitRoomOptions,
+        _run_room_case_with_retries,
+    )
+
+    calls = 0
+
+    async def fake_run_room_case(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=False,
+                metrics={"room_name": "room-failed"},
+                errors=["timed out waiting for agent participant before user audio"],
+            )
+        return CaseResult(
+            case_id="topic_switch_001",
+            suite="semantic_control",
+            runner="livekit_room",
+            passed=True,
+            metrics={"room_name": "room-retry"},
+        )
+
+    monkeypatch.setattr(livekit_room_runner, "_run_room_case", fake_run_room_case)
+    suite = load_suite("benchmarks/cases/core.yaml")
+    case = next(case for case in suite.cases if case.case_id == "topic_switch_001")
+
+    result = await _run_room_case_with_retries(
+        case,
+        root=Path("."),
+        options=LiveKitRoomOptions(agent_missing_retry_count=1),
+        livekit_url="ws://127.0.0.1:7880",
+        api_key="devkey",
+        api_secret="devkey_secret",
+    )
+
+    assert calls == 2
+    assert result.passed is True
+    assert result.metrics["retry_attempts"] == 1
+    assert result.events[0]["type"] == "case_retry"
+    assert result.events[0]["previous_room_name"] == "room-failed"
 
 
 @pytest.mark.asyncio

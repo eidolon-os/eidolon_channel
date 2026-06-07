@@ -44,6 +44,10 @@ class LiveKitRoomOptions:
     participant_kind: str = "user"
     participant_metadata: dict[str, Any] | None = None
     room_prefix: str = "voice-bench"
+    agent_missing_retry_count: int = 1
+
+
+_AGENT_MISSING_ERROR = "timed out waiting for agent participant before user audio"
 
 
 def _git_sha() -> str:
@@ -70,7 +74,7 @@ async def run_livekit_room_suite(
     for suite in suites:
         for case in suite.cases:
             results.append(
-                await _run_room_case(
+                await _run_room_case_with_retries(
                     case,
                     root=root,
                     options=options,
@@ -97,6 +101,50 @@ async def run_livekit_room_suite(
 def write_livekit_room_outputs(run: RunResult, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     run.write_jsonl(output_dir / "livekit_room_results.jsonl")
+
+
+async def _run_room_case_with_retries(
+    case: BenchmarkCase,
+    *,
+    root: Path,
+    options: LiveKitRoomOptions,
+    livekit_url: str,
+    api_key: str,
+    api_secret: str,
+) -> CaseResult:
+    result = await _run_room_case(
+        case,
+        root=root,
+        options=options,
+        livekit_url=livekit_url,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    for attempt in range(max(0, options.agent_missing_retry_count)):
+        if not _should_retry_room_case(result):
+            return result
+        retry_event = {
+            "type": "case_retry",
+            "attempt": attempt + 1,
+            "reason": "agent_missing",
+            "previous_room_name": result.metrics.get("room_name"),
+            "previous_errors": list(result.errors),
+        }
+        result = await _run_room_case(
+            case,
+            root=root,
+            options=options,
+            livekit_url=livekit_url,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+        result.events.insert(0, retry_event)
+        result.metrics["retry_attempts"] = attempt + 1
+    return result
+
+
+def _should_retry_room_case(result: CaseResult) -> bool:
+    return _AGENT_MISSING_ERROR in result.errors
 
 
 async def _run_room_case(

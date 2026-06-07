@@ -74,7 +74,7 @@ from .turn_policy import (
 )
 from .observability import TurnTimeline
 from .factory import SharedStageFactory
-from .output import FillerManager, OutputController
+from .output import FillerManager, OutputController, OutputDuckingController
 from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from .session import (
@@ -251,10 +251,7 @@ class StreamingPipeline(BasePipeline):
         # so the AudioOutput chain is fully assembled. The timeout task is
         # started on every VAD-start (user_state listening → speaking) and
         # cancelled the moment EOT decides to cancel/unduck.
-        self._duck_mixer: OutputController | None = None
-        self._duck_timeout_task: asyncio.Task | None = None
-        self._last_unduck_time: float = 0.0
-        self._duck_suspend_start: float = 0.0
+        self._ducking = OutputDuckingController()
 
         # Filler word injection for latency masking.
         eot_cfg = self._get_eot_model()._config
@@ -280,6 +277,50 @@ class StreamingPipeline(BasePipeline):
     def _get_eot_model(self) -> Any:
         """Return the shared EOT model instance."""
         return _get_shared_eot_model(self._turn_policy)
+
+    @property
+    def _duck_mixer(self) -> OutputController | None:
+        self._ensure_ducking_controller()
+        return self._ducking.mixer
+
+    @_duck_mixer.setter
+    def _duck_mixer(self, value: OutputController | None) -> None:
+        self._ensure_ducking_controller()
+        self._ducking.mixer = value
+
+    @property
+    def _duck_timeout_task(self) -> asyncio.Task | None:
+        self._ensure_ducking_controller()
+        return self._ducking.timeout_task
+
+    @_duck_timeout_task.setter
+    def _duck_timeout_task(self, value: asyncio.Task | None) -> None:
+        self._ensure_ducking_controller()
+        self._ducking.timeout_task = value
+
+    @property
+    def _last_unduck_time(self) -> float:
+        self._ensure_ducking_controller()
+        return self._ducking.last_unduck_time
+
+    @_last_unduck_time.setter
+    def _last_unduck_time(self, value: float) -> None:
+        self._ensure_ducking_controller()
+        self._ducking.last_unduck_time = value
+
+    @property
+    def _duck_suspend_start(self) -> float:
+        self._ensure_ducking_controller()
+        return self._ducking.suspend_start
+
+    @_duck_suspend_start.setter
+    def _duck_suspend_start(self, value: float) -> None:
+        self._ensure_ducking_controller()
+        self._ducking.suspend_start = value
+
+    def _ensure_ducking_controller(self) -> None:
+        if not hasattr(self, "_ducking"):
+            self._ducking = OutputDuckingController()
 
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
@@ -381,6 +422,7 @@ class StreamingPipeline(BasePipeline):
             self._pending_stt_provider_events = []
         if not hasattr(self, "_client_audio_states"):
             self._client_audio_states = {}
+        self._ensure_ducking_controller()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -618,10 +660,10 @@ class StreamingPipeline(BasePipeline):
             logger.exception(
                 "[StreamingPipeline] eot_model.end_session failed (non-fatal)"
             )
-        if self._duck_mixer is not None:
-            metrics = self._duck_mixer.get_metrics()
+        duck_metrics = self._ducking.get_metrics()
+        if duck_metrics is not None:
             logger.info(
-                "[StreamingPipeline] session duck metrics: %s", metrics,
+                "[StreamingPipeline] session duck metrics: %s", duck_metrics,
             )
         self._append_timeline_debug("session_closed")
         self._session_closed_event.set()
@@ -779,13 +821,10 @@ class StreamingPipeline(BasePipeline):
         # (backchannels, echo) and clobbered the count, so the interrupted
         # context snapshot under-reported "how much the user heard". The
         # speaking-transition is the true turn boundary.
-        if event.new_state == "speaking" and self._duck_mixer is not None:
-            try:
-                self._duck_mixer.on_agent_started_speaking()
-            except AttributeError:
-                # Older DuckingMixer build without the new hook — silently
-                # tolerate; observed in tests that pin a frozen mixer.
-                pass
+        if event.new_state == "speaking":
+            # Older DuckingMixer builds without the hook are tolerated inside
+            # the controller; focused tests still pin such frozen mixers.
+            self._ducking.on_agent_started_speaking()
 
         # G22-fix (2026-05-18): when a new agent turn starts (transition to
         # ``thinking``), reset the mixer state if it was left in CANCELLED
@@ -801,16 +840,11 @@ class StreamingPipeline(BasePipeline):
         # LLM response + 17s of TTS audio, but no `agent_state → speaking`
         # and no audio playback. Symptom: "second interrupt then TTS not
         # playing".
-        if event.new_state == "thinking" and self._duck_mixer is not None:
-            try:
-                if self._duck_mixer.state == "CANCELLED":
-                    self._duck_mixer.reset()
-                    logger.info(
-                        "[StreamingPipeline] OutputController CANCELLED→NORMAL "
-                        "(new turn starting — clearing prior-interrupt state)"
-                    )
-            except AttributeError:
-                pass
+        if event.new_state == "thinking" and self._ducking.reset_if_cancelled():
+            logger.info(
+                "[StreamingPipeline] OutputController CANCELLED→NORMAL "
+                "(new turn starting — clearing prior-interrupt state)"
+            )
 
     def _register_vad_inference_callback(self) -> None:
         """Round 7 G6: bridge per-frame VAD probability to EOT state.
@@ -983,10 +1017,7 @@ class StreamingPipeline(BasePipeline):
                 # speaking without producing a strong-enough interrupt
                 # signal — confirmed false interruption, resume agent
                 # output smoothly and record the rollback decision.
-                if (
-                    self._duck_mixer is not None
-                    and self._duck_mixer.state == "SUSPENDED"
-                ):
+                if self._ducking.is_suspended:
                     decision = self._turn_runtime.user_silent_decision(
                         self._latest_asr_text
                     )
@@ -1141,10 +1172,7 @@ class StreamingPipeline(BasePipeline):
         if decision.action is AdmissionAction.HARD_INTERRUPT:
             return True
         if decision.action is AdmissionAction.DUCK_AND_DECIDE:
-            duck_active = (
-                self._duck_mixer is not None
-                and self._duck_mixer.state == "SUSPENDED"
-            )
+            duck_active = self._ducking.is_suspended
             if self._state == PipelineState.SPEAKING and not duck_active:
                 self._duck_and_arm_timeout()
             return True
@@ -1225,10 +1253,7 @@ class StreamingPipeline(BasePipeline):
         # AND we're in the suspend window (mixer state == SUSPENDED). The
         # mixer was armed on user_state listening→speaking; we now resolve
         # it based on EOT signal.
-        duck_active = (
-            self._duck_mixer is not None
-            and self._duck_mixer.state == "SUSPENDED"
-        )
+        duck_active = self._ducking.is_suspended
 
         # Strong interrupt intent — confirmed cancel (real interrupt).
         if eot_model._turn_end_policy.is_strong_interrupt_intent(text):
@@ -1278,12 +1303,12 @@ class StreamingPipeline(BasePipeline):
                 agent_speaking=True,
                 is_final=is_final,
             )
-            suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
+            stats = self._ducking.stats()
             logger.info(
                 "[StreamingPipeline] EOT(duck): decision=%s reason=%s "
                 "suspend_ms=%.0f score=%.2f text=%r",
                 decision.action.value, decision.reason,
-                suspend_ms, score, text[:80],
+                stats.suspend_ms, score, text[:80],
             )
             self._apply_decision(
                 decision,
@@ -1382,9 +1407,10 @@ class StreamingPipeline(BasePipeline):
 
     def _interrupt_current_turn(self) -> None:
         """Interrupt the currently in-progress agent turn via session.interrupt()."""
+        self._ensure_ducking_controller()
         if not self._allow_interruptions:
             return
-        if self._duck_mixer is not None and self._duck_mixer.state == "CANCELLED":
+        if self._ducking.is_cancelled:
             logger.debug(
                 "[StreamingPipeline] interrupt skipped — output already CANCELLED"
             )
@@ -1493,26 +1519,9 @@ class StreamingPipeline(BasePipeline):
         become no-ops.
         """
         cfg = self._get_eot_model()._config
-        if not getattr(cfg, "duck_enabled", True):
-            logger.info("[StreamingPipeline] duck_enabled=False — skipping DuckingMixer")
+        mixer = self._ducking.install(session, cfg)
+        if mixer is None:
             return
-        inner = session.output.audio
-        if inner is None:
-            logger.warning(
-                "[StreamingPipeline] session.output.audio is None — "
-                "DuckingMixer not installed (interrupt path falls back to "
-                "soft/hard interrupt only)"
-            )
-            return
-        mixer = OutputController(
-            inner,
-            fade_ms=cfg.duck_fade_ms,
-            fade_in_ms=cfg.duck_fade_in_ms,
-            suspend_volume=cfg.duck_suspend_volume,
-            buffer_max_sec=cfg.duck_buffer_max_sec,
-        )
-        session.output.audio = mixer
-        self._duck_mixer = mixer
         logger.info(
             "[StreamingPipeline] DuckingMixer installed "
             "(fade_out=%dms fade_in=%dms suspend_vol=%.2f "
@@ -1538,7 +1547,7 @@ class StreamingPipeline(BasePipeline):
         Skips the duck if within ``duck_cooldown_sec`` of the last unduck
         to prevent "volume yo-yo" from rapid VAD toggling.
         """
-        if self._duck_mixer is None:
+        if not self._ducking.installed:
             return
         # F3 (2026-05-16): skip duck when agent isn't actually speaking.
         # Previously, every ``user_state: listening → speaking`` armed a duck
@@ -1556,16 +1565,15 @@ class StreamingPipeline(BasePipeline):
             logger.info("[StreamingPipeline] duck skipped — filler playing")
             return
         now = time.monotonic()
-        if now - self._last_unduck_time < cfg.duck_cooldown_sec:
+        if now - self._ducking.last_unduck_time < cfg.duck_cooldown_sec:
             logger.info(
                 "[StreamingPipeline] duck skipped — within cooldown (%.2fs since last unduck)",
-                now - self._last_unduck_time,
+                now - self._ducking.last_unduck_time,
             )
             return
         # Cancel any prior timeout before re-arming.
-        self._cancel_duck_timeout()
-        self._duck_suspend_start = now
-        self._duck_mixer.duck()
+        self._ducking.cancel_timeout()
+        self._ducking.duck(now=now)
         if self._timeline is not None:
             self._timeline.mark("interrupt_started_at")
         self._callbacks.on_duck_started()
@@ -1577,7 +1585,7 @@ class StreamingPipeline(BasePipeline):
             "timeout=%.2fs  cooldown=%.2fs",
             vad_to_duck_ms, cfg.duck_suspend_timeout_sec, cfg.duck_cooldown_sec,
         )
-        self._duck_timeout_task = asyncio.create_task(
+        self._ducking.timeout_task = asyncio.create_task(
             self._duck_suspend_timeout_fallback(cfg.duck_suspend_timeout_sec)
         )
 
@@ -1588,10 +1596,8 @@ class StreamingPipeline(BasePipeline):
         try:
             self._ensure_runtime_defaults()
             await asyncio.sleep(timeout_sec)
-            if self._duck_mixer is not None and self._duck_mixer.state == "SUSPENDED":
-                suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
-                buffered = self._duck_mixer.buffered_frames
-                buffered_sec = self._duck_mixer.buffered_sec
+            if self._ducking.is_suspended:
+                stats = self._ducking.stats()
 
                 vad_still_active = (
                     self._session is not None
@@ -1611,7 +1617,7 @@ class StreamingPipeline(BasePipeline):
                         timeout_sec,
                         getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
                     )
-                    suspend_sec = time.monotonic() - self._duck_suspend_start
+                    suspend_sec = time.monotonic() - self._ducking.suspend_start
                     if suspend_sec >= max_suspend_sec:
                         decision = Decision(
                             action=Action.ROLLBACK,
@@ -1628,7 +1634,7 @@ class StreamingPipeline(BasePipeline):
                         decision = self._turn_runtime.tiers.annotate_decision(decision)
                     else:
                         next_timeout = max(0.0, max_suspend_sec - suspend_sec)
-                        self._duck_timeout_task = asyncio.create_task(
+                        self._ducking.timeout_task = asyncio.create_task(
                             self._duck_suspend_timeout_fallback(
                                 min(timeout_sec, next_timeout)
                             )
@@ -1638,7 +1644,10 @@ class StreamingPipeline(BasePipeline):
                     "decision=%s decider_reason=%s  has_transcript=%s  "
                     "suspend_ms=%.0f  buffered=%d frames (%.3fs)  timeout=%.2fs",
                     decision.action.value, decision.reason,
-                    bool(latest_asr_text), suspend_ms, buffered, buffered_sec,
+                    bool(latest_asr_text),
+                    stats.suspend_ms,
+                    stats.buffered_frames,
+                    stats.buffered_sec,
                     timeout_sec,
                 )
                 self._apply_decision(
@@ -1755,35 +1764,28 @@ class StreamingPipeline(BasePipeline):
 
     def _cancel_duck_timeout(self) -> None:
         """Cancel the suspend-window fallback task if active. Safe to call any time."""
-        if self._duck_timeout_task is not None and not self._duck_timeout_task.done():
-            self._duck_timeout_task.cancel()
-        self._duck_timeout_task = None
+        self._ensure_ducking_controller()
+        self._ducking.cancel_timeout()
 
     def _duck_cancel_and_interrupt(self) -> None:
         """Confirm interrupt: discard buffer + cancel TTS generation."""
         self._ensure_runtime_defaults()
-        if self._duck_mixer is not None and self._duck_mixer.state == "CANCELLED":
+        if self._ducking.is_cancelled:
             logger.debug(
                 "[StreamingPipeline] duplicate duck cancel ignored — "
                 "output already CANCELLED"
             )
             return
-        self._cancel_duck_timeout()
-        suspend_ms = 0.0
-        buffered = 0
-        buffered_sec = 0.0
-        if self._duck_mixer is not None:
-            suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
-            buffered = self._duck_mixer.buffered_frames
-            buffered_sec = self._duck_mixer.buffered_sec
+        stats = self._ducking.stats()
         logger.info(
             "[StreamingPipeline] duck resolved  reason=eot_cancel  "
             "action=cancel  suspend_ms=%.0f  discarded=%d frames (%.3fs)",
-            suspend_ms, buffered, buffered_sec,
+            stats.suspend_ms,
+            stats.buffered_frames,
+            stats.buffered_sec,
         )
         self._snapshot_interrupted_context()
-        if self._duck_mixer is not None:
-            self._duck_mixer.cancel()
+        self._ducking.cancel_output()
         self._callbacks.on_duck_resolved("cancel")
         if self._timeline is not None:
             self._timeline.mark("interrupt_resolved_at")
@@ -1803,22 +1805,20 @@ class StreamingPipeline(BasePipeline):
                 buffered frames are stale.
         """
         self._ensure_runtime_defaults()
-        if self._duck_mixer is None:
+        if not self._ducking.installed:
             return
-        self._cancel_duck_timeout()
-        if self._duck_mixer.state == "SUSPENDED":
-            suspend_ms = (time.monotonic() - self._duck_suspend_start) * 1000
-            buffered = self._duck_mixer.buffered_frames
-            buffered_sec = self._duck_mixer.buffered_sec
+        if self._ducking.is_suspended:
+            stats = self._ducking.stats()
             logger.info(
                 "[StreamingPipeline] duck resolved  reason=%s  "
                 "action=unduck(drop_buffered=%s)  suspend_ms=%.0f  "
                 "buffered=%d frames (%.3fs)",
                 reason, drop_buffered,
-                suspend_ms, buffered, buffered_sec,
+                stats.suspend_ms,
+                stats.buffered_frames,
+                stats.buffered_sec,
             )
-            self._duck_mixer.unduck(drop_buffered=drop_buffered)
-            self._last_unduck_time = time.monotonic()
+            self._ducking.unduck_if_suspended(drop_buffered=drop_buffered)
             self._callbacks.on_duck_resolved("unduck")
             if self._timeline is not None:
                 self._timeline.mark("interrupt_resolved_at")

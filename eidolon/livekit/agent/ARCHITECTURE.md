@@ -107,6 +107,7 @@ eidolon/livekit/agent/
 │       └── tier4_attention.py
 ├── output/
 │   ├── controller.py         # OutputController: TTS/播放句柄、取消、指标
+│   ├── ducking.py            # OutputDuckingController: duck 安装/状态迁移/timeout
 │   └── filler.py             # FillerManager: 填充语管理与播放
 ├── session/
 │   ├── provider_events.py    # STT/TTS provider event 观测

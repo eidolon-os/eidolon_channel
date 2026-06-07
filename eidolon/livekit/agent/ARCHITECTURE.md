@@ -114,7 +114,8 @@ eidolon/livekit/agent/
 │   ├── provider_events.py    # STT/TTS provider event 观测
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发
-│   └── interruption.py       # SoftInterruptController: 软打断补偿路径
+│   ├── interruption.py       # SoftInterruptController: 软打断补偿路径
+│   └── signals.py            # SessionSignalBridge: VAD/STT provider 信号桥接
 ├── context/
 │   └── interrupted.py        # InterruptedContextManager: 被打断回复注入上下文
 ├── runtime/

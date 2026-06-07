@@ -82,6 +82,7 @@ from .session import (
     IdleWatchdog,
     ProviderEventObserver,
     RoomDataHandler,
+    SessionSignalBridge,
     SoftInterruptController,
 )
 
@@ -154,6 +155,7 @@ class StreamingPipeline(BasePipeline):
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
         self._decision_effects = self._build_decision_effect_applier()
+        self._session_signals = self._build_session_signal_bridge()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -340,6 +342,16 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_decision_effects"):
             self._decision_effects = self._build_decision_effect_applier()
 
+    def _build_session_signal_bridge(self) -> SessionSignalBridge:
+        return SessionSignalBridge(
+            factory=getattr(self, "_factory", None),
+            get_eot_model=lambda: self._get_eot_model(),
+        )
+
+    def _ensure_session_signal_bridge(self) -> None:
+        if not hasattr(self, "_session_signals"):
+            self._session_signals = self._build_session_signal_bridge()
+
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
@@ -442,6 +454,7 @@ class StreamingPipeline(BasePipeline):
             self._client_audio_states = {}
         self._ensure_ducking_controller()
         self._ensure_decision_effect_applier()
+        self._ensure_session_signal_bridge()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -866,103 +879,16 @@ class StreamingPipeline(BasePipeline):
             )
 
     def _register_vad_inference_callback(self) -> None:
-        """Round 7 G6: bridge per-frame VAD probability to EOT state.
-
-        Wires ``FireredPvadVAD.register_inference_callback`` (only available
-        on the FireRed plugin — duck-typed for compatibility) so each
-        ``INFERENCE_DONE`` window updates ``state.probability_samples``.
-        Policies can then call ``state.recent_avg_vad_confidence()`` to
-        gate cuts on confidence.
-
-        No-op if VAD is None or doesn't expose the callback hook (e.g.
-        Silero VAD plugin doesn't have it).
-
-        The callback is invoked from the VAD inference thread; we keep it
-        dead-simple (just push a sample into a deque) — no awaits, no I/O.
-        """
-        try:
-            vad_stage = self._factory.vad
-            raw_vad = vad_stage.vad if vad_stage else None
-            if raw_vad is None:
-                return
-            if not hasattr(raw_vad, "register_inference_callback"):
-                return  # e.g. Silero plugin
-
-            eot_model = self._get_eot_model()
-            # G16 (2026-05-17): also bridge VAD signal to the STT plugin
-            # if it exposes a notify_vad_state hook. Used by Bailian STT's
-            # cost-saving gate (BAILIAN_STT_GATE_ENABLED=true). Duck-typed —
-            # other STT plugins are unaffected.
-            stt_stage = getattr(self._factory, "stt", None)
-            stt_plugin = getattr(stt_stage, "stt", None) if stt_stage else None
-            stt_notify = (
-                getattr(stt_plugin, "notify_vad_state", None)
-                if stt_plugin is not None
-                else None
-            )
-
-            def _on_inference(probability: float, speaking: bool) -> None:
-                # Inference thread → keep this lightweight.
-                try:
-                    eot_model.update_vad_probability(probability)
-                except Exception:
-                    # Don't let pipeline state errors stall VAD inference.
-                    pass
-                # G16: forward to STT gate. ``speaking`` is the boolean
-                # threshold-pass result from FireRed pVAD; we synthesize an
-                # RMS estimate by mapping probability to a coarse fallback
-                # (the gate has its own RMS threshold for ground-truth audio,
-                # but the VAD callback doesn't carry raw frame bytes — so we
-                # pass 0.0 and rely on the gate's vad_high primary path).
-                if stt_notify is not None:
-                    try:
-                        stt_notify(probability, 0.0)
-                    except Exception:
-                        pass
-
-            raw_vad.register_inference_callback(_on_inference)
-            logger.info(
-                "[StreamingPipeline] VAD inference callback registered "
-                "(per-frame probability → EOT state%s)",
-                " + STT gate" if stt_notify else "",
-            )
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to register VAD inference callback"
-            )
+        self._ensure_session_signal_bridge()
+        self._session_signals.register_vad_inference_callback()
 
     def _signal_stt_user_away(self) -> None:
-        """Forward user_state -> "away" to STT plugin if it supports it.
-
-        Part of the Round 7 G11 state-sync bridge: lets STT plugins with
-        active streams (e.g. SenseTimeSTT) abort immediately when the
-        framework decides the user is gone, instead of waiting for the
-        per-stream 30 s safety net to fire.
-
-        Uses ``hasattr`` ducktyping so STT plugins without this hook
-        (e.g. Bailian) are safely no-op'd.
-        """
-        try:
-            stt = self._factory.stt._stt
-            if hasattr(stt, "signal_user_away"):
-                stt.signal_user_away()
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] error signaling user_away to STT"
-            )
+        self._ensure_session_signal_bridge()
+        self._session_signals.signal_stt_user_away()
 
     def _signal_stt_user_present(self) -> None:
-        """Reverse of :meth:`_signal_stt_user_away` — user_state returned
-        from "away" to "listening" / "speaking".
-        """
-        try:
-            stt = self._factory.stt._stt
-            if hasattr(stt, "signal_user_present"):
-                stt.signal_user_present()
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] error signaling user_present to STT"
-            )
+        self._ensure_session_signal_bridge()
+        self._session_signals.signal_stt_user_present()
 
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()

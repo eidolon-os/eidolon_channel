@@ -228,6 +228,7 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
             run,
             strict=not args.lenient_realcall,
             timeline_path=timeline_path,
+            require_brain_evidence=_suite_requires_runtime_identity(suites),
         )
         write_livekit_room_outputs(run, repeat_dir)
         runs.append(run)

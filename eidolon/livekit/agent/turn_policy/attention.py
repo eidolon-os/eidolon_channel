@@ -28,6 +28,8 @@ class AttentionDecision:
     reason: str
     transcript_preview: str = ""
     client_state_used: bool = False
+    tier: str = ""
+    tier_reason: str = ""
 
 
 @dataclass(frozen=True)

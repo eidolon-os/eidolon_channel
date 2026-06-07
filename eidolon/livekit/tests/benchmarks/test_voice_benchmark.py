@@ -111,6 +111,8 @@ def test_default_voice_benchmark_cases_skip_enforced_suites() -> None:
 
     assert "attention_admission_baseline.yaml" in cases
     assert "attention_admission_enforced.yaml" not in cases
+    assert "v1_interrupt_tiers_enforced.yaml" not in cases
+    assert "v1_realistic_interaction_flows_enforced.yaml" not in cases
 
 
 def test_policy_runner_attention_enforced_suite() -> None:
@@ -135,6 +137,124 @@ def test_policy_runner_attention_enforced_suite() -> None:
     assert ambient.decisions[0]["attention_admission"]["action"] == "observe"
     assert ambient.decisions[0]["attention_admission"]["client_state_used"] is True
     assert ambient.decisions[0]["decision"] is None
+
+
+def test_load_v1_interrupt_tiers_enforced_suite() -> None:
+    suite = load_suite("benchmarks/cases/v1_interrupt_tiers_enforced.yaml")
+
+    assert suite.suite_id == "v1_interrupt_tiers_enforced"
+    assert {case.case_id for case in suite.cases} == {
+        "tier0_hard_stop_enforced_cancels_001",
+        "tier1_topic_switch_enforced_cancels_after_stability_001",
+        "tier1_correction_enforced_cancels_after_stability_001",
+        "tier2_normal_interrupt_no_client_state_stable_cancel_001",
+        "tier3_backchannel_no_client_state_rolls_back_001",
+        "tier3_noise_no_client_state_rolls_back_001",
+        "tier4_ambient_speech_enforced_observes_001",
+    }
+    ambient = next(
+        case
+        for case in suite.cases
+        if case.case_id == "tier4_ambient_speech_enforced_observes_001"
+    )
+    assert ambient.user_steps[0].client_playback_state == "agent_speaking"
+    assert ambient.expectations.action == "none"
+    assert "cancel" in ambient.expectations.forbid_actions
+
+
+def test_policy_runner_v1_interrupt_tiers_enforced_suite() -> None:
+    suite = load_suite("benchmarks/cases/v1_interrupt_tiers_enforced.yaml")
+    policy = TurnPolicyConfig(
+        attention=replace(AttentionPolicyConfig(), enforce=True),
+    )
+
+    run = run_policy_suite([suite], turn_policy=policy, run_id="test")
+
+    assert {case.case_id: case.passed for case in run.cases} == {
+        "tier0_hard_stop_enforced_cancels_001": True,
+        "tier1_topic_switch_enforced_cancels_after_stability_001": True,
+        "tier1_correction_enforced_cancels_after_stability_001": True,
+        "tier2_normal_interrupt_no_client_state_stable_cancel_001": True,
+        "tier3_backchannel_no_client_state_rolls_back_001": True,
+        "tier3_noise_no_client_state_rolls_back_001": True,
+        "tier4_ambient_speech_enforced_observes_001": True,
+    }
+    tier4 = next(
+        case for case in run.cases if case.case_id == "tier4_ambient_speech_enforced_observes_001"
+    )
+    assert tier4.metrics["actual_action"] == "none"
+    assert tier4.decisions[0]["attention_admission"]["action"] == "observe"
+    assert tier4.decisions[0]["decision"] is None
+
+
+def test_load_v1_realistic_interaction_flows_enforced_suite() -> None:
+    suite = load_suite("benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml")
+
+    assert suite.suite_id == "v1_realistic_interaction_flows_enforced"
+    assert len(suite.cases) == 9
+    assert {case.case_id for case in suite.cases} >= {
+        "flow_normal_question_then_agent_reply_001",
+        "flow_normal_question_then_hard_stop_001",
+        "flow_normal_question_then_topic_switch_001",
+        "flow_normal_question_then_correction_001",
+        "flow_normal_question_then_followup_no_client_state_001",
+        "flow_normal_question_then_backchannel_001",
+        "flow_normal_question_then_noise_001",
+        "flow_ambient_speech_during_agent_playback_001",
+        "flow_mic_muted_hard_stop_is_ignored_001",
+    }
+    multi_step = [
+        case
+        for case in suite.cases
+        if case.case_id != "flow_normal_question_then_agent_reply_001"
+    ]
+    assert all(len(case.user_steps) == 2 for case in multi_step)
+    assert all(case.user_steps[0].agent_speaking is False for case in multi_step)
+    assert all(case.user_steps[1].agent_speaking is True for case in multi_step)
+
+
+def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
+    suite = load_suite("benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml")
+    policy = TurnPolicyConfig(
+        attention=replace(AttentionPolicyConfig(), enforce=True),
+    )
+
+    run = run_policy_suite([suite], turn_policy=policy, run_id="test")
+
+    pass_by_case = {case.case_id: case.passed for case in run.cases}
+    assert pass_by_case == {
+        "flow_normal_question_then_agent_reply_001": True,
+        "flow_normal_question_then_hard_stop_001": True,
+        "flow_normal_question_then_topic_switch_001": True,
+        "flow_normal_question_then_correction_001": True,
+        # Current known gap: Tier2 ordinary follow-up is held by the
+        # weak-signal follow-up window in pure policy simulation.
+        "flow_normal_question_then_followup_no_client_state_001": False,
+        "flow_normal_question_then_backchannel_001": True,
+        "flow_normal_question_then_noise_001": True,
+        "flow_ambient_speech_during_agent_playback_001": True,
+        "flow_mic_muted_hard_stop_is_ignored_001": True,
+    }
+    followup = next(
+        case
+        for case in run.cases
+        if case.case_id == "flow_normal_question_then_followup_no_client_state_001"
+    )
+    assert any("expected action=cancel" in error for error in followup.errors)
+    ambient = next(
+        case
+        for case in run.cases
+        if case.case_id == "flow_ambient_speech_during_agent_playback_001"
+    )
+    assert ambient.metrics["actual_action"] == "none"
+    assert ambient.decisions[-1]["attention_admission"]["action"] == "observe"
+    muted = next(
+        case
+        for case in run.cases
+        if case.case_id == "flow_mic_muted_hard_stop_is_ignored_001"
+    )
+    assert muted.metrics["actual_action"] == "none"
+    assert muted.decisions[-1]["attention_admission"]["action"] == "ignore"
 
 
 def test_aggregate_case_metrics() -> None:
@@ -252,6 +372,23 @@ def test_verify_real_call_component_tts_bytes() -> None:
     assert verify_real_call(ok, runner="component", provider_config=cfg) == []
 
 
+def test_verify_real_call_component_stt_empty_allowed_only_for_noise() -> None:
+    cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
+    normal_empty = CaseResult(
+        "c:stt", "s:stt", "component", True, metrics={"stt_nonempty": False}
+    )
+    assert verify_real_call(normal_empty, runner="component", provider_config=cfg)
+
+    noise_empty = CaseResult(
+        "c:stt",
+        "s:stt",
+        "component",
+        True,
+        metrics={"stt_nonempty": False, "stt_empty_allowed": True},
+    )
+    assert verify_real_call(noise_empty, runner="component", provider_config=cfg) == []
+
+
 def test_verify_real_call_room_per_case_checks_stt_and_audio() -> None:
     cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
     # interrupt-style turn: no brain marks, but real STT stream + agent audio.
@@ -314,6 +451,16 @@ def test_apply_real_call_verification_run_level_brain(tmp_path) -> None:
     apply_real_call_verification(run2, strict=True, timeline_path=bad)
     assert all(not c.passed for c in run2.cases)
     assert all("brain RPC evidence in the whole run" in " ".join(c.errors) for c in run2.cases)
+
+    run3 = make_run()
+    apply_real_call_verification(
+        run3,
+        strict=True,
+        timeline_path=bad,
+        require_brain_evidence=False,
+    )
+    assert all(c.passed for c in run3.cases)
+    assert all(c.metrics["real_call_verified"] for c in run3.cases)
 
 
 def test_apply_real_call_verification_strict_fails_mocked_run() -> None:
@@ -913,7 +1060,8 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
         (
             '{"turn_id":"t1","attrs":{"room_name":'
             '"voice-bench-hard_interrupt_001-1234abcd",'
-            '"interrupt_action":"cancel","decision":{"intent":"hard_stop"}}}\n'
+            '"interrupt_action":"cancel","decision":{"intent":"hard_stop"}},'
+            '"durations_ms":{"vad_start_to_interrupt_resolved":320}}\n'
         ),
         encoding="utf-8",
     )
@@ -922,3 +1070,38 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
 
     assert run.cases[0].passed is True
     assert not run.cases[0].errors
+
+
+def test_livekit_room_timeline_expectations_fail_slow_interrupt(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="hard_interrupt_001",
+                suite="interrupt",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-hard_interrupt_001-1234abcd",'
+            '"interrupt_action":"cancel","decision":{"intent":"hard_stop"}},'
+            '"durations_ms":{"vad_start_to_interrupt_resolved":900}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any("exceeded 500" in error for error in run.cases[0].errors)

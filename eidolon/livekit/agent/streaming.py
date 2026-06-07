@@ -1234,7 +1234,7 @@ class StreamingPipeline(BasePipeline):
                     self._duck_mixer is not None
                     and self._duck_mixer.state == "SUSPENDED"
                 ):
-                    decision = self._turn_runtime.decider.on_user_silent(
+                    decision = self._turn_runtime.user_silent_decision(
                         self._latest_asr_text
                     )
                     self._apply_decision(
@@ -1449,6 +1449,8 @@ class StreamingPipeline(BasePipeline):
             "reason": decision.reason,
             "transcript_preview": decision.transcript_preview,
             "client_state_used": decision.client_state_used,
+            "tier": decision.tier or None,
+            "tier_reason": decision.tier_reason or None,
             "enforced": self._turn_policy.attention.enforce,
         }
         self._timeline.set_attr("attention_admission", payload)
@@ -1488,7 +1490,7 @@ class StreamingPipeline(BasePipeline):
                 "[StreamingPipeline] EOT: strong interrupt intent, text=%r",
                 text[:50],
             )
-            decision = self._turn_runtime.decider.on_strong_intent()
+            decision = self._turn_runtime.strong_intent_decision()
             signal = self._turn_runtime.control_signal_from_decision(decision)
             self._publish_turn_control(signal.as_metadata())
             if self._timeline is not None:
@@ -1502,6 +1504,9 @@ class StreamingPipeline(BasePipeline):
             if duck_active:
                 self._duck_cancel_and_interrupt()
             else:
+                if self._timeline is not None:
+                    self._timeline.mark("interrupt_resolved_at")
+                    self._timeline.set_attr("cancel_reason", "strong_intent_cancel")
                 self._interrupt_current_turn()
             return
 
@@ -1827,7 +1832,7 @@ class StreamingPipeline(BasePipeline):
                 )
                 latest_asr_text = self._latest_asr_text.strip()
                 eot_model = self._get_eot_model()
-                decision = self._turn_runtime.decider.on_decision_deadline(
+                decision = self._turn_runtime.deadline_decision(
                     vad_still_active,
                     has_transcript=bool(latest_asr_text),
                     transcript=latest_asr_text,
@@ -1853,6 +1858,7 @@ class StreamingPipeline(BasePipeline):
                             intent_source="timeout",
                             intent_confidence=0.0,
                         )
+                        decision = self._turn_runtime.tiers.annotate_decision(decision)
                     else:
                         next_timeout = max(0.0, max_suspend_sec - suspend_sec)
                         self._duck_timeout_task = asyncio.create_task(
@@ -1949,6 +1955,8 @@ class StreamingPipeline(BasePipeline):
             intent_confidence=decision.intent_confidence,
             topic_switch_hint=decision.topic_switch_hint,
             correction_hint=decision.correction_hint,
+            tier=decision.tier or None,
+            tier_reason=decision.tier_reason or None,
             source=source,
             resolved_reason=resolved_reason,
             eot_score=eot_score,

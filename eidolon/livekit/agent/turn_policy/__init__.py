@@ -13,6 +13,7 @@ from .intent_classifier import (
     OnnxInterruptClassifier,
 )
 from .runtime import TurnControlSignal, TurnPolicyRuntime
+from .tiers import Tier, TierEvidence, TierPolicyChain
 
 __all__ = [
     "AdmissionAction",
@@ -31,6 +32,9 @@ __all__ = [
     "OnnxInterruptClassifier",
     "TranscriptEvidence",
     "TranscriptEvidenceGate",
+    "Tier",
+    "TierEvidence",
+    "TierPolicyChain",
     "TurnControlSignal",
     "TurnPolicyRuntime",
 ]

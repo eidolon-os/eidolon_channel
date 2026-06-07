@@ -16,6 +16,7 @@ from .constants import (
 )
 from .decider import Action, Decision, InterruptDecider
 from .intent_classifier import InterruptIntent, canonicalize_interrupt_text
+from .tiers.chain import TierPolicyChain
 
 
 @dataclass
@@ -55,6 +56,7 @@ class TurnPolicyRuntime:
         self.config = config
         self.decider = InterruptDecider(config.interrupt)
         self.attention = AttentionAdmission(config)
+        self.tiers = TierPolicyChain()
         self._stable_signal = _StableSignalStabilizer(config)
         self._stabilizer = _WeakSignalFollowupStabilizer(config)
 
@@ -88,10 +90,34 @@ class TurnPolicyRuntime:
             is_final=is_final,
             now_ms=now_ms,
         )
-        return self._stabilizer.apply(decision, now_ms=now_ms)
+        decision = self._stabilizer.apply(decision, now_ms=now_ms)
+        return self.tiers.annotate_decision(decision)
 
     def admit_attention(self, signal: AttentionInput) -> AttentionDecision:
-        return self.attention.decide(signal)
+        return self.tiers.annotate_attention(self.attention.decide(signal))
+
+    def strong_intent_decision(self) -> Decision:
+        return self.tiers.annotate_decision(self.decider.on_strong_intent())
+
+    def deadline_decision(
+        self,
+        vad_still_active: bool,
+        *,
+        has_transcript: bool = False,
+        transcript: str = "",
+        eot_score: float = 0.0,
+    ) -> Decision:
+        return self.tiers.annotate_decision(
+            self.decider.on_decision_deadline(
+                vad_still_active,
+                has_transcript=has_transcript,
+                transcript=transcript,
+                eot_score=eot_score,
+            )
+        )
+
+    def user_silent_decision(self, transcript: str = "") -> Decision:
+        return self.tiers.annotate_decision(self.decider.on_user_silent(transcript))
 
     @staticmethod
     def control_signal_from_decision(

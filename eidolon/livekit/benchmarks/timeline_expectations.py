@@ -74,6 +74,22 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
     if expected.correction_hint and not _any_decision_flag(records, "correction_hint"):
         errors.append("timeline expected correction_hint=True")
 
+    if expected.max_interrupt_decision_ms is not None:
+        durations = _interrupt_decision_durations_ms(records)
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > expected.max_interrupt_decision_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline interrupt decision exceeded "
+                    f"{expected.max_interrupt_decision_ms}ms: {slow}"
+                )
+        elif expected.action not in ("", "any", "none"):
+            errors.append("timeline missing interrupt decision duration")
+
     if not records:
         errors.append(f"timeline missing for case={case_id}")
     return errors
@@ -129,3 +145,38 @@ def _any_decision_flag(records: list[dict[str, Any]], key: str) -> bool:
         if bool(decision.get(key)):
             return True
     return False
+
+
+def _interrupt_decision_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+    durations: list[float] = []
+    for record in records:
+        duration = _number(
+            (
+                record.get("durations_ms")
+                if isinstance(record.get("durations_ms"), dict)
+                else {}
+            ).get("vad_start_to_interrupt_resolved")
+        )
+        if duration is None:
+            timestamps = (
+                record.get("timestamps")
+                if isinstance(record.get("timestamps"), dict)
+                else {}
+            )
+            start = _number(timestamps.get("speech_started_at"))
+            end = _number(timestamps.get("interrupt_resolved_at"))
+            if end is None:
+                end = _number(timestamps.get("turn_committed_at"))
+            if start is not None and end is not None:
+                duration = max(0.0, (end - start) * 1000.0)
+        if duration is not None:
+            durations.append(duration)
+    return durations
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None

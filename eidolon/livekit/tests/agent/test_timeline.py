@@ -36,6 +36,8 @@ def test_timeline_records_normalized_decision_attrs() -> None:
         intent="backchannel",
         intent_source="lexicon",
         intent_confidence=0.95,
+        tier="tier3_backchannel_noise",
+        tier_reason="intent:backchannel",
         source="turn_policy",
         resolved_reason="timeout",
         eot_score=0.1,
@@ -48,6 +50,7 @@ def test_timeline_records_normalized_decision_attrs() -> None:
     assert snap["attrs"]["decision_reason"] == "intent:backchannel"
     assert snap["attrs"]["rollback_drop_buffered"] is True
     assert snap["attrs"]["decision"]["intent"] == "backchannel"
+    assert snap["attrs"]["decision"]["tier"] == "tier3_backchannel_noise"
 
 
 def test_timeline_provider_latency_snapshot() -> None:

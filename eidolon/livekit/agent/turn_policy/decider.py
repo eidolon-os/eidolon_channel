@@ -44,6 +44,8 @@ class Decision:
     intent_confidence: float = 0.0
     topic_switch_hint: bool = False
     correction_hint: bool = False
+    tier: str = ""
+    tier_reason: str = ""
 
 
 class InterruptDecider:

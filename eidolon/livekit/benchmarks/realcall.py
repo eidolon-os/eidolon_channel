@@ -159,7 +159,7 @@ def verify_real_call(
                     "(mock/empty TTS?)"
                 )
         elif component == "stt":
-            if not metrics.get("stt_nonempty"):
+            if not metrics.get("stt_nonempty") and not metrics.get("stt_empty_allowed"):
                 failures.append("stt produced empty transcript (no real STT output)")
         elif component == "vad":
             inference = metrics.get("vad_inference_count")
@@ -182,6 +182,7 @@ def apply_real_call_verification(
     *,
     strict: bool,
     timeline_path: Path | None = None,
+    require_brain_evidence: bool = True,
 ) -> None:
     """Annotate each case with a real-call verdict.
 
@@ -202,7 +203,11 @@ def apply_real_call_verification(
     # have none). If it never appears, every case shares the failure.
     brain_provider = (run.provider_config or {}).get("brain", "")
     run_brain_failure: str | None = None
-    if run.runner == "livekit_room" and brain_provider == "eidolon_agent":
+    if (
+        require_brain_evidence
+        and run.runner == "livekit_room"
+        and brain_provider == "eidolon_agent"
+    ):
         if not any(_has_brain_rpc_evidence(record) for record in all_records):
             run_brain_failure = (
                 "no real eidolon_agent brain RPC evidence in the whole run "

@@ -118,6 +118,10 @@ def test_pipeline_attention_skips_eot_for_ambient_playback_speech() -> None:
     assert allowed is False
     pipeline._duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["tier"]
+        == "tier4_attention"
+    )
 
 
 def test_pipeline_attention_allows_hard_stop_during_playback() -> None:

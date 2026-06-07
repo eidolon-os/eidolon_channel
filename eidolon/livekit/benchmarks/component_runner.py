@@ -18,7 +18,7 @@ from typing import Any
 
 from livekit.agents import vad as lk_vad
 
-from eidolon.livekit.agent.factory import SharedStageFactory
+from eidolon.livekit.agent.factory import RealtimeStageBundle, SharedStageFactory
 from eidolon.livekit.agent.turn_policy.eot_config import eot_kwargs_from_turn_policy
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.plugins.eot import ChineseModel
@@ -64,7 +64,7 @@ def _unique_clips(suites: list[BenchmarkSuite]) -> list[tuple[BenchmarkCase, Aud
 
 
 async def _run_vad_clip(
-    factory: SharedStageFactory,
+    stages: RealtimeStageBundle,
     *,
     case: BenchmarkCase,
     clip: AudioClip,
@@ -75,11 +75,11 @@ async def _run_vad_clip(
     metrics: dict[str, float | int | str | bool | None] = {}
     events: list[dict[str, Any]] = []
     errors: list[str] = []
-    if factory.vad is None:
+    if stages.vad is None:
         errors.append("VAD provider is disabled")
         return _component_result(case, "vad", False, started, metrics, events, errors)
 
-    stream = factory.vad.vad.stream()
+    stream = stages.vad.vad.stream()
 
     async def consume() -> None:
         async for ev in stream:
@@ -210,7 +210,7 @@ async def _run_eot_case(
 
 
 async def _run_stt_clip(
-    factory: SharedStageFactory,
+    stages: RealtimeStageBundle,
     *,
     case: BenchmarkCase,
     clip: AudioClip,
@@ -224,11 +224,12 @@ async def _run_stt_clip(
     try:
         pcm, _sample_rate = load_clip_pcm(root / clip.path)
         text = await asyncio.wait_for(
-            factory.stt.recognize_streaming(pcm),
+            stages.stt.recognize_streaming(pcm),
             timeout=timeouts.stt_sec,
         )
         normalized_expected = _normalize_text(clip.text)
         normalized_actual = _normalize_text(text)
+        empty_allowed = clip.intent in {"noise", "noise_like"}
         metrics.update(
             {
                 "stt_elapsed_ms": _elapsed_ms(started),
@@ -236,6 +237,7 @@ async def _run_stt_clip(
                 "stt_expected_chars": len(normalized_expected),
                 "stt_exact_match": normalized_actual == normalized_expected,
                 "stt_nonempty": bool(normalized_actual),
+                "stt_empty_allowed": empty_allowed,
             }
         )
         events.append(
@@ -245,7 +247,7 @@ async def _run_stt_clip(
                 "actual": text,
             }
         )
-        if not normalized_actual:
+        if not normalized_actual and not empty_allowed:
             errors.append("STT returned an empty transcript")
     except Exception as exc:
         metrics["stt_elapsed_ms"] = _elapsed_ms(started)
@@ -255,7 +257,7 @@ async def _run_stt_clip(
 
 
 async def _run_tts_text(
-    factory: SharedStageFactory,
+    stages: RealtimeStageBundle,
     *,
     case: BenchmarkCase,
     text: str,
@@ -268,7 +270,7 @@ async def _run_tts_text(
 
     async def synthesize() -> list[Any]:
         frames: list[Any] = []
-        async for frame in factory.tts.synthesize(text):
+        async for frame in stages.tts.synthesize(text):
             frames.append(frame)
         return frames
 
@@ -306,18 +308,18 @@ async def run_component_suite(
 ) -> RunResult:
     timeouts = timeouts or ComponentTimeouts()
     cfg = load_effective_config()
-    factory = SharedStageFactory.from_config(cfg)
+    stages = SharedStageFactory.components_from_config(cfg)
     eot_model = ChineseModel(**eot_kwargs_from_turn_policy(cfg.turn_policy))
     results: list[CaseResult] = []
 
     try:
-        await asyncio.wait_for(factory.stt.warmup(), timeout=timeouts.stt_sec)
-        await asyncio.wait_for(factory.tts.warmup(), timeout=timeouts.tts_warmup_sec)
+        await asyncio.wait_for(stages.stt.warmup(), timeout=timeouts.stt_sec)
+        await asyncio.wait_for(stages.tts.warmup(), timeout=timeouts.tts_warmup_sec)
 
         for case, clip in _unique_clips(suites):
             results.append(
                 await _run_vad_clip(
-                    factory,
+                    stages,
                     case=case,
                     clip=clip,
                     root=root,
@@ -326,7 +328,7 @@ async def run_component_suite(
             )
             results.append(
                 await _run_stt_clip(
-                    factory,
+                    stages,
                     case=case,
                     clip=clip,
                     root=root,
@@ -335,7 +337,7 @@ async def run_component_suite(
             )
             results.append(
                 await _run_tts_text(
-                    factory,
+                    stages,
                     case=case,
                     text=clip.text,
                     timeouts=timeouts,
@@ -348,8 +350,10 @@ async def run_component_suite(
                     await _run_eot_case(eot_model, case=case, timeouts=timeouts)
                 )
     finally:
-        await factory.stt.shutdown()
-        await factory.tts.shutdown()
+        await stages.stt.shutdown()
+        await stages.tts.shutdown()
+        if stages.vad is not None:
+            await stages.vad.shutdown()
 
     return RunResult(
         run_id=run_id or time.strftime("%Y%m%d-%H%M%S"),

@@ -1,0 +1,362 @@
+suite_id: v1_realistic_interaction_flows_enforced
+cases:
+  - case_id: flow_normal_question_then_agent_reply_001
+    suite: v1_realistic_flows
+    description: 真实起手：用户在 agent idle 时正常提问，应该进入正常回答链路，不触发打断。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "normal_turn", "agent_idle"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 帮我详细介绍
+        reply: 好的，我会先概括整体方案，再说明关键风险和下一步建议。
+    expect:
+      action: none
+      intent: uncertain
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: flow_normal_question_then_hard_stop_001
+    suite: v1_realistic_flows
+    description: 真实打断：用户先正常提问，agent 回答中用户明确说停一下，应取消当前回答。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier0", "hard_stop", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmarks/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["停一下"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意较长，用来制造可打断窗口。
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_normal_question_then_topic_switch_001
+    suite: v1_realistic_flows
+    description: 真实换话题：用户先正常提问，agent 回答中用户要求换个话题，应取消并带 topic_switch hint。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier1", "topic_switch", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: topic_switch
+        text: 换个话题，我们聊点别的。
+        path: benchmarks/audio/generated/topic_switch.wav
+        intent: topic_switch
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 换个话题
+        audio: topic_switch
+        start_ms: 1700
+        duration_ms: 900
+        interims: ["换个", "换个话题", "换个话题", "换个话题"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我先从架构说起，然后补充交互体验、延迟、可靠性和测试方法。
+    expect:
+      action: cancel
+      intent: topic_switch
+      topic_switch_hint: true
+      max_interrupt_decision_ms: 500
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_normal_question_then_correction_001
+    suite: v1_realistic_flows
+    description: 真实纠正：用户先正常提问，agent 回答中用户纠正自己刚才的说法，应取消并带 correction hint。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier1", "correction", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: correction
+        text: 不是，我刚才说错了。
+        path: benchmarks/audio/generated/correction.wav
+        intent: correction
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 不是，我刚才说错了
+        audio: correction
+        start_ms: 1700
+        duration_ms: 900
+        interims: ["不是", "不是，我刚才", "不是，我刚才说错了"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会沿着你刚才的问题继续展开，包括系统边界、风险和体验目标。
+    expect:
+      action: cancel
+      intent: correction
+      correction_hint: true
+      max_interrupt_decision_ms: 500
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_normal_question_then_followup_no_client_state_001
+    suite: v1_realistic_flows
+    description: 真实普通插话：没有 fresh client playback state 时，用户在回答中提出实质追问，走 legacy duck/decide 并稳定后取消。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier2", "normal_interrupt", "legacy_compat", "multi_step", "known_gap"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 1800
+        duration_ms: 1050
+        interims:
+          - 那它
+          - 那它的主要
+          - 那它的主要风险
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+          - 那它的主要风险是什么
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: none
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会先讲系统的优点，再补充几个风险点，包括误打断、延迟和上下文一致性。
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 900
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_normal_question_then_backchannel_001
+    suite: v1_realistic_flows
+    description: 真实附和：用户在 agent 回答中短促说“好的”，应该 rollback/unduck，不取消回答。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier3", "backchannel", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: backchannel_ok
+        text: 好。
+        path: benchmarks/audio/generated/backchannel_ok.wav
+        intent: backchannel
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 好的
+        audio: backchannel_ok
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["好的"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: none
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会分成几个部分说明，这段回答会持续一会儿，方便检测短反馈是否误打断。
+    expect:
+      action: rollback
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_normal_question_then_noise_001
+    suite: v1_realistic_flows
+    description: 真实噪声：用户在 agent 回答中咳嗽，应该快速 rollback 或继续观察，但不取消回答。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier3", "noise", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: noise_like_cough
+        text: 咳。
+        path: benchmarks/audio/generated/noise_like_cough.wav
+        intent: noise
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 咳
+        audio: noise_like_cough
+        start_ms: 1600
+        duration_ms: 260
+        interims: ["咳"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: none
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会继续回答，并且这段回答留出足够时间，方便检测咳嗽噪声是否误触发取消。
+    expect:
+      action: any
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: flow_ambient_speech_during_agent_playback_001
+    suite: v1_realistic_flows
+    description: 真实环境人声：client 明确处于 agent_speaking，普通旁人/环境语音没有直连意图，应 observe/ignore。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier4", "ambient_speech", "enforced", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 1800
+        duration_ms: 1050
+        interims:
+          - 那它
+          - 那它的主要
+          - 那它的主要风险
+          - 那它的主要风险是什么
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会持续说明方案细节；如果这时出现普通环境语音，不应该直接打断当前回答。
+    expect:
+      action: none
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_mic_muted_hard_stop_is_ignored_001
+    suite: v1_realistic_flows
+    description: 真实静音态：client 表示 mic_muted 时，即使 STT 误收到硬停文本，也应 ignore，不取消。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "client_state", "mic_muted", "enforced"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: hard_stop_dont
+        text: 别说了。
+        path: benchmarks/audio/generated/hard_stop_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 别说了
+        audio: hard_stop_dont
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["别说了"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_mic_muted: true
+    agent_replies:
+      - when: 详细介绍
+        reply: 这段回答用于验证客户端静音状态能否阻断误入的语音文本。
+    expect:
+      action: none
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 1
+      min_agent_messages: 1

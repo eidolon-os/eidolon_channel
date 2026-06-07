@@ -46,6 +46,73 @@ def test_runtime_decision_becomes_turn_control_metadata() -> None:
     assert metadata["latency_ms"] == 120.0
 
 
+def test_runtime_annotates_hard_stop_as_tier0() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    decision = runtime.decide_from_transcript(
+        "别说了",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.tier == "tier0_hard_stop"
+    assert decision.tier_reason.startswith("intent:hard_stop")
+
+
+def test_runtime_annotates_redirect_as_tier1_during_stability_wait() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    decision = runtime.decide_from_transcript(
+        "换个话题",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.tier == "tier1_redirect"
+    assert decision.topic_switch_hint is True
+
+
+def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    runtime.decide_from_transcript(
+        "那它的主要风险是什么",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.decide_from_transcript(
+        "那它的主要风险是什么",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=470.0,
+    )
+
+    assert decision.tier == "tier2_interruption"
+    assert decision.reason.startswith("stable_normal_interrupt")
+
+
+def test_runtime_annotates_backchannel_noise_as_tier3() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    decision = runtime.decide_from_transcript(
+        "嗯",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.tier == "tier3_backchannel_noise"
+    assert decision.tier_reason.startswith("intent:backchannel")
+
+
 def test_runtime_hard_stop_bypasses_stable_signal_window() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 

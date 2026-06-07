@@ -20,6 +20,7 @@ Adding a new STT/TTS provider only requires editing the corresponding
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -34,6 +35,15 @@ from .pipeline.tts import TtsParams, TtsStage
 from .pipeline.vad import VadStage
 
 logger = logging.getLogger("agent")
+
+
+@dataclass(frozen=True)
+class RealtimeStageBundle:
+    """STT/TTS/VAD stages that can be built without a room-bound LLM."""
+
+    stt: SttStage
+    tts: TtsStage
+    vad: VadStage | None = None
 
 
 def _build_device_token_source(
@@ -296,6 +306,28 @@ class SharedStageFactory:
                 model=cfg.llm.model,
                 temperature=cfg.llm.temperature or 0.6,
             ),
+        )
+
+    @classmethod
+    def components_from_config(
+        cls,
+        cfg: "AgentConfig",
+        *,
+        prebuilt_vad: "lk_vad.VAD | None" = None,
+    ) -> RealtimeStageBundle:
+        """Build STT/TTS/VAD without initializing LLM or device-token state.
+
+        Component benchmarks and other audio-only tools should not need a
+        LiveKit room. Keeping this path separate prevents room-scoped brain
+        wiring from leaking into realtime audio component checks.
+        """
+        stt = cls._build_stt(cfg)
+        tts = cls._build_tts(cfg)
+        raw_vad = prebuilt_vad if prebuilt_vad is not None else cls._build_vad(cfg)
+        return RealtimeStageBundle(
+            stt=stt,
+            tts=tts,
+            vad=VadStage(raw_vad) if raw_vad is not None else None,
         )
 
     # ------------------------------------------------------------------

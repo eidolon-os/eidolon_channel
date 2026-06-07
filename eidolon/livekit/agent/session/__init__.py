@@ -3,6 +3,7 @@
 from .agent_state import AgentStateEffectHandler
 from .attention_effects import AttentionEffectHandler
 from .decision_effects import DecisionEffectApplier
+from .duck_timeout import DuckSuspendTimeoutHandler
 from .idle import IdleWatchdog
 from .interruption import SoftInterruptController
 from .provider_events import ProviderEventObserver
@@ -15,6 +16,7 @@ __all__ = [
     "AgentStateEffectHandler",
     "AttentionEffectHandler",
     "DecisionEffectApplier",
+    "DuckSuspendTimeoutHandler",
     "IdleWatchdog",
     "ProviderEventObserver",
     "RoomDataHandler",

@@ -113,6 +113,7 @@ eidolon/livekit/agent/
 │   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
+│   ├── duck_timeout.py       # DuckSuspendTimeoutHandler: duck deadline policy effects
 │   ├── provider_events.py    # STT/TTS provider event 观测
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发

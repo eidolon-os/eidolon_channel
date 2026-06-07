@@ -63,10 +63,8 @@ from . import _framework_patches
 from .client_audio_state import ClientAudioState
 from .context import InterruptedContextManager
 from .turn_policy import (
-    Action,
     AttentionDecision,
     Decision,
-    InterruptIntent,
     TurnPolicyRuntime,
     eot_kwargs_from_turn_policy,
 )
@@ -79,6 +77,7 @@ from .session import (
     AgentStateEffectHandler,
     AttentionEffectHandler,
     DecisionEffectApplier,
+    DuckSuspendTimeoutHandler,
     IdleWatchdog,
     ProviderEventObserver,
     RoomDataHandler,
@@ -162,6 +161,7 @@ class StreamingPipeline(BasePipeline):
         self._turn_committer = UserTurnCommitter()
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
+        self._duck_deadline = self._build_duck_suspend_timeout_handler()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -440,6 +440,35 @@ class StreamingPipeline(BasePipeline):
         ):
             self._semantic_interrupts = self._build_semantic_interrupt_handler()
 
+    def _build_duck_suspend_timeout_handler(self) -> DuckSuspendTimeoutHandler:
+        return DuckSuspendTimeoutHandler(
+            turn_runtime=self._turn_runtime,
+            sleep=lambda timeout_sec: asyncio.sleep(timeout_sec),
+            create_task=lambda coro: asyncio.create_task(coro),
+            get_duck_suspended=lambda: self._ducking.is_suspended,
+            get_duck_stats=lambda: self._ducking.stats(),
+            get_suspend_start=lambda: self._ducking.suspend_start,
+            set_timeout_task=lambda task: setattr(self._ducking, "timeout_task", task),
+            get_latest_asr_text=lambda: self._latest_asr_text,
+            get_vad_active=lambda: (
+                self._session is not None
+                and self._session.user_state == "speaking"
+            ),
+            get_eot_model=lambda: self._get_eot_model(),
+            apply_decision=lambda decision, **kwargs: self._apply_decision(
+                decision,
+                **kwargs,
+            ),
+        )
+
+    def _ensure_duck_suspend_timeout_handler(self) -> None:
+        handler = getattr(self, "_duck_deadline", None)
+        if (
+            handler is None
+            or getattr(handler, "_turn_runtime", None) is not self._turn_runtime
+        ):
+            self._duck_deadline = self._build_duck_suspend_timeout_handler()
+
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
@@ -547,6 +576,7 @@ class StreamingPipeline(BasePipeline):
         self._ensure_turn_committer()
         self._ensure_agent_state_effect_handler()
         self._ensure_semantic_interrupt_handler()
+        self._ensure_duck_suspend_timeout_handler()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -1329,71 +1359,9 @@ class StreamingPipeline(BasePipeline):
         """500ms decision-budget deadline. Delegates the branch decision
         to :class:`InterruptDecider` so the policy stays in one place
         (G18b)."""
-        try:
-            self._ensure_runtime_defaults()
-            await asyncio.sleep(timeout_sec)
-            if self._ducking.is_suspended:
-                stats = self._ducking.stats()
-
-                vad_still_active = (
-                    self._session is not None
-                    and self._session.user_state == "speaking"
-                )
-                latest_asr_text = self._latest_asr_text.strip()
-                eot_model = self._get_eot_model()
-                decision = self._turn_runtime.deadline_decision(
-                    vad_still_active,
-                    has_transcript=bool(latest_asr_text),
-                    transcript=latest_asr_text,
-                    eot_score=eot_model.current_eot_score,
-                )
-                if decision.action is Action.HOLD:
-                    eot_config = getattr(eot_model, "_config", None)
-                    max_suspend_sec = max(
-                        timeout_sec,
-                        getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
-                    )
-                    suspend_sec = time.monotonic() - self._ducking.suspend_start
-                    if suspend_sec >= max_suspend_sec:
-                        decision = Decision(
-                            action=Action.ROLLBACK,
-                            reason=(
-                                "deadline_hold_max_suspend_elapsed "
-                                f"suspend={suspend_sec:.2f}s>={max_suspend_sec:.2f}s "
-                                f"last_reason={decision.reason}"
-                            ),
-                            rollback_drop_buffered=True,
-                            intent=InterruptIntent.UNCERTAIN,
-                            intent_source="timeout",
-                            intent_confidence=0.0,
-                        )
-                        decision = self._turn_runtime.tiers.annotate_decision(decision)
-                    else:
-                        next_timeout = max(0.0, max_suspend_sec - suspend_sec)
-                        self._ducking.timeout_task = asyncio.create_task(
-                            self._duck_suspend_timeout_fallback(
-                                min(timeout_sec, next_timeout)
-                            )
-                        )
-                logger.info(
-                    "[StreamingPipeline] duck deadline  reason=deadline  "
-                    "decision=%s decider_reason=%s  has_transcript=%s  "
-                    "suspend_ms=%.0f  buffered=%d frames (%.3fs)  timeout=%.2fs",
-                    decision.action.value, decision.reason,
-                    bool(latest_asr_text),
-                    stats.suspend_ms,
-                    stats.buffered_frames,
-                    stats.buffered_sec,
-                    timeout_sec,
-                )
-                self._apply_decision(
-                    decision,
-                    resolved_reason="timeout",
-                    transcript=latest_asr_text,
-                    vad_active=vad_still_active,
-                )
-        except asyncio.CancelledError:
-            pass
+        self._ensure_runtime_defaults()
+        self._ensure_duck_suspend_timeout_handler()
+        await self._duck_deadline.run(timeout_sec)
 
     # ------------------------------------------------------------------
     # G18b (2026-05-18) — decider integration

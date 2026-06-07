@@ -63,10 +63,8 @@ from . import _framework_patches
 from .client_audio_state import ClientAudioState
 from .context import InterruptedContextManager
 from .turn_policy import (
-    AdmissionAction,
     Action,
     AttentionDecision,
-    AttentionInput,
     Decision,
     InterruptIntent,
     TurnPolicyRuntime,
@@ -78,6 +76,7 @@ from .output import FillerManager, OutputController, OutputDuckingController
 from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from .session import (
+    AttentionEffectHandler,
     DecisionEffectApplier,
     IdleWatchdog,
     ProviderEventObserver,
@@ -155,6 +154,7 @@ class StreamingPipeline(BasePipeline):
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
         self._decision_effects = self._build_decision_effect_applier()
+        self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
@@ -342,6 +342,31 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_decision_effects"):
             self._decision_effects = self._build_decision_effect_applier()
 
+    def _build_attention_effect_handler(self) -> AttentionEffectHandler:
+        return AttentionEffectHandler(
+            turn_policy=self._turn_policy,
+            turn_runtime=self._turn_runtime,
+            get_agent_speaking=lambda: self._state == PipelineState.SPEAKING,
+            get_duck_active=lambda: self._ducking.is_suspended,
+            latest_client_audio_state=lambda participant_identity: (
+                self._latest_client_audio_state(
+                    participant_identity=participant_identity,
+                )
+            ),
+            get_timeline=lambda: self._timeline,
+            on_duck=lambda: self._duck_and_arm_timeout(),
+            on_interrupt=lambda: self._interrupt_current_turn(),
+        )
+
+    def _ensure_attention_effect_handler(self) -> None:
+        handler = getattr(self, "_attention_effects", None)
+        if (
+            handler is None
+            or getattr(handler, "_turn_policy", None) is not self._turn_policy
+            or getattr(handler, "_turn_runtime", None) is not self._turn_runtime
+        ):
+            self._attention_effects = self._build_attention_effect_handler()
+
     def _build_session_signal_bridge(self) -> SessionSignalBridge:
         return SessionSignalBridge(
             factory=getattr(self, "_factory", None),
@@ -454,6 +479,7 @@ class StreamingPipeline(BasePipeline):
             self._client_audio_states = {}
         self._ensure_ducking_controller()
         self._ensure_decision_effect_applier()
+        self._ensure_attention_effect_handler()
         self._ensure_session_signal_bridge()
         self._ensure_room_data_handler()
 
@@ -1085,24 +1111,8 @@ class StreamingPipeline(BasePipeline):
         super()._on_user_transcribed(event)
 
     def _handle_attention_on_speaking_started(self) -> None:
-        decision = self._decide_attention("")
-        self._record_attention_admission(decision)
-        if not self._turn_policy.attention.enforce:
-            self._duck_and_arm_timeout()
-            return
-        if decision.action is AdmissionAction.HARD_INTERRUPT:
-            if self._timeline is not None:
-                self._timeline.mark("interrupt_started_at")
-            self._interrupt_current_turn()
-            return
-        if decision.action is AdmissionAction.DUCK_AND_DECIDE:
-            self._duck_and_arm_timeout()
-            return
-        logger.info(
-            "[StreamingPipeline] attention admission: %s reason=%s — no duck",
-            decision.action.value,
-            decision.reason,
-        )
+        self._ensure_attention_effect_handler()
+        self._attention_effects.handle_speaking_started()
 
     def _attention_allows_eot_check(
         self,
@@ -1110,23 +1120,11 @@ class StreamingPipeline(BasePipeline):
         *,
         speaker_id: str | None = None,
     ) -> bool:
-        decision = self._decide_attention(transcript, participant_identity=speaker_id)
-        self._record_attention_admission(decision)
-        if not self._turn_policy.attention.enforce:
-            return True
-        if decision.action is AdmissionAction.HARD_INTERRUPT:
-            return True
-        if decision.action is AdmissionAction.DUCK_AND_DECIDE:
-            duck_active = self._ducking.is_suspended
-            if self._state == PipelineState.SPEAKING and not duck_active:
-                self._duck_and_arm_timeout()
-            return True
-        logger.info(
-            "[StreamingPipeline] attention admission: %s reason=%s — skip EOT",
-            decision.action.value,
-            decision.reason,
+        self._ensure_attention_effect_handler()
+        return self._attention_effects.allows_eot_check(
+            transcript,
+            speaker_id=speaker_id,
         )
-        return False
 
     def _decide_attention(
         self,
@@ -1135,14 +1133,10 @@ class StreamingPipeline(BasePipeline):
         participant_identity: str | None = None,
     ) -> AttentionDecision:
         self._ensure_runtime_defaults()
-        return self._turn_runtime.admit_attention(
-            AttentionInput(
-                agent_speaking=self._state == PipelineState.SPEAKING,
-                client_state=self._latest_client_audio_state(
-                    participant_identity=participant_identity
-                ),
-                transcript=transcript,
-            )
+        self._ensure_attention_effect_handler()
+        return self._attention_effects.decide(
+            transcript,
+            participant_identity=participant_identity,
         )
 
     def _latest_client_audio_state(
@@ -1161,21 +1155,8 @@ class StreamingPipeline(BasePipeline):
         )
 
     def _record_attention_admission(self, decision: AttentionDecision) -> None:
-        if self._timeline is None:
-            return
-        payload = {
-            "action": decision.action.value,
-            "reason": decision.reason,
-            "transcript_preview": decision.transcript_preview,
-            "client_state_used": decision.client_state_used,
-            "tier": decision.tier or None,
-            "tier_reason": decision.tier_reason or None,
-            "enforced": self._turn_policy.attention.enforce,
-        }
-        self._timeline.set_attr("attention_admission", payload)
-        events = list(self._timeline.attrs.get("attention_admission_events") or ())
-        events.append(payload)
-        self._timeline.set_attr("attention_admission_events", events)
+        self._ensure_attention_effect_handler()
+        self._attention_effects.record_admission(decision)
 
     def _run_eot_check(self, text: str, is_final: bool = False) -> None:
         """

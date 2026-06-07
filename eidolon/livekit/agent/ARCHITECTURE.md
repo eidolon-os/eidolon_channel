@@ -1,7 +1,7 @@
 # LiveKit Agent Server 架构分析
 
-> 生成时间: 2026-04-24
-> 代码路径: `eidolon/livekit/`
+> 最近更新: 2026-06-07
+> 代码路径: `eidolon/livekit/agent/`
 
 ---
 
@@ -69,69 +69,129 @@
 
 ---
 
-## 2. 目录结构
+## 2. 当前目录结构与边界
 
 ```
-eidolon/livekit/
-├── agent/
-│   ├── server.py           # 主入口: AgentServer 启动、配置加载、插件构建
-│   ├── factory.py         # SharedStageFactory: 统一创建 stt/llm/tts/vad 实例
-│   ├── streaming.py        # StreamingPipeline: 实时流式音频处理
-│   ├── batch.py           # BatchPipeline: 批量音频 blob 处理
-│   ├── __init__.py
-│   └── pipeline/
-│       ├── pipeline.py    # VoicePipeline: 统一编排器 (包含 streaming + manual 两种模式)
-│       ├── stt.py         # SttStage: 封装 BailianFunASRSTT
-│       ├── tts.py         # TtsStage: 封装 SenseTimeTTS
-│       ├── vad.py         # FireredVadStage + VadStage: 封装 FireredPvadVAD
-│       ├── llm.py         # LivekitLlmStage: 封装 livekit.plugins.openai.LLM
-│       ├── types.py       # PipelineMode, PipelineState, PipelineCallbacks 等类型定义
-│       ├── canceller.py   # PipelineCanceller: 跨 stage 协调打断
-│       └── __init__.py
-└── plugins/
+eidolon/livekit/agent/
+├── server.py                 # 主入口: AgentServer 启动、配置加载、session 回调注册
+├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
+├── streaming.py              # StreamingPipeline: 实时会话总编排器
+├── batch.py                  # BatchPipeline: 批量音频 blob 处理
+├── client_audio_state.py     # Web/硬件客户端 audio_state 数据模型
+├── _framework_patches.py     # LiveKit framework 兼容性 patch
+├── output_controller.py      # 兼容入口: re-export output.controller
+├── filler.py                 # 兼容入口: re-export output.filler
+├── ducking.py                # 兼容入口: ducking 模块迁移后的旧路径
+├── interrupt_decider.py      # 兼容入口: re-export turn_policy
+├── pipeline/
+│   ├── base.py               # VoicePipeline 抽象基类
+│   ├── stt.py                # SttStage: 封装 STT provider
+│   ├── tts.py                # TtsStage: 封装 TTS provider
+│   ├── vad.py                # VadStage: 封装 VAD provider
+│   ├── llm.py                # LLM stage / remote-agent bridge
+│   └── types.py              # PipelineMode, PipelineState, callbacks 等类型
+├── turn_policy/
+│   ├── attention.py          # client audio_state 与注意力判定
+│   ├── constants.py          # 打断词表与 intent pattern 的代码默认值
+│   ├── decider.py            # InterruptDecision 汇总入口
+│   ├── evidence.py           # transcript/eot/preflight evidence 结构
+│   ├── intent_classifier.py  # 轻量 intent 分类
+│   ├── runtime.py            # turn policy 运行时状态
+│   └── tiers/
+│       ├── chain.py          # Tier 0-4 policy chain
+│       ├── model.py          # TierDecision/TierEvidence
+│       ├── tier0_hard_stop.py
+│       ├── tier1_redirect.py
+│       ├── tier2_interruption.py
+│       ├── tier3_noise.py
+│       └── tier4_attention.py
+├── output/
+│   ├── controller.py         # OutputController: TTS/播放句柄、取消、指标
+│   └── filler.py             # FillerManager: 填充语管理与播放
+├── session/
+│   ├── provider_events.py    # STT/TTS provider event 观测
+│   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
+│   ├── room_data.py          # LiveKit data packet 解析与分发
+│   └── interruption.py       # SoftInterruptController: 软打断补偿路径
+├── context/
+│   └── interrupted.py        # InterruptedContextManager: 被打断回复注入上下文
+├── runtime/
+│   ├── admin_client.py       # admin service 查询
+│   ├── resolver.py           # tenant/user/template 解析
+│   └── token_signer.py       # token 签名
+├── eidolon_agent_rpc/
+│   ├── grpc_llm.py           # remote Agent LLM adapter
+│   └── session.py            # remote Agent session client
+└── observability/
+    ├── metrics.py            # 指标聚合
+    └── timeline.py           # timeline event 记录
+```
+
+### 2.1 边界原则
+
+`streaming.py` 是实时会话的主编排器，仍然负责把 LiveKit `AgentSession`、Room、pipeline stage、打断决策、输出控制和观测串起来。它可以持有流程状态，但不应继续承载可独立测试的副作用模块。
+
+`turn_policy/` 负责“是否打断、如何标注 tier、是否 rollback/observe”的决策。这里应尽量保持输入输出结构化，不直接操作 LiveKit Room、播放句柄或 chat context。
+
+`output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
+
+`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。它们可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+
+`context/` 负责对 conversation/chat context 的局部改写。当前只放被打断回复注入，后续如果扩展 memory recall/write 的会话内上下文拼装，也应先判断是否属于 agent 项目还是上游 brain 项目。
+
+`pipeline/` 只封装 STT/TTS/VAD/LLM stage 的 provider-neutral 接口，避免把实时会话策略写进 provider stage。
+
+### 2.2 兼容入口
+
+`output_controller.py`、`filler.py`、`interrupt_decider.py` 等旧路径仍保留 re-export，是为了不一次性破坏已有导入与测试。新代码应优先从 `output.*`、`turn_policy.*`、`session.*`、`context.*` 导入。
+
+### 2.3 Plugin 目录结构
+
+```
+eidolon/livekit/plugins/
+├── __init__.py
+├── stt/
+│   └── bailian/
+│       ├── stt.py           # BailianFunASRSTT (实现 livekit.agents.stt.STT)
+│       ├── speech_stream.py # BailianFunASRSpeechStream (流式 WebSocket)
+│       ├── connection_manager.py  # BailianConnectionManager (WebSocket 管理)
+│       ├── registry.py
+│       ├── config.py         # BailianSTTConfig
+│       ├── models.py        # FunASR JSON 消息解析
+│       └── test_*.py
+├── tts/
+│   └── sensetime/
+│       ├── tts.py           # SenseTimeTTS + SenseTimeSynthesizeStream
+│       ├── tts_client.py    # SenseTimeTTSClient (WebSocket 客户端)
+│       ├── protocol.py      # WebSocket 协议常量
+│       ├── config.py        # SenseTimeTTSConfig
+│       └── test_*.py
+├── vad/
+│   └── firered/
+│       ├── vad.py           # VAD + VADStream (实现 livekit.agents.vad.VAD)
+│       ├── processor.py     # PvadProcessor (ONNX 推理, 共享单例)
+│       ├── config.py        # FireredPvadConfig
+│       └── test_*.py
+└── eot/
     ├── __init__.py
-    ├── stt/
-    │   └── bailian/
-    │       ├── stt.py           # BailianFunASRSTT (实现 livekit.agents.stt.STT)
-    │       ├── speech_stream.py # BailianFunASRSpeechStream (流式 WebSocket)
-    │       ├── connection_manager.py  # BailianConnectionManager (WebSocket 管理)
-    │       ├── registry.py
-    │       ├── config.py         # BailianSTTConfig
-    │       ├── models.py        # FunASR JSON 消息解析
-    │       └── test_*.py
-    ├── tts/
-    │   └── sensetime/
-    │       ├── tts.py           # SenseTimeTTS + SenseTimeSynthesizeStream
-    │       ├── tts_client.py    # SenseTimeTTSClient (WebSocket 客户端)
-    │       ├── protocol.py      # WebSocket 协议常量
-    │       ├── config.py        # SenseTimeTTSConfig
-    │       └── test_*.py
-    ├── vad/
-    │   └── firered/
-    │       ├── vad.py           # VAD + VADStream (实现 livekit.agents.vad.VAD)
-    │       ├── processor.py     # PvadProcessor (ONNX 推理, 共享单例)
-    │       ├── config.py        # FireredPvadConfig
-    │       └── test_*.py
-    └── eot/
-        ├── __init__.py
-        ├── _plugin.py          # EidolonEOTPlugin (LiveKit 插件注册)
-        ├── config.py           # EidolonEOTConfig
-        ├── log.py
-        ├── version.py
-        ├── models/
-        │   ├── base.py         # EidolonEOTModel (实现 LiveKit _TurnDetector 协议)
-        │   ├── chinese.py       # ChineseModel (中文 EOT)
-        │   └── multilingual.py  # MultilingualModel (多语言 EOT)
-        ├── impl/
-        │   ├── eot_manager.py          # EotManager (ONNX 推理单例)
-        │   ├── context_enhanced_eot.py # ContextEnhancedEot (上下文增强)
-        │   ├── turn_end_policy.py      # TurnEndPolicy (动态静默阈值)
-        │   ├── state.py                # TurnDetectionStateManager (VAD/ASR 状态)
-        │   ├── eot_policy.py          # PolicyChain (切句决策规则)
-        │   └── eot_backend.py
-        ├── firered/
-        │   └── eot.py          # FireRedChatEOT (keyword fallback EOT)
-        └── test_eot_plugin.py
+    ├── _plugin.py          # EidolonEOTPlugin (LiveKit 插件注册)
+    ├── config.py           # EidolonEOTConfig
+    ├── log.py
+    ├── version.py
+    ├── models/
+    │   ├── base.py         # EidolonEOTModel (实现 LiveKit _TurnDetector 协议)
+    │   ├── chinese.py       # ChineseModel (中文 EOT)
+    │   └── multilingual.py  # MultilingualModel (多语言 EOT)
+    ├── impl/
+    │   ├── eot_manager.py          # EotManager (ONNX 推理单例)
+    │   ├── context_enhanced_eot.py # ContextEnhancedEot (上下文增强)
+    │   ├── turn_end_policy.py      # TurnEndPolicy (动态静默阈值)
+    │   ├── state.py                # TurnDetectionStateManager (VAD/ASR 状态)
+    │   ├── eot_policy.py          # PolicyChain (切句决策规则)
+    │   └── eot_backend.py
+    ├── firered/
+    │   └── eot.py          # FireRedChatEOT (keyword fallback EOT)
+    └── test_eot_plugin.py
 ```
 
 ---
@@ -151,8 +211,31 @@ eidolon/livekit/
 ### Streaming 模式数据流
 
 ```
-VAD 检测语音开始 → STT 实时转写 → LLM 流式生成 → ChineseModel EOT 检测 → TTS 流式合成 → Room 发布音频
+用户音频 → LiveKit Room → AgentSession
+  → VAD START_OF_SPEECH: 标记用户开始说话，必要时先 duck 当前 Agent 输出
+  → STT INTERIM/FINAL: 形成 transcript evidence
+  → turn_policy Tier 0-4: hard-stop / redirect / normal / noise / attention observe
+  → StreamingPipeline 应用决策:
+       cancel: 取消当前 Agent 输出并提交用户输入
+       rollback: 恢复被 duck 的输出，不把短反馈当成打断
+       observe: 只记录环境人声或低置信信号
+  → VAD END_OF_SPEECH + EOT score: 判定用户是否说完
+  → LLM 流式生成 → TTS 流式合成 → OutputController 发布音频到 Room
 ```
+
+### Streaming 打断分层
+
+当前实时打断是五层策略链，目标是在“足够快”和“不误杀自然陪伴感”之间折中：
+
+| Tier | 典型输入 | 目标动作 | 延迟目标 | 主要代码 |
+|---|---|---|---|---|
+| Tier 0 hard stop | “别说了”、“停”、“打住” | 立即 cancel | 最快，尽量不等 EOT | `turn_policy/tiers/tier0_hard_stop.py` |
+| Tier 1 redirect/correct | “不是”、“等一下”、“换个话题” | 快速 cancel，但要求更强 evidence | 约 100-300ms 稳定窗口 | `turn_policy/tiers/tier1_redirect.py` |
+| Tier 2 normal interruption | 普通完整插话 | 等 EOT/final/preflight 或稳定文本后 cancel | 约 500-800ms，取决于 STT/EOT | `turn_policy/tiers/tier2_interruption.py` |
+| Tier 3 noise/backchannel | “嗯”、“好”、“啊”、咳嗽 | rollback / unduck | 短暂 duck 后恢复 | `turn_policy/tiers/tier3_noise.py` |
+| Tier 4 attention observe | agent 正在说话时的环境人声 | observe / ignore | 不 cancel | `turn_policy/tiers/tier4_attention.py` |
+
+`client_audio_state.py` 提供来自 Web/硬件客户端的播放态信号。`attention.enforce=true` 时，如果客户端明确处于 Agent speaking，普通环境人声默认不会直接进入 EOT cancel；只有 Tier 0、Tier 1、PTT/manual interrupt 或足够强的语义 evidence 才会更快取消。
 
 ### Batch 模式数据流
 
@@ -294,11 +377,11 @@ ChineseModel (models/chinese.py) ──继承 EidolonEOTModel
 用户说完 → VAD 触发 END_OF_SPEECH
   → STT 返回 FINAL_TRANSCRIPT
     → EOT Model 分析用户文本
-      → predict_end_of_turn() → 分数 >= threshold
-        → AgentSession 开始 LLM 生成回复
-          → 每个 LLM token 都经过 EOT 检测
-            → 分数 <= unlikely_threshold (默认 0.08)
-              → TTS 开始合成并发布音频
+      → predict_end_of_turn() 产出用户是否结束的 evidence
+        → turn_policy/tiers 结合 transcript、client_audio_state、preflight intent
+          → cancel / rollback / observe / submit
+            → submit 时 AgentSession 开始 LLM 生成回复
+              → TTS 开始合成并通过 OutputController 发布音频
 ```
 
 **备选 FireRedChatEOT (keyword fallback):**
@@ -393,12 +476,12 @@ no_punct            → 0.95 (无标点 = 还没结束)
        │                         │  20. STT stream 返回        │                          │
        │                         │     FINAL_TRANSCRIPT        │                          │
        │                         │                             │                          │
-       │                         │  21. LLM.chat(chat_ctx)     │                          │
-       │                         │     流式生成回复 token       │                          │
+       │                         │  21. turn_policy + EOT      │                          │
+       │                         │     判定 cancel/rollback/   │                          │
+       │                         │     observe/submit          │                          │
        │                         │                             │                          │
-       │                         │  22. ChineseModel           │                          │
-       │                         │     predict_end_of_turn()   │                          │
-       │                         │     控制 TTS 开始/结束       │                          │
+       │                         │  22. LLM.chat(chat_ctx)     │                          │
+       │                         │     流式生成回复 token       │                          │
        │                         │                             │                          │
        │                         │  23. TTS stream 流式合成    │                          │
        │                         │     AudioFrame PCM          │                          │
@@ -451,23 +534,23 @@ no_punct            → 0.95 (无标点 = 还没结束)
 │                                      │                                   │
 │                                      ▼                                   │
 │                              ┌───────────────┐                           │
+│                              │ turn_policy   │ Tier 0-4 decision chain   │
+│                              │ + EOT evidence│                           │
+│                              │               │                           │
+│                              │ hard stop → cancel                        │
+│                              │ noise → rollback/unduck                   │
+│                              │ normal → wait EOT/final/stability         │
+│                              └───────┬───────┘                           │
+│                                      │                                   │
+│                       用户说完且未取消当前输出后:                         │
+│                                      │                                   │
+│                                      ▼                                   │
+│                              ┌───────────────┐                           │
 │                              │     LLM       │ livekit.plugins.openai.LLM │
 │                              │  OpenAI-style │                           │
 │                              │               │                           │
 │                              │  流式 token 输出│                          │
 │                              │  chat_ctx 上下文│                          │
-│                              └───────┬───────┘                           │
-│                                      │                                   │
-│                              每个 token 都经过:                           │
-│                                      │                                   │
-│                                      ▼                                   │
-│                              ┌───────────────┐                           │
-│                              │  ChineseModel │ EidolonEOTModel           │
-│                              │  (EOT 检测)   │                           │
-│                              │               │                           │
-│                              │ predict_end_of_turn()                     │
-│                              │  分数 >= unlikely_threshold → TTS 开始    │
-│                              │  用户新语音 → should_interrupt() → 打断   │
 │                              └───────┬───────┘                           │
 │                                      │                                   │
 │                                      ▼                                   │

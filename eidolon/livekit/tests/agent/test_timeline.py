@@ -382,6 +382,30 @@ def test_streaming_pipeline_flushes_unfinished_timeline_on_session_close(
     pipeline._session_closed_event.set.assert_called_once()
 
 
+def test_streaming_pipeline_does_not_flush_cancelled_timeline_on_session_close(
+    tmp_path,
+) -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    debug_path = tmp_path / "timeline.jsonl"
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = TurnTimeline("turn-cancel")
+    pipeline._timeline_debug_flushed = False
+    pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
+    pipeline._session_closed_event = MagicMock()
+    pipeline._get_eot_model = MagicMock()
+    pipeline._ducking = MagicMock()
+    pipeline._ducking.get_metrics.return_value = None
+
+    pipeline._append_timeline_debug("interrupt_cancel", clear=True)
+    pipeline._on_session_close(SimpleNamespace(reason="participant_left", error=None))
+
+    rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["attrs"]["timeline_flush_reason"] == "interrupt_cancel"
+    pipeline._session_closed_event.set.assert_called_once()
+
+
 def test_parse_client_audio_state_sanitizes_payload() -> None:
     state = parse_client_audio_state(
         b'{"type":"client.audio_state","input_mode":"auto","ptt":false,'

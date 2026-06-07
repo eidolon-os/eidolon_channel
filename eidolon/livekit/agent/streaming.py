@@ -1390,7 +1390,7 @@ class StreamingPipeline(BasePipeline):
         if self._timeline is not None:
             self._timeline.mark("interrupt_resolved_at")
             self._timeline.set_attr("cancel_reason", "eot_cancel")
-            self._append_timeline_debug("interrupt_cancel")
+            self._append_timeline_debug("interrupt_cancel", clear=True)
         self._interrupt_current_turn()
 
     def _duck_unduck_if_suspended(

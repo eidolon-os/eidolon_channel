@@ -60,11 +60,7 @@ from eidolon.livekit.common.config import (
 )
 
 from . import _framework_patches
-from .client_audio_state import (
-    CLIENT_AUDIO_STATE_TOPIC,
-    ClientAudioState,
-    parse_client_audio_state,
-)
+from .client_audio_state import ClientAudioState
 from .turn_policy import (
     AdmissionAction,
     Action,
@@ -80,14 +76,13 @@ from .factory import SharedStageFactory
 from .output import FillerManager, OutputController
 from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
-from .session import IdleWatchdog, ProviderEventObserver
+from .session import (
+    IdleWatchdog,
+    ProviderEventObserver,
+    RoomDataHandler,
+)
 
 logger = logging.getLogger("agent")
-
-
-def _participant_identity_from_packet(packet: Any) -> str:
-    participant = getattr(packet, "participant", None)
-    return getattr(participant, "identity", "") or "unknown"
 
 
 # Module-level cache for the EOT model singleton.
@@ -182,6 +177,9 @@ class StreamingPipeline(BasePipeline):
 
         self._session: AgentSession | None = None
         self._client_audio_states: dict[str, ClientAudioState] = {}
+        self._room_data = RoomDataHandler(
+            get_timeline=lambda: getattr(self, "_timeline", None),
+        )
         # Set when AgentSession emits "close" event (e.g. participant disconnect).
         # run() awaits this instead of polling room.isconnected, so shutdown
         # fires within milliseconds of the framework deciding to close.
@@ -376,6 +374,7 @@ class StreamingPipeline(BasePipeline):
             self._pending_stt_provider_events = []
         if not hasattr(self, "_client_audio_states"):
             self._client_audio_states = {}
+        self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
         """Start the streaming pipeline. Blocks until room disconnects."""
@@ -541,75 +540,14 @@ class StreamingPipeline(BasePipeline):
 
     def _install_room_data_observer(self, room: Room) -> None:
         """Observe client-side audio hints for later admission policy use."""
-
-        logger.info(
-            "[StreamingPipeline] room data observer installed for topic=%s",
-            CLIENT_AUDIO_STATE_TOPIC,
-        )
-
-        @room.on("data_received")
-        def _on_data_received(packet: Any) -> None:
-            self._on_room_data_received(packet)
+        self._ensure_room_data_handler()
+        self._room_data.install(room)
+        self._sync_room_data_compat_attrs()
 
     def _on_room_data_received(self, packet: Any) -> None:
-        topic = getattr(packet, "topic", None)
-        packet_count = getattr(self, "_room_data_packet_count", 0) + 1
-        self._room_data_packet_count = packet_count
-        if self._timeline is not None:
-            events = list(self._timeline.attrs.get("room_data_events") or ())
-            events.append(
-                {
-                    "topic": topic,
-                    "participant_identity": _participant_identity_from_packet(packet),
-                    "bytes": len(getattr(packet, "data", b"") or b""),
-                }
-            )
-            self._timeline.set_attr("room_data_events", events[-12:])
-            self._timeline.set_attr("room_data_packet_count", packet_count)
-        if packet_count <= 3 or topic == CLIENT_AUDIO_STATE_TOPIC:
-            logger.debug(
-                "[StreamingPipeline] room data received topic=%s identity=%s bytes=%d count=%d",
-                topic,
-                _participant_identity_from_packet(packet),
-                len(getattr(packet, "data", b"") or b""),
-                packet_count,
-            )
-        if topic != CLIENT_AUDIO_STATE_TOPIC:
-            return
-        identity = _participant_identity_from_packet(packet)
-        try:
-            state = parse_client_audio_state(
-                getattr(packet, "data", b""),
-                participant_identity=identity,
-            )
-        except ValueError:
-            logger.debug(
-                "[StreamingPipeline] ignored malformed client.audio_state packet",
-                exc_info=True,
-            )
-            return
-        self._client_audio_states[identity] = state
-        client_packet_count = getattr(self, "_client_audio_state_packet_count", 0) + 1
-        self._client_audio_state_packet_count = client_packet_count
-        if self._timeline is not None:
-            self._timeline.set_attr(
-                "client_audio_state",
-                state.as_timeline_attr(),
-            )
-            self._timeline.set_attr(
-                "client_audio_state_packet_count",
-                client_packet_count,
-            )
-        logger.info(
-            "[StreamingPipeline] client.audio_state received identity=%s "
-            "playback=%s mic_muted=%s manual_interrupt=%s ptt=%s count=%d",
-            state.participant_identity,
-            state.playback_state,
-            state.mic_muted,
-            state.manual_interrupt,
-            state.ptt,
-            client_packet_count,
-        )
+        self._ensure_room_data_handler()
+        self._room_data.handle_packet(packet)
+        self._sync_room_data_compat_attrs()
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
@@ -756,6 +694,35 @@ class StreamingPipeline(BasePipeline):
             return
         self._idle_watchdog_task = controller.task
         self._last_activity_monotonic = controller.last_activity_monotonic
+
+    def _ensure_room_data_handler(self) -> None:
+        if not hasattr(self, "_room_data"):
+            self._room_data = RoomDataHandler(
+                get_timeline=lambda: getattr(self, "_timeline", None),
+            )
+            if hasattr(self, "_client_audio_states"):
+                self._room_data.client_audio_states = self._client_audio_states
+            self._room_data.room_data_packet_count = getattr(
+                self,
+                "_room_data_packet_count",
+                0,
+            )
+            self._room_data.client_audio_state_packet_count = getattr(
+                self,
+                "_client_audio_state_packet_count",
+                0,
+            )
+        self._sync_room_data_compat_attrs()
+
+    def _sync_room_data_compat_attrs(self) -> None:
+        room_data = getattr(self, "_room_data", None)
+        if room_data is None:
+            return
+        self._client_audio_states = room_data.client_audio_states
+        self._room_data_packet_count = room_data.room_data_packet_count
+        self._client_audio_state_packet_count = (
+            room_data.client_audio_state_packet_count
+        )
 
     def _on_agent_state_changed(self, event: Any) -> None:
         """Forward agent state change + cancel pending soft interrupts.
@@ -1204,21 +1171,14 @@ class StreamingPipeline(BasePipeline):
         participant_identity: str | None = None,
     ) -> ClientAudioState | None:
         self._ensure_runtime_defaults()
-        if not self._client_audio_states:
-            return None
         max_age_sec = self._turn_policy.attention.client_state_max_age_ms / 1000.0
-        if participant_identity:
-            state = self._client_audio_states.get(participant_identity)
-            if state is not None and state.is_fresh(max_age_sec=max_age_sec):
-                return state
-        states = [
-            state
-            for state in self._client_audio_states.values()
-            if state.is_fresh(max_age_sec=max_age_sec)
-        ]
-        if not states:
-            return None
-        return max(states, key=lambda state: state.received_at)
+        self._ensure_room_data_handler()
+        if self._client_audio_states is not self._room_data.client_audio_states:
+            self._room_data.client_audio_states = self._client_audio_states
+        return self._room_data.latest_client_audio_state(
+            participant_identity=participant_identity,
+            max_age_sec=max_age_sec,
+        )
 
     def _record_attention_admission(self, decision: AttentionDecision) -> None:
         if self._timeline is None:

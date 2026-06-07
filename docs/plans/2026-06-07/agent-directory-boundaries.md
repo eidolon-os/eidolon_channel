@@ -402,9 +402,17 @@ eidolon/livekit/agent/
 - `StreamingPipeline` 保留 `_mark_activity`、`_start_idle_watchdog` 等薄 wrapper，兼容既有测试。
 - 新增 `IdleWatchdog` 直接单测。
 
-下一步继续 Phase 2：
+已完成第三块 `streaming.py` 职责抽取：
 
-1. 抽 room data/client audio state handler。
-2. 每一步独立 commit，保持行为不变。
+- 新增 `session/room_data.py`。
+- 将 room data packet 监听、`client.audio_state` 解析、timeline 记录、fresh client state 选择移入 `RoomDataHandler`。
+- `StreamingPipeline` 保留 `_install_room_data_observer`、`_on_room_data_received`、`_latest_client_audio_state` 薄 wrapper，兼容既有测试。
+- 新增 `RoomDataHandler` 直接单测。
+
+Phase 2 当前完成。下一步建议先 review `streaming.py` 剩余职责，再决定是否进入 Phase 3：
+
+1. 抽 interruption side effects。
+2. 抽 interrupted context snapshot/injection。
+3. 更新 `ARCHITECTURE.md`。
 
 这一步收益明确，风险较低，也能验证目录边界设计是否顺手。

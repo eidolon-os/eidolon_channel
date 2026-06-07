@@ -415,4 +415,20 @@ Phase 2 当前完成。下一步建议先 review `streaming.py` 剩余职责，�
 2. 抽 interrupted context snapshot/injection。
 3. 更新 `ARCHITECTURE.md`。
 
+### 2026-06-07 Phase 3 执行记录
+
+已完成第一块 Phase 3 抽取：
+
+- 新建 `context/`。
+- 新增 `context/interrupted.py`。
+- 将 interrupted assistant response snapshot/injection 移入 `InterruptedContextManager`。
+- `StreamingPipeline` 保留 `_snapshot_interrupted_context`、`_inject_interrupted_context` 薄 wrapper，兼容既有测试。
+- 新增 `InterruptedContextManager` 直接单测。
+
+下一步建议：
+
+1. 先 review `duck/cancel/rollback` 剩余逻辑，不急着抽。
+2. 若继续 Phase 3，优先抽一个只执行 side effect 的 `InterruptionEffects`，不要把 `turn_policy` 语义判断搬进去。
+3. 更新 `ARCHITECTURE.md`，让实际目录和文档同步。
+
 这一步收益明确，风险较低，也能验证目录边界设计是否顺手。

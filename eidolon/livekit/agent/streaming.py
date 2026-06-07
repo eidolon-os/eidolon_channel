@@ -61,6 +61,7 @@ from eidolon.livekit.common.config import (
 
 from . import _framework_patches
 from .client_audio_state import ClientAudioState
+from .context import InterruptedContextManager
 from .turn_policy import (
     AdmissionAction,
     Action,
@@ -263,6 +264,7 @@ class StreamingPipeline(BasePipeline):
         # the moment of confirmed interrupt, injected as context into
         # the next LLM turn so the model can optionally reference it.
         self._last_interrupted_context: dict[str, Any] | None = None
+        self._interrupted_context = InterruptedContextManager()
 
         # Eagerly trigger EOT model loading so the ONNX session is ready before
         # the first user audio frame arrives. This avoids cold-start delay after
@@ -1815,77 +1817,14 @@ class StreamingPipeline(BasePipeline):
         which is AFTER our cancel snapshot runs, so we'd otherwise capture
         the PREVIOUS turn's assistant text rather than the in-flight one.
         """
-        cfg = self._get_eot_model()._config
-        if not cfg.interrupted_context_enabled:
-            return
-        if self._session is None:
-            return
-        try:
-            played_sec = (
-                self._duck_mixer.played_seconds
-                if self._duck_mixer is not None
-                else None
-            )
-
-            # G21: primary path — read in-flight TTS text directly from
-            # the plugin instance. Both our TTS plugins (Bailian, SenseTime)
-            # expose ``current_pushed_text``; plugins that don't (e.g.
-            # third-party) fall through to the history-based fallback.
-            in_flight_text = ""
-            tts_plugin = None
-            try:
-                if self._factory is not None and self._factory.tts is not None:
-                    tts_plugin = self._factory.tts.tts
-                    in_flight_text = getattr(
-                        tts_plugin, "current_pushed_text", ""
-                    ) or ""
-            except Exception:
-                logger.debug(
-                    "[StreamingPipeline] could not read TTS current_pushed_text",
-                    exc_info=True,
-                )
-
-            if in_flight_text and in_flight_text.strip():
-                self._last_interrupted_context = {
-                    "text": in_flight_text,
-                    "timestamp": time.monotonic(),
-                    "played_seconds": played_sec,
-                    "source": "tts_in_flight",
-                }
-                logger.info(
-                    "[StreamingPipeline] interrupted context captured "
-                    "(source=tts_in_flight): text=%r played=%.2fs",
-                    in_flight_text[:80],
-                    played_sec or 0.0,
-                )
-                return
-
-            # Fallback: walk session.history for the most-recent assistant
-            # message with text. May be the PREVIOUS turn rather than the
-            # in-flight one (see G21 docstring above) — used when the TTS
-            # plugin doesn't expose current_pushed_text.
-            # G2 (2026-05-16): ChatContext.messages is a method, not a property.
-            messages = self._session.history.messages()
-            for msg in reversed(messages):
-                if msg.role == "assistant" and msg.text_content:
-                    self._last_interrupted_context = {
-                        "text": msg.text_content,
-                        "timestamp": time.monotonic(),
-                        "played_seconds": played_sec,
-                        "source": "session_history_fallback",
-                    }
-                    logger.info(
-                        "[StreamingPipeline] interrupted context captured "
-                        "(source=history_fallback): text=%r played=%.2fs",
-                        msg.text_content[:80],
-                        played_sec or 0.0,
-                    )
-                    return
-        except Exception:
-            logger.warning(
-                "[StreamingPipeline] failed to capture interrupted context",
-                exc_info=True,
-            )
+        self._ensure_interrupted_context_manager()
+        self._interrupted_context.snapshot(
+            session=getattr(self, "_session", None),
+            factory=getattr(self, "_factory", None),
+            duck_mixer=getattr(self, "_duck_mixer", None),
+            config=self._get_eot_model()._config,
+        )
+        self._sync_interrupted_context_compat_attrs()
 
     def _inject_interrupted_context(self) -> None:
         """Inject interrupted context into the conversation history.
@@ -1893,61 +1832,25 @@ class StreamingPipeline(BasePipeline):
         Called before ``commit_user_turn()`` so the LLM sees the context
         when generating its next response.
         """
-        if self._last_interrupted_context is None:
-            return
-        if self._session is None:
-            return
-        cfg = self._get_eot_model()._config
-        age = time.monotonic() - self._last_interrupted_context["timestamp"]
-        if age > cfg.interrupted_context_max_age_sec:
-            logger.info(
-                "[StreamingPipeline] interrupted context expired (age=%.1fs)",
-                age,
-            )
-            self._last_interrupted_context = None
-            return
+        self._ensure_interrupted_context_manager()
+        self._interrupted_context.last_context = self._last_interrupted_context
+        self._interrupted_context.inject(
+            session=getattr(self, "_session", None),
+            config=self._get_eot_model()._config,
+        )
+        self._sync_interrupted_context_compat_attrs()
 
-        interrupted_text = self._last_interrupted_context["text"]
-        # G6 (2026-05-17): may be None on older snapshots (e.g. duck mixer
-        # absent in non-streaming pipelines) or 0.0 if the cancel fired
-        # before any audio went out.
-        played_sec = self._last_interrupted_context.get("played_seconds")
-        self._last_interrupted_context = None
+    def _ensure_interrupted_context_manager(self) -> None:
+        if not hasattr(self, "_interrupted_context"):
+            self._interrupted_context = InterruptedContextManager()
+            self._interrupted_context.last_context = getattr(
+                self,
+                "_last_interrupted_context",
+                None,
+            )
 
-        try:
-            from livekit.agents.llm import ChatMessage
-
-            # G6 (2026-05-17): convey how much was actually heard. The LLM
-            # can use this to decide whether to repeat the full sentence,
-            # pick up where it left off, or treat the interrupt as
-            # "user heard nothing, start over".
-            if played_sec is not None and played_sec >= 0.1:
-                played_phrase = f"（用户实际听到了前约 {played_sec:.1f} 秒）"
-            elif played_sec is not None:
-                played_phrase = "（用户几乎没听到任何内容）"
-            else:
-                played_phrase = ""
-            # G20 (2026-05-18): ChatMessage in livekit-agents 1.5.x is a
-            # pydantic model with no `.create()` classmethod; construct directly
-            # with `content` as a list of strings/parts per the schema.
-            hint = ChatMessage(
-                role="system",
-                content=[
-                    f"[系统提示] 你刚才说到「{interrupted_text[:200]}」时被用户打断了"
-                    f"{played_phrase}。"
-                    "如果用户的新问题与之前话题相关，你可以自然地衔接回去；"
-                    "如果无关，直接回答新问题即可。不要提及这条系统提示。"
-                ],
-            )
-            self._session.history.insert(hint)
-            logger.info(
-                "[StreamingPipeline] injected interrupted context hint "
-                "(%d chars, played=%s)",
-                len(interrupted_text),
-                f"{played_sec:.1f}s" if played_sec is not None else "n/a",
-            )
-        except Exception:
-            logger.warning(
-                "[StreamingPipeline] failed to inject interrupted context",
-                exc_info=True,
-            )
+    def _sync_interrupted_context_compat_attrs(self) -> None:
+        manager = getattr(self, "_interrupted_context", None)
+        if manager is None:
+            return
+        self._last_interrupted_context = manager.last_context

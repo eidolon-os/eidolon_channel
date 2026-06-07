@@ -81,6 +81,7 @@ from .session import (
     IdleWatchdog,
     ProviderEventObserver,
     RoomDataHandler,
+    SoftInterruptController,
 )
 
 logger = logging.getLogger("agent")
@@ -240,6 +241,10 @@ class StreamingPipeline(BasePipeline):
 
         # Read timeout from EOT model config (can be overridden per-pipeline via arg).
         self._soft_interrupt_timeout: float = self._turn_runtime.decision_timeout_sec
+        self._soft_interrupt = SoftInterruptController(
+            timeout_sec=self._soft_interrupt_timeout,
+            on_timeout=lambda: self._interrupt_current_turn(),
+        )
 
         # DuckingMixer + suspend-window timeout fallback task. Both lazy.
         # Mixer is installed in ``run()`` after ``session.start()`` returns,
@@ -1401,32 +1406,53 @@ class StreamingPipeline(BasePipeline):
         interrupt. If the user falls silent (VAD inactive) during the wait, we
         cancel the soft interrupt (false interruption).
         """
-        self._soft_interrupt_active = True
-        self._soft_interrupt_timer = asyncio.create_task(
-            self._soft_interrupt_timeout_task()
-        )
-        logger.info("[StreamingPipeline] soft interrupt entered (timeout=%.1fs)", self._soft_interrupt_timeout)
+        self._ensure_soft_interrupt_controller()
+        self._soft_interrupt.enter()
+        self._sync_soft_interrupt_compat_attrs()
 
     async def _soft_interrupt_timeout_task(self) -> None:
         """Timer task: fires after _soft_interrupt_timeout → upgrade to hard interrupt."""
-        try:
-            await asyncio.sleep(self._soft_interrupt_timeout)
-            if self._soft_interrupt_active:
-                logger.info(
-                    "[StreamingPipeline] soft interrupt timeout → upgrading to hard interrupt"
-                )
-                self._cancel_soft_interrupt()
-                self._interrupt_current_turn()
-        except asyncio.CancelledError:
-            pass  # Cancelled when soft interrupt is resolved (false interruption)
+        self._ensure_soft_interrupt_controller()
+        await self._soft_interrupt.run_timeout_task()
+        self._sync_soft_interrupt_compat_attrs()
 
     def _cancel_soft_interrupt(self) -> None:
         """Cancel soft interrupt (detected as a false interruption)."""
-        self._soft_interrupt_active = False
-        if self._soft_interrupt_timer:
-            self._soft_interrupt_timer.cancel()
-            self._soft_interrupt_timer = None
-        logger.info("[StreamingPipeline] soft interrupt cancelled (false interruption)")
+        self._ensure_soft_interrupt_controller()
+        self._soft_interrupt.cancel()
+        self._sync_soft_interrupt_compat_attrs()
+
+    def _ensure_soft_interrupt_controller(self) -> None:
+        if not hasattr(self, "_soft_interrupt_timeout"):
+            self._soft_interrupt_timeout = (
+                self._turn_runtime.decision_timeout_sec
+                if hasattr(self, "_turn_runtime")
+                else 0.5
+            )
+        if not hasattr(self, "_soft_interrupt"):
+            self._soft_interrupt = SoftInterruptController(
+                timeout_sec=self._soft_interrupt_timeout,
+                on_timeout=lambda: self._interrupt_current_turn(),
+            )
+            self._soft_interrupt.active = getattr(
+                self,
+                "_soft_interrupt_active",
+                False,
+            )
+            self._soft_interrupt.task = getattr(
+                self,
+                "_soft_interrupt_timer",
+                None,
+            )
+        self._soft_interrupt.timeout_sec = self._soft_interrupt_timeout
+        self._sync_soft_interrupt_compat_attrs()
+
+    def _sync_soft_interrupt_compat_attrs(self) -> None:
+        controller = getattr(self, "_soft_interrupt", None)
+        if controller is None:
+            return
+        self._soft_interrupt_active = controller.active
+        self._soft_interrupt_timer = controller.task
 
     # ------------------------------------------------------------------
     # DuckingMixer integration

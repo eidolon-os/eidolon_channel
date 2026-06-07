@@ -82,6 +82,7 @@ from .session import (
     IdleWatchdog,
     ProviderEventObserver,
     RoomDataHandler,
+    SemanticInterruptHandler,
     SessionSignalBridge,
     SoftInterruptController,
     UserTurnCommitter,
@@ -160,6 +161,7 @@ class StreamingPipeline(BasePipeline):
         self._session_signals = self._build_session_signal_bridge()
         self._turn_committer = UserTurnCommitter()
         self._agent_state_effects = self._build_agent_state_effect_handler()
+        self._semantic_interrupts = self._build_semantic_interrupt_handler()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -404,6 +406,40 @@ class StreamingPipeline(BasePipeline):
         if handler is None or getattr(handler, "_ducking", None) is not self._ducking:
             self._agent_state_effects = self._build_agent_state_effect_handler()
 
+    def _build_semantic_interrupt_handler(self) -> SemanticInterruptHandler:
+        return SemanticInterruptHandler(
+            get_eot_model=lambda: self._get_eot_model(),
+            turn_runtime=self._turn_runtime,
+            get_timeline=lambda: self._timeline,
+            get_duck_active=lambda: self._ducking.is_suspended,
+            get_duck_stats=lambda: self._ducking.stats(),
+            get_vad_active=lambda: (
+                self._session is not None
+                and self._session.user_state == "speaking"
+            ),
+            soft_interrupt_active=lambda: self._soft_interrupt_active,
+            soft_interrupt_timeout=lambda: self._soft_interrupt_timeout,
+            apply_decision=lambda decision, **kwargs: self._apply_decision(
+                decision,
+                **kwargs,
+            ),
+            record_decision_attrs=lambda decision, **kwargs: (
+                self._record_decision_attrs(decision, **kwargs)
+            ),
+            publish_turn_control=lambda metadata: self._publish_turn_control(metadata),
+            cancel_duck_and_interrupt=lambda: self._duck_cancel_and_interrupt(),
+            interrupt_current_turn=lambda: self._interrupt_current_turn(),
+            enter_soft_interrupt=lambda: self._enter_soft_interrupt(),
+        )
+
+    def _ensure_semantic_interrupt_handler(self) -> None:
+        handler = getattr(self, "_semantic_interrupts", None)
+        if (
+            handler is None
+            or getattr(handler, "_turn_runtime", None) is not self._turn_runtime
+        ):
+            self._semantic_interrupts = self._build_semantic_interrupt_handler()
+
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
@@ -510,6 +546,7 @@ class StreamingPipeline(BasePipeline):
         self._ensure_session_signal_bridge()
         self._ensure_turn_committer()
         self._ensure_agent_state_effect_handler()
+        self._ensure_semantic_interrupt_handler()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -1094,174 +1131,15 @@ class StreamingPipeline(BasePipeline):
         """
         Synchronous EOT semantic check triggered by each STT transcript event.
 
-        Runs immediately on the text received from STT, without polling or delay.
-        Two-stage flow:
-        - Strong intent  → hard interrupt immediately
-        - EOT says cut   → enter soft interrupt (wait for confirmation)
-        - User silent    → cancel soft interrupt (false interruption)
-        - Timeout        → upgrade to hard interrupt
+        ``turn_policy`` owns tier/intent/action decisions. The session semantic
+        handler owns the hot-path side effects: strong-stop fast path,
+        duck-active resolution and fallback soft interrupt staging.
         """
         if not text or not text.strip():
             return
         self._ensure_runtime_defaults()
-
-        eot_model = self._get_eot_model()
-
-        # Phase C duck-mixer path takes priority when a mixer is installed
-        # AND we're in the suspend window (mixer state == SUSPENDED). The
-        # mixer was armed on user_state listening→speaking; we now resolve
-        # it based on EOT signal.
-        duck_active = self._ducking.is_suspended
-
-        # Strong interrupt intent — confirmed cancel (real interrupt).
-        if eot_model._turn_end_policy.is_strong_interrupt_intent(text):
-            logger.info(
-                "[StreamingPipeline] EOT: strong interrupt intent, text=%r",
-                text[:50],
-            )
-            decision = self._turn_runtime.strong_intent_decision()
-            signal = self._turn_runtime.control_signal_from_decision(decision)
-            self._publish_turn_control(signal.as_metadata())
-            if self._timeline is not None:
-                self._record_decision_attrs(
-                    decision,
-                    source="strong_intent",
-                    transcript=text,
-                    vad_active=True,
-                )
-                self._timeline.set_attr("turn_control", signal.as_metadata())
-            if duck_active:
-                self._duck_cancel_and_interrupt()
-            else:
-                if self._timeline is not None:
-                    self._timeline.mark("interrupt_resolved_at")
-                    self._timeline.set_attr("cancel_reason", "strong_intent_cancel")
-                self._interrupt_current_turn()
-            return
-
-        # Compute score (always, for both duck-active and fallback paths).
-        # vad_active reads from framework's authoritative user_state.
-        vad_active = (
-            self._session is not None
-            and self._session.user_state == "speaking"
-        )
-        should_cut = eot_model.should_interrupt(
-            text, vad_active=vad_active, is_final=is_final,
-        )
-        score = eot_model.current_eot_score
-
-        # ──────────────────────────────────────────────────────────
-        # Duck-active path: delegate to InterruptDecider (G18b)
-        # ──────────────────────────────────────────────────────────
-        if duck_active:
-            decision = self._turn_runtime.decide_from_transcript(
-                text,
-                score,
-                vad_active=vad_active,
-                agent_speaking=True,
-                is_final=is_final,
-            )
-            stats = self._ducking.stats()
-            logger.info(
-                "[StreamingPipeline] EOT(duck): decision=%s reason=%s "
-                "suspend_ms=%.0f score=%.2f text=%r",
-                decision.action.value, decision.reason,
-                stats.suspend_ms, score, text[:80],
-            )
-            self._apply_decision(
-                decision,
-                eot_score=score,
-                transcript=text,
-                vad_active=vad_active,
-            )
-            return
-
-        # ──────────────────────────────────────────────────────────
-        # Fallback path (mixer not installed, or duck disabled):
-        # use the soft/hard interrupt machinery without output ducking.
-        # ──────────────────────────────────────────────────────────
-        semantic_decision = self._turn_runtime.decide_from_transcript(
-            text,
-            score,
-            vad_active=vad_active,
-            agent_speaking=True,
-            is_final=is_final,
-        )
-        if semantic_decision.intent in (
-            InterruptIntent.HARD_STOP,
-            InterruptIntent.TOPIC_SWITCH,
-            InterruptIntent.CORRECTION,
-            InterruptIntent.BACKCHANNEL,
-            InterruptIntent.NOISE,
-        ):
-            logger.info(
-                "[StreamingPipeline] EOT(fallback semantic): decision=%s "
-                "reason=%s score=%.2f text=%r",
-                semantic_decision.action.value,
-                semantic_decision.reason,
-                score,
-                text[:80],
-            )
-            self._apply_decision(
-                semantic_decision,
-                eot_score=score,
-                transcript=text,
-                vad_active=vad_active,
-            )
-            return
-
-        # Already in soft interrupt: stay in the waiting state until timeout or silence.
-        if self._soft_interrupt_active:
-            logger.info(
-                "[StreamingPipeline] EOT: already in soft interrupt, waiting. text=%r",
-                text[:80],
-            )
-            return
-
-        if should_cut:
-            if score >= eot_model.hard_interrupt_score_threshold:
-                logger.info(
-                    "[StreamingPipeline] EOT: score=%.2f ≥ %.2f → hard interrupt "
-                    "(skip soft stage). text=%r",
-                    score,
-                    eot_model.hard_interrupt_score_threshold,
-                    text[:80],
-                )
-                if self._timeline is not None:
-                    self._timeline.record_decision(
-                        action="cancel",
-                        reason="fallback_eot_hard_score",
-                        rollback_drop_buffered=False,
-                        source="eot_fallback",
-                        eot_score=score,
-                        transcript_preview=text[:120],
-                        vad_active=vad_active,
-                    )
-                self._interrupt_current_turn()
-            else:
-                logger.info(
-                    "[StreamingPipeline] EOT: score=%.2f → soft interrupt "
-                    "(timeout=%.2fs). text=%r",
-                    score,
-                    self._soft_interrupt_timeout,
-                    text[:80],
-                )
-                if self._timeline is not None:
-                    self._timeline.record_decision(
-                        action="hold",
-                        reason="fallback_eot_soft_interrupt",
-                        rollback_drop_buffered=False,
-                        source="eot_fallback",
-                        eot_score=score,
-                        transcript_preview=text[:120],
-                        vad_active=vad_active,
-                    )
-                self._enter_soft_interrupt()
-        else:
-            logger.info(
-                "[StreamingPipeline] EOT: should_interrupt=False, text=%r",
-                text[:80],
-            )
+        self._ensure_semantic_interrupt_handler()
+        self._semantic_interrupts.run(text, is_final=is_final)
 
     def _interrupt_current_turn(self) -> None:
         """Interrupt the currently in-progress agent turn via session.interrupt()."""

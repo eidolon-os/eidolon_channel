@@ -117,6 +117,7 @@ eidolon/livekit/agent/
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发
 │   ├── interruption.py       # SoftInterruptController: 软打断补偿路径
+│   ├── semantic_interrupt.py # SemanticInterruptHandler: STT/EOT 打断热路径副作用
 │   ├── signals.py            # SessionSignalBridge: VAD/STT provider 信号桥接
 │   └── turn_commit.py        # UserTurnCommitter: VAD-end commit guard
 ├── context/

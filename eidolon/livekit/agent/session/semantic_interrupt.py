@@ -66,18 +66,44 @@ class SemanticInterruptHandler:
 
         eot_model = self._get_eot_model()
         duck_active = self._get_duck_active()
+        vad_active = self._get_vad_active()
+        score = eot_model.current_eot_score
 
         if eot_model._turn_end_policy.is_strong_interrupt_intent(text):
-            self._handle_strong_interrupt(text, duck_active=duck_active)
+            decision = self._turn_runtime.decide_from_transcript(
+                text,
+                score,
+                vad_active=vad_active,
+                agent_speaking=True,
+                is_final=is_final,
+            )
+            if decision.intent is InterruptIntent.HARD_STOP:
+                self._handle_strong_interrupt(
+                    text,
+                    decision=decision,
+                    duck_active=duck_active,
+                )
+                return
+            logger.info(
+                "[SemanticInterruptHandler] EOT: legacy strong signal "
+                "resolved as %s reason=%s text=%r",
+                decision.intent.value if decision.intent else "unknown",
+                decision.reason,
+                text[:80],
+            )
+            self._apply_decision(
+                decision,
+                eot_score=score,
+                transcript=text,
+                vad_active=vad_active,
+            )
             return
 
-        vad_active = self._get_vad_active()
         should_cut = eot_model.should_interrupt(
             text,
             vad_active=vad_active,
             is_final=is_final,
         )
-        score = eot_model.current_eot_score
 
         if duck_active:
             self._handle_duck_active(
@@ -117,12 +143,17 @@ class SemanticInterruptHandler:
                 text[:80],
             )
 
-    def _handle_strong_interrupt(self, text: str, *, duck_active: bool) -> None:
+    def _handle_strong_interrupt(
+        self,
+        text: str,
+        *,
+        decision: Decision,
+        duck_active: bool,
+    ) -> None:
         logger.info(
             "[SemanticInterruptHandler] EOT: strong interrupt intent, text=%r",
             text[:50],
         )
-        decision = self._turn_runtime.strong_intent_decision()
         signal = self._turn_runtime.control_signal_from_decision(decision)
         metadata = signal.as_metadata()
         self._publish_turn_control(metadata)

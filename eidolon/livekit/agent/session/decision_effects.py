@@ -31,12 +31,14 @@ class DecisionEffectApplier:
         get_timeline: Callable[[], TurnTimeline | None],
         on_cancel: Callable[[], None],
         on_rollback: Callable[[str, bool], None],
+        on_hold: Callable[[Decision, str, float | None, bool | None], None] | None = None,
     ) -> None:
         self._factory = factory
         self._turn_runtime = turn_runtime
         self._get_timeline = get_timeline
         self._on_cancel = on_cancel
         self._on_rollback = on_rollback
+        self._on_hold = on_hold
 
     def apply(
         self,
@@ -65,6 +67,8 @@ class DecisionEffectApplier:
                 decision.rollback_drop_buffered,
             )
             return
+        if decision.action is Action.HOLD and self._on_hold is not None:
+            self._on_hold(decision, transcript, eot_score, vad_active)
 
     def record_decision_attrs(
         self,

@@ -83,3 +83,21 @@ def test_record_decision_attrs_noops_without_timeline() -> None:
     setter.assert_not_called()
     on_cancel.assert_not_called()
     on_rollback.assert_not_called()
+
+
+def test_apply_hold_calls_hold_callback() -> None:
+    on_hold = MagicMock()
+    factory = SimpleNamespace(llm=SimpleNamespace(llm=SimpleNamespace()))
+    applier = DecisionEffectApplier(
+        factory=factory,
+        turn_runtime=TurnPolicyRuntime(TurnPolicyConfig()),
+        get_timeline=lambda: None,
+        on_cancel=MagicMock(),
+        on_rollback=MagicMock(),
+        on_hold=on_hold,
+    )
+    decision = Decision(action=Action.HOLD, reason="stable_signal_wait")
+
+    applier.apply(decision, transcript="不是", eot_score=0.1, vad_active=True)
+
+    on_hold.assert_called_once_with(decision, "不是", 0.1, True)

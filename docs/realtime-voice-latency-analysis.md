@@ -230,6 +230,24 @@ Still open:
 
 ## vs Industry Top-Tier
 
+Update 2026-06-07: `tts_request_started_at` is emitted when the LiveKit TTS
+stream opens. That can happen before the brain has produced any text, so
+`tts_request_to_provider_first_audio_ms` is a composite "stream opened -> first
+provider audio" metric, not pure provider TTFB. The provider-facing TTS TTFB SLO
+now uses `tts_first_text_sent_to_provider_first_audio_ms`.
+
+Update 2026-06-07: interrupt latency now has a split interpretation. Tier 0
+hard stops are still judged from VAD/speech start to `interrupt_resolved_at`,
+because a hard stop should cancel as soon as the direct stop phrase is
+available. Tier 1 semantic redirects/corrections additionally use
+`interrupt_started_at -> interrupt_resolved_at` as the channel execution SLO.
+The full `speech_started_at -> interrupt_resolved_at` value remains important,
+but it includes STT evidence availability. In the
+`stable-recheck-smoke-20260607` run, topic/correction were still slow from
+speech start (963 / 1154 ms), while admitted-to-resolved execution was fast
+(about 136 / 141 ms). That points to early transcript quality/timing rather
+than slow channel policy execution.
+
 Reference baseline, May 2026 (platform口径 = user stop -> first agent audio,
 excludes telephony network). Sources: Twilio Core-Latency 2025.11, OpenAI
 gpt-realtime, LiveKit pipeline blog, Gradium/Podcastle TTS 2026.
@@ -241,7 +259,7 @@ Measured `eidolon_agent` + Bailian, real LiveKit room, `--repeat 5` (25 turns),
 | --- | ---: | ---: | --- |
 | STT final: commit -> provider final (`stt_final_after_commit_ms`) | 350 / 500 | **990 / 1042** | ❌ ~2.8x — #1 lever |
 | Brain TTFT: request sent -> first delta (`brain_request_to_first_delta`) | 375 / 750 | **152 / 159** | ✅ top-tier |
-| TTS TTFB: request -> provider audio (`tts_request_to_provider_first_audio_ms`) | 100 / 250 | **649 / 734** | ❌ ~6.5x — #2 lever (was a black box) |
+| TTS stream-open -> provider audio (`tts_request_to_provider_first_audio_ms`) | diagnostic | **649 / 734** | composite: includes waiting for first brain text |
 | TTS publish: provider audio -> agent audio (`tts_provider_first_audio_to_agent_audio_ms`) | 50 / 120 | **2 / 2** | ✅ negligible |
 | Interrupt: VAD start -> resolved (`vad_start_to_interrupt_resolved`) | 500 / 650 | 699 / 1424 | ⚠️ p95 pulled by 1 flaky correction case |
 | E2E commit -> first audio (`commit_to_tts_first_audio`) | 800 / 1100 | **1718 / 1755** | ❌ ~2.1x |
@@ -250,10 +268,13 @@ Key data-backed findings:
 
 - The brain (`eidolon_agent`) is already **top-tier (~152ms TTFT)** — do not optimize it.
 - E2E 1718ms is almost entirely two segments: **STT finalization (~990ms)** and
-  **TTS TTFB (~649ms)**. TTS publish is ~2ms.
-- The TTS instrumentation added this iteration revealed TTS TTFB (~649ms) as the
-  #2 lever; it was previously folded into an opaque ~356ms brain->audio box.
-  Likely sentence-aggregation wait + provider first-audio; both tunable.
+  the post-brain TTS path. TTS publish is ~2ms.
+- New TTS split marks (`tts_first_text_sent_at`) show the old
+  `tts_request_to_provider_first_audio_ms` number included waiting for the
+  first brain text. In the 2026-06-07 smoke, provider-facing TTFB was
+  `tts_first_text_sent_to_provider_first_audio_ms ~= 291ms`, while
+  `tts_request_to_first_text_sent_ms ~= 735ms` was mostly upstream brain/token
+  wait. Optimize the provider/aggregator path against the new first-text metric.
 - `correction_001` is flaky (4/5): one repeat the STT interim classified as
   `normal_interrupt` instead of `correction` — a semantic-robustness issue, not
   latency.
@@ -265,8 +286,9 @@ top-tier on a single sample.
 
 Milestone: `commit -> first_audio` 1635 ms -> p95 <= 1100 ms. The biggest lever
 is the ~1s endpoint wait now isolated as `stt_final_after_commit_ms`; closing it
-(interim-preemptive brain request, faster STT endpointing) plus driving TTS TTFB
-under 250 ms is **Phase 2** (runtime), measured by the new marks above.
+(interim-preemptive brain request, faster STT endpointing) plus driving
+`tts_first_text_sent_to_provider_first_audio_ms` under 250 ms is **Phase 2**
+(runtime), measured by the new marks above.
 
 Every real-provider run must also pass real-call verification
 (`eidolon/livekit/benchmarks/realcall.py`): provider != mock, minimum audio

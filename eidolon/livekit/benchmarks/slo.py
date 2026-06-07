@@ -171,16 +171,19 @@ DEFAULT_SLO_GATES: tuple[SloGate, ...] = (
         description="Brain request sent -> first delta P95",
         min_samples=_PERCENTILE_MIN_SAMPLES,
     ),
-    # TTS TTFB and publish.
+    # TTS TTFB and publish. The provider-facing TTFB starts when the first
+    # non-empty text segment is successfully sent to the provider, not when the
+    # LiveKit TTS stream opens. The stream can open before the brain has emitted
+    # any text, so using tts_request_started_at would mix LLM wait into TTS.
     *_tier_pair(
         base_name="tts_ttfb",
         runner="livekit_room",
         source="timeline",
-        metric="tts_request_to_provider_first_audio_ms",
+        metric="tts_first_text_sent_to_provider_first_audio_ms",
         statistic="p95",
         target=100.0,
         acceptable=250.0,
-        description="TTS request -> provider first audio P95",
+        description="TTS first text sent -> provider first audio P95",
         min_samples=_PERCENTILE_MIN_SAMPLES,
     ),
     *_tier_pair(

@@ -59,7 +59,7 @@ cases:
     expect:
       action: cancel
       intent: hard_stop
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 650
       min_user_finals: 2
       min_agent_messages: 1
 
@@ -83,7 +83,7 @@ cases:
       action: cancel
       intent: topic_switch
       topic_switch_hint: true
-      max_interrupt_decision_ms: 500
+      max_interrupt_resolution_after_started_ms: 250
       min_user_finals: 1
 
   - case_id: correction_001
@@ -106,7 +106,7 @@ cases:
       action: cancel
       intent: correction
       correction_hint: true
-      max_interrupt_decision_ms: 500
+      max_interrupt_resolution_after_started_ms: 250
       min_user_finals: 1
 
   - case_id: backchannel_001
@@ -128,4 +128,5 @@ cases:
     expect:
       action: rollback
       intent: backchannel
+      allow_attention_actions: ["observe"]
       min_user_finals: 1

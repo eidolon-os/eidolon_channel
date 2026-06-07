@@ -51,6 +51,12 @@ def test_load_core_benchmark_suite() -> None:
         "hard_interrupt_001",
         "backchannel_001",
     }
+    hard = next(case for case in suite.cases if case.case_id == "hard_interrupt_001")
+    assert hard.expectations.max_interrupt_decision_ms == 650
+    topic = next(case for case in suite.cases if case.case_id == "topic_switch_001")
+    assert topic.expectations.max_interrupt_resolution_after_started_ms == 250
+    backchannel = next(case for case in suite.cases if case.case_id == "backchannel_001")
+    assert "observe" in backchannel.expectations.allow_attention_actions
 
 
 def test_load_attention_admission_benchmark_suite() -> None:
@@ -838,6 +844,12 @@ def test_enforcement_failures_only_required_hard_fails() -> None:
     assert enforcement_failures(advisory) == []
 
 
+def test_tts_ttfb_slo_uses_first_text_to_provider_audio() -> None:
+    tts_gate = next(g for g in DEFAULT_SLO_GATES if g.name == "tts_ttfb")
+
+    assert tts_gate.metric == "tts_first_text_sent_to_provider_first_audio_ms"
+
+
 def test_timeline_preemptive_outcomes(tmp_path) -> None:
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
@@ -1109,4 +1121,117 @@ def test_livekit_room_timeline_expectations_fail_slow_interrupt(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is False
-    assert any("exceeded 500" in error for error in run.cases[0].errors)
+    assert any("exceeded 650" in error for error in run.cases[0].errors)
+
+
+def test_livekit_room_timeline_expectations_pass_fast_tier1_after_start(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-topic_switch_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"topic_switch","topic_switch_hint":true}},'
+            '"durations_ms":{"vad_start_to_interrupt_resolved":960},'
+            '"timestamps":{"interrupt_started_at":10.0,'
+            '"interrupt_resolved_at":10.14}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_livekit_room_timeline_expectations_fail_slow_tier1_after_start(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-topic_switch_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"topic_switch","topic_switch_hint":true}},'
+            '"timestamps":{"interrupt_started_at":10.0,'
+            '"interrupt_resolved_at":10.4}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any(
+        "resolution-after-start exceeded 250" in error
+        for error in run.cases[0].errors
+    )
+
+
+def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="backchannel_001",
+                suite="false_interrupt",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-backchannel_001-1234abcd",'
+            '"attention_admission":{"action":"observe"},'
+            '"attention_admission_events":[{"action":"observe"}]}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors

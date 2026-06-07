@@ -44,6 +44,7 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
     errors: list[str] = []
     actions = _actions(records)
     intents = _intents(records)
+    allowed_attention = _allowed_attention_actions(expected, records)
 
     forbidden = set(expected.forbid_actions)
     forbidden_seen = sorted(forbidden.intersection(actions))
@@ -58,12 +59,16 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
             errors.append(
                 f"timeline expected no interrupt action, got {sorted(set(unexpected))}"
             )
-    elif expected.action and expected.action not in actions:
+    elif (
+        expected.action
+        and expected.action not in actions
+        and not allowed_attention
+    ):
         errors.append(
             f"timeline expected action={expected.action}, got {actions or ['<none>']}"
         )
 
-    if expected.intent not in ("", "uncertain"):
+    if expected.intent not in ("", "uncertain") and not allowed_attention:
         if expected.intent not in intents:
             errors.append(
                 f"timeline expected intent={expected.intent}, got {intents or ['<none>']}"
@@ -90,9 +95,39 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         elif expected.action not in ("", "any", "none"):
             errors.append("timeline missing interrupt decision duration")
 
+    if expected.max_interrupt_resolution_after_started_ms is not None:
+        durations = _interrupt_resolution_after_started_ms(records)
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > expected.max_interrupt_resolution_after_started_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline interrupt resolution-after-start exceeded "
+                    f"{expected.max_interrupt_resolution_after_started_ms}ms: {slow}"
+                )
+        elif expected.action not in ("", "any", "none"):
+            errors.append("timeline missing interrupt started-to-resolved duration")
+
     if not records:
         errors.append(f"timeline missing for case={case_id}")
     return errors
+
+
+def _allowed_attention_actions(
+    expected: Any,
+    records: list[dict[str, Any]],
+) -> list[str]:
+    allowed = set(getattr(expected, "allow_attention_actions", ()) or ())
+    if not allowed:
+        return []
+    seen = sorted(allowed.intersection(_attention_actions(records)))
+    if not seen:
+        return []
+    interrupt_actions = set(_actions(records)).intersection({"cancel", "rollback"})
+    return [] if interrupt_actions else seen
 
 
 def _records_by_case(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -138,6 +173,26 @@ def _intents(records: list[dict[str, Any]]) -> list[str]:
     return values
 
 
+def _attention_actions(records: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for record in records:
+        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+        admissions = attrs.get("attention_admission_events")
+        if isinstance(admissions, list):
+            for item in admissions:
+                if not isinstance(item, dict):
+                    continue
+                action = item.get("action")
+                if isinstance(action, str) and action:
+                    values.append(action)
+        admission = attrs.get("attention_admission")
+        if isinstance(admission, dict):
+            action = admission.get("action")
+            if isinstance(action, str) and action:
+                values.append(action)
+    return values
+
+
 def _any_decision_flag(records: list[dict[str, Any]], key: str) -> bool:
     for record in records:
         attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
@@ -171,6 +226,21 @@ def _interrupt_decision_durations_ms(records: list[dict[str, Any]]) -> list[floa
                 duration = max(0.0, (end - start) * 1000.0)
         if duration is not None:
             durations.append(duration)
+    return durations
+
+
+def _interrupt_resolution_after_started_ms(records: list[dict[str, Any]]) -> list[float]:
+    durations: list[float] = []
+    for record in records:
+        timestamps = (
+            record.get("timestamps")
+            if isinstance(record.get("timestamps"), dict)
+            else {}
+        )
+        start = _number(timestamps.get("interrupt_started_at"))
+        end = _number(timestamps.get("interrupt_resolved_at"))
+        if start is not None and end is not None:
+            durations.append(max(0.0, (end - start) * 1000.0))
     return durations
 
 

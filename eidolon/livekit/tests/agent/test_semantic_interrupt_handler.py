@@ -62,8 +62,12 @@ def _handler(
 
 def test_strong_interrupt_without_duck_interrupts_immediately() -> None:
     runtime = MagicMock()
-    decision = Decision(action=Action.CANCEL, reason="hard_stop")
-    runtime.strong_intent_decision.return_value = decision
+    decision = Decision(
+        action=Action.CANCEL,
+        reason="intent:hard_stop",
+        intent=InterruptIntent.HARD_STOP,
+    )
+    runtime.decide_from_transcript.return_value = decision
     runtime.control_signal_from_decision.return_value.as_metadata.return_value = {
         "action": "cancel",
     }
@@ -75,12 +79,47 @@ def test_strong_interrupt_without_duck_interrupts_immediately() -> None:
 
     handler.run("别说了")
 
+    runtime.decide_from_transcript.assert_called_once()
     calls.publish_turn_control.assert_called_once_with({"action": "cancel"})
     calls.record_decision_attrs.assert_called_once()
     calls.cancel_duck_and_interrupt.assert_not_called()
     calls.interrupt_current_turn.assert_called_once()
     calls.timeline.set_attr.assert_any_call("turn_control", {"action": "cancel"})
     calls.timeline.set_attr.assert_any_call("cancel_reason", "strong_intent_cancel")
+
+
+def test_legacy_strong_signal_keeps_correction_intent() -> None:
+    runtime = MagicMock()
+    decision = Decision(
+        action=Action.CANCEL,
+        reason="intent:correction",
+        intent=InterruptIntent.CORRECTION,
+        correction_hint=True,
+    )
+    runtime.decide_from_transcript.return_value = decision
+    handler, calls = _handler(
+        eot_model=_eot_model(strong_intent=True, score=0.2),
+        turn_runtime=runtime,
+        duck_active=True,
+    )
+
+    handler.run("我刚才说错了")
+
+    runtime.decide_from_transcript.assert_called_once_with(
+        "我刚才说错了",
+        0.2,
+        vad_active=True,
+        agent_speaking=True,
+        is_final=False,
+    )
+    calls.apply_decision.assert_called_once_with(
+        decision,
+        eot_score=0.2,
+        transcript="我刚才说错了",
+        vad_active=True,
+    )
+    calls.publish_turn_control.assert_not_called()
+    calls.interrupt_current_turn.assert_not_called()
 
 
 def test_duck_active_delegates_decision_to_effect_applier() -> None:

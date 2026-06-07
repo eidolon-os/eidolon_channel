@@ -161,13 +161,33 @@ unmet gates never block.
 | `room_publish_to_first_audio` | acceptable | 2800 ms p95 | ✅ required |
 | `commit_to_first_audio` (E2E) | target/acceptable | 800–1400 ms | Phase-2 (advisory) |
 | `stt_final_after_commit` | target/acceptable | 350–500 ms | Phase-2 (advisory) |
-| `tts_ttfb` | target/acceptable | 100–250 ms | Phase-2 (advisory) |
+| `tts_ttfb` (`first_text_sent -> provider_first_audio`) | target/acceptable | 100–250 ms | Phase-2 (advisory) |
 | `brain_first_delta` | target/acceptable | 375–750 ms p95 | advisory (upstream p95 variance) |
 | `room_interrupt_resolved` | target/acceptable | 500–650 ms | advisory (semantic variance) |
 
 The Phase-2 gates (STT finalization, TTS TTFB, E2E) are honest goals the
 preemptive-generation + TTS work will close; they get promoted to `required`
 once the system meets them with margin.
+
+TTS note: `tts_request_started_at` marks when the LiveKit TTS stream opens. It
+can happen before the brain has emitted any text, so it is useful as a composite
+diagnostic but should not be used as provider TTFB. The provider-facing TTFB SLO
+uses `tts_first_text_sent_to_provider_first_audio_ms`.
+
+Interrupt note: Tier 0 hard stops still use VAD/speech-start ->
+`interrupt_resolved_at` as the primary latency target. Tier 1 semantic
+redirects/corrections are split into two diagnostics:
+
+- VAD/speech-start -> `interrupt_resolved_at`: user-perceived total latency,
+  including how quickly STT exposes enough text evidence.
+- `interrupt_started_at` -> `interrupt_resolved_at`: channel execution latency
+  after attention admission has enough direct semantic evidence to duck/decide.
+
+The core suite uses a 650 ms acceptable hard-stop total gate to avoid flaking on
+one-off STT first-token confusions, while the SLO dashboard still tracks the
+500 ms target. Topic switch and correction assert a 250 ms admitted-to-resolved
+target. The longer speech-start total remains visible in the timeline report as
+an STT/evidence availability diagnostic.
 
 For real room timeline collection, set the channel worker config:
 

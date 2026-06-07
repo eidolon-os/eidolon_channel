@@ -47,6 +47,7 @@ class AgentReply:
 class Expectations:
     action: str = "none"
     intent: str = "uncertain"
+    allow_attention_actions: tuple[str, ...] = ()
     forbid_actions: tuple[str, ...] = ()
     topic_switch_hint: bool = False
     correction_hint: bool = False
@@ -54,6 +55,7 @@ class Expectations:
     min_user_finals: int = 1
     min_agent_messages: int = 0
     max_interrupt_decision_ms: float | None = None
+    max_interrupt_resolution_after_started_ms: float | None = None
 
 
 @dataclass(frozen=True)

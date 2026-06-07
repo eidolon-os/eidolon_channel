@@ -63,9 +63,11 @@ from . import _framework_patches
 from .client_audio_state import ClientAudioState
 from .context import InterruptedContextManager
 from .turn_policy import (
+    Decision,
     TurnPolicyRuntime,
     eot_kwargs_from_turn_policy,
 )
+from .turn_policy.constants import STABLE_SIGNAL_WAIT_REASON_PREFIX
 from .observability import TurnTimeline
 from .factory import SharedStageFactory
 from .output import FillerManager, OutputController, OutputDuckingController
@@ -153,6 +155,10 @@ class StreamingPipeline(BasePipeline):
         self._observability = observability or ObservabilityConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
+        # Ducking state is shared by several effect handlers. It must exist
+        # before those handlers are built, because AgentStateEffectHandler keeps
+        # a direct reference to the controller.
+        self._ducking = OutputDuckingController()
         self._decision_effects = self._build_decision_effect_applier()
         self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
@@ -160,6 +166,7 @@ class StreamingPipeline(BasePipeline):
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
         self._duck_deadline = self._build_duck_suspend_timeout_handler()
+        self._stable_signal_timer: asyncio.Task | None = None
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -259,7 +266,6 @@ class StreamingPipeline(BasePipeline):
         # so the AudioOutput chain is fully assembled. The timeout task is
         # started on every VAD-start (user_state listening → speaking) and
         # cancelled the moment EOT decides to cancel/unduck.
-        self._ducking = OutputDuckingController()
 
         # Filler word injection for latency masking.
         eot_cfg = self._get_eot_model()._config
@@ -340,6 +346,7 @@ class StreamingPipeline(BasePipeline):
                 reason=reason,
                 drop_buffered=drop_buffered,
             ),
+            on_hold=self._handle_hold_decision,
         )
 
     def _ensure_decision_effect_applier(self) -> None:
@@ -553,6 +560,8 @@ class StreamingPipeline(BasePipeline):
             self._timeline_debug_flushed = False
         if not hasattr(self, "_latest_asr_text"):
             self._latest_asr_text = ""
+        if not hasattr(self, "_stable_signal_timer"):
+            self._stable_signal_timer = None
         if not hasattr(self, "_llm_metrics_observer_installed"):
             self._llm_metrics_observer_installed = False
         if not hasattr(self, "_brain_provider_observer_installed"):
@@ -723,6 +732,7 @@ class StreamingPipeline(BasePipeline):
         logger.info("[StreamingPipeline] shutting down")
         # Cancel any pending soft interrupt / duck timeout before closing.
         self._cancel_soft_interrupt()
+        self._cancel_stable_signal_timer()
         self._ducking.cancel_timeout()
         self._stop_idle_watchdog()
         if self._session is not None:
@@ -1149,6 +1159,63 @@ class StreamingPipeline(BasePipeline):
         self._soft_interrupt.cancel()
         self._sync_soft_interrupt_compat_attrs()
 
+    def _handle_hold_decision(
+        self,
+        decision: Decision,
+        transcript: str,
+        eot_score: float | None,
+        vad_active: bool | None,
+    ) -> None:
+        if not decision.reason.startswith(STABLE_SIGNAL_WAIT_REASON_PREFIX):
+            return
+        if not self._ducking.is_suspended:
+            return
+        if not transcript.strip():
+            return
+        timeout_sec = (
+            self._turn_policy.interrupt.correction_topic_stability_window_ms
+            / 1000.0
+        )
+        self._cancel_stable_signal_timer()
+        logger.info(
+            "[StreamingPipeline] stable-signal recheck armed "
+            "timeout=%.3fs reason=%s text=%r eot_score=%s vad_active=%s",
+            timeout_sec,
+            decision.reason,
+            transcript[:80],
+            f"{eot_score:.2f}" if eot_score is not None else "None",
+            vad_active,
+        )
+        self._stable_signal_timer = asyncio.create_task(
+            self._stable_signal_recheck(timeout_sec, transcript)
+        )
+
+    async def _stable_signal_recheck(self, timeout_sec: float, transcript: str) -> None:
+        current_task = asyncio.current_task()
+        try:
+            await asyncio.sleep(timeout_sec)
+            if not self._ducking.is_suspended:
+                return
+            latest = (self._latest_asr_text or transcript).strip()
+            if not latest:
+                return
+            logger.info(
+                "[StreamingPipeline] stable-signal recheck firing text=%r",
+                latest[:80],
+            )
+            self._semantic_interrupts.run(latest, is_final=False)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._stable_signal_timer is current_task:
+                self._stable_signal_timer = None
+
+    def _cancel_stable_signal_timer(self) -> None:
+        task = getattr(self, "_stable_signal_timer", None)
+        if task is not None and not task.done():
+            task.cancel()
+        self._stable_signal_timer = None
+
     def _ensure_soft_interrupt_controller(self) -> None:
         if not hasattr(self, "_soft_interrupt_timeout"):
             self._soft_interrupt_timeout = (
@@ -1316,6 +1383,7 @@ class StreamingPipeline(BasePipeline):
             stats.buffered_frames,
             stats.buffered_sec,
         )
+        self._cancel_stable_signal_timer()
         self._snapshot_interrupted_context()
         self._ducking.cancel_output()
         self._callbacks.on_duck_resolved("cancel")
@@ -1350,6 +1418,7 @@ class StreamingPipeline(BasePipeline):
                 stats.buffered_frames,
                 stats.buffered_sec,
             )
+            self._cancel_stable_signal_timer()
             self._ducking.unduck_if_suspended(drop_buffered=drop_buffered)
             self._callbacks.on_duck_resolved("unduck")
             if self._timeline is not None:

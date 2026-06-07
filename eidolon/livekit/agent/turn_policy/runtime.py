@@ -96,9 +96,6 @@ class TurnPolicyRuntime:
     def admit_attention(self, signal: AttentionInput) -> AttentionDecision:
         return self.tiers.annotate_attention(self.attention.decide(signal))
 
-    def strong_intent_decision(self) -> Decision:
-        return self.tiers.annotate_decision(self.decider.on_strong_intent())
-
     def deadline_decision(
         self,
         vad_still_active: bool,

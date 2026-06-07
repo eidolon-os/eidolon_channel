@@ -2,12 +2,12 @@
 
 Unit tests for the two new behaviours in StreamingPipeline:
 
-  1. In the duck-active branch of ``_run_eot_check``, a non-backchannel
+  1. In the duck-active semantic interrupt branch, a non-backchannel
      STT INTERIM of ≥ ``interrupt_min_interim_chars`` chars is enough
      transcript evidence to keep evaluating, but ordinary text still needs
      EOT semantic confidence (or explicit intent) before canceling.
 
-  2. In ``_duck_suspend_timeout_fallback``, when the timeout fires while
+  2. In the duck suspend-window deadline handler, when the timeout fires while
      VAD is still active, the resolution depends on transcript evidence
      and EOT semantic score: without transcript or semantic confidence it
      holds the suspended output; high-confidence transcript confirms.
@@ -73,8 +73,18 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
     return pipeline
 
 
+def _run_semantic_check(pipeline, text: str, *, is_final: bool = False) -> None:
+    pipeline._ensure_runtime_defaults()
+    pipeline._semantic_interrupts.run(text, is_final=is_final)
+
+
+async def _run_duck_deadline(pipeline, timeout_sec: float) -> None:
+    pipeline._ensure_runtime_defaults()
+    await pipeline._duck_deadline.run(timeout_sec)
+
+
 # ---------------------------------------------------------------------------
-# 1. semantic-tiered first signal in _run_eot_check duck-active path
+# 1. semantic-tiered first signal in duck-active path
 # ---------------------------------------------------------------------------
 
 
@@ -82,7 +92,7 @@ def test_first_signal_holds_substantive_interim_without_semantic_score() -> None
     """Substantive CJK INTERIM waits for EOT semantics instead of raw length."""
     pipeline = _make_pipeline()
 
-    pipeline._run_eot_check("我不相信你", is_final=False)
+    _run_semantic_check(pipeline, "我不相信你", is_final=False)
 
     pipeline._snapshot_interrupted_context.assert_not_called()
     pipeline._duck_mixer.cancel.assert_not_called()
@@ -93,7 +103,7 @@ def test_first_signal_cancel_on_high_semantic_score() -> None:
     """High EOT semantic confidence keeps the quick cancel tier."""
     pipeline = _make_pipeline(eot_score=0.82)
 
-    pipeline._run_eot_check("我不相信你", is_final=False)
+    _run_semantic_check(pipeline, "我不相信你", is_final=False)
 
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._interrupt_current_turn.assert_called_once()
@@ -103,7 +113,7 @@ def test_first_signal_holds_short_latin_artifact() -> None:
     """Short latin-only ASR artifacts should not cancel the agent turn."""
     pipeline = _make_pipeline()
 
-    pipeline._run_eot_check("If", is_final=False)
+    _run_semantic_check(pipeline, "If", is_final=False)
 
     pipeline._duck_mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
@@ -114,7 +124,7 @@ def test_first_signal_skips_backchannel() -> None:
     should wait for the next INTERIM."""
     pipeline = _make_pipeline()
 
-    pipeline._run_eot_check("嗯", is_final=False)
+    _run_semantic_check(pipeline, "嗯", is_final=False)
 
     pipeline._duck_mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
@@ -124,7 +134,7 @@ def test_first_signal_skips_compound_backchannel() -> None:
     """Compound backchannel ("嗯嗯好") also rejected."""
     pipeline = _make_pipeline()
 
-    pipeline._run_eot_check("嗯嗯", is_final=False)
+    _run_semantic_check(pipeline, "嗯嗯", is_final=False)
 
     pipeline._duck_mixer.cancel.assert_not_called()
 
@@ -134,7 +144,7 @@ def test_first_signal_skips_single_char() -> None:
     even if it's not in the backchannel list."""
     pipeline = _make_pipeline()
 
-    pipeline._run_eot_check("你", is_final=False)  # 1 char < min 2
+    _run_semantic_check(pipeline, "你", is_final=False)  # 1 char < min 2
 
     pipeline._duck_mixer.cancel.assert_not_called()
 
@@ -154,7 +164,7 @@ def test_first_signal_respects_turn_policy_min_chars() -> None:
     pipeline._turn_policy = policy
     pipeline._turn_runtime = TurnPolicyRuntime(policy)
 
-    pipeline._run_eot_check("你好世", is_final=False)  # 3 chars < new 5
+    _run_semantic_check(pipeline, "你好世", is_final=False)  # 3 chars < new 5
 
     pipeline._duck_mixer.cancel.assert_not_called()
 
@@ -164,7 +174,7 @@ def test_first_signal_strips_punctuation() -> None:
     sometimes attaches "。"/"," to short INTERIMs)."""
     pipeline = _make_pipeline()
 
-    pipeline._run_eot_check("嗯。", is_final=False)  # stripped → "嗯" backchannel
+    _run_semantic_check(pipeline, "嗯。", is_final=False)  # stripped → "嗯"
 
     pipeline._duck_mixer.cancel.assert_not_called()
 
@@ -174,7 +184,7 @@ def test_fallback_semantic_correction_cancels_after_late_interim() -> None:
     pipeline = _make_pipeline(vad_user_state="listening")
     pipeline._duck_mixer.state = "NORMAL"
 
-    pipeline._run_eot_check("我刚才说错了", is_final=False)
+    _run_semantic_check(pipeline, "我刚才说错了", is_final=False)
 
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._interrupt_current_turn.assert_called_once()
@@ -189,10 +199,9 @@ def test_fallback_semantic_correction_cancels_after_late_interim() -> None:
 async def test_timeout_with_vad_still_active_without_transcript_holds() -> None:
     """At the decision deadline, VAD alone is not enough evidence to cancel."""
     pipeline = _make_pipeline(vad_user_state="speaking")
-    pipeline._cancel_duck_timeout = MagicMock()
 
     with patch("eidolon.livekit.agent.streaming.asyncio.create_task") as create_task:
-        await pipeline._duck_suspend_timeout_fallback(0.01)
+        await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.cancel.assert_not_called()
     pipeline._duck_mixer.unduck.assert_not_called()
@@ -206,9 +215,8 @@ async def test_timeout_with_vad_still_active_and_transcript_cancels() -> None:
     """At deadline, transcript + high semantic score can confirm interrupt."""
     pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.82)
     pipeline._latest_asr_text = "我不相信你"
-    pipeline._cancel_duck_timeout = MagicMock()
 
-    await pipeline._duck_suspend_timeout_fallback(0.01)
+    await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.cancel.assert_called_once()
     pipeline._duck_mixer.unduck.assert_not_called()
@@ -220,10 +228,9 @@ async def test_timeout_with_low_score_transcript_holds() -> None:
     """A partial transcript at the deadline waits for the semantic tier."""
     pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.0)
     pipeline._latest_asr_text = "啊那你"
-    pipeline._cancel_duck_timeout = MagicMock()
 
     with patch("eidolon.livekit.agent.streaming.asyncio.create_task") as create_task:
-        await pipeline._duck_suspend_timeout_fallback(0.01)
+        await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.cancel.assert_not_called()
     pipeline._duck_mixer.unduck.assert_not_called()
@@ -242,9 +249,8 @@ async def test_timeout_hold_rolls_back_after_max_suspend_budget() -> None:
         - pipeline._get_eot_model()._config.duck_buffer_max_sec
         - 0.1
     )
-    pipeline._cancel_duck_timeout = MagicMock()
 
-    await pipeline._duck_suspend_timeout_fallback(0.01)
+    await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.unduck.assert_called_once_with(drop_buffered=True)
     pipeline._duck_mixer.cancel.assert_not_called()
@@ -256,9 +262,8 @@ async def test_timeout_with_vad_idle_unducks_drop_buffered() -> None:
     """G18a + G17a: if VAD is no longer active at the deadline (user
     really did go silent), unduck with drop_buffered=True."""
     pipeline = _make_pipeline(vad_user_state="listening")
-    pipeline._cancel_duck_timeout = MagicMock()
 
-    await pipeline._duck_suspend_timeout_fallback(0.01)
+    await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.unduck.assert_called_once_with(drop_buffered=True)
     pipeline._duck_mixer.cancel.assert_not_called()
@@ -270,9 +275,8 @@ async def test_timeout_noop_if_already_resolved() -> None:
     timeout fires, the fallback should be a no-op."""
     pipeline = _make_pipeline(vad_user_state="speaking")
     pipeline._duck_mixer.state = "NORMAL"  # already resolved
-    pipeline._cancel_duck_timeout = MagicMock()
 
-    await pipeline._duck_suspend_timeout_fallback(0.01)
+    await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.cancel.assert_not_called()
     pipeline._duck_mixer.unduck.assert_not_called()

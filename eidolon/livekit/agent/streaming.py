@@ -63,8 +63,6 @@ from . import _framework_patches
 from .client_audio_state import ClientAudioState
 from .context import InterruptedContextManager
 from .turn_policy import (
-    AttentionDecision,
-    Decision,
     TurnPolicyRuntime,
     eot_kwargs_from_turn_policy,
 )
@@ -242,7 +240,7 @@ class StreamingPipeline(BasePipeline):
         #
         # NOTE: when ``EidolonEOTConfig.duck_enabled`` is True (default), the
         # primary interrupt mechanism is the DuckingMixer + early-resume
-        # watcher (see ``_install_duck_mixer`` and ``_run_eot_check`` below).
+        # watcher (see ``_install_duck_mixer`` and SemanticInterruptHandler).
         # The soft-interrupt path here is kept as a fallback for the rare
         # cases where EOT signals a cut but the mixer isn't installed
         # (e.g. duck_enabled=False, or audio output sink not yet attached).
@@ -345,7 +343,11 @@ class StreamingPipeline(BasePipeline):
         )
 
     def _ensure_decision_effect_applier(self) -> None:
-        if not hasattr(self, "_decision_effects"):
+        handler = getattr(self, "_decision_effects", None)
+        if (
+            handler is None
+            or getattr(handler, "_turn_runtime", None) is not self._turn_runtime
+        ):
             self._decision_effects = self._build_decision_effect_applier()
 
     def _build_attention_effect_handler(self) -> AttentionEffectHandler:
@@ -419,14 +421,9 @@ class StreamingPipeline(BasePipeline):
             ),
             soft_interrupt_active=lambda: self._soft_interrupt_active,
             soft_interrupt_timeout=lambda: self._soft_interrupt_timeout,
-            apply_decision=lambda decision, **kwargs: self._apply_decision(
-                decision,
-                **kwargs,
-            ),
-            record_decision_attrs=lambda decision, **kwargs: (
-                self._record_decision_attrs(decision, **kwargs)
-            ),
-            publish_turn_control=lambda metadata: self._publish_turn_control(metadata),
+            apply_decision=self._decision_effects.apply,
+            record_decision_attrs=self._decision_effects.record_decision_attrs,
+            publish_turn_control=self._decision_effects.publish_turn_control,
             cancel_duck_and_interrupt=lambda: self._duck_cancel_and_interrupt(),
             interrupt_current_turn=lambda: self._interrupt_current_turn(),
             enter_soft_interrupt=lambda: self._enter_soft_interrupt(),
@@ -455,10 +452,7 @@ class StreamingPipeline(BasePipeline):
                 and self._session.user_state == "speaking"
             ),
             get_eot_model=lambda: self._get_eot_model(),
-            apply_decision=lambda decision, **kwargs: self._apply_decision(
-                decision,
-                **kwargs,
-            ),
+            apply_decision=self._decision_effects.apply,
         )
 
     def _ensure_duck_suspend_timeout_handler(self) -> None:
@@ -641,7 +635,7 @@ class StreamingPipeline(BasePipeline):
         # externally, so we register directly on the FireRed VAD's per-frame
         # callback hook. Policies can then read
         # state.recent_avg_vad_confidence() for confidence-gated decisions.
-        self._register_vad_inference_callback()
+        self._session_signals.register_vad_inference_callback()
 
         # Warm up persistent-connection stages (STT, TTS) before starting the
         # session. Stages without a warmup() are silently skipped.
@@ -729,7 +723,7 @@ class StreamingPipeline(BasePipeline):
         logger.info("[StreamingPipeline] shutting down")
         # Cancel any pending soft interrupt / duck timeout before closing.
         self._cancel_soft_interrupt()
-        self._cancel_duck_timeout()
+        self._ducking.cancel_timeout()
         self._stop_idle_watchdog()
         if self._session is not None:
             try:
@@ -934,18 +928,6 @@ class StreamingPipeline(BasePipeline):
         self._ensure_agent_state_effect_handler()
         self._agent_state_effects.handle(event)
 
-    def _register_vad_inference_callback(self) -> None:
-        self._ensure_session_signal_bridge()
-        self._session_signals.register_vad_inference_callback()
-
-    def _signal_stt_user_away(self) -> None:
-        self._ensure_session_signal_bridge()
-        self._session_signals.signal_stt_user_away()
-
-    def _signal_stt_user_present(self) -> None:
-        self._ensure_session_signal_bridge()
-        self._session_signals.signal_stt_user_present()
-
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()
         try:
@@ -966,9 +948,9 @@ class StreamingPipeline(BasePipeline):
             # rather than burn 30 s of bandwidth + compute on the safety net.
             # ------------------------------------------------------------
             if new == "away":
-                self._signal_stt_user_away()
+                self._session_signals.signal_stt_user_away()
             elif old == "away" and new in ("listening", "speaking"):
-                self._signal_stt_user_present()
+                self._session_signals.signal_stt_user_present()
 
             if new == "speaking":
                 self._callbacks.on_user_started_speaking()
@@ -988,9 +970,9 @@ class StreamingPipeline(BasePipeline):
 
                 # Phase C: immediately fade agent output to silence and arm
                 # the suspend-window fallback. EOT decisions in
-                # ``_run_eot_check`` will resolve us out of SUSPENDED before
-                # the timeout fires in the typical case.
-                self._handle_attention_on_speaking_started()
+                # the semantic interrupt handler will resolve SUSPENDED output
+                # before the timeout fires in the typical case.
+                self._attention_effects.handle_speaking_started()
 
                 # If agent is speaking and interruptions are allowed, EOT check is
                 # triggered synchronously in _on_user_transcribed as soon as STT
@@ -1022,7 +1004,7 @@ class StreamingPipeline(BasePipeline):
                     decision = self._turn_runtime.user_silent_decision(
                         self._latest_asr_text
                     )
-                    self._apply_decision(
+                    self._decision_effects.apply(
                         decision,
                         resolved_reason="user_silent",
                         transcript=self._latest_asr_text,
@@ -1099,44 +1081,15 @@ class StreamingPipeline(BasePipeline):
             and event.transcript
             and (agent_is_speaking or interruption_timeline_active)
         ):
-            if not self._attention_allows_eot_check(
+            if not self._attention_effects.allows_eot_check(
                 event.transcript,
                 speaker_id=getattr(event, "speaker_id", None),
             ):
                 super()._on_user_transcribed(event)
                 return
-            self._run_eot_check(event.transcript, is_final=event.is_final)
+            self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
-
-    def _handle_attention_on_speaking_started(self) -> None:
-        self._ensure_attention_effect_handler()
-        self._attention_effects.handle_speaking_started()
-
-    def _attention_allows_eot_check(
-        self,
-        transcript: str,
-        *,
-        speaker_id: str | None = None,
-    ) -> bool:
-        self._ensure_attention_effect_handler()
-        return self._attention_effects.allows_eot_check(
-            transcript,
-            speaker_id=speaker_id,
-        )
-
-    def _decide_attention(
-        self,
-        transcript: str,
-        *,
-        participant_identity: str | None = None,
-    ) -> AttentionDecision:
-        self._ensure_runtime_defaults()
-        self._ensure_attention_effect_handler()
-        return self._attention_effects.decide(
-            transcript,
-            participant_identity=participant_identity,
-        )
 
     def _latest_client_audio_state(
         self,
@@ -1152,24 +1105,6 @@ class StreamingPipeline(BasePipeline):
             participant_identity=participant_identity,
             max_age_sec=max_age_sec,
         )
-
-    def _record_attention_admission(self, decision: AttentionDecision) -> None:
-        self._ensure_attention_effect_handler()
-        self._attention_effects.record_admission(decision)
-
-    def _run_eot_check(self, text: str, is_final: bool = False) -> None:
-        """
-        Synchronous EOT semantic check triggered by each STT transcript event.
-
-        ``turn_policy`` owns tier/intent/action decisions. The session semantic
-        handler owns the hot-path side effects: strong-stop fast path,
-        duck-active resolution and fallback soft interrupt staging.
-        """
-        if not text or not text.strip():
-            return
-        self._ensure_runtime_defaults()
-        self._ensure_semantic_interrupt_handler()
-        self._semantic_interrupts.run(text, is_final=is_final)
 
     def _interrupt_current_turn(self) -> None:
         """Interrupt the currently in-progress agent turn via session.interrupt()."""
@@ -1257,7 +1192,7 @@ class StreamingPipeline(BasePipeline):
     #         mixer.duck()  (50 ms fade-out to silence)
     #         start _duck_timeout_task (default 0.5 s fallback)
     #
-    #   _run_eot_check (per STT interim/final):
+    #   SemanticInterruptHandler.run (per STT interim/final):
     #     strong_interrupt_intent OR score >= duck_early_cancel_score_threshold
     #       → _duck_cancel_and_interrupt()  (real interrupt, no resume)
     #     score <= duck_early_resume_score_threshold (and > 0)
@@ -1352,67 +1287,7 @@ class StreamingPipeline(BasePipeline):
             vad_to_duck_ms, cfg.duck_suspend_timeout_sec, cfg.duck_cooldown_sec,
         )
         self._ducking.timeout_task = asyncio.create_task(
-            self._duck_suspend_timeout_fallback(cfg.duck_suspend_timeout_sec)
-        )
-
-    async def _duck_suspend_timeout_fallback(self, timeout_sec: float) -> None:
-        """500ms decision-budget deadline. Delegates the branch decision
-        to :class:`InterruptDecider` so the policy stays in one place
-        (G18b)."""
-        self._ensure_runtime_defaults()
-        self._ensure_duck_suspend_timeout_handler()
-        await self._duck_deadline.run(timeout_sec)
-
-    # ------------------------------------------------------------------
-    # G18b (2026-05-18) — decider integration
-    # ------------------------------------------------------------------
-
-    def _apply_decision(
-        self,
-        decision: Decision,
-        *,
-        resolved_reason: str | None = None,
-        eot_score: float | None = None,
-        transcript: str = "",
-        vad_active: bool | None = None,
-    ) -> None:
-        """Execute the side effects implied by a :class:`Decision`.
-
-        Args:
-            decision: The decider's verdict.
-            resolved_reason: If set, override the on_duck_resolved
-                callback's reason string (used by the timeout path so
-                metrics show "timeout" rather than the decider's
-                internal classification).
-        """
-        self._ensure_runtime_defaults()
-        self._ensure_decision_effect_applier()
-        self._decision_effects.apply(
-            decision,
-            resolved_reason=resolved_reason,
-            eot_score=eot_score,
-            transcript=transcript,
-            vad_active=vad_active,
-        )
-
-    def _record_decision_attrs(
-        self,
-        decision: Decision,
-        *,
-        source: str = "turn_policy",
-        resolved_reason: str | None = None,
-        eot_score: float | None = None,
-        transcript: str = "",
-        vad_active: bool | None = None,
-    ) -> None:
-        self._ensure_decision_effect_applier()
-        self._decision_effects.record_decision_attrs(
-            decision,
-            source=source,
-            resolved_reason=resolved_reason,
-            eot_score=eot_score,
-            transcript=transcript,
-            vad_active=vad_active,
+            self._duck_deadline.run(cfg.duck_suspend_timeout_sec)
         )
 
     def _append_timeline_debug(self, reason: str, *, clear: bool = False) -> None:
@@ -1423,16 +1298,6 @@ class StreamingPipeline(BasePipeline):
         self._timeline_debug_flushed = True
         if clear:
             self._timeline = None
-
-    def _publish_turn_control(self, metadata: dict[str, object]) -> None:
-        """Attach control hints to the next remote-brain turn when supported."""
-        self._ensure_decision_effect_applier()
-        self._decision_effects.publish_turn_control(metadata)
-
-    def _cancel_duck_timeout(self) -> None:
-        """Cancel the suspend-window fallback task if active. Safe to call any time."""
-        self._ensure_ducking_controller()
-        self._ducking.cancel_timeout()
 
     def _duck_cancel_and_interrupt(self) -> None:
         """Confirm interrupt: discard buffer + cancel TTS generation."""

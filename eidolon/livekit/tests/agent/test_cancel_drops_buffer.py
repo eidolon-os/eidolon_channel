@@ -10,7 +10,7 @@ Bug in production log (2026-05-17, round-4 long agent reply):
 
 Root cause: ``DuckingMixer.unduck()`` unconditionally drained the buffer
 on next ``capture_frame``. The timeout fallback in
-``StreamingPipeline._duck_suspend_timeout_fallback`` is by definition the
+``DuckSuspendTimeoutHandler`` is by definition the
 "buffer is now stale" path (we've been suspended ≥0.8s, the user almost
 certainly hasn't stopped talking).
 

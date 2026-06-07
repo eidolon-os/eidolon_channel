@@ -40,7 +40,7 @@ its own entry method:
 
 * :meth:`should_interrupt` — answers Eidolon's question *"should we
   interrupt agent's TTS right now?"*. Called by
-  ``StreamingPipeline._run_eot_check`` whenever STT delivers interim or
+  ``SemanticInterruptHandler`` whenever STT delivers interim or
   final text **while the agent is speaking**. Score must include
   semantic completeness PLUS interruption-specific guards (cooldown to
   avoid bouncing interrupts, similarity to avoid duplicate cuts,
@@ -449,7 +449,7 @@ class EidolonEOTModel(ABC):
     def should_interrupt(self, text: str, vad_active: bool, is_final: bool = False) -> bool:
         """Path B — Eidolon's question: "should we interrupt agent now?".
 
-        Called by :meth:`StreamingPipeline._run_eot_check` whenever STT
+        Called by ``SemanticInterruptHandler`` whenever STT
         delivers interim/final text **while the agent is speaking**.
         Stricter than :meth:`predict_end_of_turn` — must include interruption-
         specific guards because cutting agent's TTS is more disruptive than
@@ -604,7 +604,7 @@ class EidolonEOTModel(ABC):
     def current_eot_score(self) -> float:
         """Most recent EOT score from ``update_asr`` / ``should_interrupt``.
 
-        Used by :class:`StreamingPipeline._run_eot_check` to branch
+        Used by ``SemanticInterruptHandler`` to branch
         between hard and soft interrupt tiers based on confidence.
         """
         return self._current_eot_score

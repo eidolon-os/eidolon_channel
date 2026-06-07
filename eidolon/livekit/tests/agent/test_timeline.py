@@ -436,12 +436,10 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._duck_mixer = SimpleNamespace(state="CANCELLED")
     pipeline._callbacks = MagicMock()
-    pipeline._cancel_duck_timeout = MagicMock()
     pipeline._session = MagicMock()
     pipeline._timeline = TurnTimeline("turn-duplicate-cancel")
 
     pipeline._duck_cancel_and_interrupt()
 
-    pipeline._cancel_duck_timeout.assert_not_called()
     pipeline._callbacks.on_duck_resolved.assert_not_called()
     pipeline._session.interrupt.assert_not_called()

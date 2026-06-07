@@ -62,7 +62,7 @@ class EidolonEOTConfig:
     # the 5s production interrupt delay: rolling-avg confidence needs ~1s
     # of frame accumulation to cross any non-trivial threshold, by which
     # time the interrupt opportunity has passed. We now rely on the
-    # ≤500ms decision window in ``_duck_suspend_timeout_fallback`` plus
+    # ≤500ms decision window in ``DuckSuspendTimeoutHandler`` plus
     # backchannel filtering on the first STT INTERIM to distinguish real
     # interrupts from echo/noise — much faster signal sources.
     # Phase 2 (G18c) will remove the gate code from MinSpeakingDurationPolicy
@@ -177,7 +177,7 @@ class EidolonEOTConfig:
     (bypassing the EOT-score-based path). ≥2 filters single-char vocalizations
     and aligns with industry pre-filters (Pipecat ``interrupt_min_words``,
     LiveKit ``min_words``). Combined with ``BACKCHANNEL_WORDS`` rejection
-    in ``_run_eot_check``, this is the fast-path "real interrupt confirmed
+    in ``SemanticInterruptHandler``, this is the fast-path "real interrupt confirmed
     by semantic signal" trigger."""
 
     duck_early_cancel_score_threshold: float = 0.7

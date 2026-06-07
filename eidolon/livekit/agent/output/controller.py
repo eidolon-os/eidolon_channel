@@ -347,7 +347,7 @@ class OutputController(lk_io.AudioOutput):
         Args:
             drop_buffered: If True, discard the buffered frames instead of
                 draining them. G17a (2026-05-18) — used by the timeout
-                fallback in StreamingPipeline._duck_suspend_timeout_fallback:
+                fallback in DuckSuspendTimeoutHandler:
                 by the time the 0.8s timeout fires, any buffered TTS frames
                 are stale (the user has been talking through the window),
                 and replaying them after fade-in causes "agent talks over

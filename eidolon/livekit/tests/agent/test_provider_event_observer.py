@@ -43,6 +43,38 @@ def test_provider_event_observer_records_brain_and_tts_events() -> None:
         {
             "provider": "bailian",
             "model": "cosyvoice",
+            "event": "tts_stream_started",
+            "timestamp": 20.4,
+        }
+    )
+    fake_tts.handlers["provider_event"](
+        {
+            "provider": "bailian",
+            "model": "cosyvoice",
+            "event": "tts_connection_acquired",
+            "timestamp": 20.45,
+        }
+    )
+    fake_tts.handlers["provider_event"](
+        {
+            "provider": "bailian",
+            "model": "cosyvoice",
+            "event": "tts_request_started",
+            "timestamp": 20.5,
+        }
+    )
+    fake_tts.handlers["provider_event"](
+        {
+            "provider": "bailian",
+            "model": "cosyvoice",
+            "event": "tts_first_text_sent",
+            "timestamp": 20.55,
+        }
+    )
+    fake_tts.handlers["provider_event"](
+        {
+            "provider": "bailian",
+            "model": "cosyvoice",
             "event": "tts_provider_first_audio",
             "timestamp": 20.6,
         }
@@ -51,6 +83,10 @@ def test_provider_event_observer_records_brain_and_tts_events() -> None:
     snap = timeline.snapshot()
     assert snap["timestamps"]["brain_first_delta_at"] == 20.25
     assert snap["timestamps"]["llm_first_delta_at"] == 20.25
+    assert snap["timestamps"]["tts_stream_started_at"] == 20.4
+    assert snap["timestamps"]["tts_connection_acquired_at"] == 20.45
+    assert snap["timestamps"]["tts_request_started_at"] == 20.5
+    assert snap["timestamps"]["tts_first_text_sent_at"] == 20.55
     assert snap["timestamps"]["tts_provider_first_audio_at"] == 20.6
     assert snap["attrs"]["brain_rpc"]["request_id"] == "req-1"
     assert snap["attrs"]["tts_stream"]["model"] == "cosyvoice"

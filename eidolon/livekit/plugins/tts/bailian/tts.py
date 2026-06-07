@@ -316,8 +316,10 @@ class BailianSynthesizeStream(SynthesizeStream):
             logger.debug("[BailianSynthesizeStream] ignored stream during shutdown")
             return
 
+        self._tts.emit_provider_event("tts_stream_started")
         async with self._tts._stream_lock:
             client = await self._tts._acquire_conn()
+            self._tts.emit_provider_event("tts_connection_acquired")
             self._tts.emit_provider_event("tts_request_started")
             self._tts._stream_active = True
             self._audio_byte_stream = AudioByteStream(
@@ -461,18 +463,25 @@ class BailianSynthesizeStream(SynthesizeStream):
                 )
                 return
             try:
+                async def send_text_part(part: str) -> None:
+                    await client.send_continue(part)
+                    # G12 (2026-05-17): wall-clock marker for the no-audio
+                    # watchdog. Set on FIRST send_continue only — subsequent
+                    # ones don't shift the deadline.
+                    if self._first_send_continue_time is None:
+                        self._first_send_continue_time = time.monotonic()
+                        self._tts.emit_provider_event(
+                            "tts_first_text_sent",
+                            chars=len(part),
+                        )
+
                 # DashScope restricts per-continue-task text size.
                 if len(cleaned) > 20000:
                     for i in range(0, len(cleaned), 20000):
-                        await client.send_continue(cleaned[i : i + 20000])
+                        await send_text_part(cleaned[i : i + 20000])
                 else:
-                    await client.send_continue(cleaned)
+                    await send_text_part(cleaned)
                 self._text_sent = True
-                # G12 (2026-05-17): wall-clock marker for the no-audio
-                # watchdog. Set on FIRST send_continue only — subsequent
-                # ones don't shift the deadline.
-                if self._first_send_continue_time is None:
-                    self._first_send_continue_time = time.monotonic()
             except BailianTTSError as e:
                 if e.recoverable and (self._conn_closed or self._exit_event.is_set()):
                     # Connection closed during interrupt — expected, not an error.

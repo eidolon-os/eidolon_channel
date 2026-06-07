@@ -29,7 +29,10 @@ TIMELINE_FIELDS = (
     "brain_first_delta_at",
     "brain_done_at",
     "brain_cancelled_at",
+    "tts_stream_started_at",
+    "tts_connection_acquired_at",
     "tts_request_started_at",
+    "tts_first_text_sent_at",
     "tts_provider_first_audio_at",
     "tts_first_audio_at",
     "agent_audio_playback_done_at",
@@ -134,6 +137,27 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         stage="tts",
         start="brain_first_delta_at",
         end="tts_first_audio_at",
+    ),
+    ProviderLatencySegment(
+        name="tts_pool_acquire",
+        label="TTS: stream start -> connection acquired",
+        stage="tts",
+        start="tts_stream_started_at",
+        end="tts_connection_acquired_at",
+    ),
+    ProviderLatencySegment(
+        name="tts_request_to_first_text",
+        label="TTS: request started -> first text sent",
+        stage="tts",
+        start="tts_request_started_at",
+        end="tts_first_text_sent_at",
+    ),
+    ProviderLatencySegment(
+        name="tts_first_text_to_provider_audio",
+        label="TTS: first text sent -> provider first audio",
+        stage="tts",
+        start="tts_first_text_sent_at",
+        end="tts_provider_first_audio_at",
     ),
     ProviderLatencySegment(
         name="tts_request_to_first_audio",
@@ -313,6 +337,18 @@ class TurnTimeline:
             ),
             "brain_first_delta_to_tts_first_audio_ms": self.duration_ms(
                 "brain_first_delta_at", "tts_first_audio_at"
+            ),
+            "tts_stream_to_connection_acquired_ms": self.duration_ms(
+                "tts_stream_started_at", "tts_connection_acquired_at"
+            ),
+            "tts_request_to_first_text_sent_ms": self.duration_ms(
+                "tts_request_started_at", "tts_first_text_sent_at"
+            ),
+            "tts_first_text_sent_to_provider_first_audio_ms": self.duration_ms(
+                "tts_first_text_sent_at", "tts_provider_first_audio_at"
+            ),
+            "tts_first_text_sent_to_agent_audio_ms": self.duration_ms(
+                "tts_first_text_sent_at", "tts_first_audio_at"
             ),
             "tts_request_to_provider_first_audio_ms": self.duration_ms(
                 "tts_request_started_at", "tts_provider_first_audio_at"

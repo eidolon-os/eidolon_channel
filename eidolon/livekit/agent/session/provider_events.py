@@ -128,7 +128,10 @@ class ProviderEventObserver:
             return
 
         mark_by_event = {
+            "tts_stream_started": "tts_stream_started_at",
+            "tts_connection_acquired": "tts_connection_acquired_at",
             "tts_request_started": "tts_request_started_at",
+            "tts_first_text_sent": "tts_first_text_sent_at",
             "tts_provider_first_audio": "tts_provider_first_audio_at",
         }
 

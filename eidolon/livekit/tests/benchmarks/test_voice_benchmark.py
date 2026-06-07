@@ -874,7 +874,9 @@ def test_timeline_exposes_tts_and_endpoint_segments(tmp_path) -> None:
         (
             '{"turn_id":"t1","timestamps":{'
             '"turn_committed_at":1.0,"stt_provider_final_at":1.8,'
-            '"tts_request_started_at":2.0,"tts_provider_first_audio_at":2.15,'
+            '"tts_stream_started_at":1.95,"tts_connection_acquired_at":2.0,'
+            '"tts_request_started_at":2.0,"tts_first_text_sent_at":2.05,'
+            '"tts_provider_first_audio_at":2.15,'
             '"tts_first_audio_at":2.20},'
             '"attrs":{"room_name":"voice-bench-normal_single_turn_001-1234abcd"}}\n'
         ),
@@ -885,6 +887,9 @@ def test_timeline_exposes_tts_and_endpoint_segments(tmp_path) -> None:
     segments = summary["provider_segments"]
 
     assert round(segments["tts_request_to_first_audio"]["p50"]) == 150
+    assert round(segments["tts_pool_acquire"]["p50"]) == 50
+    assert round(segments["tts_request_to_first_text"]["p50"]) == 50
+    assert round(segments["tts_first_text_to_provider_audio"]["p50"]) == 100
     assert round(segments["tts_provider_to_agent_audio"]["p50"]) == 50
     assert round(segments["stt_final_after_commit"]["p50"]) == 800
 

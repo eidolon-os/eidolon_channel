@@ -7,6 +7,7 @@ from .interruption import SoftInterruptController
 from .provider_events import ProviderEventObserver
 from .room_data import RoomDataHandler, participant_identity_from_packet
 from .signals import SessionSignalBridge
+from .turn_commit import UserTurnCommitter
 
 __all__ = [
     "AttentionEffectHandler",
@@ -16,5 +17,6 @@ __all__ = [
     "RoomDataHandler",
     "SessionSignalBridge",
     "SoftInterruptController",
+    "UserTurnCommitter",
     "participant_identity_from_packet",
 ]

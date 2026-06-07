@@ -83,6 +83,7 @@ from .session import (
     RoomDataHandler,
     SessionSignalBridge,
     SoftInterruptController,
+    UserTurnCommitter,
 )
 
 logger = logging.getLogger("agent")
@@ -156,6 +157,7 @@ class StreamingPipeline(BasePipeline):
         self._decision_effects = self._build_decision_effect_applier()
         self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
+        self._turn_committer = UserTurnCommitter()
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
@@ -377,6 +379,10 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_session_signals"):
             self._session_signals = self._build_session_signal_bridge()
 
+    def _ensure_turn_committer(self) -> None:
+        if not hasattr(self, "_turn_committer"):
+            self._turn_committer = UserTurnCommitter()
+
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
@@ -481,6 +487,7 @@ class StreamingPipeline(BasePipeline):
         self._ensure_decision_effect_applier()
         self._ensure_attention_effect_handler()
         self._ensure_session_signal_bridge()
+        self._ensure_turn_committer()
         self._ensure_room_data_handler()
 
     async def run(self, room: Room) -> None:
@@ -1001,47 +1008,16 @@ class StreamingPipeline(BasePipeline):
 
                 self._callbacks.on_user_ended_speaking()
                 if self._session is not None:
-                    # G8 fix (2026-05-17): only commit a user turn if STT
-                    # actually produced text. Without this guard, every
-                    # VAD-end (including AEC-warmup-suppressed audio, brief
-                    # noise, or STT hiccups) triggers commit_user_turn → the
-                    # framework waits ``transcript_timeout`` for a FINAL that
-                    # will never come, then promotes whatever INTERIM is
-                    # currently in ``_audio_interim_transcript`` (a global
-                    # string, not VAD-segment-scoped). That INTERIM is often
-                    # from the NEXT user utterance, producing a ghost LLM
-                    # call with cross-segment-contaminated text.
-                    if self._latest_asr_text:
-                        # Record turn BEFORE reset so dialogue history captures it.
-                        eot_model.record_turn(
-                            self._latest_asr_text,
-                            is_complete=True,
-                            eot_score=eot_model._current_eot_score,
-                        )
-                        eot_model.reset()
-                        self._inject_interrupted_context()
-                        if self._timeline is not None:
-                            self._timeline.mark("turn_committed_at")
-                        # F1 fix (2026-05-16): framework default is 2.0s, too
-                        # short for Bailian FunASR FINAL on long Chinese
-                        # sentences. Pass our configured timeout.
-                        self._session.commit_user_turn(
-                            transcript_timeout=self._stt_commit_transcript_timeout,
-                        )
-                        if (
-                            self._filler is not None
-                            and self._session.output.audio is not None
-                        ):
-                            self._filler.inject(self._session.output.audio)
-                    else:
-                        # G8 (2026-05-17): VAD-end with no STT text. Reset
-                        # EOT state but skip commit — see comment above.
-                        eot_model.reset()
-                        logger.info(
-                            "[StreamingPipeline] VAD-end with empty ASR — "
-                            "skipping commit_user_turn (AEC window / noise / "
-                            "STT hiccup)"
-                        )
+                    self._ensure_turn_committer()
+                    self._turn_committer.commit_or_skip(
+                        session=self._session,
+                        eot_model=eot_model,
+                        transcript=self._latest_asr_text,
+                        transcript_timeout=self._stt_commit_transcript_timeout,
+                        timeline=self._timeline,
+                        inject_interrupted_context=self._inject_interrupted_context,
+                        filler=self._filler,
+                    )
 
                 self._latest_asr_text = ""
 

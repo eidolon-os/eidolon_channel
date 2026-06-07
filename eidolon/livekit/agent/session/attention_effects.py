@@ -71,6 +71,7 @@ class AttentionEffectHandler:
     ) -> bool:
         decision = self.decide(transcript, participant_identity=speaker_id)
         self.record_admission(decision)
+        self._mark_direct_intent_admission(decision)
         if not self._turn_policy.attention.enforce:
             return True
         if decision.action is AdmissionAction.HARD_INTERRUPT:
@@ -117,3 +118,21 @@ class AttentionEffectHandler:
         events = list(timeline.attrs.get("attention_admission_events") or ())
         events.append(payload)
         timeline.set_attr("attention_admission_events", events)
+
+    def _mark_direct_intent_admission(self, decision: AttentionDecision) -> None:
+        if not _is_direct_intent_admission(decision):
+            return
+        timeline = self._get_timeline()
+        if timeline is not None:
+            timeline.mark("interrupt_intent_admitted_at")
+
+
+def _is_direct_intent_admission(decision: AttentionDecision) -> bool:
+    if decision.action is AdmissionAction.HARD_INTERRUPT:
+        return True
+    return decision.reason in {
+        "explicit_client_interrupt",
+        "transcript_hard_stop",
+        "transcript_topic_switch",
+        "transcript_correction",
+    }

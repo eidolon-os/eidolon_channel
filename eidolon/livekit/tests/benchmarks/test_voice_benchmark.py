@@ -1162,6 +1162,44 @@ def test_livekit_room_timeline_expectations_pass_fast_tier1_after_start(
     assert not run.cases[0].errors
 
 
+def test_livekit_room_timeline_expectations_use_direct_intent_admission_time(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-topic_switch_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"topic_switch","topic_switch_hint":true}},'
+            '"timestamps":{"interrupt_started_at":10.0,'
+            '"interrupt_intent_admitted_at":10.6,'
+            '"interrupt_resolved_at":10.74}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
 def test_livekit_room_timeline_expectations_fail_slow_tier1_after_start(
     tmp_path,
 ) -> None:

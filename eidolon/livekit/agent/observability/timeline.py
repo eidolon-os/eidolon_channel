@@ -37,6 +37,7 @@ TIMELINE_FIELDS = (
     "tts_first_audio_at",
     "agent_audio_playback_done_at",
     "interrupt_started_at",
+    "interrupt_intent_admitted_at",
     "interrupt_resolved_at",
     "idle_timeout_triggered_at",
 )

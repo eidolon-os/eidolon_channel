@@ -6,18 +6,13 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config import InterruptPolicyConfig
-from eidolon.livekit.common.config.defaults import (
-    DEFAULT_CORRECTION_LEXICON,
-    DEFAULT_TOPIC_SWITCH_LEXICON,
-)
-
 from .intent_classifier import (
     InterruptIntent,
     InterruptIntentClassifier,
     InterruptIntentResult,
     LexiconInterruptClassifier,
     canonicalize_interrupt_text,
-    normalize_interrupt_text,
+    is_semantic_interrupt_prefix,
 )
 from .constants import (
     DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
@@ -85,17 +80,10 @@ class InterruptDecider:
                     if early_resume_score_threshold is not None
                     else base.early_resume_score_threshold
                 ),
-            )
+        )
         self._config = base
         self._classifier = classifier or LexiconInterruptClassifier()
         self._evidence_gate = TranscriptEvidenceGate(base)
-        self._semantic_prefixes = tuple(
-            normalize_interrupt_text(item)
-            for item in (
-                DEFAULT_TOPIC_SWITCH_LEXICON
-                + DEFAULT_CORRECTION_LEXICON
-            )
-        )
 
     def on_strong_intent(self) -> Decision:
         return Decision(
@@ -130,7 +118,10 @@ class InterruptDecider:
         if forced is not None:
             return forced
 
-        if self._is_semantic_prefix(stripped):
+        if is_semantic_interrupt_prefix(
+            stripped,
+            min_chars=self._config.min_interim_chars,
+        ):
             return Decision(
                 action=Action.HOLD,
                 reason=f"semantic_prefix text={stripped}",
@@ -252,7 +243,10 @@ class InterruptDecider:
             )
             if forced is not None:
                 return forced
-            if self._is_semantic_prefix(text):
+            if is_semantic_interrupt_prefix(
+                text,
+                min_chars=self._config.min_interim_chars,
+            ):
                 return Decision(
                     action=Action.HOLD,
                     reason=f"deadline_semantic_prefix text={text}",
@@ -382,11 +376,3 @@ class InterruptDecider:
                 intent_confidence=intent.confidence,
             )
         return None
-
-    def _is_semantic_prefix(self, text: str) -> bool:
-        if len(text) < self._config.min_interim_chars:
-            return False
-        return any(
-            candidate.startswith(text) and candidate != text
-            for candidate in self._semantic_prefixes
-        )

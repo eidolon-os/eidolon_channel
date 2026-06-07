@@ -8,6 +8,9 @@ from eidolon.livekit.agent.turn_policy import (
     InterruptIntent,
     LexiconInterruptClassifier,
 )
+from eidolon.livekit.agent.turn_policy.intent_classifier import (
+    is_semantic_interrupt_prefix,
+)
 from eidolon.livekit.common.config.defaults import (
     DEFAULT_CORRECTION_EXCLUSION_LEXICON,
     DEFAULT_CORRECTION_LEXICON,
@@ -79,3 +82,29 @@ def test_interrupt_lexicons_are_non_empty_and_unique() -> None:
     ):
         assert all(item.strip() for item in lexicon)
         assert len(lexicon) == len(set(lexicon))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "换个",
+        "我们换",
+        "我刚",
+        "let me",
+    ],
+)
+def test_semantic_interrupt_prefix_detects_redirect_candidates(text: str) -> None:
+    assert is_semantic_interrupt_prefix(text)
+
+
+@pytest.mark.parametrize("text", ["换", "好", "那它", "是不是"])
+def test_semantic_interrupt_prefix_rejects_weak_or_ambient_text(text: str) -> None:
+    assert not is_semantic_interrupt_prefix(text)
+
+
+def test_semantic_interrupt_prefix_accepts_attention_early_duck_only() -> None:
+    assert is_semantic_interrupt_prefix(
+        "换",
+        min_chars=1,
+        include_attention_early_duck=True,
+    )

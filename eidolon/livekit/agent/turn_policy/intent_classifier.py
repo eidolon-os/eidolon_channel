@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config.defaults import (
+    DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON,
     DEFAULT_CORRECTION_EXCLUSION_LEXICON,
     DEFAULT_CORRECTION_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,
@@ -70,6 +71,42 @@ def canonicalize_interrupt_text(text: str) -> str:
         if stripped.startswith(source_prefix):
             return target_prefix + stripped[len(source_prefix) :]
     return stripped
+
+
+def is_semantic_interrupt_prefix(
+    text: str,
+    *,
+    min_chars: int = 2,
+    include_attention_early_duck: bool = False,
+) -> bool:
+    """Return true for high-precision prefixes of redirect/correction lexicons."""
+
+    stripped = canonicalize_interrupt_text(text)
+    if len(stripped) < min_chars:
+        return False
+    if (
+        include_attention_early_duck
+        and stripped in _attention_early_duck_prefixes()
+    ):
+        return True
+    return any(
+        candidate.startswith(stripped) and candidate != stripped
+        for candidate in _semantic_prefix_candidates()
+    )
+
+
+def _semantic_prefix_candidates() -> tuple[str, ...]:
+    return tuple(
+        normalize_interrupt_text(item)
+        for item in (DEFAULT_TOPIC_SWITCH_LEXICON + DEFAULT_CORRECTION_LEXICON)
+    )
+
+
+def _attention_early_duck_prefixes() -> tuple[str, ...]:
+    return tuple(
+        normalize_interrupt_text(item)
+        for item in DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON
+    )
 
 
 class LexiconInterruptClassifier(InterruptIntentClassifier):

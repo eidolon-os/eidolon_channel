@@ -71,6 +71,36 @@ def test_attention_hard_stop_upgrades_during_playback() -> None:
     assert decision.reason == "transcript_hard_stop"
 
 
+def test_attention_allows_semantic_prefix_during_playback() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="换个",
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "transcript_semantic_prefix"
+
+
+def test_attention_allows_early_duck_prefix_during_playback() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="换",
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "transcript_semantic_prefix"
+
+
 def test_attention_explicit_client_interrupt_is_hard() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
@@ -145,6 +175,34 @@ def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
     assert allowed is True
     pipeline._duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+
+
+def test_pipeline_attention_ducks_for_semantic_prefix_during_playback() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+
+    allowed = _allows_eot(pipeline, "换个")
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "transcript_semantic_prefix"
+    )
+
+
+def test_pipeline_attention_ducks_for_early_duck_prefix_during_playback() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+
+    allowed = _allows_eot(pipeline, "换")
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "transcript_semantic_prefix"
+    )
 
 
 def test_pipeline_attention_preserves_old_path_without_client_state() -> None:

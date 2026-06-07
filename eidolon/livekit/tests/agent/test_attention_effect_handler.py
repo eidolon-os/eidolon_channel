@@ -81,6 +81,19 @@ def test_hard_stop_during_playback_allows_eot_without_ducking() -> None:
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+    assert "interrupt_intent_admitted_at" in timeline.timestamps
+
+
+def test_semantic_prefix_ducks_without_direct_intent_mark() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
+
+    allowed = handler.allows_eot_check("换")
+
+    assert allowed is True
+    on_duck.assert_called_once_with()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["reason"] == "transcript_semantic_prefix"
+    assert "interrupt_intent_admitted_at" not in timeline.timestamps
 
 
 def test_speaking_started_hard_client_interrupt_marks_and_interrupts() -> None:

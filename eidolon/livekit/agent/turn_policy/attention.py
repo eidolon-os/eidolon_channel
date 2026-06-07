@@ -12,7 +12,11 @@ from eidolon.livekit.agent.client_audio_state import (
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .constants import TRANSCRIPT_PREVIEW_MAX_CHARS
-from .intent_classifier import InterruptIntent, LexiconInterruptClassifier
+from .intent_classifier import (
+    InterruptIntent,
+    LexiconInterruptClassifier,
+    is_semantic_interrupt_prefix,
+)
 
 
 class AdmissionAction(str, Enum):
@@ -109,6 +113,17 @@ class AttentionAdmission:
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,
                     f"transcript_{intent.value}",
+                    transcript_preview=preview,
+                    client_state_used=True,
+                )
+            if is_semantic_interrupt_prefix(
+                text,
+                min_chars=1,
+                include_attention_early_duck=True,
+            ):
+                return AttentionDecision(
+                    AdmissionAction.DUCK_AND_DECIDE,
+                    "transcript_semantic_prefix",
                     transcript_preview=preview,
                     client_state_used=True,
                 )

@@ -196,3 +196,8 @@ DEFAULT_CORRECTION_EXCLUSION_LEXICON: tuple[str, ...] = (
 DEFAULT_HARD_STOP_LEXICON: tuple[str, ...] = _HARD_STOP_ZH + _HARD_STOP_EN
 DEFAULT_TOPIC_SWITCH_LEXICON: tuple[str, ...] = _TOPIC_SWITCH_ZH + _TOPIC_SWITCH_EN
 DEFAULT_CORRECTION_LEXICON: tuple[str, ...] = _CORRECTION_ZH + _CORRECTION_EN
+
+# Single-token fragments that are too weak to cancel, but useful enough to duck
+# early while waiting for the next ASR interim. Keep this list tiny: entries
+# only gate attention admission and must not be treated as intent by themselves.
+DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON: tuple[str, ...] = ("换",)

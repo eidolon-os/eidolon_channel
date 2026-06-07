@@ -237,7 +237,9 @@ def _interrupt_resolution_after_started_ms(records: list[dict[str, Any]]) -> lis
             if isinstance(record.get("timestamps"), dict)
             else {}
         )
-        start = _number(timestamps.get("interrupt_started_at"))
+        start = _number(timestamps.get("interrupt_intent_admitted_at"))
+        if start is None:
+            start = _number(timestamps.get("interrupt_started_at"))
         end = _number(timestamps.get("interrupt_resolved_at"))
         if start is not None and end is not None:
             durations.append(max(0.0, (end - start) * 1000.0))

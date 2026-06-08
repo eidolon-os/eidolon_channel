@@ -268,6 +268,67 @@ def test_user_transcript_suppresses_semantic_during_post_cancel_residual_window(
     pipeline._semantic_interrupts.run.assert_not_called()
 
 
+def test_user_transcript_ignores_stale_client_playback_after_output_cancelled() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(participant_identity="manson"),
+        pipeline_state=PipelineState.IDLE,
+    )
+    pipeline._ensure_runtime_defaults()
+    pipeline._ducking.mixer = SimpleNamespace(state="CANCELLED")
+    eot = MagicMock()
+    eot.update_asr = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+    pipeline._semantic_interrupts = SimpleNamespace(
+        run=MagicMock(),
+        _turn_runtime=pipeline._turn_runtime,
+    )
+    pipeline._allow_interruptions = True
+    pipeline._mark_activity = MagicMock()
+
+    pipeline._on_user_transcribed(
+        SimpleNamespace(
+            transcript="我们聊点别的。",
+            is_final=False,
+            speaker_id="manson",
+        )
+    )
+
+    eot.update_asr.assert_called_once_with(
+        "我们聊点别的。",
+        is_final=False,
+    )
+    pipeline._semantic_interrupts.run.assert_not_called()
+
+
+def test_user_transcript_does_not_use_timeline_marker_as_interrupt_window() -> None:
+    pipeline = _pipeline_with_client_state(None, pipeline_state=PipelineState.IDLE)
+    pipeline._ensure_runtime_defaults()
+    pipeline._timeline.mark("interrupt_started_at")
+    eot = MagicMock()
+    eot.update_asr = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+    pipeline._semantic_interrupts = SimpleNamespace(
+        run=MagicMock(),
+        _turn_runtime=pipeline._turn_runtime,
+    )
+    pipeline._allow_interruptions = True
+    pipeline._mark_activity = MagicMock()
+
+    pipeline._on_user_transcribed(
+        SimpleNamespace(
+            transcript="我们聊点别的。",
+            is_final=False,
+            speaker_id="manson",
+        )
+    )
+
+    eot.update_asr.assert_called_once_with(
+        "我们聊点别的。",
+        is_final=False,
+    )
+    pipeline._semantic_interrupts.run.assert_not_called()
+
+
 def test_pipeline_attention_ducks_for_semantic_prefix_during_playback() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
 

@@ -1106,14 +1106,11 @@ class StreamingPipeline(BasePipeline):
         agent_is_speaking = self._agent_output_active_for_interrupts(
             participant_identity=getattr(event, "speaker_id", None),
         )
-        interruption_timeline_active = (
-            self._timeline is not None
-            and "interrupt_started_at" in self._timeline.timestamps
-        )
+        interrupt_window_active = self._interrupt_window_active()
         if (
             self._allow_interruptions
             and event.transcript
-            and (agent_is_speaking or interruption_timeline_active)
+            and (agent_is_speaking or interrupt_window_active)
         ):
             if self._interrupt_decision_suppressed():
                 logger.debug(
@@ -1135,6 +1132,12 @@ class StreamingPipeline(BasePipeline):
         """Ignore residual ASR after a confirmed interrupt cancel."""
         return time.monotonic() < self._suppress_commit_after_interrupt_until
 
+    def _interrupt_window_active(self) -> bool:
+        """Return true while an actual interrupt decision window is open."""
+        return self._ducking.is_suspended or bool(
+            getattr(self, "_soft_interrupt_active", False)
+        )
+
     def _agent_output_active_for_interrupts(
         self,
         *,
@@ -1148,6 +1151,8 @@ class StreamingPipeline(BasePipeline):
         is also authoritative.
         """
         self._ensure_ducking_controller()
+        if self._ducking.is_cancelled:
+            return False
         if (
             getattr(self, "_state", PipelineState.IDLE) == PipelineState.SPEAKING
             or self._ducking.is_suspended

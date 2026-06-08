@@ -38,6 +38,10 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "首次转写 -> cancel/rollback 完成",
     ),
     (
+        "timeline_decision_hold_recheck_ms",
+        "策略 HOLD -> 下次 recheck 预算",
+    ),
+    (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
         "直接意图通过 -> cancel 完成",
     ),
@@ -69,6 +73,10 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_interrupt_first_transcript_to_resolved_ms",
         "首次转写 -> cancel/rollback 完成",
+    ),
+    (
+        "timeline_decision_hold_recheck_ms",
+        "策略 HOLD -> 下次 recheck 预算",
     ),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
@@ -493,6 +501,7 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
         first_to_actionable = metrics.get(
             "timeline_stt_first_transcript_to_actionable_transcript_ms"
         )
+        hold_recheck = metrics.get("timeline_decision_hold_recheck_ms")
         after_transcript = metrics.get(
             "timeline_interrupt_first_transcript_to_resolved_ms"
         )
@@ -506,6 +515,11 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
                 extra = (
                     "，首次转写到可行动转写约 "
                     f"{_fmt_metric_value(first_to_actionable)}"
+                )
+            if hold_recheck is not None:
+                extra += (
+                    "，策略 HOLD recheck 预算约 "
+                    f"{_fmt_metric_value(hold_recheck)}"
                 )
             return (
                 f"该用例完成 `{intent or 'unknown'}` 打断，总耗时约 {total}；"

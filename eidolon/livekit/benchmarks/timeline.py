@@ -115,6 +115,15 @@ def summarize_timeline_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         decision_reason = attrs.get("decision_reason")
         if isinstance(decision_reason, str) and decision_reason:
             decisions[decision_reason] = decisions.get(decision_reason, 0) + 1
+        decision = _mapping(attrs.get("decision"))
+        hold_recheck_ms = decision.get("hold_recheck_ms")
+        if isinstance(hold_recheck_ms, (int, float)) and not isinstance(
+            hold_recheck_ms,
+            bool,
+        ):
+            latency_samples.setdefault("decision_hold_recheck_ms", []).append(
+                float(hold_recheck_ms)
+            )
 
         flush_reason = attrs.get("timeline_flush_reason")
         if isinstance(flush_reason, str) and flush_reason:

@@ -346,6 +346,12 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
             number = _number(value)
             if number is not None:
                 samples.setdefault(f"timeline_{key}", []).append(number)
+        decision = _mapping(attrs.get("decision"))
+        hold_recheck_ms = _number(decision.get("hold_recheck_ms"))
+        if hold_recheck_ms is not None:
+            samples.setdefault("timeline_decision_hold_recheck_ms", []).append(
+                hold_recheck_ms
+            )
         total_interrupt = _number(durations.get("vad_start_to_interrupt_resolved"))
         if total_interrupt is not None:
             samples.setdefault(

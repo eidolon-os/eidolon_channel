@@ -950,6 +950,7 @@ def test_timeline_records_are_summarized(tmp_path) -> None:
                     '{"turn_id":"t1","durations_ms":{"commit_to_tts_first_audio":100},'
                     '"timestamps":{"speech_started_at":1.0,"transcript_final_at":1.2},'
                     '"attrs":{"decision_reason":"intent:hard_stop",'
+                    '"decision":{"hold_recheck_ms":40},'
                     '"room_name":"voice-bench-hard_interrupt_001-1234abcd",'
                     '"timeline_flush_reason":"interrupt_cancel",'
                     '"provider_latency_ms":{"stt_final_ms":200}}}'
@@ -971,6 +972,7 @@ def test_timeline_records_are_summarized(tmp_path) -> None:
     assert summary["count"] == 2
     assert summary["latencies"]["commit_to_tts_first_audio"]["p95"] == 290
     assert summary["latencies"]["stt_final_ms"]["p50"] == 300
+    assert summary["latencies"]["decision_hold_recheck_ms"]["p50"] == 40
     assert round(summary["provider_segments"]["stt_final"]["p50"]) == 300
     assert summary["record_summaries"][0]["case_id"] == "hard_interrupt_001"
     assert summary["decision_reasons"]["intent:hard_stop"] == 1
@@ -1444,7 +1446,8 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
         (
             '{"turn_id":"t1","attrs":{"room_name":'
             '"voice-bench-hard_interrupt_001-1234abcd",'
-            '"interrupt_action":"cancel","decision":{"intent":"hard_stop"},'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"hard_stop","hold_recheck_ms":40},'
             '"provider_latency_ms":{'
             '"interrupt_speech_to_first_transcript_ms":310,'
             '"stt_speech_to_actionable_transcript_ms":360,'
@@ -1470,6 +1473,7 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_interrupt_first_transcript_to_resolved_ms"] == 70
     assert metrics["timeline_interrupt_actionable_transcript_to_resolved_ms"] == 20
     assert metrics["timeline_interrupt_intent_admitted_to_resolved_ms"] == 35
+    assert metrics["timeline_decision_hold_recheck_ms"] == 40
     assert metrics["timeline_stt_provider_partial_to_livekit_interim_ms"] == 22
     assert metrics["timeline_vad_start_to_interrupt_resolved"] == 380
 

@@ -251,6 +251,7 @@ class TurnTimeline:
         eot_score: float | None = None,
         transcript_preview: str = "",
         vad_active: bool | None = None,
+        hold_recheck_ms: float | None = None,
     ) -> None:
         """Attach a normalized interruption decision to this turn.
 
@@ -275,6 +276,7 @@ class TurnTimeline:
             "eot_score": eot_score,
             "transcript_preview": transcript_preview,
             "vad_active": vad_active,
+            "hold_recheck_ms": hold_recheck_ms,
         }
         self.attrs["decision"] = payload
         self.attrs["decision_reason"] = reason

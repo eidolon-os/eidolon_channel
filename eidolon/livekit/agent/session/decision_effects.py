@@ -99,6 +99,7 @@ class DecisionEffectApplier:
             eot_score=eot_score,
             transcript_preview=transcript[:120],
             vad_active=vad_active,
+            hold_recheck_ms=decision.hold_recheck_ms,
         )
 
     def publish_turn_control(self, metadata: dict[str, object]) -> None:

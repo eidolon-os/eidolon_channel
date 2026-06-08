@@ -43,6 +43,7 @@ class Decision:
     correction_hint: bool = False
     tier: str = ""
     tier_reason: str = ""
+    hold_recheck_ms: float | None = None
 
 
 class InterruptDecider:

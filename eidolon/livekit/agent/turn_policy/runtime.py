@@ -226,6 +226,7 @@ class _StableSignalStabilizer:
             intent_confidence=0.0,
             topic_switch_hint=decision.topic_switch_hint,
             correction_hint=decision.correction_hint,
+            hold_recheck_ms=max(0.0, window_ms - age_ms),
         )
 
     def _stabilize_normal_interrupt(

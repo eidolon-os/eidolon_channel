@@ -155,7 +155,9 @@ def test_runtime_correction_waits_for_short_stability_window() -> None:
 
     assert first.action is Action.HOLD
     assert first.reason.startswith("stable_signal_wait")
+    assert first.hold_recheck_ms == 120
     assert second.action is Action.HOLD
+    assert second.hold_recheck_ms == 40
     assert third.action is Action.CANCEL
     assert third.correction_hint is True
 
@@ -204,8 +206,10 @@ def test_runtime_long_topic_prefix_uses_stability_window() -> None:
 
     assert first.action is Action.HOLD
     assert first.reason.startswith("stable_signal_wait")
+    assert first.hold_recheck_ms == 120
     assert first.topic_switch_hint is True
     assert too_soon.action is Action.HOLD
+    assert too_soon.hold_recheck_ms == 40
     assert stable.action is Action.CANCEL
     assert stable.intent.value == "topic_switch"
     assert stable.intent_source == "lexicon_prefix"

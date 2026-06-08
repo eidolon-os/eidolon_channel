@@ -62,3 +62,30 @@ async def test_stable_signal_timer_is_cancelled_before_recheck() -> None:
 
     pipeline._semantic_interrupts.run.assert_not_called()
     assert pipeline._stable_signal_timer is None
+
+
+@pytest.mark.asyncio
+async def test_stable_signal_hold_uses_remaining_recheck_ms() -> None:
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._turn_policy = TurnPolicyConfig()
+    pipeline._ducking = _SuspendedDucking()
+    pipeline._latest_asr_text = "换个话"
+    pipeline._stable_signal_timer = None
+    pipeline._semantic_interrupts = SimpleNamespace(run=MagicMock())
+    decision = Decision(
+        action=Action.HOLD,
+        reason="stable_signal_wait intent=topic_switch age_ms=80 window_ms=120",
+        hold_recheck_ms=40,
+    )
+
+    pipeline._handle_hold_decision(
+        decision,
+        "换个话",
+        eot_score=0.0,
+        vad_active=True,
+    )
+
+    await asyncio.sleep(0.06)
+
+    pipeline._semantic_interrupts.run.assert_called_once_with("换个话", is_final=False)
+    assert pipeline._stable_signal_timer is None

@@ -1252,10 +1252,12 @@ class StreamingPipeline(BasePipeline):
             return
         if not transcript.strip():
             return
-        timeout_sec = (
-            self._turn_policy.interrupt.correction_topic_stability_window_ms
-            / 1000.0
-        )
+        recheck_ms = decision.hold_recheck_ms
+        if recheck_ms is None:
+            recheck_ms = (
+                self._turn_policy.interrupt.correction_topic_stability_window_ms
+            )
+        timeout_sec = max(0.0, recheck_ms) / 1000.0
         self._cancel_stable_signal_timer()
         logger.info(
             "[StreamingPipeline] stable-signal recheck armed "

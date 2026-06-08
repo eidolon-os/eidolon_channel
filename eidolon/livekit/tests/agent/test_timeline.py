@@ -138,6 +138,21 @@ def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
     )
 
 
+def test_timeline_records_hold_recheck_ms() -> None:
+    timeline = TurnTimeline("turn-stable-hold")
+
+    timeline.record_decision(
+        action="hold",
+        reason="stable_signal_wait intent=topic_switch age_ms=80 window_ms=120",
+        rollback_drop_buffered=False,
+        intent="uncertain",
+        topic_switch_hint=True,
+        hold_recheck_ms=40,
+    )
+
+    assert timeline.snapshot()["attrs"]["decision"]["hold_recheck_ms"] == 40
+
+
 def test_timeline_mark_after_sets_synthetic_llm_first_delta() -> None:
     timeline = TurnTimeline("turn-4")
     timeline.mark("turn_committed_at")

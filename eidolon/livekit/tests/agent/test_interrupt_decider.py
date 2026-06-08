@@ -56,6 +56,25 @@ def test_strong_intent_always_cancels() -> None:
     assert "strong_intent" in decision.reason
 
 
+def test_hard_stop_prefix_cancels_on_hot_path() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("别说", score=0.0)
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent is not None
+    assert decision.intent.value == "hard_stop"
+    assert decision.intent_source == "lexicon_prefix"
+
+
+def test_ambiguous_hard_stop_fragment_does_not_cancel() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("不要", score=0.0)
+
+    assert decision.action is not Action.CANCEL
+
+
 # ---------------------------------------------------------------------------
 # on_stt_interim — semantic-tiered first signal
 # ---------------------------------------------------------------------------

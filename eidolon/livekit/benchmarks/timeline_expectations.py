@@ -34,6 +34,12 @@ def apply_timeline_expectations(
         result.metrics["timeline_record_count"] = len(case_records)
         result.metrics["timeline_actions"] = ",".join(_actions(case_records))
         result.metrics["timeline_intents"] = ",".join(_intents(case_records))
+        result.metrics["timeline_decision_actions"] = ",".join(
+            _decision_actions(case_records)
+        )
+        result.metrics["timeline_decision_intents"] = ",".join(
+            _decision_intents(case_records)
+        )
         result.metrics.update(_latency_metrics(case_records))
 
         expected = expectations.get(result.case_id)
@@ -184,6 +190,8 @@ def _room_name(record: dict[str, Any]) -> str:
 def _actions(records: list[dict[str, Any]]) -> list[str]:
     values: list[str] = []
     for record in records:
+        if not _is_resolved_interrupt(record):
+            continue
         attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
         action = attrs.get("interrupt_action")
         if isinstance(action, str) and action:
@@ -194,12 +202,58 @@ def _actions(records: list[dict[str, Any]]) -> list[str]:
 def _intents(records: list[dict[str, Any]]) -> list[str]:
     values: list[str] = []
     for record in records:
+        if not _is_resolved_interrupt(record):
+            continue
         attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
         decision = attrs.get("decision") if isinstance(attrs.get("decision"), dict) else {}
         intent = decision.get("intent")
         if isinstance(intent, str) and intent:
             values.append(intent)
     return values
+
+
+def _decision_actions(records: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for record in records:
+        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+        action = attrs.get("interrupt_action")
+        if isinstance(action, str) and action:
+            values.append(action)
+    return values
+
+
+def _decision_intents(records: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for record in records:
+        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+        decision = attrs.get("decision") if isinstance(attrs.get("decision"), dict) else {}
+        intent = decision.get("intent")
+        if isinstance(intent, str) and intent:
+            values.append(intent)
+    return values
+
+
+def _is_resolved_interrupt(record: dict[str, Any]) -> bool:
+    timestamps = record.get("timestamps")
+    if isinstance(timestamps, dict) and isinstance(
+        timestamps.get("interrupt_resolved_at"),
+        (int, float),
+    ):
+        return True
+    durations = record.get("durations_ms")
+    if isinstance(durations, dict) and isinstance(
+        durations.get("vad_start_to_interrupt_resolved"),
+        (int, float),
+    ):
+        return True
+    attrs = record.get("attrs")
+    if not isinstance(attrs, dict):
+        return False
+    provider_latency = attrs.get("provider_latency_ms")
+    return isinstance(provider_latency, dict) and isinstance(
+        provider_latency.get("interrupt_speech_to_resolved_ms"),
+        (int, float),
+    )
 
 
 def _attention_actions(records: list[dict[str, Any]]) -> list[str]:

@@ -12,6 +12,7 @@ from .intent_classifier import (
     InterruptIntentResult,
     LexiconInterruptClassifier,
     canonicalize_interrupt_text,
+    hard_stop_prefix_intent,
     is_semantic_interrupt_prefix,
     semantic_interrupt_prefix_intent,
 )
@@ -118,6 +119,19 @@ class InterruptDecider:
         )
         if forced is not None:
             return forced
+
+        hard_prefix = hard_stop_prefix_intent(
+            stripped,
+            min_chars=self._config.min_interim_chars,
+        )
+        if hard_prefix is InterruptIntent.HARD_STOP:
+            return Decision(
+                action=Action.CANCEL,
+                reason=f"prefix_intent:hard_stop text={stripped}",
+                intent=InterruptIntent.HARD_STOP,
+                intent_source="lexicon_prefix",
+                intent_confidence=0.90,
+            )
 
         prefix_intent = semantic_interrupt_prefix_intent(
             stripped,

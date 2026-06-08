@@ -160,6 +160,23 @@ def test_runtime_correction_waits_for_short_stability_window() -> None:
     assert third.correction_hint is True
 
 
+def test_runtime_hard_stop_prefix_bypasses_stability_window() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    decision = runtime.decide_from_transcript(
+        "别说",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "hard_stop"
+    assert decision.intent_source == "lexicon_prefix"
+    assert decision.tier == "tier0_hard_stop"
+
+
 def test_runtime_long_topic_prefix_uses_stability_window() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 

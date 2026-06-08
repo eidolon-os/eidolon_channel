@@ -410,9 +410,11 @@ def _case_overview_rows(
         ("expected_action", "期望动作"),
         ("actual_action", "实际动作"),
         ("timeline_actions", "timeline 动作"),
+        ("timeline_decision_actions", "timeline 决策动作"),
         ("expected_intent", "期望意图"),
         ("actual_intent", "实际意图"),
         ("timeline_intents", "timeline 意图"),
+        ("timeline_decision_intents", "timeline 决策意图"),
         ("forbid_actions", "禁止动作"),
     ):
         value = metrics.get(key)

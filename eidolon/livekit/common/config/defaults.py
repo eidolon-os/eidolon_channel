@@ -51,6 +51,20 @@ _HARD_STOP_EN: tuple[str, ...] = (
     "let's stop",
 )
 
+DEFAULT_HARD_STOP_PREFIX_LEXICON: tuple[str, ...] = (
+    "别说",
+    "先别说",
+    "别讲",
+    "先别讲",
+    "不要说",
+    "不要再说",
+    "不用说",
+    "不用讲",
+    "停下",
+    "先停",
+    "你先停",
+)
+
 _TOPIC_SWITCH_ZH: tuple[str, ...] = (
     "换个话题",
     "换一个话题",

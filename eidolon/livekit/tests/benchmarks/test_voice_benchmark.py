@@ -1322,13 +1322,14 @@ def test_livekit_room_timeline_expectations_fail_unexpected_cancel(
     )
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
-        (
-            '{"turn_id":"t1","attrs":{"room_name":'
-            '"voice-bench-normal_single_turn_001-1234abcd",'
-            '"interrupt_action":"cancel","decision":{"intent":"normal_interrupt"}}}\n'
-        ),
-        encoding="utf-8",
-    )
+            (
+                '{"turn_id":"t1","attrs":{"room_name":'
+                '"voice-bench-normal_single_turn_001-1234abcd",'
+                '"interrupt_action":"cancel","decision":{"intent":"normal_interrupt"}},'
+                '"timestamps":{"interrupt_resolved_at":10.2}}\n'
+            ),
+            encoding="utf-8",
+        )
 
     apply_timeline_expectations(run, [suite], timeline_path)
 
@@ -1368,6 +1369,55 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_livekit_room_timeline_actions_count_only_resolved_interrupts(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"resolved","attrs":{"room_name":'
+            '"voice-bench-topic_switch_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"topic_switch","topic_switch_hint":true}},'
+            '"timestamps":{"interrupt_started_at":10.0,'
+            '"interrupt_resolved_at":10.14}}\n'
+            '{"turn_id":"residual","attrs":{"room_name":'
+            '"voice-bench-topic_switch_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"topic_switch","topic_switch_hint":true},'
+            '"timeline_flush_reason":"agent_audio_playback_done"},'
+            '"timestamps":{"interrupt_started_at":10.6}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert run.cases[0].metrics["timeline_actions"] == "cancel"
+    assert run.cases[0].metrics["timeline_intents"] == "topic_switch"
+    assert run.cases[0].metrics["timeline_decision_actions"] == "cancel,cancel"
+    assert run.cases[0].metrics["timeline_decision_intents"] == (
+        "topic_switch,topic_switch"
+    )
     assert not run.cases[0].errors
 
 

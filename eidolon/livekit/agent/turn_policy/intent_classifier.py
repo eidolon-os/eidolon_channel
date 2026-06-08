@@ -9,6 +9,7 @@ from eidolon.livekit.common.config.defaults import (
     DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON,
     DEFAULT_CORRECTION_EXCLUSION_LEXICON,
     DEFAULT_CORRECTION_LEXICON,
+    DEFAULT_HARD_STOP_PREFIX_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,
     DEFAULT_TOPIC_SWITCH_LEXICON,
 )
@@ -117,6 +118,24 @@ def semantic_interrupt_prefix_intent(
     if _is_prefix_of(stripped, DEFAULT_CORRECTION_LEXICON):
         return InterruptIntent.CORRECTION
     return None
+
+
+def hard_stop_prefix_intent(
+    text: str,
+    *,
+    min_chars: int = 2,
+    min_cjk_chars: int = 2,
+) -> InterruptIntent | None:
+    """Classify high-precision Tier0 hard-stop prefixes."""
+
+    stripped = canonicalize_interrupt_text(text)
+    if len(stripped) < min_chars or _count_cjk(stripped) < min_cjk_chars:
+        return None
+    prefixes = tuple(
+        normalize_interrupt_text(item)
+        for item in DEFAULT_HARD_STOP_PREFIX_LEXICON
+    )
+    return InterruptIntent.HARD_STOP if stripped in prefixes else None
 
 
 def _semantic_prefix_candidates() -> tuple[str, ...]:

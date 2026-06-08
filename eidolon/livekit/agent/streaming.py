@@ -1115,6 +1115,12 @@ class StreamingPipeline(BasePipeline):
             and event.transcript
             and (agent_is_speaking or interruption_timeline_active)
         ):
+            if self._interrupt_decision_suppressed():
+                logger.debug(
+                    "[StreamingPipeline] interrupt decision suppressed after cancel"
+                )
+                super()._on_user_transcribed(event)
+                return
             if not self._attention_effects.allows_eot_check(
                 event.transcript,
                 speaker_id=getattr(event, "speaker_id", None),
@@ -1124,6 +1130,10 @@ class StreamingPipeline(BasePipeline):
             self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
+
+    def _interrupt_decision_suppressed(self) -> bool:
+        """Ignore residual ASR after a confirmed interrupt cancel."""
+        return time.monotonic() < self._suppress_commit_after_interrupt_until
 
     def _agent_output_active_for_interrupts(
         self,

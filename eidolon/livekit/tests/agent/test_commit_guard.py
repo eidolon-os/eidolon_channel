@@ -12,10 +12,13 @@ text.
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from eidolon.livekit.agent.observability import TurnTimeline
 
 
 def _make_pipeline_with_session(*, latest_asr_text: str) -> "StreamingPipeline":
@@ -42,6 +45,8 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> "StreamingPipeline":
     pipeline._soft_interrupt_timer = None
     pipeline._user_speaking_start_time = None
     pipeline._last_unduck_time = 0.0
+    pipeline._skip_commit_after_interrupt_cancel = False
+    pipeline._suppress_commit_after_interrupt_until = 0.0
 
     # Stub EOT model — its methods are called regardless of guard branch.
     eot = MagicMock()
@@ -99,3 +104,37 @@ def test_asr_text_cleared_after_either_branch() -> None:
     pipeline2 = _make_pipeline_with_session(latest_asr_text="")
     pipeline2._on_user_state_changed(_user_state_event("speaking", "listening"))
     assert pipeline2._latest_asr_text == ""
+
+
+def test_commit_skipped_after_interrupt_cancel() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="换个话题")
+    pipeline._skip_commit_after_interrupt_cancel = True
+    pipeline._timeline = TurnTimeline("turn-after-cancel")
+    pipeline._timeline_debug_flushed = False
+
+    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
+
+    pipeline._session.commit_user_turn.assert_not_called()
+    eot = pipeline._get_eot_model.return_value
+    eot.record_turn.assert_not_called()
+    eot.reset.assert_called_once()
+    assert pipeline._skip_commit_after_interrupt_cancel is False
+    assert pipeline._timeline is None
+    assert pipeline._latest_asr_text == ""
+
+
+def test_commit_skipped_during_post_interrupt_suppression_window() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="这是一段迟到的识别")
+    pipeline._suppress_commit_after_interrupt_until = time.monotonic() + 1.0
+    pipeline._timeline = TurnTimeline("late-stt-after-cancel")
+    pipeline._timeline_debug_flushed = False
+
+    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
+
+    pipeline._session.commit_user_turn.assert_not_called()
+    eot = pipeline._get_eot_model.return_value
+    eot.record_turn.assert_not_called()
+    eot.reset.assert_called_once()
+    assert pipeline._skip_commit_after_interrupt_cancel is False
+    assert pipeline._timeline is None
+    assert pipeline._latest_asr_text == ""

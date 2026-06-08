@@ -60,7 +60,7 @@ from eidolon.livekit.common.config import (
 )
 
 from . import _framework_patches
-from .client_audio_state import ClientAudioState
+from .client_audio_state import PLAYBACK_STATE_AGENT_SPEAKING, ClientAudioState
 from .context import InterruptedContextManager
 from .turn_policy import (
     Decision,
@@ -88,6 +88,8 @@ from .session import (
 )
 
 logger = logging.getLogger("agent")
+
+_INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC = 2.0
 
 
 # Module-level cache for the EOT model singleton.
@@ -155,6 +157,8 @@ class StreamingPipeline(BasePipeline):
         self._observability = observability or ObservabilityConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
+        self._skip_commit_after_interrupt_cancel = False
+        self._suppress_commit_after_interrupt_until = 0.0
         # Ducking state is shared by several effect handlers. It must exist
         # before those handlers are built, because AgentStateEffectHandler keeps
         # a direct reference to the controller.
@@ -361,7 +365,7 @@ class StreamingPipeline(BasePipeline):
         return AttentionEffectHandler(
             turn_policy=self._turn_policy,
             turn_runtime=self._turn_runtime,
-            get_agent_speaking=lambda: self._state == PipelineState.SPEAKING,
+            get_agent_speaking=lambda: self._agent_output_active_for_interrupts(),
             get_duck_active=lambda: self._ducking.is_suspended,
             latest_client_audio_state=lambda participant_identity: (
                 self._latest_client_audio_state(
@@ -558,6 +562,10 @@ class StreamingPipeline(BasePipeline):
             self._timeline = None
         if not hasattr(self, "_timeline_debug_flushed"):
             self._timeline_debug_flushed = False
+        if not hasattr(self, "_skip_commit_after_interrupt_cancel"):
+            self._skip_commit_after_interrupt_cancel = False
+        if not hasattr(self, "_suppress_commit_after_interrupt_until"):
+            self._suppress_commit_after_interrupt_until = 0.0
         if not hasattr(self, "_latest_asr_text"):
             self._latest_asr_text = ""
         if not hasattr(self, "_stable_signal_timer"):
@@ -1022,7 +1030,21 @@ class StreamingPipeline(BasePipeline):
                     )
 
                 self._callbacks.on_user_ended_speaking()
-                if self._session is not None:
+                suppress_commit_after_interrupt = (
+                    self._skip_commit_after_interrupt_cancel
+                    or time.monotonic()
+                    < self._suppress_commit_after_interrupt_until
+                )
+                if suppress_commit_after_interrupt:
+                    logger.info(
+                        "[StreamingPipeline] skipping user turn commit after "
+                        "interrupt cancel"
+                    )
+                    eot_model.reset()
+                    self._skip_commit_after_interrupt_cancel = False
+                    self._timeline = None
+                    self._timeline_debug_flushed = True
+                elif self._session is not None:
                     self._ensure_turn_committer()
                     self._turn_committer.commit_or_skip(
                         session=self._session,
@@ -1081,7 +1103,9 @@ class StreamingPipeline(BasePipeline):
         # Event-driven EOT check: react immediately when STT delivers text,
         # instead of polling for it. This ensures we analyze the CURRENT
         # speech turn's text, not a stale one from a previous turn.
-        agent_is_speaking = self._state == PipelineState.SPEAKING
+        agent_is_speaking = self._agent_output_active_for_interrupts(
+            participant_identity=getattr(event, "speaker_id", None),
+        )
         interruption_timeline_active = (
             self._timeline is not None
             and "interrupt_started_at" in self._timeline.timestamps
@@ -1100,6 +1124,47 @@ class StreamingPipeline(BasePipeline):
             self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
+
+    def _agent_output_active_for_interrupts(
+        self,
+        *,
+        participant_identity: str | None = None,
+    ) -> bool:
+        """Return true when user speech should be evaluated as an interrupt.
+
+        LiveKit's internal agent state can briefly disagree with the browser or
+        device playback state. For hot-path interruption, user experience cares
+        about audible agent output, so a fresh client ``agent_speaking`` signal
+        is also authoritative.
+        """
+        self._ensure_ducking_controller()
+        if (
+            getattr(self, "_state", PipelineState.IDLE) == PipelineState.SPEAKING
+            or self._ducking.is_suspended
+        ):
+            return True
+        states = getattr(self, "_client_audio_states", {})
+        if not states:
+            return False
+        max_age_sec = (
+            self._turn_policy.attention.client_state_max_age_ms / 1000.0
+            if hasattr(self, "_turn_policy")
+            else 2.0
+        )
+        now = time.monotonic()
+        if participant_identity:
+            client = states.get(participant_identity)
+            if (
+                client is not None
+                and client.is_fresh(now=now, max_age_sec=max_age_sec)
+                and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
+            ):
+                return True
+        return any(
+            state.is_fresh(now=now, max_age_sec=max_age_sec)
+            and state.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
+            for state in states.values()
+        )
 
     def _latest_client_audio_state(
         self,
@@ -1391,6 +1456,10 @@ class StreamingPipeline(BasePipeline):
             self._timeline.mark("interrupt_resolved_at")
             self._timeline.set_attr("cancel_reason", "eot_cancel")
             self._append_timeline_debug("interrupt_cancel", clear=True)
+        self._skip_commit_after_interrupt_cancel = True
+        self._suppress_commit_after_interrupt_until = (
+            time.monotonic() + _INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC
+        )
         self._interrupt_current_turn()
 
     def _duck_unduck_if_suspended(

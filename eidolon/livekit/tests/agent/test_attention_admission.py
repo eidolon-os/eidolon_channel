@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.client_audio_state import ClientAudioState
@@ -126,17 +127,19 @@ def _pipeline_with_client_state(
     state: ClientAudioState | None,
     *,
     enforce: bool = True,
+    pipeline_state: PipelineState = PipelineState.SPEAKING,
 ) -> StreamingPipeline:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = _turn_policy(enforce=enforce)
     pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
-    pipeline._state = PipelineState.SPEAKING
+    pipeline._state = pipeline_state
     pipeline._duck_mixer = None
     pipeline._timeline = TurnTimeline("turn-1")
     pipeline._client_audio_states = (
         {state.participant_identity: state} if state is not None else {}
     )
     pipeline._duck_and_arm_timeout = MagicMock()
+    pipeline._callbacks = MagicMock()
     return pipeline
 
 
@@ -175,6 +178,48 @@ def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
     assert allowed is True
     pipeline._duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+
+
+def test_pipeline_attention_uses_client_playback_when_internal_state_idle() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(),
+        pipeline_state=PipelineState.IDLE,
+    )
+
+    allowed = _allows_eot(pipeline, "停一下")
+
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+
+
+def test_user_transcript_runs_semantic_when_client_playback_active_but_state_idle() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(participant_identity="manson"),
+        pipeline_state=PipelineState.IDLE,
+    )
+    eot = MagicMock()
+    eot.update_asr = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+    pipeline._semantic_interrupts = SimpleNamespace(
+        run=MagicMock(),
+        _turn_runtime=pipeline._turn_runtime,
+    )
+    pipeline._allow_interruptions = True
+    pipeline._mark_activity = MagicMock()
+
+    pipeline._on_user_transcribed(
+        SimpleNamespace(
+            transcript="停一下",
+            is_final=False,
+            speaker_id="manson",
+        )
+    )
+
+    pipeline._semantic_interrupts.run.assert_called_once_with(
+        "停一下",
+        is_final=False,
+    )
 
 
 def test_pipeline_attention_ducks_for_semantic_prefix_during_playback() -> None:

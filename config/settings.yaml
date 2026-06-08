@@ -1,0 +1,173 @@
+# Channel structured settings — secret placeholders = env var names (see settings.example.yaml)
+
+core:
+  livekit_url: ws://127.0.0.1:7880
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+  host: 0.0.0.0
+  port: 8766
+
+behavior:
+  agent_mode: streaming
+  instructions: You are a helpful, friendly voice assistant. Keep responses concise.
+  welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
+  audio_sample_rate: 16000
+
+llm:
+  base_url: http://mopai.geni.dyxnet.com.cn/v1
+  model: deepseek-v4-flash
+  api_key: OPENAI_LLM_API_KEY
+  temperature: 0.7
+  timeout: 120
+
+providers:
+  stt_provider: bailian
+  tts_provider: bailian
+  vad_provider: firered_pvad
+  brain_provider: eidolon_agent
+
+remote_agent_rpc:
+  target: 127.0.0.1:45051
+  locale: zh
+  # Phase 32.D 删了 device_token 字段。Token 现在由 runtime_admin 块
+  # 描述的 per-session 流程签发。如果你 fork 了 .yaml 还带这一行,
+  # loader 会静默忽略它(不是错误,只是死字段)。
+  conversation_id_prefix: livekit
+
+# Phase 32.B: per-session runtime token signing. participant 进 LiveKit
+# 后,channel 查 admin /api/resolve/{kind}/{identity} 拿 (tenant, user,
+# template),用 jwt_secret 现签 device JWT 接 agent gRPC。secret 跟
+# eidolon-agent 共享 — placeholder PAIRING_JWT_SECRET 是 env 名;空时
+# 会 fallback 到 ~/eidolon/run/jwt-secret 文件 (agent auto-persist)。
+runtime_admin:
+  enabled: true
+  admin_api_url: http://127.0.0.1:9000
+  jwt_secret: PAIRING_JWT_SECRET
+  jwt_algorithm: HS256
+  device_token_ttl_seconds: 86400
+
+turn_policy:
+  profile: balanced_semantic
+  vad:
+    activation_threshold: 0.50
+    prefix_padding_ms: 300
+    min_speech_duration_ms: 100
+    min_silence_duration_ms: 500
+  eot:
+    eot_unlikely_threshold: 0.50
+    tail_hang_silence_ms: 2000
+  interrupt:
+    decision_timeout_ms: 500
+    min_interim_chars: 2
+    early_cancel_score_threshold: 0.70
+    early_resume_score_threshold: 0.20
+    correction_topic_stability_window_ms: 120
+    normal_interrupt_stability_window_ms: 350
+  ducking:
+    enabled: true
+    fade_out_ms: 30
+    fade_in_ms: 30
+    suspend_volume: 0.0
+    buffer_max_ms: 2000
+    cooldown_ms: 800
+  idle:
+    followup_timeout_ms: 15000
+    # Disconnect a session idle (no recognized speech / no agent activity)
+    # for this long, so a forgotten-open client stops streaming STT. 0 disables.
+    disconnect_after_idle_ms: 60000
+  preemptive:
+    # Default off — A/B showed no first-audio gain with eos=400 (see docs).
+    enabled: false
+    preemptive_tts: false
+  attention:
+    # Dev dogfood: enforce admission before duck/interrupt when fresh
+    # client.audio_state says the agent is currently speaking.
+    enabled: true
+    enforce: true
+    client_state_max_age_ms: 2000
+    require_direct_signal_during_playback: true
+    ignore_when_mic_muted: true
+
+observability:
+  structured_logs: true
+  metrics_enabled: true
+  timeline_debug_path: "benchmarks/runs/channel-worker-turn-timeline.jsonl"
+
+# Bailian STT/TTS provider config (non-secret). API keys stay in .env
+# (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).
+bailian_stt:
+  api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
+  model: fun-asr-realtime-2026-02-28
+  sample_rate: 16000
+  language: zh
+  itn: true
+  # Endpointing: silence (ms) before FINAL. 400 (vs provider default 800) cuts
+  # first-audio latency; validated not to worsen mid-utterance splits. 500-600 = safer.
+  max_sentence_silence_ms: 400
+  gate_enabled: false
+  gate_preroll_ms: 500
+  gate_tail_window_ms: 1500
+  gate_keepalive_interval_sec: 1.0
+  gate_keepalive_frame_ms: 100
+  gate_vad_high_threshold: 0.6
+  gate_vad_low_threshold: 0.3
+  gate_rms_threshold: 500.0
+
+bailian_tts:
+  api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference
+  model: cosyvoice-v3-flash
+  voice: longanyang
+  audio_format: pcm
+  sample_rate: 16000
+  speech_rate: 1.0
+  volume: 50
+  pitch: 1.0
+  pool_size: 4
+  pool_size_bootstrap: 3
+  pool_refill_backoff: 1.5
+  pool_acquire_timeout: 12.0
+  pool_max_idle_sec: 15.0
+  ws_heartbeat_sec: 15.0
+  task_started_timeout: 15.0
+  task_finished_timeout: 20.0
+  first_token_timeout: 15.0
+  inter_token_timeout: 10.0
+  no_first_audio_timeout: 5.0
+  aggregator_soft_min_chars: 12
+  aggregator_hard_max_chars: 80
+  aggregator_idle_ms: 300
+  # first-audio TTFB tuning: flush first segment on early prefix+punctuation
+  aggregator_first_sentence_soft_min_chars: 4
+  aggregator_first_sentence_flush_any_punct: true
+  log_audio_diag: true
+
+# SenseTime STT/TTS provider config (non-secret). API keys stay in .env
+# (SENSETIME_STT_API_KEY / SENSETIME_TTS_API_KEY).
+sensetime_stt:
+  api_url: wss://api.senseaudio.cn/ws/v1/audio/transcriptions
+  model: senseaudio-asr-deepthink-1.5-260319
+  sample_rate: 16000
+  language: zh
+  max_stream_retries: 3
+  min_speech_duration_ms: 300
+  silence_duration_ms: 800
+  log_audio_diag: true
+
+sensetime_tts:
+  api_url: wss://api.senseaudio.cn/ws/v1/t2a_v2
+  model: senseaudio-tts-1.5-260319
+  voice: female_0033_a
+  audio_format: pcm
+  sample_rate: 32000
+  bitrate: 128000
+  channel: 1
+  speed: 1.0
+  vol: 1.0
+  pitch: 0
+  pool_size: 4
+  first_token_timeout: 15.0
+  no_first_audio_timeout: 5.0
+  aggregator_soft_min_chars: 12
+  aggregator_hard_max_chars: 60
+  aggregator_idle_ms: 300
+  log_audio_diag: true

@@ -48,6 +48,11 @@ class LiveKitRoomOptions:
 
 
 _AGENT_MISSING_ERROR = "timed out waiting for agent participant before user audio"
+_ROOM_CONNECT_TRANSIENT_ERRORS = (
+    "could not find any available nodes",
+    "no permissions to access the room",
+    "signal failure",
+)
 
 
 def _git_sha() -> str:
@@ -121,12 +126,13 @@ async def _run_room_case_with_retries(
         api_secret=api_secret,
     )
     for attempt in range(max(0, options.agent_missing_retry_count)):
-        if not _should_retry_room_case(result):
+        retry_reason = _retry_reason(result)
+        if retry_reason is None:
             return result
         retry_event = {
             "type": "case_retry",
             "attempt": attempt + 1,
-            "reason": "agent_missing",
+            "reason": retry_reason,
             "previous_room_name": result.metrics.get("room_name"),
             "previous_errors": list(result.errors),
         }
@@ -144,7 +150,24 @@ async def _run_room_case_with_retries(
 
 
 def _should_retry_room_case(result: CaseResult) -> bool:
-    return _AGENT_MISSING_ERROR in result.errors
+    return _retry_reason(result) is not None
+
+
+def _retry_reason(result: CaseResult) -> str | None:
+    if _AGENT_MISSING_ERROR in result.errors:
+        return "agent_missing"
+    if _is_room_connect_transient_failure(result):
+        return "room_connect_transient"
+    return None
+
+
+def _is_room_connect_transient_failure(result: CaseResult) -> bool:
+    if result.metrics.get("room_connected_ms") is not None:
+        return False
+    if result.metrics.get("user_audio_done_ms") is not None:
+        return False
+    error_text = "\n".join(str(error).lower() for error in result.errors)
+    return any(marker in error_text for marker in _ROOM_CONNECT_TRANSIENT_ERRORS)
 
 
 async def _run_room_case(

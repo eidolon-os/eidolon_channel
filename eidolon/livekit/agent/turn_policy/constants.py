@@ -13,6 +13,10 @@ ASR_EXACT_CANONICALIZATIONS: dict[str, str] = {
     # decider holds for a follow-up interim instead of treating them as normal
     # speech.
     "是我": "我刚",
+    # Bailian/FunASR can briefly emit the homophone "亭" before resolving the
+    # hard-stop phrase "停一下". Exact-only keeps ordinary words like "亭子"
+    # out of the fast cancel path.
+    "亭": "停",
 }
 
 ASR_PREFIX_CANONICALIZATIONS: tuple[tuple[str, str], ...] = (

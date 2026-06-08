@@ -560,7 +560,7 @@ def test_livekit_room_state_marks_agent_connected() -> None:
     assert state.agent_connected.is_set()
 
 
-def test_livekit_room_retries_only_agent_missing_infrastructure_failure() -> None:
+def test_livekit_room_retries_only_pre_audio_infrastructure_failures() -> None:
     from eidolon.livekit.benchmarks.livekit_room_runner import _should_retry_room_case
 
     missing_agent = CaseResult(
@@ -577,8 +577,32 @@ def test_livekit_room_retries_only_agent_missing_infrastructure_failure() -> Non
         passed=False,
         errors=["timeline expected intent=topic_switch, got ['<none>']"],
     )
+    connect_transient = CaseResult(
+        case_id="topic_switch_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        metrics={"room_connected_ms": None, "user_audio_done_ms": None},
+        errors=[
+            "ConnectError: engine: signal failure: client error: "
+            "401 Unauthorized - no permissions to access the room"
+        ],
+    )
+    after_audio_failure = CaseResult(
+        case_id="topic_switch_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        metrics={"room_connected_ms": 100, "user_audio_done_ms": 900},
+        errors=[
+            "ConnectError: engine: signal failure: client error: "
+            "401 Unauthorized - no permissions to access the room"
+        ],
+    )
 
     assert _should_retry_room_case(missing_agent) is True
+    assert _should_retry_room_case(connect_transient) is True
+    assert _should_retry_room_case(after_audio_failure) is False
     assert _should_retry_room_case(semantic_failure) is False
 
 
@@ -630,6 +654,61 @@ async def test_livekit_room_case_retry_records_previous_attempt(monkeypatch) -> 
     assert result.metrics["retry_attempts"] == 1
     assert result.events[0]["type"] == "case_retry"
     assert result.events[0]["previous_room_name"] == "room-failed"
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_case_retry_records_room_connect_transient(
+    monkeypatch,
+) -> None:
+    from eidolon.livekit.benchmarks import livekit_room_runner
+    from eidolon.livekit.benchmarks.livekit_room_runner import (
+        LiveKitRoomOptions,
+        _run_room_case_with_retries,
+    )
+
+    calls = 0
+
+    async def fake_run_room_case(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=False,
+                metrics={"room_name": "room-connect-failed"},
+                errors=[
+                    "ConnectError: engine: signal failure: client error: "
+                    "401 Unauthorized - no permissions to access the room"
+                ],
+            )
+        return CaseResult(
+            case_id="topic_switch_001",
+            suite="semantic_control",
+            runner="livekit_room",
+            passed=True,
+            metrics={"room_name": "room-retry"},
+        )
+
+    monkeypatch.setattr(livekit_room_runner, "_run_room_case", fake_run_room_case)
+    suite = load_suite("benchmarks/cases/core.yaml")
+    case = next(case for case in suite.cases if case.case_id == "topic_switch_001")
+
+    result = await _run_room_case_with_retries(
+        case,
+        root=Path("."),
+        options=LiveKitRoomOptions(agent_missing_retry_count=1),
+        livekit_url="ws://127.0.0.1:7880",
+        api_key="devkey",
+        api_secret="devkey_secret",
+    )
+
+    assert calls == 2
+    assert result.passed is True
+    assert result.metrics["retry_attempts"] == 1
+    assert result.events[0]["reason"] == "room_connect_transient"
+    assert result.events[0]["previous_room_name"] == "room-connect-failed"
 
 
 @pytest.mark.asyncio
@@ -1159,6 +1238,56 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_livekit_room_timeline_expectations_ignore_stale_retry_room(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="hard_interrupt_001",
+                suite="interrupt",
+                runner="livekit_room",
+                passed=True,
+                metrics={"room_name": "voice-bench-hard_interrupt_001-retry123"},
+                events=[
+                    {
+                        "type": "case_retry",
+                        "previous_room_name": (
+                            "voice-bench-hard_interrupt_001-stale123"
+                        ),
+                    }
+                ],
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"stale","attrs":{"room_name":'
+            '"voice-bench-hard_interrupt_001-stale123",'
+            '"timeline_flush_reason":"session_closed"}}\n'
+            '{"turn_id":"retry","attrs":{"room_name":'
+            '"voice-bench-hard_interrupt_001-retry123",'
+            '"interrupt_action":"cancel","decision":{"intent":"hard_stop"}},'
+            '"durations_ms":{"vad_start_to_interrupt_resolved":320}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert run.cases[0].metrics["timeline_record_count"] == 1
+    assert run.cases[0].metrics["timeline_actions"] == "cancel"
+    assert run.cases[0].metrics["timeline_intents"] == "hard_stop"
     assert not run.cases[0].errors
 
 

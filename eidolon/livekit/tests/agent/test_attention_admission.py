@@ -72,6 +72,21 @@ def test_attention_hard_stop_upgrades_during_playback() -> None:
     assert decision.reason == "transcript_hard_stop"
 
 
+def test_attention_hard_stop_homophone_upgrades_during_playback() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="亭",
+        )
+    )
+
+    assert decision.action is AdmissionAction.HARD_INTERRUPT
+    assert decision.reason == "transcript_hard_stop"
+
+
 def test_attention_allows_semantic_prefix_during_playback() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 

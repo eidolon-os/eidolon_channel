@@ -26,7 +26,11 @@ def apply_timeline_expectations(
     }
 
     for result in run.cases:
-        case_records = by_case.get(result.case_id, [])
+        case_records = _records_for_result(
+            result_case_id=result.case_id,
+            result_room_name=result.metrics.get("room_name"),
+            by_case=by_case,
+        )
         result.metrics["timeline_record_count"] = len(case_records)
         result.metrics["timeline_actions"] = ",".join(_actions(case_records))
         result.metrics["timeline_intents"] = ",".join(_intents(case_records))
@@ -116,6 +120,23 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
     return errors
 
 
+def _records_for_result(
+    *,
+    result_case_id: str,
+    result_room_name: Any,
+    by_case: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    records = by_case.get(result_case_id, [])
+    if not isinstance(result_room_name, str) or not result_room_name:
+        return records
+    exact = [
+        record
+        for record in records
+        if _room_name(record) == result_room_name
+    ]
+    return exact if exact else records
+
+
 def _allowed_attention_actions(
     expected: Any,
     records: list[dict[str, Any]],
@@ -140,9 +161,8 @@ def _records_by_case(records: list[dict[str, Any]]) -> dict[str, list[dict[str, 
 
 
 def _case_id(record: dict[str, Any]) -> str:
-    attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
-    room_name = attrs.get("room_name")
-    if not isinstance(room_name, str):
+    room_name = _room_name(record)
+    if not room_name:
         return ""
     prefix = "voice-bench-"
     if not room_name.startswith(prefix):
@@ -150,6 +170,14 @@ def _case_id(record: dict[str, Any]) -> str:
     rest = room_name[len(prefix) :]
     case_id, _, suffix = rest.rpartition("-")
     return case_id if case_id and len(suffix) == 8 else ""
+
+
+def _room_name(record: dict[str, Any]) -> str:
+    attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+    room_name = attrs.get("room_name")
+    if not isinstance(room_name, str):
+        return ""
+    return room_name
 
 
 def _actions(records: list[dict[str, Any]]) -> list[str]:

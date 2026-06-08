@@ -28,6 +28,7 @@ def classifier() -> LexiconInterruptClassifier:
     "text,intent",
     [
         ("停一下", InterruptIntent.HARD_STOP),
+        ("亭", InterruptIntent.HARD_STOP),
         ("你先停一下", InterruptIntent.HARD_STOP),
         ("暂停一下", InterruptIntent.HARD_STOP),
         ("可以了先到这里", InterruptIntent.HARD_STOP),
@@ -58,6 +59,7 @@ def classifier() -> LexiconInterruptClassifier:
         ("嗯", InterruptIntent.BACKCHANNEL),
         ("咳咳", InterruptIntent.NOISE),
         ("帮我查一下天气", InterruptIntent.UNCERTAIN),
+        ("亭子旁边有什么", InterruptIntent.UNCERTAIN),
     ],
 )
 def test_lexicon_classifier_intents(

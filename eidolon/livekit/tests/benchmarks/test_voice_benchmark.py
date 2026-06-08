@@ -264,6 +264,65 @@ def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
     assert muted.decisions[-1]["attention_admission"]["action"] == "ignore"
 
 
+def test_load_v1_realistic_extended_suite() -> None:
+    suite = load_suite("benchmarks/cases/v1_realistic_extended.yaml")
+
+    assert suite.suite_id == "v1_realistic_extended"
+    assert {case.case_id for case in suite.cases} == {
+        "extended_normal_question_brain_proof_001",
+        "extended_hard_stop_latin_artifact_then_correct_001",
+        "extended_hard_stop_homophone_then_correct_001",
+        "extended_topic_switch_prefix_confusion_001",
+        "extended_backchannel_en_during_agent_reply_001",
+        "extended_late_ambient_followup_observed_001",
+    }
+    homophone = next(
+        case
+        for case in suite.cases
+        if case.case_id == "extended_hard_stop_homophone_then_correct_001"
+    )
+    assert homophone.user_steps[1].interims[0] == "亭"
+    assert homophone.expectations.intent == "hard_stop"
+    ambient = next(
+        case
+        for case in suite.cases
+        if case.case_id == "extended_late_ambient_followup_observed_001"
+    )
+    assert ambient.user_steps[1].client_playback_state == "agent_speaking"
+    assert "cancel" in ambient.expectations.forbid_actions
+
+
+def test_policy_runner_v1_realistic_extended_suite() -> None:
+    suite = load_suite("benchmarks/cases/v1_realistic_extended.yaml")
+    policy = TurnPolicyConfig(
+        attention=replace(AttentionPolicyConfig(), enforce=True),
+    )
+
+    run = run_policy_suite([suite], turn_policy=policy, run_id="test")
+
+    assert {case.case_id: case.passed for case in run.cases} == {
+        "extended_normal_question_brain_proof_001": True,
+        "extended_hard_stop_latin_artifact_then_correct_001": True,
+        "extended_hard_stop_homophone_then_correct_001": True,
+        "extended_topic_switch_prefix_confusion_001": True,
+        "extended_backchannel_en_during_agent_reply_001": True,
+        "extended_late_ambient_followup_observed_001": True,
+    }
+    topic = next(
+        case
+        for case in run.cases
+        if case.case_id == "extended_topic_switch_prefix_confusion_001"
+    )
+    assert topic.metrics["actual_action"] == "cancel"
+    assert topic.metrics["topic_switch_hint"] is True
+    backchannel = next(
+        case
+        for case in run.cases
+        if case.case_id == "extended_backchannel_en_during_agent_reply_001"
+    )
+    assert backchannel.metrics["actual_action"] in {"hold", "rollback", "none"}
+
+
 def test_aggregate_case_metrics() -> None:
     summary = aggregate(
         [
@@ -416,6 +475,25 @@ def test_verify_real_call_room_per_case_checks_stt_and_audio() -> None:
     # wrong/absent STT stream fails per-case
     no_stt = {"attrs": {"room_name": "voice-bench-x-12345678"}, "timestamps": {}}
     assert verify_real_call(ok, runner="livekit_room", provider_config=cfg, case_records=[no_stt])
+    # Immediate control turns may flush before stt_stream provider attrs are
+    # copied; transcript timeline + decision transcript is still real room STT
+    # evidence.
+    transcript_mark = {
+        "attrs": {
+            "room_name": "voice-bench-x-12345678",
+            "decision": {"transcript_preview": "停一下"},
+        },
+        "timestamps": {"transcript_interim_first_at": 1.0},
+    }
+    assert (
+        verify_real_call(
+            ok,
+            runner="livekit_room",
+            provider_config=cfg,
+            case_records=[transcript_mark],
+        )
+        == []
+    )
 
 
 def test_apply_real_call_verification_run_level_brain(tmp_path) -> None:

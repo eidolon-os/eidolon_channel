@@ -1,0 +1,233 @@
+suite_id: v1_realistic_extended
+cases:
+  - case_id: extended_normal_question_brain_proof_001
+    suite: v1_realistic_extended
+    description: 正常问答基线：为 extended suite 提供完整 brain/STT/TTS 实调用证明。
+    timeout_sec: 60
+    tags: ["v1_realistic_extended", "normal_turn", "brain_proof"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会先概括方案，再说明打断、状态同步和测试边界。
+    expect:
+      action: none
+      intent: uncertain
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: extended_hard_stop_latin_artifact_then_correct_001
+    suite: v1_realistic_extended
+    description: 硬停前先出现短 latin-only interim，应该先 observe/hold，等“别说了”出现后 Tier0 取消。
+    timeout_sec: 60
+    tags: ["v1_realistic_extended", "tier0", "hard_stop", "asr_artifact", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: hard_stop_dont
+        text: 别说了。
+        path: benchmarks/audio/generated/hard_stop_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 别说了
+        audio: hard_stop_dont
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["If", "别说了"]
+        final_delay_ms: 120
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会持续说明架构、延迟、状态同步和风险控制，这段回答用于制造稳定的可打断窗口。
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 800
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: extended_hard_stop_homophone_then_correct_001
+    suite: v1_realistic_extended
+    description: 硬停“停一下”首个 interim 可能被识别成“亭”，应通过 exact canonicalization 直接进入 Tier0。
+    timeout_sec: 60
+    tags: ["v1_realistic_extended", "tier0", "hard_stop", "asr_homophone", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmarks/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["亭", "停一下"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会继续展开方案细节，用足够长的回答来验证同音误识别不会拖慢硬停。
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 550
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: extended_topic_switch_prefix_confusion_001
+    suite: v1_realistic_extended
+    description: 换话题前缀可能被短暂识别成“半个”，应按现有 prefix canonicalization 稳定进入 Tier1。
+    timeout_sec: 60
+    tags: ["v1_realistic_extended", "tier1", "topic_switch", "asr_prefix", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: topic_switch
+        text: 换个话题，我们聊点别的。
+        path: benchmarks/audio/generated/topic_switch.wav
+        intent: topic_switch
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 换个话题
+        audio: topic_switch
+        start_ms: 1700
+        duration_ms: 900
+        interims: ["半个", "半个话题", "换个话题", "换个话题"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会从多个角度解释当前主题，这段回答用于验证换话题前缀误识别时仍能快速取消。
+    expect:
+      action: cancel
+      intent: topic_switch
+      topic_switch_hint: true
+      max_interrupt_decision_ms: 1500
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: extended_backchannel_en_during_agent_reply_001
+    suite: v1_realistic_extended
+    description: 用户在 agent 回答中短促说“嗯”，可 hold/rollback/observe，但不应取消或触发新 brain。
+    timeout_sec: 60
+    tags: ["v1_realistic_extended", "tier3", "backchannel", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: backchannel_en
+        text: 嗯。
+        path: benchmarks/audio/generated/backchannel_en.wav
+        intent: backchannel
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 嗯
+        audio: backchannel_en
+        start_ms: 1600
+        duration_ms: 420
+        interims: ["嗯"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: none
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会保持一段较长的回答，用来确认短促附和不会把当前回答取消掉。
+    expect:
+      action: any
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: extended_late_ambient_followup_observed_001
+    suite: v1_realistic_extended
+    description: agent 已经说了一会儿后出现普通环境人声；client 仍声明播放态，应 observe 而不是打断。
+    timeout_sec: 70
+    tags: ["v1_realistic_extended", "tier4", "ambient_speech", "late_interjection", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: normal_followup
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那它的主要风险是什么
+        audio: normal_followup
+        start_ms: 3600
+        duration_ms: 1050
+        interims:
+          - 那它
+          - 那它的主要
+          - 那它的主要风险
+          - 那它的主要风险是什么
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会先讲系统结构，然后讲多端协同、音频打断、状态同步、测试方法和后续优化，这段回答会持续更久一些。
+    expect:
+      action: none
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      min_user_finals: 2
+      min_agent_messages: 1

@@ -132,9 +132,31 @@ def _verify_room_timeline(
             for r in case_records
         )
         if not stt_ok:
+            stt_ok = any(_has_transcript_timeline_evidence(r) for r in case_records)
+        if not stt_ok:
             failures.append(f"no STT stream evidence for provider {stt_provider!r}")
 
     return failures
+
+
+def _has_transcript_timeline_evidence(record: dict[str, Any]) -> bool:
+    """Fallback STT proof for immediate control turns.
+
+    Very fast cancel/rollback turns may flush before the provider observer has
+    copied ``stt_stream.provider`` into the timeline. A transcript mark plus a
+    recorded decision transcript still proves the worker processed real room
+    STT events for this turn.
+    """
+
+    timestamps = _mapping(record.get("timestamps"))
+    if not (
+        "transcript_interim_first_at" in timestamps
+        or "transcript_final_at" in timestamps
+    ):
+        return False
+    attrs = _mapping(record.get("attrs"))
+    decision = _mapping(attrs.get("decision"))
+    return bool(decision.get("transcript_preview") or attrs.get("attention_admission"))
 
 
 def verify_real_call(

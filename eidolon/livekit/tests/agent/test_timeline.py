@@ -81,6 +81,27 @@ def test_timeline_provider_latency_snapshot() -> None:
     assert all("stage" in segment for segment in provider_segments)
 
 
+def test_timeline_interrupt_latency_breakdown() -> None:
+    timeline = TurnTimeline("turn-interrupt")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("interrupt_started_at", 10.02)
+    timeline.mark_at("transcript_interim_first_at", 10.34)
+    timeline.mark_at("interrupt_intent_admitted_at", 10.39)
+    timeline.mark_at("interrupt_resolved_at", 10.45)
+
+    snap = timeline.snapshot()
+    provider_latency = snap["attrs"]["provider_latency_ms"]
+    durations = snap["durations_ms"]
+
+    assert round(provider_latency["interrupt_speech_to_started_ms"]) == 20
+    assert round(provider_latency["interrupt_speech_to_first_transcript_ms"]) == 340
+    assert round(provider_latency["interrupt_started_to_first_transcript_ms"]) == 320
+    assert round(provider_latency["interrupt_first_transcript_to_intent_admitted_ms"]) == 50
+    assert round(provider_latency["interrupt_intent_admitted_to_resolved_ms"]) == 60
+    assert round(provider_latency["interrupt_speech_to_resolved_ms"]) == 450
+    assert round(durations["interrupt_first_transcript_to_resolved"]) == 110
+
+
 def test_timeline_mark_after_sets_synthetic_llm_first_delta() -> None:
     timeline = TurnTimeline("turn-4")
     timeline.mark("turn_committed_at")

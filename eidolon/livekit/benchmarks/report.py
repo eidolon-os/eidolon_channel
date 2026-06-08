@@ -12,6 +12,38 @@ from typing import Any
 from .schema import CaseResult, RunResult
 
 
+INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
+    (
+        "timeline_interrupt_speech_to_started_ms",
+        "VAD start -> duck/manual interrupt starts",
+    ),
+    (
+        "timeline_interrupt_speech_to_first_transcript_ms",
+        "VAD start -> first transcript",
+    ),
+    (
+        "timeline_interrupt_first_transcript_to_intent_admitted_ms",
+        "first transcript -> direct intent admitted",
+    ),
+    (
+        "timeline_interrupt_first_transcript_to_resolved_ms",
+        "first transcript -> cancel/rollback resolved",
+    ),
+    (
+        "timeline_interrupt_intent_admitted_to_resolved_ms",
+        "direct intent admitted -> cancel resolved",
+    ),
+    (
+        "timeline_interrupt_started_to_resolved_ms",
+        "duck/manual interrupt starts -> resolved",
+    ),
+    (
+        "timeline_interrupt_speech_to_resolved_ms",
+        "VAD start -> resolved",
+    ),
+)
+
+
 def _percentile(values: list[float], p: float) -> float | None:
     if not values:
         return None
@@ -180,6 +212,18 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 count=values["count"],
             )
         )
+    interrupt_lines = _interrupt_focus_lines(summary["metrics"])
+    if interrupt_lines:
+        lines.extend(
+            [
+                "",
+                "## Interrupt Latency Breakdown",
+                "",
+                "| segment | metric | p50 | p95 | max | count |",
+                "| --- | --- | ---: | ---: | ---: | ---: |",
+                *interrupt_lines,
+            ]
+        )
     per_case = summary.get("per_case")
     if per_case:
         lines.extend(
@@ -280,3 +324,22 @@ def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.1f}"
     return str(value)
+
+
+def _interrupt_focus_lines(metrics: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for key, label in INTERRUPT_FOCUS_METRICS:
+        values = metrics.get(key)
+        if not isinstance(values, dict) or not values.get("count"):
+            continue
+        lines.append(
+            "| {label} | `{key}` | {p50} | {p95} | {maxv} | {count} |".format(
+                label=label,
+                key=key,
+                p50=_fmt(values.get("p50")),
+                p95=_fmt(values.get("p95")),
+                maxv=_fmt(values.get("max")),
+                count=values.get("count"),
+            )
+        )
+    return lines

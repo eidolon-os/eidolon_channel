@@ -34,6 +34,7 @@ def apply_timeline_expectations(
         result.metrics["timeline_record_count"] = len(case_records)
         result.metrics["timeline_actions"] = ",".join(_actions(case_records))
         result.metrics["timeline_intents"] = ",".join(_intents(case_records))
+        result.metrics.update(_latency_metrics(case_records))
 
         expected = expectations.get(result.case_id)
         if expected is None:
@@ -272,6 +273,40 @@ def _interrupt_resolution_after_started_ms(records: list[dict[str, Any]]) -> lis
         if start is not None and end is not None:
             durations.append(max(0.0, (end - start) * 1000.0))
     return durations
+
+
+def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
+    """Expose timeline latency segments as per-case benchmark metrics.
+
+    A case should usually have one timeline record. When retries or residual
+    speech produce more, keep the maximum sample for each segment so the report
+    surfaces the slowest user-visible path instead of averaging it away.
+    """
+
+    samples: dict[str, list[float]] = {}
+    for record in records:
+        durations = _mapping(record.get("durations_ms"))
+        attrs = _mapping(record.get("attrs"))
+        provider_latency = _mapping(attrs.get("provider_latency_ms"))
+        for key, value in provider_latency.items():
+            number = _number(value)
+            if number is not None:
+                samples.setdefault(f"timeline_{key}", []).append(number)
+        total_interrupt = _number(durations.get("vad_start_to_interrupt_resolved"))
+        if total_interrupt is not None:
+            samples.setdefault(
+                "timeline_vad_start_to_interrupt_resolved",
+                [],
+            ).append(total_interrupt)
+    return {
+        key: max(values)
+        for key, values in sorted(samples.items())
+        if values
+    }
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _number(value: Any) -> float | None:

@@ -276,7 +276,38 @@ class TurnTimeline:
     def duration_ms(self, start: str, end: str) -> float | None:
         if start not in self.timestamps or end not in self.timestamps:
             return None
-        return (self.timestamps[end] - self.timestamps[start]) * 1000
+        return _duration_ms(self.timestamps[start], self.timestamps[end])
+
+    def duration_from_first_ms(self, starts: tuple[str, ...], end: str) -> float | None:
+        start = self._first_timestamp(starts)
+        if start is None or end not in self.timestamps:
+            return None
+        return _duration_ms(start, self.timestamps[end])
+
+    def duration_to_first_ms(self, start: str, ends: tuple[str, ...]) -> float | None:
+        end = self._first_timestamp(ends)
+        if start not in self.timestamps or end is None:
+            return None
+        return _duration_ms(self.timestamps[start], end)
+
+    def duration_between_first_ms(
+        self,
+        starts: tuple[str, ...],
+        ends: tuple[str, ...],
+    ) -> float | None:
+        start = self._first_timestamp(starts)
+        end = self._first_timestamp(ends)
+        if start is None or end is None:
+            return None
+        return _duration_ms(start, end)
+
+    def _first_timestamp(self, names: tuple[str, ...]) -> float | None:
+        values = [
+            self.timestamps[name]
+            for name in names
+            if isinstance(self.timestamps.get(name), (int, float))
+        ]
+        return min(values) if values else None
 
     def provider_latency_ms(self) -> dict[str, float | None]:
         """Return provider/experience latencies derivable from known marks."""
@@ -363,6 +394,36 @@ class TurnTimeline:
             "tts_playback_duration_ms": self.duration_ms(
                 "tts_first_audio_at", "agent_audio_playback_done_at"
             ),
+            "interrupt_speech_to_started_ms": self.duration_ms(
+                "speech_started_at", "interrupt_started_at"
+            ),
+            "interrupt_speech_to_first_transcript_ms": self.duration_to_first_ms(
+                "speech_started_at",
+                ("transcript_interim_first_at", "transcript_final_at"),
+            ),
+            "interrupt_started_to_first_transcript_ms": self.duration_to_first_ms(
+                "interrupt_started_at",
+                ("transcript_interim_first_at", "transcript_final_at"),
+            ),
+            "interrupt_first_transcript_to_intent_admitted_ms": (
+                self.duration_from_first_ms(
+                    ("transcript_interim_first_at", "transcript_final_at"),
+                    "interrupt_intent_admitted_at",
+                )
+            ),
+            "interrupt_first_transcript_to_resolved_ms": self.duration_from_first_ms(
+                ("transcript_interim_first_at", "transcript_final_at"),
+                "interrupt_resolved_at",
+            ),
+            "interrupt_intent_admitted_to_resolved_ms": self.duration_ms(
+                "interrupt_intent_admitted_at", "interrupt_resolved_at"
+            ),
+            "interrupt_started_to_resolved_ms": self.duration_ms(
+                "interrupt_started_at", "interrupt_resolved_at"
+            ),
+            "interrupt_speech_to_resolved_ms": self.duration_ms(
+                "speech_started_at", "interrupt_resolved_at"
+            ),
         }
 
     def provider_segments(self) -> list[dict[str, Any]]:
@@ -422,6 +483,20 @@ class TurnTimeline:
                 "brain_first_delta_to_tts_first_audio": self.duration_ms(
                     "brain_first_delta_at", "tts_first_audio_at"
                 ),
+                "interrupt_speech_to_started": self.duration_ms(
+                    "speech_started_at", "interrupt_started_at"
+                ),
+                "interrupt_speech_to_first_transcript": self.duration_to_first_ms(
+                    "speech_started_at",
+                    ("transcript_interim_first_at", "transcript_final_at"),
+                ),
+                "interrupt_first_transcript_to_resolved": self.duration_from_first_ms(
+                    ("transcript_interim_first_at", "transcript_final_at"),
+                    "interrupt_resolved_at",
+                ),
+                "interrupt_intent_admitted_to_resolved": self.duration_ms(
+                    "interrupt_intent_admitted_at", "interrupt_resolved_at"
+                ),
             },
         }
 
@@ -432,3 +507,9 @@ class TurnTimeline:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(json.dumps(self.snapshot(), ensure_ascii=False) + "\n")
+
+
+def _duration_ms(start: float, end: float) -> float | None:
+    if end < start:
+        return None
+    return (end - start) * 1000

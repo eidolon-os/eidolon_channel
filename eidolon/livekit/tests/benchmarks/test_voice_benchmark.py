@@ -406,6 +406,36 @@ def test_write_repeated_reports_emits_stability_view(tmp_path) -> None:
     assert "Per-Case Stability" in markdown
 
 
+def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> None:
+    out = tmp_path / "livekit_room"
+    run = RunResult(
+        run_id="interrupt-report",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                "hard_interrupt_001",
+                "interrupt",
+                "livekit_room",
+                True,
+                metrics={
+                    "timeline_interrupt_speech_to_first_transcript_ms": 240.0,
+                    "timeline_interrupt_first_transcript_to_resolved_ms": 20.0,
+                    "timeline_interrupt_speech_to_resolved_ms": 260.0,
+                },
+            )
+        ],
+    )
+
+    write_repeated_reports([run], out)
+
+    markdown = (out / "report.md").read_text(encoding="utf-8")
+    assert "Interrupt Latency Breakdown" in markdown
+    assert "`timeline_interrupt_speech_to_first_transcript_ms`" in markdown
+    assert "VAD start -> first transcript" in markdown
+
+
 def test_dashboard_flags_flaky_case_from_repeats(tmp_path) -> None:
     run_dir = tmp_path / "policy"
     write_repeated_reports(_repeat_runs(), run_dir)
@@ -1317,6 +1347,51 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
 
     assert run.cases[0].passed is True
     assert not run.cases[0].errors
+
+
+def test_livekit_room_timeline_expectations_export_latency_metrics(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="hard_interrupt_001",
+                suite="interrupt",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-hard_interrupt_001-1234abcd",'
+            '"interrupt_action":"cancel","decision":{"intent":"hard_stop"},'
+            '"provider_latency_ms":{'
+            '"interrupt_speech_to_first_transcript_ms":310,'
+            '"interrupt_first_transcript_to_resolved_ms":70,'
+            '"interrupt_intent_admitted_to_resolved_ms":35,'
+            '"stt_provider_partial_to_livekit_interim_ms":22}},'
+            '"durations_ms":{"vad_start_to_interrupt_resolved":380,'
+            '"interrupt_intent_admitted_to_resolved":35}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    metrics = run.cases[0].metrics
+    assert metrics["timeline_interrupt_speech_to_first_transcript_ms"] == 310
+    assert metrics["timeline_interrupt_first_transcript_to_resolved_ms"] == 70
+    assert metrics["timeline_interrupt_intent_admitted_to_resolved_ms"] == 35
+    assert metrics["timeline_stt_provider_partial_to_livekit_interim_ms"] == 22
+    assert metrics["timeline_vad_start_to_interrupt_resolved"] == 380
 
 
 def test_livekit_room_timeline_expectations_ignore_stale_retry_room(

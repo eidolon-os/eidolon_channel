@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from eidolon.livekit.common.config import TurnPolicyConfig
 
@@ -257,7 +257,7 @@ class _StableSignalStabilizer:
                 age_ms=age_ms,
                 window_ms=window_ms,
             )
-        return decision
+        return replace(decision, hold_recheck_ms=max(0.0, window_ms - age_ms))
 
     @staticmethod
     def _normal_cancel(

@@ -128,6 +128,11 @@ class DuckSuspendTimeoutHandler:
             return self._turn_runtime.tiers.annotate_decision(rollback)
 
         next_timeout = max(0.0, max_suspend_sec - suspend_sec)
+        if decision.hold_recheck_ms is not None:
+            next_timeout = min(
+                next_timeout,
+                max(0.0, decision.hold_recheck_ms / 1000.0),
+            )
         self._set_timeout_task(
             self._create_task(self.run(min(timeout_sec, next_timeout)))
         )

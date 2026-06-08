@@ -273,7 +273,9 @@ def test_runtime_normal_interrupt_requires_stable_substantive_text() -> None:
     )
 
     assert first.action is Action.HOLD
+    assert first.hold_recheck_ms == 350
     assert too_soon.action is Action.HOLD
+    assert too_soon.hold_recheck_ms == 190
     assert stable.action is Action.CANCEL
     assert stable.reason.startswith("stable_normal_interrupt")
 

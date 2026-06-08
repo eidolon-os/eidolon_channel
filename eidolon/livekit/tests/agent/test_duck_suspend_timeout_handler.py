@@ -96,6 +96,38 @@ async def test_hold_rearms_before_max_suspend_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hold_rearms_with_policy_recheck_budget() -> None:
+    runtime = MagicMock()
+    decision = Decision(
+        action=Action.HOLD,
+        reason="semantic_score_wait score=0.00 evidence=interim_substantive",
+        intent=InterruptIntent.UNCERTAIN,
+        hold_recheck_ms=120,
+    )
+    runtime.deadline_decision.return_value = decision
+    handler, calls = _handler(
+        runtime=runtime,
+        suspend_start=time.monotonic(),
+        eot_model=_eot_model(max_suspend_sec=2.0),
+    )
+
+    await handler.run(0.5)
+
+    calls.create_task.assert_called_once()
+    rearmed_coro = calls.create_task.call_args.args[0]
+    calls.set_timeout_task.assert_called_once_with(calls.create_task.return_value)
+    calls.apply_decision.assert_called_once_with(
+        decision,
+        resolved_reason="timeout",
+        transcript="",
+        vad_active=True,
+    )
+    assert rearmed_coro.cr_frame is not None
+    assert rearmed_coro.cr_frame.f_locals["timeout_sec"] == pytest.approx(0.12)
+    rearmed_coro.close()
+
+
+@pytest.mark.asyncio
 async def test_hold_rolls_back_after_max_suspend_budget() -> None:
     runtime = MagicMock()
     runtime.deadline_decision.return_value = Decision(

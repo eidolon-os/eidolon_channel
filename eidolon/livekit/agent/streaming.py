@@ -1246,7 +1246,10 @@ class StreamingPipeline(BasePipeline):
         eot_score: float | None,
         vad_active: bool | None,
     ) -> None:
-        if not decision.reason.startswith(STABLE_SIGNAL_WAIT_REASON_PREFIX):
+        if (
+            decision.hold_recheck_ms is None
+            and not decision.reason.startswith(STABLE_SIGNAL_WAIT_REASON_PREFIX)
+        ):
             return
         if not self._ducking.is_suspended:
             return

@@ -1447,7 +1447,10 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"interrupt_action":"cancel","decision":{"intent":"hard_stop"},'
             '"provider_latency_ms":{'
             '"interrupt_speech_to_first_transcript_ms":310,'
+            '"stt_speech_to_actionable_transcript_ms":360,'
+            '"stt_first_transcript_to_actionable_transcript_ms":50,'
             '"interrupt_first_transcript_to_resolved_ms":70,'
+            '"interrupt_actionable_transcript_to_resolved_ms":20,'
             '"interrupt_intent_admitted_to_resolved_ms":35,'
             '"stt_provider_partial_to_livekit_interim_ms":22}},'
             '"durations_ms":{"vad_start_to_interrupt_resolved":380,'
@@ -1460,7 +1463,12 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
 
     metrics = run.cases[0].metrics
     assert metrics["timeline_interrupt_speech_to_first_transcript_ms"] == 310
+    assert metrics["timeline_stt_speech_to_actionable_transcript_ms"] == 360
+    assert (
+        metrics["timeline_stt_first_transcript_to_actionable_transcript_ms"] == 50
+    )
     assert metrics["timeline_interrupt_first_transcript_to_resolved_ms"] == 70
+    assert metrics["timeline_interrupt_actionable_transcript_to_resolved_ms"] == 20
     assert metrics["timeline_interrupt_intent_admitted_to_resolved_ms"] == 35
     assert metrics["timeline_stt_provider_partial_to_livekit_interim_ms"] == 22
     assert metrics["timeline_vad_start_to_interrupt_resolved"] == 380

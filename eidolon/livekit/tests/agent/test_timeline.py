@@ -86,6 +86,13 @@ def test_timeline_interrupt_latency_breakdown() -> None:
     timeline.mark_at("speech_started_at", 10.0)
     timeline.mark_at("interrupt_started_at", 10.02)
     timeline.mark_at("transcript_interim_first_at", 10.34)
+    timeline.mark_at("transcript_actionable_first_at", 10.37)
+    timeline.record_decision(
+        action="cancel",
+        reason="intent:hard_stop",
+        rollback_drop_buffered=False,
+        intent="hard_stop",
+    )
     timeline.mark_at("interrupt_intent_admitted_at", 10.39)
     timeline.mark_at("interrupt_resolved_at", 10.45)
 
@@ -96,10 +103,39 @@ def test_timeline_interrupt_latency_breakdown() -> None:
     assert round(provider_latency["interrupt_speech_to_started_ms"]) == 20
     assert round(provider_latency["interrupt_speech_to_first_transcript_ms"]) == 340
     assert round(provider_latency["interrupt_started_to_first_transcript_ms"]) == 320
+    assert round(provider_latency["stt_speech_to_actionable_transcript_ms"]) == 370
+    assert round(
+        provider_latency["stt_first_transcript_to_actionable_transcript_ms"]
+    ) == 30
     assert round(provider_latency["interrupt_first_transcript_to_intent_admitted_ms"]) == 50
+    assert round(provider_latency["interrupt_actionable_transcript_to_resolved_ms"]) == 80
     assert round(provider_latency["interrupt_intent_admitted_to_resolved_ms"]) == 60
     assert round(provider_latency["interrupt_speech_to_resolved_ms"]) == 450
+    assert round(durations["stt_speech_to_actionable_transcript"]) == 370
+    assert round(durations["interrupt_actionable_transcript_to_resolved"]) == 80
     assert round(durations["interrupt_first_transcript_to_resolved"]) == 110
+
+
+def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
+    timeline = TurnTimeline("turn-noise")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("transcript_interim_first_at", 10.2)
+
+    timeline.record_decision(
+        action="rollback",
+        reason="intent:backchannel",
+        rollback_drop_buffered=False,
+        intent="backchannel",
+    )
+
+    snap = timeline.snapshot()
+    assert "transcript_actionable_first_at" not in snap["timestamps"]
+    assert (
+        snap["attrs"]["provider_latency_ms"][
+            "stt_speech_to_actionable_transcript_ms"
+        ]
+        is None
+    )
 
 
 def test_timeline_mark_after_sets_synthetic_llm_first_delta() -> None:

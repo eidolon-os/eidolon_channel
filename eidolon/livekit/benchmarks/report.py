@@ -22,6 +22,14 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "VAD 起声 -> 首次转写",
     ),
     (
+        "timeline_stt_speech_to_actionable_transcript_ms",
+        "VAD 起声 -> 首个可行动转写",
+    ),
+    (
+        "timeline_stt_first_transcript_to_actionable_transcript_ms",
+        "首次转写 -> 首个可行动转写",
+    ),
+    (
         "timeline_interrupt_first_transcript_to_intent_admitted_ms",
         "首次转写 -> 直接意图通过",
     ),
@@ -49,6 +57,11 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ("timeline_vad_start_to_interrupt_resolved", "VAD 起声 -> 打断完成"),
     ("timeline_interrupt_speech_to_started_ms", "VAD 起声 -> duck/手动打断开始"),
     ("timeline_interrupt_speech_to_first_transcript_ms", "VAD 起声 -> 首次转写"),
+    ("timeline_stt_speech_to_actionable_transcript_ms", "VAD 起声 -> 首个可行动转写"),
+    (
+        "timeline_stt_first_transcript_to_actionable_transcript_ms",
+        "首次转写 -> 首个可行动转写",
+    ),
     (
         "timeline_interrupt_first_transcript_to_intent_admitted_ms",
         "首次转写 -> 直接意图通过",
@@ -474,9 +487,32 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
             or metrics.get("interrupt_decision_ms")
         )
         first_transcript = metrics.get("timeline_interrupt_speech_to_first_transcript_ms")
+        actionable_transcript = metrics.get(
+            "timeline_stt_speech_to_actionable_transcript_ms"
+        )
+        first_to_actionable = metrics.get(
+            "timeline_stt_first_transcript_to_actionable_transcript_ms"
+        )
         after_transcript = metrics.get(
             "timeline_interrupt_first_transcript_to_resolved_ms"
         )
+        if (
+            first_transcript is not None
+            and actionable_transcript is not None
+            and after_transcript is not None
+        ):
+            extra = ""
+            if first_to_actionable is not None:
+                extra = (
+                    "，首次转写到可行动转写约 "
+                    f"{_fmt_metric_value(first_to_actionable)}"
+                )
+            return (
+                f"该用例完成 `{intent or 'unknown'}` 打断，总耗时约 {total}；"
+                f"其中首次转写约 {_fmt_metric_value(first_transcript)}，"
+                f"首个可行动转写约 {_fmt_metric_value(actionable_transcript)}"
+                f"{extra}，转写后到完成约 {_fmt_metric_value(after_transcript)}。"
+            )
         if first_transcript is not None and after_transcript is not None:
             return (
                 f"该用例完成 `{intent or 'unknown'}` 打断，总耗时约 {total}；"

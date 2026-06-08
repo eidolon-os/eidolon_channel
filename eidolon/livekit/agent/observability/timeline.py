@@ -20,6 +20,7 @@ TIMELINE_FIELDS = (
     "stt_provider_first_partial_at",
     "stt_provider_final_at",
     "transcript_interim_first_at",
+    "transcript_actionable_first_at",
     "transcript_final_at",
     "turn_committed_at",
     "llm_started_at",
@@ -75,6 +76,13 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         stage="stt",
         start="stt_provider_first_partial_at",
         end="transcript_interim_first_at",
+    ),
+    ProviderLatencySegment(
+        name="stt_actionable_transcript",
+        label="STT: speech start -> first actionable transcript",
+        stage="stt",
+        start="speech_started_at",
+        end="transcript_actionable_first_at",
     ),
     ProviderLatencySegment(
         name="stt_final",
@@ -272,6 +280,13 @@ class TurnTimeline:
         self.attrs["decision_reason"] = reason
         self.attrs["interrupt_action"] = action
         self.attrs["rollback_drop_buffered"] = rollback_drop_buffered
+        if _is_actionable_transcript_decision(
+            action=action,
+            intent=intent,
+            topic_switch_hint=topic_switch_hint,
+            correction_hint=correction_hint,
+        ):
+            self.mark("transcript_actionable_first_at")
 
     def duration_ms(self, start: str, end: str) -> float | None:
         if start not in self.timestamps or end not in self.timestamps:
@@ -333,6 +348,15 @@ class TurnTimeline:
             ),
             "stt_provider_final_to_livekit_final_ms": self.duration_ms(
                 "stt_provider_final_at", "transcript_final_at"
+            ),
+            "stt_speech_to_actionable_transcript_ms": self.duration_ms(
+                "speech_started_at", "transcript_actionable_first_at"
+            ),
+            "stt_first_transcript_to_actionable_transcript_ms": (
+                self.duration_from_first_ms(
+                    ("transcript_interim_first_at", "transcript_final_at"),
+                    "transcript_actionable_first_at",
+                )
             ),
             "speech_stop_to_commit_ms": self.duration_ms(
                 "speech_stopped_at", "turn_committed_at"
@@ -415,6 +439,9 @@ class TurnTimeline:
                 ("transcript_interim_first_at", "transcript_final_at"),
                 "interrupt_resolved_at",
             ),
+            "interrupt_actionable_transcript_to_resolved_ms": self.duration_ms(
+                "transcript_actionable_first_at", "interrupt_resolved_at"
+            ),
             "interrupt_intent_admitted_to_resolved_ms": self.duration_ms(
                 "interrupt_intent_admitted_at", "interrupt_resolved_at"
             ),
@@ -490,9 +517,15 @@ class TurnTimeline:
                     "speech_started_at",
                     ("transcript_interim_first_at", "transcript_final_at"),
                 ),
+                "stt_speech_to_actionable_transcript": self.duration_ms(
+                    "speech_started_at", "transcript_actionable_first_at"
+                ),
                 "interrupt_first_transcript_to_resolved": self.duration_from_first_ms(
                     ("transcript_interim_first_at", "transcript_final_at"),
                     "interrupt_resolved_at",
+                ),
+                "interrupt_actionable_transcript_to_resolved": self.duration_ms(
+                    "transcript_actionable_first_at", "interrupt_resolved_at"
                 ),
                 "interrupt_intent_admitted_to_resolved": self.duration_ms(
                     "interrupt_intent_admitted_at", "interrupt_resolved_at"
@@ -513,3 +546,22 @@ def _duration_ms(start: float, end: float) -> float | None:
     if end < start:
         return None
     return (end - start) * 1000
+
+
+def _is_actionable_transcript_decision(
+    *,
+    action: str,
+    intent: str | None,
+    topic_switch_hint: bool,
+    correction_hint: bool,
+) -> bool:
+    if action not in {"cancel", "hold"}:
+        return False
+    if intent in {
+        "hard_stop",
+        "topic_switch",
+        "correction",
+        "normal_interrupt",
+    }:
+        return True
+    return topic_switch_hint or correction_hint

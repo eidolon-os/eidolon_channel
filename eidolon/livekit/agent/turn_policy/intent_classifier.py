@@ -95,6 +95,30 @@ def is_semantic_interrupt_prefix(
     )
 
 
+def semantic_interrupt_prefix_intent(
+    text: str,
+    *,
+    min_chars: int = 2,
+    min_cjk_chars: int = 3,
+) -> InterruptIntent | None:
+    """Classify high-precision redirect/correction prefixes.
+
+    Short prefixes such as ``换`` or ``换个`` are useful for ducking but too
+    ambiguous to cancel. Longer prefixes such as ``换个话`` are strong enough
+    to enter the Tier1 stability window, where the runtime still requires a
+    short repeat/recheck before allowing cancellation.
+    """
+
+    stripped = canonicalize_interrupt_text(text)
+    if len(stripped) < min_chars or _count_cjk(stripped) < min_cjk_chars:
+        return None
+    if _is_prefix_of(stripped, DEFAULT_TOPIC_SWITCH_LEXICON):
+        return InterruptIntent.TOPIC_SWITCH
+    if _is_prefix_of(stripped, DEFAULT_CORRECTION_LEXICON):
+        return InterruptIntent.CORRECTION
+    return None
+
+
 def _semantic_prefix_candidates() -> tuple[str, ...]:
     return tuple(
         normalize_interrupt_text(item)
@@ -107,6 +131,17 @@ def _attention_early_duck_prefixes() -> tuple[str, ...]:
         normalize_interrupt_text(item)
         for item in DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON
     )
+
+
+def _is_prefix_of(text: str, candidates: tuple[str, ...]) -> bool:
+    return any(
+        candidate.startswith(text) and candidate != text
+        for candidate in (normalize_interrupt_text(item) for item in candidates)
+    )
+
+
+def _count_cjk(text: str) -> int:
+    return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
 
 
 class LexiconInterruptClassifier(InterruptIntentClassifier):

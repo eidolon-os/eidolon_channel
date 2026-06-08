@@ -420,10 +420,28 @@ def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> N
                 "livekit_room",
                 True,
                 metrics={
+                    "expected_action": "cancel",
+                    "actual_action": "cancel",
+                    "expected_intent": "hard_stop",
+                    "actual_intent": "hard_stop",
                     "timeline_interrupt_speech_to_first_transcript_ms": 240.0,
                     "timeline_interrupt_first_transcript_to_resolved_ms": 20.0,
                     "timeline_interrupt_speech_to_resolved_ms": 260.0,
                 },
+                decisions=[
+                    {
+                        "interim_text": "停一下",
+                        "attention_admission": {
+                            "action": "hard_interrupt",
+                            "reason": "transcript_hard_stop",
+                        },
+                        "decision": {
+                            "action": "cancel",
+                            "intent": "hard_stop",
+                            "reason": "intent:hard_stop",
+                        },
+                    }
+                ],
             )
         ],
     )
@@ -434,6 +452,10 @@ def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> N
     assert "打断延迟拆解" in markdown
     assert "`timeline_interrupt_speech_to_first_transcript_ms`" in markdown
     assert "VAD 起声 -> 首次转写" in markdown
+    assert "判定摘要" in markdown
+    assert "关键指标" in markdown
+    assert "决策路径" in markdown
+    assert "该用例完成 `hard_stop` 打断" in markdown
 
 
 def test_dashboard_flags_flaky_case_from_repeats(tmp_path) -> None:

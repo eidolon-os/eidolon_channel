@@ -43,6 +43,32 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ),
 )
 
+CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
+    ("elapsed_ms", "用例总耗时"),
+    ("interrupt_decision_ms", "策略决策耗时"),
+    ("timeline_vad_start_to_interrupt_resolved", "VAD 起声 -> 打断完成"),
+    ("timeline_interrupt_speech_to_started_ms", "VAD 起声 -> duck/手动打断开始"),
+    ("timeline_interrupt_speech_to_first_transcript_ms", "VAD 起声 -> 首次转写"),
+    (
+        "timeline_interrupt_first_transcript_to_intent_admitted_ms",
+        "首次转写 -> 直接意图通过",
+    ),
+    (
+        "timeline_interrupt_first_transcript_to_resolved_ms",
+        "首次转写 -> cancel/rollback 完成",
+    ),
+    (
+        "timeline_interrupt_intent_admitted_to_resolved_ms",
+        "直接意图通过 -> cancel 完成",
+    ),
+    ("timeline_interrupt_speech_to_resolved_ms", "VAD 起声 -> 完成"),
+    ("timeline_record_count", "timeline 记录数"),
+    ("real_call_verified", "真实调用校验"),
+    ("user_done_to_agent_audio_after_user_done_ms", "用户音频结束 -> 下一段 agent 音频"),
+    ("publish_to_agent_audio_first_ms", "发布音频 -> 首段 agent 音频"),
+    ("timeline_commit_to_tts_first_audio_ms", "commit -> TTS 首音频"),
+)
+
 
 def _percentile(values: list[float], p: float) -> float | None:
     if not values:
@@ -251,6 +277,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         if case["errors"]:
             lines.append("")
             lines.extend(f"- 错误：{err}" for err in case["errors"])
+        lines.extend(_case_detail_lines(case))
         lines.append("")
         lines.append("```json")
         lines.append(json.dumps(case["metrics"], ensure_ascii=False, indent=2))
@@ -343,3 +370,146 @@ def _interrupt_focus_lines(metrics: dict[str, Any]) -> list[str]:
             )
         )
     return lines
+
+
+def _case_detail_lines(case: dict[str, Any]) -> list[str]:
+    metrics = _mapping(case.get("metrics"))
+    lines: list[str] = []
+    overview = _case_overview_rows(case, metrics)
+    if overview:
+        lines.extend(["", "#### 判定摘要", "", "| 项目 | 值 |", "| --- | --- |"])
+        lines.extend(f"| {key} | {value} |" for key, value in overview)
+    focus = _case_focus_metric_rows(metrics)
+    if focus:
+        lines.extend(["", "#### 关键指标", "", "| 指标 | 值 |", "| --- | ---: |"])
+        lines.extend(f"| {label} | {value} |" for label, value in focus)
+    decision_lines = _case_decision_lines(case)
+    if decision_lines:
+        lines.extend(
+            [
+                "",
+                "#### 决策路径",
+                "",
+                "| interim | attention | decision | intent | reason |",
+                "| --- | --- | --- | --- | --- |",
+                *decision_lines,
+            ]
+        )
+    diagnosis = _case_diagnosis(case, metrics)
+    if diagnosis:
+        lines.extend(["", "#### 诊断", "", diagnosis])
+    return lines
+
+
+def _case_overview_rows(
+    case: dict[str, Any],
+    metrics: dict[str, Any],
+) -> list[tuple[str, str]]:
+    rows = [("结果", "通过" if case.get("passed") else "失败")]
+    for key, label in (
+        ("expected_action", "期望动作"),
+        ("actual_action", "实际动作"),
+        ("timeline_actions", "timeline 动作"),
+        ("expected_intent", "期望意图"),
+        ("actual_intent", "实际意图"),
+        ("timeline_intents", "timeline 意图"),
+        ("forbid_actions", "禁止动作"),
+    ):
+        value = metrics.get(key)
+        if value not in (None, ""):
+            rows.append((label, _fmt_metric_value(value)))
+    return rows
+
+
+def _case_focus_metric_rows(metrics: dict[str, Any]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for key, label in CASE_FOCUS_METRICS:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        rows.append((f"{label} (`{key}`)", _fmt_metric_value(value)))
+    return rows
+
+
+def _case_decision_lines(case: dict[str, Any]) -> list[str]:
+    rows: list[str] = []
+    decisions = case.get("decisions")
+    if not isinstance(decisions, list):
+        return rows
+    for item in decisions[:8]:
+        if not isinstance(item, dict):
+            continue
+        interim = _escape_cell(str(item.get("interim_text") or ""))
+        attention = _mapping(item.get("attention_admission"))
+        attention_text = _escape_cell(
+            _compact_parts(
+                attention.get("action"),
+                attention.get("reason"),
+            )
+        )
+        decision = _mapping(item.get("decision"))
+        decision_text = _escape_cell(str(decision.get("action") or "-"))
+        intent = _escape_cell(str(decision.get("intent") or "-"))
+        reason = _escape_cell(str(decision.get("reason") or "-"))
+        rows.append(
+            f"| {interim or '-'} | {attention_text or '-'} | "
+            f"{decision_text} | {intent} | {reason} |"
+        )
+    if len(decisions) > 8:
+        rows.append(f"| ... | ... | ... | ... | 还有 {len(decisions) - 8} 条 |")
+    return rows
+
+
+def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
+    if case.get("errors"):
+        return "该用例失败，优先查看上方错误和原始 metrics。"
+    action = str(metrics.get("timeline_actions") or metrics.get("actual_action") or "")
+    intent = str(metrics.get("timeline_intents") or metrics.get("actual_intent") or "")
+    if "cancel" in action:
+        total = _fmt_metric_value(
+            metrics.get("timeline_vad_start_to_interrupt_resolved")
+            or metrics.get("timeline_interrupt_speech_to_resolved_ms")
+            or metrics.get("interrupt_decision_ms")
+        )
+        first_transcript = metrics.get("timeline_interrupt_speech_to_first_transcript_ms")
+        after_transcript = metrics.get(
+            "timeline_interrupt_first_transcript_to_resolved_ms"
+        )
+        if first_transcript is not None and after_transcript is not None:
+            return (
+                f"该用例完成 `{intent or 'unknown'}` 打断，总耗时约 {total}；"
+                f"其中首次转写约 {_fmt_metric_value(first_transcript)}，"
+                f"转写后到完成约 {_fmt_metric_value(after_transcript)}。"
+            )
+        return f"该用例完成 `{intent or 'unknown'}` 打断，总耗时约 {total}。"
+    if "rollback" in action:
+        total = _fmt_metric_value(
+            metrics.get("timeline_vad_start_to_interrupt_resolved")
+            or metrics.get("timeline_interrupt_speech_to_resolved_ms")
+        )
+        return f"该用例被识别为短反馈/噪声路径，执行 rollback，完成耗时约 {total}。"
+    if metrics.get("real_call_verified") is True:
+        return "该用例通过真实调用校验，且未触发取消路径。"
+    return ""
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _compact_parts(*parts: Any) -> str:
+    return " / ".join(str(part) for part in parts if part not in (None, ""))
+
+
+def _escape_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
+def _fmt_metric_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, float):
+        return f"{value:.1f}"
+    return str(value)

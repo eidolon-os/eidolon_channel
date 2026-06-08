@@ -168,6 +168,15 @@ def test_topic_switch_confused_prefix_holds_for_more_interim() -> None:
     assert "semantic_prefix" in decision.reason
 
 
+def test_long_topic_switch_prefix_becomes_stable_tier1_candidate() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+    decision = d.on_stt_interim("换个话", score=0.0)
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "topic_switch"
+    assert decision.intent_source == "lexicon_prefix"
+    assert decision.topic_switch_hint is True
+
+
 def test_correction_confused_prefix_holds_for_more_interim() -> None:
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("是我", score=0.0)

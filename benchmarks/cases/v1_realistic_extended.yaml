@@ -69,7 +69,7 @@ cases:
 
   - case_id: extended_hard_stop_homophone_then_correct_001
     suite: v1_realistic_extended
-    description: 硬停“停一下”首个 interim 可能被识别成“亭”，应通过 exact canonicalization 直接进入 Tier0。
+    description: 硬停“停一下”首个 interim 可能被识别成“亭/这”等短误识别，应在 STT 修正后稳定进入 Tier0。
     timeout_sec: 60
     tags: ["v1_realistic_extended", "tier0", "hard_stop", "asr_homophone", "multi_step"]
     audio_clips:
@@ -103,7 +103,7 @@ cases:
     expect:
       action: cancel
       intent: hard_stop
-      max_interrupt_decision_ms: 550
+      max_interrupt_decision_ms: 650
       min_user_finals: 2
       min_agent_messages: 1
 

@@ -13,6 +13,7 @@ from .intent_classifier import (
     LexiconInterruptClassifier,
     canonicalize_interrupt_text,
     is_semantic_interrupt_prefix,
+    semantic_interrupt_prefix_intent,
 )
 from .constants import (
     DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
@@ -117,6 +118,22 @@ class InterruptDecider:
         )
         if forced is not None:
             return forced
+
+        prefix_intent = semantic_interrupt_prefix_intent(
+            stripped,
+            min_chars=self._config.min_interim_chars,
+            min_cjk_chars=self._config.min_normal_interim_cjk_chars,
+        )
+        if prefix_intent in (InterruptIntent.TOPIC_SWITCH, InterruptIntent.CORRECTION):
+            return Decision(
+                action=Action.CANCEL,
+                reason=f"prefix_intent:{prefix_intent.value} text={stripped}",
+                intent=prefix_intent,
+                intent_source="lexicon_prefix",
+                intent_confidence=0.65,
+                topic_switch_hint=prefix_intent is InterruptIntent.TOPIC_SWITCH,
+                correction_hint=prefix_intent is InterruptIntent.CORRECTION,
+            )
 
         if is_semantic_interrupt_prefix(
             stripped,

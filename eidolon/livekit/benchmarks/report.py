@@ -15,31 +15,31 @@ from .schema import CaseResult, RunResult
 INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_interrupt_speech_to_started_ms",
-        "VAD start -> duck/manual interrupt starts",
+        "VAD 起声 -> duck/手动打断开始",
     ),
     (
         "timeline_interrupt_speech_to_first_transcript_ms",
-        "VAD start -> first transcript",
+        "VAD 起声 -> 首次转写",
     ),
     (
         "timeline_interrupt_first_transcript_to_intent_admitted_ms",
-        "first transcript -> direct intent admitted",
+        "首次转写 -> 直接意图通过",
     ),
     (
         "timeline_interrupt_first_transcript_to_resolved_ms",
-        "first transcript -> cancel/rollback resolved",
+        "首次转写 -> cancel/rollback 完成",
     ),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
-        "direct intent admitted -> cancel resolved",
+        "直接意图通过 -> cancel 完成",
     ),
     (
         "timeline_interrupt_started_to_resolved_ms",
-        "duck/manual interrupt starts -> resolved",
+        "duck/手动打断开始 -> 完成",
     ),
     (
         "timeline_interrupt_speech_to_resolved_ms",
-        "VAD start -> resolved",
+        "VAD 起声 -> 完成",
     ),
 )
 
@@ -181,23 +181,23 @@ def render_markdown(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
     repeats = summary.get("repeats")
     lines = [
-        f"# Voice Benchmark Report: {run['run_id']}",
+        f"# 语音基准测试报告：{run['run_id']}",
         "",
-        f"- runner: `{run['runner']}`",
-        f"- profile: `{run['profile']}`",
-        f"- git_sha: `{run['git_sha']}`",
-        f"- pass_rate: `{summary['passed']}/{summary['total']}`",
+        f"- 运行器：`{run['runner']}`",
+        f"- 配置画像：`{run['profile']}`",
+        f"- Git 提交：`{run['git_sha']}`",
+        f"- 通过率：`{summary['passed']}/{summary['total']}`",
     ]
     if repeats:
-        lines.append(f"- repeats: `{repeats}`")
+        lines.append(f"- 重复次数：`{repeats}`")
         if summary.get("flaky"):
-            lines.append(f"- flaky cases: `{summary['flaky']}`")
+            lines.append(f"- 不稳定用例数：`{summary['flaky']}`")
     lines.extend(
         [
             "",
-            "## Metric Summary",
+            "## 指标汇总",
             "",
-            "| metric | p50 | p95 | max | stdev | count |",
+            "| 指标 | p50 | p95 | 最大值 | 标准差 | 样本数 |",
             "| --- | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -217,9 +217,9 @@ def render_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Interrupt Latency Breakdown",
+                "## 打断延迟拆解",
                 "",
-                "| segment | metric | p50 | p95 | max | count |",
+                "| 分段 | 指标 | p50 | p95 | 最大值 | 样本数 |",
                 "| --- | --- | ---: | ---: | ---: | ---: |",
                 *interrupt_lines,
             ]
@@ -229,9 +229,9 @@ def render_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Per-Case Stability",
+                "## 用例稳定性",
                 "",
-                "| case | pass | runs | pass_rate |",
+                "| 用例 | 通过次数 | 运行次数 | 通过率 |",
                 "| --- | ---: | ---: | ---: |",
             ]
         )
@@ -244,13 +244,13 @@ def render_markdown(payload: dict[str, Any]) -> str:
                     rate=info["pass_rate"],
                 )
             )
-    lines.extend(["", "## Cases", ""])
+    lines.extend(["", "## 用例详情", ""])
     for case in payload["cases"]:
-        status = "PASS" if case["passed"] else "FAIL"
+        status = "通过" if case["passed"] else "失败"
         lines.append(f"### {case['case_id']} - {status}")
         if case["errors"]:
             lines.append("")
-            lines.extend(f"- {err}" for err in case["errors"])
+            lines.extend(f"- 错误：{err}" for err in case["errors"])
         lines.append("")
         lines.append("```json")
         lines.append(json.dumps(case["metrics"], ensure_ascii=False, indent=2))
@@ -266,7 +266,7 @@ def render_html(payload: dict[str, Any]) -> str:
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Voice Benchmark {html.escape(payload['run']['run_id'])}</title>
+  <title>语音基准测试 {html.escape(payload['run']['run_id'])}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 32px; }}
     pre {{ white-space: pre-wrap; background: #f7f7f8; padding: 16px; border-radius: 8px; }}

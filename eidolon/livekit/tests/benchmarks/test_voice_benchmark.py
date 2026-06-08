@@ -402,8 +402,8 @@ def test_write_repeated_reports_emits_stability_view(tmp_path) -> None:
     assert len(payload["cases"]) == 4
     assert (out / "metrics.json").exists()
     markdown = (out / "report.md").read_text(encoding="utf-8")
-    assert "repeats: `2`" in markdown
-    assert "Per-Case Stability" in markdown
+    assert "重复次数：`2`" in markdown
+    assert "用例稳定性" in markdown
 
 
 def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> None:
@@ -431,9 +431,9 @@ def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> N
     write_repeated_reports([run], out)
 
     markdown = (out / "report.md").read_text(encoding="utf-8")
-    assert "Interrupt Latency Breakdown" in markdown
+    assert "打断延迟拆解" in markdown
     assert "`timeline_interrupt_speech_to_first_transcript_ms`" in markdown
-    assert "VAD start -> first transcript" in markdown
+    assert "VAD 起声 -> 首次转写" in markdown
 
 
 def test_dashboard_flags_flaky_case_from_repeats(tmp_path) -> None:

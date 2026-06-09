@@ -47,7 +47,9 @@ runtime_admin:
   device_token_ttl_seconds: 86400
 
 turn_policy:
+  # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.
   profile: balanced_semantic
+  # Options: balanced, responsive.
   interrupt_mode: balanced
   vad:
     activation_threshold: 0.50

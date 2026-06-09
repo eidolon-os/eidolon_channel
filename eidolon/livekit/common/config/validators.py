@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .schema import EffectiveAgentConfig
+from .schema import EffectiveAgentConfig, SUPPORTED_INTERRUPT_MODES
 
 
 def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
@@ -53,6 +53,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.vad.min_silence_duration_ms must be in [100, 5000]")
 
     intr = cfg.turn_policy.interrupt
+    if cfg.turn_policy.interrupt_mode not in SUPPORTED_INTERRUPT_MODES:
+        supported = ", ".join(SUPPORTED_INTERRUPT_MODES)
+        errors.append(
+            f"turn_policy.interrupt_mode must be one of: {supported}"
+        )
     if not 200 <= intr.decision_timeout_ms <= 1_000:
         errors.append("turn_policy.interrupt.decision_timeout_ms must be in [200, 1000]")
     if not 1 <= intr.min_interim_chars <= 12:

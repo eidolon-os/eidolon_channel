@@ -18,6 +18,8 @@ TurnPolicyProfile = Literal[
     "patient_companion",
     "custom",
 ]
+InterruptMode = Literal["balanced", "responsive"]
+SUPPORTED_INTERRUPT_MODES: tuple[str, ...] = ("balanced", "responsive")
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,7 @@ class AttentionPolicyConfig:
 @dataclass(frozen=True)
 class TurnPolicyConfig:
     profile: TurnPolicyProfile = "balanced_semantic"
+    interrupt_mode: InterruptMode = "balanced"
     vad: VadPolicyConfig = field(default_factory=VadPolicyConfig)
     eot: EotPolicyConfig = field(default_factory=EotPolicyConfig)
     interrupt: InterruptPolicyConfig = field(default_factory=InterruptPolicyConfig)

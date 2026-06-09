@@ -21,6 +21,7 @@ from .constants import (
     WEAK_SIGNAL_SHORT_TRANSCRIPT_REASON_PREFIX,
 )
 from .evidence import TranscriptEvidenceGate
+from .modes import InterruptModeSpec, interrupt_mode_spec
 
 
 class Action(Enum):
@@ -56,8 +57,10 @@ class InterruptDecider:
         min_interim_chars: int | None = None,
         early_cancel_score_threshold: float | None = None,
         early_resume_score_threshold: float | None = None,
+        mode: str | InterruptModeSpec | None = None,
     ) -> None:
         base = config or InterruptPolicyConfig()
+        self._mode = interrupt_mode_spec(mode)
         if (
             min_interim_chars is not None
             or early_cancel_score_threshold is not None
@@ -84,7 +87,9 @@ class InterruptDecider:
                 ),
         )
         self._config = base
-        self._classifier = classifier or LexiconInterruptClassifier()
+        self._classifier = classifier or LexiconInterruptClassifier(
+            fast_intents=self._mode.fast_lexical_intents
+        )
         self._evidence_gate = TranscriptEvidenceGate(base)
 
     def on_strong_intent(self) -> Decision:
@@ -134,6 +139,14 @@ class InterruptDecider:
             )
 
         if len(stripped) >= self._config.min_interim_chars:
+            if self._mode.first_signal_cancel:
+                return Decision(
+                    action=Action.CANCEL,
+                    reason=f"first_signal_interim len={len(stripped)}",
+                    intent=InterruptIntent.NORMAL_INTERRUPT,
+                    intent_source=intent.source,
+                    intent_confidence=0.75,
+                )
             evidence = self._evidence_gate.evaluate(
                 stripped,
                 is_final=is_final,
@@ -271,6 +284,14 @@ class InterruptDecider:
             )
             if forced is not None:
                 return forced
+            if self._mode.first_signal_cancel:
+                return Decision(
+                    action=Action.CANCEL,
+                    reason="deadline_trust_vad_with_transcript",
+                    intent=InterruptIntent.NORMAL_INTERRUPT,
+                    intent_source="timeout",
+                    intent_confidence=0.70,
+                )
             evidence = self._evidence_gate.evaluate(
                 text,
                 is_final=False,

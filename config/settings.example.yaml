@@ -47,6 +47,8 @@ runtime_admin:
 
 turn_policy:
   profile: balanced_semantic
+  # balanced: current robust semantic gate; responsive: high-sensitivity barge-in.
+  interrupt_mode: balanced
   vad:
     activation_threshold: 0.50
     prefix_padding_ms: 300

@@ -90,6 +90,39 @@ def test_substantive_interim_holds_until_semantic_score() -> None:
     assert "semantic_score_wait" in decision.reason
 
 
+def test_responsive_mode_cancels_on_first_substantive_interim() -> None:
+    """Responsive mode restores eager barge-in after the first useful STT text."""
+    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+
+    decision = d.on_stt_interim("我不相信", score=0.0)
+
+    assert decision.action is Action.CANCEL
+    assert decision.reason.startswith("first_signal_interim")
+    assert decision.intent is not None
+    assert decision.intent.value == "normal_interrupt"
+
+
+def test_responsive_mode_keeps_hard_stop_priority() -> None:
+    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+
+    decision = d.on_stt_interim("别说", score=0.0)
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent is not None
+    assert decision.intent.value == "hard_stop"
+    assert decision.intent_source == "lexicon_prefix"
+
+
+def test_responsive_mode_rolls_back_backchannel_before_first_signal_cancel() -> None:
+    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+
+    decision = d.on_stt_interim("好的", score=0.0)
+
+    assert decision.action is Action.ROLLBACK
+    assert decision.intent is not None
+    assert decision.intent.value == "backchannel"
+
+
 def test_substantive_interim_cancels_with_high_semantic_score() -> None:
     """Once EOT semantic confidence is high, the same interim can cancel."""
     d = InterruptDecider(min_interim_chars=2, early_cancel_score_threshold=0.7)
@@ -322,6 +355,20 @@ def test_deadline_vad_active_waits_for_semantic_score() -> None:
     )
     assert decision.action is Action.HOLD
     assert "wait_for_semantic_score" in decision.reason
+
+
+def test_responsive_deadline_vad_active_with_transcript_cancels_without_score() -> None:
+    d = InterruptDecider(mode="responsive")
+
+    decision = d.on_decision_deadline(
+        vad_still_active=True,
+        has_transcript=True,
+        transcript="啊那你",
+        eot_score=0.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.reason.startswith("deadline_trust_vad_with_transcript")
 
 
 def test_deadline_vad_active_with_noise_fragment_holds() -> None:

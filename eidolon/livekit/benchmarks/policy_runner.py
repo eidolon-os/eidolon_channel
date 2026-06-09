@@ -13,6 +13,7 @@ from eidolon.livekit.agent.turn_policy import (
     Action,
     TurnPolicyRuntime,
 )
+from eidolon.livekit.agent.turn_policy.modes import effective_attention_enforce
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
 
 from .schema import BenchmarkSuite, CaseResult, RunResult, UserStep
@@ -37,6 +38,7 @@ def run_policy_suite(
 ) -> RunResult:
     cfg = load_effective_config()
     policy = turn_policy or cfg.turn_policy
+    attention_enforced = effective_attention_enforce(policy)
     runtime = TurnPolicyRuntime(policy)
     results: list[CaseResult] = []
 
@@ -83,14 +85,14 @@ def run_policy_suite(
                         },
                         "decision": None,
                     }
-                    if policy.attention.enforce and attention.action in (
+                    if attention_enforced and attention.action in (
                         AdmissionAction.IGNORE,
                         AdmissionAction.OBSERVE,
                     ):
                         decisions.append(decision_record)
                         continue
                     if (
-                        policy.attention.enforce
+                        attention_enforced
                         and attention.action is AdmissionAction.HARD_INTERRUPT
                         and not text.strip()
                     ):

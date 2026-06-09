@@ -6,8 +6,14 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config.defaults import (
+    DEFAULT_CORRECTION_LEXICON,
     DEFAULT_HARD_STOP_PREFIX_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,
+    DEFAULT_TOPIC_SWITCH_LEXICON,
+)
+from eidolon.livekit.plugins.eot.impl.constants import (
+    BACKCHANNEL_WORDS,
+    NOISE_LIKE_TRANSCRIPTIONS,
 )
 
 from .constants import (
@@ -116,9 +122,16 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
     evidence or a separately validated model.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, fast_intents: bool = False) -> None:
+        self._fast_intents = fast_intents
         self._hard_stop = tuple(
             normalize_interrupt_text(x) for x in DEFAULT_HARD_STOP_LEXICON
+        )
+        self._topic_switch = tuple(
+            normalize_interrupt_text(x) for x in DEFAULT_TOPIC_SWITCH_LEXICON
+        )
+        self._correction = tuple(
+            normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_LEXICON
         )
 
     def classify(
@@ -138,6 +151,22 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
         if self._contains_any(stripped, self._hard_stop):
             return InterruptIntentResult(
                 InterruptIntent.HARD_STOP, 1.0, "lexicon", "hard_stop"
+            )
+        if self._fast_intents and self._contains_any(stripped, self._topic_switch):
+            return InterruptIntentResult(
+                InterruptIntent.TOPIC_SWITCH, 0.95, "lexicon", "topic_switch"
+            )
+        if self._fast_intents and self._contains_any(stripped, self._correction):
+            return InterruptIntentResult(
+                InterruptIntent.CORRECTION, 0.85, "lexicon", "correction"
+            )
+        if self._fast_intents and stripped in BACKCHANNEL_WORDS:
+            return InterruptIntentResult(
+                InterruptIntent.BACKCHANNEL, 0.95, "lexicon", "backchannel"
+            )
+        if self._fast_intents and stripped in NOISE_LIKE_TRANSCRIPTIONS:
+            return InterruptIntentResult(
+                InterruptIntent.NOISE, 0.90, "lexicon", "noise_like"
             )
         if (
             2 <= len(stripped) <= 6

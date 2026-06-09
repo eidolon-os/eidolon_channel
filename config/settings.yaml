@@ -48,6 +48,7 @@ runtime_admin:
 
 turn_policy:
   profile: balanced_semantic
+  interrupt_mode: balanced
   vad:
     activation_threshold: 0.50
     prefix_padding_ms: 300

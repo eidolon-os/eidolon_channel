@@ -166,6 +166,20 @@ def test_snapshot_records_played_seconds_when_duck_mixer_present() -> None:
     assert ctx["text"] == "你好世界，今天天气不错"
 
 
+def test_snapshot_records_context_preview_on_timeline() -> None:
+    from eidolon.livekit.agent.observability import TurnTimeline
+
+    pipeline = _make_pipeline_with_duck_mixer(played_seconds=1.5)
+    pipeline._timeline = TurnTimeline("turn-interrupted")
+
+    pipeline._snapshot_interrupted_context()
+
+    attr = pipeline._timeline.attrs["interrupted_context"]
+    assert attr["source"] == "session_history_fallback"
+    assert attr["played_seconds"] == 1.5
+    assert attr["text_preview"] == "你好世界，今天天气不错"
+
+
 def test_snapshot_records_none_played_seconds_when_no_duck_mixer() -> None:
     """G6: without DuckingMixer (e.g. tests / non-streaming pipelines),
     played_seconds is None, not crash."""

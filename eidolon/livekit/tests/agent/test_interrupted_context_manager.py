@@ -54,6 +54,30 @@ def test_interrupted_context_manager_injects_and_clears_hint() -> None:
     session.history.insert.assert_called_once()
     hint = session.history.insert.call_args.args[0]
     assert hint.role == "system"
-    assert "刚才的回答" in hint.content[0]
-    assert "用户几乎没听到任何内容" in hint.content[0]
+    assert "刚才的回答" not in hint.content[0]
+    assert "用户几乎没听完整上一轮回复" in hint.content[0]
+    assert "不要复述" in hint.content[0]
+    assert "优先回答用户最新输入" in hint.content[0]
+    assert manager.last_context is None
+
+
+def test_interrupted_context_manager_includes_brief_background_after_playback() -> None:
+    manager = InterruptedContextManager()
+    manager.last_context = {
+        "text": "这是已经播放较久的回答内容" * 10,
+        "timestamp": time.monotonic(),
+        "played_seconds": 2.4,
+        "source": "tts_in_flight",
+    }
+    session = MagicMock()
+    cfg = SimpleNamespace(interrupted_context_max_age_sec=999999.0)
+
+    manager.inject(session=session, config=cfg)
+
+    hint = session.history.insert.call_args.args[0]
+    text = hint.content[0]
+    assert "用户大约听到了前 2.4 秒" in text
+    assert "把以下内容当作背景" in text
+    assert "不要直接复述" in text
+    assert len(text) < 320
     assert manager.last_context is None

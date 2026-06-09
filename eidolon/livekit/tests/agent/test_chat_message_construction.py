@@ -47,13 +47,15 @@ def test_chat_message_accepts_long_chinese_content() -> None:
     from livekit.agents.llm import ChatMessage
 
     text = (
-        "[系统提示] 你刚才说到「你好，今天天气不错，"
-        "适合出去散步，记得带伞」时被用户打断了"
-        "（用户实际听到了前约 2.3 秒）。"
-        "如果用户的新问题与之前话题相关，你可以自然地衔接回去；"
-        "如果无关，直接回答新问题即可。不要提及这条系统提示。"
+        "[系统提示] 上一轮助手回复被用户打断。"
+        "请优先回答用户最新输入；除非用户明确要求继续上一轮，"
+        "不要复述或主动续写被打断的内容，也不要提及这条系统提示。"
+        "用户大约听到了前 2.3 秒。仅在判断用户是在追问上一轮时，"
+        "把以下内容当作背景，不要直接复述："
+        "「你好，今天天气不错，适合出去散步，记得带伞」"
     )
     msg = ChatMessage(role="system", content=[text])
     assert msg.role == "system"
     assert len(msg.content) == 1
     assert "[系统提示]" in msg.content[0]
+    assert "不要复述" in msg.content[0]

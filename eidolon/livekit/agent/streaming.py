@@ -1578,6 +1578,17 @@ class StreamingPipeline(BasePipeline):
             config=self._get_eot_model()._config,
         )
         self._sync_interrupted_context_compat_attrs()
+        context = getattr(self, "_last_interrupted_context", None)
+        timeline = getattr(self, "_timeline", None)
+        if timeline is not None and context is not None:
+            timeline.set_attr(
+                "interrupted_context",
+                {
+                    "source": context.get("source"),
+                    "played_seconds": context.get("played_seconds"),
+                    "text_preview": str(context.get("text") or "")[:120],
+                },
+            )
 
     def _inject_interrupted_context(self) -> None:
         """Inject interrupted context into the conversation history.

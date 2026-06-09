@@ -8,6 +8,9 @@ from typing import Any
 
 logger = logging.getLogger("agent.context.interrupted")
 
+_CONTEXT_EXCERPT_MIN_PLAYED_SEC = 0.8
+_CONTEXT_EXCERPT_MAX_CHARS = 120
+
 
 class InterruptedContextManager:
     """Capture interrupted assistant text and inject a one-turn system hint."""
@@ -100,20 +103,13 @@ class InterruptedContextManager:
         try:
             from livekit.agents.llm import ChatMessage
 
-            if played_sec is not None and played_sec >= 0.1:
-                played_phrase = f"（用户实际听到了前约 {played_sec:.1f} 秒）"
-            elif played_sec is not None:
-                played_phrase = "（用户几乎没听到任何内容）"
-            else:
-                played_phrase = ""
+            hint_text = self._build_hint_text(
+                interrupted_text=interrupted_text,
+                played_sec=played_sec,
+            )
             hint = ChatMessage(
                 role="system",
-                content=[
-                    f"[系统提示] 你刚才说到「{interrupted_text[:200]}」时被用户打断了"
-                    f"{played_phrase}。"
-                    "如果用户的新问题与之前话题相关，你可以自然地衔接回去；"
-                    "如果无关，直接回答新问题即可。不要提及这条系统提示。"
-                ],
+                content=[hint_text],
             )
             session.history.insert(hint)
             logger.info(
@@ -127,6 +123,36 @@ class InterruptedContextManager:
                 "[InterruptedContextManager] failed to inject context",
                 exc_info=True,
             )
+
+    @staticmethod
+    def _build_hint_text(
+        *,
+        interrupted_text: str,
+        played_sec: float | None,
+    ) -> str:
+        """Build a one-turn hint that avoids making the model repeat itself."""
+
+        base = (
+            "[系统提示] 上一轮助手回复被用户打断。"
+            "请优先回答用户最新输入；除非用户明确要求继续上一轮，"
+            "不要复述或主动续写被打断的内容，也不要提及这条系统提示。"
+        )
+        if played_sec is not None and played_sec < _CONTEXT_EXCERPT_MIN_PLAYED_SEC:
+            return (
+                f"{base} 用户几乎没听完整上一轮回复"
+                f"（约 {played_sec:.1f} 秒），按新的用户输入重新组织回答。"
+            )
+        excerpt = interrupted_text.strip()[:_CONTEXT_EXCERPT_MAX_CHARS]
+        if not excerpt:
+            return base
+        if played_sec is None:
+            played_phrase = "用户听到的范围未知"
+        else:
+            played_phrase = f"用户大约听到了前 {played_sec:.1f} 秒"
+        return (
+            f"{base} {played_phrase}。仅在判断用户是在追问上一轮时，"
+            f"把以下内容当作背景，不要直接复述：「{excerpt}」"
+        )
 
     @staticmethod
     def _current_tts_text(factory: Any | None) -> str:

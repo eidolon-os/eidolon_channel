@@ -42,7 +42,7 @@ def test_attention_preserves_existing_path_without_client_state() -> None:
     assert decision.reason == "no_client_state"
 
 
-def test_attention_allows_substantive_overlap_during_playback() -> None:
+def test_attention_observes_substantive_overlap_during_playback_without_eot() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -53,8 +53,24 @@ def test_attention_allows_substantive_overlap_during_playback() -> None:
         )
     )
 
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "client_playback_active_without_direct_signal"
+
+
+def test_attention_allows_high_eot_overlap_during_playback() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="那它的主要风险是什么",
+            eot_score=0.82,
+        )
+    )
+
     assert decision.action is AdmissionAction.DUCK_AND_DECIDE
-    assert decision.reason == "transcript_evidence:substantive_cjk_transcript"
+    assert decision.reason == "transcript_evidence:high_eot_transcript"
 
 
 def test_attention_hard_stop_upgrades_during_playback() -> None:
@@ -171,14 +187,31 @@ def _allows_eot(
     )
 
 
-def test_pipeline_attention_allows_substantive_playback_speech() -> None:
+def test_pipeline_attention_observes_substantive_playback_speech_without_eot() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
+
+    allowed = _allows_eot(pipeline, "那它的主要风险是什么")
+
+    assert allowed is False
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
+
+
+def test_pipeline_attention_allows_high_eot_playback_speech() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+    eot = MagicMock()
+    eot.current_eot_score = 0.82
+    pipeline._get_eot_model = MagicMock(return_value=eot)
 
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
     assert allowed is True
     pipeline._duck_and_arm_timeout.assert_called_once()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "transcript_evidence:high_eot_transcript"
+    )
 
 
 def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
@@ -370,7 +403,7 @@ def test_pipeline_attention_defaults_to_observe_only_rollout() -> None:
 
     assert allowed is True
     pipeline._duck_and_arm_timeout.assert_not_called()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert pipeline._timeline.attrs["attention_admission"]["enforced"] is False
 
 
@@ -381,7 +414,7 @@ def test_pipeline_attention_records_decision_history() -> None:
     _allows_eot(pipeline, "别说了")
 
     events = pipeline._timeline.attrs["attention_admission_events"]
-    assert [event["action"] for event in events] == ["duck_and_decide", "hard_interrupt"]
+    assert [event["action"] for event in events] == ["observe", "hard_interrupt"]
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
 
 

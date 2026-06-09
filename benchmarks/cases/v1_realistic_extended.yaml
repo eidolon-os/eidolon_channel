@@ -109,9 +109,9 @@ cases:
 
   - case_id: extended_topic_switch_prefix_confusion_001
     suite: v1_realistic_extended
-    description: 换话题前缀可能被短暂识别成“半个”，应按现有 prefix canonicalization 稳定进入 Tier1。
+    description: 换话题前缀可能被短暂识别成“半个”；balanced 模式不使用非 Tier0 热词，等 EOT 语义证据后按普通插话取消。
     timeout_sec: 60
-    tags: ["v1_realistic_extended", "tier1", "topic_switch", "asr_prefix", "multi_step"]
+    tags: ["v1_realistic_extended", "tier2", "topic_switch_text", "asr_prefix", "multi_step", "no_nontier0_lexicon"]
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
@@ -134,6 +134,7 @@ cases:
         start_ms: 1700
         duration_ms: 900
         interims: ["半个", "半个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.0, 0.0, 0.72]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -142,8 +143,7 @@ cases:
         reply: 我会从多个角度解释当前主题，这段回答用于验证换话题前缀误识别时仍能快速取消。
     expect:
       action: cancel
-      intent: topic_switch
-      topic_switch_hint: true
+      intent: normal_interrupt
       max_interrupt_decision_ms: 1500
       min_user_finals: 2
       min_agent_messages: 1

@@ -67,8 +67,22 @@ def _handler(
     return handler, timeline, on_duck, on_interrupt
 
 
-def test_allows_eot_ducks_for_substantive_playback_speech() -> None:
+def test_allows_eot_observes_substantive_playback_speech_without_eot() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
+
+    allowed = handler.allows_eot_check("那它有什么风险")
+
+    assert allowed is False
+    on_duck.assert_not_called()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "observe"
+
+
+def test_allows_eot_ducks_for_high_eot_playback_speech() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(
+        client_state=_client_state(),
+        eot_score=0.82,
+    )
 
     allowed = handler.allows_eot_check("那它有什么风险")
 
@@ -76,6 +90,9 @@ def test_allows_eot_ducks_for_substantive_playback_speech() -> None:
     on_duck.assert_called_once_with()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert timeline.attrs["attention_admission"]["reason"] == (
+        "transcript_evidence:high_eot_transcript"
+    )
 
 
 def test_allows_eot_observes_short_low_score_playback_speech() -> None:

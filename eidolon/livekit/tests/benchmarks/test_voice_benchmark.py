@@ -146,6 +146,27 @@ def test_policy_runner_attention_enforced_suite() -> None:
     assert ambient.decisions[0]["decision"] is None
 
 
+def test_policy_runner_responsive_mode_exposes_sensitive_baseline() -> None:
+    suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
+    policy = TurnPolicyConfig(
+        interrupt_mode="responsive",
+        attention=replace(AttentionPolicyConfig(), enforce=True),
+    )
+
+    run = run_policy_suite([suite], turn_policy=policy, run_id="test")
+
+    ambient = next(
+        case
+        for case in run.cases
+        if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
+    )
+    assert run.profile == "balanced_semantic+responsive"
+    assert ambient.passed is False
+    assert ambient.metrics["actual_action"] == "cancel"
+    assert ambient.metrics["interrupt_mode"] == "responsive"
+    assert ambient.decisions[0]["decision"]["reason"].startswith("first_signal_interim")
+
+
 def test_load_v1_interrupt_tiers_enforced_suite() -> None:
     suite = load_suite("benchmarks/cases/v1_interrupt_tiers_enforced.yaml")
 
@@ -341,7 +362,8 @@ def test_policy_runner_v1_realistic_extended_suite() -> None:
         if case.case_id == "extended_topic_switch_prefix_confusion_001"
     )
     assert topic.metrics["actual_action"] == "cancel"
-    assert topic.metrics["topic_switch_hint"] is True
+    assert topic.metrics["actual_intent"] == "normal_interrupt"
+    assert topic.metrics["topic_switch_hint"] is False
     backchannel = next(
         case
         for case in run.cases

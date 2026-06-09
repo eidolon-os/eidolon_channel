@@ -185,6 +185,7 @@ def run_policy_suite(
             metrics = {
                 "elapsed_ms": round((time.monotonic() - started) * 1000),
                 "interrupt_decision_ms": decision_latency_ms,
+                "interrupt_mode": policy.interrupt_mode,
                 "expected_action": case.expectations.action,
                 "actual_action": action.value,
                 "forbid_actions": ",".join(case.expectations.forbid_actions),
@@ -209,7 +210,7 @@ def run_policy_suite(
         run_id=run_id or time.strftime("%Y%m%d-%H%M%S"),
         git_sha=_git_sha(),
         runner="policy",
-        profile=policy.profile,
+        profile=f"{policy.profile}+{policy.interrupt_mode}",
         cases=results,
     )
 

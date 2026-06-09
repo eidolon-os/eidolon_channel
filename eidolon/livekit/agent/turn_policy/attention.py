@@ -96,6 +96,37 @@ class AttentionAdmission:
                 client_state_used=True,
             )
 
+        if (
+            self._config.require_direct_signal_during_playback
+            and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
+        ):
+            if text:
+                intent = hard_stop_intent(text)
+                if intent is InterruptIntent.HARD_STOP:
+                    return AttentionDecision(
+                        AdmissionAction.HARD_INTERRUPT,
+                        "transcript_hard_stop",
+                        transcript_preview=preview,
+                        client_state_used=True,
+                    )
+                evidence = self._evidence_gate.evaluate_attention(
+                    text,
+                    eot_score=signal.eot_score,
+                )
+                if evidence.allow_decision and evidence.reason == "high_eot_transcript":
+                    return AttentionDecision(
+                        AdmissionAction.DUCK_AND_DECIDE,
+                        f"transcript_evidence:{evidence.reason}",
+                        transcript_preview=preview,
+                        client_state_used=True,
+                    )
+            return AttentionDecision(
+                AdmissionAction.OBSERVE,
+                "client_playback_active_without_direct_signal",
+                transcript_preview=preview,
+                client_state_used=True,
+            )
+
         if text:
             intent = hard_stop_intent(text)
             if intent is InterruptIntent.HARD_STOP:
@@ -117,17 +148,6 @@ class AttentionAdmission:
                     transcript_preview=preview,
                     client_state_used=True,
                 )
-
-        if (
-            self._config.require_direct_signal_during_playback
-            and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
-        ):
-            return AttentionDecision(
-                AdmissionAction.OBSERVE,
-                "client_playback_active_without_direct_signal",
-                transcript_preview=preview,
-                client_state_used=True,
-            )
 
         return AttentionDecision(
             AdmissionAction.DUCK_AND_DECIDE,

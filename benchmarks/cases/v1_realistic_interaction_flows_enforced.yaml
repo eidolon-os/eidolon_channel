@@ -330,7 +330,7 @@ cases:
 
   - case_id: flow_short_pause_directive_during_playback_enforced_001
     suite: v1_realistic_flows
-    description: 真实暂停指令：用户在 agent 播放中说“等一秒/等一下”一类短指令；目标体验应快速暂停/取消，而不是 observe 到回答结束。
+    description: 真实暂停指令：用户在 agent 播放中说“等一秒/等一下”一类短指令；balanced 模式不靠非 Tier0 热词，需等 EOT 证据足够后取消。
     timeout_sec: 60
     tags: ["v1_realistic_flows", "tier2", "pause_directive", "owner_directed", "enforced", "multi_step"]
     audio_clips:
@@ -355,7 +355,7 @@ cases:
         start_ms: 1800
         duration_ms: 620
         interims: ["嗯", "等秒", "等一秒"]
-        eot_scores: [0.0, 0.0, 0.68]
+        eot_scores: [0.0, 0.0, 0.74]
         final_delay_ms: 100
         agent_speaking: true
         client_playback_state: agent_speaking

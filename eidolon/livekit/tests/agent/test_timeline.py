@@ -138,6 +138,28 @@ def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
     )
 
 
+def test_timeline_marks_semantic_score_wait_as_actionable_transcript() -> None:
+    timeline = TurnTimeline("turn-actionable-hold")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("transcript_interim_first_at", 10.1)
+
+    timeline.record_decision(
+        action="hold",
+        reason="semantic_score_wait score=0.35 evidence=enough_cjk_interim",
+        rollback_drop_buffered=False,
+        intent="uncertain",
+    )
+
+    snap = timeline.snapshot()
+    assert "transcript_actionable_first_at" in snap["timestamps"]
+    assert (
+        snap["attrs"]["provider_latency_ms"][
+            "stt_speech_to_actionable_transcript_ms"
+        ]
+        is not None
+    )
+
+
 def test_timeline_records_hold_recheck_ms() -> None:
     timeline = TurnTimeline("turn-stable-hold")
 

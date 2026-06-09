@@ -198,13 +198,17 @@ def test_load_v1_realistic_interaction_flows_enforced_suite() -> None:
     suite = load_suite("benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml")
 
     assert suite.suite_id == "v1_realistic_interaction_flows_enforced"
-    assert len(suite.cases) == 9
+    assert len(suite.cases) == 13
     assert {case.case_id for case in suite.cases} >= {
         "flow_normal_question_then_agent_reply_001",
         "flow_normal_question_then_hard_stop_001",
+        "flow_normal_question_then_hard_stop_delayed_phrase_001",
         "flow_normal_question_then_topic_switch_001",
         "flow_normal_question_then_correction_001",
         "flow_normal_question_then_followup_no_client_state_001",
+        "flow_owner_followup_during_playback_enforced_001",
+        "flow_language_switch_during_playback_enforced_001",
+        "flow_short_pause_directive_during_playback_enforced_001",
         "flow_normal_question_then_backchannel_001",
         "flow_normal_question_then_noise_001",
         "flow_ambient_speech_during_agent_playback_001",
@@ -232,11 +236,13 @@ def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
     assert pass_by_case == {
         "flow_normal_question_then_agent_reply_001": True,
         "flow_normal_question_then_hard_stop_001": True,
+        "flow_normal_question_then_hard_stop_delayed_phrase_001": True,
         "flow_normal_question_then_topic_switch_001": True,
         "flow_normal_question_then_correction_001": True,
-        # Current known gap: Tier2 ordinary follow-up is held by the
-        # weak-signal follow-up window in pure policy simulation.
-        "flow_normal_question_then_followup_no_client_state_001": False,
+        "flow_normal_question_then_followup_no_client_state_001": True,
+        "flow_owner_followup_during_playback_enforced_001": True,
+        "flow_language_switch_during_playback_enforced_001": True,
+        "flow_short_pause_directive_during_playback_enforced_001": True,
         "flow_normal_question_then_backchannel_001": True,
         "flow_normal_question_then_noise_001": True,
         "flow_ambient_speech_during_agent_playback_001": True,
@@ -247,14 +253,35 @@ def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
         for case in run.cases
         if case.case_id == "flow_normal_question_then_followup_no_client_state_001"
     )
-    assert any("expected action=cancel" in error for error in followup.errors)
+    assert followup.metrics["actual_action"] == "cancel"
+    owner_followup = next(
+        case
+        for case in run.cases
+        if case.case_id == "flow_owner_followup_during_playback_enforced_001"
+    )
+    assert owner_followup.metrics["actual_action"] == "cancel"
+    assert owner_followup.decisions[-1]["attention_admission"]["action"] == "duck_and_decide"
+    language_switch = next(
+        case
+        for case in run.cases
+        if case.case_id == "flow_language_switch_during_playback_enforced_001"
+    )
+    assert language_switch.metrics["actual_action"] == "cancel"
+    assert language_switch.decisions[-1]["attention_admission"]["action"] == "duck_and_decide"
+    pause_directive = next(
+        case
+        for case in run.cases
+        if case.case_id == "flow_short_pause_directive_during_playback_enforced_001"
+    )
+    assert pause_directive.metrics["actual_action"] == "cancel"
+    assert pause_directive.decisions[-1]["attention_admission"]["action"] == "duck_and_decide"
     ambient = next(
         case
         for case in run.cases
         if case.case_id == "flow_ambient_speech_during_agent_playback_001"
     )
-    assert ambient.metrics["actual_action"] == "none"
-    assert ambient.decisions[-1]["attention_admission"]["action"] == "observe"
+    assert ambient.metrics["actual_action"] in {"hold", "none"}
+    assert ambient.metrics["actual_action"] != "cancel"
     muted = next(
         case
         for case in run.cases

@@ -26,13 +26,13 @@ from eidolon.livekit.agent.interrupt_decider import (
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("嗯", True),
+        ("嗯", False),
         ("嗯嗯", True),
-        ("好的", True),
-        ("OK", True),
-        ("ok", True),
-        ("Yeah", True),
-        ("嗯。", True),  # trailing punctuation stripped
+        ("好的", False),
+        ("OK", False),
+        ("ok", False),
+        ("Yeah", False),
+        ("嗯。", False),  # no backchannel lexicon in turn_policy hot path
         ("", True),  # empty counts as backchannel
         ("   ", True),  # whitespace-only stripped → empty
         ("你好", False),
@@ -173,38 +173,37 @@ def test_first_signal_below_min_chars_is_hold() -> None:
     assert decision.action is Action.HOLD
 
 
-def test_semantic_prefix_holds_for_more_interim() -> None:
+def test_short_non_hard_prefix_holds_as_weak_signal() -> None:
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("换个", score=0.0)
     assert decision.action is Action.HOLD
-    assert "semantic_prefix" in decision.reason
+    assert "insufficient_transcript_evidence" in decision.reason
 
 
-def test_topic_switch_confused_prefix_holds_for_more_interim() -> None:
+def test_confused_non_hard_prefix_holds_as_weak_signal() -> None:
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("半个", score=0.0)
     assert decision.action is Action.HOLD
-    assert "semantic_prefix" in decision.reason
+    assert "insufficient_transcript_evidence" in decision.reason
 
 
-def test_long_topic_switch_prefix_becomes_stable_tier1_candidate() -> None:
+def test_long_non_hard_prefix_waits_for_semantic_score() -> None:
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("换个话", score=0.0)
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "topic_switch"
-    assert decision.intent_source == "lexicon_prefix"
-    assert decision.topic_switch_hint is True
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert decision.topic_switch_hint is False
 
 
-def test_correction_confused_prefix_holds_for_more_interim() -> None:
+def test_correction_like_prefix_holds_as_weak_signal() -> None:
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("是我", score=0.0)
     assert decision.action is Action.HOLD
-    assert "semantic_prefix" in decision.reason
+    assert "insufficient_transcript_evidence" in decision.reason
 
 
 def test_first_signal_strips_punctuation_before_length_check() -> None:
-    """Backchannel + punctuation ('嗯。') is recognized after strip."""
+    """Short filler + punctuation stays a weak hold, not a lexical backchannel."""
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯。", score=0.0)
     assert decision.action is Action.HOLD
@@ -222,8 +221,8 @@ def test_first_signal_respects_min_chars_setting() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_compound_backchannel_rolls_back_even_with_high_score() -> None:
-    """Explicit backchannel/noise classification wins over EOT score."""
+def test_repeated_noise_rolls_back_even_with_high_score() -> None:
+    """Repeated noise shape wins over EOT score without a backchannel word list."""
     d = InterruptDecider(early_cancel_score_threshold=0.7)
     decision = d.on_stt_interim("嗯嗯", score=0.85)
     assert decision.action is Action.ROLLBACK
@@ -257,32 +256,36 @@ def test_mid_band_score_holds() -> None:
     assert "eot_score_mid" in decision.reason
 
 
-def test_topic_switch_cancels_with_hint() -> None:
+def test_topic_switch_text_waits_without_semantic_score() -> None:
     d = InterruptDecider()
     decision = d.on_stt_interim("换个话题吧", score=0.0)
-    assert decision.action is Action.CANCEL
-    assert decision.topic_switch_hint is True
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert decision.topic_switch_hint is False
 
 
-def test_topic_switch_confused_transcript_cancels_with_hint() -> None:
+def test_topic_switch_confused_text_waits_without_semantic_score() -> None:
     d = InterruptDecider()
     decision = d.on_stt_interim("半个话题吧", score=0.0)
-    assert decision.action is Action.CANCEL
-    assert decision.topic_switch_hint is True
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert decision.topic_switch_hint is False
 
 
-def test_correction_cancels_with_hint() -> None:
+def test_correction_text_waits_without_semantic_score() -> None:
     d = InterruptDecider()
     decision = d.on_stt_interim("不是，我的意思是", score=0.0)
-    assert decision.action is Action.CANCEL
-    assert decision.correction_hint is True
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert decision.correction_hint is False
 
 
-def test_correction_confused_transcript_cancels_with_hint() -> None:
+def test_correction_confused_text_waits_without_semantic_score() -> None:
     d = InterruptDecider()
     decision = d.on_stt_interim("是我刚", score=0.0)
-    assert decision.action is Action.CANCEL
-    assert decision.correction_hint is True
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
+    assert decision.correction_hint is False
 
 
 # ---------------------------------------------------------------------------
@@ -364,12 +367,12 @@ def test_user_silent_fast_rollback_drains() -> None:
     assert decision.rollback_drop_buffered is False
 
 
-def test_user_silent_backchannel_keeps_intent() -> None:
+def test_user_silent_text_rolls_back_without_lexical_intent() -> None:
     d = InterruptDecider()
     decision = d.on_user_silent("好")
     assert decision.action is Action.ROLLBACK
     assert decision.intent is not None
-    assert decision.intent.value == "backchannel"
+    assert decision.intent.value == "uncertain"
 
 
 # ---------------------------------------------------------------------------

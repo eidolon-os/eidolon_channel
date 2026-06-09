@@ -42,7 +42,7 @@ def test_attention_preserves_existing_path_without_client_state() -> None:
     assert decision.reason == "no_client_state"
 
 
-def test_attention_observes_browser_playback_without_direct_signal() -> None:
+def test_attention_allows_substantive_overlap_during_playback() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -53,8 +53,8 @@ def test_attention_observes_browser_playback_without_direct_signal() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.OBSERVE
-    assert decision.reason == "client_playback_active_without_direct_signal"
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "transcript_evidence:substantive_cjk_transcript"
 
 
 def test_attention_hard_stop_upgrades_during_playback() -> None:
@@ -87,7 +87,7 @@ def test_attention_hard_stop_homophone_upgrades_during_playback() -> None:
     assert decision.reason == "transcript_hard_stop"
 
 
-def test_attention_allows_semantic_prefix_during_playback() -> None:
+def test_attention_observes_short_prefix_during_playback() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -98,11 +98,11 @@ def test_attention_allows_semantic_prefix_during_playback() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
-    assert decision.reason == "transcript_semantic_prefix"
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "client_playback_active_without_direct_signal"
 
 
-def test_attention_allows_early_duck_prefix_during_playback() -> None:
+def test_attention_observes_single_char_prefix_during_playback() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -113,8 +113,8 @@ def test_attention_allows_early_duck_prefix_during_playback() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
-    assert decision.reason == "transcript_semantic_prefix"
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "client_playback_active_without_direct_signal"
 
 
 def test_attention_explicit_client_interrupt_is_hard() -> None:
@@ -171,18 +171,14 @@ def _allows_eot(
     )
 
 
-def test_pipeline_attention_skips_eot_for_ambient_playback_speech() -> None:
+def test_pipeline_attention_allows_substantive_playback_speech() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
 
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
-    assert allowed is False
-    pipeline._duck_and_arm_timeout.assert_not_called()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
-    assert (
-        pipeline._timeline.attrs["attention_admission"]["tier"]
-        == "tier4_attention"
-    )
+    assert allowed is True
+    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
 
 
 def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
@@ -329,31 +325,31 @@ def test_user_transcript_does_not_use_timeline_marker_as_interrupt_window() -> N
     pipeline._semantic_interrupts.run.assert_not_called()
 
 
-def test_pipeline_attention_ducks_for_semantic_prefix_during_playback() -> None:
+def test_pipeline_attention_observes_short_prefix_during_playback() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
 
     allowed = _allows_eot(pipeline, "换个")
 
-    assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_called_once()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert allowed is False
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "transcript_semantic_prefix"
+        == "client_playback_active_without_direct_signal"
     )
 
 
-def test_pipeline_attention_ducks_for_early_duck_prefix_during_playback() -> None:
+def test_pipeline_attention_observes_single_char_prefix_during_playback() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
 
     allowed = _allows_eot(pipeline, "换")
 
-    assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_called_once()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert allowed is False
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "transcript_semantic_prefix"
+        == "client_playback_active_without_direct_signal"
     )
 
 
@@ -374,7 +370,7 @@ def test_pipeline_attention_defaults_to_observe_only_rollout() -> None:
 
     assert allowed is True
     pipeline._duck_and_arm_timeout.assert_not_called()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
     assert pipeline._timeline.attrs["attention_admission"]["enforced"] is False
 
 
@@ -385,7 +381,7 @@ def test_pipeline_attention_records_decision_history() -> None:
     _allows_eot(pipeline, "别说了")
 
     events = pipeline._timeline.attrs["attention_admission_events"]
-    assert [event["action"] for event in events] == ["observe", "hard_interrupt"]
+    assert [event["action"] for event in events] == ["duck_and_decide", "hard_interrupt"]
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
 
 
@@ -414,5 +410,5 @@ def test_pipeline_attention_prefers_speaker_client_state() -> None:
     pipeline._duck_and_arm_timeout.assert_called_once()
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "client_playback_idle"
+        == "transcript_evidence:substantive_cjk_transcript"
     )

@@ -28,6 +28,7 @@ class UserStep:
     start_ms: int
     duration_ms: int = 700
     interims: tuple[str, ...] = ()
+    eot_scores: tuple[float, ...] = ()
     final_delay_ms: int = 80
     vad_probability: float = 0.9
     agent_speaking: bool = True

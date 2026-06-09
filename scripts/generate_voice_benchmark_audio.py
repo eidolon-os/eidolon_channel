@@ -19,8 +19,12 @@ DEFAULT_CLIPS: dict[str, str] = {
     "normal_followup": "那它的主要风险是什么？",
     "hard_stop_stop": "停一下。",
     "hard_stop_dont": "别说了。",
+    "hard_stop_ok_dont": "行，不要说了。",
     "topic_switch": "换个话题，我们聊点别的。",
     "correction": "不是，我刚才说错了。",
+    "owner_followup_capability": "那你现在能帮我做什么？",
+    "language_switch_english": "我们换成英文，然后聊。",
+    "wait_one_second": "等一秒。",
     "backchannel_en": "嗯。",
     "backchannel_ok": "好。",
     "noise_like_cough": "咳。",
@@ -43,20 +47,20 @@ async def _main() -> int:
     args = parser.parse_args()
 
     cfg = load_effective_config()
-    factory = SharedStageFactory.from_config(cfg)
-    await factory.tts.warmup()
+    stages = SharedStageFactory.components_from_config(cfg)
+    await stages.tts.warmup()
 
     out_dir = Path(args.out_dir)
     manifest: dict[str, dict[str, str]] = {}
     try:
         for clip_id, text in DEFAULT_CLIPS.items():
-            pcm = await _synthesize_clip(factory, text)
+            pcm = await _synthesize_clip(stages, text)
             path = out_dir / f"{clip_id}.wav"
             write_wav(path, pcm, sample_rate=cfg.bailian_tts.sample_rate)
             manifest[clip_id] = {"text": text, "path": str(path)}
             print(f"generated {clip_id}: {path}")
     finally:
-        await factory.tts.shutdown()
+        await stages.tts.shutdown()
 
     manifest_path = Path(args.manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)

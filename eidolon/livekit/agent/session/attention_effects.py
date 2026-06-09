@@ -32,12 +32,14 @@ class AttentionEffectHandler:
         get_timeline: Callable[[], TurnTimeline | None],
         on_duck: Callable[[], None],
         on_interrupt: Callable[[], None],
+        get_eot_score: Callable[[], float] | None = None,
     ) -> None:
         self._turn_policy = turn_policy
         self._turn_runtime = turn_runtime
         self._get_agent_speaking = get_agent_speaking
         self._get_duck_active = get_duck_active
         self._latest_client_audio_state = latest_client_audio_state
+        self._get_eot_score = get_eot_score or (lambda: 0.0)
         self._get_timeline = get_timeline
         self._on_duck = on_duck
         self._on_interrupt = on_interrupt
@@ -98,6 +100,7 @@ class AttentionEffectHandler:
                 agent_speaking=self._get_agent_speaking(),
                 client_state=self._latest_client_audio_state(participant_identity),
                 transcript=transcript,
+                eot_score=self._get_eot_score(),
             )
         )
 

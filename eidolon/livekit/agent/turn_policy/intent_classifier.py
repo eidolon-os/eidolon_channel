@@ -6,16 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from eidolon.livekit.common.config.defaults import (
-    DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON,
-    DEFAULT_CORRECTION_EXCLUSION_LEXICON,
-    DEFAULT_CORRECTION_LEXICON,
     DEFAULT_HARD_STOP_PREFIX_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,
-    DEFAULT_TOPIC_SWITCH_LEXICON,
-)
-from eidolon.livekit.plugins.eot.impl.constants import (
-    BACKCHANNEL_WORDS,
-    NOISE_LIKE_TRANSCRIPTIONS,
 )
 
 from .constants import (
@@ -74,52 +66,6 @@ def canonicalize_interrupt_text(text: str) -> str:
     return stripped
 
 
-def is_semantic_interrupt_prefix(
-    text: str,
-    *,
-    min_chars: int = 2,
-    include_attention_early_duck: bool = False,
-) -> bool:
-    """Return true for high-precision prefixes of redirect/correction lexicons."""
-
-    stripped = canonicalize_interrupt_text(text)
-    if len(stripped) < min_chars:
-        return False
-    if (
-        include_attention_early_duck
-        and stripped in _attention_early_duck_prefixes()
-    ):
-        return True
-    return any(
-        candidate.startswith(stripped) and candidate != stripped
-        for candidate in _semantic_prefix_candidates()
-    )
-
-
-def semantic_interrupt_prefix_intent(
-    text: str,
-    *,
-    min_chars: int = 2,
-    min_cjk_chars: int = 3,
-) -> InterruptIntent | None:
-    """Classify high-precision redirect/correction prefixes.
-
-    Short prefixes such as ``换`` or ``换个`` are useful for ducking but too
-    ambiguous to cancel. Longer prefixes such as ``换个话`` are strong enough
-    to enter the Tier1 stability window, where the runtime still requires a
-    short repeat/recheck before allowing cancellation.
-    """
-
-    stripped = canonicalize_interrupt_text(text)
-    if len(stripped) < min_chars or _count_cjk(stripped) < min_cjk_chars:
-        return None
-    if _is_prefix_of(stripped, DEFAULT_TOPIC_SWITCH_LEXICON):
-        return InterruptIntent.TOPIC_SWITCH
-    if _is_prefix_of(stripped, DEFAULT_CORRECTION_LEXICON):
-        return InterruptIntent.CORRECTION
-    return None
-
-
 def hard_stop_prefix_intent(
     text: str,
     *,
@@ -138,25 +84,24 @@ def hard_stop_prefix_intent(
     return InterruptIntent.HARD_STOP if stripped in prefixes else None
 
 
-def _semantic_prefix_candidates() -> tuple[str, ...]:
-    return tuple(
+def hard_stop_intent(text: str) -> InterruptIntent | None:
+    """Classify only Tier0 hard-stop text.
+
+    Non-Tier0 interruption semantics intentionally do not live in lexical
+    hot-path rules. They should come from transcript evidence, EOT/turn
+    detection, or a future validated lightweight model.
+    """
+
+    stripped = canonicalize_interrupt_text(text)
+    if not stripped:
+        return None
+    hard_stops = tuple(
         normalize_interrupt_text(item)
-        for item in (DEFAULT_TOPIC_SWITCH_LEXICON + DEFAULT_CORRECTION_LEXICON)
+        for item in DEFAULT_HARD_STOP_LEXICON
     )
-
-
-def _attention_early_duck_prefixes() -> tuple[str, ...]:
-    return tuple(
-        normalize_interrupt_text(item)
-        for item in DEFAULT_ATTENTION_EARLY_DUCK_PREFIX_LEXICON
-    )
-
-
-def _is_prefix_of(text: str, candidates: tuple[str, ...]) -> bool:
-    return any(
-        candidate.startswith(text) and candidate != text
-        for candidate in (normalize_interrupt_text(item) for item in candidates)
-    )
+    if any(candidate and candidate in stripped for candidate in hard_stops):
+        return InterruptIntent.HARD_STOP
+    return hard_stop_prefix_intent(stripped)
 
 
 def _count_cjk(text: str) -> int:
@@ -164,18 +109,16 @@ def _count_cjk(text: str) -> int:
 
 
 class LexiconInterruptClassifier(InterruptIntentClassifier):
-    """Low-latency classifier based on high-precision lexical signals."""
+    """Low-latency classifier for Tier0 plus non-lexical noise shape.
+
+    Topic switch, correction, and backchannel word lists are deliberately not
+    used here. Outside Tier0, hot-path intent should be decided by EOT/semantic
+    evidence or a separately validated model.
+    """
 
     def __init__(self) -> None:
-        self._hard_stop = tuple(normalize_interrupt_text(x) for x in DEFAULT_HARD_STOP_LEXICON)
-        self._topic_switch = tuple(
-            normalize_interrupt_text(x) for x in DEFAULT_TOPIC_SWITCH_LEXICON
-        )
-        self._correction = tuple(
-            normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_LEXICON
-        )
-        self._correction_exclusions = tuple(
-            normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_EXCLUSION_LEXICON
+        self._hard_stop = tuple(
+            normalize_interrupt_text(x) for x in DEFAULT_HARD_STOP_LEXICON
         )
 
     def classify(
@@ -195,24 +138,6 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
         if self._contains_any(stripped, self._hard_stop):
             return InterruptIntentResult(
                 InterruptIntent.HARD_STOP, 1.0, "lexicon", "hard_stop"
-            )
-        if self._contains_any(stripped, self._topic_switch):
-            return InterruptIntentResult(
-                InterruptIntent.TOPIC_SWITCH, 0.95, "lexicon", "topic_switch"
-            )
-        if self._contains_any(stripped, self._correction) and not self._starts_with_any(
-            stripped, self._correction_exclusions
-        ):
-            return InterruptIntentResult(
-                InterruptIntent.CORRECTION, 0.85, "lexicon", "correction"
-            )
-        if stripped in BACKCHANNEL_WORDS:
-            return InterruptIntentResult(
-                InterruptIntent.BACKCHANNEL, 0.95, "lexicon", "backchannel"
-            )
-        if stripped in NOISE_LIKE_TRANSCRIPTIONS:
-            return InterruptIntentResult(
-                InterruptIntent.NOISE, 0.90, "lexicon", "noise_like"
             )
         if (
             2 <= len(stripped) <= 6

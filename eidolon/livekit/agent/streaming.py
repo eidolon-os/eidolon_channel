@@ -375,6 +375,7 @@ class StreamingPipeline(BasePipeline):
             get_timeline=lambda: self._timeline,
             on_duck=lambda: self._duck_and_arm_timeout(),
             on_interrupt=lambda: self._interrupt_current_turn(),
+            get_eot_score=lambda: self._get_eot_model().current_eot_score,
         )
 
     def _ensure_attention_effect_handler(self) -> None:
@@ -1429,6 +1430,16 @@ class StreamingPipeline(BasePipeline):
         self._ducking.duck(now=now)
         if self._timeline is not None:
             self._timeline.mark("interrupt_started_at")
+            self._record_duck_event(
+                "duck_started",
+                vad_to_duck_ms=(
+                    (now - self._user_speaking_start_time) * 1000
+                    if self._user_speaking_start_time is not None
+                    else None
+                ),
+                timeout_sec=cfg.duck_suspend_timeout_sec,
+                cooldown_sec=cfg.duck_cooldown_sec,
+            )
         self._callbacks.on_duck_started()
         vad_to_duck_ms = 0.0
         if self._user_speaking_start_time is not None:
@@ -1441,6 +1452,16 @@ class StreamingPipeline(BasePipeline):
         self._ducking.timeout_task = asyncio.create_task(
             self._duck_deadline.run(cfg.duck_suspend_timeout_sec)
         )
+
+    def _record_duck_event(self, event: str, **fields: object) -> None:
+        timeline = self._timeline
+        if timeline is None:
+            return
+        payload = {"event": event, **fields}
+        events = list(timeline.attrs.get("duck_events") or ())
+        events.append(payload)
+        timeline.set_attr("duck_events", events)
+        timeline.set_attr("duck_last_event", payload)
 
     def _append_timeline_debug(self, reason: str, *, clear: bool = False) -> None:
         if self._timeline is None or self._timeline_debug_flushed:
@@ -1473,6 +1494,14 @@ class StreamingPipeline(BasePipeline):
         self._ducking.cancel_output()
         self._callbacks.on_duck_resolved("cancel")
         if self._timeline is not None:
+            self._record_duck_event(
+                "duck_cancelled",
+                reason="eot_cancel",
+                suspend_ms=stats.suspend_ms,
+                buffered_frames=stats.buffered_frames,
+                buffered_sec=stats.buffered_sec,
+                drop_buffered=True,
+            )
             self._timeline.mark("interrupt_resolved_at")
             self._timeline.set_attr("cancel_reason", "eot_cancel")
             self._append_timeline_debug("interrupt_cancel", clear=True)
@@ -1511,6 +1540,14 @@ class StreamingPipeline(BasePipeline):
             self._ducking.unduck_if_suspended(drop_buffered=drop_buffered)
             self._callbacks.on_duck_resolved("unduck")
             if self._timeline is not None:
+                self._record_duck_event(
+                    "duck_unducked",
+                    reason=reason,
+                    suspend_ms=stats.suspend_ms,
+                    buffered_frames=stats.buffered_frames,
+                    buffered_sec=stats.buffered_sec,
+                    drop_buffered=drop_buffered,
+                )
                 self._timeline.mark("interrupt_resolved_at")
                 self._timeline.set_attr("rollback_reason", reason)
 

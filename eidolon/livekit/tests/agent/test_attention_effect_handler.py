@@ -31,7 +31,13 @@ def _policy(*, enforce: bool = True) -> TurnPolicyConfig:
     )
 
 
-def _handler(*, client_state=None, enforce: bool = True, agent_speaking: bool = True):
+def _handler(
+    *,
+    client_state=None,
+    enforce: bool = True,
+    agent_speaking: bool = True,
+    eot_score: float = 0.0,
+):
     policy = _policy(enforce=enforce)
     timeline = TurnTimeline("turn-attention")
     on_duck = MagicMock()
@@ -45,20 +51,45 @@ def _handler(*, client_state=None, enforce: bool = True, agent_speaking: bool = 
         get_timeline=lambda: timeline,
         on_duck=on_duck,
         on_interrupt=on_interrupt,
+        get_eot_score=lambda: eot_score,
     )
     return handler, timeline, on_duck, on_interrupt
 
 
-def test_allows_eot_observes_ambient_playback_speech() -> None:
+def test_allows_eot_ducks_for_substantive_playback_speech() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
 
     allowed = handler.allows_eot_check("那它有什么风险")
+
+    assert allowed is True
+    on_duck.assert_called_once_with()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+
+
+def test_allows_eot_observes_short_low_score_playback_speech() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
+
+    allowed = handler.allows_eot_check("不是")
 
     assert allowed is False
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["action"] == "observe"
-    assert timeline.attrs["attention_admission"]["tier"] == "tier4_attention"
+
+
+def test_allows_eot_ducks_for_short_high_eot_playback_speech() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(
+        client_state=_client_state(),
+        eot_score=0.82,
+    )
+
+    allowed = handler.allows_eot_check("不是")
+
+    assert allowed is True
+    on_duck.assert_called_once_with()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
 
 
 def test_allows_eot_ducks_when_no_client_state() -> None:
@@ -84,15 +115,18 @@ def test_hard_stop_during_playback_allows_eot_without_ducking() -> None:
     assert "interrupt_intent_admitted_at" in timeline.timestamps
 
 
-def test_semantic_prefix_ducks_without_direct_intent_mark() -> None:
+def test_single_char_prefix_observes_without_direct_intent_mark() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
 
     allowed = handler.allows_eot_check("换")
 
-    assert allowed is True
-    on_duck.assert_called_once_with()
+    assert allowed is False
+    on_duck.assert_not_called()
     on_interrupt.assert_not_called()
-    assert timeline.attrs["attention_admission"]["reason"] == "transcript_semantic_prefix"
+    assert (
+        timeline.attrs["attention_admission"]["reason"]
+        == "client_playback_active_without_direct_signal"
+    )
     assert "interrupt_intent_admitted_at" not in timeline.timestamps
 
 

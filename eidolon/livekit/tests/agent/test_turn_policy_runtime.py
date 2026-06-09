@@ -16,14 +16,14 @@ def test_runtime_decision_becomes_turn_control_metadata() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
     runtime.decide_from_transcript(
         "换个话题",
-        0.0,
+        0.8,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=100.0,
     )
     decision = runtime.decide_from_transcript(
         "换个话题",
-        0.0,
+        0.8,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=240.0,
@@ -38,8 +38,8 @@ def test_runtime_decision_becomes_turn_control_metadata() -> None:
     metadata = signal.as_metadata()
 
     assert decision.action is Action.CANCEL
-    assert metadata["intent"] == "topic_switch"
-    assert metadata["topic_switch_hint"] is True
+    assert metadata["intent"] == "normal_interrupt"
+    assert metadata["topic_switch_hint"] is False
     assert metadata["correction_hint"] is False
     assert metadata["interrupted_text_excerpt"] == "被打断的回复"
     assert metadata["played_seconds"] == 1.25
@@ -61,7 +61,7 @@ def test_runtime_annotates_hard_stop_as_tier0() -> None:
     assert decision.tier_reason.startswith("intent:hard_stop")
 
 
-def test_runtime_annotates_redirect_as_tier1_during_stability_wait() -> None:
+def test_runtime_annotates_non_hard_redirect_text_as_tier2() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     decision = runtime.decide_from_transcript(
@@ -72,8 +72,8 @@ def test_runtime_annotates_redirect_as_tier1_during_stability_wait() -> None:
         event_time_ms=100.0,
     )
 
-    assert decision.tier == "tier1_redirect"
-    assert decision.topic_switch_hint is True
+    assert decision.tier == "tier2_interruption"
+    assert decision.topic_switch_hint is False
 
 
 def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
@@ -98,7 +98,7 @@ def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
     assert decision.reason.startswith("stable_normal_interrupt")
 
 
-def test_runtime_annotates_backchannel_noise_as_tier3() -> None:
+def test_runtime_annotates_short_weak_signal_as_tier3() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     decision = runtime.decide_from_transcript(
@@ -110,7 +110,7 @@ def test_runtime_annotates_backchannel_noise_as_tier3() -> None:
     )
 
     assert decision.tier == "tier3_backchannel_noise"
-    assert decision.tier_reason.startswith("intent:backchannel")
+    assert decision.tier_reason.startswith("weak_signal_short_transcript")
 
 
 def test_runtime_hard_stop_bypasses_stable_signal_window() -> None:
@@ -128,7 +128,7 @@ def test_runtime_hard_stop_bypasses_stable_signal_window() -> None:
     assert decision.reason.startswith("intent:hard_stop")
 
 
-def test_runtime_correction_waits_for_short_stability_window() -> None:
+def test_runtime_short_correction_text_waits_for_more_evidence() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     first = runtime.decide_from_transcript(
@@ -154,12 +154,11 @@ def test_runtime_correction_waits_for_short_stability_window() -> None:
     )
 
     assert first.action is Action.HOLD
-    assert first.reason.startswith("stable_signal_wait")
-    assert first.hold_recheck_ms == 120
+    assert "insufficient_transcript_evidence" in first.reason
+    assert first.hold_recheck_ms is None
     assert second.action is Action.HOLD
-    assert second.hold_recheck_ms == 40
-    assert third.action is Action.CANCEL
-    assert third.correction_hint is True
+    assert third.action is Action.HOLD
+    assert third.correction_hint is False
 
 
 def test_runtime_hard_stop_prefix_bypasses_stability_window() -> None:
@@ -179,7 +178,7 @@ def test_runtime_hard_stop_prefix_bypasses_stability_window() -> None:
     assert decision.tier == "tier0_hard_stop"
 
 
-def test_runtime_long_topic_prefix_uses_stability_window() -> None:
+def test_runtime_long_topic_text_uses_normal_stability_window() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     first = runtime.decide_from_transcript(
@@ -201,22 +200,22 @@ def test_runtime_long_topic_prefix_uses_stability_window() -> None:
         0.0,
         vad_active=True,
         agent_speaking=True,
-        event_time_ms=230.0,
+        event_time_ms=470.0,
     )
 
     assert first.action is Action.HOLD
-    assert first.reason.startswith("stable_signal_wait")
-    assert first.hold_recheck_ms == 120
-    assert first.topic_switch_hint is True
+    assert first.reason.startswith("semantic_score_wait")
+    assert first.hold_recheck_ms == 350
+    assert first.topic_switch_hint is False
     assert too_soon.action is Action.HOLD
-    assert too_soon.hold_recheck_ms == 40
+    assert too_soon.hold_recheck_ms == 270
     assert stable.action is Action.CANCEL
-    assert stable.intent.value == "topic_switch"
-    assert stable.intent_source == "lexicon_prefix"
-    assert stable.topic_switch_hint is True
+    assert stable.intent.value == "normal_interrupt"
+    assert stable.intent_source == "stable_signal"
+    assert stable.topic_switch_hint is False
 
 
-def test_runtime_correction_final_can_confirm_without_waiting_window() -> None:
+def test_runtime_short_correction_final_still_needs_semantic_score() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     decision = runtime.decide_from_transcript(
@@ -228,11 +227,11 @@ def test_runtime_correction_final_can_confirm_without_waiting_window() -> None:
         event_time_ms=100.0,
     )
 
-    assert decision.action is Action.CANCEL
-    assert decision.correction_hint is True
+    assert decision.action is Action.HOLD
+    assert decision.correction_hint is False
 
 
-def test_runtime_late_correction_after_vad_end_bypasses_stable_window() -> None:
+def test_runtime_late_correction_text_after_vad_end_waits_for_semantics() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     decision = runtime.decide_from_transcript(
@@ -243,8 +242,8 @@ def test_runtime_late_correction_after_vad_end_bypasses_stable_window() -> None:
         event_time_ms=100.0,
     )
 
-    assert decision.action is Action.CANCEL
-    assert decision.correction_hint is True
+    assert decision.action is Action.HOLD
+    assert decision.correction_hint is False
 
 
 def test_runtime_normal_interrupt_requires_stable_substantive_text() -> None:

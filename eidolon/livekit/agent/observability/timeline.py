@@ -284,6 +284,7 @@ class TurnTimeline:
         self.attrs["rollback_drop_buffered"] = rollback_drop_buffered
         if _is_actionable_transcript_decision(
             action=action,
+            reason=reason,
             intent=intent,
             topic_switch_hint=topic_switch_hint,
             correction_hint=correction_hint,
@@ -553,12 +554,15 @@ def _duration_ms(start: float, end: float) -> float | None:
 def _is_actionable_transcript_decision(
     *,
     action: str,
+    reason: str,
     intent: str | None,
     topic_switch_hint: bool,
     correction_hint: bool,
 ) -> bool:
     if action not in {"cancel", "hold"}:
         return False
+    if action == "hold" and reason.startswith("semantic_score_wait"):
+        return True
     if intent in {
         "hard_stop",
         "topic_switch",

@@ -14,9 +14,9 @@ from eidolon.livekit.common.config import TurnPolicyConfig
 from .constants import TRANSCRIPT_PREVIEW_MAX_CHARS
 from .intent_classifier import (
     InterruptIntent,
-    LexiconInterruptClassifier,
-    is_semantic_interrupt_prefix,
+    hard_stop_intent,
 )
+from .evidence import TranscriptEvidenceGate
 
 
 class AdmissionAction(str, Enum):
@@ -41,6 +41,7 @@ class AttentionInput:
     agent_speaking: bool
     client_state: ClientAudioState | None = None
     transcript: str = ""
+    eot_score: float = 0.0
 
 
 class AttentionAdmission:
@@ -52,7 +53,7 @@ class AttentionAdmission:
 
     def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config.attention
-        self._classifier = LexiconInterruptClassifier()
+        self._evidence_gate = TranscriptEvidenceGate(config.interrupt)
 
     def decide(self, signal: AttentionInput) -> AttentionDecision:
         text = signal.transcript.strip()
@@ -96,12 +97,7 @@ class AttentionAdmission:
             )
 
         if text:
-            intent = self._classifier.classify(
-                text,
-                vad_active=True,
-                agent_speaking=signal.agent_speaking,
-                eot_score=0.0,
-            ).intent
+            intent = hard_stop_intent(text)
             if intent is InterruptIntent.HARD_STOP:
                 return AttentionDecision(
                     AdmissionAction.HARD_INTERRUPT,
@@ -109,21 +105,15 @@ class AttentionAdmission:
                     transcript_preview=preview,
                     client_state_used=True,
                 )
-            if intent in (InterruptIntent.TOPIC_SWITCH, InterruptIntent.CORRECTION):
-                return AttentionDecision(
-                    AdmissionAction.DUCK_AND_DECIDE,
-                    f"transcript_{intent.value}",
-                    transcript_preview=preview,
-                    client_state_used=True,
-                )
-            if is_semantic_interrupt_prefix(
+
+            evidence = self._evidence_gate.evaluate_attention(
                 text,
-                min_chars=1,
-                include_attention_early_duck=True,
-            ):
+                eot_score=signal.eot_score,
+            )
+            if evidence.allow_decision:
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,
-                    "transcript_semantic_prefix",
+                    f"transcript_evidence:{evidence.reason}",
                     transcript_preview=preview,
                     client_state_used=True,
                 )

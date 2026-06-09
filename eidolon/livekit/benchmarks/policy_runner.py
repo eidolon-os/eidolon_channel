@@ -57,12 +57,19 @@ def run_policy_suite(
                     continue
                 texts = step.interims or (step.text,)
                 for index, text in enumerate(texts):
+                    is_final = index == len(texts) - 1
                     event_time_ms = step.start_ms + index * 80
+                    eot_score = (
+                        step.eot_scores[index]
+                        if index < len(step.eot_scores)
+                        else 0.0
+                    )
                     attention = runtime.admit_attention(
                         AttentionInput(
                             agent_speaking=step.agent_speaking,
                             client_state=_client_audio_state(step),
                             transcript=text,
+                            eot_score=eot_score,
                         )
                     )
                     decision_record = {
@@ -105,9 +112,10 @@ def run_policy_suite(
                         break
                     decision = runtime.decide_from_transcript(
                         text,
-                        0.0,
+                        eot_score,
                         vad_active=True,
                         agent_speaking=step.agent_speaking,
+                        is_final=is_final,
                         event_time_ms=event_time_ms,
                     )
                     decision_record["decision"] = {

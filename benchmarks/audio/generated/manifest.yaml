@@ -11,9 +11,15 @@ clips:
   hard_stop_dont:
     path: benchmarks/audio/generated/hard_stop_dont.wav
     text: 别说了。
+  hard_stop_ok_dont:
+    path: benchmarks/audio/generated/hard_stop_ok_dont.wav
+    text: 行，不要说了。
   hard_stop_stop:
     path: benchmarks/audio/generated/hard_stop_stop.wav
     text: 停一下。
+  language_switch_english:
+    path: benchmarks/audio/generated/language_switch_english.wav
+    text: 我们换成英文，然后聊。
   noise_like_cough:
     path: benchmarks/audio/generated/noise_like_cough.wav
     text: 咳。
@@ -23,6 +29,12 @@ clips:
   normal_followup:
     path: benchmarks/audio/generated/normal_followup.wav
     text: 那它的主要风险是什么？
+  owner_followup_capability:
+    path: benchmarks/audio/generated/owner_followup_capability.wav
+    text: 那你现在能帮我做什么？
   topic_switch:
     path: benchmarks/audio/generated/topic_switch.wav
     text: 换个话题，我们聊点别的。
+  wait_one_second:
+    path: benchmarks/audio/generated/wait_one_second.wav
+    text: 等一秒。

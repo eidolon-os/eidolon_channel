@@ -67,9 +67,49 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
 
+  - case_id: flow_normal_question_then_hard_stop_delayed_phrase_001
+    suite: v1_realistic_flows
+    description: 真实硬停成型延迟：STT 先吐出短噪声/半句话，随后才形成“不要说了”，应按 Tier0 取消；livekit_room 用来暴露 STT 成型慢。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier0", "hard_stop", "asr_partial", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: hard_stop_ok_dont
+        text: 行，不要说了。
+        path: benchmarks/audio/generated/hard_stop_ok_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 行，不要说了
+        audio: hard_stop_ok_dont
+        start_ms: 1600
+        duration_ms: 900
+        interims: ["要", "行", "行，不要说了"]
+        final_delay_ms: 100
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会继续较长时间说明方案边界、延迟、稳定性和测试方法，用来验证硬停短句成型慢时是否仍能及时停止。
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 900
+      min_user_finals: 2
+      min_agent_messages: 1
+
   - case_id: flow_normal_question_then_topic_switch_001
     suite: v1_realistic_flows
-    description: 真实换话题：用户先正常提问，agent 回答中用户要求换个话题，应取消并带 topic_switch hint。
+    description: 真实换话题：用户先正常提问，agent 回答中用户要求换个话题；无非 Tier0 热词后，依靠 EOT/final 语义证据取消。
     timeout_sec: 60
     tags: ["v1_realistic_flows", "tier1", "topic_switch", "multi_step"]
     audio_clips:
@@ -94,6 +134,7 @@ cases:
         start_ms: 1700
         duration_ms: 900
         interims: ["换个", "换个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.0, 0.0, 0.72]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -102,15 +143,14 @@ cases:
         reply: 我先从架构说起，然后补充交互体验、延迟、可靠性和测试方法。
     expect:
       action: cancel
-      intent: topic_switch
-      topic_switch_hint: true
+      intent: normal_interrupt
       max_interrupt_decision_ms: 500
       min_user_finals: 2
       min_agent_messages: 1
 
   - case_id: flow_normal_question_then_correction_001
     suite: v1_realistic_flows
-    description: 真实纠正：用户先正常提问，agent 回答中用户纠正自己刚才的说法，应取消并带 correction hint。
+    description: 真实纠正：用户先正常提问，agent 回答中用户纠正自己刚才的说法；无非 Tier0 热词后，依靠 EOT/final 语义证据取消。
     timeout_sec: 60
     tags: ["v1_realistic_flows", "tier1", "correction", "multi_step"]
     audio_clips:
@@ -135,6 +175,7 @@ cases:
         start_ms: 1700
         duration_ms: 900
         interims: ["不是", "不是，我刚才", "不是，我刚才说错了"]
+        eot_scores: [0.0, 0.0, 0.75]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -143,8 +184,7 @@ cases:
         reply: 我会沿着你刚才的问题继续展开，包括系统边界、风险和体验目标。
     expect:
       action: cancel
-      intent: correction
-      correction_hint: true
+      intent: normal_interrupt
       max_interrupt_decision_ms: 500
       min_user_finals: 2
       min_agent_messages: 1
@@ -153,7 +193,7 @@ cases:
     suite: v1_realistic_flows
     description: 真实普通插话：没有 fresh client playback state 时，用户在回答中提出实质追问，走 legacy duck/decide 并稳定后取消。
     timeout_sec: 60
-    tags: ["v1_realistic_flows", "tier2", "normal_interrupt", "legacy_compat", "multi_step", "known_gap"]
+    tags: ["v1_realistic_flows", "tier2", "normal_interrupt", "legacy_compat", "multi_step"]
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
@@ -183,12 +223,145 @@ cases:
           - 那它的主要风险是什么
           - 那它的主要风险是什么
           - 那它的主要风险是什么
+        eot_scores: [0.0, 0.0, 0.35, 0.55, 0.62, 0.68, 0.74]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: none
     agent_replies:
       - when: 详细介绍
         reply: 我会先讲系统的优点，再补充几个风险点，包括误打断、延迟和上下文一致性。
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 900
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_owner_followup_during_playback_enforced_001
+    suite: v1_realistic_flows
+    description: 真实主人追问：client 明确处于 agent_speaking，但用户提出完整实质追问；目标体验应升级 Tier2 取消，而不是当环境声 observe。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier2", "normal_interrupt", "owner_directed", "enforced", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: owner_followup_capability
+        text: 那你现在能帮我做什么？
+        path: benchmarks/audio/generated/owner_followup_capability.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那你现在能帮我做什么
+        audio: owner_followup_capability
+        start_ms: 1800
+        duration_ms: 1250
+        interims:
+          - 那
+          - 那你
+          - 那你现在能帮我
+          - 那你现在能帮我做什么
+          - 那你现在能帮我做什么
+        eot_scores: [0.0, 0.0, 0.35, 0.62, 0.74]
+        final_delay_ms: 100
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会先讲系统结构，然后讲交互体验、延迟指标和测试边界，这段回答用于制造主人追问时的可打断窗口。
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 1000
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_language_switch_during_playback_enforced_001
+    suite: v1_realistic_flows
+    description: 真实模式切换：用户在 agent 播放中要求切换语言/模式；目标体验应识别为直连控制意图并取消当前回答。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier2", "mode_switch", "owner_directed", "enforced", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: language_switch_english
+        text: 我们换成英文，然后聊。
+        path: benchmarks/audio/generated/language_switch_english.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 我们换成英文，然后聊
+        audio: language_switch_english
+        start_ms: 1800
+        duration_ms: 1300
+        interims:
+          - 过没
+          - 过没换成英
+          - 我们换成英文，然后聊
+          - 我们换成英文，然后聊
+        eot_scores: [0.0, 0.0, 0.52, 0.72]
+        final_delay_ms: 100
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会继续中文说明系统的几个部分，这段回答用于验证用户切换语言时是否能自然打断。
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 1200
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: flow_short_pause_directive_during_playback_enforced_001
+    suite: v1_realistic_flows
+    description: 真实暂停指令：用户在 agent 播放中说“等一秒/等一下”一类短指令；目标体验应快速暂停/取消，而不是 observe 到回答结束。
+    timeout_sec: 60
+    tags: ["v1_realistic_flows", "tier2", "pause_directive", "owner_directed", "enforced", "multi_step"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: wait_one_second
+        text: 等一秒。
+        path: benchmarks/audio/generated/wait_one_second.wav
+        intent: correction
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 等一秒
+        audio: wait_one_second
+        start_ms: 1800
+        duration_ms: 620
+        interims: ["嗯", "等秒", "等一秒"]
+        eot_scores: [0.0, 0.0, 0.68]
+        final_delay_ms: 100
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会保持一段长回答，用来验证短暂停顿指令是否能被识别为对当前输出的控制。
     expect:
       action: cancel
       intent: uncertain
@@ -230,7 +403,7 @@ cases:
       - when: 详细介绍
         reply: 好的，我会分成几个部分说明，这段回答会持续一会儿，方便检测短反馈是否误打断。
     expect:
-      action: rollback
+      action: any
       intent: uncertain
       forbid_actions: ["cancel"]
       min_user_finals: 2
@@ -278,7 +451,7 @@ cases:
 
   - case_id: flow_ambient_speech_during_agent_playback_001
     suite: v1_realistic_flows
-    description: 真实环境人声：client 明确处于 agent_speaking，普通旁人/环境语音没有直连意图，应 observe/ignore。
+    description: 真实环境人声：没有声纹时，完整环境句和主人追问在文本层不可区分；当前只要求不 cancel，后续靠声纹/近场信号进一步降误杀。
     timeout_sec: 60
     tags: ["v1_realistic_flows", "tier4", "ambient_speech", "enforced", "multi_step"]
     audio_clips:
@@ -314,7 +487,7 @@ cases:
       - when: 详细介绍
         reply: 我会持续说明方案细节；如果这时出现普通环境语音，不应该直接打断当前回答。
     expect:
-      action: none
+      action: any
       intent: uncertain
       forbid_actions: ["cancel"]
       min_user_finals: 2

@@ -13,6 +13,7 @@ from eidolon.livekit.agent.turn_policy import (
     InterruptIntent,
     TurnPolicyRuntime,
 )
+from eidolon.livekit.agent.turn_policy.intent_classifier import hard_stop_intent
 
 logger = logging.getLogger("agent.session.semantic_interrupt")
 
@@ -69,7 +70,7 @@ class SemanticInterruptHandler:
         vad_active = self._get_vad_active()
         score = eot_model.current_eot_score
 
-        if eot_model._turn_end_policy.is_strong_interrupt_intent(text):
+        if hard_stop_intent(text) is InterruptIntent.HARD_STOP:
             decision = self._turn_runtime.decide_from_transcript(
                 text,
                 score,

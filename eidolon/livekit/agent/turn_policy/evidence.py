@@ -15,6 +15,14 @@ class TranscriptEvidence:
     latin_chars: int
 
 
+@dataclass(frozen=True)
+class AttentionEvidence:
+    allow_decision: bool
+    reason: str
+    cjk_chars: int
+    latin_chars: int
+
+
 class TranscriptEvidenceGate:
     """Separate transcript quality from interrupt intent classification.
 
@@ -54,6 +62,43 @@ class TranscriptEvidenceGate:
         if eot_score >= self._config.early_cancel_score_threshold and cjk > 0:
             return TranscriptEvidence(True, "high_eot_with_cjk", cjk, latin)
         return TranscriptEvidence(False, "insufficient_transcript_evidence", cjk, latin)
+
+    def evaluate_attention(
+        self,
+        text: str,
+        *,
+        eot_score: float = 0.0,
+    ) -> AttentionEvidence:
+        """Gate overlapping playback before ducking/EOT side effects.
+
+        Attention admission should not classify intent. It only decides whether
+        the transcript is substantive enough to leave Tier4 observation and let
+        the normal turn policy decide. Tier0 hard-stop is handled before this.
+        """
+
+        stripped = text.strip()
+        cjk = _count_cjk(stripped)
+        latin = _count_latin(stripped)
+        if not self._config.transcript_evidence_gate_enabled:
+            return AttentionEvidence(True, "gate_disabled", cjk, latin)
+        if not stripped:
+            return AttentionEvidence(False, "empty_transcript", cjk, latin)
+        if (
+            cjk == 0
+            and latin > 0
+            and latin <= self._config.latin_artifact_hold_max_chars
+        ):
+            return AttentionEvidence(False, "short_latin_artifact", cjk, latin)
+        if (
+            eot_score >= self._config.early_cancel_score_threshold
+            and (cjk > 0 or latin > 0)
+        ):
+            return AttentionEvidence(True, "high_eot_transcript", cjk, latin)
+        if cjk >= self._config.min_normal_interim_cjk_chars:
+            return AttentionEvidence(True, "substantive_cjk_transcript", cjk, latin)
+        if latin > self._config.latin_artifact_hold_max_chars:
+            return AttentionEvidence(True, "substantive_latin_transcript", cjk, latin)
+        return AttentionEvidence(False, "insufficient_transcript_evidence", cjk, latin)
 
 
 def _count_cjk(text: str) -> int:

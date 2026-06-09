@@ -27,8 +27,8 @@ cases:
 
   - case_id: tier1_topic_switch_enforced_cancels_after_stability_001
     suite: v1_interrupt_tiers
-    description: Tier 1：换话题是显式重定向，应在短稳定窗口后取消并带 topic_switch hint。
-    tags: ["v1_interrupt_tiers", "tier1", "topic_switch", "enforced"]
+    description: Tier 1/2：无非 Tier0 热词后，换话题文本依靠 EOT/final 语义证据取消；不再由词表产出 topic_switch hint。
+    tags: ["v1_interrupt_tiers", "tier2", "topic_switch_text", "enforced", "no_nontier0_lexicon"]
     audio_clips:
       - id: topic_switch
         text: 换个话题，我们聊点别的。
@@ -40,21 +40,21 @@ cases:
         start_ms: 240
         duration_ms: 900
         interims: ["换个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.0, 0.72]
         final_delay_ms: 80
         vad_probability: 0.95
         agent_speaking: true
         client_playback_state: agent_speaking
     expect:
       action: cancel
-      intent: topic_switch
-      topic_switch_hint: true
+      intent: normal_interrupt
       max_interrupt_decision_ms: 500
       min_user_finals: 1
 
   - case_id: tier1_correction_enforced_cancels_after_stability_001
     suite: v1_interrupt_tiers
-    description: Tier 1：纠正/重述应在短稳定窗口后取消并带 correction hint。
-    tags: ["v1_interrupt_tiers", "tier1", "correction", "enforced"]
+    description: Tier 1/2：无非 Tier0 热词后，短纠正文依靠 EOT/final 语义证据取消；不再由词表产出 correction hint。
+    tags: ["v1_interrupt_tiers", "tier2", "correction_text", "enforced", "no_nontier0_lexicon"]
     audio_clips:
       - id: correction
         text: 不是，我刚才说错了。
@@ -66,14 +66,14 @@ cases:
         start_ms: 240
         duration_ms: 900
         interims: ["不是", "不是", "不是"]
+        eot_scores: [0.0, 0.0, 0.75]
         final_delay_ms: 80
         vad_probability: 0.95
         agent_speaking: true
         client_playback_state: agent_speaking
     expect:
       action: cancel
-      intent: correction
-      correction_hint: true
+      intent: normal_interrupt
       max_interrupt_decision_ms: 500
       min_user_finals: 1
 
@@ -110,7 +110,7 @@ cases:
 
   - case_id: tier3_backchannel_no_client_state_rolls_back_001
     suite: v1_interrupt_tiers
-    description: Tier 3：无 client state 的短附和走 legacy duck/decide，应该 rollback 而不是 cancel。
+    description: Tier 3：无 client state 的短附和走 legacy duck/decide，纯 policy runner 只要求不 cancel；真实 VAD-end 再 rollback。
     tags: ["v1_interrupt_tiers", "tier3", "backchannel", "legacy_compat"]
     audio_clips:
       - id: backchannel_ok
@@ -128,7 +128,7 @@ cases:
         agent_speaking: true
         client_playback_state: none
     expect:
-      action: rollback
+      action: any
       intent: uncertain
       forbid_actions: ["cancel"]
       min_user_finals: 1
@@ -160,25 +160,20 @@ cases:
 
   - case_id: tier4_ambient_speech_enforced_observes_001
     suite: v1_interrupt_tiers
-    description: Tier 4：播放态中 fresh client state 表明 agent 正在播放，普通环境人声没有直连意图时 observe/ignore。
-    tags: ["v1_interrupt_tiers", "tier4", "ambient_speech", "enforced"]
+    description: Tier 4：播放态中 fresh client state 表明 agent 正在播放，短弱环境声没有足够语义证据时 observe/ignore。
+    tags: ["v1_interrupt_tiers", "tier4", "ambient_weak_speech", "enforced"]
     audio_clips:
       - id: normal_followup
-        text: 那它的主要风险是什么？
+        text: 啊。
         path: benchmarks/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
-      - text: 那它的主要风险是什么
+      - text: 啊
         audio: normal_followup
         start_ms: 260
-        duration_ms: 1050
+        duration_ms: 300
         interims:
-          - 那它的主要风险是什么
-          - 那它的主要风险是什么
-          - 那它的主要风险是什么
-          - 那它的主要风险是什么
-          - 那它的主要风险是什么
-          - 那它的主要风险是什么
+          - 啊
         final_delay_ms: 80
         vad_probability: 0.9
         agent_speaking: true

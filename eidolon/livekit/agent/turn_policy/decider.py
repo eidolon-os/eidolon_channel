@@ -13,13 +13,12 @@ from .intent_classifier import (
     LexiconInterruptClassifier,
     canonicalize_interrupt_text,
     hard_stop_prefix_intent,
-    is_semantic_interrupt_prefix,
-    semantic_interrupt_prefix_intent,
 )
 from .constants import (
     DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
     SEMANTIC_SCORE_WAIT_REASON_PREFIX,
     TRANSCRIPT_EVIDENCE_HOLD_REASON_PREFIX,
+    WEAK_SIGNAL_SHORT_TRANSCRIPT_REASON_PREFIX,
 )
 from .evidence import TranscriptEvidenceGate
 
@@ -134,34 +133,6 @@ class InterruptDecider:
                 intent_confidence=0.90,
             )
 
-        prefix_intent = semantic_interrupt_prefix_intent(
-            stripped,
-            min_chars=self._config.min_interim_chars,
-            min_cjk_chars=self._config.min_normal_interim_cjk_chars,
-        )
-        if prefix_intent in (InterruptIntent.TOPIC_SWITCH, InterruptIntent.CORRECTION):
-            return Decision(
-                action=Action.CANCEL,
-                reason=f"prefix_intent:{prefix_intent.value} text={stripped}",
-                intent=prefix_intent,
-                intent_source="lexicon_prefix",
-                intent_confidence=0.65,
-                topic_switch_hint=prefix_intent is InterruptIntent.TOPIC_SWITCH,
-                correction_hint=prefix_intent is InterruptIntent.CORRECTION,
-            )
-
-        if is_semantic_interrupt_prefix(
-            stripped,
-            min_chars=self._config.min_interim_chars,
-        ):
-            return Decision(
-                action=Action.HOLD,
-                reason=f"semantic_prefix text={stripped}",
-                intent=InterruptIntent.UNCERTAIN,
-                intent_source="lexicon",
-                intent_confidence=0.0,
-            )
-
         if len(stripped) >= self._config.min_interim_chars:
             evidence = self._evidence_gate.evaluate(
                 stripped,
@@ -191,6 +162,22 @@ class InterruptDecider:
                     intent_source="eot",
                     intent_confidence=score,
                 )
+            final_cancel_threshold = max(
+                self._config.early_resume_score_threshold,
+                self._config.early_cancel_score_threshold - 0.10,
+            )
+            if is_final and score >= final_cancel_threshold:
+                return Decision(
+                    action=Action.CANCEL,
+                    reason=(
+                        "final_eot_score_high "
+                        f"score={score:.2f}>={final_cancel_threshold:.2f} "
+                        f"evidence={evidence.reason}"
+                    ),
+                    intent=InterruptIntent.NORMAL_INTERRUPT,
+                    intent_source="eot_final",
+                    intent_confidence=score,
+                )
             return Decision(
                 action=Action.HOLD,
                 reason=(
@@ -213,6 +200,15 @@ class InterruptDecider:
                 intent=InterruptIntent.NORMAL_INTERRUPT,
                 intent_source="eot",
                 intent_confidence=score,
+            )
+
+        if len(stripped) < self._config.min_interim_chars and score == 0.0:
+            return Decision(
+                action=Action.HOLD,
+                reason=f"{WEAK_SIGNAL_SHORT_TRANSCRIPT_REASON_PREFIX} len={len(stripped)}",
+                intent=InterruptIntent.UNCERTAIN,
+                intent_source=intent.source,
+                intent_confidence=0.0,
             )
 
         if 0.0 < score <= self._config.early_resume_score_threshold:
@@ -275,17 +271,6 @@ class InterruptDecider:
             )
             if forced is not None:
                 return forced
-            if is_semantic_interrupt_prefix(
-                text,
-                min_chars=self._config.min_interim_chars,
-            ):
-                return Decision(
-                    action=Action.HOLD,
-                    reason=f"deadline_semantic_prefix text={text}",
-                    intent=InterruptIntent.UNCERTAIN,
-                    intent_source="lexicon",
-                    intent_confidence=0.0,
-                )
             evidence = self._evidence_gate.evaluate(
                 text,
                 is_final=False,

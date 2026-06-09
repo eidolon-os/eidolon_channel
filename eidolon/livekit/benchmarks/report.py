@@ -437,6 +437,10 @@ def _case_overview_rows(
         ("timeline_intents", "timeline 意图"),
         ("timeline_decision_intents", "timeline 决策意图"),
         ("forbid_actions", "禁止动作"),
+        ("timeline_interrupted_context_count", "被打断上下文捕获次数"),
+        ("timeline_interrupted_context_source", "被打断上下文来源"),
+        ("timeline_interrupted_context_played_seconds", "用户已听时长"),
+        ("timeline_interrupted_context_preview", "被打断内容预览"),
     ):
         value = metrics.get(key)
         if value not in (None, ""):

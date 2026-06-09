@@ -473,6 +473,10 @@ def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> N
                     "actual_action": "cancel",
                     "expected_intent": "hard_stop",
                     "actual_intent": "hard_stop",
+                    "timeline_interrupted_context_count": 1,
+                    "timeline_interrupted_context_source": "tts_in_flight",
+                    "timeline_interrupted_context_played_seconds": 1.2,
+                    "timeline_interrupted_context_preview": "上一轮被打断的回答",
                     "timeline_interrupt_speech_to_first_transcript_ms": 240.0,
                     "timeline_interrupt_first_transcript_to_resolved_ms": 20.0,
                     "timeline_interrupt_speech_to_resolved_ms": 260.0,
@@ -502,6 +506,8 @@ def test_write_repeated_reports_emits_interrupt_latency_breakdown(tmp_path) -> N
     assert "`timeline_interrupt_speech_to_first_transcript_ms`" in markdown
     assert "VAD 起声 -> 首次转写" in markdown
     assert "判定摘要" in markdown
+    assert "被打断上下文来源" in markdown
+    assert "上一轮被打断的回答" in markdown
     assert "关键指标" in markdown
     assert "决策路径" in markdown
     assert "该用例完成 `hard_stop` 打断" in markdown
@@ -1497,6 +1503,10 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"voice-bench-hard_interrupt_001-1234abcd",'
             '"interrupt_action":"cancel",'
             '"decision":{"intent":"hard_stop","hold_recheck_ms":40},'
+            '"interrupted_context":{'
+            '"source":"tts_in_flight",'
+            '"played_seconds":1.2,'
+            '"text_preview":"上一轮被打断的回答"},'
             '"provider_latency_ms":{'
             '"interrupt_speech_to_first_transcript_ms":310,'
             '"stt_speech_to_actionable_transcript_ms":360,'
@@ -1525,6 +1535,10 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_decision_hold_recheck_ms"] == 40
     assert metrics["timeline_stt_provider_partial_to_livekit_interim_ms"] == 22
     assert metrics["timeline_vad_start_to_interrupt_resolved"] == 380
+    assert metrics["timeline_interrupted_context_count"] == 1
+    assert metrics["timeline_interrupted_context_source"] == "tts_in_flight"
+    assert metrics["timeline_interrupted_context_played_seconds"] == 1.2
+    assert metrics["timeline_interrupted_context_preview"] == "上一轮被打断的回答"
 
 
 def test_livekit_room_timeline_expectations_ignore_stale_retry_room(

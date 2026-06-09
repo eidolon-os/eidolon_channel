@@ -41,6 +41,7 @@ def apply_timeline_expectations(
             _decision_intents(case_records)
         )
         result.metrics.update(_latency_metrics(case_records))
+        result.metrics.update(_interrupted_context_metrics(case_records))
 
         expected = expectations.get(result.case_id)
         if expected is None:
@@ -363,6 +364,34 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
         for key, values in sorted(samples.items())
         if values
     }
+
+
+def _interrupted_context_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose interrupted-context capture so reports can diagnose repetition."""
+
+    contexts: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        context = _mapping(attrs.get("interrupted_context"))
+        if context:
+            contexts.append(context)
+    if not contexts:
+        return {}
+
+    latest = contexts[-1]
+    metrics: dict[str, Any] = {
+        "timeline_interrupted_context_count": len(contexts),
+    }
+    source = latest.get("source")
+    if isinstance(source, str) and source:
+        metrics["timeline_interrupted_context_source"] = source
+    played_seconds = _number(latest.get("played_seconds"))
+    if played_seconds is not None:
+        metrics["timeline_interrupted_context_played_seconds"] = played_seconds
+    preview = latest.get("text_preview")
+    if isinstance(preview, str) and preview:
+        metrics["timeline_interrupted_context_preview"] = preview
+    return metrics
 
 
 def _mapping(value: Any) -> dict[str, Any]:

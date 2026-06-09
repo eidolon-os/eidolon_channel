@@ -185,6 +185,17 @@ def test_final_substantive_transcript_still_waits_for_semantics() -> None:
     assert "final=true" in decision.reason
 
 
+def test_final_low_eot_score_rolls_back_substantive_text() -> None:
+    """A final transcript with explicit low EOT confidence is a false interrupt."""
+    d = InterruptDecider(min_interim_chars=2, early_resume_score_threshold=0.2)
+
+    decision = d.on_stt_interim("好的", score=0.1, is_final=True)
+
+    assert decision.action is Action.ROLLBACK
+    assert decision.reason.startswith("final_eot_score_low")
+    assert decision.intent_source == "eot_final"
+
+
 def test_first_signal_holds_single_char_backchannel() -> None:
     """Single-char backchannel fragments wait for more speech evidence."""
     d = InterruptDecider(min_interim_chars=2)

@@ -191,6 +191,19 @@ class InterruptDecider:
                     intent_source="eot_final",
                     intent_confidence=score,
                 )
+            if is_final and 0.0 < score <= self._config.early_resume_score_threshold:
+                return Decision(
+                    action=Action.ROLLBACK,
+                    reason=(
+                        "final_eot_score_low "
+                        f"score={score:.2f}<={self._config.early_resume_score_threshold:.2f} "
+                        f"evidence={evidence.reason}"
+                    ),
+                    rollback_drop_buffered=False,
+                    intent=intent.intent,
+                    intent_source="eot_final",
+                    intent_confidence=score,
+                )
             return Decision(
                 action=Action.HOLD,
                 reason=(

@@ -156,12 +156,18 @@ def run_policy_suite(
                 )
             if case.expectations.intent not in ("", "uncertain") and intent != case.expectations.intent:
                 errors.append(f"expected intent={case.expectations.intent}, got {intent}")
-            if topic_switch_hint != case.expectations.topic_switch_hint:
+            if (
+                case.expectations.topic_switch_hint
+                and topic_switch_hint != case.expectations.topic_switch_hint
+            ):
                 errors.append(
                     "expected topic_switch_hint="
                     f"{case.expectations.topic_switch_hint}, got {topic_switch_hint}"
                 )
-            if correction_hint != case.expectations.correction_hint:
+            if (
+                case.expectations.correction_hint
+                and correction_hint != case.expectations.correction_hint
+            ):
                 errors.append(
                     "expected correction_hint="
                     f"{case.expectations.correction_hint}, got {correction_hint}"

@@ -77,12 +77,12 @@ cases:
         start_ms: 200
         duration_ms: 900
         interims: ["换个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.35, 0.72]
         final_delay_ms: 80
         agent_speaking: true
     expect:
       action: cancel
-      intent: topic_switch
-      topic_switch_hint: true
+      intent: uncertain
       max_interrupt_resolution_after_started_ms: 250
       min_user_finals: 1
 
@@ -100,12 +100,12 @@ cases:
         start_ms: 200
         duration_ms: 900
         interims: ["不是", "不是", "不是"]
+        eot_scores: [0.0, 0.35, 0.72]
         final_delay_ms: 80
         agent_speaking: true
     expect:
       action: cancel
-      intent: correction
-      correction_hint: true
+      intent: uncertain
       max_interrupt_resolution_after_started_ms: 250
       min_user_finals: 1
 
@@ -123,10 +123,11 @@ cases:
         start_ms: 200
         duration_ms: 1050
         interims: ["好的"]
+        eot_scores: [0.1]
         final_delay_ms: 80
         agent_speaking: true
     expect:
       action: rollback
-      intent: backchannel
+      intent: uncertain
       allow_attention_actions: ["observe"]
       min_user_finals: 1

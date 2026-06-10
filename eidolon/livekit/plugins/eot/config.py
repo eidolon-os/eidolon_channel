@@ -113,7 +113,7 @@ class EidolonEOTConfig:
     # to STT interim and decides:
     #
     #   strong intent / score ≥ ``early_cancel_score_threshold``
-    #     → mixer.cancel() + session.interrupt()
+    #     → mixer.cancel() + session.interrupt(force=True)
     #       Buffer is discarded (real interrupt, no resume).
     #
     #   semantic score 0.0 (filler/too-short) OR

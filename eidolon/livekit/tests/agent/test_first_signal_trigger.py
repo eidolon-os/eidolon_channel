@@ -179,15 +179,15 @@ def test_first_signal_strips_punctuation() -> None:
     pipeline._duck_mixer.cancel.assert_not_called()
 
 
-def test_fallback_semantic_correction_cancels_after_late_interim() -> None:
-    """Late STT text after VAD-end still drives semantic turn control."""
+def test_fallback_semantic_correction_waits_without_semantic_score() -> None:
+    """Late correction text after VAD-end waits for semantic confidence."""
     pipeline = _make_pipeline(vad_user_state="listening")
     pipeline._duck_mixer.state = "NORMAL"
 
     _run_semantic_check(pipeline, "我刚才说错了", is_final=False)
 
-    pipeline._duck_mixer.cancel.assert_called_once()
-    pipeline._interrupt_current_turn.assert_called_once()
+    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._interrupt_current_turn.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

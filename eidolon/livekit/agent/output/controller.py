@@ -390,7 +390,7 @@ class OutputController(lk_io.AudioOutput):
     def cancel(self) -> None:
         """Mark CANCELLED — discard buffer and drop all subsequent frames.
 
-        Caller must also invoke ``session.interrupt()`` to stop TTS.
+        Caller must also invoke ``session.interrupt(force=True)`` to stop TTS.
         """
         previous = self._state
         dropped = len(self._buffer)

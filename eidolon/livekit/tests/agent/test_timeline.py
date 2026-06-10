@@ -12,7 +12,7 @@ from eidolon.livekit.agent.client_audio_state import (
 )
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.common.config import ObservabilityConfig
+from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
 
 
 def test_timeline_marks_and_durations() -> None:
@@ -561,3 +561,40 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
 
     pipeline._callbacks.on_duck_resolved.assert_not_called()
     pipeline._session.interrupt.assert_not_called()
+
+
+def test_streaming_pipeline_turn_handling_disables_auto_interruption() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._allow_interruptions = True
+    pipeline._false_interruption_timeout = 6.0
+    pipeline._turn_policy = TurnPolicyConfig()
+
+    turn_handling = pipeline._agent_session_turn_handling()
+
+    assert turn_handling["interruption"] == {
+        "enabled": False,
+        "discard_audio_if_uninterruptible": True,
+        "false_interruption_timeout": 6.0,
+    }
+    assert turn_handling["preemptive_generation"] == {
+        "enabled": False,
+        "preemptive_tts": False,
+    }
+
+
+def test_streaming_pipeline_hard_interrupt_uses_force() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    eot = MagicMock()
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._allow_interruptions = True
+    pipeline._ducking = SimpleNamespace(is_cancelled=False)
+    pipeline._session = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+
+    pipeline._interrupt_current_turn()
+
+    pipeline._session.interrupt.assert_called_once_with(force=True)
+    eot.update_vad.assert_called_once_with(False)

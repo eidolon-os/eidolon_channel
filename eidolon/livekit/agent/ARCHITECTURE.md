@@ -78,7 +78,6 @@ eidolon/livekit/agent/
 ├── streaming.py              # StreamingPipeline: 实时会话总编排器
 ├── batch.py                  # BatchPipeline: 批量音频 blob 处理
 ├── client_audio_state.py     # Web/硬件客户端 audio_state 数据模型
-├── _framework_patches.py     # LiveKit framework 兼容性 patch
 ├── output_controller.py      # 兼容入口: re-export output.controller
 ├── filler.py                 # 兼容入口: re-export output.filler
 ├── ducking.py                # 兼容入口: ducking 模块迁移后的旧路径

@@ -51,8 +51,9 @@ What it adds beyond a plain probability score:
    and slightly different post-processing.
 
 When framework's interrupt path is active alongside this plugin,
-results conflict. We disable framework's auto-interrupt via
-``agent/_framework_patches.py`` so this plugin is the sole authority.
+results conflict. We disable framework auto-interrupt with the public
+``AgentSession.turn_handling.interruption.enabled = False`` config, while
+keeping this plugin as the EOT endpointing model.
 
 ============================================================================
 

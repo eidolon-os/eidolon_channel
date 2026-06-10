@@ -113,13 +113,6 @@ def _prewarm(proc) -> None:
     before any job is dispatched. Loading models here avoids cold-start latency
     on the first user audio frame.
     """
-    # Validate framework-internal patches are still applicable on this
-    # SDK version. Logs WARNING (not fatal) on untested versions —
-    # surfaces SDK upgrades that may have broken our patches before
-    # users see weird behaviour. See _framework_patches.py for details.
-    from eidolon.livekit.agent import _framework_patches
-    _framework_patches.check_framework_version()
-
     try:
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
         from eidolon.livekit.common.config import load_effective_config

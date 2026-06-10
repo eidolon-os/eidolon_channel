@@ -29,11 +29,11 @@ IS NOT a replacement for AgentSession — it's a thin wrapper that:
      our PolicyChain decisions. Our soft-interrupt is in addition
      to (not replacing) framework's.
 
-  5. **Forces framework's auto-interrupt OFF** via
-     ``_framework_patches.disable_audio_activity_interruption`` —
-     so EOT PolicyChain is the sole authority. See
-     ``_framework_patches.py`` for the rationale (no public API
-     does this without breaking endpointing).
+  5. **Disables framework auto-interrupt** via the public
+     ``turn_handling.interruption.enabled = False`` config, while
+     keeping the custom EOT model active. Eidolon PolicyChain remains
+     the sole authority for confirmed hard interrupts, which are sent
+     explicitly with ``session.interrupt(force=True)``.
 
 If you find yourself adding logic here that AgentSession already
 handles, push back — likely the right shape is to USE the
@@ -59,7 +59,6 @@ from eidolon.livekit.common.config import (
     TurnPolicyConfig,
 )
 
-from . import _framework_patches
 from .client_audio_state import PLAYBACK_STATE_AGENT_SPEAKING, ClientAudioState
 from .context import InterruptedContextManager
 from .turn_policy import (
@@ -849,39 +848,8 @@ class StreamingPipeline(BasePipeline):
 
         agent = self._build_agent()
 
-        # Round 8 R8.9 (re-fix): the ``turn_handling`` config — including
-        # ``false_interruption_timeout`` — must be passed to AGENTSESSION,
-        # not to Agent. The framework's ``AgentActivity`` reads
-        # ``session._opts.turn_handling.interruption`` from the
-        # AgentSession-level options. The previous attempt put this on
-        # Agent.turn_handling and it was silently ignored — production
-        # logs showed the default 2.0s timeout still firing instead of
-        # our configured 6.0s. Source of truth: ``agent_session.py:354
-        # _resolve_interruption(turn_handling.get("interruption"))``.
         session = AgentSession(
-            turn_handling={
-                "interruption": {
-                    "enabled": self._allow_interruptions,
-                    "discard_audio_if_uninterruptible": True,
-                    "false_interruption_timeout": self._false_interruption_timeout,
-                },
-                # Phase 2 (2026-05-30): preemptive (speculative) brain
-                # generation, config-gated via turn_policy.preemptive.
-                # Hides the ~990ms STT-final wait by starting the brain on a
-                # stable interim/preflight transcript; the framework reuses it
-                # if the final transcript matches, else cancels via our gRPC
-                # CancelTurn (clean: stops the upstream LLM, no orphan tokens,
-                # no history mutation). ``preemptive_tts`` stays False so audio
-                # output is still gated by our commit (no partial-audio leak,
-                # which was the R8.12.c concern). Was hard-disabled in R8.12.c
-                # because _inject_interrupted_context() mutates chat_ctx before
-                # commit on *post-interruption* turns, breaking is_equivalent;
-                # normal turns do not diverge and now get the speedup.
-                "preemptive_generation": {
-                    "enabled": self._turn_policy.preemptive.enabled,
-                    "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
-                },
-            },
+            turn_handling=self._agent_session_turn_handling(),
             # G9 (2026-05-17): framework public API. Default 3.0s only covers
             # ~2/3 of a typical Chinese welcome; we expose this via env so
             # deployments can pick: 0/None = always interruptible; 0.5-1.0 =
@@ -932,15 +900,6 @@ class StreamingPipeline(BasePipeline):
                 ),
             ),
         )
-        # Disable framework's built-in audio-activity auto-interrupt so EOT
-        # PolicyChain (and the DuckingMixer below) is the sole authority on
-        # interrupt decisions. See _framework_patches.disable_audio_activity_interruption
-        # for the full rationale (no public API alternative — internal flags must be
-        # patched). The patch sets BOTH the runtime flag AND the default-
-        # value flag, so framework's restore logic on agent state transitions
-        # doesn't undo us. No re-patch needed in _on_agent_state_changed.
-        _framework_patches.disable_audio_activity_interruption(session)
-
         # Install the DuckingMixer between TTS frames and the RoomIO sink.
         # Must run AFTER session.start() because that's when the framework
         # assembles ``session.output.audio`` (RoomIO + TranscriptSynchronizer).
@@ -984,6 +943,42 @@ class StreamingPipeline(BasePipeline):
             raise
         finally:
             await self.shutdown()
+
+    def _agent_session_turn_handling(self) -> dict[str, Any]:
+        # Round 8 R8.9 (re-fix): the ``turn_handling`` config — including
+        # ``false_interruption_timeout`` — must be passed to AGENTSESSION,
+        # not to Agent. The framework's ``AgentActivity`` reads
+        # ``session._opts.turn_handling.interruption`` from the
+        # AgentSession-level options. The previous attempt put this on
+        # Agent.turn_handling and it was silently ignored — production
+        # logs showed the default 2.0s timeout still firing instead of
+        # our configured 6.0s. Source of truth: ``agent_session.py:354
+        # _resolve_interruption(turn_handling.get("interruption"))``.
+        return {
+            "interruption": {
+                # Disable LiveKit's raw audio-activity auto-interrupt.
+                # Eidolon still permits policy-confirmed interrupts via
+                # ``session.interrupt(force=True)`` in _interrupt_current_turn.
+                "enabled": False,
+                "discard_audio_if_uninterruptible": True,
+                "false_interruption_timeout": self._false_interruption_timeout,
+            },
+            # Phase 2 (2026-05-30): preemptive (speculative) brain generation,
+            # config-gated via turn_policy.preemptive. Hides the ~990ms STT-final
+            # wait by starting the brain on a stable interim/preflight transcript;
+            # the framework reuses it if the final transcript matches, else
+            # cancels via our gRPC CancelTurn (clean: stops the upstream LLM, no
+            # orphan tokens, no history mutation). ``preemptive_tts`` stays False
+            # so audio output is still gated by our commit (no partial-audio leak,
+            # which was the R8.12.c concern). Was hard-disabled in R8.12.c because
+            # _inject_interrupted_context() mutates chat_ctx before commit on
+            # *post-interruption* turns, breaking is_equivalent; normal turns do
+            # not diverge and now get the speedup.
+            "preemptive_generation": {
+                "enabled": self._turn_policy.preemptive.enabled,
+                "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
+            },
+        }
 
     async def shutdown(self) -> None:
         """Gracefully shut down the session."""
@@ -1039,7 +1034,10 @@ class StreamingPipeline(BasePipeline):
                 # is faster (no LLM call), more deterministic, and avoids
                 # leaking instruction text to users.
                 if welcome_message:
-                    self.session.say(welcome_message, allow_interruptions=True)
+                    # Keep welcome speech under the same no-auto-interrupt
+                    # contract as normal replies. Eidolon policy can still cut
+                    # it with session.interrupt(force=True) after confirmation.
+                    self.session.say(welcome_message)
                 # else: silent welcome — agent waits for user to speak first
 
             async def on_user_turn_completed(
@@ -1485,7 +1483,7 @@ class StreamingPipeline(BasePipeline):
         )
 
     def _interrupt_current_turn(self) -> None:
-        """Interrupt the currently in-progress agent turn via session.interrupt()."""
+        """Hard-interrupt the in-progress agent turn after policy confirmation."""
         self._ensure_ducking_controller()
         if not self._allow_interruptions:
             return
@@ -1496,7 +1494,7 @@ class StreamingPipeline(BasePipeline):
             return
 
         if self._session is not None:
-            self._session.interrupt()
+            self._session.interrupt(force=True)
 
         # Reset VAD state so EOT doesn't carry stale state into the next turn.
         self._get_eot_model().update_vad(False)

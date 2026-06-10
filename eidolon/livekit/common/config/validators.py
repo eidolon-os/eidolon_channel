@@ -25,6 +25,12 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if cfg.providers.brain_provider not in ("direct_llm", "eidolon_agent"):
         errors.append("providers.brain_provider must be 'direct_llm' or 'eidolon_agent'")
 
+    worker = cfg.worker
+    if worker.num_idle_processes is not None and not (
+        0 <= worker.num_idle_processes <= 64
+    ):
+        errors.append("worker.num_idle_processes must be in [0, 64]")
+
     if not (1 <= cfg.core.port <= 65535):
         errors.append("core.port must be in [1, 65535]")
 
@@ -101,6 +107,17 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "turn_policy.attention.client_state_max_age_ms must be in [100, 10000]"
         )
+
+    vp = cfg.voiceprint
+    if vp.enabled:
+        if vp.provider != "3d_speaker":
+            errors.append("voiceprint.provider must be '3d_speaker'")
+        if vp.model != "campplus_zh_16k_common":
+            errors.append("voiceprint.model must be 'campplus_zh_16k_common'")
+        if not 0.0 < vp.threshold < 1.0:
+            errors.append("voiceprint.threshold must be in (0, 1)")
+        if not 500 <= vp.min_audio_ms <= 30_000:
+            errors.append("voiceprint.min_audio_ms must be in [500, 30000]")
 
     if errors:
         raise ValueError("EffectiveAgentConfig validation failed:\n  - " + "\n  - ".join(errors))

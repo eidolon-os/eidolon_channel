@@ -209,6 +209,25 @@ class ObservabilityConfig:
 
 
 @dataclass(frozen=True)
+class VoiceprintConfig:
+    enabled: bool = True
+    provider: str = "3d_speaker"
+    model: str = "campplus_zh_16k_common"
+    root: str = "~/eidolon/voiceprints"
+    model_dir: str = ""
+    threshold: float = 0.31
+    min_audio_ms: int = 1500
+    prewarm: bool = True
+
+
+@dataclass(frozen=True)
+class WorkerConfig:
+    # None preserves the historical runtime default:
+    # dev=0, prod=min(cpu_count, 4). Set 1+ to force startup prewarm workers.
+    num_idle_processes: int | None = None
+
+
+@dataclass(frozen=True)
 class EffectiveAgentConfig:
     core: CoreConfig = field(default_factory=CoreConfig)
     behavior: AgentBehaviorConfig = field(default_factory=AgentBehaviorConfig)
@@ -218,6 +237,8 @@ class EffectiveAgentConfig:
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
     turn_policy: TurnPolicyConfig = field(default_factory=TurnPolicyConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+    voiceprint: VoiceprintConfig = field(default_factory=VoiceprintConfig)
+    worker: WorkerConfig = field(default_factory=WorkerConfig)
 
     bailian_stt: BailianSTTConfig = field(default_factory=BailianSTTConfig)
     sensetime_stt: SenseTimeSTTConfig = field(default_factory=SenseTimeSTTConfig)

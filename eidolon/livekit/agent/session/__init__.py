@@ -11,6 +11,7 @@ from .room_data import RoomDataHandler, participant_identity_from_packet
 from .semantic_interrupt import SemanticInterruptHandler
 from .signals import SessionSignalBridge
 from .turn_commit import UserTurnCommitter
+from .voiceprint import VoiceprintTurnObserver
 
 __all__ = [
     "AgentStateEffectHandler",
@@ -24,5 +25,6 @@ __all__ = [
     "SessionSignalBridge",
     "SoftInterruptController",
     "UserTurnCommitter",
+    "VoiceprintTurnObserver",
     "participant_identity_from_packet",
 ]

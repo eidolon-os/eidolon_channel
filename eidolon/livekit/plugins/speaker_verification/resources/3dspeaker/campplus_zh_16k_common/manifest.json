@@ -1,0 +1,41 @@
+{
+  "provider": "3d_speaker",
+  "model_id": "iic/speech_campplus_sv_zh-cn_16k-common",
+  "model_alias": "campplus_zh_16k_common",
+  "task": "speaker_verification",
+  "sample_rate": 16000,
+  "channels": 1,
+  "source": {
+    "project_url": "https://github.com/modelscope/3D-Speaker",
+    "model_url": "https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common",
+    "revision": "624dcb0f2e40153d7bbbbbcb02cb9f3518f225c3"
+  },
+  "usage": {
+    "admin": "enroll voiceprint profiles from recorded WAV samples",
+    "channel": "verify turn audio against persisted voiceprint profiles"
+  },
+  "runtime": {
+    "auto_download": false,
+    "shared_model_env": "EIDOLON_3DSPEAKER_MODEL_DIR"
+  },
+  "artifacts": [
+    {
+      "path": "campplus_cn_common.bin",
+      "size_bytes": 28036335,
+      "sha256": "3388cf5fd3493c9ac9c69851d8e7a8badcfb4f3dc631020c4961371646d5ada8",
+      "kind": "pytorch_weights"
+    },
+    {
+      "path": "config.yaml",
+      "size_bytes": 537,
+      "sha256": "17342041bd5b22f6fd7e32f6e7a267b0bf65f018c0a721bada6547e3d28fbfc9",
+      "kind": "model_config"
+    },
+    {
+      "path": "configuration.json",
+      "size_bytes": 581,
+      "sha256": "6f7acaf1e81ca121f4a3c71b6ddb66beec24350a3ef330e2c846f17829176a8f",
+      "kind": "modelscope_configuration"
+    }
+  ]
+}

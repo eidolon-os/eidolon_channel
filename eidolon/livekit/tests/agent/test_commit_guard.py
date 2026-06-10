@@ -14,14 +14,17 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
+from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
 
 
-def _make_pipeline_with_session(*, latest_asr_text: str) -> "StreamingPipeline":
+def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     """Build a minimally-initialised StreamingPipeline ready to receive a
     ``user_state: speaking → listening`` transition.
 
@@ -67,6 +70,10 @@ def _user_state_event(old: str, new: str) -> SimpleNamespace:
     return SimpleNamespace(old_state=old, new_state=new)
 
 
+def _transcript_event(text: str, *, final: bool = True) -> SimpleNamespace:
+    return SimpleNamespace(transcript=text, is_final=final, speaker_id="manson")
+
+
 def test_commit_skipped_when_asr_text_empty() -> None:
     """G8: VAD-end with empty ASR text → no commit_user_turn call."""
     pipeline = _make_pipeline_with_session(latest_asr_text="")
@@ -74,6 +81,7 @@ def test_commit_skipped_when_asr_text_empty() -> None:
     pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
 
     pipeline._session.commit_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
     # record_turn also gated on text — should not fire either
     eot = pipeline._get_eot_model.return_value
     eot.record_turn.assert_not_called()
@@ -115,6 +123,7 @@ def test_commit_skipped_after_interrupt_cancel() -> None:
     pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
 
     pipeline._session.commit_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
     eot = pipeline._get_eot_model.return_value
     eot.record_turn.assert_not_called()
     eot.reset.assert_called_once()
@@ -132,9 +141,159 @@ def test_commit_skipped_during_post_interrupt_suppression_window() -> None:
     pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
 
     pipeline._session.commit_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
     eot = pipeline._get_eot_model.return_value
     eot.record_turn.assert_not_called()
     eot.reset.assert_called_once()
     assert pipeline._skip_commit_after_interrupt_cancel is False
     assert pipeline._timeline is None
     assert pipeline._latest_asr_text == ""
+
+
+def test_late_final_transcript_is_dropped_after_voiceprint_block() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._suppress_transcripts_until_next_speech = True
+
+    pipeline._on_user_transcribed(_transcript_event("迟到的噪音字幕", final=True))
+
+    pipeline._callbacks.on_user_message.assert_not_called()
+    pipeline._get_eot_model.return_value.update_asr.assert_not_called()
+    assert pipeline._latest_asr_text == ""
+
+
+def test_new_speech_reopens_transcript_admission() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._suppress_transcripts_until_next_speech = True
+
+    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
+
+    assert pipeline._suppress_transcripts_until_next_speech is False
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_allows_owner_voiceprint() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("owner-hook-turn")
+    signal = SpeakerSignal(
+        provider="3d_speaker",
+        model="campplus_zh_16k_common",
+        known=True,
+        score=0.66,
+        audio_ms=2400,
+        latency_ms=20.0,
+        profile_id="vp_manson_default",
+    )
+    result = VoiceprintTurnResult(
+        signal=signal,
+        cached=False,
+        commit_allowed=True,
+        commit_reason="owner_high_confidence",
+    )
+    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
+        asyncio.sleep(0, result=result)
+    )
+    pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
+
+    allowed = await pipeline._voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="主人正常说话")
+    )
+
+    assert allowed is True
+    pipeline._session.clear_user_turn.assert_not_called()
+    assert pipeline._timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_blocks_late_noise_final() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("noise-hook-turn")
+    signal = SpeakerSignal(
+        provider="3d_speaker",
+        model="campplus_zh_16k_common",
+        known=False,
+        score=0.22,
+        audio_ms=3200,
+        latency_ms=20.0,
+        profile_id="vp_manson_default",
+    )
+    result = VoiceprintTurnResult(
+        signal=signal,
+        cached=False,
+        commit_allowed=False,
+        commit_reason="speaker_not_owner",
+    )
+    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
+        asyncio.sleep(0, result=result)
+    )
+    pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
+
+    allowed = await pipeline._voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="迟到的噪音字幕")
+    )
+
+    assert allowed is False
+    pipeline._session.clear_user_turn.assert_called_once()
+    assert pipeline._suppress_transcripts_until_next_speech is True
+    assert pipeline._timeline is None
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_gate_allows_high_confidence_owner_commit() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="你好世界")
+    pipeline._timeline = TurnTimeline("owner-turn")
+    signal = SpeakerSignal(
+        provider="3d_speaker",
+        model="campplus_zh_16k_common",
+        known=True,
+        score=0.66,
+        audio_ms=2400,
+        latency_ms=20.0,
+        profile_id="vp_manson_default",
+    )
+    result = VoiceprintTurnResult(
+        signal=signal,
+        cached=False,
+        commit_allowed=True,
+        commit_reason="owner_high_confidence",
+    )
+    verify_task = asyncio.create_task(asyncio.sleep(0, result=result))
+    pipeline._voiceprint_turns = SimpleNamespace(finish_turn=MagicMock(return_value=verify_task))
+
+    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
+    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
+
+    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
+    pipeline._session.clear_user_turn.assert_not_called()
+    assert pipeline._timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_gate_blocks_low_score_commit() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="视频里的声音")
+    pipeline._timeline = TurnTimeline("noise-turn")
+    signal = SpeakerSignal(
+        provider="3d_speaker",
+        model="campplus_zh_16k_common",
+        known=False,
+        score=0.22,
+        audio_ms=3200,
+        latency_ms=20.0,
+        profile_id="vp_manson_default",
+    )
+    result = VoiceprintTurnResult(
+        signal=signal,
+        cached=False,
+        commit_allowed=False,
+        commit_reason="speaker_not_owner",
+    )
+    verify_task = asyncio.create_task(asyncio.sleep(0, result=result))
+    pipeline._voiceprint_turns = SimpleNamespace(finish_turn=MagicMock(return_value=verify_task))
+
+    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
+    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
+
+    pipeline._session.commit_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
+    eot = pipeline._get_eot_model.return_value
+    eot.reset.assert_called_once()
+    assert pipeline._timeline is None

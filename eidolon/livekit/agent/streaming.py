@@ -85,6 +85,7 @@ from .session import (
     SessionSignalBridge,
     SoftInterruptController,
     UserTurnCommitter,
+    VoiceprintTurnObserver,
 )
 
 logger = logging.getLogger("agent")
@@ -116,6 +117,18 @@ def _get_shared_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
         _eot_model_cache_key = key
         logger.info("[StreamingPipeline] EOT model loaded")
     return _eot_model_cache
+
+
+def _message_text(message: Any) -> str:
+    text_content = getattr(message, "text_content", None)
+    if isinstance(text_content, str):
+        return text_content
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(item) for item in content)
+    return str(content or "")
 
 
 class StreamingPipeline(BasePipeline):
@@ -171,9 +184,19 @@ class StreamingPipeline(BasePipeline):
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
         self._duck_deadline = self._build_duck_suspend_timeout_handler()
         self._stable_signal_timer: asyncio.Task | None = None
+        self._pending_voiceprint_commit_tasks: set[asyncio.Task] = set()
+        self._suppress_transcripts_until_next_speech = False
+        self._completed_turn_voiceprint_task: asyncio.Task | None = None
+        self._completed_turn_voiceprint_result: Any | None = None
+        self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
         self._provider_events = ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
+        )
+        self._voiceprint_turns = VoiceprintTurnObserver(
+            service=getattr(self._factory, "voiceprint_service", None),
+            runtime_admin=getattr(self._factory, "runtime_admin", None),
+            sample_rate=audio_sample_rate,
         )
         self._instructions = instructions
         self._allow_interruptions = allow_interruptions
@@ -401,6 +424,214 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_turn_committer"):
             self._turn_committer = UserTurnCommitter()
 
+    def _cancel_pending_voiceprint_commits(self, reason: str) -> None:
+        tasks = getattr(self, "_pending_voiceprint_commit_tasks", set())
+        for task in list(tasks):
+            if not task.done():
+                logger.info(
+                    "[StreamingPipeline] cancelling pending voiceprint-gated "
+                    "commit reason=%s",
+                    reason,
+                )
+                task.cancel()
+
+    def _schedule_voiceprint_gated_commit(
+        self,
+        *,
+        verify_task: asyncio.Task | None,
+        eot_model: Any,
+        transcript: str,
+        timeline: TurnTimeline | None,
+    ) -> None:
+        if verify_task is None:
+            self._commit_user_turn_now(
+                eot_model=eot_model,
+                transcript=transcript,
+                timeline=timeline,
+            )
+            return
+        task = asyncio.create_task(
+            self._finalize_voiceprint_gated_commit(
+                verify_task=verify_task,
+                eot_model=eot_model,
+                transcript=transcript,
+                timeline=timeline,
+            )
+        )
+        self._pending_voiceprint_commit_tasks.add(task)
+        task.add_done_callback(self._pending_voiceprint_commit_tasks.discard)
+
+    async def _finalize_voiceprint_gated_commit(
+        self,
+        *,
+        verify_task: asyncio.Task,
+        eot_model: Any,
+        transcript: str,
+        timeline: TurnTimeline | None,
+    ) -> None:
+        try:
+            result = await verify_task
+        except asyncio.CancelledError:
+            eot_model.reset()
+            raise
+        except Exception as exc:  # noqa: BLE001 - conservative gate
+            eot_model.reset()
+            self._clear_session_user_turn("voiceprint_error")
+            self._record_voiceprint_commit_gate(
+                timeline,
+                allowed=False,
+                reason=f"voiceprint_error:{type(exc).__name__}",
+            )
+            self._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
+            logger.exception("[StreamingPipeline] voiceprint gate failed")
+            return
+
+        self._completed_turn_voiceprint_result = result
+        allowed = bool(getattr(result, "commit_allowed", False))
+        reason = str(getattr(result, "commit_reason", "") or "unknown")
+        self._record_voiceprint_commit_gate(timeline, allowed=allowed, reason=reason)
+        if not allowed:
+            eot_model.reset()
+            self._suppress_transcripts_until_next_speech = True
+            self._clear_session_user_turn(f"voiceprint_blocked:{reason}")
+            self._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
+            logger.info(
+                "[StreamingPipeline] voiceprint gate blocked commit reason=%s "
+                "transcript=%r",
+                reason,
+                transcript[:80],
+            )
+            return
+
+        self._commit_user_turn_now(
+            eot_model=eot_model,
+            transcript=transcript,
+            timeline=timeline,
+        )
+
+    def _commit_user_turn_now(
+        self,
+        *,
+        eot_model: Any,
+        transcript: str,
+        timeline: TurnTimeline | None,
+    ) -> bool:
+        if self._session is None:
+            eot_model.reset()
+            return False
+        self._ensure_turn_committer()
+        committed = self._turn_committer.commit_or_skip(
+            session=self._session,
+            eot_model=eot_model,
+            transcript=transcript,
+            transcript_timeout=self._stt_commit_transcript_timeout,
+            timeline=timeline,
+            inject_interrupted_context=self._inject_interrupted_context,
+            filler=self._filler,
+        )
+        if not committed:
+            self._clear_session_user_turn("empty_transcript")
+        return committed
+
+    def _clear_session_user_turn(self, reason: str) -> None:
+        session = getattr(self, "_session", None)
+        if session is None:
+            return
+        clear_user_turn = getattr(session, "clear_user_turn", None)
+        if clear_user_turn is None:
+            return
+        try:
+            clear_user_turn()
+            logger.info("[StreamingPipeline] cleared user turn reason=%s", reason)
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] failed to clear user turn reason=%s",
+                reason,
+            )
+
+    async def _voiceprint_allows_completed_turn(self, *, new_message: Any) -> bool:
+        """Gate LiveKit's final turn-completed hook with voiceprint ownership.
+
+        This is the last public lifecycle boundary before LiveKit starts the
+        LLM reply, so it catches both our explicit commit path and framework
+        auto-EOU paths such as late STT FINAL delivery.
+        """
+        self._ensure_runtime_defaults()
+        task = getattr(self, "_completed_turn_voiceprint_task", None)
+        result = getattr(self, "_completed_turn_voiceprint_result", None)
+        timeline = (
+            getattr(self, "_completed_turn_voiceprint_timeline", None)
+            or getattr(self, "_timeline", None)
+        )
+        if task is None and result is None:
+            return True
+        if result is None and task is not None:
+            try:
+                result = await task
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - conservative gate
+                self._record_voiceprint_commit_gate(
+                    timeline,
+                    allowed=False,
+                    reason=f"voiceprint_error:{type(exc).__name__}",
+                )
+                self._clear_session_user_turn(f"voiceprint_error:{type(exc).__name__}")
+                self._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
+                logger.exception(
+                    "[StreamingPipeline] voiceprint gate failed in turn hook"
+                )
+                return False
+            self._completed_turn_voiceprint_result = result
+
+        allowed = bool(getattr(result, "commit_allowed", False))
+        reason = str(getattr(result, "commit_reason", "") or "unknown")
+        self._record_voiceprint_commit_gate(timeline, allowed=allowed, reason=reason)
+        if allowed:
+            return True
+
+        transcript = _message_text(new_message)
+        self._suppress_transcripts_until_next_speech = True
+        self._clear_session_user_turn(f"voiceprint_blocked:{reason}")
+        self._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
+        logger.info(
+            "[StreamingPipeline] voiceprint gate stopped completed turn "
+            "reason=%s transcript=%r",
+            reason,
+            transcript[:80],
+        )
+        return False
+
+    def _record_voiceprint_commit_gate(
+        self,
+        timeline: TurnTimeline | None,
+        *,
+        allowed: bool,
+        reason: str,
+    ) -> None:
+        if timeline is None:
+            return
+        timeline.set_attr(
+            "voiceprint_commit_gate",
+            {
+                "allowed": allowed,
+                "reason": reason,
+            },
+        )
+
+    def _flush_turn_timeline(
+        self,
+        timeline: TurnTimeline | None,
+        reason: str,
+    ) -> None:
+        if timeline is None or getattr(self, "_timeline_debug_flushed", False):
+            return
+        timeline.set_attr("timeline_flush_reason", reason)
+        timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        if timeline is self._timeline:
+            self._timeline_debug_flushed = True
+            self._timeline = None
+
     def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
         return AgentStateEffectHandler(
             get_timeline=lambda: self._timeline,
@@ -571,6 +802,16 @@ class StreamingPipeline(BasePipeline):
             self._latest_asr_text = ""
         if not hasattr(self, "_stable_signal_timer"):
             self._stable_signal_timer = None
+        if not hasattr(self, "_pending_voiceprint_commit_tasks"):
+            self._pending_voiceprint_commit_tasks = set()
+        if not hasattr(self, "_suppress_transcripts_until_next_speech"):
+            self._suppress_transcripts_until_next_speech = False
+        if not hasattr(self, "_completed_turn_voiceprint_task"):
+            self._completed_turn_voiceprint_task = None
+        if not hasattr(self, "_completed_turn_voiceprint_result"):
+            self._completed_turn_voiceprint_result = None
+        if not hasattr(self, "_completed_turn_voiceprint_timeline"):
+            self._completed_turn_voiceprint_timeline = None
         if not hasattr(self, "_llm_metrics_observer_installed"):
             self._llm_metrics_observer_installed = False
         if not hasattr(self, "_brain_provider_observer_installed"):
@@ -581,6 +822,13 @@ class StreamingPipeline(BasePipeline):
             self._pending_stt_provider_events = []
         if not hasattr(self, "_client_audio_states"):
             self._client_audio_states = {}
+        if not hasattr(self, "_voiceprint_turns"):
+            factory = getattr(self, "_factory", None)
+            self._voiceprint_turns = VoiceprintTurnObserver(
+                service=getattr(factory, "voiceprint_service", None),
+                runtime_admin=getattr(factory, "runtime_admin", None),
+                sample_rate=getattr(self, "_audio_sample_rate", 16000),
+            )
         self._ensure_ducking_controller()
         self._ensure_decision_effect_applier()
         self._ensure_attention_effect_handler()
@@ -663,6 +911,7 @@ class StreamingPipeline(BasePipeline):
 
         logger.info("[StreamingPipeline] calling session.start()...")
         self._install_room_data_observer(room)
+        self._voiceprint_turns.install(room)
         # G3 (2026-05-16): migrated from deprecated RoomInputOptions/
         # RoomOutputOptions to the new RoomOptions schema. Equivalent
         # behaviour:
@@ -742,8 +991,11 @@ class StreamingPipeline(BasePipeline):
         # Cancel any pending soft interrupt / duck timeout before closing.
         self._cancel_soft_interrupt()
         self._cancel_stable_signal_timer()
+        self._cancel_pending_voiceprint_commits("shutdown")
         self._ducking.cancel_timeout()
         self._stop_idle_watchdog()
+        if hasattr(self, "_voiceprint_turns"):
+            await self._voiceprint_turns.aclose()
         if self._session is not None:
             try:
                 await self._session.aclose()
@@ -768,10 +1020,12 @@ class StreamingPipeline(BasePipeline):
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
         from livekit.agents.voice import Agent
+        from livekit.agents import StopResponse
 
         # Bind welcome to a closure so the inner Agent class can read it
         # without us touching its constructor signature.
         welcome_message = self._welcome_message
+        pipeline = self
 
         class VoiceAgent(Agent):
             async def on_enter(self) -> None:
@@ -787,6 +1041,18 @@ class StreamingPipeline(BasePipeline):
                 if welcome_message:
                     self.session.say(welcome_message, allow_interruptions=True)
                 # else: silent welcome — agent waits for user to speak first
+
+            async def on_user_turn_completed(
+                self,
+                turn_ctx: Any,
+                new_message: Any,
+            ) -> None:
+                del turn_ctx
+                allowed = await pipeline._voiceprint_allows_completed_turn(
+                    new_message=new_message
+                )
+                if not allowed:
+                    raise StopResponse()
 
         # Round 8 R8.9 (re-fix): turn_handling config (including
         # false_interruption_timeout, preemptive_generation) lives on
@@ -972,6 +1238,11 @@ class StreamingPipeline(BasePipeline):
                 self._session_signals.signal_stt_user_present()
 
             if new == "speaking":
+                self._suppress_transcripts_until_next_speech = False
+                self._cancel_pending_voiceprint_commits("new_speech_started")
+                self._completed_turn_voiceprint_task = None
+                self._completed_turn_voiceprint_result = None
+                self._completed_turn_voiceprint_timeline = None
                 self._callbacks.on_user_started_speaking()
                 self._user_speaking_start_time = time.time()
                 self._timeline = TurnTimeline(generate_turn_id())
@@ -979,6 +1250,7 @@ class StreamingPipeline(BasePipeline):
                 if self._room is not None:
                     self._timeline.set_attr("room_name", self._room.name or "")
                 self._timeline.mark("speech_started_at")
+                self._voiceprint_turns.start_turn(timeline=self._timeline)
                 self._apply_pending_stt_provider_events()
                 self._observe_stt_turn_audio()
                 # Immediately clear stale text so EOT only sees text from THIS speech turn.
@@ -1001,6 +1273,10 @@ class StreamingPipeline(BasePipeline):
                 self._user_speaking_start_time = None
                 if self._timeline is not None:
                     self._timeline.mark("speech_stopped_at")
+                voiceprint_task = self._voiceprint_turns.finish_turn()
+                self._completed_turn_voiceprint_task = voiceprint_task
+                self._completed_turn_voiceprint_result = None
+                self._completed_turn_voiceprint_timeline = self._timeline
 
                 # Feed VAD silence signal into EOT model.
                 eot_model = self._get_eot_model()
@@ -1041,20 +1317,20 @@ class StreamingPipeline(BasePipeline):
                         "[StreamingPipeline] skipping user turn commit after "
                         "interrupt cancel"
                     )
+                    self._suppress_transcripts_until_next_speech = True
                     eot_model.reset()
+                    self._clear_session_user_turn("interrupt_cancel_suppression")
                     self._skip_commit_after_interrupt_cancel = False
                     self._timeline = None
                     self._timeline_debug_flushed = True
                 elif self._session is not None:
-                    self._ensure_turn_committer()
-                    self._turn_committer.commit_or_skip(
-                        session=self._session,
+                    transcript = self._latest_asr_text
+                    verify_task = voiceprint_task if transcript else None
+                    self._schedule_voiceprint_gated_commit(
+                        verify_task=verify_task,
                         eot_model=eot_model,
-                        transcript=self._latest_asr_text,
-                        transcript_timeout=self._stt_commit_transcript_timeout,
+                        transcript=transcript,
                         timeline=self._timeline,
-                        inject_interrupted_context=self._inject_interrupted_context,
-                        filler=self._filler,
                     )
 
                 self._latest_asr_text = ""
@@ -1076,6 +1352,17 @@ class StreamingPipeline(BasePipeline):
              polling approach).
         """
         self._ensure_runtime_defaults()
+        if (
+            self._suppress_transcripts_until_next_speech
+            and getattr(event, "transcript", "")
+        ):
+            logger.info(
+                "[StreamingPipeline] dropping post-turn transcript after "
+                "voiceprint ownership gate transcript=%r final=%s",
+                event.transcript[:80],
+                getattr(event, "is_final", None),
+            )
+            return
         if event.transcript:
             # Real recognized speech (interim or final) — keeps the session
             # alive. Empty/noise transcripts deliberately don't, so a silent

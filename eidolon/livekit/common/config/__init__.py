@@ -24,6 +24,8 @@ from .schema import (
     RemoteAgentRpcConfig,
     TurnPolicyConfig,
     VadPolicyConfig,
+    VoiceprintConfig,
+    WorkerConfig,
 )
 
 __all__ = [
@@ -44,6 +46,8 @@ __all__ = [
     "RemoteAgentRpcConfig",
     "TurnPolicyConfig",
     "VadPolicyConfig",
+    "VoiceprintConfig",
+    "WorkerConfig",
     "load_agent_config",
     "load_effective_config",
     "_optional_float",

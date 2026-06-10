@@ -25,6 +25,8 @@ from .schema import (
     SenseTimeSTTConfig,
     SenseTimeTTSConfig,
     TurnPolicyConfig,
+    VoiceprintConfig,
+    WorkerConfig,
 )
 from .validators import validate_effective_config
 
@@ -167,6 +169,8 @@ def load_effective_config() -> EffectiveAgentConfig:
     rt_admin_y = _section(y, "runtime_admin")
     turn_y = _section(y, "turn_policy")
     obs_y = _section(y, "observability")
+    voiceprint_y = _section(y, "voiceprint")
+    worker_y = _section(y, "worker")
     bailian_stt_y = _section(y, "bailian_stt")
     bailian_tts_y = _section(y, "bailian_tts")
     sensetime_stt_y = _section(y, "sensetime_stt")
@@ -235,6 +239,8 @@ def load_effective_config() -> EffectiveAgentConfig:
         ),
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),
+        voiceprint=_merge_dataclass(VoiceprintConfig(), voiceprint_y),
+        worker=_merge_dataclass(WorkerConfig(), worker_y),
         # Non-secret Bailian STT/TTS config lives in settings.yaml; the API key
         # stays in .env (the BailianSTTConfig()/BailianTTSConfig() base reads it
         # from env via default_factory, and the YAML section — which must omit

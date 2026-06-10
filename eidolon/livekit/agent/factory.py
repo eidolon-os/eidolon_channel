@@ -140,6 +140,8 @@ class SharedStageFactory:
         stt: SttStage,
         tts: TtsStage,
         vad: "lk_vad.VAD | None" = None,
+        voiceprint_provider: "Any | None" = None,
+        runtime_admin: "Any | None" = None,
         llm_params: LlmParams | None = None,
     ) -> None:
         if llm is None:
@@ -155,13 +157,33 @@ class SharedStageFactory:
         # Wrap raw VAD in VadStage for symmetry with stt / tts. AgentSession
         # still receives the raw VAD via stage.vad property.
         self.vad: VadStage | None = VadStage(vad) if vad is not None else None
+        self.runtime_admin = runtime_admin
+        self.voiceprint_provider = voiceprint_provider
+        self.voiceprint_service = None
+        if voiceprint_provider is not None:
+            from eidolon.livekit.agent.speaker_verification import (
+                SpeakerVerificationService,
+                VoiceprintStore,
+            )
+
+            self.voiceprint_service = SpeakerVerificationService(
+                provider=voiceprint_provider,
+                store=VoiceprintStore(
+                    getattr(
+                        voiceprint_provider,
+                        "voiceprint_root",
+                        "~/eidolon/voiceprints",
+                    )
+                ),
+            )
 
         logger.info(
-            "[SharedStageFactory] initialized stt=%s llm=%s tts=%s vad=%s",
+            "[SharedStageFactory] initialized stt=%s llm=%s tts=%s vad=%s voiceprint=%s",
             type(self.stt).__name__,
             type(self.llm).__name__,
             type(self.tts).__name__,
             type(self.vad).__name__ if self.vad else None,
+            type(self.voiceprint_provider).__name__ if self.voiceprint_provider else None,
         )
 
     # ------------------------------------------------------------------
@@ -174,6 +196,7 @@ class SharedStageFactory:
         cfg: "AgentConfig",
         *,
         prebuilt_vad: "lk_vad.VAD | None" = None,
+        prebuilt_voiceprint_provider: "Any | None" = None,
         livekit_session_key: str = "",
         livekit_room: "Any | None" = None,
     ) -> "SharedStageFactory":
@@ -185,6 +208,9 @@ class SharedStageFactory:
                 instance is used instead of building a fresh one. Useful when
                 a worker process loads the VAD model once at startup and
                 reuses it across jobs.
+            prebuilt_voiceprint_provider: If supplied from worker prewarm,
+                this CAMPPlus provider is reused across jobs instead of
+                cold-loading the voiceprint model per room.
             livekit_session_key: When ``REMOTE_AGENT_RPC_TARGET`` is set and
                 ``livekit_room`` is None, used as the static brain-side
                 ``conversation_id`` as ``<prefix>:<session_key>``. Mainly for
@@ -302,6 +328,8 @@ class SharedStageFactory:
             stt=stt,
             tts=tts,
             vad=vad,
+            voiceprint_provider=prebuilt_voiceprint_provider,
+            runtime_admin=cfg.runtime_admin,
             llm_params=LlmParams(
                 model=cfg.llm.model,
                 temperature=cfg.llm.temperature or 0.6,

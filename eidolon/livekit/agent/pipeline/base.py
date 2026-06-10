@@ -28,7 +28,6 @@ collapsed to a single ``LifecycleStage`` helper.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
@@ -116,6 +115,9 @@ class BasePipeline(ABC):
         # (e.g. FireredPvadVAD), this is effectively a no-op.
         if self._factory.vad is not None:
             stages.append(self._factory.vad)
+        voiceprint = getattr(self._factory, "voiceprint_provider", None)
+        if voiceprint is not None:
+            stages.append(voiceprint)
         return stages
 
     async def _warmup_stages(self) -> None:
@@ -127,6 +129,16 @@ class BasePipeline(ABC):
         """
         for stage in self._lifecycle_stages():
             if not hasattr(stage, "warmup"):
+                warm_up = getattr(stage, "warm_up", None)
+                if warm_up is None:
+                    continue
+                try:
+                    await warm_up()
+                except Exception:
+                    logger.exception(
+                        "[BasePipeline] %s warm_up failed",
+                        type(stage).__name__,
+                    )
                 continue
             try:
                 await stage.warmup()

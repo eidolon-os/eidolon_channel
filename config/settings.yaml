@@ -7,6 +7,11 @@ core:
   host: 0.0.0.0
   port: 8766
 
+worker:
+  # Keep one idle worker process warm in dev so VAD/EOT/voiceprint models load
+  # at channel startup instead of on the first room job.
+  num_idle_processes: 1
+
 behavior:
   agent_mode: streaming
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.
@@ -46,11 +51,23 @@ runtime_admin:
   jwt_algorithm: HS256
   device_token_ttl_seconds: 86400
 
+voiceprint:
+  enabled: true
+  provider: 3d_speaker
+  model: campplus_zh_16k_common
+  root: ~/eidolon/voiceprints
+  # Empty means use the bundled model in
+  # eidolon/livekit/plugins/speaker_verification/resources/3dspeaker.
+  model_dir: ""
+  threshold: 0.31
+  min_audio_ms: 1500
+  prewarm: true
+
 turn_policy:
   # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.
   profile: balanced_semantic
   # Options: balanced, responsive.
-  interrupt_mode: balanced
+  interrupt_mode: responsive
   vad:
     activation_threshold: 0.50
     prefix_padding_ms: 300

@@ -39,6 +39,17 @@ from eidolon.livekit.common.config import AgentConfig, load_agent_config
 
 logger = logging.getLogger("agent_server")
 
+
+def _default_voiceprint_model_dir() -> Path:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "plugins"
+        / "speaker_verification"
+        / "resources"
+        / "3dspeaker"
+        / "campplus_zh_16k_common"
+    )
+
 # Suppress noisy debug logs from websockets library (BINARY frame dumps)
 logging.getLogger("websockets").setLevel(logging.INFO)
 logging.getLogger("websockets.client").setLevel(logging.INFO)
@@ -135,6 +146,34 @@ def _prewarm(proc) -> None:
     except Exception as e:
         logger.warning("[Agent] prewarm: EOT load failed: %s", e)
 
+    try:
+        from eidolon.livekit.agent.speaker_verification.providers import (
+            ModelScopeCampPlusSpeakerVerificationProvider,
+        )
+        from eidolon.livekit.common.config import load_effective_config
+
+        cfg = load_effective_config()
+        vp_cfg = cfg.voiceprint
+        if not vp_cfg.enabled or not vp_cfg.prewarm:
+            logger.info("[Agent] prewarm: voiceprint disabled")
+            return
+        model_dir = (
+            Path(vp_cfg.model_dir).expanduser()
+            if vp_cfg.model_dir.strip()
+            else _default_voiceprint_model_dir()
+        )
+        provider = ModelScopeCampPlusSpeakerVerificationProvider(
+            model_dir=model_dir,
+            voiceprint_root=Path(vp_cfg.root).expanduser(),
+            threshold=vp_cfg.threshold,
+            min_audio_ms=vp_cfg.min_audio_ms,
+        )
+        asyncio.run(provider.warm_up())
+        proc.userdata["voiceprint_provider"] = provider
+        logger.info("[Agent] prewarm: voiceprint model loaded")
+    except Exception as e:
+        logger.warning("[Agent] prewarm: voiceprint load failed: %s", e)
+
 
 async def run_agent(ctx, cfg: AgentConfig) -> None:
     """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
@@ -154,6 +193,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     )
 
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
+    prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get(
+        "voiceprint_provider"
+    )
     room = ctx.room
     # session_key still passed as a synchronous fallback (Room.sid is async,
     # Room.name is set pre-connect). D1: also pass the room reference so the
@@ -163,6 +205,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     factory = SharedStageFactory.from_config(
         cfg,
         prebuilt_vad=prebuilt_vad,
+        prebuilt_voiceprint_provider=prebuilt_voiceprint_provider,
         livekit_session_key=session_key,
         livekit_room=room,
     )
@@ -283,17 +326,34 @@ def _validate_config(cfg: AgentConfig) -> None:
         raise ValueError("AgentConfig validation failed:\n  - " + "\n  - ".join(errors))
 
 
-def _build_server(cfg: AgentConfig) -> "AgentServer":
-    import multiprocessing
-    import os
+def _resolve_num_idle_processes(
+    cfg: AgentConfig,
+    *,
+    env: str | None = None,
+    cpu_count: int | None = None,
+) -> int:
+    raw_env = os.getenv("EIDOLON_CHANNEL_NUM_IDLE_PROCESSES", "").strip()
+    if raw_env:
+        value = int(raw_env)
+        if value < 0:
+            raise ValueError("EIDOLON_CHANNEL_NUM_IDLE_PROCESSES must be >= 0")
+        return min(value, 64)
 
+    configured = cfg.worker.num_idle_processes
+    if configured is not None:
+        return configured
+
+    runtime_env = env or os.getenv("EIDOLON_ENV", "prod")
+    runtime_cpu_count = cpu_count if cpu_count is not None else multiprocessing.cpu_count()
+    return 0 if runtime_env == "dev" else min(runtime_cpu_count, 4)
+
+
+def _build_server(cfg: AgentConfig) -> "AgentServer":
     from livekit.agents import AgentServer, JobExecutorType, WorkerType
 
     env = os.getenv("EIDOLON_ENV", "prod")
     is_dev = env == "dev"
-
-    cpu_count = multiprocessing.cpu_count()
-    num_idle = 0 if is_dev else min(cpu_count, 4)
+    num_idle = _resolve_num_idle_processes(cfg, env=env)
 
     prometheus_port = int(os.getenv("AGENT_PROMETHEUS_PORT", "0") or "0")
     prometheus_multiproc_dir = os.getenv("AGENT_PROMETHEUS_MULTIPROC_DIR", "")
@@ -343,7 +403,7 @@ async def _serve() -> None:
         cfg.core.livekit_url,
         cfg.behavior.agent_mode,
         cfg.llm.model,
-        min(multiprocessing.cpu_count(), 4),
+        _resolve_num_idle_processes(cfg),
     )
 
     server = _build_server(cfg)

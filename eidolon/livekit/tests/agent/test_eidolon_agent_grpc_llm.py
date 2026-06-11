@@ -209,6 +209,133 @@ async def test_forwards_deltas_then_finishes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_next_user_text_override_supplies_canonical_turn_text() -> None:
+    servicer = _ScriptedServicer(deltas=["ok"])
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id="livekit:canonical-text",
+        )
+        try:
+            provider_events: list[dict] = []
+            adapter.on("provider_event", provider_events.append)
+            adapter.set_next_user_text(
+                "对，不是陪伴了，是给一个嗯。私立医院的。医生他们做系统。",
+                source="user_turn_coordinator",
+            )
+
+            async for _ in adapter.chat(chat_ctx=_ctx("对，不是陪伴了，是给一个嗯。 私立医院的。")):
+                pass
+
+            assert len(servicer.starts) == 1
+            assert (
+                servicer.starts[0].text
+                == "对，不是陪伴了，是给一个嗯。私立医院的。医生他们做系统。"
+            )
+            assert provider_events[0]["user_text_source"] == "user_turn_coordinator"
+            assert provider_events[0]["text_overridden"] is True
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+async def test_next_user_text_override_is_consumed_once() -> None:
+    servicer = _ScriptedServicer(deltas=["ok"])
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id="livekit:canonical-text-once",
+        )
+        try:
+            adapter.set_next_user_text("第一轮 canonical", source="user_turn_coordinator")
+
+            async for _ in adapter.chat(chat_ctx=_ctx("第一轮 framework")):
+                pass
+            async for _ in adapter.chat(chat_ctx=_ctx("第二轮 framework")):
+                pass
+
+            assert [start.text for start in servicer.starts] == [
+                "第一轮 canonical",
+                "第二轮 framework",
+            ]
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+async def test_next_user_text_override_survives_retry_attempt() -> None:
+    from livekit.agents._exceptions import APIConnectionError
+    from livekit.agents.types import APIConnectOptions
+
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import DeltaPayload
+
+    class _FlakySession:
+        def __init__(self) -> None:
+            self.starts: list[str] = []
+            self.conversations: list[str] = []
+            self.metadata: list[dict | None] = []
+
+        async def start_turn(self, *, text: str, conversation_id: str, metadata=None):
+            self.starts.append(text)
+            self.conversations.append(conversation_id)
+            self.metadata.append(metadata)
+            if len(self.starts) == 1:
+                raise APIConnectionError("transient start failure", retryable=True)
+
+            async def _payloads():
+                yield DeltaPayload("ok")
+
+            return "retry-turn", _payloads()
+
+    conversation_calls: list[str] = []
+
+    def _conversation_id() -> str:
+        value = f"livekit:retry-{len(conversation_calls) + 1}"
+        conversation_calls.append(value)
+        return value
+
+    adapter = EidolonAgentGrpcLlm(
+        target="unused",
+        device_token="test-token",
+        conversation_id=_conversation_id,
+    )
+    session = _FlakySession()
+
+    async def _get_session():
+        return session
+
+    adapter._get_session = _get_session  # type: ignore[method-assign]
+    adapter.set_next_user_text("第一轮 canonical", source="user_turn_coordinator")
+    adapter.set_turn_control_metadata({"action": "cancel", "reason": "interrupt"})
+
+    stream = adapter.chat(
+        chat_ctx=_ctx("第一轮 framework"),
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+    )
+    collected: list[str] = []
+    async for chunk in stream:
+        if chunk.delta and chunk.delta.content:
+            collected.append(chunk.delta.content)
+
+    assert collected == ["ok"]
+    assert conversation_calls == ["livekit:retry-1"]
+    assert session.starts == ["第一轮 canonical", "第一轮 canonical"]
+    assert session.conversations == ["livekit:retry-1", "livekit:retry-1"]
+    assert session.metadata == [
+        {"turn_control": {"action": "cancel", "reason": "interrupt"}},
+        {"turn_control": {"action": "cancel", "reason": "interrupt"}},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_session_open_uses_connect_timeout() -> None:
     from livekit.agents._exceptions import APIConnectionError
     from livekit.agents.types import APIConnectOptions
@@ -238,6 +365,96 @@ async def test_session_open_uses_connect_timeout() -> None:
                 pass
         assert provider_events
         assert provider_events[0]["event"] == "brain_request_started"
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
+    from livekit.agents.types import APIConnectOptions
+
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import (
+        DeltaPayload,
+        StatePayload,
+    )
+
+    class _TimeoutThenFastSession:
+        def __init__(self) -> None:
+            self.starts: list[str] = []
+            self.turn_ids: list[str] = []
+            self.cancels: list[str] = []
+            self._tasks: set[asyncio.Task] = set()
+
+        async def start_turn(self, *, text: str, conversation_id: str, metadata=None):
+            self.starts.append(text)
+            turn_id = f"turn-{len(self.starts)}"
+            self.turn_ids.append(turn_id)
+
+            async def _payloads():
+                if turn_id == "turn-1":
+                    yield StatePayload("speaking")
+                    await asyncio.sleep(10.0)
+                    yield DeltaPayload("late")
+                else:
+                    yield DeltaPayload("ok")
+
+            return turn_id, _payloads()
+
+        async def cancel_turn(self, turn_id: str) -> None:
+            self.cancels.append(turn_id)
+
+        def spawn(self, coro, *, name: str | None = None):
+            task = asyncio.create_task(coro, name=name)
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            return task
+
+    adapter = EidolonAgentGrpcLlm(
+        target="unused",
+        device_token="test-token",
+        conversation_id="livekit:first-delta-timeout",
+    )
+    session = _TimeoutThenFastSession()
+
+    async def _get_session():
+        return session
+
+    adapter._get_session = _get_session  # type: ignore[method-assign]
+    provider_events: list[dict] = []
+    adapter.on("provider_event", provider_events.append)
+    try:
+        stream = adapter.chat(
+            chat_ctx=_ctx("第一轮会卡住吗"),
+            conn_options=APIConnectOptions(
+                max_retry=1,
+                retry_interval=0.0,
+                timeout=0.05,
+            ),
+        )
+        collected: list[str] = []
+        async for chunk in stream:
+            if chunk.delta and chunk.delta.content:
+                collected.append(chunk.delta.content)
+
+        await asyncio.wait_for(
+            _wait_until(lambda: session.cancels == ["turn-1"]),
+            timeout=1.0,
+        )
+        assert collected == ["ok"]
+        assert session.turn_ids == ["turn-1", "turn-2"]
+        request_events = [
+            event
+            for event in provider_events
+            if event.get("event") == "brain_request_sent"
+        ]
+        assert [event.get("attempt") for event in request_events] == [1, 2]
+        timeout_errors = [
+            event
+            for event in provider_events
+            if event.get("event") == "brain_error"
+        ]
+        assert timeout_errors[0]["code"] == "first_delta_timeout"
+        assert timeout_errors[0]["turn_id"] == "turn-1"
     finally:
         await adapter.aclose()
 
@@ -406,6 +623,16 @@ def test_tls_off_no_credentials_built() -> None:
     assert s._credentials is None
 
 
+def test_default_channel_options_do_not_send_aggressive_keepalive() -> None:
+    """Default client options must not trip server GOAWAY too_many_pings."""
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import _CHANNEL_OPTIONS
+
+    option_names = {name for name, _ in _CHANNEL_OPTIONS}
+    assert "grpc.keepalive_time_ms" not in option_names
+    assert "grpc.keepalive_permit_without_calls" not in option_names
+    assert "grpc.http2.max_pings_without_data" not in option_names
+
+
 @pytest.mark.asyncio
 async def test_state_and_usage_events_surface(caplog) -> None:
     """C: typed inbox payloads.
@@ -425,6 +652,8 @@ async def test_state_and_usage_events_surface(caplog) -> None:
             conversation_id="livekit:cphase",
         )
         try:
+            provider_events: list[dict] = []
+            adapter.on("provider_event", provider_events.append)
             with caplog.at_level(logging.INFO, logger="eidolon_agent_rpc.grpc_llm"):
                 stream = adapter.chat(chat_ctx=_ctx("trigger usage"))
                 delta_chunks: list[str] = []
@@ -444,6 +673,11 @@ async def test_state_and_usage_events_surface(caplog) -> None:
             # STATE event surfaces as INFO log with state=thinking
             state_logs = [r for r in caplog.records if "state=thinking" in r.getMessage()]
             assert state_logs, f"expected STATE INFO log, got: {[r.getMessage() for r in caplog.records]}"
+            assert any(
+                event.get("event") == "brain_state"
+                and event.get("state") == "thinking"
+                for event in provider_events
+            )
         finally:
             await adapter.aclose()
     finally:

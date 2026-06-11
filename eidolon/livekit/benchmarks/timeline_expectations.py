@@ -56,6 +56,8 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
     errors: list[str] = []
     actions = _actions(records)
     intents = _intents(records)
+    decision_actions = _decision_actions(records)
+    decision_intents = _decision_intents(records)
     allowed_attention = _allowed_attention_actions(expected, records)
 
     forbidden = set(expected.forbid_actions)
@@ -85,6 +87,65 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
             errors.append(
                 f"timeline expected intent={expected.intent}, got {intents or ['<none>']}"
             )
+
+    decision_action = str(getattr(expected, "decision_action", "") or "")
+    if decision_action not in ("", "any"):
+        if decision_action not in decision_actions:
+            errors.append(
+                "timeline expected decision_action="
+                f"{decision_action}, got {decision_actions or ['<none>']}"
+            )
+
+    decision_intent = str(getattr(expected, "decision_intent", "") or "")
+    if decision_intent not in ("", "uncertain"):
+        if decision_intent not in decision_intents:
+            errors.append(
+                "timeline expected decision_intent="
+                f"{decision_intent}, got {decision_intents or ['<none>']}"
+            )
+
+    voiceprint_expectation = str(getattr(expected, "voiceprint", "any") or "any")
+    if voiceprint_expectation not in ("", "any"):
+        allowed_values = _voiceprint_allowed_values(records)
+        if voiceprint_expectation == "allowed":
+            if True not in allowed_values:
+                errors.append(
+                    "timeline expected voiceprint allowed, got "
+                    f"{allowed_values or ['<missing>']}"
+                )
+        elif voiceprint_expectation == "blocked":
+            if False not in allowed_values:
+                errors.append(
+                    "timeline expected voiceprint blocked, got "
+                    f"{allowed_values or ['<missing>']}"
+                )
+        else:
+            errors.append(f"unknown voiceprint expectation={voiceprint_expectation!r}")
+
+    brain_expectation = str(getattr(expected, "brain", "any") or "any")
+    if brain_expectation not in ("", "any"):
+        has_brain = _has_brain_request(records)
+        if brain_expectation == "required" and not has_brain:
+            errors.append("timeline expected brain_request_sent_at")
+        elif brain_expectation == "forbidden" and has_brain:
+            errors.append("timeline expected no brain_request_sent_at")
+        elif brain_expectation not in ("required", "forbidden"):
+            errors.append(f"unknown brain expectation={brain_expectation!r}")
+
+    rejected_turn_brain = str(getattr(expected, "rejected_turn_brain", "any") or "any")
+    if rejected_turn_brain not in ("", "any"):
+        rejected_records = _rejected_turn_records(records)
+        rejected_has_brain = _has_brain_request(rejected_records)
+        if rejected_turn_brain == "forbidden" and rejected_has_brain:
+            errors.append("timeline expected rejected turns to have no brain_request_sent_at")
+        elif rejected_turn_brain == "required" and not rejected_has_brain:
+            errors.append("timeline expected rejected turns to have brain_request_sent_at")
+        elif rejected_turn_brain not in ("required", "forbidden"):
+            errors.append(f"unknown rejected_turn_brain expectation={rejected_turn_brain!r}")
+
+    for needle in getattr(expected, "canonical_contains", ()) or ():
+        if not _canonical_contains(records, str(needle)):
+            errors.append(f"timeline canonical text missing {needle!r}")
 
     if expected.topic_switch_hint and not _any_decision_flag(records, "topic_switch_hint"):
         errors.append("timeline expected topic_switch_hint=True")
@@ -232,6 +293,79 @@ def _decision_intents(records: list[dict[str, Any]]) -> list[str]:
         if isinstance(intent, str) and intent:
             values.append(intent)
     return values
+
+
+def _voiceprint_allowed_values(records: list[dict[str, Any]]) -> list[bool]:
+    values: list[bool] = []
+    for record in records:
+        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+        gate = attrs.get("voiceprint_commit_gate")
+        if isinstance(gate, dict) and isinstance(gate.get("allowed"), bool):
+            values.append(bool(gate["allowed"]))
+            continue
+        voiceprint = attrs.get("voiceprint")
+        if isinstance(voiceprint, dict) and isinstance(
+            voiceprint.get("commit_allowed"), bool
+        ):
+            values.append(bool(voiceprint["commit_allowed"]))
+    return values
+
+
+def _has_brain_request(records: list[dict[str, Any]]) -> bool:
+    for record in records:
+        timestamps = (
+            record.get("timestamps")
+            if isinstance(record.get("timestamps"), dict)
+            else {}
+        )
+        if isinstance(timestamps.get("brain_request_sent_at"), (int, float)):
+            return True
+    return False
+
+
+def _rejected_turn_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rejected: list[dict[str, Any]] = []
+    for record in records:
+        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+        coordinator = attrs.get("user_turn_coordinator")
+        if isinstance(coordinator, dict) and coordinator.get("state") == "rejected":
+            rejected.append(record)
+            continue
+        flush_reason = attrs.get("timeline_flush_reason")
+        if isinstance(flush_reason, str) and flush_reason.startswith(
+            "non_semantic_completed_turn:"
+        ):
+            rejected.append(record)
+    return rejected
+
+
+def _canonical_contains(records: list[dict[str, Any]], needle: str) -> bool:
+    if not needle:
+        return True
+    for record in records:
+        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
+        candidates: list[str] = []
+        for key in (
+            "canonical_user_text",
+            "framework_completed_turn",
+            "user_turn_coordinator",
+            "stt_stream",
+        ):
+            value = attrs.get(key)
+            if not isinstance(value, dict):
+                continue
+            for text_key in (
+                "text_preview",
+                "selected_text_preview",
+                "committed_transcript_preview",
+                "last_text_preview",
+            ):
+                text = value.get(text_key)
+                if isinstance(text, str) and text:
+                    candidates.append(text)
+        if any(needle in text for text in candidates):
+            return True
+    return False
 
 
 def _is_resolved_interrupt(record: dict[str, Any]) -> bool:

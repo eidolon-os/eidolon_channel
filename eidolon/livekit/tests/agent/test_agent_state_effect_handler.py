@@ -15,7 +15,14 @@ class _Ducking:
         self.reset_if_cancelled = MagicMock(return_value=False)
 
 
-def _handler(*, timeline=None, soft_interrupt_active=False, ducking=None, filler=None):
+def _handler(
+    *,
+    timeline=None,
+    soft_interrupt_active=False,
+    ducking=None,
+    filler=None,
+    should_flush_on_playback_done=None,
+):
     mark_activity = MagicMock()
     cancel_soft_interrupt = MagicMock()
     flush = MagicMock()
@@ -28,6 +35,7 @@ def _handler(*, timeline=None, soft_interrupt_active=False, ducking=None, filler
         ducking=ducking,
         get_filler=lambda: filler,
         flush_timeline_debug=flush,
+        should_flush_on_playback_done=should_flush_on_playback_done,
     )
     return handler, mark_activity, cancel_soft_interrupt, flush, ducking
 
@@ -67,6 +75,19 @@ def test_playback_done_marks_and_flushes_timeline() -> None:
 
     assert "agent_audio_playback_done_at" in timeline.timestamps
     flush.assert_called_once_with("agent_audio_playback_done", True)
+
+
+def test_playback_done_does_not_flush_non_terminal_user_turn() -> None:
+    timeline = TurnTimeline("turn-agent-state")
+    handler, _, _, flush, _ = _handler(
+        timeline=timeline,
+        should_flush_on_playback_done=lambda: False,
+    )
+
+    handler.handle(SimpleNamespace(old_state="speaking", new_state="listening"))
+
+    assert "agent_audio_playback_done_at" in timeline.timestamps
+    flush.assert_not_called()
 
 
 def test_thinking_and_speaking_mark_timeline() -> None:

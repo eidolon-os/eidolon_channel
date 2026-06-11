@@ -8,6 +8,7 @@ from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output import FillerManager, OutputDuckingController
+from .agent_output_coordinator import AgentOutputCoordinator
 
 logger = logging.getLogger("agent.session.agent_state")
 
@@ -25,6 +26,8 @@ class AgentStateEffectHandler:
         ducking: OutputDuckingController,
         get_filler: Callable[[], FillerManager | None],
         flush_timeline_debug: Callable[[str, bool], None],
+        should_flush_on_playback_done: Callable[[], bool] | None = None,
+        agent_output: AgentOutputCoordinator | None = None,
     ) -> None:
         self._get_timeline = get_timeline
         self._mark_activity = mark_activity
@@ -33,6 +36,10 @@ class AgentStateEffectHandler:
         self._ducking = ducking
         self._get_filler = get_filler
         self._flush_timeline_debug = flush_timeline_debug
+        self._should_flush_on_playback_done = (
+            should_flush_on_playback_done or (lambda: True)
+        )
+        self._agent_output = agent_output or AgentOutputCoordinator()
 
     def handle(self, event: Any) -> None:
         old_state = event.old_state
@@ -73,4 +80,10 @@ class AgentStateEffectHandler:
             timeline.mark("tts_first_audio_at")
         elif old_state == "speaking" and new_state in ("idle", "listening"):
             timeline.mark("agent_audio_playback_done_at")
-            self._flush_timeline_debug("agent_audio_playback_done", True)
+            if self._should_flush_on_playback_done():
+                self._flush_timeline_debug("agent_audio_playback_done", True)
+        self._agent_output.record_agent_state(
+            timeline,
+            old_state=old_state,
+            new_state=new_state,
+        )

@@ -189,7 +189,16 @@ def verify_real_call(
                 failures.append("vad emitted no inference events")
     elif runner == "livekit_room":
         audio_bytes = metrics.get("agent_audio_bytes")
-        if not isinstance(audio_bytes, (int, float)) or audio_bytes < MIN_ROOM_AGENT_AUDIO_BYTES:
+        agent_audio_expected = str(
+            metrics.get("expected_agent_audio_response") or "auto"
+        )
+        if (
+            agent_audio_expected != "none"
+            and (
+                not isinstance(audio_bytes, (int, float))
+                or audio_bytes < MIN_ROOM_AGENT_AUDIO_BYTES
+            )
+        ):
             failures.append(
                 f"agent_audio_bytes={audio_bytes} < {MIN_ROOM_AGENT_AUDIO_BYTES} "
                 "(dead/mock agent?)"

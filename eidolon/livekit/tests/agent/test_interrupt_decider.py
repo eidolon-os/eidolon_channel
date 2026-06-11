@@ -123,6 +123,16 @@ def test_responsive_mode_rolls_back_backchannel_before_first_signal_cancel() -> 
     assert decision.intent.value == "backchannel"
 
 
+def test_responsive_mode_rolls_back_short_acknowledgement_before_first_signal_cancel() -> None:
+    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+
+    decision = d.on_stt_interim("对呀", score=0.0)
+
+    assert decision.action is Action.ROLLBACK
+    assert decision.intent is not None
+    assert decision.intent.value == "backchannel"
+
+
 def test_substantive_interim_cancels_with_high_semantic_score() -> None:
     """Once EOT semantic confidence is high, the same interim can cancel."""
     d = InterruptDecider(min_interim_chars=2, early_cancel_score_threshold=0.7)

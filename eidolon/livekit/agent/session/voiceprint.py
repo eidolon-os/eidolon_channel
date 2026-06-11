@@ -348,19 +348,19 @@ class VoiceprintTurnObserver:
         )
 
     def _commit_decision(self, signal: SpeakerSignal, *, cached: bool) -> tuple[bool, str]:
-        if cached:
-            return False, "cached_result_not_commit_evidence"
         if signal.error:
             return False, signal.error
-        if signal.audio_ms is not None and signal.audio_ms < 1500:
-            return False, "audio_too_short_for_commit"
         if not signal.known:
             return False, "speaker_not_owner"
         score = signal.score if signal.score is not None else signal.owner_confidence
         if score is None:
             return False, "score_missing"
+        if cached:
+            return True, "cached_owner_context"
+        if signal.audio_ms is not None and signal.audio_ms < 1500:
+            return True, "owner_known_short_audio"
         if score < self._commit_threshold:
-            return False, f"score_below_commit_threshold:{score:.3f}<{self._commit_threshold:.3f}"
+            return True, f"owner_above_provider_threshold:{score:.3f}<{self._commit_threshold:.3f}"
         return True, "owner_high_confidence"
 
     def _provider_name(self) -> str:

@@ -35,22 +35,20 @@ logger = logging.getLogger("eidolon_agent_rpc.session")
 
 # Channel-level gRPC options.
 #
-# Keepalive (A3, plan Phase A):
-#   - Loopback never times out, but cross-host / via-LB deployments silently
-#     drop idle long-conns. Probe every 10s, fail after 5s no-ACK.
-#   - permit_without_calls=1 + max_pings_without_data=0 let us ping even on a
-#     stream with no active turn (e.g. between voice turns).
+# Keepalive:
+#   - Do not enable client-side HTTP/2 keepalive by default. The Chat() RPC is a
+#     long-lived bidi stream, and aggressive no-data pings can trip the default
+#     gRPC server enforcement policy with GOAWAY/debug "too_many_pings".
+#   - If a cross-host deployment sits behind an idle-closing proxy/LB, expose a
+#     deployment-specific keepalive policy instead of baking a 10s dev default
+#     into the client.
 #
-# Latency hints (F3, plan Phase F):
+# Latency hints:
 #   - optimization_target=latency: tell gRPC C-core to prefer p99 latency over
 #     throughput. Voice TTFD is the metric we care about, not bulk bytes/sec.
 #   - bdp_probe=1: auto-adjust HTTP/2 BDP for bursty streaming (LLM token
 #     emission is bursty), keeping flow control windows out of the critical path.
 _CHANNEL_OPTIONS: list[tuple[str, int | str]] = [
-    ("grpc.keepalive_time_ms", 10_000),
-    ("grpc.keepalive_timeout_ms", 5_000),
-    ("grpc.keepalive_permit_without_calls", 1),
-    ("grpc.http2.max_pings_without_data", 0),
     ("grpc.optimization_target", "latency"),
     ("grpc.http2.bdp_probe", 1),
 ]

@@ -30,6 +30,23 @@ class _FakeEmitter:
         self.calls.append("push")
 
 
+class _FakeBailianClient:
+    def __init__(self) -> None:
+        self.connected = False
+        self.started = 0
+        self.disconnected = 0
+
+    async def connect(self) -> bool:
+        self.connected = True
+        return True
+
+    async def start_task(self) -> None:
+        self.started += 1
+
+    async def disconnect(self) -> None:
+        self.disconnected += 1
+
+
 def _tts() -> BailianTTS:
     return BailianTTS(
         BailianTTSConfig(
@@ -67,3 +84,17 @@ async def test_stream_started_during_shutdown_ends_without_pool_acquire() -> Non
         "end_segment",
         "end_input",
     ]
+
+
+@pytest.mark.asyncio
+async def test_warmup_preconnects_without_starting_provider_task() -> None:
+    tts = _tts()
+    fake = _FakeBailianClient()
+    tts._create_connection = lambda: fake  # type: ignore[method-assign]
+
+    await tts.warmup()
+    await tts.shutdown()
+
+    assert fake.connected is True
+    assert fake.started == 0
+    assert fake.disconnected == 1

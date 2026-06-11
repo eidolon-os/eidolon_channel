@@ -1,0 +1,71 @@
+tenant_id: default
+user_id: default
+admin_url: http://127.0.0.1:9000
+audio:
+  backchannel_duiya:
+    path: benchmarks/audio/synthetic_default/backchannel_duiya.wav
+    duration_ms: 1130
+  enroll_calm_rain:
+    path: benchmarks/audio/synthetic_default/enroll_calm_rain.wav
+    duration_ms: 7260
+  enroll_medical_system:
+    path: benchmarks/audio/synthetic_default/enroll_medical_system.wav
+    duration_ms: 6660
+  enroll_project_risk:
+    path: benchmarks/audio/synthetic_default/enroll_project_risk.wav
+    duration_ms: 5940
+  hard_stop_stop:
+    path: benchmarks/audio/synthetic_default/hard_stop_stop.wav
+    duration_ms: 1780
+  normal_ask_intro:
+    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    duration_ms: 2980
+  owner_long_medical_plan:
+    path: benchmarks/audio/synthetic_default/owner_long_medical_plan.wav
+    duration_ms: 7500
+  owner_medical_project:
+    path: benchmarks/audio/synthetic_default/owner_medical_project.wav
+    duration_ms: 3740
+  owner_pause_private_hospital:
+    path: benchmarks/audio/synthetic_default/owner_pause_private_hospital.wav
+    duration_ms: 9060
+  topic_switch_pricing:
+    path: benchmarks/audio/synthetic_default/topic_switch_pricing.wav
+    duration_ms: 3180
+enrollment_clips:
+- enroll_calm_rain
+- enroll_medical_system
+- enroll_project_risk
+profile:
+  profile_id: vp_default_default
+  tenant_id: default
+  user_id: default
+  provider: 3d_speaker
+  model: campplus_zh_16k_common
+  embedding_ref: default/default/embeddings/vp_default_default.json
+  sample_refs:
+  - default/default/enrollments/vpe_3ea65f51a71c/samples/sample_001.wav
+  - default/default/enrollments/vpe_3ea65f51a71c/samples/sample_002.wav
+  - default/default/enrollments/vpe_3ea65f51a71c/samples/sample_003.wav
+  sample_rate: 16000
+  duration_ms: 19860
+  threshold: null
+  quality:
+    accepted_segments: 3
+    rejected_segments: 0
+    embedding:
+      status: ready
+      dim: 192
+      dtype: float32
+      pooling: mean_l2_normalized
+  created_at: '2026-06-11T03:47:55.269657+00:00'
+  updated_at: '2026-06-11T03:48:01.007181+00:00'
+  metadata:
+    enrollment_id: vpe_3ea65f51a71c
+    status: ready
+    embedding:
+      ref: default/default/embeddings/vp_default_default.json
+      generated_at: '2026-06-11T03:48:01.005452+00:00'
+      latency_ms: 251
+      sample_count: 3
+cases: benchmarks/cases/synthetic_default_voiceprint_e2e.yaml

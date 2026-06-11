@@ -78,6 +78,7 @@ eidolon/livekit/agent/
 ├── streaming.py              # StreamingPipeline: 实时会话总编排器
 ├── batch.py                  # BatchPipeline: 批量音频 blob 处理
 ├── client_audio_state.py     # Web/硬件客户端 audio_state 数据模型
+├── _framework_patches.py     # LiveKit framework 兼容性 patch
 ├── output_controller.py      # 兼容入口: re-export output.controller
 ├── filler.py                 # 兼容入口: re-export output.filler
 ├── ducking.py                # 兼容入口: ducking 模块迁移后的旧路径
@@ -119,6 +120,7 @@ eidolon/livekit/agent/
 │   ├── interruption.py       # SoftInterruptController: 软打断补偿路径
 │   ├── semantic_interrupt.py # SemanticInterruptHandler: STT/EOT 打断热路径副作用
 │   ├── signals.py            # SessionSignalBridge: VAD/STT provider 信号桥接
+│   ├── user_turn_coordinator.py # UserTurnCoordinator: 用户 turn 候选、合并、提交/拒绝决策
 │   └── turn_commit.py        # UserTurnCommitter: VAD-end commit guard
 ├── context/
 │   └── interrupted.py        # InterruptedContextManager: 被打断回复注入上下文
@@ -142,7 +144,7 @@ eidolon/livekit/agent/
 
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
-`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。它们可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；它不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
 
 `context/` 负责对 conversation/chat context 的局部改写。当前只放被打断回复注入，后续如果扩展 memory recall/write 的会话内上下文拼装，也应先判断是否属于 agent 项目还是上游 brain 项目。
 

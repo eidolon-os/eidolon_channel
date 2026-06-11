@@ -290,21 +290,26 @@ async def _run_room_case(
         state.mark("user_audio_done_at")
 
         try:
-            response_event = (
-                state.agent_audio_after_user_done
-                if case.expectations.min_agent_messages > 0
-                else state.first_agent_audio
-            )
-            await asyncio.wait_for(
-                response_event.wait(),
-                timeout=min(options.timeout_sec, case.timeout_sec + 20.0),
-            )
+            wait_mode = _agent_audio_wait_mode(case)
+            metrics["expected_agent_audio_response"] = wait_mode
+            if wait_mode != "none":
+                wait_timeout_sec = _agent_audio_wait_timeout_sec(case, options)
+                metrics["agent_audio_wait_timeout_sec"] = wait_timeout_sec
+                response_event = (
+                    state.agent_audio_after_user_done
+                    if wait_mode == "after_user_done"
+                    else state.first_agent_audio
+                )
+                await asyncio.wait_for(
+                    response_event.wait(),
+                    timeout=wait_timeout_sec,
+                )
             await asyncio.sleep(options.settle_after_first_audio_sec)
         except asyncio.TimeoutError:
             errors.append("timed out waiting for agent audio in LiveKit room")
 
         metrics.update(state.metrics())
-        if state.agent_audio_frames <= 0:
+        if state.agent_audio_frames <= 0 and _agent_audio_wait_mode(case) != "none":
             errors.append("no agent audio frames captured")
     except Exception as exc:
         metrics.update(state.metrics())
@@ -607,6 +612,33 @@ def _make_dispatch_token(
     if metadata:
         token = token.with_metadata(json.dumps(metadata, ensure_ascii=False))
     return token.to_jwt()
+
+
+def _agent_audio_wait_mode(case: BenchmarkCase) -> str:
+    """Return how a room case should wait for agent audio.
+
+    ``min_agent_messages`` is meaningful for headless message tests, but the
+    room runner only observes audio. Some voice UX cases intentionally suppress
+    a new semantic response, so they need an explicit room-audio expectation
+    instead of being inferred from message count.
+    """
+
+    mode = str(case.expectations.agent_audio_response or "auto").strip()
+    if mode in {"after_user_done", "first", "none"}:
+        return mode
+    if mode not in {"", "auto"}:
+        raise ValueError(
+            f"{case.case_id}: unknown agent_audio_response={mode!r}; "
+            "expected auto, after_user_done, first, or none"
+        )
+    return "after_user_done" if case.expectations.min_agent_messages > 0 else "first"
+
+
+def _agent_audio_wait_timeout_sec(
+    case: BenchmarkCase,
+    options: LiveKitRoomOptions,
+) -> float:
+    return max(float(options.timeout_sec), float(case.timeout_sec))
 
 
 def _participant_metadata(options: LiveKitRoomOptions) -> dict[str, Any]:

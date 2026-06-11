@@ -48,6 +48,13 @@ class AgentReply:
 class Expectations:
     action: str = "none"
     intent: str = "uncertain"
+    decision_action: str = ""
+    decision_intent: str = ""
+    voiceprint: str = "any"
+    brain: str = "any"
+    rejected_turn_brain: str = "any"
+    agent_audio_response: str = "auto"
+    canonical_contains: tuple[str, ...] = ()
     allow_attention_actions: tuple[str, ...] = ()
     forbid_actions: tuple[str, ...] = ()
     topic_switch_hint: bool = False
@@ -122,7 +129,10 @@ def load_suite(path: str | Path) -> BenchmarkSuite:
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     cases: list[BenchmarkCase] = []
     for case_raw in raw.get("cases", []):
-        expectations = Expectations(**(case_raw.get("expect") or {}))
+        expect_raw = dict(case_raw.get("expect") or {})
+        if isinstance(expect_raw.get("canonical_contains"), list):
+            expect_raw["canonical_contains"] = tuple(expect_raw["canonical_contains"])
+        expectations = Expectations(**expect_raw)
         cases.append(
             BenchmarkCase(
                 case_id=case_raw["case_id"],

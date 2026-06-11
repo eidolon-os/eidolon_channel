@@ -9,7 +9,7 @@ from eidolon.livekit.agent.turn_policy import (
     LexiconInterruptClassifier,
 )
 from eidolon.livekit.agent.turn_policy.intent_classifier import (
-    is_semantic_interrupt_prefix,
+    hard_stop_prefix_intent,
 )
 from eidolon.livekit.common.config.defaults import (
     DEFAULT_CORRECTION_EXCLUSION_LEXICON,
@@ -35,28 +35,25 @@ def classifier() -> LexiconInterruptClassifier:
         ("别说了我想换个", InterruptIntent.HARD_STOP),
         ("please stop", InterruptIntent.HARD_STOP),
         ("that's enough", InterruptIntent.HARD_STOP),
-        ("换个话题吧", InterruptIntent.TOPIC_SWITCH),
-        ("半个话题吧", InterruptIntent.TOPIC_SWITCH),
-        ("我们聊点", InterruptIntent.TOPIC_SWITCH),
-        ("这个先不聊", InterruptIntent.TOPIC_SWITCH),
-        ("别说这个", InterruptIntent.TOPIC_SWITCH),
-        ("跳过这个", InterruptIntent.TOPIC_SWITCH),
-        ("let's talk about something else", InterruptIntent.TOPIC_SWITCH),
-        ("next topic", InterruptIntent.TOPIC_SWITCH),
-        ("不是，我的意思是", InterruptIntent.CORRECTION),
-        ("我刚才说", InterruptIntent.CORRECTION),
-        ("我刚才", InterruptIntent.CORRECTION),
-        ("是我刚", InterruptIntent.CORRECTION),
-        ("不对不对你理解错了", InterruptIntent.CORRECTION),
-        ("我纠正一下", InterruptIntent.CORRECTION),
-        ("hold on a second", InterruptIntent.CORRECTION),
-        ("let me rephrase", InterruptIntent.CORRECTION),
-        ("that's not what i meant", InterruptIntent.CORRECTION),
+        ("换个话题吧", InterruptIntent.UNCERTAIN),
+        ("我们聊点", InterruptIntent.UNCERTAIN),
+        ("这个先不聊", InterruptIntent.UNCERTAIN),
+        ("跳过这个", InterruptIntent.UNCERTAIN),
+        ("let's talk about something else", InterruptIntent.UNCERTAIN),
+        ("next topic", InterruptIntent.UNCERTAIN),
+        ("不是，我的意思是", InterruptIntent.UNCERTAIN),
+        ("我刚才说", InterruptIntent.UNCERTAIN),
+        ("我刚才", InterruptIntent.UNCERTAIN),
+        ("不对不对你理解错了", InterruptIntent.UNCERTAIN),
+        ("我纠正一下", InterruptIntent.UNCERTAIN),
+        ("hold on a second", InterruptIntent.UNCERTAIN),
+        ("let me rephrase", InterruptIntent.UNCERTAIN),
+        ("that's not what i meant", InterruptIntent.UNCERTAIN),
         ("是我", InterruptIntent.UNCERTAIN),
         ("是不是应该这样", InterruptIntent.UNCERTAIN),
         ("对不对呢", InterruptIntent.UNCERTAIN),
         ("not enough detail", InterruptIntent.UNCERTAIN),
-        ("嗯", InterruptIntent.BACKCHANNEL),
+        ("嗯", InterruptIntent.UNCERTAIN),
         ("咳咳", InterruptIntent.NOISE),
         ("帮我查一下天气", InterruptIntent.UNCERTAIN),
         ("亭子旁边有什么", InterruptIntent.UNCERTAIN),
@@ -75,6 +72,32 @@ def test_lexicon_classifier_intents(
     assert result.source == "lexicon"
 
 
+@pytest.mark.parametrize(
+    "text,intent",
+    [
+        ("换个话题吧", InterruptIntent.TOPIC_SWITCH),
+        ("我们聊点", InterruptIntent.TOPIC_SWITCH),
+        ("不是，我的意思是", InterruptIntent.CORRECTION),
+        ("我刚才说", InterruptIntent.CORRECTION),
+        ("我纠正一下", InterruptIntent.CORRECTION),
+        ("hold on a second", InterruptIntent.CORRECTION),
+        ("let me rephrase", InterruptIntent.CORRECTION),
+        ("嗯", InterruptIntent.BACKCHANNEL),
+    ],
+)
+def test_fast_intents_mode_keeps_legacy_semantic_lexicon(
+    text: str,
+    intent: InterruptIntent,
+) -> None:
+    result = LexiconInterruptClassifier(fast_intents=True).classify(
+        text,
+        vad_active=True,
+        agent_speaking=True,
+        eot_score=0.0,
+    )
+    assert result.intent is intent
+
+
 def test_interrupt_lexicons_are_non_empty_and_unique() -> None:
     for lexicon in (
         DEFAULT_HARD_STOP_LEXICON,
@@ -89,24 +112,20 @@ def test_interrupt_lexicons_are_non_empty_and_unique() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "换个",
-        "我们换",
-        "我刚",
-        "let me",
+        "别说",
+        "先别说",
+        "停下",
+        "你先停",
     ],
 )
-def test_semantic_interrupt_prefix_detects_redirect_candidates(text: str) -> None:
-    assert is_semantic_interrupt_prefix(text)
+def test_hard_stop_prefix_detects_tier0_candidates(text: str) -> None:
+    assert hard_stop_prefix_intent(text) is InterruptIntent.HARD_STOP
 
 
-@pytest.mark.parametrize("text", ["换", "好", "那它", "是不是"])
-def test_semantic_interrupt_prefix_rejects_weak_or_ambient_text(text: str) -> None:
-    assert not is_semantic_interrupt_prefix(text)
+@pytest.mark.parametrize("text", ["换", "好", "那它", "是不是", "我刚"])
+def test_hard_stop_prefix_rejects_weak_or_ambient_text(text: str) -> None:
+    assert hard_stop_prefix_intent(text) is None
 
 
-def test_semantic_interrupt_prefix_accepts_attention_early_duck_only() -> None:
-    assert is_semantic_interrupt_prefix(
-        "换",
-        min_chars=1,
-        include_attention_early_duck=True,
-    )
+def test_hard_stop_prefix_keeps_single_char_hotword_out_of_prefix_path() -> None:
+    assert hard_stop_prefix_intent("停", min_chars=1, min_cjk_chars=1) is None

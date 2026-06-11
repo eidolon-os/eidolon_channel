@@ -1,0 +1,227 @@
+suite_id: synthetic_default_voiceprint_e2e
+cases:
+- case_id: synthetic_default_owner_normal_001
+  suite: synthetic_default_voiceprint_e2e
+  description: 'default synthetic owner voiceprint: normal owner turn should pass
+    voiceprint and reach brain/TTS.'
+  timeout_sec: 90
+  tags:
+  - synthetic_default
+  - voiceprint
+  - owner_positive
+  audio_clips:
+  - id: owner_medical_project
+    text: 今天我想聊一下一个新的医疗项目。
+    path: benchmarks/audio/synthetic_default/owner_medical_project.wav
+    intent: normal
+  user_steps:
+  - text: 今天我想聊一下一个新的医疗项目
+    audio: owner_medical_project
+    start_ms: 200
+    duration_ms: 3740
+    final_delay_ms: 160
+    agent_speaking: false
+    client_playback_state: idle
+  expect:
+    action: none
+    intent: uncertain
+    voiceprint: allowed
+    brain: required
+    agent_audio_response: after_user_done
+    canonical_contains:
+    - 医疗项目
+    min_user_finals: 1
+    min_agent_messages: 1
+- case_id: synthetic_default_owner_pause_001
+  suite: synthetic_default_voiceprint_e2e
+  description: 'default synthetic owner voiceprint: natural pauses inside one utterance
+    should keep the medical-system meaning.'
+  timeout_sec: 90
+  tags:
+  - synthetic_default
+  - voiceprint
+  - turn_boundary
+  audio_clips:
+  - id: owner_pause_private_hospital
+    text: 私立医院的。主要给医生做的系统。不是给患者的。
+    path: benchmarks/audio/synthetic_default/owner_pause_private_hospital.wav
+    intent: normal
+  user_steps:
+  - text: 私立医院的，主要给医生做的系统，不是给患者的
+    audio: owner_pause_private_hospital
+    start_ms: 200
+    duration_ms: 9060
+    final_delay_ms: 180
+    agent_speaking: false
+    client_playback_state: idle
+  expect:
+    action: none
+    intent: uncertain
+    voiceprint: allowed
+    brain: required
+    agent_audio_response: after_user_done
+    canonical_contains:
+    - 医生
+    min_user_finals: 1
+    min_agent_messages: 1
+- case_id: synthetic_default_hard_stop_001
+  suite: synthetic_default_voiceprint_e2e
+  description: 'default synthetic owner voiceprint: hard stop should cancel current
+    output while preserving the first owner turn.'
+  timeout_sec: 90
+  tags:
+  - synthetic_default
+  - voiceprint
+  - hard_stop
+  audio_clips:
+  - id: normal_ask_intro
+    text: 帮我详细介绍一下这个方案。
+    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    intent: normal
+  - id: hard_stop_stop
+    text: 停一下。
+    path: benchmarks/audio/synthetic_default/hard_stop_stop.wav
+    intent: hard_stop
+  user_steps:
+  - text: 帮我详细介绍一下这个方案
+    audio: normal_ask_intro
+    start_ms: 200
+    duration_ms: 2980
+    final_delay_ms: 120
+    agent_speaking: false
+    client_playback_state: idle
+  - text: 停一下
+    audio: hard_stop_stop
+    start_ms: 1800
+    duration_ms: 1780
+    interims:
+    - 停一下
+    final_delay_ms: 80
+    agent_speaking: true
+    client_playback_state: agent_speaking
+  expect:
+    action: cancel
+    intent: hard_stop
+    voiceprint: allowed
+    brain: any
+    agent_audio_response: first
+    max_interrupt_decision_ms: 700
+    min_user_finals: 1
+    min_agent_messages: 1
+- case_id: synthetic_default_topic_switch_001
+  suite: synthetic_default_voiceprint_e2e
+  description: 'default synthetic owner voiceprint: topic switch during agent output
+    should cancel and keep the requested new topic.'
+  timeout_sec: 90
+  tags:
+  - synthetic_default
+  - voiceprint
+  - topic_switch
+  audio_clips:
+  - id: normal_ask_intro
+    text: 帮我详细介绍一下这个方案。
+    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    intent: normal
+  - id: topic_switch_pricing
+    text: 换个话题，我们聊一下定价。
+    path: benchmarks/audio/synthetic_default/topic_switch_pricing.wav
+    intent: topic_switch
+  user_steps:
+  - text: 帮我详细介绍一下这个方案
+    audio: normal_ask_intro
+    start_ms: 200
+    duration_ms: 2980
+    final_delay_ms: 120
+    agent_speaking: false
+    client_playback_state: idle
+  - text: 换个话题，我们聊一下定价
+    audio: topic_switch_pricing
+    start_ms: 1800
+    duration_ms: 3180
+    final_delay_ms: 100
+    agent_speaking: true
+    client_playback_state: agent_speaking
+  expect:
+    action: cancel
+    voiceprint: allowed
+    brain: required
+    agent_audio_response: after_user_done
+    canonical_contains:
+    - 换个话题
+    min_user_finals: 1
+    min_agent_messages: 1
+- case_id: synthetic_default_backchannel_001
+  suite: synthetic_default_voiceprint_e2e
+  description: 'default synthetic owner voiceprint: short backchannel during output
+    should not become a semantic user request.'
+  timeout_sec: 90
+  tags:
+  - synthetic_default
+  - voiceprint
+  - backchannel
+  audio_clips:
+  - id: normal_ask_intro
+    text: 帮我详细介绍一下这个方案。
+    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    intent: normal
+  - id: backchannel_duiya
+    text: 对呀。
+    path: benchmarks/audio/synthetic_default/backchannel_duiya.wav
+    intent: backchannel
+  user_steps:
+  - text: 帮我详细介绍一下这个方案
+    audio: normal_ask_intro
+    start_ms: 200
+    duration_ms: 2980
+    final_delay_ms: 120
+    agent_speaking: false
+    client_playback_state: idle
+  - text: 对呀
+    audio: backchannel_duiya
+    start_ms: 1800
+    duration_ms: 1130
+    interims:
+    - 对呀
+    final_delay_ms: 80
+    agent_speaking: true
+    client_playback_state: agent_speaking
+  expect:
+    action: any
+    decision_action: rollback
+    decision_intent: backchannel
+    voiceprint: allowed
+    brain: any
+    rejected_turn_brain: forbidden
+    agent_audio_response: first
+    min_user_finals: 1
+    min_agent_messages: 1
+- case_id: synthetic_default_non_owner_rejected_001
+  suite: synthetic_default_voiceprint_e2e
+  description: 'default synthetic voiceprint: non-default voice should be transcribed
+    but blocked before brain.'
+  timeout_sec: 70
+  tags:
+  - synthetic_default
+  - voiceprint
+  - negative
+  audio_clips:
+  - id: non_owner_sample
+    text: non-default speaker sample
+    path: /Users/manson/eidolon/voiceprints/default/manson/enrollments/vpe_4b5aca8dd8d0/samples/sample_001.wav
+    intent: normal
+  user_steps:
+  - text: non-default speaker sample
+    audio: non_owner_sample
+    start_ms: 200
+    duration_ms: 8960
+    final_delay_ms: 180
+    agent_speaking: false
+    client_playback_state: idle
+  expect:
+    action: none
+    intent: uncertain
+    voiceprint: blocked
+    brain: forbidden
+    agent_audio_response: none
+    min_user_finals: 1
+    min_agent_messages: 0

@@ -43,6 +43,7 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
+_USER_TEXT_OVERRIDE_TTL_SEC = 10.0
 
 
 # Phase 32.B: ``device_token`` accepts either a static string (legacy
@@ -171,6 +172,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
         self._pending_turn_control_metadata: dict[str, Any] | None = None
+        self._pending_user_text_override: dict[str, Any] | None = None
 
     def emit_provider_event(self, name: str, **payload: Any) -> None:
         """Emit provider-level timing events for Channel observability."""
@@ -242,6 +244,60 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._pending_turn_control_metadata = None
         return metadata
 
+    def set_next_user_text(self, text: str, *, source: str) -> None:
+        """Override the next StartTurn text with Eidolon's canonical user turn.
+
+        LiveKit still owns the framework lifecycle and ChatContext, but Eidolon
+        owns the product-level turn assembly.  This one-shot override is the
+        narrow adapter boundary that lets ``UserTurnCoordinator`` supply the
+        final transcript without mutating LiveKit internals.
+        """
+        stripped = text.strip()
+        self._pending_user_text_override = (
+            {
+                "text": stripped,
+                "source": source,
+                "created_at": time.monotonic(),
+            }
+            if stripped
+            else None
+        )
+
+    def _pop_next_user_text_for_chat(
+        self,
+        *,
+        framework_user_text: str,
+    ) -> dict[str, Any] | None:
+        override = self._pending_user_text_override
+        if override is None:
+            return None
+        created_at = override.get("created_at")
+        if isinstance(created_at, (int, float)):
+            if time.monotonic() - float(created_at) > _USER_TEXT_OVERRIDE_TTL_SEC:
+                self._pending_user_text_override = None
+                return None
+        if not framework_user_text.strip():
+            return None
+        self._pending_user_text_override = None
+        return override
+
+    def _resolve_conversation_id_for_chat(self) -> str:
+        # Resolve once per logical chat stream. LiveKit may retry _run() for
+        # transient provider errors; retries must not silently move the turn to
+        # a different conversation.
+        cid_src = self._conversation_id
+        if callable(cid_src):
+            try:
+                return cid_src()
+            except Exception as exc:
+                logger.warning(
+                    "[EidolonAgentGrpcLlm] conversation_id resolver raised; "
+                    "falling back to literal display_model. exc=%r",
+                    exc,
+                )
+                return f"livekit:{self._display_model}"
+        return cid_src
+
     def chat(
         self,
         *,
@@ -256,11 +312,18 @@ class EidolonAgentGrpcLlm(llm.LLM):
             logger.debug(
                 "[EidolonAgentGrpcLlm] tools are not forwarded over eidolon.agent.v1"
             )
+        framework_user_text = _last_user_text(chat_ctx)
         return EidolonAgentGrpcLlmStream(
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            turn_control_metadata=self.pop_turn_control_metadata(),
+            user_text_override=self._pop_next_user_text_for_chat(
+                framework_user_text=framework_user_text,
+            ),
+            framework_user_text=framework_user_text,
+            conversation_id=self._resolve_conversation_id_for_chat(),
         )
 
     async def aclose(self) -> None:
@@ -270,12 +333,49 @@ class EidolonAgentGrpcLlm(llm.LLM):
 
 
 class EidolonAgentGrpcLlmStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm: EidolonAgentGrpcLlm,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool],
+        conn_options: APIConnectOptions,
+        turn_control_metadata: dict[str, Any] | None,
+        user_text_override: dict[str, Any] | None,
+        framework_user_text: str,
+        conversation_id: str,
+    ) -> None:
+        self._turn_control_metadata = turn_control_metadata
+        self._user_text_override = user_text_override
+        self._framework_user_text = framework_user_text
+        self._conversation_id = conversation_id
+        self._attempt_index = 0
+        super().__init__(
+            llm,
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+        )
+
     async def _run(self) -> None:
         llm_v: EidolonAgentGrpcLlm = self._llm  # type: ignore[assignment]
-        user_text = _last_user_text(self._chat_ctx)
+        self._attempt_index += 1
+        attempt = self._attempt_index
+        framework_user_text = self._framework_user_text
+        override = self._user_text_override
+        if override is not None and override["text"].strip():
+            user_text = override["text"]
+            text_source = override.get("source") or "override"
+        else:
+            user_text = framework_user_text
+            text_source = "framework_chat_context"
         llm_v.emit_provider_event(
             "brain_request_started",
+            attempt=attempt,
             text_chars=len(user_text),
+            framework_text_chars=len(framework_user_text),
+            user_text_source=text_source,
+            text_overridden=user_text != framework_user_text,
         )
         timeout = max(float(getattr(self._conn_options, "timeout", 10.0) or 10.0), 0.1)
         try:
@@ -285,29 +385,14 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 f"eidolon_agent session open timed out after {timeout:.1f}s",
                 retryable=True,
             ) from exc
-        # D1: resolve conversation_id at chat() time so the resolver can
-        # consult LiveKit room state (participant identity etc.) that wasn't
-        # available when the adapter was constructed by the factory.
-        cid_src = llm_v._conversation_id
-        if callable(cid_src):
-            try:
-                conversation_id = cid_src()
-            except Exception as exc:
-                logger.warning(
-                    "[EidolonAgentGrpcLlm] conversation_id resolver raised; "
-                    "falling back to literal display_model. exc=%r",
-                    exc,
-                )
-                conversation_id = f"livekit:{llm_v._display_model}"
-        else:
-            conversation_id = cid_src
+        conversation_id = self._conversation_id
         try:
             turn_id, payloads = await asyncio.wait_for(
                 session.start_turn(
                     text=user_text,
                     conversation_id=conversation_id,
-                    metadata={"turn_control": turn_control}
-                    if (turn_control := llm_v.pop_turn_control_metadata())
+                    metadata={"turn_control": self._turn_control_metadata}
+                    if self._turn_control_metadata
                     else None,
                 ),
                 timeout=timeout,
@@ -323,10 +408,47 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             conversation_id=conversation_id,
             turn_id=turn_id,
             request_id=req_id,
+            attempt=attempt,
         )
         first_delta_seen = False
         try:
-            async for payload in payloads:
+            payload_iter = payloads.__aiter__()
+            first_delta_deadline = asyncio.get_running_loop().time() + timeout
+            while True:
+                try:
+                    if first_delta_seen:
+                        payload = await payload_iter.__anext__()
+                    else:
+                        remaining = first_delta_deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            raise asyncio.TimeoutError
+                        payload = await asyncio.wait_for(
+                            payload_iter.__anext__(),
+                            timeout=remaining,
+                        )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError as exc:
+                    message = (
+                        "eidolon_agent first delta timed out after "
+                        f"{timeout:.1f}s"
+                    )
+                    llm_v.emit_provider_event(
+                        "brain_error",
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        request_id=req_id,
+                        attempt=attempt,
+                        code="first_delta_timeout",
+                        message=message,
+                        fatal=False,
+                    )
+                    session.spawn(
+                        session.cancel_turn(turn_id),
+                        name=f"eidolon-first-delta-timeout-cancel-{turn_id}",
+                    )
+                    raise APIConnectionError(message, retryable=True) from exc
+
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
                 if isinstance(payload, DeltaPayload):
@@ -337,6 +459,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             conversation_id=conversation_id,
                             turn_id=turn_id,
                             request_id=req_id,
+                            attempt=attempt,
                         )
                     self._event_ch.send_nowait(
                         llm.ChatChunk(
@@ -359,9 +482,14 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                         )
                     )
                 elif isinstance(payload, StatePayload):
-                    # UX hook (future): pipeline can subscribe to drive a
-                    # "thinking..." indicator. For now we just log so the
-                    # signal isn't lost.
+                    llm_v.emit_provider_event(
+                        "brain_state",
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        request_id=req_id,
+                        attempt=attempt,
+                        state=payload.state,
+                    )
                     logger.info(
                         "[EidolonAgentGrpcLlmStream] state=%s turn=%s",
                         payload.state, turn_id,
@@ -380,7 +508,10 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 request_id=req_id,
+                attempt=attempt,
             )
+        except APIConnectionError:
+            raise
         except asyncio.CancelledError:
             # Barge-in, preemptive-generation discard, or job teardown: tell the
             # brain to stop generating without closing the underlying bidi
@@ -393,6 +524,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 request_id=req_id,
+                attempt=attempt,
             )
             session.spawn(
                 session.cancel_turn(turn_id),
@@ -400,6 +532,16 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             )
             raise
         except TurnError as exc:
+            llm_v.emit_provider_event(
+                "brain_error",
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                request_id=req_id,
+                attempt=attempt,
+                code=exc.code,
+                message=str(exc),
+                fatal=exc.fatal,
+            )
             raise _map_turn_error(exc) from exc
         except Exception as exc:
             raise APIConnectionError(

@@ -152,7 +152,6 @@ class BailianTTS(TTS):
                 f"Failed to connect Bailian TTS: {self._config.api_url}",
                 recoverable=True,
             )
-        await conn.start_task()
         return conn
 
     async def _dispose_conn(self, conn: BailianTTSClient) -> None:
@@ -257,6 +256,7 @@ class BailianSynthesizeStream(SynthesizeStream):
         self._conn_closed = False
         self._pcm_total_bytes = 0
         self._log_audio_diag = self._config.log_audio_diag
+        self._provider_task_started = False
         # G12 (2026-05-17): wall-clock marker for the no-audio guard.
         # Set on first successful send_continue. None means "no text sent
         # yet" — the guard ignores this state.
@@ -300,6 +300,7 @@ class BailianSynthesizeStream(SynthesizeStream):
         self._conn_closed = False
         self._pcm_total_bytes = 0
         self._first_send_continue_time = None  # G12 reset per-stream
+        self._provider_task_started = False
 
         output_emitter.initialize(
             request_id=uuid.uuid4().hex[:16],
@@ -320,7 +321,6 @@ class BailianSynthesizeStream(SynthesizeStream):
         async with self._tts._stream_lock:
             client = await self._tts._acquire_conn()
             self._tts.emit_provider_event("tts_connection_acquired")
-            self._tts.emit_provider_event("tts_request_started")
             self._tts._stream_active = True
             self._audio_byte_stream = AudioByteStream(
                 sample_rate=self._config.sample_rate,
@@ -348,7 +348,7 @@ class BailianSynthesizeStream(SynthesizeStream):
             try:
                 await asyncio.wait_for(self._exit_event.wait(), timeout=45.0)
             except asyncio.TimeoutError:
-                raise APIError("bailian tts stream timeout", body=None, retryable=False)
+                raise APIError("bailian tts stream timeout", body=None, retryable=True)
             finally:
                 self._input_done.set()
                 for t in (recv_task, input_task, no_audio_guard_task):
@@ -376,10 +376,15 @@ class BailianSynthesizeStream(SynthesizeStream):
             self._tts._conn = None
 
         if self._task_failed_error is not None:
-            raise APIError(str(self._task_failed_error), body=None, retryable=False)
+            retryable = bool(getattr(self._task_failed_error, "recoverable", False))
+            raise APIError(str(self._task_failed_error), body=None, retryable=retryable)
 
         if self._conn_closed and not self._task_finished:
-            raise APIError("bailian tts connection closed unexpectedly", body=None, retryable=False)
+            raise APIError(
+                "bailian tts connection closed unexpectedly",
+                body=None,
+                retryable=True,
+            )
 
         if self._log_audio_diag:
             logger.info(
@@ -421,7 +426,10 @@ class BailianSynthesizeStream(SynthesizeStream):
             error_message = header.get("error_message", "task failed")
             err_str = f"[{error_code}] {error_message}"
             logger.error("[BailianSynthesizeStream] task-failed: %s", err_str)
-            self._task_failed_error = BailianTTSError(err_str, recoverable=False)
+            self._task_failed_error = BailianTTSError(
+                err_str,
+                recoverable="timeout" in str(error_message).lower(),
+            )
 
     async def _handle_audio_chunk(
         self, chunk: bytes, output_emitter: AudioEmitter
@@ -463,6 +471,11 @@ class BailianSynthesizeStream(SynthesizeStream):
                 )
                 return
             try:
+                if not self._provider_task_started:
+                    self._tts.emit_provider_event("tts_request_started")
+                    await client.start_task()
+                    self._provider_task_started = True
+
                 async def send_text_part(part: str) -> None:
                     await client.send_continue(part)
                     # G12 (2026-05-17): wall-clock marker for the no-audio
@@ -551,8 +564,11 @@ class BailianSynthesizeStream(SynthesizeStream):
             raise
         except Exception as e:
             self._task_failed_error = e
+            self._exit_event.set()
         finally:
             await aggregator.aclose()
+            if not self._text_sent and self._task_failed_error is None:
+                self._exit_event.set()
             self._input_done.set()
 
     async def _no_first_audio_guard(self) -> None:

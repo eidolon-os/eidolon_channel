@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from .agent_output_coordinator import AgentOutputCoordinator
 
 logger = logging.getLogger("agent.session.provider_events")
 
@@ -19,14 +21,25 @@ class ProviderEventObserver:
         *,
         factory: Any,
         get_timeline: Callable[[], TurnTimeline | None],
+        flush_timeline: Callable[[TurnTimeline, str], None] | None = None,
+        append_timeline_snapshot: Callable[[TurnTimeline, str], None] | None = None,
+        first_delta_timeout_sec: float = 3.0,
     ) -> None:
         self._factory = factory
         self._get_timeline = get_timeline
+        self._flush_timeline = flush_timeline
+        self._append_timeline_snapshot = append_timeline_snapshot
+        self._first_delta_timeout_sec = first_delta_timeout_sec
+        self._first_delta_watchdog: asyncio.Task | None = None
         self.llm_metrics_observer_installed = False
         self.brain_provider_observer_installed = False
         self.stt_provider_observer_installed = False
         self.tts_provider_observer_installed = False
         self.pending_stt_provider_events: list[dict[str, Any]] = []
+        self.agent_output = AgentOutputCoordinator()
+
+    def cancel_output_watchdog(self) -> None:
+        self._cancel_first_delta_watchdog()
 
     def install_all(self) -> None:
         self.install_llm_metrics_observer()
@@ -46,10 +59,19 @@ class ProviderEventObserver:
             timeline = self._get_timeline()
             if timeline is None:
                 return
+            if not self._should_record_llm_metrics(timeline, metrics):
+                logger.debug(
+                    "[ProviderEventObserver] ignored LLM metrics outside current turn "
+                    "timeline=%s request_id=%s",
+                    timeline.turn_id,
+                    getattr(metrics, "request_id", ""),
+                )
+                return
             ttft = getattr(metrics, "ttft", None)
             duration = getattr(metrics, "duration", None)
             if ttft is not None and ttft >= 0:
                 timeline.mark_after("llm_first_delta_at", "llm_started_at", ttft)
+                self._cancel_first_delta_watchdog()
             timeline.set_attr(
                 "llm_metrics",
                 {
@@ -64,7 +86,37 @@ class ProviderEventObserver:
             )
 
         llm_plugin.on("metrics_collected", _on_metrics_collected)
+        llm_plugin.on("error", self._on_llm_error)
         self.llm_metrics_observer_installed = True
+
+    def _on_llm_error(self, event: Any) -> None:
+        timeline = self._get_timeline()
+        if timeline is None:
+            return
+        if not self._timeline_has_reply_context(timeline):
+            logger.debug(
+                "[ProviderEventObserver] ignored LLM error outside current turn "
+                "timeline=%s",
+                timeline.turn_id,
+            )
+            return
+        timestamp = getattr(event, "timestamp", None)
+        if isinstance(timestamp, (int, float)):
+            timeline.mark_at("llm_error_at", float(timestamp))
+        else:
+            timeline.mark("llm_error_at")
+        timeline.set_attr(
+            "llm_error",
+            {
+                "label": getattr(event, "label", ""),
+                "recoverable": bool(getattr(event, "recoverable", False)),
+                "error": str(getattr(event, "error", "") or ""),
+            },
+        )
+        output = self.agent_output.record_llm_error(timeline, event)
+        self._cancel_first_delta_watchdog()
+        if bool(output.get("silent_failure")):
+            self._flush_silent_output_if_terminal(timeline, output)
 
     def install_brain_provider_event_observer(self) -> None:
         """Bridge provider-native brain RPC timing events into the timeline."""
@@ -80,6 +132,8 @@ class ProviderEventObserver:
             "brain_first_delta": "brain_first_delta_at",
             "brain_done": "brain_done_at",
             "brain_cancelled": "brain_cancelled_at",
+            "brain_state": None,
+            "brain_error": "brain_error_at",
         }
 
         def _on_provider_event(event: Any) -> None:
@@ -87,17 +141,37 @@ class ProviderEventObserver:
             if timeline is None or not isinstance(event, dict):
                 return
             mark = mark_by_event.get(str(event.get("event") or ""))
-            if mark is None:
+            event_name = str(event.get("event") or "")
+            if event_name == "brain_state":
+                state = str(event.get("state") or "")
+                if state == "thinking":
+                    mark = "brain_state_thinking_at"
+                elif state == "speaking":
+                    mark = "brain_state_speaking_at"
+            if mark is None and event_name != "brain_state":
                 return
-            timestamp = event.get("timestamp")
-            if isinstance(timestamp, (int, float)):
-                timeline.mark_at(mark, float(timestamp))
-                if mark == "brain_first_delta_at":
-                    timeline.mark_at("llm_first_delta_at", float(timestamp))
-            else:
-                timeline.mark(mark)
-                if mark == "brain_first_delta_at":
-                    timeline.mark("llm_first_delta_at")
+            if not self._should_record_brain_event(timeline, event_name, event):
+                logger.debug(
+                    "[ProviderEventObserver] ignored brain provider event outside "
+                    "current turn timeline=%s event=%s turn_id=%s request_id=%s",
+                    timeline.turn_id,
+                    event_name,
+                    event.get("turn_id", ""),
+                    event.get("request_id", ""),
+                )
+                return
+            if mark is not None:
+                timestamp = event.get("timestamp")
+                if isinstance(timestamp, (int, float)):
+                    timeline.mark_at(mark, float(timestamp))
+                    if mark == "brain_first_delta_at":
+                        timeline.mark_at("llm_first_delta_at", float(timestamp))
+                        self._cancel_first_delta_watchdog()
+                else:
+                    timeline.mark(mark)
+                    if mark == "brain_first_delta_at":
+                        timeline.mark("llm_first_delta_at")
+                        self._cancel_first_delta_watchdog()
             brain_rpc = dict(timeline.attrs.get("brain_rpc") or {})
             brain_rpc.update(
                 {
@@ -114,7 +188,23 @@ class ProviderEventObserver:
                     "last_event": event.get("event", ""),
                 }
             )
+            if "user_text_source" in event:
+                brain_rpc["user_text_source"] = event.get("user_text_source")
+            if "text_overridden" in event:
+                brain_rpc["text_overridden"] = bool(event.get("text_overridden"))
+            if "text_chars" in event:
+                brain_rpc["text_chars"] = event.get("text_chars")
+            if "framework_text_chars" in event:
+                brain_rpc["framework_text_chars"] = event.get("framework_text_chars")
+            if "attempt" in event:
+                brain_rpc["attempt"] = event.get("attempt")
             timeline.set_attr("brain_rpc", brain_rpc)
+            output = self.agent_output.record_brain_event(timeline, event)
+            if event_name == "brain_request_sent":
+                self._arm_first_delta_watchdog(timeline)
+            elif event_name in {"brain_done", "brain_cancelled", "brain_error"}:
+                self._cancel_first_delta_watchdog()
+            self._flush_silent_output_if_terminal(timeline, output)
 
         llm_plugin.on("provider_event", _on_provider_event)
         self.brain_provider_observer_installed = True
@@ -142,6 +232,14 @@ class ProviderEventObserver:
             mark = mark_by_event.get(str(event.get("event") or ""))
             if mark is None:
                 return
+            if not self._should_record_tts_event(timeline):
+                logger.debug(
+                    "[ProviderEventObserver] ignored TTS provider event outside "
+                    "current turn timeline=%s event=%s",
+                    timeline.turn_id,
+                    event.get("event", ""),
+                )
+                return
             timestamp = event.get("timestamp")
             if isinstance(timestamp, (int, float)):
                 timeline.mark_at(mark, float(timestamp))
@@ -156,9 +254,205 @@ class ProviderEventObserver:
                 }
             )
             timeline.set_attr("tts_stream", tts_stream)
+            self.agent_output.record_tts_event(timeline, event)
+            if mark in {"tts_first_text_sent_at", "tts_provider_first_audio_at"}:
+                self._cancel_first_delta_watchdog()
 
         tts_plugin.on("provider_event", _on_provider_event)
         self.tts_provider_observer_installed = True
+
+    def _should_record_llm_metrics(self, timeline: TurnTimeline, metrics: Any) -> bool:
+        request_id = str(getattr(metrics, "request_id", "") or "")
+        if request_id and not self._event_identity_matches_brain_rpc(
+            timeline,
+            request_id=request_id,
+        ):
+            return False
+        return self._timeline_has_reply_context(timeline)
+
+    def _should_record_brain_event(
+        self,
+        timeline: TurnTimeline,
+        event_name: str,
+        event: dict[str, Any],
+    ) -> bool:
+        if event_name == "brain_request_started":
+            return self._timeline_has_reply_context(timeline)
+        if event_name == "brain_request_sent":
+            return (
+                self._timeline_has_reply_context(timeline)
+                and (
+                    self._event_identity_matches_brain_rpc(
+                        timeline,
+                        turn_id=str(event.get("turn_id") or ""),
+                        request_id=str(event.get("request_id") or ""),
+                    )
+                    or self._is_retry_attempt_after_terminal_brain_event(
+                        timeline,
+                        event,
+                    )
+                )
+            )
+
+        event_turn_id = str(event.get("turn_id") or "")
+        event_request_id = str(event.get("request_id") or "")
+        if event_turn_id or event_request_id:
+            if not self._brain_rpc_has_identity(timeline):
+                return False
+            return self._event_identity_matches_brain_rpc(
+                timeline,
+                turn_id=event_turn_id,
+                request_id=event_request_id,
+            )
+        return self._timeline_has_reply_context(timeline)
+
+    @staticmethod
+    def _is_retry_attempt_after_terminal_brain_event(
+        timeline: TurnTimeline,
+        event: dict[str, Any],
+    ) -> bool:
+        brain_rpc = timeline.attrs.get("brain_rpc")
+        if not isinstance(brain_rpc, dict):
+            return False
+        if str(brain_rpc.get("last_event") or "") not in {
+            "brain_error",
+            "brain_cancelled",
+        }:
+            return False
+        known_attempt = brain_rpc.get("attempt")
+        event_attempt = event.get("attempt")
+        if not isinstance(known_attempt, (int, float)):
+            return False
+        if not isinstance(event_attempt, (int, float)):
+            return False
+        return float(event_attempt) > float(known_attempt)
+
+    def _should_record_tts_event(self, timeline: TurnTimeline) -> bool:
+        return self._timeline_has_reply_context(timeline)
+
+    @staticmethod
+    def _timeline_has_reply_context(timeline: TurnTimeline) -> bool:
+        attrs = timeline.attrs
+        if any(
+            key in attrs
+            for key in (
+                "canonical_user_text",
+                "framework_commit_request",
+                "framework_completed_turn",
+                "brain_rpc",
+                "tts_stream",
+            )
+        ):
+            return True
+        return any(
+            mark in timeline.timestamps
+            for mark in (
+                "turn_committed_at",
+                "llm_started_at",
+                "brain_request_started_at",
+                "brain_request_sent_at",
+                "brain_first_delta_at",
+            )
+        )
+
+    @staticmethod
+    def _brain_rpc_has_identity(timeline: TurnTimeline) -> bool:
+        brain_rpc = timeline.attrs.get("brain_rpc")
+        if not isinstance(brain_rpc, dict):
+            return False
+        return bool(brain_rpc.get("turn_id") or brain_rpc.get("request_id"))
+
+    @staticmethod
+    def _event_identity_matches_brain_rpc(
+        timeline: TurnTimeline,
+        *,
+        turn_id: str = "",
+        request_id: str = "",
+    ) -> bool:
+        brain_rpc = timeline.attrs.get("brain_rpc")
+        if not isinstance(brain_rpc, dict):
+            return True
+        known_turn_id = str(brain_rpc.get("turn_id") or "")
+        known_request_id = str(brain_rpc.get("request_id") or "")
+        if turn_id and known_turn_id and turn_id != known_turn_id:
+            return False
+        if request_id and known_request_id and request_id != known_request_id:
+            return False
+        return True
+
+    def _arm_first_delta_watchdog(self, timeline: TurnTimeline) -> None:
+        if self._append_timeline_snapshot is None:
+            return
+        if self._first_delta_timeout_sec <= 0:
+            return
+        if "brain_first_delta_at" in timeline.timestamps:
+            return
+        if (
+            self._first_delta_watchdog is not None
+            and not self._first_delta_watchdog.done()
+        ):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        turn_id = timeline.turn_id
+        timeout_sec = self._first_delta_timeout_sec
+        self._first_delta_watchdog = loop.create_task(
+            self._first_delta_timeout_after(turn_id, timeout_sec)
+        )
+
+    def _cancel_first_delta_watchdog(self) -> None:
+        task = self._first_delta_watchdog
+        if task is not None and not task.done():
+            task.cancel()
+        self._first_delta_watchdog = None
+
+    async def _first_delta_timeout_after(self, turn_id: str, timeout_sec: float) -> None:
+        try:
+            await asyncio.sleep(timeout_sec)
+        except asyncio.CancelledError:
+            return
+        timeline = self._get_timeline()
+        if timeline is None or timeline.turn_id != turn_id:
+            return
+        if "brain_first_delta_at" in timeline.timestamps:
+            return
+        if any(
+            mark in timeline.timestamps
+            for mark in (
+                "brain_done_at",
+                "brain_cancelled_at",
+                "llm_error_at",
+                "tts_first_text_sent_at",
+                "tts_provider_first_audio_at",
+            )
+        ):
+            return
+        timeline.mark("llm_first_delta_timeout_at")
+        self.agent_output.record_first_delta_timeout(
+            timeline,
+            timeout_sec=timeout_sec,
+        )
+        if self._append_timeline_snapshot is not None:
+            self._append_timeline_snapshot(
+                timeline,
+                "agent_output_first_delta_timeout",
+            )
+
+    def _flush_silent_output_if_terminal(
+        self,
+        timeline: TurnTimeline,
+        output: dict[str, Any],
+    ) -> None:
+        if self._flush_timeline is None:
+            return
+        if not bool(output.get("silent_failure")):
+            return
+        outcome = str(output.get("outcome") or "")
+        if outcome not in {"brain_done_without_delta", "llm_error_without_delta"}:
+            return
+        self._flush_timeline(timeline, f"agent_output_{outcome}")
 
     def install_stt_provider_event_observer(self) -> None:
         """Bridge provider-native STT streaming timing events into timeline."""

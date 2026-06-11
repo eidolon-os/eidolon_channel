@@ -82,6 +82,7 @@ async def test_voiceprint_turn_observer_verifies_completed_turn() -> None:
     assert timeline.attrs["voiceprint"]["known"] is True
     assert timeline.attrs["voiceprint"]["score"] == 0.91
     assert timeline.attrs["voiceprint"]["cached"] is False
+    assert timeline.attrs["voiceprint"]["commit_allowed"] is True
 
 
 @pytest.mark.asyncio
@@ -111,3 +112,49 @@ async def test_voiceprint_turn_observer_reuses_accept_cache_for_short_turn() -> 
     assert second.attrs["voiceprint"]["audio_ms"] == 1000
     assert second.attrs["voiceprint"]["latency_ms"] == 0.0
     assert second.attrs["voiceprint"]["cached"] is True
+    assert second.attrs["voiceprint"]["commit_allowed"] is True
+    assert second.attrs["voiceprint"]["commit_reason"] == "cached_owner_context"
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_turn_observer_allows_provider_known_below_high_confidence() -> None:
+    service = _Service(score=0.5734381675720215)
+    observer = VoiceprintTurnObserver(
+        service=service,
+        context_resolver=_resolve_context,
+    )
+    timeline = TurnTimeline("turn_1")
+
+    observer.start_turn(timeline=timeline)
+    observer.append_frame(_Frame(samples_per_channel=16000 * 3))
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    assert timeline.attrs["voiceprint"]["known"] is True
+    assert timeline.attrs["voiceprint"]["score"] == 0.5734381675720215
+    assert timeline.attrs["voiceprint"]["commit_allowed"] is True
+    assert (
+        timeline.attrs["voiceprint"]["commit_reason"]
+        == "owner_above_provider_threshold:0.573<0.580"
+    )
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_turn_observer_blocks_unknown_speaker() -> None:
+    service = _Service(known=False, score=0.22)
+    observer = VoiceprintTurnObserver(
+        service=service,
+        context_resolver=_resolve_context,
+    )
+    timeline = TurnTimeline("turn_1")
+
+    observer.start_turn(timeline=timeline)
+    observer.append_frame(_Frame(samples_per_channel=16000 * 3))
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    assert timeline.attrs["voiceprint"]["known"] is False
+    assert timeline.attrs["voiceprint"]["commit_allowed"] is False
+    assert timeline.attrs["voiceprint"]["commit_reason"] == "speaker_not_owner"

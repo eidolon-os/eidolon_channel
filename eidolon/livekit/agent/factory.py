@@ -141,6 +141,7 @@ class SharedStageFactory:
         tts: TtsStage,
         vad: "lk_vad.VAD | None" = None,
         voiceprint_provider: "Any | None" = None,
+        voiceprint_trust_paired_devices: bool = True,
         runtime_admin: "Any | None" = None,
         llm_params: LlmParams | None = None,
     ) -> None:
@@ -159,6 +160,7 @@ class SharedStageFactory:
         self.vad: VadStage | None = VadStage(vad) if vad is not None else None
         self.runtime_admin = runtime_admin
         self.voiceprint_provider = voiceprint_provider
+        self.voiceprint_trust_paired_devices = voiceprint_trust_paired_devices
         self.voiceprint_service = None
         if voiceprint_provider is not None:
             from eidolon.livekit.agent.speaker_verification import (
@@ -329,6 +331,7 @@ class SharedStageFactory:
             tts=tts,
             vad=vad,
             voiceprint_provider=prebuilt_voiceprint_provider,
+            voiceprint_trust_paired_devices=cfg.voiceprint.trust_paired_devices,
             runtime_admin=cfg.runtime_admin,
             llm_params=LlmParams(
                 model=cfg.llm.model,

@@ -381,19 +381,12 @@ class UserTurnCoordinator:
         current_time = self._now(now)
         stripped = transcript.strip()
         candidate = self._active
-        if candidate is None:
-            self._counter += 1
-            candidate = UserTurnCandidate(
-                candidate_id=(
-                    timeline.turn_id
-                    if timeline is not None
-                    else f"user-turn-{self._counter}"
-                ),
+        if candidate is None or self._is_terminal(candidate):
+            candidate = self._new_candidate(
                 timeline=timeline,
                 state="open",
-                created_at=current_time,
-                updated_at=current_time,
-                segments=[],
+                now=current_time,
+                with_initial_segment=False,
             )
             self._active = candidate
         elif candidate.timeline is None and timeline is not None:
@@ -428,19 +421,12 @@ class UserTurnCoordinator:
         current_time = self._now(now)
         stripped = transcript.strip()
         candidate = self._active
-        if candidate is None:
-            self._counter += 1
-            candidate = UserTurnCandidate(
-                candidate_id=(
-                    timeline.turn_id
-                    if timeline is not None
-                    else f"user-turn-{self._counter}"
-                ),
+        if candidate is None or self._is_terminal(candidate):
+            candidate = self._new_candidate(
                 timeline=timeline,
                 state="open",
-                created_at=current_time,
-                updated_at=current_time,
-                segments=[],
+                now=current_time,
+                with_initial_segment=False,
             )
             self._active = candidate
         elif candidate.timeline is None and timeline is not None:
@@ -495,19 +481,12 @@ class UserTurnCoordinator:
         current_time = self._now(now)
         stripped = transcript.strip()
         candidate = self._active
-        if candidate is None:
-            self._counter += 1
-            candidate = UserTurnCandidate(
-                candidate_id=(
-                    timeline.turn_id
-                    if timeline is not None
-                    else f"user-turn-{self._counter}"
-                ),
+        if candidate is None or self._is_terminal(candidate):
+            candidate = self._new_candidate(
                 timeline=timeline,
                 state="open",
-                created_at=current_time,
-                updated_at=current_time,
-                segments=[],
+                now=current_time,
+                with_initial_segment=False,
             )
             self._active = candidate
         elif candidate.timeline is None and timeline is not None:
@@ -570,6 +549,31 @@ class UserTurnCoordinator:
 
     def _now(self, value: float | None) -> float:
         return self._clock() if value is None else value
+
+    def _is_terminal(self, candidate: UserTurnCandidate) -> bool:
+        return candidate.state in {"committed", "rejected"}
+
+    def _new_candidate(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+        state: CandidateState,
+        now: float,
+        with_initial_segment: bool,
+    ) -> UserTurnCandidate:
+        self._counter += 1
+        return UserTurnCandidate(
+            candidate_id=(
+                timeline.turn_id
+                if timeline is not None
+                else f"user-turn-{self._counter}"
+            ),
+            timeline=timeline,
+            state=state,
+            created_at=now,
+            updated_at=now,
+            segments=[SpeechSegment(started_at=now)] if with_initial_segment else [],
+        )
 
     def _merge_window_sec(self, candidate: UserTurnCandidate) -> float:
         if candidate.voiceprint_reason.startswith(

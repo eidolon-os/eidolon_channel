@@ -115,9 +115,8 @@ async def _run_case(case: BenchmarkCase, root: Path) -> CaseResult:
                     timeout=case.timeout_sec,
                 )
             if case.expectations.min_agent_messages:
-                await h.events.wait_for(
-                    lambda e: e.type == "conversation_item_added"
-                    and getattr(e.payload.item, "role", None) == "assistant",
+                await h.events.wait_for_agent_messages(
+                    case.expectations.min_agent_messages,
                     timeout=case.timeout_sec,
                 )
             await asyncio.sleep(0.25)
@@ -238,9 +237,8 @@ async def _run_case_with_llm(
                     timeout=case.timeout_sec,
                 )
             if case.expectations.min_agent_messages:
-                await h.events.wait_for(
-                    lambda e: e.type == "conversation_item_added"
-                    and getattr(e.payload.item, "role", None) == "assistant",
+                await h.events.wait_for_agent_messages(
+                    case.expectations.min_agent_messages,
                     timeout=case.timeout_sec,
                 )
             await asyncio.sleep(0.25)

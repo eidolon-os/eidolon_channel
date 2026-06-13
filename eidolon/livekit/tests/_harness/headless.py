@@ -504,6 +504,29 @@ class EventRecorder:
                 )
             await asyncio.sleep(poll_ms / 1000.0)
 
+    async def wait_for_agent_messages(
+        self,
+        count: int,
+        *,
+        timeout: float = 5.0,
+        poll_ms: int = 10,
+    ) -> None:
+        """Block until at least ``count`` assistant messages are recorded.
+
+        ``wait_for`` matches a single event, so multi-turn flows need a
+        count-based wait: the Nth reply may not exist yet when the first
+        one matches.
+        """
+
+        deadline = time.monotonic() + timeout
+        while len(self.agent_messages()) < count:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"expected {count} agent messages within {timeout}s, "
+                    f"got {len(self.agent_messages())}"
+                )
+            await asyncio.sleep(poll_ms / 1000.0)
+
     async def wait_for_state(
         self,
         *,

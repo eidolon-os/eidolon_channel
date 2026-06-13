@@ -44,6 +44,7 @@ AgentSession config rather than override.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -60,7 +61,11 @@ from eidolon.livekit.common.config import (
 )
 
 from . import _framework_patches
-from .client_audio_state import PLAYBACK_STATE_AGENT_SPEAKING, ClientAudioState
+from .client_audio_state import (
+    CLIENT_AUDIO_STATE_TOPIC,
+    PLAYBACK_STATE_AGENT_SPEAKING,
+    ClientAudioState,
+)
 from .context import InterruptedContextManager
 from .turn_policy import (
     Decision,
@@ -94,6 +99,9 @@ logger = logging.getLogger("agent")
 _INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC = 2.0
 _LOW_EOT_COMMIT_GRACE_MAX_SEC = 2.0
 _SHORT_STATEMENT_DEFER_MAX_CJK_CHARS = 12
+_CLIENT_AUDIO_ECHO_TAIL_SUPPRESS_SEC = 1.5
+_COMPANION_UI_STATE_TOPIC = "eidolon.ui_state"
+_CLIENT_CONTROL_TOPIC = "eidolon.control"
 
 
 # Module-level cache for the EOT model singleton.
@@ -132,6 +140,21 @@ def _message_text(message: Any) -> str:
     if isinstance(content, list):
         return " ".join(str(item) for item in content)
     return str(content or "")
+
+
+def _normalize_transcript_for_echo_match(text: str) -> str:
+    return "".join(ch.lower() for ch in text if ch.isalnum())
+
+
+def _looks_like_same_echo_transcript(left: str, right: str) -> bool:
+    left_norm = _normalize_transcript_for_echo_match(left)
+    right_norm = _normalize_transcript_for_echo_match(right)
+    if not left_norm or not right_norm:
+        return False
+    shorter = min(len(left_norm), len(right_norm))
+    if shorter < 3:
+        return left_norm == right_norm
+    return left_norm.startswith(right_norm) or right_norm.startswith(left_norm)
 
 
 class StreamingPipeline(BasePipeline):
@@ -192,6 +215,9 @@ class StreamingPipeline(BasePipeline):
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._deferred_low_eot_commit_task: asyncio.Task | None = None
         self._suppress_transcripts_until_next_speech = False
+        self._client_audio_echo_tail_until = 0.0
+        self._client_audio_echo_tail_text = ""
+        self._client_audio_echo_tail_identity = ""
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
         self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
@@ -210,6 +236,11 @@ class StreamingPipeline(BasePipeline):
             service=getattr(self._factory, "voiceprint_service", None),
             runtime_admin=getattr(self._factory, "runtime_admin", None),
             sample_rate=audio_sample_rate,
+            trust_paired_devices=getattr(
+                self._factory,
+                "voiceprint_trust_paired_devices",
+                True,
+            ),
         )
         self._instructions = instructions
         self._allow_interruptions = allow_interruptions
@@ -817,6 +848,11 @@ class StreamingPipeline(BasePipeline):
                 reason,
             )
 
+    def _reject_and_clear_user_turn(self, reason: str) -> None:
+        self._ensure_user_turn_coordinator()
+        self._user_turns.reject_active(reason)
+        self._clear_session_user_turn(reason)
+
     async def _voiceprint_allows_completed_turn(self, *, new_message: Any) -> bool:
         """Gate LiveKit's final turn-completed hook with voiceprint ownership.
 
@@ -840,6 +876,37 @@ class StreamingPipeline(BasePipeline):
                     "text_length": len(completed_transcript),
                 },
             )
+        if self._client_audio_state_suppresses_completed_turn(
+            completed_transcript,
+            timeline=timeline,
+        ):
+            return False
+        if self._client_audio_state_suppresses_echo_tail(
+            completed_transcript,
+            speaker_id=None,
+            source="framework_completed_turn",
+        ):
+            self._ensure_user_turn_coordinator()
+            self._user_turns.reject_active("client_audio_echo_tail")
+            self._clear_session_user_turn("client_audio_echo_tail")
+            if timeline is not None:
+                timeline.set_attr(
+                    "framework_completed_turn_dropped",
+                    {
+                        "reason": "client_audio_echo_tail",
+                        "text_preview": completed_transcript[:120],
+                    },
+                )
+                self._append_turn_timeline_snapshot(
+                    timeline,
+                    "framework_completed_turn_dropped",
+                )
+            logger.info(
+                "[StreamingPipeline] stopped framework completed turn "
+                "from playback echo tail transcript=%r",
+                completed_transcript[:80],
+            )
+            return False
         if task is None and result is None:
             if self._should_defer_framework_completed_turn(completed_transcript):
                 self._defer_framework_completed_turn(
@@ -1315,6 +1382,18 @@ class StreamingPipeline(BasePipeline):
         self._ensure_user_turn_coordinator()
         if not hasattr(self, "_suppress_transcripts_until_next_speech"):
             self._suppress_transcripts_until_next_speech = False
+        if not hasattr(self, "_suppress_mic_muted_user_state_until_listening"):
+            self._suppress_mic_muted_user_state_until_listening = False
+        if not hasattr(self, "_client_audio_echo_tail_until"):
+            self._client_audio_echo_tail_until = 0.0
+        if not hasattr(self, "_client_audio_echo_tail_text"):
+            self._client_audio_echo_tail_text = ""
+        if not hasattr(self, "_client_audio_echo_tail_identity"):
+            self._client_audio_echo_tail_identity = ""
+        if not hasattr(self, "_client_audio_mic_muted_turn_until"):
+            self._client_audio_mic_muted_turn_until = 0.0
+        if not hasattr(self, "_client_audio_mic_muted_turn_identity"):
+            self._client_audio_mic_muted_turn_identity = ""
         if not hasattr(self, "_completed_turn_voiceprint_task"):
             self._completed_turn_voiceprint_task = None
         if not hasattr(self, "_completed_turn_voiceprint_result"):
@@ -1337,6 +1416,11 @@ class StreamingPipeline(BasePipeline):
                 service=getattr(factory, "voiceprint_service", None),
                 runtime_admin=getattr(factory, "runtime_admin", None),
                 sample_rate=getattr(self, "_audio_sample_rate", 16000),
+                trust_paired_devices=getattr(
+                    factory,
+                    "voiceprint_trust_paired_devices",
+                    True,
+                ),
             )
         self._ensure_ducking_controller()
         self._ensure_decision_effect_applier()
@@ -1441,6 +1525,7 @@ class StreamingPipeline(BasePipeline):
                 ),
             ),
         )
+        self._publish_companion_ui_state("listening", "session_started")
         # Disable framework's built-in audio-activity auto-interrupt so EOT
         # PolicyChain (and the DuckingMixer below) is the sole authority on
         # interrupt decisions. See _framework_patches.disable_audio_activity_interruption
@@ -1527,6 +1612,35 @@ class StreamingPipeline(BasePipeline):
         self._ensure_room_data_handler()
         self._room_data.handle_packet(packet)
         self._sync_room_data_compat_attrs()
+        self._handle_explicit_client_interrupt(packet)
+
+    def _handle_explicit_client_interrupt(self, packet: Any) -> None:
+        if getattr(packet, "topic", None) != CLIENT_AUDIO_STATE_TOPIC:
+            return
+        participant = getattr(packet, "participant", None)
+        identity = getattr(participant, "identity", "") or None
+        state = self._latest_client_audio_state(participant_identity=identity)
+        if state is None or not (state.manual_interrupt or state.ptt):
+            return
+        if not self._agent_output_active_for_interrupts(participant_identity=identity):
+            return
+        self._ensure_ducking_controller()
+        if self._ducking.is_cancelled:
+            return
+        logger.info(
+            "[StreamingPipeline] explicit client interrupt received "
+            "identity=%s playback=%s ptt=%s manual_interrupt=%s",
+            state.participant_identity,
+            state.playback_state,
+            state.ptt,
+            state.manual_interrupt,
+        )
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "explicit_client_interrupt",
+                state.as_timeline_attr(),
+            )
+        self._duck_cancel_and_interrupt()
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
@@ -1717,12 +1831,119 @@ class StreamingPipeline(BasePipeline):
             room_data.client_audio_state_packet_count
         )
 
+    def _publish_companion_ui_state(self, state: str, reason: str) -> None:
+        """Best-effort state bridge for thin clients such as ESP32 displays."""
+        room = getattr(self, "_room", None)
+        local = getattr(room, "local_participant", None) if room else None
+        if local is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        payload = {
+            "type": _COMPANION_UI_STATE_TOPIC,
+            "state": state,
+            "reason": reason,
+            "ts_ms": int(time.time() * 1000),
+        }
+
+        async def _send() -> None:
+            await local.publish_data(
+                json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                reliable=True,
+                topic=_COMPANION_UI_STATE_TOPIC,
+            )
+
+        task = loop.create_task(_send())
+
+        def _log_failure(done: asyncio.Task[None]) -> None:
+            try:
+                done.result()
+            except Exception:
+                logger.debug(
+                    "[StreamingPipeline] failed to publish companion UI state",
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_log_failure)
+
+    def _publish_client_control(self, op: str, *, reason: str) -> None:
+        """Best-effort server-authoritative command for thin clients."""
+        room = getattr(self, "_room", None)
+        local = getattr(room, "local_participant", None) if room else None
+        if local is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        timeline = self._timeline
+        turn_id = getattr(timeline, "turn_id", "") if timeline is not None else ""
+        payload = {
+            "v": 1,
+            "kind": "cmd",
+            "id": f"{op}:{int(time.time() * 1000)}",
+            "op": op,
+            "payload": {
+                "reason": reason,
+                "turn_id": turn_id,
+            },
+            "ts": int(time.time() * 1000),
+            "ttl_ms": 5000,
+        }
+        if timeline is not None:
+            events = list(timeline.attrs.get("client_control_events") or ())
+            events.append(
+                {
+                    "op": op,
+                    "reason": reason,
+                    "turn_id": turn_id,
+                }
+            )
+            timeline.set_attr("client_control_events", events[-12:])
+
+        async def _send() -> None:
+            await local.publish_data(
+                json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                reliable=True,
+                topic=_CLIENT_CONTROL_TOPIC,
+            )
+
+        task = loop.create_task(_send())
+
+        def _log_failure(done: asyncio.Task[None]) -> None:
+            try:
+                done.result()
+            except Exception:
+                logger.debug(
+                    "[StreamingPipeline] failed to publish client control",
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_log_failure)
+
+    def _agent_state_to_companion_ui_state(self, state: str) -> str:
+        if state == "thinking":
+            return "thinking"
+        if state == "speaking":
+            return "speaking"
+        return "listening"
+
     def _on_agent_state_changed(self, event: Any) -> None:
         """Forward agent state changes through BasePipeline and session effects."""
         self._ensure_runtime_defaults()
         super()._on_agent_state_changed(event)
         self._ensure_agent_state_effect_handler()
         self._agent_state_effects.handle(event)
+        new = getattr(event, "new_state", "")
+        if new:
+            self._publish_companion_ui_state(
+                self._agent_state_to_companion_ui_state(new),
+                f"agent_state:{new}",
+            )
 
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()
@@ -1730,6 +1951,16 @@ class StreamingPipeline(BasePipeline):
             old = event.old_state
             new = event.new_state
             logger.info("[StreamingPipeline] user_state: %s -> %s", old, new)
+
+            if self._client_audio_state_suppresses_user_state(event):
+                return
+
+            if new == "speaking":
+                self._publish_companion_ui_state("listening", "user_state:speaking")
+            elif old == "speaking" and new == "listening":
+                self._publish_companion_ui_state("listening", "user_state:listening")
+            elif new == "away":
+                self._publish_companion_ui_state("idle", "user_state:away")
 
             # ------------------------------------------------------------
             # State-sync bridge (Round 7 G11)
@@ -1903,6 +2134,8 @@ class StreamingPipeline(BasePipeline):
                 getattr(event, "is_final", None),
             )
             return
+        if self._client_audio_state_suppresses_transcript(event):
+            return
         if event.transcript:
             # Real recognized speech (interim or final) — keeps the session
             # alive. Empty/noise transcripts deliberately don't, so a silent
@@ -1960,6 +2193,229 @@ class StreamingPipeline(BasePipeline):
             self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
+
+    def _client_audio_state_suppresses_transcript(self, event: Any) -> bool:
+        transcript = getattr(event, "transcript", "")
+        if not transcript:
+            return False
+        try:
+            state = self._latest_client_audio_state(
+                participant_identity=getattr(event, "speaker_id", None),
+            )
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] failed to inspect client audio state"
+            )
+            return False
+        if state is None or not state.mic_muted:
+            return self._client_audio_state_suppresses_echo_tail(
+                transcript,
+                speaker_id=getattr(event, "speaker_id", None),
+                source="transcript",
+            )
+        if state.manual_interrupt or state.ptt:
+            return False
+        if not self._turn_policy.attention.ignore_when_mic_muted:
+            return False
+        self._remember_client_audio_mic_muted_turn(state=state)
+        self._remember_client_audio_echo_tail(transcript, state=state)
+        self._reject_and_clear_user_turn("client_mic_muted")
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "transcript_dropped_by_client_audio_state",
+                {
+                    "reason": "client_mic_muted",
+                    "participant_identity": state.participant_identity,
+                    "playback_state": state.playback_state,
+                },
+        )
+        logger.info(
+            "[StreamingPipeline] dropping transcript while client mic muted "
+            "identity=%s playback=%s transcript=%r final=%s",
+            state.participant_identity,
+            state.playback_state,
+            transcript[:80],
+            getattr(event, "is_final", None),
+        )
+        return True
+
+    def _remember_client_audio_mic_muted_turn(
+        self,
+        *,
+        state: ClientAudioState,
+    ) -> None:
+        self._client_audio_mic_muted_turn_until = (
+            time.monotonic() + _CLIENT_AUDIO_ECHO_TAIL_SUPPRESS_SEC
+        )
+        self._client_audio_mic_muted_turn_identity = state.participant_identity
+
+    def _remember_client_audio_echo_tail(
+        self,
+        transcript: str,
+        *,
+        state: ClientAudioState,
+    ) -> None:
+        if not transcript:
+            return
+        self._client_audio_echo_tail_until = (
+            time.monotonic() + _CLIENT_AUDIO_ECHO_TAIL_SUPPRESS_SEC
+        )
+        self._client_audio_echo_tail_text = transcript
+        self._client_audio_echo_tail_identity = state.participant_identity
+
+    def _client_audio_state_suppresses_completed_turn(
+        self,
+        transcript: str,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> bool:
+        if not transcript:
+            return False
+        reason = ""
+        participant_identity = ""
+        playback_state = ""
+        try:
+            state = self._latest_client_audio_state(participant_identity=None)
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] failed to inspect client audio state"
+            )
+            state = None
+        if (
+            state is not None
+            and state.mic_muted
+            and not state.manual_interrupt
+            and not state.ptt
+            and self._turn_policy.attention.ignore_when_mic_muted
+        ):
+            self._remember_client_audio_mic_muted_turn(state=state)
+            reason = "client_mic_muted"
+            participant_identity = state.participant_identity
+            playback_state = state.playback_state
+        else:
+            until = float(
+                getattr(self, "_client_audio_mic_muted_turn_until", 0.0) or 0.0
+            )
+            if time.monotonic() > until:
+                return False
+            reason = "client_mic_muted_tail"
+            participant_identity = str(
+                getattr(self, "_client_audio_mic_muted_turn_identity", "") or ""
+            )
+        self._ensure_user_turn_coordinator()
+        self._user_turns.reject_active(reason)
+        self._clear_session_user_turn(reason)
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_turn_dropped",
+                {
+                    "reason": reason,
+                    "participant_identity": participant_identity,
+                    "playback_state": playback_state,
+                    "text_preview": transcript[:120],
+                },
+            )
+            self._append_turn_timeline_snapshot(
+                timeline,
+                "framework_completed_turn_dropped",
+            )
+        logger.info(
+            "[StreamingPipeline] stopped framework completed turn while "
+            "client mic muted reason=%s identity=%s transcript=%r",
+            reason,
+            participant_identity,
+            transcript[:80],
+        )
+        return True
+
+    def _client_audio_state_suppresses_echo_tail(
+        self,
+        transcript: str,
+        *,
+        speaker_id: str | None,
+        source: str,
+    ) -> bool:
+        if not transcript:
+            return False
+        until = float(getattr(self, "_client_audio_echo_tail_until", 0.0) or 0.0)
+        if time.monotonic() > until:
+            return False
+        tail_text = str(getattr(self, "_client_audio_echo_tail_text", "") or "")
+        if not _looks_like_same_echo_transcript(transcript, tail_text):
+            return False
+        tail_identity = str(
+            getattr(self, "_client_audio_echo_tail_identity", "") or ""
+        )
+        if speaker_id and tail_identity and speaker_id != tail_identity:
+            return False
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "transcript_dropped_by_client_audio_state",
+                {
+                    "reason": "client_playback_echo_tail",
+                    "participant_identity": tail_identity,
+                    "source": source,
+                },
+            )
+        if source == "transcript":
+            self._reject_and_clear_user_turn("client_audio_echo_tail")
+        logger.info(
+            "[StreamingPipeline] dropping playback echo tail source=%s "
+            "identity=%s transcript=%r previous=%r",
+            source,
+            tail_identity or speaker_id,
+            transcript[:80],
+            tail_text[:80],
+        )
+        return True
+
+    def _client_audio_state_suppresses_user_state(self, event: Any) -> bool:
+        old = getattr(event, "old_state", "")
+        new = getattr(event, "new_state", "")
+        if old == "speaking" and new == "listening":
+            if self._suppress_mic_muted_user_state_until_listening:
+                self._suppress_mic_muted_user_state_until_listening = False
+                logger.info(
+                    "[StreamingPipeline] suppressing user_state end after "
+                    "client mic-muted playback echo"
+                )
+                return True
+            return False
+        if new != "speaking":
+            return False
+        try:
+            state = self._latest_client_audio_state(participant_identity=None)
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] failed to inspect client audio state"
+            )
+            return False
+        if state is None or not state.mic_muted:
+            return False
+        if state.manual_interrupt or state.ptt:
+            return False
+        if not self._turn_policy.attention.ignore_when_mic_muted:
+            return False
+        self._remember_client_audio_mic_muted_turn(state=state)
+        self._suppress_mic_muted_user_state_until_listening = True
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "user_state_dropped_by_client_audio_state",
+                {
+                    "reason": "client_mic_muted",
+                    "participant_identity": state.participant_identity,
+                    "playback_state": state.playback_state,
+                },
+            )
+        logger.info(
+            "[StreamingPipeline] suppressing user_state while client mic muted "
+            "identity=%s playback=%s old=%s new=%s",
+            state.participant_identity,
+            state.playback_state,
+            old,
+            new,
+        )
+        return True
 
     def _interrupt_decision_suppressed(self) -> bool:
         """Ignore residual ASR after a confirmed interrupt cancel."""
@@ -2323,6 +2779,7 @@ class StreamingPipeline(BasePipeline):
         )
         self._cancel_stable_signal_timer()
         self._snapshot_interrupted_context()
+        self._publish_client_control("playback.stop", reason="interrupt_cancel")
         self._ducking.cancel_output()
         self._callbacks.on_duck_resolved("cancel")
         if self._timeline is not None:

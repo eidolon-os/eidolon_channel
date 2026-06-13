@@ -2,6 +2,9 @@ clips:
   backchannel_en:
     path: benchmarks/audio/generated/backchannel_en.wav
     text: 嗯。
+  backchannel_mm:
+    path: benchmarks/audio/generated/backchannel_mm.wav
+    text: 嗯嗯。
   backchannel_ok:
     path: benchmarks/audio/generated/backchannel_ok.wav
     text: 好。
@@ -17,6 +20,9 @@ clips:
   hard_stop_stop:
     path: benchmarks/audio/generated/hard_stop_stop.wav
     text: 停一下。
+  hesitation_weather:
+    path: benchmarks/audio/generated/hesitation_weather.wav
+    text: 嗯，那个。帮我查一下明天的天气。
   language_switch_english:
     path: benchmarks/audio/generated/language_switch_english.wav
     text: 我们换成英文，然后聊。
@@ -29,9 +35,21 @@ clips:
   normal_followup:
     path: benchmarks/audio/generated/normal_followup.wav
     text: 那它的主要风险是什么？
+  normal_followup_deadline:
+    path: benchmarks/audio/generated/normal_followup_deadline.wav
+    text: 那大概多久能做完？
   owner_followup_capability:
     path: benchmarks/audio/generated/owner_followup_capability.wav
     text: 那你现在能帮我做什么？
+  pause_plan_two_parts:
+    path: benchmarks/audio/generated/pause_plan_two_parts.wav
+    text: 今天想讨论一下那个方案。就是上次说的实时语音方案。
+  statement_followup_risk:
+    path: benchmarks/audio/generated/statement_followup_risk.wav
+    text: 想先把风险理清楚。
+  statement_plan_intro:
+    path: benchmarks/audio/generated/statement_plan_intro.wav
+    text: 我在做一个新项目。
   topic_switch:
     path: benchmarks/audio/generated/topic_switch.wav
     text: 换个话题，我们聊点别的。

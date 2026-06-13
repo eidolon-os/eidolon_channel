@@ -28,7 +28,13 @@ from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
 from .audio_assets import load_clip_pcm
 from .realcall import provider_config_from_cfg
-from .schema import BenchmarkCase, BenchmarkSuite, CaseResult, RunResult
+from .schema import (
+    ROOM_NAME_PREFIX,
+    BenchmarkCase,
+    BenchmarkSuite,
+    CaseResult,
+    RunResult,
+)
 
 
 @dataclass(frozen=True)
@@ -38,12 +44,22 @@ class LiveKitRoomOptions:
     agent_ready_timeout_sec: float = 12.0
     agent_quiet_ms: int = 800
     agent_speaking_wait_sec: float = 8.0
+    # A brain-generated greeting can take ~1-3s to produce its first audio. If
+    # the first-audio wait is shorter, a normal user turn gets fed into the
+    # incoming greeting and turns into an accidental interrupt.
+    agent_first_audio_wait_sec: float = 6.0
+    # Deadline for a polite user turn waiting out the agent's previous answer.
+    # Real-brain answers regularly exceed 8s; expiring early injects an
+    # unintended interrupt, so this is deliberately generous.
+    agent_quiet_wait_sec: float = 30.0
     agent_name: str = "eidolon"
-    participant_prefix: str = "voice-bench"
+    participant_prefix: str = ROOM_NAME_PREFIX
     participant_identity: str | None = None
     participant_kind: str = "user"
     participant_metadata: dict[str, Any] | None = None
-    room_prefix: str = "voice-bench"
+    # timeline_expectations parses case ids back out of room names, so a custom
+    # prefix would break that mapping; keep the shared constant.
+    room_prefix: str = ROOM_NAME_PREFIX
     agent_missing_retry_count: int = 1
 
 
@@ -311,6 +327,7 @@ async def _run_room_case(
         metrics.update(state.metrics())
         if state.agent_audio_frames <= 0 and _agent_audio_wait_mode(case) != "none":
             errors.append("no agent audio frames captured")
+        errors.extend(_user_done_audio_latency_errors(case, metrics))
     except Exception as exc:
         metrics.update(state.metrics())
         errors.append(f"{type(exc).__name__}: {exc}")
@@ -371,11 +388,20 @@ async def _feed_case_audio(
                     mic_muted=step.client_mic_muted,
                 )
         else:
-            await _wait_for_agent_quiet(
+            quiet = await _wait_for_agent_quiet(
                 state,
                 quiet_ms=options.agent_quiet_ms,
-                timeout_sec=options.agent_speaking_wait_sec,
+                timeout_sec=options.agent_quiet_wait_sec,
+                first_audio_wait_sec=options.agent_first_audio_wait_sec,
             )
+            if not quiet:
+                events.append(
+                    {
+                        "type": "agent_quiet_wait_timeout",
+                        "timestamp_ms": _elapsed_ms(started),
+                        "step_text": step.text,
+                    }
+                )
             playback_state = _step_playback_state(step, default="idle")
             if publish_client_state:
                 await _publish_client_audio_state(
@@ -509,25 +535,31 @@ async def _wait_for_agent_quiet(
     *,
     quiet_ms: int,
     timeout_sec: float,
-) -> None:
+    first_audio_wait_sec: float = 2.0,
+) -> bool:
     """Wait until the room has observed a quiet window in agent audio.
 
     Real room cases use ``agent_speaking: false`` to model a normal user turn,
     not an interruption of the greeting. Waiting here keeps that scenario honest
     without changing the Channel runtime.
+
+    Returns True when a quiet window was observed (or no agent audio exists),
+    False when the deadline expired while the agent was still speaking — the
+    caller is about to inject an unintended interrupt and should record that.
     """
     deadline = time.monotonic() + timeout_sec
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(
             state.first_agent_audio.wait(),
-            timeout=min(2.0, timeout_sec),
+            timeout=min(first_audio_wait_sec, timeout_sec),
         )
     quiet_sec = quiet_ms / 1000
     while time.monotonic() < deadline:
         last_audio = state.last_agent_audio_monotonic
         if last_audio is None or time.monotonic() - last_audio >= quiet_sec:
-            return
+            return True
         await asyncio.sleep(0.05)
+    return False
 
 
 async def _wait_for_agent_speaking(
@@ -612,6 +644,28 @@ def _make_dispatch_token(
     if metadata:
         token = token.with_metadata(json.dumps(metadata, ensure_ascii=False))
     return token.to_jwt()
+
+
+def _user_done_audio_latency_errors(
+    case: BenchmarkCase,
+    metrics: dict[str, Any],
+) -> list[str]:
+    """Check user-audio-done -> next agent audio against the case bound.
+
+    For false-interruption recovery cases this is the resume-latency bound:
+    the agent audio observed after the last user step is the resumed playback,
+    not a new turn (which `rejected_turn_brain: forbidden` rules out).
+    """
+
+    bound_ms = case.expectations.max_user_done_to_agent_audio_ms
+    if bound_ms is None:
+        return []
+    latency = metrics.get("user_done_to_agent_audio_after_user_done_ms")
+    if not isinstance(latency, (int, float)):
+        return ["user-done-to-agent-audio latency missing but a bound was set"]
+    if latency > bound_ms:
+        return [f"user-done-to-agent-audio too slow: {latency}>{bound_ms}ms"]
+    return []
 
 
 def _agent_audio_wait_mode(case: BenchmarkCase) -> str:

@@ -218,6 +218,7 @@ class VoiceprintConfig:
     threshold: float = 0.31
     min_audio_ms: int = 1500
     prewarm: bool = True
+    trust_paired_devices: bool = True
 
 
 @dataclass(frozen=True)

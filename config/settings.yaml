@@ -62,6 +62,9 @@ voiceprint:
   threshold: 0.31
   min_audio_ms: 1500
   prewarm: true
+  # Paired ESP32 devices are already approved and user-bound in admin.
+  # Keep voiceprint as telemetry, but don't hard-block those device turns by default.
+  trust_paired_devices: true
 
 turn_policy:
   # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.

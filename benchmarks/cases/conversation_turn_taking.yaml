@@ -1,0 +1,297 @@
+# 自然对话 turn-taking 场景，对齐 Full-Duplex-Bench 的四个维度：
+# pause handling / smooth turn-taking / backchannel / interruption management，
+# 外加 false-interruption 恢复（LiveKit adaptive interruption 的核心指标）。
+#
+# EOT 的"晚判"用 max_speech_stop_to_commit_ms 按 case 限界，而不是全局 SLO gate：
+# 自然停顿合并 case 的长等待是设计行为，混入全局分位数会污染门限。
+# "提前误判"（cut-in 把一句话拆成两个 turn）用 max_brain_requests 表达。
+#
+# 音频素材由 scripts/generate_voice_benchmark_audio.py 生成（含 composite 停顿 clip）。
+suite_id: conversation_turn_taking
+cases:
+  - case_id: pause_mid_utterance_single_turn_001
+    suite: turn_boundary
+    description: 一句话内的自然停顿（900ms）不应拆成两个 turn，语义完整送 brain。
+    timeout_sec: 90
+    tags: ["turn_boundary", "pause_handling"]
+    audio_clips:
+      - id: pause_plan_two_parts
+        text: 今天想讨论一下那个方案。就是上次说的实时语音方案。
+        path: benchmarks/audio/generated/pause_plan_two_parts.wav
+        intent: normal
+    user_steps:
+      - text: 今天想讨论一下那个方案，就是上次说的实时语音方案
+        audio: pause_plan_two_parts
+        start_ms: 200
+        duration_ms: 7140
+        final_delay_ms: 180
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 实时语音
+        reply: 好的，我们继续聊上次的实时语音方案。
+    expect:
+      action: none
+      intent: uncertain
+      brain: required
+      max_brain_requests: 1
+      canonical_contains: ["实时语音"]
+      agent_audio_response: after_user_done
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: hesitation_filler_start_001
+    suite: turn_boundary
+    description: 犹豫起句（"嗯，那个…"+600ms 停顿）不应被提前提交，完整意图一次送 brain。
+    timeout_sec: 90
+    tags: ["turn_boundary", "pause_handling", "hesitation"]
+    audio_clips:
+      - id: hesitation_weather
+        text: 嗯，那个。帮我查一下明天的天气。
+        path: benchmarks/audio/generated/hesitation_weather.wav
+        intent: normal
+    user_steps:
+      - text: 嗯，那个，帮我查一下明天的天气
+        audio: hesitation_weather
+        start_ms: 200
+        duration_ms: 5400
+        final_delay_ms: 180
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 天气
+        reply: 明天多云，气温二十到二十六度。
+    expect:
+      action: none
+      intent: uncertain
+      brain: required
+      max_brain_requests: 1
+      canonical_contains: ["天气"]
+      agent_audio_response: after_user_done
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: quick_followup_merge_001
+    suite: turn_boundary
+    description: 两个独立短句之间约 0.6s 间隔（基础合并窗内），应合并为一个 turn。
+    timeout_sec: 90
+    tags: ["turn_boundary", "pause_handling"]
+    audio_clips:
+      - id: statement_plan_intro
+        text: 我在做一个新项目。
+        path: benchmarks/audio/generated/statement_plan_intro.wav
+        intent: normal
+      - id: statement_followup_risk
+        text: 想先把风险理清楚。
+        path: benchmarks/audio/generated/statement_followup_risk.wav
+        intent: normal
+    user_steps:
+      - text: 我在做一个新项目
+        audio: statement_plan_intro
+        start_ms: 80
+        duration_ms: 2420
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 想先把风险理清楚
+        audio: statement_followup_risk
+        start_ms: 3100
+        duration_ms: 2820
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 风险
+        reply: 好的，我们先把项目的主要风险列出来。
+    expect:
+      action: none
+      intent: uncertain
+      brain: required
+      max_brain_requests: 1
+      canonical_contains: ["风险"]
+      agent_audio_response: after_user_done
+      min_user_finals: 2
+      min_agent_messages: 1
+
+  - case_id: eot_prompt_commit_001
+    suite: eot_latency
+    description: 干脆的完整问句说完后应及时提交（EOT 不晚判），并在上界内出声。
+    timeout_sec: 90
+    tags: ["eot_latency", "smooth_turn_taking"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 2980
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 详细介绍
+        reply: 这是一个实时语音方案，下面按结构展开介绍。
+    expect:
+      action: none
+      intent: uncertain
+      brain: required
+      # 干脆句尾不应吃满 merge window；阈值在 Phase-0 基线重测后再收紧。
+      max_speech_stop_to_commit_ms: 1500
+      max_user_done_to_agent_audio_ms: 4000
+      agent_audio_response: after_user_done
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: multi_turn_three_rounds_001
+    suite: conversation_flow
+    description: 连续三轮问答（Q1→A1→Q2→A2→Q3→A3），每轮都应到达 brain 并出声。
+    timeout_sec: 120
+    tags: ["conversation_flow", "smooth_turn_taking"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: followup_risk
+        text: 那它的主要风险是什么？
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+      - id: followup_deadline
+        text: 那大概多久能做完？
+        path: benchmarks/audio/generated/normal_followup_deadline.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 2980
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那它的主要风险是什么
+        audio: followup_risk
+        start_ms: 6000
+        duration_ms: 2860
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那大概多久能做完
+        audio: followup_deadline
+        start_ms: 12000
+        duration_ms: 2580
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 详细介绍
+        reply: 这个方案分为接入、识别和合成三层。
+      - when: 风险
+        reply: 主要风险是打断延迟和识别准确率。
+      - when: 多久
+        reply: 大概需要六周左右。
+    expect:
+      action: none
+      intent: uncertain
+      brain: required
+      min_brain_requests: 3
+      agent_audio_response: after_user_done
+      min_user_finals: 3
+      min_agent_messages: 3
+
+  - case_id: backchannel_resume_001
+    suite: false_interrupt_recovery
+    description: agent 回答中用户"嗯嗯"附和，应 rollback 且不进 brain，播放在上界内恢复。
+    timeout_sec: 90
+    tags: ["false_interrupt_recovery", "backchannel"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: backchannel_mm
+        text: 嗯嗯。
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: backchannel
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 2980
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      # 单字"嗯"在 VAD 活跃期会 hold 等待续句（设计行为，见 decider 的
+      # await_more_speech 分支，已由 v1_realistic_extended 覆盖）；这里用两字
+      # 附和换取各 runner 一致的确定性 rollback，聚焦验证恢复链路。
+      - text: 嗯嗯
+        audio: backchannel_mm
+        start_ms: 3800
+        duration_ms: 650
+        interims: ["嗯嗯"]
+        eot_scores: [0.1]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意很长，用来制造可打断窗口。
+    expect:
+      action: rollback
+      intent: uncertain
+      forbid_actions: ["cancel"]
+      rejected_turn_brain: forbidden
+      allow_attention_actions: ["observe"]
+      # after_user_done 等到的音频就是恢复后的播放（rejected_turn_brain 已排除新 turn）。
+      agent_audio_response: after_user_done
+      max_user_done_to_agent_audio_ms: 2500
+      min_user_finals: 1
+      min_agent_messages: 1
+
+  - case_id: interrupt_then_new_turn_001
+    suite: interruption_management
+    description: agent 回答中用户切换话题，应 cancel 旧播放，新内容作为第二个 turn 送 brain。
+    timeout_sec: 90
+    tags: ["interruption_management", "topic_switch"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: topic_switch
+        text: 换个话题，我们聊点别的。
+        path: benchmarks/audio/generated/topic_switch.wav
+        intent: topic_switch
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 2980
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 换个话题，我们聊点别的
+        audio: topic_switch
+        start_ms: 3800
+        duration_ms: 3500
+        interims: ["换个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.35, 0.72]
+        final_delay_ms: 100
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意很长，用来制造可打断窗口。
+      - when: 换个话题
+        reply: 好的，那我们聊点别的。
+    expect:
+      action: cancel
+      intent: uncertain
+      brain: required
+      min_brain_requests: 2
+      canonical_contains: ["换个话题"]
+      agent_audio_response: after_user_done
+      min_user_finals: 2
+      min_agent_messages: 1

@@ -119,7 +119,7 @@ class IdleWatchdog:
                 {"type": "idle_timeout", "reason": "idle_timeout"}
             ).encode("utf-8")
             await local.publish_data(
-                payload, reliable=True, topic="session_control"
+                payload, reliable=True, topic="eidolon.session_control"
             )
             logger.info("[IdleWatchdog] notified client of idle timeout")
         except Exception:

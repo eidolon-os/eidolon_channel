@@ -12,6 +12,10 @@ import yaml
 
 RunnerName = Literal["policy", "headless", "component", "livekit_room"]
 
+# Room names are "{prefix}-{case_id}-{8-hex}". The livekit_room runner builds
+# them and timeline_expectations parses them back, so both sides share this.
+ROOM_NAME_PREFIX = "voice-bench"
+
 
 @dataclass(frozen=True)
 class AudioClip:
@@ -64,6 +68,18 @@ class Expectations:
     min_agent_messages: int = 0
     max_interrupt_decision_ms: float | None = None
     max_interrupt_resolution_after_started_ms: float | None = None
+    # Turn-segmentation correctness (timeline source). A natural pause that is
+    # wrongly split shows up as extra brain requests; a multi-turn flow that
+    # silently drops a turn shows up as missing ones.
+    min_brain_requests: int | None = None
+    max_brain_requests: int | None = None
+    # End-of-turn responsiveness bound for committed turns (timeline source).
+    # Per-case because merge-window cases wait longer by design, which would
+    # pollute a suite-wide percentile gate.
+    max_speech_stop_to_commit_ms: float | None = None
+    # Room-participant bound on user-audio-done -> next agent audio. Doubles as
+    # the resume-latency bound for false-interruption recovery cases.
+    max_user_done_to_agent_audio_ms: float | None = None
 
 
 @dataclass(frozen=True)

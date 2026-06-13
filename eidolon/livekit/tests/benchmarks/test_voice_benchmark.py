@@ -1995,3 +1995,254 @@ def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
 
     assert run.cases[0].passed is True
     assert not run.cases[0].errors
+
+
+def test_load_conversation_turn_taking_suite() -> None:
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+
+    assert suite.suite_id == "conversation_turn_taking"
+    assert {case.case_id for case in suite.cases} == {
+        "pause_mid_utterance_single_turn_001",
+        "hesitation_filler_start_001",
+        "quick_followup_merge_001",
+        "eot_prompt_commit_001",
+        "multi_turn_three_rounds_001",
+        "backchannel_resume_001",
+        "interrupt_then_new_turn_001",
+    }
+    pause = next(
+        case
+        for case in suite.cases
+        if case.case_id == "pause_mid_utterance_single_turn_001"
+    )
+    assert pause.expectations.max_brain_requests == 1
+    multi = next(
+        case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001"
+    )
+    assert multi.expectations.min_brain_requests == 3
+    eot = next(case for case in suite.cases if case.case_id == "eot_prompt_commit_001")
+    assert eot.expectations.max_speech_stop_to_commit_ms == 1500
+    assert eot.expectations.max_user_done_to_agent_audio_ms == 4000
+    resume = next(
+        case for case in suite.cases if case.case_id == "backchannel_resume_001"
+    )
+    assert resume.expectations.rejected_turn_brain == "forbidden"
+    assert resume.expectations.max_user_done_to_agent_audio_ms == 2500
+
+
+def _expectation_run(case_id: str, suite_name: str) -> RunResult:
+    return RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id=case_id,
+                suite=suite_name,
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+
+
+def _committed_turn_record(case_id: str, *, turn_id: str) -> str:
+    return json.dumps(
+        {
+            "turn_id": turn_id,
+            "attrs": {
+                "room_name": f"voice-bench-{case_id}-1234abcd",
+                "canonical_user_text": {"text_preview": "实时语音方案的风险和天气"},
+            },
+            "timestamps": {"brain_request_sent_at": 10.0},
+        }
+    )
+
+
+def test_timeline_expectations_fail_split_turn_with_max_brain_requests(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    run = _expectation_run("pause_mid_utterance_single_turn_001", "turn_boundary")
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        _committed_turn_record("pause_mid_utterance_single_turn_001", turn_id="t1")
+        + "\n"
+        + _committed_turn_record("pause_mid_utterance_single_turn_001", turn_id="t2")
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any("<=1 brain requests, got 2" in error for error in run.cases[0].errors)
+
+
+def test_timeline_expectations_require_min_brain_requests(tmp_path) -> None:
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    run = _expectation_run("multi_turn_three_rounds_001", "conversation_flow")
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        _committed_turn_record("multi_turn_three_rounds_001", turn_id="t1") + "\n"
+        + _committed_turn_record("multi_turn_three_rounds_001", turn_id="t2") + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any(">=3 brain requests, got 2" in error for error in run.cases[0].errors)
+
+
+def test_timeline_expectations_pass_single_merged_turn(tmp_path) -> None:
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    run = _expectation_run("pause_mid_utterance_single_turn_001", "turn_boundary")
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        _committed_turn_record("pause_mid_utterance_single_turn_001", turn_id="t1")
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_timeline_expectations_fail_slow_speech_stop_to_commit(tmp_path) -> None:
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    run = _expectation_run("eot_prompt_commit_001", "eot_latency")
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "attrs": {
+                    "room_name": "voice-bench-eot_prompt_commit_001-1234abcd",
+                    "provider_latency_ms": {"speech_stop_to_commit_ms": 2400.0},
+                },
+                "timestamps": {"brain_request_sent_at": 10.0},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any(
+        "speech-stop-to-commit exceeded 1500" in error
+        for error in run.cases[0].errors
+    )
+
+
+def test_timeline_expectations_speech_stop_to_commit_timestamp_fallback(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    run = _expectation_run("eot_prompt_commit_001", "eot_latency")
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "attrs": {"room_name": "voice-bench-eot_prompt_commit_001-1234abcd"},
+                "timestamps": {
+                    "speech_stopped_at": 5.0,
+                    "turn_committed_at": 5.4,
+                    "brain_request_sent_at": 5.5,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_room_user_done_audio_latency_bound() -> None:
+    from eidolon.livekit.benchmarks.livekit_room_runner import (
+        _user_done_audio_latency_errors,
+    )
+
+    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    case = next(
+        case for case in suite.cases if case.case_id == "backchannel_resume_001"
+    )
+
+    in_bound = {"user_done_to_agent_audio_after_user_done_ms": 1200}
+    assert _user_done_audio_latency_errors(case, in_bound) == []
+
+    too_slow = {"user_done_to_agent_audio_after_user_done_ms": 3000}
+    assert any("too slow" in e for e in _user_done_audio_latency_errors(case, too_slow))
+
+    assert any("missing" in e for e in _user_done_audio_latency_errors(case, {}))
+
+    unbounded = next(
+        case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001"
+    )
+    assert _user_done_audio_latency_errors(unbounded, {}) == []
+
+
+def test_event_recorder_waits_for_multiple_agent_messages() -> None:
+    from types import SimpleNamespace
+
+    from eidolon.livekit.tests._harness.headless import EventRecorder, RecordedEvent
+
+    recorder = EventRecorder(SimpleNamespace(on=lambda event_type, callback: None))
+
+    def assistant_message(text: str) -> RecordedEvent:
+        item = SimpleNamespace(role="assistant", text_content=text)
+        return RecordedEvent(type="conversation_item_added", payload=SimpleNamespace(item=item))
+
+    async def scenario() -> None:
+        recorder._events.append(assistant_message("first"))
+        wait = asyncio.create_task(
+            recorder.wait_for_agent_messages(2, timeout=2.0, poll_ms=5)
+        )
+        await asyncio.sleep(0.05)
+        assert not wait.done()
+        recorder._events.append(assistant_message("second"))
+        await asyncio.wait_for(wait, timeout=1.0)
+
+        with pytest.raises(TimeoutError, match="expected 3 agent messages"):
+            await recorder.wait_for_agent_messages(3, timeout=0.05, poll_ms=5)
+
+    asyncio.run(scenario())
+
+
+def test_synthesize_composite_pcm_inserts_silence() -> None:
+    from eidolon.livekit.benchmarks.audio_assets import (
+        silence_pcm,
+        synthesize_composite_pcm,
+    )
+
+    sample_rate = 16_000
+    speech = b"\x01\x02" * sample_rate  # 1s of non-zero PCM
+
+    class FakeFrame:
+        def __init__(self, data: bytes, rate: int) -> None:
+            self.data = data
+            self.sample_rate = rate
+
+    async def fake_synthesize(text: str):
+        yield FakeFrame(speech, sample_rate)
+
+    async def scenario() -> None:
+        pcm, rate = await synthesize_composite_pcm(
+            fake_synthesize, [("你好。", 500), ("再见。", 0)]
+        )
+        assert rate == sample_rate
+        expected_silence = silence_pcm(500, sample_rate=sample_rate)
+        assert len(pcm) == len(speech) * 2 + len(expected_silence)
+        assert pcm[len(speech) : len(speech) + len(expected_silence)] == expected_silence
+
+    asyncio.run(scenario())

@@ -20,7 +20,13 @@ import httpx
 import yaml
 
 from eidolon.livekit.agent.factory import SharedStageFactory
-from eidolon.livekit.benchmarks.audio_assets import load_clip_pcm, wav_duration_ms, write_wav
+from eidolon.livekit.benchmarks.audio_assets import (
+    load_clip_pcm,
+    synthesize_composite_pcm,
+    synthesize_pcm,
+    wav_duration_ms,
+    write_wav,
+)
 from eidolon.livekit.common.config import load_effective_config
 
 
@@ -64,22 +70,6 @@ def _default_model_dir() -> Path:
     )
 
 
-async def _synthesize(factory: SharedStageFactory, text: str) -> tuple[bytes, int]:
-    frames = []
-    sample_rate = 16_000
-    async for frame in factory.tts.synthesize(text):
-        frames.append(bytes(frame.data))
-        sample_rate = int(frame.sample_rate)
-    if not frames:
-        raise RuntimeError(f"TTS returned no audio for {text!r}")
-    return b"".join(frames), sample_rate
-
-
-def _silence(duration_ms: int, *, sample_rate: int) -> bytes:
-    samples = int(sample_rate * duration_ms / 1000)
-    return b"\x00\x00" * samples
-
-
 async def _generate_audio(args: argparse.Namespace) -> dict[str, Path]:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +87,7 @@ async def _generate_audio(args: argparse.Namespace) -> dict[str, Path]:
             path = paths[clip_id]
             if args.skip_tts and path.is_file():
                 continue
-            pcm, sample_rate = await _synthesize(stages, text)
+            pcm, sample_rate = await synthesize_pcm(stages.tts.synthesize, text)
             write_wav(path, pcm, sample_rate=sample_rate)
             print(f"generated {clip_id}: {path}")
 
@@ -105,14 +95,10 @@ async def _generate_audio(args: argparse.Namespace) -> dict[str, Path]:
             path = paths[clip_id]
             if args.skip_tts and path.is_file():
                 continue
-            chunks: list[bytes] = []
-            sample_rate = 16_000
-            for text, silence_ms in parts:
-                pcm, sample_rate = await _synthesize(stages, text)
-                chunks.append(pcm)
-                if silence_ms > 0:
-                    chunks.append(_silence(silence_ms, sample_rate=sample_rate))
-            write_wav(path, b"".join(chunks), sample_rate=sample_rate)
+            pcm, sample_rate = await synthesize_composite_pcm(
+                stages.tts.synthesize, parts
+            )
+            write_wav(path, pcm, sample_rate=sample_rate)
             print(f"generated {clip_id}: {path}")
     finally:
         await stages.tts.shutdown()

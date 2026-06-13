@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .schema import BenchmarkSuite, RunResult
+from .schema import ROOM_NAME_PREFIX, BenchmarkSuite, RunResult
 from .timeline import load_timeline_records
 
 
@@ -132,6 +132,40 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         elif brain_expectation not in ("required", "forbidden"):
             errors.append(f"unknown brain expectation={brain_expectation!r}")
 
+    min_brain_requests = getattr(expected, "min_brain_requests", None)
+    max_brain_requests = getattr(expected, "max_brain_requests", None)
+    if min_brain_requests is not None or max_brain_requests is not None:
+        brain_requests = _brain_request_count(records)
+        if min_brain_requests is not None and brain_requests < min_brain_requests:
+            errors.append(
+                "timeline expected >="
+                f"{min_brain_requests} brain requests, got {brain_requests}"
+            )
+        if max_brain_requests is not None and brain_requests > max_brain_requests:
+            errors.append(
+                "timeline expected <="
+                f"{max_brain_requests} brain requests, got {brain_requests}"
+            )
+
+    max_speech_stop_to_commit_ms = getattr(
+        expected, "max_speech_stop_to_commit_ms", None
+    )
+    if max_speech_stop_to_commit_ms is not None:
+        durations = _speech_stop_to_commit_durations_ms(records)
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > max_speech_stop_to_commit_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline speech-stop-to-commit exceeded "
+                    f"{max_speech_stop_to_commit_ms}ms: {slow}"
+                )
+        else:
+            errors.append("timeline missing speech-stop-to-commit duration")
+
     rejected_turn_brain = str(getattr(expected, "rejected_turn_brain", "any") or "any")
     if rejected_turn_brain not in ("", "any"):
         rejected_records = _rejected_turn_records(records)
@@ -233,7 +267,7 @@ def _case_id(record: dict[str, Any]) -> str:
     room_name = _room_name(record)
     if not room_name:
         return ""
-    prefix = "voice-bench-"
+    prefix = f"{ROOM_NAME_PREFIX}-"
     if not room_name.startswith(prefix):
         return ""
     rest = room_name[len(prefix) :]
@@ -312,15 +346,16 @@ def _voiceprint_allowed_values(records: list[dict[str, Any]]) -> list[bool]:
 
 
 def _has_brain_request(records: list[dict[str, Any]]) -> bool:
+    return _brain_request_count(records) > 0
+
+
+def _brain_request_count(records: list[dict[str, Any]]) -> int:
+    count = 0
     for record in records:
-        timestamps = (
-            record.get("timestamps")
-            if isinstance(record.get("timestamps"), dict)
-            else {}
-        )
+        timestamps = _mapping(record.get("timestamps"))
         if isinstance(timestamps.get("brain_request_sent_at"), (int, float)):
-            return True
-    return False
+            count += 1
+    return count
 
 
 def _rejected_turn_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -442,6 +477,26 @@ def _interrupt_decision_durations_ms(records: list[dict[str, Any]]) -> list[floa
                 end = _number(timestamps.get("turn_committed_at"))
             if start is not None and end is not None:
                 duration = max(0.0, (end - start) * 1000.0)
+        if duration is not None:
+            durations.append(duration)
+    return durations
+
+
+def _speech_stop_to_commit_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+    """End-of-turn wait per committed turn: user stopped speaking -> commit."""
+
+    durations: list[float] = []
+    for record in records:
+        provider_latency = _mapping(_mapping(record.get("attrs")).get("provider_latency_ms"))
+        duration = _number(provider_latency.get("speech_stop_to_commit_ms"))
+        if duration is None:
+            duration = _number(_mapping(record.get("durations_ms")).get("speech_stop_to_commit"))
+        if duration is None:
+            timestamps = _mapping(record.get("timestamps"))
+            stop = _number(timestamps.get("speech_stopped_at"))
+            commit = _number(timestamps.get("turn_committed_at"))
+            if stop is not None and commit is not None:
+                duration = max(0.0, (commit - stop) * 1000.0)
         if duration is not None:
             durations.append(duration)
     return durations

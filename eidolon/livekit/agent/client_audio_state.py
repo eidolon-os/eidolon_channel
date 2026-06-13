@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 
-CLIENT_AUDIO_STATE_TOPIC = "client.audio_state"
+CLIENT_AUDIO_STATE_TOPIC = "eidolon.audio_state"
 INPUT_MODE_AUTO = "auto"
 INPUT_MODE_PTT = "ptt"
 INPUT_MODE_MANUAL = "manual"

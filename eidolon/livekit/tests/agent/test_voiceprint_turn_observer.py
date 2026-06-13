@@ -58,6 +58,17 @@ async def _resolve_context(_room):
     )
 
 
+async def _resolve_device_context(_room):
+    return ResolvedContext(
+        tenant_id="default",
+        user_id="manson",
+        agent_id="agent_1",
+        template_id="caretaker_jiezhi",
+        memory_mcp_url="http://127.0.0.1:8765/mcp",
+        device_id="1c:db:d4:7a:ef:0c",
+    )
+
+
 @pytest.mark.asyncio
 async def test_voiceprint_turn_observer_verifies_completed_turn() -> None:
     service = _Service()
@@ -158,3 +169,26 @@ async def test_voiceprint_turn_observer_blocks_unknown_speaker() -> None:
     assert timeline.attrs["voiceprint"]["known"] is False
     assert timeline.attrs["voiceprint"]["commit_allowed"] is False
     assert timeline.attrs["voiceprint"]["commit_reason"] == "speaker_not_owner"
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_turn_observer_allows_trusted_paired_device() -> None:
+    service = _Service(known=False, score=0.146)
+    observer = VoiceprintTurnObserver(
+        service=service,
+        context_resolver=_resolve_device_context,
+    )
+    timeline = TurnTimeline("turn_1")
+
+    observer.start_turn(timeline=timeline)
+    observer.append_frame(_Frame(samples_per_channel=16000 * 3))
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    assert len(service.calls) == 1
+    assert service.calls[0]["user_id"] == "manson"
+    assert timeline.attrs["voiceprint"]["known"] is False
+    assert timeline.attrs["voiceprint"]["trusted_paired_device"] is True
+    assert timeline.attrs["voiceprint"]["commit_allowed"] is True
+    assert timeline.attrs["voiceprint"]["commit_reason"] == "trusted_paired_device"

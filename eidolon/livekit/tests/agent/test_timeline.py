@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from eidolon.livekit.agent.client_audio_state import (
     CLIENT_AUDIO_STATE_TOPIC,
@@ -575,6 +578,66 @@ def test_streaming_pipeline_observes_client_audio_state() -> None:
         "topic": CLIENT_AUDIO_STATE_TOPIC,
         "participant_identity": "alice",
         "bytes": len(packet.data),
+    }
+
+
+def test_streaming_pipeline_manual_interrupt_data_cancels_output() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._client_audio_states = {}
+    pipeline._timeline = TurnTimeline("turn-1")
+    pipeline._state = PipelineState.SPEAKING
+    pipeline._ducking = SimpleNamespace(is_cancelled=False)
+    pipeline._duck_cancel_and_interrupt = MagicMock()
+
+    packet = SimpleNamespace(
+        topic=CLIENT_AUDIO_STATE_TOPIC,
+        data=(
+            b'{"type":"client.audio_state","input_mode":"manual",'
+            b'"playback_state":"agent_speaking","mic_muted":false,'
+            b'"manual_interrupt":true}'
+        ),
+        participant=SimpleNamespace(identity="alice"),
+    )
+
+    pipeline._on_room_data_received(packet)
+
+    pipeline._duck_cancel_and_interrupt.assert_called_once()
+    assert pipeline._timeline.attrs["explicit_client_interrupt"][
+        "participant_identity"
+    ] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_streaming_pipeline_publishes_client_playback_stop_control() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = TurnTimeline("turn-playback-stop")
+    pipeline._room = SimpleNamespace(local_participant=SimpleNamespace())
+    pipeline._room.local_participant.publish_data = AsyncMock()
+
+    pipeline._publish_client_control("playback.stop", reason="interrupt_cancel")
+    await asyncio.sleep(0)
+
+    pipeline._room.local_participant.publish_data.assert_awaited_once()
+    args = pipeline._room.local_participant.publish_data.await_args.args
+    kwargs = pipeline._room.local_participant.publish_data.await_args.kwargs
+    payload = json.loads(args[0])
+
+    assert kwargs == {"reliable": True, "topic": "eidolon.control"}
+    assert payload["v"] == 1
+    assert payload["kind"] == "cmd"
+    assert payload["op"] == "playback.stop"
+    assert payload["payload"] == {
+        "reason": "interrupt_cancel",
+        "turn_id": "turn-playback-stop",
+    }
+    assert pipeline._timeline.attrs["client_control_events"][-1] == {
+        "op": "playback.stop",
+        "reason": "interrupt_cancel",
+        "turn_id": "turn-playback-stop",
     }
 
 

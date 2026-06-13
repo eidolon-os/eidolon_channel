@@ -83,6 +83,7 @@ class VoiceprintTurnObserver:
         max_audio_ms: int = 12_000,
         accept_cache_ttl_sec: float = 180.0,
         commit_threshold: float = 0.58,
+        trust_paired_devices: bool = True,
         context_resolver: ContextResolver | None = None,
     ) -> None:
         self._service = service
@@ -91,6 +92,7 @@ class VoiceprintTurnObserver:
         self._max_audio_ms = max_audio_ms
         self._accept_cache_ttl_sec = accept_cache_ttl_sec
         self._commit_threshold = commit_threshold
+        self._trust_paired_devices = trust_paired_devices
         self._context_resolver = context_resolver
         self._room: Any | None = None
         self._active: _ActiveVoiceprintTurn | None = None
@@ -218,18 +220,6 @@ class VoiceprintTurnObserver:
         timeline = turn.timeline
         audio = turn.audio_bytes()
         audio_ms = turn.audio_ms
-        if not audio:
-            signal = SpeakerSignal.error_signal(
-                    provider=self._provider_name(),
-                    model=self._model_name(),
-                    error="audio_not_captured",
-                    audio_ms=audio_ms,
-            )
-            return self._record_result(
-                timeline,
-                signal,
-                cached=False,
-            )
         try:
             ctx = await self._resolve_context()
         except Exception as exc:  # noqa: BLE001 - observe-only failure
@@ -243,6 +233,22 @@ class VoiceprintTurnObserver:
                 timeline,
                 signal,
                 cached=False,
+                trusted_paired_device=False,
+            )
+
+        trusted_paired_device = self._is_trusted_paired_device(ctx)
+        if not audio:
+            signal = SpeakerSignal.error_signal(
+                    provider=self._provider_name(),
+                    model=self._model_name(),
+                    error="audio_not_captured",
+                    audio_ms=audio_ms,
+            )
+            return self._record_result(
+                timeline,
+                signal,
+                cached=False,
+                trusted_paired_device=trusted_paired_device,
             )
 
         cache_key = (ctx.tenant_id, ctx.user_id)
@@ -252,6 +258,7 @@ class VoiceprintTurnObserver:
                 timeline,
                 replace(cached, audio_ms=audio_ms, latency_ms=0.0),
                 cached=True,
+                trusted_paired_device=trusted_paired_device,
             )
 
         signal = await self._service.verify_turn(
@@ -266,7 +273,12 @@ class VoiceprintTurnObserver:
                 time.monotonic() + self._accept_cache_ttl_sec,
                 signal,
             )
-        return self._record_result(timeline, signal, cached=False)
+        return self._record_result(
+            timeline,
+            signal,
+            cached=False,
+            trusted_paired_device=trusted_paired_device,
+        )
 
     async def _resolve_context(self) -> ResolvedContext:
         if self._context_cache is not None:
@@ -319,11 +331,17 @@ class VoiceprintTurnObserver:
         signal: SpeakerSignal,
         *,
         cached: bool,
+        trusted_paired_device: bool = False,
     ) -> VoiceprintTurnResult:
-        commit_allowed, commit_reason = self._commit_decision(signal, cached=cached)
+        commit_allowed, commit_reason = self._commit_decision(
+            signal,
+            cached=cached,
+            trusted_paired_device=trusted_paired_device,
+        )
         payload = signal.as_timeline_attrs()
         payload["status"] = "verified" if signal.error is None else "error"
         payload["cached"] = cached
+        payload["trusted_paired_device"] = trusted_paired_device
         payload["commit_allowed"] = commit_allowed
         payload["commit_reason"] = commit_reason
         timeline.set_attr("voiceprint", payload)
@@ -347,7 +365,15 @@ class VoiceprintTurnObserver:
             commit_reason=commit_reason,
         )
 
-    def _commit_decision(self, signal: SpeakerSignal, *, cached: bool) -> tuple[bool, str]:
+    def _commit_decision(
+        self,
+        signal: SpeakerSignal,
+        *,
+        cached: bool,
+        trusted_paired_device: bool = False,
+    ) -> tuple[bool, str]:
+        if trusted_paired_device:
+            return True, "trusted_paired_device"
         if signal.error:
             return False, signal.error
         if not signal.known:
@@ -362,6 +388,11 @@ class VoiceprintTurnObserver:
         if score < self._commit_threshold:
             return True, f"owner_above_provider_threshold:{score:.3f}<{self._commit_threshold:.3f}"
         return True, "owner_high_confidence"
+
+    def _is_trusted_paired_device(self, ctx: ResolvedContext) -> bool:
+        if not self._trust_paired_devices:
+            return False
+        return bool(ctx.device_id and ctx.user_id and ctx.tenant_id)
 
     def _provider_name(self) -> str:
         provider = getattr(self._service, "_provider", None)

@@ -131,6 +131,58 @@ def test_late_final_after_commit_does_not_replace_committed_candidate() -> None:
     assert coordinator.snapshot()["state"] == "committed"
 
 
+def test_framework_completed_after_commit_starts_fresh_candidate() -> None:
+    coordinator = UserTurnCoordinator()
+    first_timeline = TurnTimeline("turn-first")
+    second_timeline = TurnTimeline("turn-second")
+
+    coordinator.start_speech(timeline=first_timeline)
+    coordinator.add_transcript("我想知道今天北京的天气怎么样。", is_final=True)
+    first_decision = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+    coordinator.mark_committed(
+        transcript=first_decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+
+    second_decision = coordinator.mark_framework_completed(
+        transcript="原来你认识铁。",
+        reason="framework_completed_turn",
+        timeline=second_timeline,
+        voiceprint_reason="cached_owner_context",
+    )
+
+    assert second_decision.action == "commit"
+    assert second_decision.transcript == "原来你认识铁。"
+    assert coordinator.snapshot()["candidate_id"] == "turn-second"
+    assert coordinator.snapshot()["selected_text_preview"] == "原来你认识铁。"
+
+
+def test_framework_deferred_after_commit_starts_fresh_candidate() -> None:
+    coordinator = UserTurnCoordinator()
+    first_timeline = TurnTimeline("turn-first")
+    second_timeline = TurnTimeline("turn-second")
+
+    coordinator.start_speech(timeline=first_timeline)
+    coordinator.add_transcript("我想知道今天北京的天气怎么样。", is_final=True)
+    first_decision = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+    coordinator.mark_committed(
+        transcript=first_decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+
+    second_decision = coordinator.defer_framework_completed(
+        transcript="原来你认识铁。",
+        reason="framework_completed_wait_for_continuation",
+        timeline=second_timeline,
+        voiceprint_reason="cached_owner_context",
+    )
+
+    assert second_decision.action == "defer"
+    assert second_decision.transcript == "原来你认识铁。"
+    assert coordinator.snapshot()["candidate_id"] == "turn-second"
+    assert coordinator.snapshot()["selected_text_preview"] == "原来你认识铁。"
+
+
 def test_voiceprint_reject_has_explicit_reason() -> None:
     coordinator = UserTurnCoordinator()
     coordinator.start_speech(timeline=TurnTimeline("turn-non-owner"))

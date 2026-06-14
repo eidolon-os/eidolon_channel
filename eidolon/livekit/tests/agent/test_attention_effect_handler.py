@@ -184,7 +184,13 @@ def test_observe_only_rollout_records_but_allows_eot() -> None:
     assert timeline.attrs["attention_admission"]["enforced"] is False
 
 
-def test_responsive_mode_disables_attention_enforcement() -> None:
+def test_responsive_mode_does_not_disable_attention_enforcement() -> None:
+    # Regression: responsive mode used to force attention_enforce=False, silently
+    # overriding the operator's turn_policy.attention.enforce=true and disabling
+    # the manual_interrupt / mic_muted gates (full-duplex barge-in bug). The mode
+    # no longer overrides enforcement — it comes solely from config. With
+    # enforce=True, a substantive playback overlap without EOT is observed (not
+    # admitted as an EOT check), regardless of interrupt_mode.
     handler, timeline, on_duck, on_interrupt = _handler(
         client_state=_client_state(),
         enforce=True,
@@ -193,8 +199,8 @@ def test_responsive_mode_disables_attention_enforcement() -> None:
 
     allowed = handler.allows_eot_check("不是")
 
-    assert allowed is True
+    assert allowed is False
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
-    assert timeline.attrs["attention_admission"]["enforced"] is False
+    assert timeline.attrs["attention_admission"]["enforced"] is True
     assert timeline.attrs["attention_admission"]["interrupt_mode"] == "responsive"

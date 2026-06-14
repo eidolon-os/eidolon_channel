@@ -36,7 +36,12 @@ _MODES: dict[str, InterruptModeSpec] = {
         fast_lexical_intents=True,
         stabilize_normal_interrupts=False,
         weak_signal_followup_hold=False,
-        attention_enforce=False,
+        # attention_enforce intentionally left as None (was False): the mode must
+        # NOT silently override the operator's turn_policy.attention.enforce.
+        # Forcing it False here disabled the manual_interrupt -> HARD_INTERRUPT
+        # path and the mic_muted echo gate even when settings.yaml set
+        # enforce: true (full-duplex barge-in regression). Enforcement now comes
+        # solely from config/profile.
     ),
 }
 

@@ -220,7 +220,13 @@ def test_policy_runner_attention_enforced_suite() -> None:
     assert ambient.decisions[0]["decision"] is None
 
 
-def test_policy_runner_responsive_mode_exposes_sensitive_baseline() -> None:
+def test_policy_runner_responsive_mode_honors_attention_enforce() -> None:
+    # Regression: responsive mode used to override attention_enforce=False, so
+    # ambient playback speech was first_signal-cancelled even when the operator
+    # set enforce=true. Responsive no longer overrides enforcement — with
+    # enforce=True the ambient overlap is observed (not cancelled), same as any
+    # mode. (Speed for genuine barge-in comes from the device manual_interrupt
+    # fast path, not from first-signal cancellation.)
     suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
     policy = TurnPolicyConfig(
         interrupt_mode="responsive",
@@ -235,10 +241,11 @@ def test_policy_runner_responsive_mode_exposes_sensitive_baseline() -> None:
         if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
     )
     assert run.profile == "balanced_semantic+responsive"
-    assert ambient.passed is False
-    assert ambient.metrics["actual_action"] == "cancel"
+    assert ambient.passed is True
+    assert ambient.metrics["actual_action"] == "none"
     assert ambient.metrics["interrupt_mode"] == "responsive"
-    assert ambient.decisions[0]["decision"]["reason"].startswith("first_signal_interim")
+    assert ambient.decisions[0]["attention_admission"]["action"] == "observe"
+    assert ambient.decisions[0]["decision"] is None
 
 
 def test_load_v1_interrupt_tiers_enforced_suite() -> None:

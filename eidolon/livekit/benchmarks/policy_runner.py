@@ -13,7 +13,6 @@ from eidolon.livekit.agent.turn_policy import (
     Action,
     TurnPolicyRuntime,
 )
-from eidolon.livekit.agent.turn_policy.modes import effective_attention_enforce
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
 
 from .schema import BenchmarkSuite, CaseResult, RunResult, UserStep
@@ -38,7 +37,7 @@ def run_policy_suite(
 ) -> RunResult:
     cfg = load_effective_config()
     policy = turn_policy or cfg.turn_policy
-    attention_enforced = effective_attention_enforce(policy)
+    attention_enforced = policy.attention.enforce
     runtime = TurnPolicyRuntime(policy)
     results: list[CaseResult] = []
 
@@ -191,7 +190,6 @@ def run_policy_suite(
             metrics = {
                 "elapsed_ms": round((time.monotonic() - started) * 1000),
                 "interrupt_decision_ms": decision_latency_ms,
-                "interrupt_mode": policy.interrupt_mode,
                 "expected_action": case.expectations.action,
                 "actual_action": action.value,
                 "forbid_actions": ",".join(case.expectations.forbid_actions),
@@ -216,7 +214,7 @@ def run_policy_suite(
         run_id=run_id or time.strftime("%Y%m%d-%H%M%S"),
         git_sha=_git_sha(),
         runner="policy",
-        profile=f"{policy.profile}+{policy.interrupt_mode}",
+        profile=policy.profile,
         cases=results,
     )
 

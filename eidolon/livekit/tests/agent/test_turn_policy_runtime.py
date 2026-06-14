@@ -100,23 +100,6 @@ def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
     assert decision.reason.startswith("stable_normal_interrupt")
 
 
-def test_responsive_runtime_skips_normal_interrupt_stability_window() -> None:
-    policy = replace(TurnPolicyConfig(), interrupt_mode="responsive")
-    runtime = TurnPolicyRuntime(policy)
-
-    decision = runtime.decide_from_transcript(
-        "那它的主要风险是什么",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.reason.startswith("first_signal_interim")
-    assert decision.tier == "tier2_interruption"
-
-
 def test_runtime_annotates_short_weak_signal_as_tier3() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
@@ -344,30 +327,6 @@ def test_runtime_holds_normal_followup_shortly_after_weak_noise() -> None:
     assert noise.action is Action.HOLD
     assert followup.action is Action.HOLD
     assert followup.reason.startswith("semantic_score_wait")
-
-
-def test_responsive_runtime_does_not_hold_followup_after_weak_signal() -> None:
-    policy = replace(TurnPolicyConfig(), interrupt_mode="responsive")
-    runtime = TurnPolicyRuntime(policy)
-
-    noise = runtime.decide_from_transcript(
-        "咳咳",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    followup = runtime.decide_from_transcript(
-        "那它的主要风险是什么",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=700.0,
-    )
-
-    assert noise.action is Action.ROLLBACK
-    assert followup.action is Action.CANCEL
-    assert followup.reason.startswith("first_signal_interim")
 
 
 def test_runtime_holds_normal_followup_shortly_after_short_artifact() -> None:

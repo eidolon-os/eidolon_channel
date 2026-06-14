@@ -95,7 +95,9 @@ def test_load_attention_admission_benchmark_suite() -> None:
         for case in suite.cases
         if case.case_id == "short_backchannel_rolls_back_001"
     )
-    assert backchannel_case.expectations.action == "rollback"
+    # fast_lexical_intents defaults off after the interrupt_mode axis was retired,
+    # so a short backchannel is held (evidence gate) rather than fast-rolled-back.
+    assert backchannel_case.expectations.action == "hold"
     assert "cancel" in backchannel_case.expectations.forbid_actions
 
 
@@ -220,16 +222,14 @@ def test_policy_runner_attention_enforced_suite() -> None:
     assert ambient.decisions[0]["decision"] is None
 
 
-def test_policy_runner_responsive_mode_honors_attention_enforce() -> None:
-    # Regression: responsive mode used to override attention_enforce=False, so
-    # ambient playback speech was first_signal-cancelled even when the operator
-    # set enforce=true. Responsive no longer overrides enforcement — with
-    # enforce=True the ambient overlap is observed (not cancelled), same as any
-    # mode. (Speed for genuine barge-in comes from the device manual_interrupt
-    # fast path, not from first-signal cancellation.)
+def test_policy_runner_enforced_ambient_playback_is_observed_not_cancelled() -> None:
+    # Regression: the retired responsive mode used to override attention_enforce
+    # =False, so ambient playback speech was first_signal-cancelled even when the
+    # operator set enforce=true. With the interrupt_mode axis gone and enforce
+    # =True, the ambient overlap is observed (not cancelled). Speed for genuine
+    # barge-in comes from the device manual_interrupt fast path.
     suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
     policy = TurnPolicyConfig(
-        interrupt_mode="responsive",
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
 
@@ -240,10 +240,9 @@ def test_policy_runner_responsive_mode_honors_attention_enforce() -> None:
         for case in run.cases
         if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
     )
-    assert run.profile == "balanced_semantic+responsive"
+    assert run.profile == "balanced_semantic"
     assert ambient.passed is True
     assert ambient.metrics["actual_action"] == "none"
-    assert ambient.metrics["interrupt_mode"] == "responsive"
     assert ambient.decisions[0]["attention_admission"]["action"] == "observe"
     assert ambient.decisions[0]["decision"] is None
 

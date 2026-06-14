@@ -8,6 +8,8 @@ wiring, mixer side effects) lives in test_first_signal_trigger.py.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from eidolon.livekit.agent.interrupt_decider import (
@@ -16,6 +18,7 @@ from eidolon.livekit.agent.interrupt_decider import (
     InterruptDecider,
     is_backchannel_text,
 )
+from eidolon.livekit.common.config import InterruptPolicyConfig
 
 
 # ---------------------------------------------------------------------------
@@ -90,20 +93,19 @@ def test_substantive_interim_holds_until_semantic_score() -> None:
     assert "semantic_score_wait" in decision.reason
 
 
-def test_responsive_mode_cancels_on_first_substantive_interim() -> None:
-    """Responsive mode restores eager barge-in after the first useful STT text."""
-    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+def test_substantive_interim_without_evidence_holds() -> None:
+    """first_signal_cancel retired: a substantive interim with no EOT evidence is
+    held (the evidence gate waits for real evidence). Genuine barge-in comes from
+    the device manual_interrupt signal or rising EOT, not raw first text."""
+    d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("我不相信", score=0.0)
 
-    assert decision.action is Action.CANCEL
-    assert decision.reason.startswith("first_signal_interim")
-    assert decision.intent is not None
-    assert decision.intent.value == "normal_interrupt"
+    assert decision.action is Action.HOLD
 
 
-def test_responsive_mode_keeps_hard_stop_priority() -> None:
-    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+def test_hard_stop_prefix_still_cancels() -> None:
+    d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("别说", score=0.0)
 
@@ -113,8 +115,11 @@ def test_responsive_mode_keeps_hard_stop_priority() -> None:
     assert decision.intent_source == "lexicon_prefix"
 
 
-def test_responsive_mode_rolls_back_backchannel_before_first_signal_cancel() -> None:
-    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+def test_backchannel_with_fast_lexical_rolls_back() -> None:
+    # fast_lexical_intents is now a config flag (default off). When on, the
+    # classifier rolls back a backchannel before any cancel path.
+    cfg = replace(InterruptPolicyConfig(), min_interim_chars=2, fast_lexical_intents=True)
+    d = InterruptDecider(cfg)
 
     decision = d.on_stt_interim("好的", score=0.0)
 
@@ -123,8 +128,9 @@ def test_responsive_mode_rolls_back_backchannel_before_first_signal_cancel() -> 
     assert decision.intent.value == "backchannel"
 
 
-def test_responsive_mode_rolls_back_short_acknowledgement_before_first_signal_cancel() -> None:
-    d = InterruptDecider(min_interim_chars=2, mode="responsive")
+def test_short_acknowledgement_with_fast_lexical_rolls_back() -> None:
+    cfg = replace(InterruptPolicyConfig(), min_interim_chars=2, fast_lexical_intents=True)
+    d = InterruptDecider(cfg)
 
     decision = d.on_stt_interim("对呀", score=0.0)
 
@@ -378,8 +384,10 @@ def test_deadline_vad_active_waits_for_semantic_score() -> None:
     assert "wait_for_semantic_score" in decision.reason
 
 
-def test_responsive_deadline_vad_active_with_transcript_cancels_without_score() -> None:
-    d = InterruptDecider(mode="responsive")
+def test_deadline_vad_active_with_transcript_without_score_holds() -> None:
+    # first_signal_cancel retired: at the decision deadline, a transcript with no
+    # EOT evidence is held (gated on evidence), not eagerly cancelled.
+    d = InterruptDecider()
 
     decision = d.on_decision_deadline(
         vad_still_active=True,
@@ -388,8 +396,7 @@ def test_responsive_deadline_vad_active_with_transcript_cancels_without_score() 
         eot_score=0.0,
     )
 
-    assert decision.action is Action.CANCEL
-    assert decision.reason.startswith("deadline_trust_vad_with_transcript")
+    assert decision.action is Action.HOLD
 
 
 def test_deadline_vad_active_with_noise_fragment_holds() -> None:

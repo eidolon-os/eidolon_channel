@@ -18,8 +18,6 @@ TurnPolicyProfile = Literal[
     "patient_companion",
     "custom",
 ]
-InterruptMode = Literal["balanced", "responsive"]
-SUPPORTED_INTERRUPT_MODES: tuple[str, ...] = ("balanced", "responsive")
 
 
 @dataclass(frozen=True)
@@ -135,6 +133,12 @@ class InterruptPolicyConfig:
     weak_signal_followup_hold_ms: int = 1500
     correction_topic_stability_window_ms: int = 120
     normal_interrupt_stability_window_ms: int = 350
+    # Interrupt behavior flags (formerly the separate `interrupt_mode` axis,
+    # collapsed into the single profile/config axis). Defaults = the stable
+    # "balanced" behavior; the retired "responsive" mode flipped these on/off.
+    fast_lexical_intents: bool = False
+    stabilize_normal_interrupts: bool = True
+    weak_signal_followup_hold: bool = True
 
 
 @dataclass(frozen=True)
@@ -191,7 +195,6 @@ class AttentionPolicyConfig:
 @dataclass(frozen=True)
 class TurnPolicyConfig:
     profile: TurnPolicyProfile = "balanced_semantic"
-    interrupt_mode: InterruptMode = "balanced"
     vad: VadPolicyConfig = field(default_factory=VadPolicyConfig)
     eot: EotPolicyConfig = field(default_factory=EotPolicyConfig)
     interrupt: InterruptPolicyConfig = field(default_factory=InterruptPolicyConfig)

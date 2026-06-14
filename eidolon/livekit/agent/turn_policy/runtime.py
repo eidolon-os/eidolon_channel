@@ -16,7 +16,6 @@ from .constants import (
 )
 from .decider import Action, Decision, InterruptDecider
 from .intent_classifier import InterruptIntent, canonicalize_interrupt_text
-from .modes import InterruptModeSpec, interrupt_mode_spec
 from .tiers.chain import TierPolicyChain
 
 
@@ -55,12 +54,11 @@ class TurnPolicyRuntime:
 
     def __init__(self, config: TurnPolicyConfig) -> None:
         self.config = config
-        self.mode = interrupt_mode_spec(config)
-        self.decider = InterruptDecider(config.interrupt, mode=self.mode)
+        self.decider = InterruptDecider(config.interrupt)
         self.attention = AttentionAdmission(config)
         self.tiers = TierPolicyChain()
-        self._stable_signal = _StableSignalStabilizer(config, mode=self.mode)
-        self._stabilizer = _WeakSignalFollowupStabilizer(config, mode=self.mode)
+        self._stable_signal = _StableSignalStabilizer(config)
+        self._stabilizer = _WeakSignalFollowupStabilizer(config)
 
     @property
     def decision_timeout_sec(self) -> float:
@@ -151,9 +149,8 @@ class _StableCandidate:
 class _StableSignalStabilizer:
     """Require short transcript stability for non-hard-stop hot-path cancels."""
 
-    def __init__(self, config: TurnPolicyConfig, *, mode: InterruptModeSpec) -> None:
+    def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config
-        self._mode = mode
         self._intent_candidate: _StableCandidate | None = None
         self._normal_candidate: _StableCandidate | None = None
 
@@ -184,7 +181,7 @@ class _StableSignalStabilizer:
                 now_ms=now_ms,
             )
         if (
-            self._mode.stabilize_normal_interrupts
+            self._config.interrupt.stabilize_normal_interrupts
             and self._is_normal_interrupt_wait(decision)
             and self._is_substantive_text(text)
         ):
@@ -345,13 +342,12 @@ class _StableSignalStabilizer:
 class _WeakSignalFollowupStabilizer:
     """Hold normal-interrupt candidates briefly after weak/noisy evidence."""
 
-    def __init__(self, config: TurnPolicyConfig, *, mode: InterruptModeSpec) -> None:
+    def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config
-        self._mode = mode
         self._last_weak_signal_ms: float | None = None
 
     def apply(self, decision: Decision, *, now_ms: float) -> Decision:
-        if not self._mode.weak_signal_followup_hold:
+        if not self._config.interrupt.weak_signal_followup_hold:
             return decision
         if self._is_weak_signal_hold(decision):
             self._last_weak_signal_ms = now_ms

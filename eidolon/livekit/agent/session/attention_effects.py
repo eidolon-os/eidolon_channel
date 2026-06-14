@@ -13,7 +13,6 @@ from eidolon.livekit.agent.turn_policy import (
     AttentionInput,
     TurnPolicyRuntime,
 )
-from eidolon.livekit.agent.turn_policy.modes import effective_attention_enforce
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 logger = logging.getLogger("agent.session.attention_effects")
@@ -48,7 +47,7 @@ class AttentionEffectHandler:
     def handle_speaking_started(self) -> None:
         decision = self.decide("")
         self.record_admission(decision)
-        if not effective_attention_enforce(self._turn_policy):
+        if not self._turn_policy.attention.enforce:
             self._on_duck()
             return
         if decision.action is AdmissionAction.HARD_INTERRUPT:
@@ -75,7 +74,7 @@ class AttentionEffectHandler:
         decision = self.decide(transcript, participant_identity=speaker_id)
         self.record_admission(decision)
         self._mark_direct_intent_admission(decision)
-        if not effective_attention_enforce(self._turn_policy):
+        if not self._turn_policy.attention.enforce:
             return True
         if decision.action is AdmissionAction.HARD_INTERRUPT:
             return True
@@ -116,8 +115,7 @@ class AttentionEffectHandler:
             "client_state_used": decision.client_state_used,
             "tier": decision.tier or None,
             "tier_reason": decision.tier_reason or None,
-            "enforced": effective_attention_enforce(self._turn_policy),
-            "interrupt_mode": self._turn_policy.interrupt_mode,
+            "enforced": self._turn_policy.attention.enforce,
         }
         timeline.set_attr("attention_admission", payload)
         events = list(timeline.attrs.get("attention_admission_events") or ())

@@ -45,7 +45,6 @@ from eidolon.livekit.benchmarks.timeline import (
 )
 from eidolon.livekit.benchmarks.timeline_expectations import apply_timeline_expectations
 from eidolon.livekit.common.config import load_effective_config
-from eidolon.livekit.common.config.schema import SUPPORTED_INTERRUPT_MODES
 
 
 def _default_cases() -> list[str]:
@@ -113,16 +112,12 @@ async def _run_headless(args: argparse.Namespace, suites) -> Path:
 def _run_policy(args: argparse.Namespace, suites) -> Path:
     output_dir = Path(args.output_dir) / args.run_id / "policy"
     turn_policy = None
-    if args.attention_enforce or args.interrupt_mode:
+    if args.attention_enforce:
         cfg = load_effective_config()
-        turn_policy = cfg.turn_policy
-        if args.interrupt_mode:
-            turn_policy = replace(turn_policy, interrupt_mode=args.interrupt_mode)
-        if args.attention_enforce:
-            turn_policy = replace(
-                turn_policy,
-                attention=replace(turn_policy.attention, enforce=True),
-            )
+        turn_policy = replace(
+            cfg.turn_policy,
+            attention=replace(cfg.turn_policy.attention, enforce=True),
+        )
     runs = []
     for index in range(args.repeat):
         run = run_policy_suite(suites, run_id=args.run_id, turn_policy=turn_policy)
@@ -282,15 +277,6 @@ async def _main() -> int:
         help=(
             "Policy-runner only: evaluate benchmark cases with "
             "turn_policy.attention.enforce=true without changing settings.yaml."
-        ),
-    )
-    parser.add_argument(
-        "--interrupt-mode",
-        choices=SUPPORTED_INTERRUPT_MODES,
-        default=None,
-        help=(
-            "Policy-runner only: override turn_policy.interrupt_mode for this "
-            "benchmark run without changing settings.yaml."
         ),
     )
     parser.add_argument(

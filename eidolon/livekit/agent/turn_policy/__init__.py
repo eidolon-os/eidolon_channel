@@ -12,7 +12,6 @@ from .intent_classifier import (
     NoopModelInterruptClassifier,
     OnnxInterruptClassifier,
 )
-from .modes import InterruptModeSpec, effective_attention_enforce, interrupt_mode_spec
 from .runtime import TurnControlSignal, TurnPolicyRuntime
 from .tiers import Tier, TierEvidence, TierPolicyChain
 
@@ -28,14 +27,11 @@ __all__ = [
     "InterruptIntent",
     "InterruptIntentClassifier",
     "InterruptIntentResult",
-    "InterruptModeSpec",
     "LexiconInterruptClassifier",
     "NoopModelInterruptClassifier",
     "OnnxInterruptClassifier",
     "TranscriptEvidence",
     "TranscriptEvidenceGate",
-    "effective_attention_enforce",
-    "interrupt_mode_spec",
     "Tier",
     "TierEvidence",
     "TierPolicyChain",

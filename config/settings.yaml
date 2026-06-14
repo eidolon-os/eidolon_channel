@@ -69,8 +69,6 @@ voiceprint:
 turn_policy:
   # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.
   profile: balanced_semantic
-  # Options: balanced, responsive.
-  interrupt_mode: responsive
   vad:
     activation_threshold: 0.50
     prefix_padding_ms: 300

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
-from typing import cast
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.client_audio_state import ClientAudioState
@@ -13,7 +12,6 @@ from eidolon.livekit.agent.session import AttentionEffectHandler
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 from eidolon.livekit.common.config import (
     AttentionPolicyConfig,
-    InterruptMode,
     TurnPolicyConfig,
 )
 
@@ -32,11 +30,9 @@ def _client_state(**kwargs) -> ClientAudioState:
 def _policy(
     *,
     enforce: bool = True,
-    interrupt_mode: str = "balanced",
 ) -> TurnPolicyConfig:
     return replace(
         TurnPolicyConfig(),
-        interrupt_mode=cast(InterruptMode, interrupt_mode),
         attention=replace(AttentionPolicyConfig(), enforce=enforce),
     )
 
@@ -47,9 +43,8 @@ def _handler(
     enforce: bool = True,
     agent_speaking: bool = True,
     eot_score: float = 0.0,
-    interrupt_mode: str = "balanced",
 ):
-    policy = _policy(enforce=enforce, interrupt_mode=interrupt_mode)
+    policy = _policy(enforce=enforce)
     timeline = TurnTimeline("turn-attention")
     on_duck = MagicMock()
     on_interrupt = MagicMock()
@@ -184,17 +179,16 @@ def test_observe_only_rollout_records_but_allows_eot() -> None:
     assert timeline.attrs["attention_admission"]["enforced"] is False
 
 
-def test_responsive_mode_does_not_disable_attention_enforcement() -> None:
-    # Regression: responsive mode used to force attention_enforce=False, silently
-    # overriding the operator's turn_policy.attention.enforce=true and disabling
-    # the manual_interrupt / mic_muted gates (full-duplex barge-in bug). The mode
-    # no longer overrides enforcement — it comes solely from config. With
+def test_attention_enforce_observes_substantive_overlap_without_eot() -> None:
+    # Regression: the retired responsive mode used to force attention_enforce=
+    # False, silently overriding the operator's turn_policy.attention.enforce and
+    # disabling the manual_interrupt / mic_muted gates (full-duplex barge-in bug).
+    # The interrupt_mode axis is gone; enforcement comes solely from config. With
     # enforce=True, a substantive playback overlap without EOT is observed (not
-    # admitted as an EOT check), regardless of interrupt_mode.
+    # admitted as an EOT check).
     handler, timeline, on_duck, on_interrupt = _handler(
         client_state=_client_state(),
         enforce=True,
-        interrupt_mode="responsive",
     )
 
     allowed = handler.allows_eot_check("不是")
@@ -203,4 +197,3 @@ def test_responsive_mode_does_not_disable_attention_enforcement() -> None:
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["enforced"] is True
-    assert timeline.attrs["attention_admission"]["interrupt_mode"] == "responsive"

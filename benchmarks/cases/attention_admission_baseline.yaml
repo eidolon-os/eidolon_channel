@@ -97,7 +97,11 @@ cases:
         vad_probability: 0.85
         agent_speaking: true
     expect:
-      action: rollback
+      # With the interrupt_mode axis retired, fast_lexical_intents defaults off,
+      # so a short backchannel is held via the evidence gate (semantic_score_wait)
+      # rather than a fast lexical rollback. Both are non-cancel; the invariant is
+      # forbid cancel.
+      action: hold
       intent: uncertain
       forbid_actions: ["cancel"]
       min_user_finals: 1

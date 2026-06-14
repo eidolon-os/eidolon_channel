@@ -61,7 +61,6 @@ llm:
   api_key: OPENAI_LLM_API_KEY
 turn_policy:
   profile: balanced_semantic
-  interrupt_mode: responsive
   interrupt:
     decision_timeout_ms: 450
 voiceprint:
@@ -76,7 +75,6 @@ voiceprint:
     monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
     cfg = load_effective_config()
     assert cfg.providers.brain_provider == "direct_llm"
-    assert cfg.turn_policy.interrupt_mode == "responsive"
     assert cfg.turn_policy.interrupt.decision_timeout_ms == 450
     assert cfg.llm.api_key == "test"
     assert cfg.voiceprint.enabled is True
@@ -85,37 +83,6 @@ voiceprint:
     assert cfg.worker.num_idle_processes == 1
 
 
-def test_invalid_interrupt_mode_fails_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings = _write_settings(
-        tmp_path,
-        """
-core:
-  livekit_url: ws://127.0.0.1:7880
-  api_key: LIVEKIT_API_KEY
-  api_secret: LIVEKIT_API_SECRET
-providers:
-  stt_provider: sensetime
-  tts_provider: sensetime
-  vad_provider: firered
-  brain_provider: direct_llm
-llm:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-  api_key: OPENAI_LLM_API_KEY
-turn_policy:
-  profile: balanced_semantic
-  interrupt_mode: hyperspeed
-""",
-    )
-    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
-    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
-    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
-
-    with pytest.raises(ValueError, match="turn_policy.interrupt_mode"):
-        load_effective_config()
 
 
 def test_invalid_voiceprint_threshold_fails_validation(

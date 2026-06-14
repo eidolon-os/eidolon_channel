@@ -9,6 +9,9 @@ from typing import Any, Literal
 
 
 CLIENT_AUDIO_STATE_TOPIC = "eidolon.audio_state"
+# Payload "type" label, decoupled from the LiveKit topic name above. Clients
+# (ESP32 / web) stamp this into the JSON body; it is NOT the routing topic.
+CLIENT_AUDIO_STATE_TYPE = "client.audio_state"
 INPUT_MODE_AUTO = "auto"
 INPUT_MODE_PTT = "ptt"
 INPUT_MODE_MANUAL = "manual"
@@ -58,7 +61,7 @@ def parse_client_audio_state(
         raise ValueError("client.audio_state payload must be UTF-8 JSON") from exc
     if not isinstance(raw, dict):
         raise ValueError("client.audio_state payload must be a JSON object")
-    if raw.get("type") not in (None, CLIENT_AUDIO_STATE_TOPIC):
+    if raw.get("type") not in (None, CLIENT_AUDIO_STATE_TYPE):
         raise ValueError("client.audio_state has unexpected type")
 
     return ClientAudioState(

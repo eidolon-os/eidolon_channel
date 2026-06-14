@@ -239,7 +239,11 @@ cases:
       - when: 详细介绍
         reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意很长，用来制造可打断窗口。
     expect:
-      action: rollback
+      # With attention.enforce on, the backchannel overlap is dropped at the
+      # attention layer (observe) before a tentative turn forms, so the action is
+      # `none` rather than a decider `rollback`. Both are non-cancel; observe is
+      # cleaner (no turn to roll back). Invariant remains: must not cancel.
+      action: none
       intent: uncertain
       forbid_actions: ["cancel"]
       rejected_turn_brain: forbidden

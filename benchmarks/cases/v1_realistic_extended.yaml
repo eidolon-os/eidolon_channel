@@ -143,7 +143,10 @@ cases:
         reply: 我会从多个角度解释当前主题，这段回答用于验证换话题前缀误识别时仍能快速取消。
     expect:
       action: cancel
-      intent: normal_interrupt
+      # Intent label is mode-dependent (responsive lexicon -> topic_switch;
+      # balanced EOT evidence_gate -> normal_interrupt), and the intent axis is
+      # being deprecated (P1-C). The case's point is that prefix-confused ASR
+      # still CANCELS fast, so assert the action, not the label.
       max_interrupt_decision_ms: 1500
       min_user_finals: 2
       min_agent_messages: 1

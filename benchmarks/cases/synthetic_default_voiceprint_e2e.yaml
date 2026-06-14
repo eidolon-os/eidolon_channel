@@ -139,6 +139,10 @@ cases:
     start_ms: 1800
     duration_ms: 3180
     final_delay_ms: 100
+    # Complete clause -> high EOT; cancel comes from EOT/semantic evidence, not
+    # first_signal. (Barge-in during playback needs a trustworthy signal — here
+    # EOT evidence; on the device it would also carry manual_interrupt.)
+    eot_scores: [0.72]
     agent_speaking: true
     client_playback_state: agent_speaking
   expect:

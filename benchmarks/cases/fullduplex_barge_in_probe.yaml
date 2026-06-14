@@ -104,6 +104,29 @@ cases:
       action: any
       forbid_actions: ["cancel"]
 
+  - case_id: probe_manual_interrupt_hard_cancels_001
+    suite: fullduplex_barge_in_probe
+    description: P0——设备 manual_interrupt（能量门限确认的真打断信号）在 agent 播放期到达、STT 尚无文本，应立即硬取消。假设：responsive(attention_enforce=False) 下被忽略=红；--attention-enforce 下=绿。
+    tags: ["fullduplex", "barge_in", "manual_interrupt", "P0", "probe"]
+    audio_clips:
+      - id: manual_interrupt_signal
+        text: ""
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: manual_interrupt
+    user_steps:
+      - text: ""
+        audio: manual_interrupt_signal
+        start_ms: 240
+        duration_ms: 200
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_manual_interrupt: true
+    expect:
+      action: cancel
+
   - case_id: probe_topic_switch_cancels_001
     suite: fullduplex_barge_in_probe
     description: 播放期用户明确换话题"换个话题"——这是真夺取话轮，应取消 agent（护栏：backchannel-aware 改动不能误伤真打断）。

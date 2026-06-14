@@ -1,0 +1,129 @@
+suite_id: fullduplex_barge_in_probe
+# Probe suite for the full-duplex barge-in work (2026-06-14).
+# Goal: empirically establish what the CURRENT turn policy does when the user
+# vocalizes while the agent is speaking, so we can tell real bugs (red) from
+# already-correct behavior (green) before touching code. Expectations encode the
+# research-grounded ideal (backchannel-aware): brief continuers / hesitations /
+# acks should NOT hard-cancel the agent; a genuine floor-take (topic switch)
+# should. All steps run during agent playback (agent_speaking + agent_speaking
+# client state). Run under responsive mode (the profile used in production).
+cases:
+  - case_id: probe_backchannel_mm_holds_001
+    suite: fullduplex_barge_in_probe
+    description: 播放期用户发"嗯嗯"backchannel——不应硬取消 agent（Full-Duplex-Bench：<1s 且 <2 词 = backchannel）。
+    tags: ["fullduplex", "barge_in", "backchannel", "probe"]
+    audio_clips:
+      - id: backchannel_mm
+        text: 嗯嗯
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: backchannel
+    user_steps:
+      - text: 嗯嗯
+        audio: backchannel_mm
+        start_ms: 240
+        duration_ms: 400
+        interims: ["嗯嗯"]
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: probe_ack_haode_holds_001
+    suite: fullduplex_barge_in_probe
+    description: 播放期用户发"好的"确认/continuer——不应硬取消 agent。
+    tags: ["fullduplex", "barge_in", "backchannel", "probe"]
+    audio_clips:
+      - id: backchannel_ok
+        text: 好的
+        path: benchmarks/audio/generated/backchannel_ok.wav
+        intent: backchannel
+    user_steps:
+      - text: 好的
+        audio: backchannel_ok
+        start_ms: 240
+        duration_ms: 400
+        interims: ["好的"]
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: probe_hesitation_nage_holds_001
+    suite: fullduplex_barge_in_probe
+    description: 播放期用户发"那个"犹豫填充——不应硬取消 agent。
+    tags: ["fullduplex", "barge_in", "hesitation", "probe"]
+    audio_clips:
+      - id: hesit_nage
+        text: 那个
+        path: benchmarks/audio/generated/hesit_nage.wav
+        intent: hesitation
+    user_steps:
+      - text: 那个
+        audio: hesit_nage
+        start_ms: 240
+        duration_ms: 400
+        interims: ["那个"]
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: probe_reaction_start_holds_001
+    suite: fullduplex_barge_in_probe
+    description: 播放期用户开口短反应"我觉得"（非 backchannel/犹豫/热词、低 EOT）——backchannel-aware 理想下应等更多证据而非第一字秒砍。这是 first_signal_cancel 与 evidence_gate 的分水岭探针。
+    tags: ["fullduplex", "barge_in", "first_signal_boundary", "probe"]
+    audio_clips:
+      - id: reaction_start
+        text: 我觉得
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 我觉得
+        audio: reaction_start
+        start_ms: 240
+        duration_ms: 500
+        interims: ["我觉得"]
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: probe_topic_switch_cancels_001
+    suite: fullduplex_barge_in_probe
+    description: 播放期用户明确换话题"换个话题"——这是真夺取话轮，应取消 agent（护栏：backchannel-aware 改动不能误伤真打断）。
+    tags: ["fullduplex", "barge_in", "floor_take", "guard"]
+    audio_clips:
+      - id: topic_switch
+        text: 换个话题
+        path: benchmarks/audio/generated/topic_switch.wav
+        intent: topic_switch
+    user_steps:
+      - text: 换个话题
+        audio: topic_switch
+        start_ms: 240
+        duration_ms: 900
+        interims: ["换个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.0, 0.72]
+        final_delay_ms: 80
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      min_user_finals: 0

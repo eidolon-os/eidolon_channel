@@ -104,6 +104,30 @@ cases:
       action: any
       forbid_actions: ["cancel"]
 
+  - case_id: probe_substantive_text_without_signal_holds_001
+    suite: fullduplex_barge_in_probe
+    description: 回声安全——全双工设备播放期上行含回声。实质多词文本但**无设备信号**（mic_muted/manual_interrupt 都没有、无 EOT）可能是回声，**不应取消**（OBSERVE）。真正的实质打断会带设备 manual_interrupt（见 manual_interrupt 用例）。顶级产品的 min_words 假设音频已无回声；我们把回声判别交给设备信号，故裸文本不取消是正确的。
+    tags: ["fullduplex", "barge_in", "echo_safety", "probe"]
+    audio_clips:
+      - id: substantive_opinion
+        text: 我对这个有别的想法
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 我对这个有别的想法
+        audio: substantive_opinion
+        start_ms: 240
+        duration_ms: 1200
+        interims: ["我对这个", "我对这个有别的想法"]
+        eot_scores: [0.0, 0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
   - case_id: probe_manual_interrupt_hard_cancels_001
     suite: fullduplex_barge_in_probe
     description: P0——设备 manual_interrupt（能量门限确认的真打断信号）在 agent 播放期到达、STT 尚无文本，应立即硬取消。假设：responsive(attention_enforce=False) 下被忽略=红；--attention-enforce 下=绿。
@@ -126,6 +150,31 @@ cases:
         client_manual_interrupt: true
     expect:
       action: cancel
+
+  - case_id: probe_manual_interrupt_backchannel_should_not_cancel_001
+    suite: fullduplex_barge_in_probe
+    description: Step 2 核心——设备能量门限只判"有真人声音"，分不清 backchannel 和夺话。用户说"嗯嗯"时设备也会发 manual_interrupt，但 backchannel 不应停 agent。当前(Step-1 无条件硬取消)=红；加薄 backchannel 词表护栏后=绿。这是"信任设备信号但不完全无条件"的关键。
+    tags: ["fullduplex", "barge_in", "manual_interrupt", "backchannel_guard", "P1-C", "probe"]
+    audio_clips:
+      - id: backchannel_with_signal
+        text: 嗯嗯
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: backchannel
+    user_steps:
+      - text: 嗯嗯
+        audio: backchannel_with_signal
+        start_ms: 240
+        duration_ms: 400
+        interims: ["嗯嗯"]
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_manual_interrupt: true
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
 
   - case_id: probe_topic_switch_cancels_001
     suite: fullduplex_barge_in_probe

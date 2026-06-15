@@ -81,7 +81,7 @@ def _build_device_token_source(
 
     # Resolve secret: env (loaded via _secret() at config time) →
     # ~/eidolon/run/jwt-secret (shared with eidolon-agent).
-    from eidolon.livekit.agent.runtime.token_signer import resolve_shared_secret
+    from eidolon_sdk.runtime import resolve_shared_secret
     secret = resolve_shared_secret(rt.jwt_secret)
     if not secret:
         raise RuntimeError(

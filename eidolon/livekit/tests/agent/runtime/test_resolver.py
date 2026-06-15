@@ -43,6 +43,7 @@ def _room_with(*participants) -> SimpleNamespace:
 
 
 pytestmark = pytest.mark.asyncio
+SECRET = "test-secret-with-enough-entropy-32b"
 
 
 async def test_resolver_dispatches_to_user_for_kind_user():
@@ -57,10 +58,10 @@ async def test_resolver_dispatches_to_user_for_kind_user():
     )
     room = _room_with(_participant("manson", '{"kind": "user"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     token = await resolve()
-    payload = jwt.decode(token, "s", algorithms=["HS256"])
+    payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["user_id"] == "manson"
     assert payload["tenant_id"] == "default"
     assert payload["template_id"] == "caretaker"
@@ -82,10 +83,10 @@ async def test_resolver_dispatches_to_device_for_kind_device():
         _participant("esp32-007", '{"kind": "device", "device_id": "esp32-007"}')
     )
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     token = await resolve()
-    payload = jwt.decode(token, "s", algorithms=["HS256"])
+    payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["user_id"] == "alice"  # admin lookup populated user
     admin.resolve_device.assert_awaited_once_with("esp32-007")
     admin.resolve_user.assert_not_called()
@@ -102,7 +103,7 @@ async def test_resolver_raises_when_metadata_missing_kind():
     admin = _fake_admin()
     room = _room_with(_participant("old-esp", metadata=""))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError) as exc_info:
         await resolve()
@@ -119,7 +120,7 @@ async def test_resolver_raises_when_kind_unknown():
     admin = _fake_admin()
     room = _room_with(_participant("x", '{"kind": "anonymous"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError):
         await resolve()
@@ -137,7 +138,7 @@ async def test_resolver_caches_token_across_calls():
     )
     room = _room_with(_participant("manson", '{"kind": "user"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     t1 = await resolve()
     t2 = await resolve()
@@ -153,7 +154,7 @@ async def test_resolver_propagates_admin_404_as_resolver_error():
     admin.resolve_user.side_effect = AdminResolveNotFound("user 'ghost' not found")
     room = _room_with(_participant("ghost", '{"kind": "user"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError, match="ghost"):
         await resolve()
@@ -166,7 +167,7 @@ async def test_resolver_no_participant_raises():
     admin = _fake_admin()
     room = _room_with()  # no participants
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError, match="no remote participant"):
         await resolve()
@@ -182,11 +183,11 @@ async def test_resolver_failure_does_not_cache():
     ]
     room = _room_with(_participant("manson", '{"kind": "user"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret="s",
+        room=room, admin=admin, jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError):
         await resolve()
     # Second call succeeds.
     token = await resolve()
-    assert jwt.decode(token, "s", algorithms=["HS256"])["user_id"] == "manson"
+    assert jwt.decode(token, SECRET, algorithms=["HS256"])["user_id"] == "manson"
     assert admin.resolve_user.await_count == 2

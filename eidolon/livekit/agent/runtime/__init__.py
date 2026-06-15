@@ -10,8 +10,6 @@ Phase 29 already built ``/api/resolve/{user,device}/{id}`` in admin that
 composes all of that in one call. The pieces here:
 
   - :class:`AdminResolveClient` — thin HTTP wrapper over those two endpoints.
-  - :func:`sign_device_token` — same payload shape eidolon-agent's
-    ``PairingTokenVerifier`` expects (shared HMAC secret).
   - :func:`make_device_token_resolver` — given a LiveKit ``Room`` ref +
     a config, returns an async zero-arg callable the gRPC LLM invokes
     once per session to mint the bearer token used for agent gRPC.
@@ -33,7 +31,6 @@ from eidolon.livekit.agent.runtime.resolver import (
     DeviceTokenResolverError,
     make_device_token_resolver,
 )
-from eidolon.livekit.agent.runtime.token_signer import sign_device_token
 
 __all__ = [
     "AdminResolveClient",
@@ -45,5 +42,4 @@ __all__ = [
     "ResolvedContext",
     "DeviceTokenResolverError",
     "make_device_token_resolver",
-    "sign_device_token",
 ]

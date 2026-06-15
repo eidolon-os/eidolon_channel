@@ -127,7 +127,7 @@ eidolon/livekit/agent/
 ├── runtime/
 │   ├── admin_client.py       # admin service 查询
 │   ├── resolver.py           # tenant/user/template 解析
-│   └── token_signer.py       # token 签名
+│   └── resolver.py           # admin resolve + SDK runtime token 签名
 ├── eidolon_agent_rpc/
 │   ├── grpc_llm.py           # remote Agent LLM adapter
 │   └── session.py            # remote Agent session client

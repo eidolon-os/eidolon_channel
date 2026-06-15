@@ -30,7 +30,7 @@ from eidolon.livekit.agent.runtime.admin_client import (
     AdminResolveError,
     ResolvedContext,
 )
-from eidolon.livekit.agent.runtime.token_signer import sign_device_token
+from eidolon_sdk.runtime import sign_device_token
 
 _log = logging.getLogger(__name__)
 

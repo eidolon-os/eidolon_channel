@@ -623,6 +623,62 @@ def test_tls_off_no_credentials_built() -> None:
     assert s._credentials is None
 
 
+@pytest.mark.asyncio
+async def test_session_open_reuses_prebuilt_credentials(monkeypatch) -> None:
+    """SDK extraction must not change TLS credential lifetime across reconnects."""
+    from eidolon.livekit.agent.eidolon_agent_rpc import session as session_mod
+
+    class FakeChannel:
+        async def close(self) -> None:
+            pass
+
+    class FakeCall:
+        def done(self) -> bool:
+            return False
+
+        async def done_writing(self) -> None:
+            pass
+
+        async def read(self):
+            await asyncio.Future()
+
+    fake_channel = FakeChannel()
+    fake_call = FakeCall()
+    sentinel_credentials = object()
+    create_calls: list[tuple[str, object]] = []
+
+    def fake_create_aio_channel_with_credentials(target: str, credentials):
+        create_calls.append((target, credentials))
+        return fake_channel
+
+    class FakeStub:
+        def __init__(self, channel) -> None:
+            assert channel is fake_channel
+
+        def Chat(self, *, metadata):
+            assert metadata == (("authorization", "Bearer token"),)
+            return fake_call
+
+    monkeypatch.setattr(
+        session_mod,
+        "create_aio_channel_with_credentials",
+        fake_create_aio_channel_with_credentials,
+    )
+    monkeypatch.setattr(session_mod.pbg, "EidolonAgentStub", FakeStub)
+
+    session = session_mod.EidolonAgentSession(
+        target="127.0.0.1:45051",
+        device_token="token",
+        tls=session_mod.TlsConfig(mode="off"),
+    )
+    session._credentials = sentinel_credentials
+    try:
+        await session._ensure_open()
+        assert create_calls == [("127.0.0.1:45051", sentinel_credentials)]
+    finally:
+        await session.aclose()
+
+
 def test_default_channel_options_do_not_send_aggressive_keepalive() -> None:
     """Default client options must not trip server GOAWAY too_many_pings."""
     from eidolon.livekit.agent.eidolon_agent_rpc.session import _CHANNEL_OPTIONS

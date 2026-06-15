@@ -26,7 +26,7 @@ from eidolon_sdk.grpc import (
     GrpcTlsConfig,
     authorization_metadata,
     build_channel_credentials,
-    create_aio_channel,
+    create_aio_channel_with_credentials,
 )
 from google.protobuf import struct_pb2
 
@@ -311,7 +311,9 @@ class EidolonAgentSession:
                     pass
             if self._channel is not None:
                 await self._channel.close()
-            self._channel = create_aio_channel(self._target, tls=self._tls)
+            self._channel = create_aio_channel_with_credentials(
+                self._target, self._credentials
+            )
             stub = pbg.EidolonAgentStub(self._channel)
             self._call = stub.Chat(metadata=self._metadata)
             # Reader runs through spawn() to share the unified done-callback

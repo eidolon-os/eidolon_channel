@@ -12,11 +12,11 @@ without tearing it down.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import time
-from typing import Any, Awaitable, Callable, Union
+from typing import Any, Callable
 
+from eidolon_sdk.grpc import TokenSource, build_channel_credentials, resolve_token_source
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice
@@ -39,7 +39,6 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
     ToolCallPayload,
     TurnError,
     UsagePayload,
-    _build_channel_credentials,
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
@@ -52,7 +51,7 @@ _USER_TEXT_OVERRIDE_TTL_SEC = 10.0
 # ``_get_session`` time (first chat() call) — by then the LiveKit
 # participant has connected and we can read their identity from the
 # room. Cached for the LLM instance lifetime.
-DeviceTokenSource = Union[str, Callable[[], str], Callable[[], Awaitable[str]]]
+DeviceTokenSource = TokenSource
 
 
 # Brain ERROR.code → LiveKit exception mapping (A4, plan Phase A).
@@ -167,7 +166,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         # credentials object here; EidolonAgentSession will recompute it when
         # it lazily opens the channel.
         if tls is not None and tls.mode != "off":
-            _build_channel_credentials(tls)
+            build_channel_credentials(tls)
         self._tls = tls
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
@@ -202,25 +201,12 @@ class EidolonAgentGrpcLlm(llm.LLM):
         if self._device_token is not None:
             return self._device_token
         source = self._device_token_source
-        if isinstance(source, str):
-            token = source  # cache miss but already a string — defensive
-        else:
-            try:
-                result = source()
-            except Exception as exc:
-                raise APIConnectionError(
-                    f"device_token resolver raised: {exc}"
-                ) from exc
-            if inspect.isawaitable(result):
-                token = await result
-            else:
-                token = result  # sync callable returned a string
-        if not isinstance(token, str) or not token.strip():
+        try:
+            self._device_token = await resolve_token_source(source)
+        except Exception as exc:
             raise APIConnectionError(
-                "device_token resolver returned empty/non-string — refusing "
-                "to open gRPC session"
-            )
-        self._device_token = token.strip()
+                f"device_token resolver failed: {exc}"
+            ) from exc
         return self._device_token
 
     async def _get_session(self) -> EidolonAgentSession:

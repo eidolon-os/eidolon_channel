@@ -21,6 +21,13 @@ from typing import AsyncIterator
 
 import grpc
 import grpc.aio
+from eidolon_sdk.grpc import (
+    DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS,
+    GrpcTlsConfig,
+    authorization_metadata,
+    build_channel_credentials,
+    create_aio_channel,
+)
 from google.protobuf import struct_pb2
 
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
@@ -48,10 +55,7 @@ logger = logging.getLogger("eidolon_agent_rpc.session")
 #     throughput. Voice TTFD is the metric we care about, not bulk bytes/sec.
 #   - bdp_probe=1: auto-adjust HTTP/2 BDP for bursty streaming (LLM token
 #     emission is bursty), keeping flow control windows out of the critical path.
-_CHANNEL_OPTIONS: list[tuple[str, int | str]] = [
-    ("grpc.optimization_target", "latency"),
-    ("grpc.http2.bdp_probe", 1),
-]
+_CHANNEL_OPTIONS = list(DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS)
 
 
 # Typed inbox payloads (C, plan Phase C).
@@ -141,63 +145,8 @@ class TurnError(RuntimeError):
         self.fatal = fatal
 
 
-@dataclass(frozen=True, slots=True)
-class TlsConfig:
-    """gRPC channel TLS configuration (D2, plan Phase D).
-
-    mode:
-        "off"  → insecure_channel (loopback / UDS / dev)
-        "tls"  → secure_channel verifying server cert
-        "mtls" → secure_channel with mutual auth (client cert + key required)
-    """
-    mode: str = "off"
-    ca_path: str = ""
-    client_cert_path: str = ""
-    client_key_path: str = ""
-
-
-def _build_channel_credentials(tls: TlsConfig) -> "grpc.ChannelCredentials | None":
-    """Materialize gRPC ChannelCredentials from a TlsConfig, or None for insecure.
-
-    Errors loudly (ValueError) on misconfiguration so the worker fails at boot
-    rather than silently falling back to insecure or 0-cert TLS.
-    """
-    from pathlib import Path
-
-    if tls.mode == "off":
-        return None
-    if tls.mode not in ("tls", "mtls"):
-        raise ValueError(
-            f"REMOTE_AGENT_RPC_TLS_MODE={tls.mode!r} unrecognized; expected "
-            "one of: off, tls, mtls"
-        )
-
-    def _read(label: str, path: str) -> bytes:
-        if not path:
-            return b""
-        p = Path(path).expanduser()
-        if not p.is_file():
-            raise ValueError(
-                f"REMOTE_AGENT_RPC_TLS {label} path does not exist or is not a file: {path}"
-            )
-        return p.read_bytes()
-
-    ca = _read("ca_path", tls.ca_path) or None
-    if tls.mode == "mtls":
-        if not tls.client_cert_path or not tls.client_key_path:
-            raise ValueError(
-                "REMOTE_AGENT_RPC_TLS_MODE=mtls requires "
-                "REMOTE_AGENT_RPC_TLS_CLIENT_CERT_PATH and _CLIENT_KEY_PATH"
-            )
-        client_cert = _read("client_cert_path", tls.client_cert_path)
-        client_key = _read("client_key_path", tls.client_key_path)
-        return grpc.ssl_channel_credentials(
-            root_certificates=ca,
-            private_key=client_key,
-            certificate_chain=client_cert,
-        )
-    # mode == "tls" — server auth only
-    return grpc.ssl_channel_credentials(root_certificates=ca)
+TlsConfig = GrpcTlsConfig
+_build_channel_credentials = build_channel_credentials
 
 
 class EidolonAgentSession:
@@ -212,7 +161,7 @@ class EidolonAgentSession:
     ) -> None:
         self._target = target.strip()
         self._device_token = device_token
-        self._metadata = (("authorization", f"Bearer {device_token}"),)
+        self._metadata = authorization_metadata(device_token)
         self._tls = tls or TlsConfig()
         # Validate TLS config eagerly so misconfig fails at construction
         # (consistent with the device_token=empty fail-loud behavior).
@@ -362,14 +311,7 @@ class EidolonAgentSession:
                     pass
             if self._channel is not None:
                 await self._channel.close()
-            if self._credentials is None:
-                self._channel = grpc.aio.insecure_channel(
-                    self._target, options=_CHANNEL_OPTIONS
-                )
-            else:
-                self._channel = grpc.aio.secure_channel(
-                    self._target, self._credentials, options=_CHANNEL_OPTIONS
-                )
+            self._channel = create_aio_channel(self._target, tls=self._tls)
             stub = pbg.EidolonAgentStub(self._channel)
             self._call = stub.Chat(metadata=self._metadata)
             # Reader runs through spawn() to share the unified done-callback

@@ -25,8 +25,8 @@ import argparse
 import asyncio
 import sys
 
-import grpc.aio
 import httpx
+from eidolon_sdk.grpc import create_aio_channel
 
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
     eidolon_pb2 as pb,
@@ -55,7 +55,7 @@ async def provision(
         code = resp.json()["code"]
         print(f"# issued pairing code: {code}", file=sys.stderr)
 
-    async with grpc.aio.insecure_channel(grpc_target) as channel:
+    async with create_aio_channel(grpc_target) as channel:
         stub = pbg.EidolonAgentStub(channel)
         exch = await stub.ExchangePairingCode(
             pb.ExchangeRequest(

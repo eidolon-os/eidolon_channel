@@ -25,7 +25,7 @@ import logging
 import uuid
 from typing import Any, Awaitable, Callable
 
-from eidolon.livekit.agent.runtime.admin_client import (
+from eidolon_sdk.admin import (
     AdminResolveClient,
     AdminResolveError,
     ResolvedContext,

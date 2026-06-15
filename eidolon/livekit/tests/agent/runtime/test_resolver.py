@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 
-from eidolon.livekit.agent.runtime.admin_client import (
+from eidolon_sdk.admin import (
     AdminResolveClient,
     AdminResolveNotFound,
     ResolvedContext,

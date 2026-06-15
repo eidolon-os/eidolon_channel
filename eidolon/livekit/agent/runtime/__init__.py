@@ -9,7 +9,7 @@ When a participant joins the LiveKit room, channel needs to know:
 Phase 29 already built ``/api/resolve/{user,device}/{id}`` in admin that
 composes all of that in one call. The pieces here:
 
-  - :class:`AdminResolveClient` — thin HTTP wrapper over those two endpoints.
+  - :class:`AdminResolveClient` — SDK HTTP wrapper over those two endpoints.
   - :func:`make_device_token_resolver` — given a LiveKit ``Room`` ref +
     a config, returns an async zero-arg callable the gRPC LLM invokes
     once per session to mint the bearer token used for agent gRPC.
@@ -18,7 +18,7 @@ Composition lives in ``runtime/resolver.py``; the other two files are
 pure helpers tested in isolation.
 """
 
-from eidolon.livekit.agent.runtime.admin_client import (
+from eidolon_sdk.admin import (
     AdminResolveClient,
     AdminResolveError,
     AdminResolveNotFound,

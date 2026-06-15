@@ -8,8 +8,6 @@ opening a real gRPC channel.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm

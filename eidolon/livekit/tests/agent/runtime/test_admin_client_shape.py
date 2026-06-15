@@ -14,7 +14,7 @@ internal refactors don't silently break the wrapper handling).
 
 from __future__ import annotations
 
-from eidolon.livekit.agent.runtime.admin_client import ResolvedContext
+from eidolon_sdk.admin import ResolvedContext
 
 
 def _expected_manson() -> dict:

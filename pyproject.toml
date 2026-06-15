@@ -28,7 +28,7 @@ dependencies = [
     "websockets>=12.0",
     "python-socks>=2.4",
     "python-dotenv>=1.0",
-    "eidolon-sdk[runtime]",
+    "eidolon-sdk[livekit,runtime]",
     "modelscope>=1.37.1",
     "addict>=2.4",
     "datasets>=4.0",

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from livekit import api as lk_api
+from eidolon_sdk.livekit import build_livekit_token
 from livekit import rtc
 
 from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
@@ -620,30 +620,16 @@ def _make_dispatch_token(
     agent_name: str,
     metadata: dict[str, Any] | None = None,
 ) -> str:
-    if not api_key or not api_secret:
-        raise ValueError("LIVEKIT api_key/api_secret are required")
-    token = (
-        lk_api.AccessToken(api_key, api_secret)
-        .with_identity(participant)
-        .with_name(participant)
-        .with_grants(
-            lk_api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                can_publish=True,
-                can_subscribe=True,
-                can_publish_data=True,
-            )
-        )
-        .with_room_config(
-            lk_api.RoomConfiguration(
-                agents=[lk_api.RoomAgentDispatch(agent_name=agent_name)],
-            )
-        )
+    return build_livekit_token(
+        api_key=api_key,
+        api_secret=api_secret,
+        room_name=room_name,
+        identity=participant,
+        name=participant,
+        participant_metadata=metadata,
+        dispatch_agent=True,
+        agent_name=agent_name,
     )
-    if metadata:
-        token = token.with_metadata(json.dumps(metadata, ensure_ascii=False))
-    return token.to_jwt()
 
 
 def _user_done_audio_latency_errors(

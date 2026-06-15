@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from livekit import api
+from eidolon_sdk.livekit import build_livekit_token
 
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
 
@@ -44,28 +44,17 @@ def generate_token(room_name: str, participant_name: str) -> tuple[str, str]:
     if not cfg.core.api_key or not cfg.core.api_secret:
         raise ValueError("LIVEKIT_API_KEY or LIVEKIT_API_SECRET not configured")
 
-    token = (
-        api.AccessToken(cfg.core.api_key, cfg.core.api_secret)
-        .with_identity(participant_name)
-        .with_name(participant_name)
-        .with_grants(
-            api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                can_publish=True,
-                can_subscribe=True,
-                can_publish_data=True,
-            )
-        )
-        # Tell LiveKit server to dispatch the "eidolon" agent worker when
-        # this token's holder joins the room. The worker (server.py) registers
-        # with the same agent_name to receive the dispatch.
-        .with_room_config(
-            api.RoomConfiguration(
-                agents=[api.RoomAgentDispatch(agent_name="eidolon")],
-            )
-        )
-        .to_jwt()
+    # Tell LiveKit server to dispatch the "eidolon" agent worker when this
+    # token's holder joins the room. The worker (server.py) registers with the
+    # same agent_name to receive the dispatch.
+    token = build_livekit_token(
+        api_key=cfg.core.api_key,
+        api_secret=cfg.core.api_secret,
+        room_name=room_name,
+        identity=participant_name,
+        name=participant_name,
+        dispatch_agent=True,
+        agent_name="eidolon",
     )
 
     return participant_name, token

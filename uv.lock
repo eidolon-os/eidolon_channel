@@ -497,7 +497,7 @@ dependencies = [
     { name = "addict" },
     { name = "aiohttp" },
     { name = "datasets" },
-    { name = "eidolon-sdk", extra = ["runtime"] },
+    { name = "eidolon-sdk", extra = ["livekit", "runtime"] },
     { name = "grpcio" },
     { name = "livekit-agents" },
     { name = "livekit-api" },
@@ -532,7 +532,7 @@ requires-dist = [
     { name = "addict", specifier = ">=2.4" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "datasets", specifier = ">=4.0" },
-    { name = "eidolon-sdk", extras = ["runtime"], editable = "../eidolon_sdk" },
+    { name = "eidolon-sdk", extras = ["livekit", "runtime"], editable = "../eidolon_sdk" },
     { name = "grpcio", specifier = ">=1.68" },
     { name = "grpcio-tools", marker = "extra == 'dev'", specifier = ">=1.68" },
     { name = "livekit-agents", specifier = ">=1.5" },
@@ -568,6 +568,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+livekit = [
+    { name = "livekit-api" },
+]
 runtime = [
     { name = "pyjwt" },
 ]
@@ -575,15 +578,19 @@ runtime = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'db'", specifier = ">=0.20" },
+    { name = "cryptography", marker = "extra == 'devices'", specifier = ">=43" },
     { name = "hatchling", marker = "extra == 'dev'", specifier = ">=1.25" },
+    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27" },
+    { name = "livekit-api", marker = "extra == 'livekit'", specifier = ">=0.5" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pyjwt", marker = "extra == 'runtime'", specifier = ">=2.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'db'", specifier = ">=2.0" },
 ]
-provides-extras = ["db", "runtime", "dev"]
+provides-extras = ["db", "runtime", "http", "devices", "livekit", "dev"]
 
 [[package]]
 name = "eval-type-backport"

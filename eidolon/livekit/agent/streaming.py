@@ -994,6 +994,30 @@ class StreamingPipeline(BasePipeline):
         )
         return False
 
+    def _eot_thinks_turn_complete(self) -> bool:
+        """True when the learned EOT model is confident the user's turn is done.
+
+        Single source of truth for "trust the end-of-turn model". The
+        framework-completed defer path uses it so a confident EOT (the model's
+        own completeness call) is not second-guessed by the short-statement text
+        heuristic — that heuristic keys off trailing punctuation/particles which
+        the ASR routinely drops (e.g. a question's trailing 「吗？」), so on its own
+        it mis-holds genuinely complete turns. Mirrors the score idiom in
+        ``_should_defer_low_eot_commit``.
+        """
+        eot_model = self._get_eot_model()
+        if eot_model is None:
+            return True
+        score = float(
+            getattr(
+                eot_model,
+                "current_eot_score",
+                getattr(eot_model, "_current_eot_score", 1.0),
+            )
+            or 0.0
+        )
+        return score >= float(self._turn_policy.eot.eot_unlikely_threshold)
+
     def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
         self._ensure_user_turn_coordinator()
         candidate = self._user_turns.active
@@ -1005,6 +1029,12 @@ class StreamingPipeline(BasePipeline):
             return True
         if self._user_turns.should_wait_for_statement_sequence_merge():
             return True
+        # The LiveKit framework already decided this turn is complete. If our EOT
+        # model agrees, don't re-hold it on the short-statement text heuristic
+        # (which a dropped 「吗？」 defeats) — let it take the normal reply path.
+        # The heuristic still hedges when EOT itself is unsure.
+        if self._eot_thinks_turn_complete():
+            return False
         selected = candidate.selected_text or transcript
         return self._looks_like_short_statement_continuation(selected)
 

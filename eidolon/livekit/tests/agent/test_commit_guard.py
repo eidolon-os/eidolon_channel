@@ -547,6 +547,9 @@ async def test_completed_turn_hook_defers_short_statement_for_continuation() -> 
     timeline = TurnTimeline("statement-fragment-hook")
     pipeline._timeline = timeline
     pipeline._ensure_runtime_defaults()
+    # EOT is unsure here (low score), so the short-statement hedge still applies
+    # and the framework-completed turn defers for continuation.
+    pipeline._get_eot_model.return_value.current_eot_score = 0.01
     pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
     pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
@@ -587,6 +590,57 @@ async def test_completed_turn_hook_defers_short_statement_for_continuation() -> 
     assert (
         timeline.attrs["user_turn_coordinator"]["selected_text_preview"]
         == "私立医院的。 给医生做的系统。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_does_not_defer_when_eot_confident() -> None:
+    # SOTA alignment: when the framework AND the EOT model both consider the turn
+    # complete, do not re-hold it on the short-statement text heuristic (which a
+    # dropped 「吗？」 would defeat). The turn takes the normal reply path instead of
+    # the fragile return-False + re-commit defer path. Mirrors the production bug
+    # where "你的笑话已经讲完了吗？" (EOT=1.0) was wrongly deferred and never answered.
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    policy = TurnPolicyConfig(
+        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
+    )
+    pipeline._turn_policy = policy
+    pipeline._turn_runtime = TurnPolicyRuntime(policy)
+    timeline = TurnTimeline("statement-fragment-confident")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    # EOT is confident the turn is complete -> trust it, don't defer.
+    pipeline._get_eot_model.return_value.current_eot_score = 1.0
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
+    pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
+    result = VoiceprintTurnResult(
+        signal=SpeakerSignal(
+            provider="3d_speaker",
+            model="campplus_zh_16k_common",
+            known=True,
+            score=0.66,
+            audio_ms=1600,
+            latency_ms=10.0,
+            profile_id="vp_manson_default",
+        ),
+        cached=False,
+        commit_allowed=True,
+        commit_reason="owner_high_confidence",
+    )
+    voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
+    pipeline._completed_turn_voiceprint_task = voiceprint_task
+    pipeline._candidate_voiceprint_tasks = [voiceprint_task]
+    pipeline._completed_turn_voiceprint_timeline = timeline
+
+    allowed = await pipeline._voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="私立医院的。")
+    )
+
+    # Not deferred -> framework proceeds to reply (allowed True), no waiting_merge.
+    assert allowed is True
+    assert pipeline._user_turns.active is None or (
+        pipeline._user_turns.active.state != "waiting_merge"
     )
 
 
@@ -736,6 +790,8 @@ async def test_deferred_framework_completed_commits_after_grace() -> None:
     timeline = TurnTimeline("statement-fragment-grace")
     pipeline._timeline = timeline
     pipeline._ensure_runtime_defaults()
+    # EOT unsure (low score) -> short-statement hedge applies -> defers.
+    pipeline._get_eot_model.return_value.current_eot_score = 0.01
     pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
     pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)

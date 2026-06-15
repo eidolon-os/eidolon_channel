@@ -20,14 +20,15 @@ from eidolon.livekit.agent.runtime.token_signer import (
 
 def test_sign_token_payload_matches_verifier_schema():
     """Pin the exact fields agent's PairingTokenVerifier expects."""
+    secret = "test-secret-with-enough-entropy-32b"
     token, exp = sign_device_token(
-        secret="test-secret-32",
+        secret=secret,
         device_id="dev-1",
         tenant_id="default",
         user_id="manson",
         template_id="caretaker",
     )
-    payload = jwt.decode(token, "test-secret-32", algorithms=["HS256"])
+    payload = jwt.decode(token, secret, algorithms=["HS256"])
     assert payload["device_id"] == "dev-1"
     assert payload["tenant_id"] == "default"
     assert payload["user_id"] == "manson"
@@ -54,14 +55,15 @@ def test_sign_token_rejects_empty_secret():
 def test_sign_token_null_template_id_round_trips():
     """ResolvedContext.template_id is None when admin has no preference;
     must propagate as JSON null, not the string 'None'."""
+    secret = "test-secret-with-enough-entropy-32b"
     token, _exp = sign_device_token(
-        secret="s",
+        secret=secret,
         device_id="d",
         tenant_id="t",
         user_id="u",
         template_id=None,
     )
-    payload = jwt.decode(token, "s", algorithms=["HS256"])
+    payload = jwt.decode(token, secret, algorithms=["HS256"])
     assert payload["template_id"] is None
 
 

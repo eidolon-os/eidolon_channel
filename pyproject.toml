@@ -28,6 +28,7 @@ dependencies = [
     "websockets>=12.0",
     "python-socks>=2.4",
     "python-dotenv>=1.0",
+    "eidolon-sdk[runtime]",
     "modelscope>=1.37.1",
     "addict>=2.4",
     "datasets>=4.0",
@@ -83,3 +84,6 @@ find-links = ["https://modelscope.oss-cn-beijing.aliyuncs.com/releases/repo.html
 required-environments = [
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+
+[tool.uv.sources]
+eidolon-sdk = { path = "../eidolon_sdk", editable = true }

@@ -1,73 +1,22 @@
-"""Sign device JWTs that ``eidolon_agent``'s ``PairingTokenVerifier``
-will accept.
-
-Phase 32.B: this is THE same payload schema agent's own ``sign_device_token``
-emits, kept in this repo because channel doesn't want a hard import
-dependency on ``eidolon_agent`` (separate venv, separate deploy unit).
-The two sign functions trust each other via a shared HMAC secret —
-``PAIRING_JWT_SECRET`` env var, falling back to
-``~/eidolon/run/jwt-secret`` (the file agent persists when its own env
-is empty).
-
-If you change the payload here, also change it in
-``eidolon_agent/app/transport/pairing/token.py`` — and bump tests on
-both sides.
-
-**Drift sentinel** (Phase 33.A1): the cross-project contract is pinned
-by ``eidolon_admin/server/tests/test_runtime_token_contract.py``. That
-test loads THIS file and agent's verifier, signs+verifies, and asserts
-every field round-trips. If you break it, CI fails before the runtime
-breaks.
-"""
+"""Channel compatibility wrapper for SDK runtime device token signing."""
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
-import jwt
+from eidolon_sdk.runtime import (
+    resolve_shared_secret as _sdk_resolve_shared_secret,
+    sign_device_token as _sdk_sign_device_token,
+)
 
 
 _SHARED_SECRET_FILE = Path("~/eidolon/run/jwt-secret").expanduser()
 
 
 def resolve_shared_secret(env_value: str = "") -> str:
-    """Resolve the HMAC secret from (in order): explicit env_value
-    argument, ``~/eidolon/run/jwt-secret`` file, empty string.
-
-    Returning an empty string is intentional — callers (factory) decide
-    whether to hard-fail. After Phase 32.D there's no legacy fallback.
-
-    **Hot-reload semantics** (Phase 33.B2): this function reads the
-    file on every call. ``factory._build_device_token_source`` invokes
-    it once per LK job (= once per voice session). The result is then
-    captured in the resolver closure for that session's lifetime.
-
-    Implication:
-      * Rotating the secret file → next session uses new secret ✓
-      * Active session in progress at rotate-time → keeps using old
-        secret until session ends (LK reconnect / hang up). Active
-        token retains validity until ``exp``, which is fine because
-        agent's verifier also uses the SAME secret in-memory until
-        agent restart. Mismatch only matters across the agent↔channel
-        seam; while the file is consistent, both sides read it
-        identically.
-
-    To force ALL sessions onto a new secret immediately: rotate the
-    file, then restart agent + channel together (or use a token
-    revocation pass — Phase 33.B1).
-    """
-    val = env_value.strip()
-    if val:
-        return val
-    if _SHARED_SECRET_FILE.is_file():
-        try:
-            return _SHARED_SECRET_FILE.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-    return ""
+    return _sdk_resolve_shared_secret(env_value, secret_file=_SHARED_SECRET_FILE)
 
 
 def sign_device_token(
@@ -81,26 +30,13 @@ def sign_device_token(
     scopes: Sequence[str] = ("device",),
     ttl_seconds: int = 24 * 3600,
 ) -> tuple[str, datetime]:
-    """Return ``(token, exp_datetime)``.
-
-    Payload mirrors agent-side ``sign_device_token`` exactly. ``ttl``
-    default is 1 day — channel re-mints on each LK session start, so a
-    short window keeps blast radius bounded if the secret leaks.
-    """
-    if not secret:
-        raise ValueError("sign_device_token: secret is required (empty)")
-
-    now = datetime.now(timezone.utc)
-    exp = now + timedelta(seconds=ttl_seconds)
-    payload = {
-        "device_id": device_id,
-        "tenant_id": tenant_id,
-        "user_id": user_id,
-        "template_id": template_id,
-        "scopes": list(scopes),
-        "jti": uuid.uuid4().hex,
-        "exp": int(exp.timestamp()),
-        "iat": int(now.timestamp()),
-    }
-    token = jwt.encode(payload, secret, algorithm=algorithm)
-    return token, exp
+    return _sdk_sign_device_token(
+        secret=secret,
+        algorithm=algorithm,
+        device_id=device_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        template_id=template_id,
+        scopes=scopes,
+        ttl_seconds=ttl_seconds,
+    )

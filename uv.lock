@@ -497,6 +497,7 @@ dependencies = [
     { name = "addict" },
     { name = "aiohttp" },
     { name = "datasets" },
+    { name = "eidolon-sdk", extra = ["runtime"] },
     { name = "grpcio" },
     { name = "livekit-agents" },
     { name = "livekit-api" },
@@ -531,6 +532,7 @@ requires-dist = [
     { name = "addict", specifier = ">=2.4" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "datasets", specifier = ">=4.0" },
+    { name = "eidolon-sdk", extras = ["runtime"], editable = "../eidolon_sdk" },
     { name = "grpcio", specifier = ">=1.68" },
     { name = "grpcio-tools", marker = "extra == 'dev'", specifier = ">=1.68" },
     { name = "livekit-agents", specifier = ">=1.5" },
@@ -556,6 +558,32 @@ requires-dist = [
     { name = "websockets", specifier = ">=12.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "eidolon-sdk"
+version = "0.1.0"
+source = { editable = "../eidolon_sdk" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+runtime = [
+    { name = "pyjwt" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", marker = "extra == 'db'", specifier = ">=0.20" },
+    { name = "hatchling", marker = "extra == 'dev'", specifier = ">=1.25" },
+    { name = "pydantic", specifier = ">=2.8" },
+    { name = "pyjwt", marker = "extra == 'runtime'", specifier = ">=2.8" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'db'", specifier = ">=2.0" },
+]
+provides-extras = ["db", "runtime", "dev"]
 
 [[package]]
 name = "eval-type-backport"

@@ -107,10 +107,8 @@ def _build_device_token_source(
     # close it lazily; one channel-worker handles one job at a time
     # so leaks are bounded.
     import httpx
-    from eidolon.livekit.agent.runtime import (
-        AdminResolveClient,
-        make_device_token_resolver,
-    )
+    from eidolon_sdk.admin import AdminResolveClient
+    from eidolon.livekit.agent.runtime import make_device_token_resolver
 
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(10.0, connect=3.0),

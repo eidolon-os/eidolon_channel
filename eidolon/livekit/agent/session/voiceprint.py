@@ -9,8 +9,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from eidolon_sdk.admin import AdminResolveClient, ResolvedContext
+
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.runtime import AdminResolveClient, ResolvedContext
 from eidolon.livekit.agent.runtime.resolver import (
     DeviceTokenResolverError,
     _participant_identity_and_metadata,

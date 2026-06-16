@@ -6,12 +6,12 @@ BEFORE STT produces a transcript, and cancels the agent's TTS. This is separate
 from the transcript/attention-admission path (which Step 1's attention.enforce
 fix covers).
 
-These tests guard the gate logic of that fast path. Note a known gap they
-document: the fast path does NOT inspect transcript content, so it cannot apply
-a backchannel guard at signal time (a loud "嗯" that trips the device energy gate
-would cancel here). Whether that over-cancels in practice is a lifecycle/timing
-question best confirmed on the real device; the policy/transcript path already
-holds backchannels via the classifier.
+These tests guard the gate logic of that fast path. P1 (2026-06-16): the energy-
+gate `manual_interrupt` is unreliable (residual playback echo trips it on-device),
+so it no longer hard-cuts at signal time — it ducks (reversible) and arms the
+existing suspend timeout, letting the transcript/SemanticInterrupt path confirm
+(real speech → cancel, echo/backchannel → resume). `ptt` (a deliberate button)
+still hard-cuts immediately.
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ def _pipeline(
     # production logs); the gate logic after it is.
     p._latest_client_audio_state = MagicMock(return_value=state)
     p._duck_cancel_and_interrupt = MagicMock()
+    p._duck_and_arm_timeout = MagicMock()
     return p
 
 
@@ -69,17 +70,32 @@ def _state(**kwargs) -> ClientAudioState:
     return ClientAudioState(**base)
 
 
-def test_manual_interrupt_while_speaking_cancels() -> None:
+def test_manual_interrupt_while_speaking_ducks_not_cancels() -> None:
+    # P1: device manual_interrupt is an UNRELIABLE energy-gate signal (residual
+    # echo can trip it). It must NOT hard-cut. Instead it ducks (reversible) and
+    # arms the existing suspend-timeout so the evidence/semantic path confirms:
+    # real speech escalates to cancel, echo/no-content resumes on timeout.
     p = _pipeline(state=_state(manual_interrupt=True))
     p._handle_explicit_client_interrupt(_packet())
+    p._duck_and_arm_timeout.assert_called_once()
+    p._duck_cancel_and_interrupt.assert_not_called()
+
+
+def test_ptt_while_speaking_cancels() -> None:
+    # PTT is a deliberate button press, not an energy guess — keep the immediate
+    # hard cut.
+    p = _pipeline(state=_state(ptt=True))
+    p._handle_explicit_client_interrupt(_packet())
     p._duck_cancel_and_interrupt.assert_called_once()
+    p._duck_and_arm_timeout.assert_not_called()
 
 
-def test_no_signal_does_not_cancel() -> None:
-    # Plain audio_state (no manual_interrupt / ptt) must not hard-cancel.
+def test_no_signal_does_not_duck_or_cancel() -> None:
+    # Plain audio_state (no manual_interrupt / ptt) must do nothing.
     p = _pipeline(state=_state())
     p._handle_explicit_client_interrupt(_packet())
     p._duck_cancel_and_interrupt.assert_not_called()
+    p._duck_and_arm_timeout.assert_not_called()
 
 
 def test_wrong_topic_ignored() -> None:
@@ -90,21 +106,23 @@ def test_wrong_topic_ignored() -> None:
     )
     p._handle_explicit_client_interrupt(pkt)
     p._duck_cancel_and_interrupt.assert_not_called()
+    p._duck_and_arm_timeout.assert_not_called()
 
 
-def test_no_cancel_when_output_already_cancelled() -> None:
+def test_no_action_when_output_already_cancelled() -> None:
     # Idempotent: if the agent output is already CANCELLED, the fast path bails.
     p = _pipeline(state=_state(manual_interrupt=True), output_cancelled=True)
     p._handle_explicit_client_interrupt(_packet())
     p._duck_cancel_and_interrupt.assert_not_called()
+    p._duck_and_arm_timeout.assert_not_called()
 
 
-def test_fast_path_ignores_transcript_no_backchannel_guard() -> None:
-    # Documents the known gap: the fast path fires on the signal alone and does
-    # not see the transcript, so even a backchannel-intent utterance cancels here
-    # when manual_interrupt is set. The backchannel guard lives on the
-    # transcript/classifier path; closing this at signal time would need a
-    # duck-then-confirm design (tracked for the device e2e step).
+def test_manual_interrupt_backchannel_gap_closed() -> None:
+    # Previously the fast path hard-cut on the signal alone (a loud "嗯" or echo
+    # would cancel). Now manual_interrupt only ducks; the existing transcript/
+    # semantic + suspend-timeout machinery resumes when there's no real speech,
+    # so echo/backchannels no longer truncate the agent at signal time.
     p = _pipeline(state=_state(manual_interrupt=True))
     p._handle_explicit_client_interrupt(_packet())
-    p._duck_cancel_and_interrupt.assert_called_once()
+    p._duck_cancel_and_interrupt.assert_not_called()
+    p._duck_and_arm_timeout.assert_called_once()

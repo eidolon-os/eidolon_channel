@@ -1670,7 +1670,18 @@ class StreamingPipeline(BasePipeline):
                 "explicit_client_interrupt",
                 state.as_timeline_attr(),
             )
-        self._duck_cancel_and_interrupt()
+        if state.ptt:
+            # PTT is a deliberate button press — trust it and hard-cut immediately.
+            self._duck_cancel_and_interrupt()
+            return
+        # manual_interrupt is the device's energy-gate barge-in guess, which
+        # residual playback echo can falsely trip (measured on-device: echo with
+        # no real near-end still raises it). So DON'T hard-cut at signal time.
+        # Duck (reversible, fast feedback) and arm the existing suspend timeout;
+        # the transcript/SemanticInterrupt path then confirms — real speech
+        # escalates to _duck_cancel_and_interrupt(), echo/no-content resumes on
+        # timeout (_duck_unduck). Reuses the VAD-path duck-then-confirm machinery.
+        self._duck_and_arm_timeout()
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""

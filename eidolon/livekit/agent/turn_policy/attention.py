@@ -88,13 +88,18 @@ class AttentionAdmission:
                 transcript_preview=preview,
                 client_state_used=True,
             )
-        if client.manual_interrupt or client.ptt:
+        if client.ptt:
+            # PTT is a deliberate button press — trust it and hard-cut.
             return AttentionDecision(
                 AdmissionAction.HARD_INTERRUPT,
-                "explicit_client_interrupt",
+                "explicit_client_ptt",
                 transcript_preview=preview,
                 client_state_used=True,
             )
+        # manual_interrupt is the device energy-gate barge-in guess, which residual
+        # playback echo can falsely trip. Do NOT hard-cut on the signal alone; fall
+        # through to the transcript-evidence gate so only real near-end content cuts
+        # (mirrors the fast-path duck-then-confirm in _handle_explicit_client_interrupt).
 
         if (
             self._config.require_direct_signal_during_playback

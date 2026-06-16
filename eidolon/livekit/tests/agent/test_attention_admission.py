@@ -135,7 +135,25 @@ def test_attention_observes_single_char_prefix_during_playback() -> None:
     assert decision.reason == "client_playback_active_without_direct_signal"
 
 
-def test_attention_explicit_client_interrupt_is_hard() -> None:
+def test_attention_ptt_is_hard_interrupt() -> None:
+    # PTT (deliberate button) stays an immediate hard cut.
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(ptt=True),
+        )
+    )
+
+    assert decision.action is AdmissionAction.HARD_INTERRUPT
+    assert decision.reason == "explicit_client_ptt"
+
+
+def test_attention_manual_interrupt_without_evidence_does_not_hard_cut() -> None:
+    # P1: manual_interrupt is an unreliable energy-gate signal (echo trips it).
+    # With no transcript evidence it must NOT hard-cut — it falls through to the
+    # evidence-gated path (observe / duck-and-decide), so echo can't truncate.
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -145,8 +163,7 @@ def test_attention_explicit_client_interrupt_is_hard() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.HARD_INTERRUPT
-    assert decision.reason == "explicit_client_interrupt"
+    assert decision.action is not AdmissionAction.HARD_INTERRUPT
 
 
 def _turn_policy(*, enforce: bool) -> TurnPolicyConfig:

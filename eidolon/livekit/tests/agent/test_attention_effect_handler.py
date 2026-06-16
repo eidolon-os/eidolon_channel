@@ -153,9 +153,11 @@ def test_single_char_prefix_observes_without_direct_intent_mark() -> None:
     assert "interrupt_intent_admitted_at" not in timeline.timestamps
 
 
-def test_speaking_started_hard_client_interrupt_marks_and_interrupts() -> None:
+def test_speaking_started_ptt_interrupt_marks_and_interrupts() -> None:
+    # PTT (deliberate button) is the hard-cut signal. manual_interrupt no longer
+    # hard-cuts (P1: it ducks + evidence-gates), so drive the hard path via ptt.
     handler, timeline, on_duck, on_interrupt = _handler(
-        client_state=_client_state(manual_interrupt=True),
+        client_state=_client_state(ptt=True),
     )
 
     handler.handle_speaking_started()

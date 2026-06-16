@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import logging
 import os
-import struct
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -44,6 +44,16 @@ if _env_path.exists():
 # Fixtures — build real components from .env
 # ---------------------------------------------------------------------------
 
+
+def _fake_livekit_room() -> SimpleNamespace:
+    """Return the minimal Room shape required by runtime-token resolution."""
+    participant = SimpleNamespace(identity="integration-user", metadata='{"kind": "user"}')
+    return SimpleNamespace(
+        name="integration-room",
+        remote_participants={participant.identity: participant},
+    )
+
+
 @pytest.fixture(scope="module")
 def shared_stage_factory():
     """Build SharedStageFactory with real components from .env config.
@@ -62,7 +72,12 @@ def shared_stage_factory():
     )
 
     try:
-        factory = SharedStageFactory.from_config(cfg)
+        livekit_room = (
+            _fake_livekit_room()
+            if cfg.providers.brain_provider == "eidolon_agent"
+            else None
+        )
+        factory = SharedStageFactory.from_config(cfg, livekit_room=livekit_room)
     except Exception as e:
         pytest.fail(f"Failed to build SharedStageFactory: {e}")
 
@@ -108,10 +123,21 @@ class TestSharedStageFactoryInit:
         logger.info("[PASS] factory has stt, llm, tts")
 
     def test_stt_is_bailian_instance(self, shared_stage_factory):
-        from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT
+        from eidolon.livekit.common.config import load_agent_config
 
-        assert isinstance(shared_stage_factory.stt.stt, BailianFunASRSTT)
-        logger.info("[PASS] STT is BailianFunASRSTT")
+        cfg = load_agent_config()
+        provider = cfg.providers.stt_provider
+        if provider == "bailian":
+            from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT
+
+            assert isinstance(shared_stage_factory.stt.stt, BailianFunASRSTT)
+        elif provider == "sensetime":
+            from eidolon.livekit.plugins.stt.sensetime import SenseTimeSTT
+
+            assert isinstance(shared_stage_factory.stt.stt, SenseTimeSTT)
+        else:
+            pytest.fail(f"unexpected STT provider in integration config: {provider!r}")
+        logger.info("[PASS] STT matches configured provider=%s", provider)
 
     def test_llm_is_livekit_llm_instance(self, shared_stage_factory):
         from livekit.agents import llm as lk_llm
@@ -120,10 +146,21 @@ class TestSharedStageFactoryInit:
         logger.info("[PASS] LLM is livekit LLM")
 
     def test_tts_is_sensetime_instance(self, shared_stage_factory):
-        from eidolon.livekit.plugins.tts.sensetime import SenseTimeTTS
+        from eidolon.livekit.common.config import load_agent_config
 
-        assert isinstance(shared_stage_factory.tts.tts, SenseTimeTTS)
-        logger.info("[PASS] TTS is SenseTimeTTS")
+        cfg = load_agent_config()
+        provider = cfg.providers.tts_provider
+        if provider == "sensetime":
+            from eidolon.livekit.plugins.tts.sensetime import SenseTimeTTS
+
+            assert isinstance(shared_stage_factory.tts.tts, SenseTimeTTS)
+        elif provider == "bailian":
+            from eidolon.livekit.plugins.tts.bailian import BailianTTS
+
+            assert isinstance(shared_stage_factory.tts.tts, BailianTTS)
+        else:
+            pytest.fail(f"unexpected TTS provider in integration config: {provider!r}")
+        logger.info("[PASS] TTS matches configured provider=%s", provider)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +244,7 @@ class TestBatchPipelineIntegration:
                 on_agent_response_done=lambda: logger.info("[callback] agent_response_done"),
             ),
         )
+        assert pipeline is not None
 
         # Step 1: STT with synthetic audio (empty transcript expected)
         audio_blob = _make_sine_wave_blob(duration_ms=500)
@@ -295,7 +333,7 @@ class TestStreamingPipelineIntegration:
     async def test_eot_model_predict_end_of_turn(self, shared_stage_factory):
         """EOT model should return a score for Chinese text."""
         from eidolon.livekit.agent import StreamingPipeline
-        from livekit.agents.llm import ChatContext, ChatMessage
+        from livekit.agents.llm import ChatContext
 
         pipeline = StreamingPipeline(shared_stage_factory, instructions="Test")
         eot_model = pipeline._get_eot_model()

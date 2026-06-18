@@ -2177,6 +2177,21 @@ class StreamingPipeline(BasePipeline):
             return
         if self._client_audio_state_suppresses_transcript(event):
             return
+        # Content-based echo gate: while the agent is speaking, the device's
+        # cleaned mic still leaks residual-echo spikes that STT transcribes as the
+        # agent's OWN words (energy can't filter them — they exceed real speech).
+        # Drop a transcript that is contained in what the agent is currently
+        # saying so it never starts a user turn (which would churn the timeline
+        # and drop the real reply).
+        if self._agent_output_active_for_interrupts(
+            participant_identity=getattr(event, "speaker_id", None),
+        ) and self._transcript_is_agent_echo(getattr(event, "transcript", "")):
+            logger.info(
+                "[StreamingPipeline] dropping agent-echo transcript during playback "
+                "transcript=%r",
+                getattr(event, "transcript", "")[:80],
+            )
+            return
         if event.transcript:
             # Real recognized speech (interim or final) — keeps the session
             # alive. Empty/noise transcripts deliberately don't, so a silent
@@ -2234,6 +2249,46 @@ class StreamingPipeline(BasePipeline):
             self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
+
+    @staticmethod
+    def _normalize_for_echo(text: str) -> str:
+        # Keep CJK + alphanumerics (CJK is .isalnum()==True), drop punctuation /
+        # spaces, lowercase — so echo matching ignores ASR punctuation noise.
+        return "".join(c for c in text if c.isalnum()).lower()
+
+    def _agent_recent_spoken_text(self) -> str:
+        """The text the agent is currently synthesizing (in-flight TTS).
+
+        Source of truth for content-based echo detection. Empty when the agent
+        isn't speaking, so the echo gate is naturally scoped to playback.
+        """
+        factory = getattr(self, "_factory", None)
+        try:
+            if factory is not None and getattr(factory, "tts", None) is not None:
+                return getattr(factory.tts.tts, "current_pushed_text", "") or ""
+        except Exception:
+            logger.debug(
+                "[StreamingPipeline] could not read TTS current_pushed_text",
+                exc_info=True,
+            )
+        return ""
+
+    def _transcript_is_agent_echo(self, transcript: str) -> bool:
+        """True when `transcript` is the agent's own current speech echoed back.
+
+        Content-based, NOT energy-based: on this board the cleaned-mic residual
+        echo spikes (RMS p99 ~1166) exceed real near-end speech (p50 ~67), so no
+        energy threshold can separate them. But the echo IS the agent's words,
+        which we know from the in-flight TTS text — so drop a (normalized)
+        transcript that is contained in it. Caller gates on agent playback.
+        """
+        t = self._normalize_for_echo(transcript)
+        if not t:
+            return False
+        agent = self._normalize_for_echo(self._agent_recent_spoken_text())
+        if not agent:
+            return False
+        return t in agent
 
     def _client_audio_state_suppresses_transcript(self, event: Any) -> bool:
         transcript = getattr(event, "transcript", "")

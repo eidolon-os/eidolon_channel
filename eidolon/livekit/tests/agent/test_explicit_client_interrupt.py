@@ -101,3 +101,43 @@ def test_no_action_when_output_already_cancelled() -> None:
     p = _pipeline(state=_state(ptt=True), output_cancelled=True)
     p._handle_explicit_client_interrupt(_packet())
     p._duck_cancel_and_interrupt.assert_not_called()
+
+
+class _FakeRoom:
+    def __init__(self) -> None:
+        self._handlers: dict[str, list] = {}
+
+    def on(self, event: str):
+        def _register(fn):
+            self._handlers.setdefault(event, []).append(fn)
+            return fn
+
+        return _register
+
+    def emit(self, event: str, packet) -> None:
+        for fn in self._handlers.get(event, []):
+            fn(packet)
+
+
+def test_room_data_registration_drives_explicit_interrupt() -> None:
+    # Regression for the wiring (not the logic): a client.audio_state packet
+    # arriving on the registered ``data_received`` callback must reach
+    # ``_handle_explicit_client_interrupt``. It used to be dead code — only
+    # ``_on_room_data_received`` called it and that was never registered — so the
+    # logic above was correct but never ran, and half-duplex PTT barge-in never
+    # fired.
+    from eidolon.livekit.agent.session import RoomDataHandler
+
+    p = StreamingPipeline.__new__(StreamingPipeline)
+    p._ensure_room_data_handler = MagicMock()
+    p._room_data = RoomDataHandler(get_timeline=lambda: None)
+    p._sync_room_data_compat_attrs = MagicMock()
+    p._handle_explicit_client_interrupt = MagicMock()
+
+    room = _FakeRoom()
+    p._install_room_data_observer(room)
+
+    pkt = _packet()
+    room.emit("data_received", pkt)
+
+    p._handle_explicit_client_interrupt.assert_called_once_with(pkt)

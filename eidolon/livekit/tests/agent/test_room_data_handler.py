@@ -114,3 +114,62 @@ def test_room_data_handler_falls_back_to_newest_fresh_state() -> None:
     )
 
     assert state is handler.client_audio_states["bob"]
+
+
+class _FakeRoom:
+    """Minimal stand-in for a LiveKit Room that records on(...) handlers."""
+
+    def __init__(self) -> None:
+        self._handlers: dict[str, list] = {}
+
+    def on(self, event: str):
+        def _register(fn):
+            self._handlers.setdefault(event, []).append(fn)
+            return fn
+
+        return _register
+
+    def emit(self, event: str, packet) -> None:
+        for fn in self._handlers.get(event, []):
+            fn(packet)
+
+
+def test_install_invokes_on_packet_after_handle() -> None:
+    # Regression: the explicit-interrupt fast path is wired through this on_packet
+    # hook. It must run on every data_received packet, AFTER handle_packet has
+    # stored the latest state (so the interrupt handler sees it).
+    handler = RoomDataHandler(get_timeline=lambda: None)
+    room = _FakeRoom()
+    seen: list = []
+
+    handler.install(
+        room,
+        on_packet=lambda pkt: seen.append("alice" in handler.client_audio_states),
+    )
+    room.emit("data_received", _packet(identity="alice"))
+
+    assert "alice" in handler.client_audio_states  # handle_packet ran
+    assert seen == [True]  # on_packet ran once, after the state was stored
+
+
+def test_install_without_on_packet_still_handles() -> None:
+    handler = RoomDataHandler(get_timeline=lambda: None)
+    room = _FakeRoom()
+
+    handler.install(room)
+    room.emit("data_received", _packet(identity="bob"))
+
+    assert "bob" in handler.client_audio_states
+
+
+def test_install_on_packet_exception_does_not_break_handling() -> None:
+    handler = RoomDataHandler(get_timeline=lambda: None)
+    room = _FakeRoom()
+
+    def _boom(_pkt) -> None:
+        raise RuntimeError("observer blew up")
+
+    handler.install(room, on_packet=_boom)
+    room.emit("data_received", _packet(identity="carol"))  # must not raise
+
+    assert "carol" in handler.client_audio_states

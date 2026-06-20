@@ -35,7 +35,12 @@ class RoomDataHandler:
         self.room_data_packet_count = 0
         self.client_audio_state_packet_count = 0
 
-    def install(self, room: Any) -> None:
+    def install(
+        self,
+        room: Any,
+        *,
+        on_packet: Callable[[Any], None] | None = None,
+    ) -> None:
         logger.info(
             "[RoomDataHandler] installed for topic=%s",
             CLIENT_AUDIO_STATE_TOPIC,
@@ -44,6 +49,14 @@ class RoomDataHandler:
         @room.on("data_received")
         def _on_data_received(packet: Any) -> None:
             self.handle_packet(packet)
+            # Post-handle observer (e.g. the explicit-interrupt fast path). Runs
+            # after the latest client audio state is stored. Never let it break
+            # packet handling.
+            if on_packet is not None:
+                try:
+                    on_packet(packet)
+                except Exception:  # noqa: BLE001 - defensive: observer must not crash the room callback
+                    logger.exception("[RoomDataHandler] on_packet observer failed")
 
     def handle_packet(self, packet: Any) -> None:
         topic = getattr(packet, "topic", None)

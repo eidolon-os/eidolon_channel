@@ -63,11 +63,14 @@ from eidolon.livekit.common.config import (
 from . import _framework_patches
 from .client_audio_state import (
     CLIENT_AUDIO_STATE_TOPIC,
-    INPUT_MODE_PTT,
     PLAYBACK_STATE_AGENT_SPEAKING,
     ClientAudioState,
 )
 from .context import InterruptedContextManager
+from .runtime.interaction_mode import (
+    INTERACTION_MODE_FULL_DUPLEX,
+    INTERACTION_MODE_HALF_DUPLEX,
+)
 from .turn_policy import (
     Decision,
     TurnPolicyRuntime,
@@ -100,7 +103,6 @@ logger = logging.getLogger("agent")
 _INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC = 2.0
 _LOW_EOT_COMMIT_GRACE_MAX_SEC = 2.0
 _SHORT_STATEMENT_DEFER_MAX_CJK_CHARS = 12
-_CLIENT_AUDIO_ECHO_TAIL_SUPPRESS_SEC = 1.5
 _COMPANION_UI_STATE_TOPIC = "eidolon.ui_state"
 _CLIENT_CONTROL_TOPIC = "eidolon.control"
 
@@ -143,21 +145,6 @@ def _message_text(message: Any) -> str:
     return str(content or "")
 
 
-def _normalize_transcript_for_echo_match(text: str) -> str:
-    return "".join(ch.lower() for ch in text if ch.isalnum())
-
-
-def _looks_like_same_echo_transcript(left: str, right: str) -> bool:
-    left_norm = _normalize_transcript_for_echo_match(left)
-    right_norm = _normalize_transcript_for_echo_match(right)
-    if not left_norm or not right_norm:
-        return False
-    shorter = min(len(left_norm), len(right_norm))
-    if shorter < 3:
-        return left_norm == right_norm
-    return left_norm.startswith(right_norm) or right_norm.startswith(left_norm)
-
-
 class StreamingPipeline(BasePipeline):
     """
     STREAMING mode: real-time audio via LiveKit Room.
@@ -190,8 +177,18 @@ class StreamingPipeline(BasePipeline):
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
+        interaction_mode: str = INTERACTION_MODE_FULL_DUPLEX,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
+        # Session-level interaction mode (plan Phase 5), authoritative from the
+        # LiveKit token metadata that hub stamps. half_duplex = push-to-talk
+        # appliance (mic device-gated; explicit tap-to-stop; no barge-in / no
+        # server-side echo suppression); full_duplex = open mic + hardware AEC
+        # (server-judged barge-in + content echo gate). Defaults to full_duplex
+        # so a directly-constructed pipeline keeps the open-mic behaviour; the
+        # worker (server.py) always passes the resolved mode.
+        self._interaction_mode = interaction_mode
+        self._is_half_duplex = interaction_mode == INTERACTION_MODE_HALF_DUPLEX
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
@@ -216,9 +213,6 @@ class StreamingPipeline(BasePipeline):
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._deferred_low_eot_commit_task: asyncio.Task | None = None
         self._suppress_transcripts_until_next_speech = False
-        self._client_audio_echo_tail_until = 0.0
-        self._client_audio_echo_tail_text = ""
-        self._client_audio_echo_tail_identity = ""
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
         self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
@@ -301,7 +295,7 @@ class StreamingPipeline(BasePipeline):
             session_closed_event=self._session_closed_event,
             on_idle_disconnect=self._on_idle_disconnect,
             disconnect_grace_sec=self._idle_disconnect_grace_sec,
-            is_ptt=self._active_input_mode_is_ptt,
+            is_half_duplex=lambda: self._is_half_duplex,
         )
 
         # EOT semantic interruption check state
@@ -550,8 +544,9 @@ class StreamingPipeline(BasePipeline):
         self._ensure_runtime_defaults()
         if not transcript.strip():
             return False
-        # Push-to-talk: release is an explicit end-of-turn — never defer.
-        if self._active_input_mode_is_ptt():
+        # Half-duplex (push-to-talk): button release is an explicit, final
+        # end-of-turn — never defer for a continuation that won't come.
+        if self._is_half_duplex:
             return False
         score = float(
             getattr(
@@ -853,11 +848,6 @@ class StreamingPipeline(BasePipeline):
                 reason,
             )
 
-    def _reject_and_clear_user_turn(self, reason: str) -> None:
-        self._ensure_user_turn_coordinator()
-        self._user_turns.reject_active(reason)
-        self._clear_session_user_turn(reason)
-
     async def _voiceprint_allows_completed_turn(self, *, new_message: Any) -> bool:
         """Gate LiveKit's final turn-completed hook with voiceprint ownership.
 
@@ -881,37 +871,6 @@ class StreamingPipeline(BasePipeline):
                     "text_length": len(completed_transcript),
                 },
             )
-        if self._client_audio_state_suppresses_completed_turn(
-            completed_transcript,
-            timeline=timeline,
-        ):
-            return False
-        if self._client_audio_state_suppresses_echo_tail(
-            completed_transcript,
-            speaker_id=None,
-            source="framework_completed_turn",
-        ):
-            self._ensure_user_turn_coordinator()
-            self._user_turns.reject_active("client_audio_echo_tail")
-            self._clear_session_user_turn("client_audio_echo_tail")
-            if timeline is not None:
-                timeline.set_attr(
-                    "framework_completed_turn_dropped",
-                    {
-                        "reason": "client_audio_echo_tail",
-                        "text_preview": completed_transcript[:120],
-                    },
-                )
-                self._append_turn_timeline_snapshot(
-                    timeline,
-                    "framework_completed_turn_dropped",
-                )
-            logger.info(
-                "[StreamingPipeline] stopped framework completed turn "
-                "from playback echo tail transcript=%r",
-                completed_transcript[:80],
-            )
-            return False
         if task is None and result is None:
             if self._should_defer_framework_completed_turn(completed_transcript):
                 self._defer_framework_completed_turn(
@@ -1025,9 +984,9 @@ class StreamingPipeline(BasePipeline):
 
     def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
         self._ensure_user_turn_coordinator()
-        # Push-to-talk: release is an explicit end-of-turn — never hold it for
-        # possible continuation.
-        if self._active_input_mode_is_ptt():
+        # Half-duplex (push-to-talk): button release is an explicit, final
+        # end-of-turn — never hold it for a possible continuation.
+        if self._is_half_duplex:
             return False
         candidate = self._user_turns.active
         if candidate is None:
@@ -1419,20 +1378,14 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_deferred_low_eot_commit_task"):
             self._deferred_low_eot_commit_task = None
         self._ensure_user_turn_coordinator()
+        if not hasattr(self, "_interaction_mode"):
+            self._interaction_mode = INTERACTION_MODE_FULL_DUPLEX
+        if not hasattr(self, "_is_half_duplex"):
+            self._is_half_duplex = (
+                self._interaction_mode == INTERACTION_MODE_HALF_DUPLEX
+            )
         if not hasattr(self, "_suppress_transcripts_until_next_speech"):
             self._suppress_transcripts_until_next_speech = False
-        if not hasattr(self, "_suppress_mic_muted_user_state_until_listening"):
-            self._suppress_mic_muted_user_state_until_listening = False
-        if not hasattr(self, "_client_audio_echo_tail_until"):
-            self._client_audio_echo_tail_until = 0.0
-        if not hasattr(self, "_client_audio_echo_tail_text"):
-            self._client_audio_echo_tail_text = ""
-        if not hasattr(self, "_client_audio_echo_tail_identity"):
-            self._client_audio_echo_tail_identity = ""
-        if not hasattr(self, "_client_audio_mic_muted_turn_until"):
-            self._client_audio_mic_muted_turn_until = 0.0
-        if not hasattr(self, "_client_audio_mic_muted_turn_identity"):
-            self._client_audio_mic_muted_turn_identity = ""
         if not hasattr(self, "_completed_turn_voiceprint_task"):
             self._completed_turn_voiceprint_task = None
         if not hasattr(self, "_completed_turn_voiceprint_result"):
@@ -1659,7 +1612,11 @@ class StreamingPipeline(BasePipeline):
         participant = getattr(packet, "participant", None)
         identity = getattr(participant, "identity", "") or None
         state = self._latest_client_audio_state(participant_identity=identity)
-        if state is None or not (state.manual_interrupt or state.ptt):
+        # PTT (button press / tap-to-stop) is the only explicit client interrupt.
+        # The device's energy-gate ``manual_interrupt`` guess was removed (it
+        # falsely tripped on residual playback echo); barge-in for open-mic
+        # full_duplex is now judged server-side from the clean transcript stream.
+        if state is None or not state.ptt:
             return
         if not self._agent_output_active_for_interrupts(participant_identity=identity):
             return
@@ -1667,30 +1624,21 @@ class StreamingPipeline(BasePipeline):
         if self._ducking.is_cancelled:
             return
         logger.info(
-            "[StreamingPipeline] explicit client interrupt received "
-            "identity=%s playback=%s ptt=%s manual_interrupt=%s",
+            "[StreamingPipeline] explicit client PTT interrupt received "
+            "identity=%s playback=%s",
             state.participant_identity,
             state.playback_state,
-            state.ptt,
-            state.manual_interrupt,
         )
         if self._timeline is not None:
             self._timeline.set_attr(
                 "explicit_client_interrupt",
                 state.as_timeline_attr(),
             )
-        if state.ptt:
-            # PTT is a deliberate button press — trust it and hard-cut immediately.
-            self._duck_cancel_and_interrupt()
-            return
-        # manual_interrupt is the device's energy-gate barge-in guess, which
-        # residual playback echo can falsely trip (measured on-device: echo with
-        # no real near-end still raises it). So DON'T hard-cut at signal time.
-        # Duck (reversible, fast feedback) and arm the existing suspend timeout;
-        # the transcript/SemanticInterrupt path then confirms — real speech
-        # escalates to _duck_cancel_and_interrupt(), echo/no-content resumes on
-        # timeout (_duck_unduck). Reuses the VAD-path duck-then-confirm machinery.
-        self._duck_and_arm_timeout()
+        # A deliberate button press — hard-cut immediately. ``force=True`` so it
+        # works even in half_duplex, where the session runs with
+        # allow_interruptions=False (no VAD/audio auto-interrupt) but tap-to-stop
+        # must still cancel the agent's speech.
+        self._duck_cancel_and_interrupt(force=True)
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
@@ -2002,9 +1950,6 @@ class StreamingPipeline(BasePipeline):
             new = event.new_state
             logger.info("[StreamingPipeline] user_state: %s -> %s", old, new)
 
-            if self._client_audio_state_suppresses_user_state(event):
-                return
-
             if new == "speaking":
                 self._publish_companion_ui_state("listening", "user_state:speaking")
             elif old == "speaking" and new == "listening":
@@ -2184,17 +2129,21 @@ class StreamingPipeline(BasePipeline):
                 getattr(event, "is_final", None),
             )
             return
-        if self._client_audio_state_suppresses_transcript(event):
-            return
-        # Content-based echo gate: while the agent is speaking, the device's
-        # cleaned mic still leaks residual-echo spikes that STT transcribes as the
-        # agent's OWN words (energy can't filter them — they exceed real speech).
-        # Drop a transcript that is contained in what the agent is currently
-        # saying so it never starts a user turn (which would churn the timeline
-        # and drop the real reply).
-        if self._agent_output_active_for_interrupts(
-            participant_identity=getattr(event, "speaker_id", None),
-        ) and self._transcript_is_agent_echo(getattr(event, "transcript", "")):
+        # Content-based echo gate (full_duplex only): with an open mic during
+        # playback, the hardware-AEC-cleaned mic can still leak residual-echo
+        # spikes that STT transcribes as the agent's OWN words (energy can't
+        # filter them — they exceed real speech). Drop a transcript contained in
+        # what the agent is currently saying so it never starts a user turn
+        # (which would churn the timeline and drop the real reply). Skipped in
+        # half_duplex — the device gates the mic during playback, so there is no
+        # echo to suppress.
+        if (
+            not self._is_half_duplex
+            and self._agent_output_active_for_interrupts(
+                participant_identity=getattr(event, "speaker_id", None),
+            )
+            and self._transcript_is_agent_echo(getattr(event, "transcript", ""))
+        ):
             logger.info(
                 "[StreamingPipeline] dropping agent-echo transcript during playback "
                 "transcript=%r",
@@ -2299,244 +2248,6 @@ class StreamingPipeline(BasePipeline):
             return False
         return t in agent
 
-    def _client_audio_state_suppresses_transcript(self, event: Any) -> bool:
-        transcript = getattr(event, "transcript", "")
-        if not transcript:
-            return False
-        # Push-to-talk: the mic is open only while the button is held and closed
-        # otherwise, so client mic_muted means "released", never playback echo.
-        # The FINAL transcript of a held utterance lands just AFTER release (when
-        # mic_muted is already True), so the half-duplex echo-suppression would
-        # wrongly drop a legitimate turn. PTT guarantees no echo — don't suppress.
-        if self._active_input_mode_is_ptt():
-            return False
-        try:
-            state = self._latest_client_audio_state(
-                participant_identity=getattr(event, "speaker_id", None),
-            )
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to inspect client audio state"
-            )
-            return False
-        if state is None or not state.mic_muted:
-            return self._client_audio_state_suppresses_echo_tail(
-                transcript,
-                speaker_id=getattr(event, "speaker_id", None),
-                source="transcript",
-            )
-        if state.manual_interrupt or state.ptt:
-            return False
-        if not self._turn_policy.attention.ignore_when_mic_muted:
-            return False
-        self._remember_client_audio_mic_muted_turn(state=state)
-        self._remember_client_audio_echo_tail(transcript, state=state)
-        self._reject_and_clear_user_turn("client_mic_muted")
-        if self._timeline is not None:
-            self._timeline.set_attr(
-                "transcript_dropped_by_client_audio_state",
-                {
-                    "reason": "client_mic_muted",
-                    "participant_identity": state.participant_identity,
-                    "playback_state": state.playback_state,
-                },
-        )
-        logger.info(
-            "[StreamingPipeline] dropping transcript while client mic muted "
-            "identity=%s playback=%s transcript=%r final=%s",
-            state.participant_identity,
-            state.playback_state,
-            transcript[:80],
-            getattr(event, "is_final", None),
-        )
-        return True
-
-    def _remember_client_audio_mic_muted_turn(
-        self,
-        *,
-        state: ClientAudioState,
-    ) -> None:
-        self._client_audio_mic_muted_turn_until = (
-            time.monotonic() + _CLIENT_AUDIO_ECHO_TAIL_SUPPRESS_SEC
-        )
-        self._client_audio_mic_muted_turn_identity = state.participant_identity
-
-    def _remember_client_audio_echo_tail(
-        self,
-        transcript: str,
-        *,
-        state: ClientAudioState,
-    ) -> None:
-        if not transcript:
-            return
-        self._client_audio_echo_tail_until = (
-            time.monotonic() + _CLIENT_AUDIO_ECHO_TAIL_SUPPRESS_SEC
-        )
-        self._client_audio_echo_tail_text = transcript
-        self._client_audio_echo_tail_identity = state.participant_identity
-
-    def _client_audio_state_suppresses_completed_turn(
-        self,
-        transcript: str,
-        *,
-        timeline: TurnTimeline | None,
-    ) -> bool:
-        if not transcript:
-            return False
-        # PTT: client mic_muted means "released", not echo — see
-        # _client_audio_state_suppresses_transcript.
-        if self._active_input_mode_is_ptt():
-            return False
-        reason = ""
-        participant_identity = ""
-        playback_state = ""
-        try:
-            state = self._latest_client_audio_state(participant_identity=None)
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to inspect client audio state"
-            )
-            state = None
-        if (
-            state is not None
-            and state.mic_muted
-            and not state.manual_interrupt
-            and not state.ptt
-            and self._turn_policy.attention.ignore_when_mic_muted
-        ):
-            self._remember_client_audio_mic_muted_turn(state=state)
-            reason = "client_mic_muted"
-            participant_identity = state.participant_identity
-            playback_state = state.playback_state
-        else:
-            until = float(
-                getattr(self, "_client_audio_mic_muted_turn_until", 0.0) or 0.0
-            )
-            if time.monotonic() > until:
-                return False
-            reason = "client_mic_muted_tail"
-            participant_identity = str(
-                getattr(self, "_client_audio_mic_muted_turn_identity", "") or ""
-            )
-        self._ensure_user_turn_coordinator()
-        self._user_turns.reject_active(reason)
-        self._clear_session_user_turn(reason)
-        if timeline is not None:
-            timeline.set_attr(
-                "framework_completed_turn_dropped",
-                {
-                    "reason": reason,
-                    "participant_identity": participant_identity,
-                    "playback_state": playback_state,
-                    "text_preview": transcript[:120],
-                },
-            )
-            self._append_turn_timeline_snapshot(
-                timeline,
-                "framework_completed_turn_dropped",
-            )
-        logger.info(
-            "[StreamingPipeline] stopped framework completed turn while "
-            "client mic muted reason=%s identity=%s transcript=%r",
-            reason,
-            participant_identity,
-            transcript[:80],
-        )
-        return True
-
-    def _client_audio_state_suppresses_echo_tail(
-        self,
-        transcript: str,
-        *,
-        speaker_id: str | None,
-        source: str,
-    ) -> bool:
-        if not transcript:
-            return False
-        until = float(getattr(self, "_client_audio_echo_tail_until", 0.0) or 0.0)
-        if time.monotonic() > until:
-            return False
-        tail_text = str(getattr(self, "_client_audio_echo_tail_text", "") or "")
-        if not _looks_like_same_echo_transcript(transcript, tail_text):
-            return False
-        tail_identity = str(
-            getattr(self, "_client_audio_echo_tail_identity", "") or ""
-        )
-        if speaker_id and tail_identity and speaker_id != tail_identity:
-            return False
-        if self._timeline is not None:
-            self._timeline.set_attr(
-                "transcript_dropped_by_client_audio_state",
-                {
-                    "reason": "client_playback_echo_tail",
-                    "participant_identity": tail_identity,
-                    "source": source,
-                },
-            )
-        if source == "transcript":
-            self._reject_and_clear_user_turn("client_audio_echo_tail")
-        logger.info(
-            "[StreamingPipeline] dropping playback echo tail source=%s "
-            "identity=%s transcript=%r previous=%r",
-            source,
-            tail_identity or speaker_id,
-            transcript[:80],
-            tail_text[:80],
-        )
-        return True
-
-    def _client_audio_state_suppresses_user_state(self, event: Any) -> bool:
-        # PTT: client mic_muted means "released", not echo — see
-        # _client_audio_state_suppresses_transcript.
-        if self._active_input_mode_is_ptt():
-            return False
-        old = getattr(event, "old_state", "")
-        new = getattr(event, "new_state", "")
-        if old == "speaking" and new == "listening":
-            if self._suppress_mic_muted_user_state_until_listening:
-                self._suppress_mic_muted_user_state_until_listening = False
-                logger.info(
-                    "[StreamingPipeline] suppressing user_state end after "
-                    "client mic-muted playback echo"
-                )
-                return True
-            return False
-        if new != "speaking":
-            return False
-        try:
-            state = self._latest_client_audio_state(participant_identity=None)
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to inspect client audio state"
-            )
-            return False
-        if state is None or not state.mic_muted:
-            return False
-        if state.manual_interrupt or state.ptt:
-            return False
-        if not self._turn_policy.attention.ignore_when_mic_muted:
-            return False
-        self._remember_client_audio_mic_muted_turn(state=state)
-        self._suppress_mic_muted_user_state_until_listening = True
-        if self._timeline is not None:
-            self._timeline.set_attr(
-                "user_state_dropped_by_client_audio_state",
-                {
-                    "reason": "client_mic_muted",
-                    "participant_identity": state.participant_identity,
-                    "playback_state": state.playback_state,
-                },
-            )
-        logger.info(
-            "[StreamingPipeline] suppressing user_state while client mic muted "
-            "identity=%s playback=%s old=%s new=%s",
-            state.participant_identity,
-            state.playback_state,
-            old,
-            new,
-        )
-        return True
-
     def _interrupt_decision_suppressed(self) -> bool:
         """Ignore residual ASR after a confirmed interrupt cancel."""
         return time.monotonic() < self._suppress_commit_after_interrupt_until
@@ -2605,24 +2316,16 @@ class StreamingPipeline(BasePipeline):
             max_age_sec=max_age_sec,
         )
 
-    def _active_input_mode_is_ptt(self) -> bool:
-        """True when the client is driving turns via push-to-talk.
+    def _interrupt_current_turn(self, *, force: bool = False) -> None:
+        """Interrupt the currently in-progress agent turn via session.interrupt().
 
-        In PTT mode the turn boundary is the user releasing the button (the mic
-        closes → the inbound stream falls silent → end-of-speech), which is
-        explicit and final. There is no "maybe the user will keep talking" to
-        wait for, so the EOT/short-statement deferral heuristics — which exist to
-        avoid cutting off open-mic speakers mid-thought — must NOT hold the turn.
-        Deferring a PTT turn is what made trailing-filler utterances ("…今天。嗯。")
-        get dropped with no reply.
+        ``force`` skips the ``allow_interruptions`` gate and passes through to
+        ``session.interrupt(force=True)``, which cancels even a speech handle
+        that was started with interruptions disabled. Used by the explicit PTT
+        tap-to-stop path in half_duplex; policy-driven interrupts leave it False.
         """
-        state = self._latest_client_audio_state()
-        return state is not None and state.input_mode == INPUT_MODE_PTT
-
-    def _interrupt_current_turn(self) -> None:
-        """Interrupt the currently in-progress agent turn via session.interrupt()."""
         self._ensure_ducking_controller()
-        if not self._allow_interruptions:
+        if not force and not self._allow_interruptions:
             return
         if self._ducking.is_cancelled:
             logger.debug(
@@ -2631,7 +2334,7 @@ class StreamingPipeline(BasePipeline):
             return
 
         if self._session is not None:
-            self._session.interrupt()
+            self._session.interrupt(force=force)
 
         # Reset VAD state so EOT doesn't carry stale state into the next turn.
         self._get_eot_model().update_vad(False)
@@ -2894,8 +2597,14 @@ class StreamingPipeline(BasePipeline):
         if clear:
             self._timeline = None
 
-    def _duck_cancel_and_interrupt(self) -> None:
-        """Confirm interrupt: discard buffer + cancel TTS generation."""
+    def _duck_cancel_and_interrupt(self, *, force: bool = False) -> None:
+        """Confirm interrupt: discard buffer + cancel TTS generation.
+
+        ``force`` propagates to ``session.interrupt(force=True)`` so an explicit
+        client request (PTT tap-to-stop) interrupts even when the session
+        disallows interruptions (half_duplex). Policy-driven callers leave it
+        False so the ``allow_interruptions`` gate still applies.
+        """
         self._ensure_runtime_defaults()
         if self._ducking.is_cancelled:
             logger.debug(
@@ -2934,7 +2643,7 @@ class StreamingPipeline(BasePipeline):
         self._suppress_commit_after_interrupt_until = (
             time.monotonic() + _INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC
         )
-        self._interrupt_current_turn()
+        self._interrupt_current_turn(force=force)
 
     def _duck_unduck_if_suspended(
         self, reason: str = "user_silent", *, drop_buffered: bool = False

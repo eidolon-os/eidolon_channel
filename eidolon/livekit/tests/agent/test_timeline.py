@@ -581,10 +581,10 @@ def test_streaming_pipeline_observes_client_audio_state() -> None:
     }
 
 
-def test_streaming_pipeline_manual_interrupt_data_ducks_not_cancels() -> None:
-    # P1: manual_interrupt (unreliable energy gate, echo can trip it) ducks +
-    # arms the suspend timeout instead of hard-cutting; the evidence/semantic path
-    # then confirms (real speech → cancel, echo → resume on timeout).
+def test_streaming_pipeline_ptt_data_force_cancels() -> None:
+    # PTT (deliberate button press / tap-to-stop) is the only explicit client
+    # interrupt — hard-cut immediately with force=True so it cuts through
+    # half_duplex's allow_interruptions=False.
     from eidolon.livekit.agent.streaming import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
@@ -593,22 +593,20 @@ def test_streaming_pipeline_manual_interrupt_data_ducks_not_cancels() -> None:
     pipeline._state = PipelineState.SPEAKING
     pipeline._ducking = SimpleNamespace(is_cancelled=False)
     pipeline._duck_cancel_and_interrupt = MagicMock()
-    pipeline._duck_and_arm_timeout = MagicMock()
 
     packet = SimpleNamespace(
         topic=CLIENT_AUDIO_STATE_TOPIC,
         data=(
-            b'{"type":"client.audio_state","input_mode":"manual",'
+            b'{"type":"client.audio_state","input_mode":"ptt",'
             b'"playback_state":"agent_speaking","mic_muted":false,'
-            b'"manual_interrupt":true}'
+            b'"ptt":true}'
         ),
         participant=SimpleNamespace(identity="alice"),
     )
 
     pipeline._on_room_data_received(packet)
 
-    pipeline._duck_and_arm_timeout.assert_called_once()
-    pipeline._duck_cancel_and_interrupt.assert_not_called()
+    pipeline._duck_cancel_and_interrupt.assert_called_once_with(force=True)
     assert pipeline._timeline.attrs["explicit_client_interrupt"][
         "participant_identity"
     ] == "alice"

@@ -201,7 +201,7 @@ def test_ptt_mode_never_defers_low_eot_commit() -> None:
     WOULD defer in open-mic mode commits immediately instead of being held for a
     continuation that will never come (the trailing-filler no-reply bug)."""
     pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._active_input_mode_is_ptt = lambda: True
+    pipeline._is_half_duplex = True
     pipeline._get_eot_model.return_value.current_eot_score = 0.01
 
     # Same short-statement fragment that defers in open-mic mode (see
@@ -217,7 +217,7 @@ def test_ptt_mode_never_defers_framework_completed_turn() -> None:
     continuation in PTT mode."""
     pipeline = _make_pipeline_with_session(latest_asr_text="")
     pipeline._ensure_runtime_defaults()
-    pipeline._active_input_mode_is_ptt = lambda: True
+    pipeline._is_half_duplex = True
 
     assert not pipeline._should_defer_framework_completed_turn("私立医院的。")
 

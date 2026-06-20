@@ -1,0 +1,108 @@
+"""Phase 5: per-session interaction-mode contract.
+
+Covers the two pure functions channel uses to turn the device-declared mode
+(carried in the LiveKit participant metadata that hub stamps) into a
+per-session turn policy:
+
+  - ``resolve_interaction_mode`` — parse + defense default.
+  - ``apply_interaction_mode`` — half_duplex disables barge-in; full_duplex
+    is the unchanged status quo.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from eidolon.livekit.agent.runtime import (
+    INTERACTION_MODE_FULL_DUPLEX,
+    INTERACTION_MODE_HALF_DUPLEX,
+    apply_interaction_mode,
+    resolve_interaction_mode,
+)
+from eidolon.livekit.common.config.schema import TurnPolicyConfig
+
+
+# ── resolve_interaction_mode ────────────────────────────────────────────
+
+
+def test_resolve_from_json_string():
+    raw = json.dumps({"kind": "device", "interaction_mode": "full_duplex"})
+    assert resolve_interaction_mode(raw) == INTERACTION_MODE_FULL_DUPLEX
+
+
+def test_resolve_from_dict():
+    meta = {"kind": "device", "interaction_mode": "half_duplex"}
+    assert resolve_interaction_mode(meta) == INTERACTION_MODE_HALF_DUPLEX
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [None, "", "   ", "not-json", "[1,2,3]", json.dumps({"kind": "device"})],
+)
+def test_resolve_missing_or_unparseable_defaults_half(raw):
+    # Defense default (plan §1): anything we can't read → safe half_duplex.
+    assert resolve_interaction_mode(raw) == INTERACTION_MODE_HALF_DUPLEX
+
+
+def test_resolve_unknown_value_defaults_half():
+    raw = json.dumps({"interaction_mode": "duplexish"})
+    assert resolve_interaction_mode(raw) == INTERACTION_MODE_HALF_DUPLEX
+
+
+def test_resolve_is_case_insensitive():
+    raw = json.dumps({"interaction_mode": "FULL_DUPLEX"})
+    assert resolve_interaction_mode(raw) == INTERACTION_MODE_FULL_DUPLEX
+
+
+def test_resolve_explicit_default_override():
+    # Web caller passes default=full_duplex.
+    assert (
+        resolve_interaction_mode(None, default=INTERACTION_MODE_FULL_DUPLEX)
+        == INTERACTION_MODE_FULL_DUPLEX
+    )
+
+
+# ── apply_interaction_mode ──────────────────────────────────────────────
+
+
+def test_half_duplex_disables_barge_in():
+    """The core 'half doesn't barge in' contract: framework interruption off
+    AND attention guessing off."""
+    base = TurnPolicyConfig()
+    assert base.attention.enabled is True  # guard the precondition
+
+    policy, allow = apply_interaction_mode(
+        turn_policy=base,
+        allow_interruptions=True,
+        interaction_mode=INTERACTION_MODE_HALF_DUPLEX,
+    )
+    assert allow is False
+    assert policy.attention.enabled is False
+    # Only attention.enabled flips; the rest of the policy is preserved.
+    assert policy.attention.client_state_max_age_ms == base.attention.client_state_max_age_ms
+    assert policy.eot == base.eot
+    assert policy.interrupt == base.interrupt
+
+
+def test_full_duplex_is_status_quo():
+    base = TurnPolicyConfig()
+    policy, allow = apply_interaction_mode(
+        turn_policy=base,
+        allow_interruptions=True,
+        interaction_mode=INTERACTION_MODE_FULL_DUPLEX,
+    )
+    assert allow is True
+    assert policy is base  # unchanged object — no per-session override
+
+
+def test_apply_does_not_mutate_input():
+    base = TurnPolicyConfig()
+    apply_interaction_mode(
+        turn_policy=base,
+        allow_interruptions=True,
+        interaction_mode=INTERACTION_MODE_HALF_DUPLEX,
+    )
+    # Global config object is untouched (frozen dataclass + replace).
+    assert base.attention.enabled is True

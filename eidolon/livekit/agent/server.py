@@ -175,6 +175,31 @@ def _prewarm(proc) -> None:
         logger.warning("[Agent] prewarm: voiceprint load failed: %s", e)
 
 
+async def _resolve_session_interaction_mode(ctx) -> str:
+    """Read the session's interaction_mode from the joined participant.
+
+    Phase 5: hub stamped ``interaction_mode`` into the LiveKit token's
+    ``participant_metadata``; ``wait_for_participant`` connects the room (if
+    needed) and returns once the device/web client is present, so we read the
+    authoritative value before building the pipeline. Any failure degrades to
+    the safe default (``half_duplex``) — see ``runtime.interaction_mode``.
+    """
+    from eidolon.livekit.agent.runtime import (
+        INTERACTION_MODE_HALF_DUPLEX,
+        resolve_interaction_mode,
+    )
+
+    try:
+        participant = await ctx.wait_for_participant()
+    except Exception:
+        logger.exception(
+            "[Agent] wait_for_participant failed; defaulting interaction_mode=%s",
+            INTERACTION_MODE_HALF_DUPLEX,
+        )
+        return INTERACTION_MODE_HALF_DUPLEX
+    return resolve_interaction_mode(getattr(participant, "metadata", None))
+
+
 async def run_agent(ctx, cfg: AgentConfig) -> None:
     """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
     from eidolon.livekit.agent import (
@@ -182,6 +207,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         SharedStageFactory,
         StreamingPipeline,
     )
+    from eidolon.livekit.agent.runtime import apply_interaction_mode
 
     logger.info(
         "[Agent] starting room=%s mode=%s stt=%s tts=%s vad=%s",
@@ -235,13 +261,29 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     if cfg.behavior.agent_mode == "batch":
         pipeline = BatchPipeline(factory)
     else:
+        # Phase 5: pick a per-session turn policy from the device-declared
+        # interaction_mode (half_duplex → no barge-in). Never mutates the
+        # shared global cfg.
+        interaction_mode = await _resolve_session_interaction_mode(ctx)
+        session_turn_policy, allow_interruptions = apply_interaction_mode(
+            turn_policy=cfg.turn_policy,
+            allow_interruptions=True,
+            interaction_mode=interaction_mode,
+        )
+        logger.info(
+            "[Agent] interaction_mode=%s allow_interruptions=%s attention_enabled=%s",
+            interaction_mode,
+            allow_interruptions,
+            session_turn_policy.attention.enabled,
+        )
         pipeline = StreamingPipeline(
             factory,
             instructions=cfg.behavior.instructions,
-            allow_interruptions=True,
+            allow_interruptions=allow_interruptions,
             welcome_message=cfg.behavior.welcome_message,
             audio_sample_rate=cfg.behavior.audio_sample_rate,
-            turn_policy=cfg.turn_policy,
+            turn_policy=session_turn_policy,
+            interaction_mode=interaction_mode,
             observability=cfg.observability,
             # Idle watchdog disconnect: delete the room so the still-connected
             # client is actively kicked (ROOM_DELETED) and the job's

@@ -20,7 +20,7 @@ def _watchdog(
     room=None,
     timeline=None,
     on_idle_disconnect=None,
-    is_ptt=None,
+    is_half_duplex=None,
 ) -> tuple[IdleWatchdog, asyncio.Event]:
     closed = asyncio.Event()
     watchdog = IdleWatchdog(
@@ -31,7 +31,7 @@ def _watchdog(
         session_closed_event=closed,
         on_idle_disconnect=on_idle_disconnect,
         disconnect_grace_sec=0.0,
-        is_ptt=is_ptt,
+        is_half_duplex=is_half_duplex,
     )
     return watchdog, closed
 
@@ -100,10 +100,10 @@ async def test_idle_watchdog_rearms_while_agent_is_active() -> None:
 
 
 @pytest.mark.asyncio
-async def test_idle_watchdog_does_not_disconnect_ptt_session() -> None:
-    """Push-to-talk appliance: silent between holds is normal, so the watchdog
-    must keep the session alive instead of idle-disconnecting (which would force
-    a reconnect + welcome replay on the next hold)."""
+async def test_idle_watchdog_does_not_disconnect_half_duplex_session() -> None:
+    """Half-duplex (push-to-talk) appliance: silent between holds is normal, so
+    the watchdog must keep the session alive instead of idle-disconnecting (which
+    would force a reconnect + welcome replay on the next hold)."""
     session = SimpleNamespace(
         agent_state="idle",
         user_state="listening",
@@ -113,7 +113,7 @@ async def test_idle_watchdog_does_not_disconnect_ptt_session() -> None:
     watchdog, closed = _watchdog(
         session=session,
         on_idle_disconnect=on_idle,
-        is_ptt=lambda: True,
+        is_half_duplex=lambda: True,
     )
 
     watchdog.start()

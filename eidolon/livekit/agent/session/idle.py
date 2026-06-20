@@ -27,7 +27,7 @@ class IdleWatchdog:
         session_closed_event: asyncio.Event,
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
         disconnect_grace_sec: float = 0.3,
-        is_ptt: Callable[[], bool] | None = None,
+        is_half_duplex: Callable[[], bool] | None = None,
     ) -> None:
         self.timeout_sec = timeout_sec
         self._get_session = get_session
@@ -36,12 +36,12 @@ class IdleWatchdog:
         self._session_closed_event = session_closed_event
         self._on_idle_disconnect = on_idle_disconnect
         self.disconnect_grace_sec = disconnect_grace_sec
-        # Push-to-talk clients are persistent appliances: the mic is closed
-        # between holds, so silence is the normal resting state, not an abandoned
-        # session. Idle-disconnecting them would force a reconnect (and replay the
-        # welcome) on the next hold. When this returns True we keep the session
-        # alive instead of disconnecting.
-        self._is_ptt = is_ptt
+        # Half-duplex (push-to-talk) clients are persistent appliances: the mic
+        # is closed between holds, so silence is the normal resting state, not an
+        # abandoned session. Idle-disconnecting them would force a reconnect (and
+        # replay the welcome) on the next hold. When this returns True we keep the
+        # session alive instead of disconnecting.
+        self._is_half_duplex = is_half_duplex
         self.task: asyncio.Task | None = None
         self.last_activity_monotonic: float = 0.0
 
@@ -84,7 +84,7 @@ class IdleWatchdog:
                 ):
                     self.mark_activity()
                     continue
-                if self._is_ptt is not None and self._is_ptt():
+                if self._is_half_duplex is not None and self._is_half_duplex():
                     # Persistent push-to-talk appliance: stay connected so the
                     # next hold is instant and the welcome isn't replayed.
                     self.mark_activity()

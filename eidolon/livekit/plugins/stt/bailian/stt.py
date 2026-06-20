@@ -202,6 +202,10 @@ class BailianFunASRSTT(stt.STT):
         return self._config.max_sentence_silence_ms
 
     @property
+    def keepalive_interval_sec(self) -> float:
+        return self._config.keepalive_interval_sec
+
+    @property
     def language(self) -> str:
         return self._language
 

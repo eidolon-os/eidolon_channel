@@ -67,6 +67,20 @@ class BailianSTTConfig:
         )
     )
 
+    # Connection keepalive (independent of the VAD billing gate below). DashScope
+    # FunASR kills an idle recognition task after ~23s of no audio ("request
+    # timeout after 23 seconds"). Between turns — especially during a long agent
+    # reply when a half-duplex device closes its mic — no user audio flows, so the
+    # freshly opened task would hit that timeout and churn a reconnect. When the
+    # send loop sees no real audio for this interval it pushes a short silence
+    # frame to keep the task alive (run-task sets heartbeat=True, so silent audio
+    # is a valid keepalive). 0 / negative disables.
+    keepalive_interval_sec: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_STT_KEEPALIVE_INTERVAL_SEC", "10.0")
+        )
+    )
+
     # G16 (2026-05-17): VAD-gated audio forwarding for cost reduction.
     # Defaults OFF (gate_enabled=False) — current operators see no behavior
     # change until they explicitly opt in via env. See ../_gate.py for the

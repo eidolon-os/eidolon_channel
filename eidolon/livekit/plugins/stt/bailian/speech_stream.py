@@ -235,11 +235,57 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             self._emit_turn_first_audio_if_needed(bytes_len=len(data))
             await conn.send_audio(data)
 
+        # Connection keepalive: when no real audio arrives for this interval,
+        # push a short silence frame so the DashScope task doesn't hit its ~23s
+        # idle timeout (e.g. during a long agent reply when a half-duplex device
+        # closes its mic). Disabled (0) or when the VAD billing gate owns
+        # liveness (it runs its own 1Hz keepalive task). 100ms PCM-16 mono.
+        keepalive_sec = float(
+            getattr(self._stt_ref, "keepalive_interval_sec", 0.0) or 0.0
+        )
+        keepalive_active = keepalive_sec > 0 and self._gate is None
+        silence_frame = b"\x00" * (_CHUNK_SAMPLES * 2)
+
         async def send_loop() -> None:
             frames_sent = 0
+            keepalive_sent = 0
             logger.info("[Bailian STT] send_loop started")
             try:
-                async for item in self._input_ch:  # type: ignore[attr-defined]
+                while True:
+                    if self._finished:
+                        logger.info(
+                            "[Bailian STT] send_loop exiting: _finished=True frames_sent=%d",
+                            frames_sent,
+                        )
+                        break
+
+                    try:
+                        if keepalive_active:
+                            item = await asyncio.wait_for(
+                                self._input_ch.__anext__(),  # type: ignore[attr-defined]
+                                timeout=keepalive_sec,
+                            )
+                        else:
+                            item = await self._input_ch.__anext__()  # type: ignore[attr-defined]
+                    except asyncio.TimeoutError:
+                        # Idle gap — keep the recognition task alive with silence
+                        # (run-task set heartbeat=True, so silent audio is valid).
+                        if self._finished:
+                            break
+                        try:
+                            await conn.send_audio(silence_frame)
+                        except BailianConnectionError:
+                            break
+                        keepalive_sent += 1
+                        if keepalive_sent % 6 == 0:
+                            logger.info(
+                                "[Bailian STT] send_loop: keepalive silence sent=%d",
+                                keepalive_sent,
+                            )
+                        continue
+                    except StopAsyncIteration:
+                        break
+
                     if self._finished:
                         logger.info(
                             "[Bailian STT] send_loop exiting: _finished=True frames_sent=%d",

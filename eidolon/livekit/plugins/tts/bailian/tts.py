@@ -263,6 +263,8 @@ class BailianSynthesizeStream(SynthesizeStream):
         self._first_send_continue_time: float | None = None
         # Emit tts_provider_first_audio exactly once per stream.
         self._first_provider_audio_emitted = False
+        # Stall-watchdog clock (reset per-run); see _await_stream_completion.
+        self._last_stream_activity_at = 0.0
 
     def _convert_audio(self, raw_data: bytes) -> bytes:
         fmt = self._config.audio_format.lower()
@@ -305,6 +307,9 @@ class BailianSynthesizeStream(SynthesizeStream):
         # produce audio" — drives the recoverable classification in
         # _handle_json_event and the first-audio provider event.
         self._first_provider_audio_emitted = False
+        # Stall-watchdog clock: last time the stream made progress (provider
+        # message received or text token sent). See _await_stream_completion.
+        self._last_stream_activity_at = time.monotonic()
 
         output_emitter.initialize(
             request_id=uuid.uuid4().hex[:16],
@@ -334,9 +339,14 @@ class BailianSynthesizeStream(SynthesizeStream):
             msg_ch: asyncio.Queue[dict[str, Any] | bytes | None] = asyncio.Queue()
 
             async def on_message(msg: dict[str, Any]) -> None:
+                # Mark at the WS-receive layer (before the downstream push) so a
+                # full-duplex duck that backpressures playback is never mistaken
+                # for a provider stall.
+                self._mark_stream_activity()
                 await msg_ch.put(msg)
 
             async def on_binary(data: bytes) -> None:
+                self._mark_stream_activity()
                 await msg_ch.put(data)
 
             async def on_closed() -> None:
@@ -350,9 +360,7 @@ class BailianSynthesizeStream(SynthesizeStream):
             input_task = asyncio.create_task(self._input_loop(client))
             no_audio_guard_task = asyncio.create_task(self._no_first_audio_guard())
             try:
-                await asyncio.wait_for(self._exit_event.wait(), timeout=45.0)
-            except asyncio.TimeoutError:
-                raise APIError("bailian tts stream timeout", body=None, retryable=True)
+                await self._await_stream_completion()
             finally:
                 self._input_done.set()
                 for t in (recv_task, input_task, no_audio_guard_task):
@@ -396,6 +404,48 @@ class BailianSynthesizeStream(SynthesizeStream):
                 len(self._pushed_text),
                 self._pcm_total_bytes,
             )
+
+    def _mark_stream_activity(self) -> None:
+        """Record that the stream just made progress (provider sent something,
+        or we sent text). Drives the stall watchdog in _await_stream_completion."""
+        self._last_stream_activity_at = time.monotonic()
+
+    async def _await_stream_completion(self) -> None:
+        """Wait for the TTS stream to finish, aborting only on a genuine stall.
+
+        Replaces the old fixed total-lifetime cap, which truncated long replies
+        whose text the LLM streams over many seconds (the stream was healthy —
+        audio kept flowing — but the blanket ceiling expired anyway). Liveness
+        here is "is the stream still making progress?": activity is marked on
+        every provider message and every text token (``_mark_stream_activity``).
+
+        Because activity is marked at the WebSocket-receive layer, a full-duplex
+        barge-in duck that backpressures downstream playback does NOT look like a
+        stall (the provider is still feeding us; the mixer is just holding the
+        audio). A confirmed barge-in cancels this coroutine via CancelledError —
+        not a stall. We abort only when nothing flows for
+        ``stream_stall_timeout_sec``; the first-token / inter-token / no-first-
+        audio guards still cover the startup phase. 0 / negative disables.
+        """
+        stall = self._config.stream_stall_timeout_sec
+        if stall <= 0:
+            await self._exit_event.wait()
+            return
+        while not self._exit_event.is_set():
+            remaining = stall - (time.monotonic() - self._last_stream_activity_at)
+            if remaining <= 0:
+                idle = time.monotonic() - self._last_stream_activity_at
+                raise APIError(
+                    f"bailian tts stream stalled (no audio/text for {idle:.0f}s)",
+                    body=None,
+                    retryable=True,
+                )
+            try:
+                # Wait until the deadline; if activity arrives meanwhile, the
+                # deadline moves forward and we simply re-arm on the next loop.
+                await asyncio.wait_for(self._exit_event.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                continue
 
     async def _recv_loop(
         self,
@@ -495,6 +545,9 @@ class BailianSynthesizeStream(SynthesizeStream):
 
                 async def send_text_part(part: str) -> None:
                     await client.send_continue(part)
+                    # Feeding text is progress too — keeps the stall watchdog
+                    # happy through the LLM-streaming phase before audio starts.
+                    self._mark_stream_activity()
                     # G12 (2026-05-17): wall-clock marker for the no-audio
                     # watchdog. Set on FIRST send_continue only — subsequent
                     # ones don't shift the deadline.

@@ -123,6 +123,19 @@ class BailianTTSConfig:
             os.environ.get("BAILIAN_TTS_NO_FIRST_AUDIO_TIMEOUT", "5.0")
         )
     )
+    # Steady-state stall watchdog for the audio-streaming phase. This is an
+    # INACTIVITY timeout, NOT a total-lifetime cap: the deadline resets on every
+    # provider message (audio/event) and every text token we send, so a long
+    # reply whose text the LLM streams over many seconds never trips it — only a
+    # genuine stall (provider goes silent / hangs after producing audio) does.
+    # Replaces the old fixed 45s lifetime cap that truncated long replies. Must
+    # comfortably exceed the normal sub-second inter-audio cadence and the tail
+    # gap before task-finished; 0 / negative disables (plain wait-for-finish).
+    stream_stall_timeout_sec: float = field(
+        default_factory=lambda: float(
+            os.environ.get("BAILIAN_TTS_STREAM_STALL_TIMEOUT_SEC", "20.0")
+        )
+    )
     aggregator_soft_min_chars: int = field(
         default_factory=lambda: int(
             os.environ.get("BAILIAN_TTS_AGGREGATOR_SOFT_MIN_CHARS", "12")

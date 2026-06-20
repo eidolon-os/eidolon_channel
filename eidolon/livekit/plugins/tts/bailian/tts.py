@@ -301,6 +301,10 @@ class BailianSynthesizeStream(SynthesizeStream):
         self._pcm_total_bytes = 0
         self._first_send_continue_time = None  # G12 reset per-stream
         self._provider_task_started = False
+        # Reset per-attempt so a framework retry re-evaluates "did THIS attempt
+        # produce audio" — drives the recoverable classification in
+        # _handle_json_event and the first-audio provider event.
+        self._first_provider_audio_emitted = False
 
         output_emitter.initialize(
             request_id=uuid.uuid4().hex[:16],
@@ -426,9 +430,22 @@ class BailianSynthesizeStream(SynthesizeStream):
             error_message = header.get("error_message", "task failed")
             err_str = f"[{error_code}] {error_message}"
             logger.error("[BailianSynthesizeStream] task-failed: %s", err_str)
+            # A task-failed that arrives BEFORE any audio has been produced is a
+            # setup/handshake-phase failure — most commonly a stale pre-warmed
+            # pool connection. CosyVoice rejects ``run-task`` ("Invalid
+            # action('run-task')! Please follow the protocol!") when the socket
+            # has sat idle between connect and the first run-task (the pool warms
+            # connections eagerly, and run-task is only sent once the first LLM
+            # tokens are aggregated — so a slow first token can span that gap).
+            # These are safe to retry: the framework's SynthesizeStream replays
+            # the buffered input through a fresh ``_run`` (→ a fresh pooled
+            # connection, run-task sent immediately since the text is already
+            # buffered). Once audio has flowed, a failure is mid-synthesis and
+            # NOT recoverable (retrying would re-emit speech — the framework's
+            # pushed_duration guard also blocks it).
             self._task_failed_error = BailianTTSError(
                 err_str,
-                recoverable="timeout" in str(error_message).lower(),
+                recoverable=not self._first_provider_audio_emitted,
             )
 
     async def _handle_audio_chunk(

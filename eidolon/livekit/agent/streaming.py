@@ -63,6 +63,7 @@ from eidolon.livekit.common.config import (
 from . import _framework_patches
 from .client_audio_state import (
     CLIENT_AUDIO_STATE_TOPIC,
+    INPUT_MODE_PTT,
     PLAYBACK_STATE_AGENT_SPEAKING,
     ClientAudioState,
 )
@@ -300,6 +301,7 @@ class StreamingPipeline(BasePipeline):
             session_closed_event=self._session_closed_event,
             on_idle_disconnect=self._on_idle_disconnect,
             disconnect_grace_sec=self._idle_disconnect_grace_sec,
+            is_ptt=self._active_input_mode_is_ptt,
         )
 
         # EOT semantic interruption check state
@@ -547,6 +549,9 @@ class StreamingPipeline(BasePipeline):
     def _should_defer_low_eot_commit(self, *, transcript: str, eot_model: Any) -> bool:
         self._ensure_runtime_defaults()
         if not transcript.strip():
+            return False
+        # Push-to-talk: release is an explicit end-of-turn — never defer.
+        if self._active_input_mode_is_ptt():
             return False
         score = float(
             getattr(
@@ -1020,6 +1025,10 @@ class StreamingPipeline(BasePipeline):
 
     def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
         self._ensure_user_turn_coordinator()
+        # Push-to-talk: release is an explicit end-of-turn — never hold it for
+        # possible continuation.
+        if self._active_input_mode_is_ptt():
+            return False
         candidate = self._user_turns.active
         if candidate is None:
             return False
@@ -2294,6 +2303,13 @@ class StreamingPipeline(BasePipeline):
         transcript = getattr(event, "transcript", "")
         if not transcript:
             return False
+        # Push-to-talk: the mic is open only while the button is held and closed
+        # otherwise, so client mic_muted means "released", never playback echo.
+        # The FINAL transcript of a held utterance lands just AFTER release (when
+        # mic_muted is already True), so the half-duplex echo-suppression would
+        # wrongly drop a legitimate turn. PTT guarantees no echo — don't suppress.
+        if self._active_input_mode_is_ptt():
+            return False
         try:
             state = self._latest_client_audio_state(
                 participant_identity=getattr(event, "speaker_id", None),
@@ -2366,6 +2382,10 @@ class StreamingPipeline(BasePipeline):
         timeline: TurnTimeline | None,
     ) -> bool:
         if not transcript:
+            return False
+        # PTT: client mic_muted means "released", not echo — see
+        # _client_audio_state_suppresses_transcript.
+        if self._active_input_mode_is_ptt():
             return False
         reason = ""
         participant_identity = ""
@@ -2466,6 +2486,10 @@ class StreamingPipeline(BasePipeline):
         return True
 
     def _client_audio_state_suppresses_user_state(self, event: Any) -> bool:
+        # PTT: client mic_muted means "released", not echo — see
+        # _client_audio_state_suppresses_transcript.
+        if self._active_input_mode_is_ptt():
+            return False
         old = getattr(event, "old_state", "")
         new = getattr(event, "new_state", "")
         if old == "speaking" and new == "listening":
@@ -2580,6 +2604,20 @@ class StreamingPipeline(BasePipeline):
             participant_identity=participant_identity,
             max_age_sec=max_age_sec,
         )
+
+    def _active_input_mode_is_ptt(self) -> bool:
+        """True when the client is driving turns via push-to-talk.
+
+        In PTT mode the turn boundary is the user releasing the button (the mic
+        closes → the inbound stream falls silent → end-of-speech), which is
+        explicit and final. There is no "maybe the user will keep talking" to
+        wait for, so the EOT/short-statement deferral heuristics — which exist to
+        avoid cutting off open-mic speakers mid-thought — must NOT hold the turn.
+        Deferring a PTT turn is what made trailing-filler utterances ("…今天。嗯。")
+        get dropped with no reply.
+        """
+        state = self._latest_client_audio_state()
+        return state is not None and state.input_mode == INPUT_MODE_PTT
 
     def _interrupt_current_turn(self) -> None:
         """Interrupt the currently in-progress agent turn via session.interrupt()."""

@@ -20,6 +20,7 @@ def _watchdog(
     room=None,
     timeline=None,
     on_idle_disconnect=None,
+    is_ptt=None,
 ) -> tuple[IdleWatchdog, asyncio.Event]:
     closed = asyncio.Event()
     watchdog = IdleWatchdog(
@@ -30,6 +31,7 @@ def _watchdog(
         session_closed_event=closed,
         on_idle_disconnect=on_idle_disconnect,
         disconnect_grace_sec=0.0,
+        is_ptt=is_ptt,
     )
     return watchdog, closed
 
@@ -95,3 +97,31 @@ async def test_idle_watchdog_rearms_while_agent_is_active() -> None:
     session.agent_state = "idle"
     await asyncio.wait_for(watchdog.task, timeout=2.0)
     session.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_idle_watchdog_does_not_disconnect_ptt_session() -> None:
+    """Push-to-talk appliance: silent between holds is normal, so the watchdog
+    must keep the session alive instead of idle-disconnecting (which would force
+    a reconnect + welcome replay on the next hold)."""
+    session = SimpleNamespace(
+        agent_state="idle",
+        user_state="listening",
+        aclose=AsyncMock(),
+    )
+    on_idle = AsyncMock()
+    watchdog, closed = _watchdog(
+        session=session,
+        on_idle_disconnect=on_idle,
+        is_ptt=lambda: True,
+    )
+
+    watchdog.start()
+    await asyncio.sleep(0.2)
+
+    assert watchdog.task is not None
+    assert not watchdog.task.done()
+    on_idle.assert_not_awaited()
+    session.aclose.assert_not_awaited()
+    assert not closed.is_set()
+    watchdog.stop()

@@ -340,6 +340,57 @@ def test_manual_interrupt_transcript_bypasses_client_mic_mute_guard() -> None:
 
     assert dropped is False
     pipeline._clear_session_user_turn.assert_not_called()
+
+
+def test_ptt_release_transcript_not_dropped_as_echo() -> None:
+    """Push-to-talk: the FINAL transcript of a held utterance lands just AFTER
+    release (mic_muted=True, ptt=False). It must NOT be dropped by the
+    half-duplex mic-mute echo guard — PTT closes the mic except while held, so
+    there is no playback echo to suppress."""
+    pipeline = _pipeline_with_client_state(
+        _client_state(
+            participant_identity="manson",
+            input_mode="ptt",
+            mic_muted=True,
+            ptt=False,
+            playback_state="idle",
+        ),
+        pipeline_state=PipelineState.IDLE,
+    )
+    pipeline._clear_session_user_turn = MagicMock()
+
+    dropped = pipeline._client_audio_state_suppresses_transcript(
+        SimpleNamespace(
+            transcript="你叫什么名字。",
+            is_final=True,
+            speaker_id="manson",
+        )
+    )
+
+    assert dropped is False
+    pipeline._clear_session_user_turn.assert_not_called()
+
+
+def test_ptt_release_completed_turn_not_dropped_as_echo() -> None:
+    """PTT: a framework-completed turn arriving after release (mic_muted=True)
+    must not be stopped by the mic-mute guard."""
+    pipeline = _pipeline_with_client_state(
+        _client_state(
+            participant_identity="manson",
+            input_mode="ptt",
+            mic_muted=True,
+            ptt=False,
+            playback_state="idle",
+        ),
+        pipeline_state=PipelineState.IDLE,
+    )
+
+    dropped = pipeline._client_audio_state_suppresses_completed_turn(
+        "你叫什么名字。",
+        timeline=pipeline._timeline,
+    )
+
+    assert dropped is False
     assert "transcript_dropped_by_client_audio_state" not in pipeline._timeline.attrs
 
 

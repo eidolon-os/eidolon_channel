@@ -196,6 +196,32 @@ def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:
     )
 
 
+def test_ptt_mode_never_defers_low_eot_commit() -> None:
+    """Push-to-talk: release is an explicit end-of-turn, so a fragment that
+    WOULD defer in open-mic mode commits immediately instead of being held for a
+    continuation that will never come (the trailing-filler no-reply bug)."""
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._active_input_mode_is_ptt = lambda: True
+    pipeline._get_eot_model.return_value.current_eot_score = 0.01
+
+    # Same short-statement fragment that defers in open-mic mode (see
+    # test_short_statement_fragment_defers_even_when_eot_is_high).
+    assert not pipeline._should_defer_low_eot_commit(
+        transcript="给医生做的系统。",
+        eot_model=pipeline._get_eot_model.return_value,
+    )
+
+
+def test_ptt_mode_never_defers_framework_completed_turn() -> None:
+    """Push-to-talk: the framework-completed turn is never re-held for
+    continuation in PTT mode."""
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._ensure_runtime_defaults()
+    pipeline._active_input_mode_is_ptt = lambda: True
+
+    assert not pipeline._should_defer_framework_completed_turn("私立医院的。")
+
+
 @pytest.mark.asyncio
 async def test_low_eot_commit_is_deferred_until_grace_expires() -> None:
     pipeline = _make_pipeline_with_session(latest_asr_text="看你能不能")

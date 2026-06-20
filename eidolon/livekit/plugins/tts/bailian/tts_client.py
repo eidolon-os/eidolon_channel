@@ -63,6 +63,10 @@ class BailianTTSClient:
         self._recv_task: asyncio.Task[None] | None = None
         self._task_started_event = asyncio.Event()
         self._task_finished_event = asyncio.Event()
+        # Set by the receive loop when a task-failed arrives during the run-task
+        # handshake, so start_task() can fail fast (and with the real error)
+        # instead of waiting out task_started_timeout. Reset on each start_task.
+        self._task_failed_error: BailianTTSError | None = None
 
     _on_message_callback: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None
     _on_binary_callback: Callable[[bytes], Awaitable[None] | None] | None = None
@@ -108,6 +112,7 @@ class BailianTTSClient:
             raise BailianTTSError("Not connected", recoverable=True)
         self._task_id = uuid.uuid4().hex
         self._task_started_event.clear()
+        self._task_failed_error = None
         payload = protocol.build_run_task_payload(
             task_id=self._task_id,
             model=self._model,
@@ -125,6 +130,13 @@ class BailianTTSClient:
             )
         except asyncio.TimeoutError as e:
             raise BailianTTSError("task-started timeout", recoverable=True) from e
+        # The receive loop unblocks the wait on EITHER task-started or
+        # task-failed; if the handshake was rejected (e.g. a stale pre-warmed
+        # connection → "Invalid action('run-task')"), surface it now so the
+        # caller can rebuild on a fresh connection instead of proceeding on a
+        # dead task.
+        if self._task_failed_error is not None:
+            raise self._task_failed_error
 
     async def send_continue(self, text: str) -> None:
         task_id = self._task_id
@@ -215,6 +227,16 @@ class BailianTTSClient:
                 elif event == protocol.EVENT_TASK_FINISHED:
                     self._task_finished_event.set()
                 elif event == protocol.EVENT_TASK_FAILED:
+                    header = data.get("header")
+                    header = header if isinstance(header, dict) else {}
+                    self._task_failed_error = BailianTTSError(
+                        f"[{header.get('error_code', 'Unknown')}] "
+                        f"{header.get('error_message', 'task failed')}",
+                        recoverable=True,
+                    )
+                    # Unblock a pending start_task() handshake wait too — it
+                    # checks _task_failed_error after waking.
+                    self._task_started_event.set()
                     self._task_finished_event.set()
 
                 if self._on_message_callback:

@@ -203,6 +203,48 @@ class BailianTTS(TTS):
         self._conn = conn
         return conn
 
+    async def _acquire_started_conn(self, *, attempts: int = 3) -> BailianTTSClient:
+        """Acquire a pooled connection AND complete its run-task handshake,
+        self-healing past a stale pre-warmed connection.
+
+        Pre-warmed connections only do the (heavy) WebSocket connect; run-task is
+        sent here, at acquire time. DashScope occasionally rejects run-task on a
+        connection that has sat idle ("Invalid action('run-task')"). Rather than
+        bubbling that to the framework (a scary error + input-replay retry), we
+        discard the bad connection and try a fresh one — transparently, bounded
+        to ``attempts``. The pool refills fresh connections as we discard, so
+        this converges within a couple of tries; a freshly-connected socket
+        sends run-task within milliseconds and is never stale.
+
+        Sending run-task here (vs lazily on the first text token) also overlaps
+        the handshake with the LLM's first-token latency, so first audio is no
+        slower in the healthy case. Raises ``BailianTTSError(recoverable=True)``
+        if every attempt fails (the caller maps it to a retryable APIError as a
+        last-resort backstop).
+        """
+        last_err: BailianTTSError | None = None
+        for attempt in range(1, attempts + 1):
+            client = await self._acquire_conn()
+            try:
+                await client.start_task()
+                return client
+            except BailianTTSError as e:
+                if not e.recoverable:
+                    raise
+                last_err = e
+                logger.warning(
+                    "[BailianTTS] run-task failed on pooled connection "
+                    "(attempt %d/%d): %s — discarding and rebuilding",
+                    attempt, attempts, e,
+                )
+                if self._conn is client:
+                    self._conn = None
+                await self._pool.mark_dirty(client)
+        raise BailianTTSError(
+            f"run-task failed after {attempts} attempts: {last_err}",
+            recoverable=True,
+        )
+
     def synthesize(self, text: str, *, conn_options: APIConnectOptions | None = None):
         return self._synthesize_with_stream(
             text, conn_options=conn_options or self._conn_options
@@ -328,7 +370,18 @@ class BailianSynthesizeStream(SynthesizeStream):
 
         self._tts.emit_provider_event("tts_stream_started")
         async with self._tts._stream_lock:
-            client = await self._tts._acquire_conn()
+            # Acquire a connection AND start its run-task up front, self-healing
+            # past a stale pre-warmed connection (see _acquire_started_conn).
+            # The task is started here, so _input_loop sends continue-task
+            # directly without its own start_task.
+            self._tts.emit_provider_event("tts_request_started")
+            try:
+                client = await self._tts._acquire_started_conn()
+            except BailianTTSError as e:
+                raise APIError(
+                    str(e), body=None, retryable=bool(getattr(e, "recoverable", False))
+                ) from e
+            self._provider_task_started = True
             self._tts.emit_provider_event("tts_connection_acquired")
             self._tts._stream_active = True
             self._audio_byte_stream = AudioByteStream(

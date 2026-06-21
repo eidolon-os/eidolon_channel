@@ -1424,6 +1424,43 @@ class StreamingPipeline(BasePipeline):
         self._ensure_duck_suspend_timeout_handler()
         self._ensure_room_data_handler()
 
+    def _build_turn_handling(self) -> dict:
+        """AgentSession ``turn_handling`` options (Round 8 R8.9: must live on the
+        AgentSession, not the Agent — ``AgentActivity`` reads
+        ``session._opts.turn_handling.interruption``).
+
+        ``discard_audio_if_uninterruptible`` is **mode-aware**:
+          - full_duplex: True (status quo). Speeches are interruptible
+            (``enabled=True``) so this path rarely triggers; when an
+            uninterruptible speech does occur, discarding open-mic audio is the
+            right echo protection.
+          - half_duplex: False. Here ``enabled=False`` makes every reply
+            uninterruptible, so the default would discard the user's audio —
+            including a DELIBERATE PTT tap-to-stop barge-in. The device gates the
+            mic closed during playback, so any audio during playback is an
+            intentional barge-in that MUST be captured (else the barge-in
+            utterance is dropped → "empty_transcript" → no reply). The explicit
+            PTT path (``_handle_explicit_client_interrupt``) does the actual cut;
+            this just stops the framework from throwing the audio away.
+
+        ``preemptive_generation`` (Phase 2, 2026-05-30): speculative brain
+        generation gated via ``turn_policy.preemptive`` — hides the STT-final
+        wait by starting the brain on a stable interim; framework reuses it if
+        the final matches, else cancels via gRPC CancelTurn. ``preemptive_tts``
+        stays gated by our commit so no partial audio leaks.
+        """
+        return {
+            "interruption": {
+                "enabled": self._allow_interruptions,
+                "discard_audio_if_uninterruptible": not self._is_half_duplex,
+                "false_interruption_timeout": self._false_interruption_timeout,
+            },
+            "preemptive_generation": {
+                "enabled": self._turn_policy.preemptive.enabled,
+                "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
+            },
+        }
+
     async def run(self, room: Room) -> None:
         """Start the streaming pipeline. Blocks until room disconnects."""
         from livekit.agents.voice import AgentSession
@@ -1444,29 +1481,7 @@ class StreamingPipeline(BasePipeline):
         # our configured 6.0s. Source of truth: ``agent_session.py:354
         # _resolve_interruption(turn_handling.get("interruption"))``.
         session = AgentSession(
-            turn_handling={
-                "interruption": {
-                    "enabled": self._allow_interruptions,
-                    "discard_audio_if_uninterruptible": True,
-                    "false_interruption_timeout": self._false_interruption_timeout,
-                },
-                # Phase 2 (2026-05-30): preemptive (speculative) brain
-                # generation, config-gated via turn_policy.preemptive.
-                # Hides the ~990ms STT-final wait by starting the brain on a
-                # stable interim/preflight transcript; the framework reuses it
-                # if the final transcript matches, else cancels via our gRPC
-                # CancelTurn (clean: stops the upstream LLM, no orphan tokens,
-                # no history mutation). ``preemptive_tts`` stays False so audio
-                # output is still gated by our commit (no partial-audio leak,
-                # which was the R8.12.c concern). Was hard-disabled in R8.12.c
-                # because _inject_interrupted_context() mutates chat_ctx before
-                # commit on *post-interruption* turns, breaking is_equivalent;
-                # normal turns do not diverge and now get the speedup.
-                "preemptive_generation": {
-                    "enabled": self._turn_policy.preemptive.enabled,
-                    "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
-                },
-            },
+            turn_handling=self._build_turn_handling(),
             # G9 (2026-05-17): framework public API. Default 3.0s only covers
             # ~2/3 of a typical Chinese welcome; we expose this via env so
             # deployments can pick: 0/None = always interruptible; 0.5-1.0 =
@@ -2342,7 +2357,14 @@ class StreamingPipeline(BasePipeline):
         self._ensure_ducking_controller()
         if not force and not self._allow_interruptions:
             return
-        if self._ducking.is_cancelled:
+        # The cancelled-output short-circuit is only for the policy path (avoid a
+        # redundant session.interrupt after cancel_output). The FORCED explicit
+        # path (PTT tap-to-stop) MUST still call session.interrupt(force=True):
+        # _duck_cancel_and_interrupt already set is_cancelled=True, but without
+        # this the agent's (uninterruptible, half_duplex) speech handle is never
+        # actually ended → agent_state stays "speaking" → the captured barge-in
+        # turn can't commit → no reply. force must reach the framework.
+        if not force and self._ducking.is_cancelled:
             logger.debug(
                 "[StreamingPipeline] interrupt skipped — output already CANCELLED"
             )

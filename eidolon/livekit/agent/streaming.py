@@ -106,6 +106,15 @@ _SHORT_STATEMENT_DEFER_MAX_CJK_CHARS = 12
 _COMPANION_UI_STATE_TOPIC = "eidolon.ui_state"
 _CLIENT_CONTROL_TOPIC = "eidolon.control"
 
+# Half-duplex (push-to-talk) release-driven turn commit. In half_duplex the turn
+# boundary is the explicit PTT falling edge, NOT VAD/EOT. On release we wait
+# (bounded) for the trailing in-flight ASR sentence to finalize so a mid-utterance
+# pause ("...今天的天气，北京的天气") aggregates into ONE committed turn instead of
+# the EOT firing in the gap after release and dropping the trailing clause.
+_PTT_RELEASE_MAX_WAIT_SEC = 1.5
+_PTT_RELEASE_SETTLE_SEC = 0.3
+_PTT_RELEASE_POLL_SEC = 0.05
+
 
 # Module-level cache for the EOT model singleton.
 # All StreamingPipeline instances share the same ChineseModel instance, which in turn
@@ -212,6 +221,16 @@ class StreamingPipeline(BasePipeline):
         self._pending_voiceprint_commit_tasks: set[asyncio.Task] = set()
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._deferred_low_eot_commit_task: asyncio.Task | None = None
+        # Half-duplex PTT turn-boundary state (see _track_ptt_turn_edges). A turn
+        # is held from the PTT rising edge until the release flush authorizes the
+        # commit; while held, VAD/EOT must not commit the turn.
+        self._ptt_turn_active = False
+        self._ptt_commit_authorized = False
+        self._last_ptt_held = False
+        self._ptt_release_task: asyncio.Task | None = None
+        self._ptt_release_max_wait_sec = _PTT_RELEASE_MAX_WAIT_SEC
+        self._ptt_release_settle_sec = _PTT_RELEASE_SETTLE_SEC
+        self._ptt_release_poll_sec = _PTT_RELEASE_POLL_SEC
         self._suppress_transcripts_until_next_speech = False
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
@@ -544,10 +563,16 @@ class StreamingPipeline(BasePipeline):
         self._ensure_runtime_defaults()
         if not transcript.strip():
             return False
-        # Half-duplex (push-to-talk): button release is an explicit, final
-        # end-of-turn — never defer for a continuation that won't come.
+        # Half-duplex (push-to-talk): the turn boundary is the explicit PTT
+        # falling edge, not VAD/EOT. While the button is still down (or the
+        # release flush hasn't authorized the commit yet) HOLD the turn so a
+        # mid-sentence pause does not commit early and drop the trailing clause;
+        # ``_run_ptt_release_commit`` fires the single commit on release. A
+        # half_duplex device that sends no PTT signal leaves the turn unheld and
+        # commits immediately (the trailing-filler no-reply behaviour from
+        # 9642a0c).
         if self._is_half_duplex:
-            return False
+            return self._ptt_release_drives_commit()
         score = float(
             getattr(
                 eot_model,
@@ -984,10 +1009,18 @@ class StreamingPipeline(BasePipeline):
 
     def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
         self._ensure_user_turn_coordinator()
-        # Half-duplex (push-to-talk): button release is an explicit, final
-        # end-of-turn — never hold it for a possible continuation.
+        # Half-duplex (push-to-talk): the turn boundary is the explicit PTT
+        # falling edge. Hold a framework-completed (VAD/EOT) turn while the
+        # button is down so a premature EOU cannot commit only the first
+        # sentence; the PTT release (_run_ptt_release_commit) drives the single
+        # commit. Once committed/rejected — including the re-entrant hook from
+        # our own commit — fall through so the turn is not held forever (matches
+        # the full_duplex terminal-candidate guard below).
         if self._is_half_duplex:
-            return False
+            candidate = self._user_turns.active
+            if candidate is not None and candidate.state in {"committed", "rejected"}:
+                return False
+            return self._ptt_release_drives_commit()
         candidate = self._user_turns.active
         if candidate is None:
             return False
@@ -1035,13 +1068,23 @@ class StreamingPipeline(BasePipeline):
                 timeline,
                 "framework_completed_waiting_merge",
             )
-        self._schedule_deferred_low_eot_commit(
-            verify_task=None,
-            eot_model=self._get_eot_model(),
-            transcript=decision.transcript or completed_transcript,
-            timeline=timeline,
-            delay_sec=decision.delay_sec,
-        )
+        if self._ptt_release_drives_commit():
+            # Half-duplex PTT: the release edge fires the commit, not a timer.
+            # Holding here just blocks the premature VAD/EOT commit; the
+            # candidate stays in waiting_merge until _run_ptt_release_commit.
+            logger.info(
+                "[StreamingPipeline] held framework completed turn for PTT "
+                "release transcript=%r",
+                completed_transcript[:80],
+            )
+        else:
+            self._schedule_deferred_low_eot_commit(
+                verify_task=None,
+                eot_model=self._get_eot_model(),
+                transcript=decision.transcript or completed_transcript,
+                timeline=timeline,
+                delay_sec=decision.delay_sec,
+            )
         self._completed_turn_voiceprint_task = None
         self._completed_turn_voiceprint_result = None
         self._completed_turn_voiceprint_timeline = None
@@ -1377,6 +1420,20 @@ class StreamingPipeline(BasePipeline):
             self._candidate_voiceprint_tasks = []
         if not hasattr(self, "_deferred_low_eot_commit_task"):
             self._deferred_low_eot_commit_task = None
+        if not hasattr(self, "_ptt_turn_active"):
+            self._ptt_turn_active = False
+        if not hasattr(self, "_ptt_commit_authorized"):
+            self._ptt_commit_authorized = False
+        if not hasattr(self, "_last_ptt_held"):
+            self._last_ptt_held = False
+        if not hasattr(self, "_ptt_release_task"):
+            self._ptt_release_task = None
+        if not hasattr(self, "_ptt_release_max_wait_sec"):
+            self._ptt_release_max_wait_sec = _PTT_RELEASE_MAX_WAIT_SEC
+        if not hasattr(self, "_ptt_release_settle_sec"):
+            self._ptt_release_settle_sec = _PTT_RELEASE_SETTLE_SEC
+        if not hasattr(self, "_ptt_release_poll_sec"):
+            self._ptt_release_poll_sec = _PTT_RELEASE_POLL_SEC
         self._ensure_user_turn_coordinator()
         if not hasattr(self, "_interaction_mode"):
             self._interaction_mode = INTERACTION_MODE_FULL_DUPLEX
@@ -1626,6 +1683,7 @@ class StreamingPipeline(BasePipeline):
         # Runs after RoomDataHandler.handle_packet has stored the latest client
         # audio state (so do NOT handle_packet again here — that would double-count).
         self._sync_room_data_compat_attrs()
+        self._track_ptt_turn_edges(packet)
         self._handle_explicit_client_interrupt(packet)
 
     def _on_room_data_received(self, packet: Any) -> None:
@@ -1669,6 +1727,179 @@ class StreamingPipeline(BasePipeline):
         # allow_interruptions=False (no VAD/audio auto-interrupt) but tap-to-stop
         # must still cancel the agent's speech.
         self._duck_cancel_and_interrupt(force=True)
+
+    # ------------------------------------------------------------------
+    # Half-duplex (PTT) turn boundary
+    # ------------------------------------------------------------------
+
+    def _ptt_release_drives_commit(self) -> bool:
+        """True when a half-duplex PTT turn is in flight and the release edge —
+        not VAD/EOT — owns the commit.
+
+        While this holds, the EOT/VAD commit paths DEFER (hold) the turn instead
+        of committing, so a mid-sentence pause cannot finalize the turn early and
+        drop the trailing clause. ``_run_ptt_release_commit`` flips
+        ``_ptt_commit_authorized`` and fires the single commit on release.
+        Devices that never send a PTT signal leave ``_ptt_turn_active`` False and
+        keep the framework's VAD/EOT commit behaviour.
+        """
+        return (
+            self._is_half_duplex
+            and getattr(self, "_ptt_turn_active", False)
+            and not getattr(self, "_ptt_commit_authorized", False)
+        )
+
+    def _track_ptt_turn_edges(self, packet: Any) -> None:
+        """Drive the half-duplex turn boundary from PTT (push-to-talk) edges.
+
+        In half_duplex the turn boundary is the explicit client signal, NOT
+        VAD/EOT: the PTT rising edge (``ptt=True``) starts a turn and the falling
+        edge (``ptt=False``) ends it. Bailian ASR splits a brief mid-sentence
+        pause into two sentence finals; an EOT firing in the gap after release
+        but before the trailing final lands would commit only the first sentence
+        and drop the rest ("...今天的天气" kept, "北京的天气" lost). So on release
+        we wait (bounded) for the trailing ASR to flush and commit the AGGREGATE
+        of every segment since press, exactly once.
+        """
+        if not getattr(self, "_is_half_duplex", False):
+            return
+        if getattr(packet, "topic", None) != CLIENT_AUDIO_STATE_TOPIC:
+            return
+        participant = getattr(packet, "participant", None)
+        identity = getattr(participant, "identity", "") or None
+        state = self._latest_client_audio_state(participant_identity=identity)
+        if state is None:
+            return
+        held = bool(state.ptt)
+        was_held = bool(getattr(self, "_last_ptt_held", False))
+        self._last_ptt_held = held
+        if held and not was_held:
+            # Rising edge: a fresh turn begins. Cancel any in-flight release
+            # commit (rapid re-press) and re-arm the gate so VAD/EOT hold the
+            # turn until the next release.
+            self._cancel_ptt_release_commit("ptt_press")
+            self._ptt_turn_active = True
+            self._ptt_commit_authorized = False
+            logger.info("[StreamingPipeline] PTT press → turn boundary armed")
+        elif was_held and not held:
+            # Falling edge: the user released. The commit is driven from here.
+            logger.info(
+                "[StreamingPipeline] PTT release → scheduling turn commit"
+            )
+            self._schedule_ptt_release_commit()
+
+    def _cancel_ptt_release_commit(self, reason: str) -> None:
+        task = getattr(self, "_ptt_release_task", None)
+        if task is not None and not task.done():
+            logger.info(
+                "[StreamingPipeline] cancelling PTT release commit reason=%s",
+                reason,
+            )
+            task.cancel()
+        self._ptt_release_task = None
+
+    def _schedule_ptt_release_commit(self) -> None:
+        self._cancel_ptt_release_commit("replace_ptt_release")
+        self._ptt_release_task = asyncio.create_task(
+            self._run_ptt_release_commit()
+        )
+
+    async def _await_ptt_trailing_asr(self) -> None:
+        """Wait (bounded) for the trailing in-flight ASR sentence to finalize.
+
+        On PTT release the last sentence is often still an INTERIM; STT flushes
+        it to a FINAL a few hundred ms later. We wait until the active
+        candidate's most recent transcript revision is a FINAL and a short quiet
+        period has elapsed (so we don't cut between a final and a follow-on
+        interim), or until a hard cap so a stuck stream never hangs the turn.
+        """
+        self._ensure_user_turn_coordinator()
+        deadline = time.monotonic() + max(0.0, self._ptt_release_max_wait_sec)
+        settle = max(0.0, self._ptt_release_settle_sec)
+        poll = max(0.01, self._ptt_release_poll_sec)
+        while True:
+            candidate = self._user_turns.active
+            revisions = candidate.revisions if candidate is not None else []
+            if revisions:
+                last = revisions[-1]
+                if last.is_final and (time.monotonic() - last.received_at) >= settle:
+                    return
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(poll)
+
+    async def _run_ptt_release_commit(self) -> None:
+        """Commit the half-duplex turn on PTT release, aggregating every segment.
+
+        Reuses the production commit path (``_schedule_voiceprint_gated_commit``
+        → ``_commit_user_turn_now``). The candidate may be ``open`` (no framework
+        EOU fired before release) or ``waiting_merge`` (a premature EOU was held);
+        either way ``selected_text`` already concatenates all ASR segments since
+        the press, so the committed turn carries the full utterance.
+        """
+        try:
+            await self._await_ptt_trailing_asr()
+            self._ensure_user_turn_coordinator()
+            eot_model = self._get_eot_model()
+            candidate = self._user_turns.active
+            transcript = (
+                self._user_turns.selected_text or self._latest_asr_text
+            ).strip()
+            if (
+                not transcript
+                or candidate is None
+                or candidate.state in {"committed", "rejected"}
+            ):
+                # Empty/silent hold, or already committed → graceful no-turn.
+                if (
+                    not transcript
+                    and candidate is not None
+                    and candidate.state not in {"committed", "rejected"}
+                ):
+                    eot_model.reset()
+                    self._user_turns.reject_active("ptt_release_empty")
+                    self._clear_session_user_turn("ptt_release_empty")
+                self._ptt_turn_active = False
+                self._latest_asr_text = ""
+                return
+            if candidate.state == "waiting_merge":
+                decision = self._user_turns.deferred_ready()
+            else:
+                decision = self._user_turns.finish_speech(
+                    eot_score=getattr(
+                        eot_model,
+                        "current_eot_score",
+                        getattr(eot_model, "_current_eot_score", None),
+                    ),
+                    should_defer=False,
+                )
+            if decision.action != "commit":
+                if decision.action == "reject":
+                    eot_model.reset()
+                    self._clear_session_user_turn(decision.reason)
+                self._ptt_turn_active = False
+                self._latest_asr_text = ""
+                return
+            # Authorize the commit BEFORE invoking commit_user_turn so the
+            # re-entrant framework ``on_user_turn_completed`` hook passes
+            # (mirrors the deferred-commit path); the next PTT press re-arms.
+            self._ptt_commit_authorized = True
+            self._schedule_voiceprint_gated_commit(
+                verify_task=self._candidate_voiceprint_gate_task(),
+                eot_model=eot_model,
+                transcript=decision.transcript or transcript,
+                timeline=self._timeline,
+            )
+            self._latest_asr_text = ""
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] error in PTT release commit"
+            )
+        finally:
+            if getattr(self, "_ptt_release_task", None) is asyncio.current_task():
+                self._ptt_release_task = None
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
@@ -2113,13 +2344,25 @@ class StreamingPipeline(BasePipeline):
                         self._reset_candidate_voiceprint_tasks()
                         self._latest_asr_text = ""
                     elif decision.action == "defer":
-                        self._schedule_deferred_low_eot_commit(
-                            verify_task=None,
-                            eot_model=eot_model,
-                            transcript=decision.transcript,
-                            timeline=self._timeline,
-                            delay_sec=decision.delay_sec,
-                        )
+                        if self._ptt_release_drives_commit():
+                            # Half-duplex PTT: the release edge fires the
+                            # commit, not a timer. Holding here just blocks the
+                            # premature VAD/EOT commit; the candidate stays in
+                            # waiting_merge until _run_ptt_release_commit, and a
+                            # mid-sentence pause merges its trailing clause in.
+                            logger.info(
+                                "[StreamingPipeline] held VAD-end turn for PTT "
+                                "release transcript=%r",
+                                transcript[:80],
+                            )
+                        else:
+                            self._schedule_deferred_low_eot_commit(
+                                verify_task=None,
+                                eot_model=eot_model,
+                                transcript=decision.transcript,
+                                timeline=self._timeline,
+                                delay_sec=decision.delay_sec,
+                            )
                     else:
                         self._schedule_voiceprint_gated_commit(
                             verify_task=self._candidate_voiceprint_gate_task(),

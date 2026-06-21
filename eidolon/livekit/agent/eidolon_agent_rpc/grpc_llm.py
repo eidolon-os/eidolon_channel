@@ -37,6 +37,7 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
     StatePayload,
     TlsConfig,
     ToolCallPayload,
+    ToolResultPayload,
     TurnError,
     UsagePayload,
 )
@@ -397,6 +398,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             attempt=attempt,
         )
         first_delta_seen = False
+        # Roles of non-answer status deltas already spoken this turn, so a
+        # preamble is rendered at most once even if the brain repeats it.
+        spoken_preamble_roles: set[str] = set()
         try:
             payload_iter = payloads.__aiter__()
             first_delta_deadline = asyncio.get_running_loop().time() + timeout
@@ -438,6 +442,22 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
                 if isinstance(payload, DeltaPayload):
+                    # Non-answer status lines (e.g. tool preambles) are spoken at
+                    # most once per turn and never accumulated as answer content.
+                    # The brain already de-dupes per turn; this is the channel's
+                    # role-aware guarantee on top of that.
+                    if payload.role != "answer":
+                        if payload.role in spoken_preamble_roles:
+                            continue
+                        spoken_preamble_roles.add(payload.role)
+                        llm_v.emit_provider_event(
+                            "brain_tool_preamble",
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            request_id=req_id,
+                            attempt=attempt,
+                            role=payload.role,
+                        )
                     if not first_delta_seen:
                         first_delta_seen = True
                         llm_v.emit_provider_event(
@@ -480,9 +500,46 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                         "[EidolonAgentGrpcLlmStream] state=%s turn=%s",
                         payload.state, turn_id,
                     )
-                elif isinstance(payload, (ToolCallPayload, CitationPayload, HandoffPayload)):
-                    # Channel doesn't surface tools / citations / handoff yet
-                    # — log at DEBUG so future work has a hook to grep for.
+                elif isinstance(payload, ToolCallPayload):
+                    # The channel neither forwards nor executes tools — the
+                    # brain runs its own tool loop. Surface at INFO so the tool
+                    # name/args are visible alongside the matching TOOL_RESULT.
+                    logger.info(
+                        "[EidolonAgentGrpcLlmStream] tool_call name=%s turn=%s",
+                        payload.name, turn_id,
+                    )
+                    llm_v.emit_provider_event(
+                        "brain_tool_call",
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        request_id=req_id,
+                        attempt=attempt,
+                        tool_name=payload.name,
+                    )
+                elif isinstance(payload, ToolResultPayload):
+                    # Surface ok/error at INFO so an operator can tell a failing
+                    # tool backend (ok=false, repeated) apart from a result that
+                    # never reached the brain's loop. The channel takes no action
+                    # on the result itself.
+                    logger.info(
+                        "[EidolonAgentGrpcLlmStream] tool_result name=%s ok=%s "
+                        "error=%s summary=%s turn=%s",
+                        payload.name, payload.ok, payload.error or "-",
+                        payload.summary or "-", turn_id,
+                    )
+                    llm_v.emit_provider_event(
+                        "brain_tool_result",
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        request_id=req_id,
+                        attempt=attempt,
+                        tool_name=payload.name,
+                        ok=payload.ok,
+                        error=payload.error,
+                    )
+                elif isinstance(payload, (CitationPayload, HandoffPayload)):
+                    # Citations / handoff not surfaced yet — DEBUG hook for
+                    # future work to grep.
                     logger.debug(
                         "[EidolonAgentGrpcLlmStream] %s turn=%s payload=%r",
                         type(payload).__name__, turn_id, payload,

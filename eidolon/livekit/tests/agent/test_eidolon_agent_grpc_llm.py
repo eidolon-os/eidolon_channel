@@ -68,6 +68,30 @@ def _state(turn_id: str, seq: int, state: str) -> pb.TurnEvent:
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.STATE, data=data)
 
 
+def _delta_role(turn_id: str, seq: int, text: str, role: str) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["text"] = text
+    data["role"] = role
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.DELTA, data=data)
+
+
+def _tool_call(turn_id: str, seq: int, name: str) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["name"] = name
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.TOOL_CALL, data=data)
+
+
+def _tool_result(
+    turn_id: str, seq: int, *, name: str, ok: bool, error: str = ""
+) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["name"] = name
+    data["ok"] = ok
+    if error:
+        data["error"] = error
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.TOOL_RESULT, data=data)
+
+
 class _ScriptedServicer(pbg.EidolonAgentServicer):
     """Replays a canned DELTA+DONE per StartTurn. Records cancels for assertions.
 
@@ -135,6 +159,50 @@ class _UsageStateServicer(pbg.EidolonAgentServicer):
                 yield _state(tid, 1, "thinking")
                 yield _delta(tid, 2, "ok")
                 yield _usage(tid, 3, prompt=12, completion=3, total=15, model="brain-test")
+                yield _done(tid, 4)
+                return
+
+
+class _ToolEventServicer(pbg.EidolonAgentServicer):
+    """Emits TOOL_CALL → TOOL_RESULT(error) → DELTA → DONE.
+
+    Mirrors a failing tool (e.g. get_weather) so we can assert the channel now
+    surfaces the result's ok/error at INFO instead of DEBUG-swallowing it."""
+
+    def __init__(self) -> None:
+        self.starts: list[pb.StartTurn] = []
+
+    async def Chat(self, request_iterator, context):  # type: ignore[override]
+        async for req in request_iterator:
+            if req.WhichOneof("payload") == "start":
+                self.starts.append(req.start)
+                tid = req.start.turn_id
+                yield _tool_call(tid, 1, "get_weather")
+                yield _tool_result(
+                    tid, 2, name="get_weather", ok=False, error="weather_lookup_failed"
+                )
+                yield _delta(tid, 3, "抱歉，天气接口暂时没有响应。")
+                yield _done(tid, 4)
+                return
+
+
+class _PreambleServicer(pbg.EidolonAgentServicer):
+    """Emits the same role=tool_preamble delta twice, then a role=answer delta.
+
+    Verifies the channel speaks a status preamble at most once per turn while
+    still rendering the real answer."""
+
+    def __init__(self) -> None:
+        self.starts: list[pb.StartTurn] = []
+
+    async def Chat(self, request_iterator, context):  # type: ignore[override]
+        async for req in request_iterator:
+            if req.WhichOneof("payload") == "start":
+                self.starts.append(req.start)
+                tid = req.start.turn_id
+                yield _delta_role(tid, 1, "我先调用相关工具处理一下。", "tool_preamble")
+                yield _delta_role(tid, 2, "我先调用相关工具处理一下。", "tool_preamble")
+                yield _delta_role(tid, 3, "北京今天晴。", "answer")
                 yield _done(tid, 4)
                 return
 
@@ -795,6 +863,97 @@ async def test_error_code_mapping(
                 # APIConnectionError carries retryable via the framework's
                 # APIError base; just verify the type since retryable surface
                 # may differ across livekit-agents versions.
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+async def test_tool_events_surface_at_info(caplog) -> None:
+    """③ observability: TOOL_CALL and TOOL_RESULT must be visible at INFO.
+
+    Previously TOOL_RESULT fell into the not-surfaced DEBUG branch, so an
+    operator could not tell a failing tool backend (ok=false) apart from a
+    result that never reached the brain's loop. The channel still takes no
+    action on the result — it only renders the brain's answer delta.
+    """
+    import logging
+
+    servicer = _ToolEventServicer()
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id="livekit:tools",
+        )
+        try:
+            provider_events: list[dict] = []
+            adapter.on("provider_event", provider_events.append)
+            with caplog.at_level(logging.INFO, logger="eidolon_agent_rpc.grpc_llm"):
+                stream = adapter.chat(chat_ctx=_ctx("查一下北京天气"))
+                deltas: list[str] = []
+                async for chunk in stream:
+                    if chunk.delta and chunk.delta.content:
+                        deltas.append(chunk.delta.content)
+
+            # The answer delta still renders (tool events are not TTS'd).
+            assert any("抱歉" in d for d in deltas)
+
+            messages = [r.getMessage() for r in caplog.records]
+            assert any("tool_call name=get_weather" in m for m in messages), messages
+            assert any(
+                "tool_result name=get_weather ok=False" in m
+                and "error=weather_lookup_failed" in m
+                for m in messages
+            ), messages
+
+            assert any(
+                e.get("event") == "brain_tool_result"
+                and e.get("tool_name") == "get_weather"
+                and e.get("ok") is False
+                and e.get("error") == "weather_lookup_failed"
+                for e in provider_events
+            ), provider_events
+            assert any(
+                e.get("event") == "brain_tool_call"
+                and e.get("tool_name") == "get_weather"
+                for e in provider_events
+            ), provider_events
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+async def test_tool_preamble_role_spoken_once() -> None:
+    """② role-aware rendering: a repeated tool_preamble is spoken at most once;
+    the answer delta still renders. Default-role answer deltas are unaffected."""
+    servicer = _PreambleServicer()
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token="test-token",
+            conversation_id="livekit:preamble",
+        )
+        try:
+            provider_events: list[dict] = []
+            adapter.on("provider_event", provider_events.append)
+            stream = adapter.chat(chat_ctx=_ctx("查一下北京天气"))
+            spoken: list[str] = []
+            async for chunk in stream:
+                if chunk.delta and chunk.delta.content:
+                    spoken.append(chunk.delta.content)
+
+            assert spoken.count("我先调用相关工具处理一下。") == 1, spoken
+            assert "北京今天晴。" in spoken
+            assert (
+                sum(1 for e in provider_events if e.get("event") == "brain_tool_preamble")
+                == 1
+            ), provider_events
         finally:
             await adapter.aclose()
     finally:

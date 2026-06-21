@@ -76,6 +76,11 @@ _CHANNEL_OPTIONS = list(DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS)
 @dataclass(frozen=True, slots=True)
 class DeltaPayload:
     text: str
+    # "answer" (default) is spoken content; non-answer roles (e.g.
+    # "tool_preamble") are status lines the renderer may speak at most once or
+    # route to UI instead of treating as answer text. Missing role on the wire
+    # defaults to "answer" for backward compatibility.
+    role: str = "answer"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +100,14 @@ class StatePayload:
 class ToolCallPayload:
     name: str
     args: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultPayload:
+    name: str
+    ok: bool
+    error: str = ""
+    summary: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +134,7 @@ TurnPayload = (
     | UsagePayload
     | StatePayload
     | ToolCallPayload
+    | ToolResultPayload
     | CitationPayload
     | HandoffPayload
     | _DonePayload
@@ -133,6 +147,31 @@ def _s_field(fields, name: str) -> str:
     field access is verbose enough that an indirection helps."""
     if fields is not None and name in fields:
         return fields[name].string_value
+    return ""
+
+
+def _tool_result_summary(fields) -> str:
+    """Compact, log-safe description of a TOOL_RESULT's ``content`` value.
+
+    The channel only logs this for observability — never the full payload —
+    so a one-liner about shape is enough to eyeball what came back."""
+    if fields is None or "content" not in fields:
+        return ""
+    value = fields["content"]
+    if value.HasField("struct_value"):
+        keys = list(value.struct_value.fields.keys())
+        return f"struct(keys={keys})"
+    if value.HasField("string_value"):
+        text = value.string_value
+        return text if len(text) <= 80 else text[:77] + "..."
+    if value.HasField("list_value"):
+        return f"list(len={len(value.list_value.values)})"
+    if value.HasField("null_value"):
+        return ""
+    if value.HasField("number_value"):
+        return str(value.number_value)
+    if value.HasField("bool_value"):
+        return str(value.bool_value)
     return ""
 
 
@@ -368,7 +407,8 @@ class EidolonAgentSession:
                 else ""
             )
             if text:
-                q.put_nowait(DeltaPayload(text=text))
+                role = _s_field(data_fields, "role") or "answer"
+                q.put_nowait(DeltaPayload(text=text, role=role))
         elif kind == pb.TurnEvent.DONE:
             q.put_nowait(_DONE)
         elif kind == pb.TurnEvent.ERROR:
@@ -418,12 +458,33 @@ class EidolonAgentSession:
             args_raw = data_fields["args"] if data_fields is not None and "args" in data_fields else None
             args = dict(args_raw.struct_value) if (args_raw is not None and args_raw.HasField("struct_value")) else {}
             q.put_nowait(ToolCallPayload(name=name, args=args))
+        elif kind == pb.TurnEvent.TOOL_RESULT:
+            # Brain emits {name, ok, content, error}. The channel neither
+            # executes tools nor feeds results back (the brain already has
+            # them) — but surfacing ok/error is what lets an operator tell a
+            # truly-failing tool backend apart from a result that never made it
+            # back into the brain's loop.
+            name = _s_field(data_fields, "name")
+            ok = (
+                data_fields["ok"].bool_value
+                if data_fields is not None and "ok" in data_fields
+                else False
+            )
+            error = _s_field(data_fields, "error")
+            q.put_nowait(
+                ToolResultPayload(
+                    name=name,
+                    ok=ok,
+                    error=error,
+                    summary=_tool_result_summary(data_fields),
+                )
+            )
         elif kind == pb.TurnEvent.CITATION:
             q.put_nowait(CitationPayload(raw=dict(ev.data) if ev.data is not None else {}))
         elif kind == pb.TurnEvent.HANDOFF:
             q.put_nowait(HandoffPayload(raw=dict(ev.data) if ev.data is not None else {}))
         else:
-            # TOOL_RESULT / ACK / PROGRESS / KIND_UNSPECIFIED — not surfaced.
+            # ACK / PROGRESS / KIND_UNSPECIFIED — not surfaced.
             logger.debug(
                 "[EidolonAgentSession] ignoring %s event (turn=%s)",
                 pb.TurnEvent.Kind.Name(kind),

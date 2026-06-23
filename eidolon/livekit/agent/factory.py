@@ -257,6 +257,8 @@ class SharedStageFactory:
 
                 def _resolve_cid() -> str:
                     try:
+                        from eidolon.livekit.agent.runtime import resolve_device_id
+
                         participants = list(
                             getattr(room_ref, "remote_participants", {}).values()
                         )
@@ -264,7 +266,27 @@ class SharedStageFactory:
                             getattr(room_ref, "name", None) or room_name_static
                         )
                         if participants:
-                            ident = getattr(participants[0], "identity", "") or "anon"
+                            p = participants[0]
+                            ident = getattr(p, "identity", "") or "anon"
+                            # Voice rooms are per-session (device-<id>-<nonce>):
+                            # keying the conversation on the volatile room name
+                            # would start a fresh brain context on every JOIN. For
+                            # a device, key on the stable participant identity
+                            # alone (its LiveKit identity is constant across
+                            # reconnects and single-format) so every JOIN from the
+                            # same device continues one conversation. device_id is
+                            # used only to DETECT a device — don't fold it into the
+                            # key too: it can arrive in a different MAC spelling
+                            # than `ident` (colon vs hyphen) and would split one
+                            # device's history across two keys. Web/other
+                            # participants carry no device_id and keep the
+                            # room-scoped id.
+                            is_device = (
+                                resolve_device_id(getattr(p, "metadata", None))
+                                is not None
+                            )
+                            if is_device:
+                                return f"{prefix}:{ident}"
                             return f"{prefix}:{ident}:{room_name}"
                         # Defensive — no participant yet (very early in job
                         # lifecycle, before user speech). Brain will still

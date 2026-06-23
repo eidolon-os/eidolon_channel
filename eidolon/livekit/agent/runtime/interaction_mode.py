@@ -42,6 +42,20 @@ _VALID_MODES = frozenset(
     {INTERACTION_MODE_HALF_DUPLEX, INTERACTION_MODE_FULL_DUPLEX}
 )
 
+# Session intent (plan §3.2) — why this voice session exists. Rides the SAME
+# join-metadata bus as interaction_mode (resolved once, from the same
+# participant.metadata, passed as an explicit param), and is orthogonal to it:
+#   - user_initiated   : the user tapped JOIN / is driving the conversation.
+#   - proactive_initiated : the session was woken to deliver a proactive report
+#     (Phase 3). Drives a shorter idle window + proactive_done teardown so a
+#     report nobody answers is reclaimed quickly (I2/I6), instead of leaning on
+#     the half_duplex keep-alive that a user_initiated PTT session enjoys.
+# Default user_initiated: today nothing stamps proactive intent (Phase 3 wires
+# the wake path), so every current session is correctly user_initiated.
+INTENT_USER_INITIATED = "user_initiated"
+INTENT_PROACTIVE = "proactive_initiated"
+_VALID_INTENTS = frozenset({INTENT_USER_INITIATED, INTENT_PROACTIVE})
+
 
 def resolve_interaction_mode(
     raw_metadata: str | dict[str, Any] | None,
@@ -68,6 +82,61 @@ def resolve_interaction_mode(
         return default
     candidate = str(meta.get("interaction_mode") or "").strip().lower()
     return candidate if candidate in _VALID_MODES else default
+
+
+def resolve_session_intent(
+    raw_metadata: str | dict[str, Any] | None,
+    *,
+    default: str = INTENT_USER_INITIATED,
+) -> str:
+    """Parse ``session_intent`` out of a participant's metadata.
+
+    Same source + parsing contract as ``resolve_interaction_mode`` (one
+    participant.metadata read resolves both). Anything missing, unparseable, or
+    holding an unknown value degrades to ``default`` (``user_initiated``) — the
+    safe assumption that a session is user-driven.
+    """
+    meta: dict[str, Any] | None = None
+    if isinstance(raw_metadata, dict):
+        meta = raw_metadata
+    elif isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            meta = parsed
+    if not meta:
+        return default
+    candidate = str(meta.get("session_intent") or "").strip().lower()
+    return candidate if candidate in _VALID_INTENTS else default
+
+
+def resolve_device_id(
+    raw_metadata: str | dict[str, Any] | None,
+) -> str | None:
+    """Parse the stable ``device_id`` out of a participant's metadata.
+
+    Same source + parsing contract as the resolvers above (hub stamps
+    ``device_id`` into the device/control token metadata). Returns the id as a
+    string, or ``None`` when absent/unparseable. Used to key the conversation on
+    the device rather than the per-session voice room name (which now carries a
+    nonce and would otherwise fragment brain context across reconnects).
+    """
+    meta: dict[str, Any] | None = None
+    if isinstance(raw_metadata, dict):
+        meta = raw_metadata
+    elif isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            meta = parsed
+    if not meta:
+        return None
+    device_id = str(meta.get("device_id") or "").strip()
+    return device_id or None
 
 
 def apply_interaction_mode(

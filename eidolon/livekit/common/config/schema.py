@@ -158,8 +158,13 @@ class IdlePolicyConfig:
     # no agent activity) for this long. Guards against a client that connects
     # and is never closed — STT keeps streaming audio (and billing) for the
     # whole connection even while silent. 0 (or negative) disables the
-    # watchdog entirely. Default 60s.
+    # watchdog entirely. Default 60s. Applies to user_initiated sessions.
     disconnect_after_idle_ms: int = 60_000
+    # Idle window for a proactive_initiated session (plan §3.3): a wake-up nobody
+    # answers must be reclaimed quickly (I2/I6) rather than lingering on the
+    # user_initiated 60s / half_duplex keep-alive. After this much silence a
+    # proactive session ends gracefully (proactive_done). 0 disables.
+    proactive_disconnect_after_idle_ms: int = 12_000
 
 
 @dataclass(frozen=True)

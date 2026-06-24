@@ -14,7 +14,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from eidolon.livekit.agent.eidolon_agent_rpc.proactive import (
+        ProactiveHandler,
+        ProactiveSubscriber,
+    )
 
 from eidolon_sdk.grpc import TokenSource, build_channel_credentials, resolve_token_source
 from livekit.agents import llm
@@ -311,6 +317,32 @@ class EidolonAgentGrpcLlm(llm.LLM):
             ),
             framework_user_text=framework_user_text,
             conversation_id=self._resolve_conversation_id_for_chat(),
+        )
+
+    async def open_proactive_subscriber(
+        self,
+        *,
+        on_event: "ProactiveHandler",
+        instance_id: str = "",
+    ) -> "ProactiveSubscriber":
+        """Build a proactive-report subscriber sharing this LLM's connection config.
+
+        Resolves the device token the same way ``chat()`` does (so the server
+        sees the same identity), then hands back a not-yet-running subscriber.
+        The pipeline owns the ``run()``/``aclose()`` lifecycle so the stream is
+        bounded to the LiveKit job, not the LLM instance.
+        """
+        from eidolon.livekit.agent.eidolon_agent_rpc.proactive import (
+            ProactiveSubscriber,
+        )
+
+        token = await self._resolve_device_token()
+        return ProactiveSubscriber(
+            target=self._target,
+            device_token=token,
+            on_event=on_event,
+            tls=self._tls,
+            instance_id=instance_id,
         )
 
     async def aclose(self) -> None:

@@ -16,10 +16,13 @@ import json
 import pytest
 
 from eidolon.livekit.agent.runtime import (
+    INTENT_PROACTIVE,
+    INTENT_USER_INITIATED,
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
     apply_interaction_mode,
     resolve_interaction_mode,
+    resolve_session_intent,
 )
 from eidolon.livekit.common.config.schema import TurnPolicyConfig
 
@@ -62,6 +65,36 @@ def test_resolve_explicit_default_override():
         resolve_interaction_mode(None, default=INTERACTION_MODE_FULL_DUPLEX)
         == INTERACTION_MODE_FULL_DUPLEX
     )
+
+
+# ── resolve_session_intent ──────────────────────────────────────────────
+
+
+def test_resolve_intent_from_metadata():
+    raw = json.dumps({"interaction_mode": "half_duplex", "session_intent": "proactive_initiated"})
+    assert resolve_session_intent(raw) == INTENT_PROACTIVE
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [None, "", "not-json", json.dumps({"interaction_mode": "half_duplex"}), json.dumps({"session_intent": "bogus"})],
+)
+def test_resolve_intent_defaults_user_initiated(raw):
+    # Missing / unparseable / unknown → safe user_initiated (today nothing
+    # stamps proactive; Phase 3 wires the wake path).
+    assert resolve_session_intent(raw) == INTENT_USER_INITIATED
+
+
+def test_resolve_intent_is_case_insensitive():
+    raw = json.dumps({"session_intent": "PROACTIVE_INITIATED"})
+    assert resolve_session_intent(raw) == INTENT_PROACTIVE
+
+
+def test_mode_and_intent_resolve_from_one_metadata():
+    # The session-metadata bus: one participant.metadata read yields both.
+    meta = {"interaction_mode": "full_duplex", "session_intent": "proactive_initiated"}
+    assert resolve_interaction_mode(meta) == INTERACTION_MODE_FULL_DUPLEX
+    assert resolve_session_intent(meta) == INTENT_PROACTIVE
 
 
 # ── apply_interaction_mode ──────────────────────────────────────────────

@@ -68,6 +68,8 @@ from .client_audio_state import (
 )
 from .context import InterruptedContextManager
 from .runtime.interaction_mode import (
+    INTENT_PROACTIVE,
+    INTENT_USER_INITIATED,
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
 )
@@ -177,7 +179,10 @@ class StreamingPipeline(BasePipeline):
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
+        on_session_end: Callable[[str], Awaitable[None]] | None = None,
+        on_session_closed: Callable[[], Awaitable[None]] | None = None,
         interaction_mode: str = INTERACTION_MODE_FULL_DUPLEX,
+        session_intent: str = INTENT_USER_INITIATED,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         # Session-level interaction mode (plan Phase 5), authoritative from the
@@ -189,6 +194,21 @@ class StreamingPipeline(BasePipeline):
         # worker (server.py) always passes the resolved mode.
         self._interaction_mode = interaction_mode
         self._is_half_duplex = interaction_mode == INTERACTION_MODE_HALF_DUPLEX
+        # Session intent (plan §3.2/§3.3) — orthogonal to interaction_mode. Drives
+        # the idle window + teardown reason + whether the half_duplex keep-alive
+        # exemption applies. Defaults user_initiated for a directly-constructed
+        # pipeline; the worker passes the resolved value.
+        self._session_intent = session_intent
+        self._is_proactive = session_intent == INTENT_PROACTIVE
+        # Half-duplex (manual turn_detection) PTT turn boundary (plan §10):
+        #   _last_ptt_held       — track the ptt edge so release (True→False)
+        #                          commits exactly one turn.
+        #   _ptt_turn_had_speech — 守空 guard: only commit if some speech arrived
+        #                          this hold (manual mode would otherwise fire an
+        #                          empty EOU on a no-speech press). Reset on press
+        #                          and after the release commit.
+        self._last_ptt_held = False
+        self._ptt_turn_had_speech = False
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
@@ -259,6 +279,12 @@ class StreamingPipeline(BasePipeline):
         self._aec_warmup_duration = aec_warmup_duration
 
         self._session: AgentSession | None = None
+        # Proactive report consumer: a background stream that lets the brain
+        # speak unprompted (e.g. "your meeting notes are ready"). Started after
+        # session.start(); torn down in shutdown(). Lazily wired so direct_llm
+        # mode (no eidolon_agent gRPC backend) simply skips it.
+        self._proactive_task: asyncio.Task | None = None
+        self._proactive_subscriber: Any | None = None
         self._client_audio_states: dict[str, ClientAudioState] = {}
         self._room_data = RoomDataHandler(
             get_timeline=lambda: getattr(self, "_timeline", None),
@@ -276,14 +302,36 @@ class StreamingPipeline(BasePipeline):
         # ``_mark_activity()`` on real ASR text and on agent thinking/speaking;
         # raw VAD/noise (which yields empty ASR) deliberately does NOT count, so
         # a silent-but-noisy room still disconnects. <=0 disables the watchdog.
-        self._idle_timeout_sec: float = (
-            self._turn_policy.idle.disconnect_after_idle_ms / 1000.0
-        )
+        # Idle window + teardown reason + keep-alive exemption are chosen by
+        # session_intent (plan §3.2/§3.3): a proactive wake-up nobody answers is
+        # reclaimed on a short window with reason=proactive_done and gets NO
+        # half_duplex keep-alive; a user session keeps the 60s window,
+        # idle_normal_end, and the half_duplex keep-alive.
+        if self._is_proactive:
+            self._idle_timeout_sec: float = (
+                self._turn_policy.idle.proactive_disconnect_after_idle_ms / 1000.0
+            )
+            self._idle_end_reason = "proactive_done"
+            self._idle_keep_alive_half_duplex = False
+        else:
+            self._idle_timeout_sec = (
+                self._turn_policy.idle.disconnect_after_idle_ms / 1000.0
+            )
+            self._idle_end_reason = "idle_normal_end"
+            self._idle_keep_alive_half_duplex = True
         self._idle_watchdog_task: asyncio.Task | None = None
         self._last_activity_monotonic: float = 0.0
         # Called when the idle timeout fires — deletes the room so the
         # still-connected client is actively disconnected (see server.py).
         self._on_idle_disconnect = on_idle_disconnect
+        # Shared session_end{reason} publisher (server.py owns idempotency + reason
+        # taxonomy). The watchdog routes idle_normal_end through it; other teardown
+        # paths (user_left/error/superseded) call it directly.
+        self._on_session_end = on_session_end
+        # Called once the AgentSession closes (device left / error) to delete the
+        # room PROMPTLY, before the slow STT/TTS shutdown drain — so a rapid
+        # re-JOIN of this fixed-name room gets a fresh room (no stale agent/track).
+        self._on_session_closed = on_session_closed
         # Grace between notifying the client and deleting the room, so the
         # reliable data packet reaches the client before it is kicked.
         self._idle_disconnect_grace_sec: float = 0.3
@@ -294,8 +342,11 @@ class StreamingPipeline(BasePipeline):
             get_timeline=lambda: getattr(self, "_timeline", None),
             session_closed_event=self._session_closed_event,
             on_idle_disconnect=self._on_idle_disconnect,
+            on_session_end=self._on_session_end,
             disconnect_grace_sec=self._idle_disconnect_grace_sec,
             is_half_duplex=lambda: self._is_half_duplex,
+            idle_end_reason=self._idle_end_reason,
+            keep_alive_half_duplex=self._idle_keep_alive_half_duplex,
         )
 
         # EOT semantic interruption check state
@@ -1569,6 +1620,11 @@ class StreamingPipeline(BasePipeline):
         # initial activity timestamp). See _idle_watchdog for the policy.
         self._start_idle_watchdog()
 
+        # Subscribe to proactive brain reports so finished background tasks can
+        # be spoken unprompted. After session.start() so session.say() has a
+        # fully-assembled audio output chain to render into.
+        self._start_proactive_consumer()
+
         try:
             # Wait for AgentSession to close (e.g. participant disconnect →
             # framework auto-closes session via close_on_disconnect=True).
@@ -1580,15 +1636,110 @@ class StreamingPipeline(BasePipeline):
             logger.info(
                 "[StreamingPipeline] session closed event received, exiting run()"
             )
+            # Delete the room NOW — before shutdown()'s STT/TTS drain — so this
+            # fixed-name room (device-<id>) and its agent/track are gone before a
+            # rapid re-JOIN. Without this the old agent lingers for the whole
+            # drain; an auto_subscribe=false client re-joining the still-alive
+            # room subscribes to the STALE track → in-room + agent_speaking state
+            # but NO audio (real-device confirmed: JOIN→X→quick JOIN → silent).
+            await self._delete_room_on_close()
         except asyncio.CancelledError:
             logger.info("[StreamingPipeline] cancelled")
             raise
         finally:
             await self.shutdown()
 
+    async def _delete_room_on_close(self) -> None:
+        """Prompt room teardown on session close (device left / error).
+
+        Runs before shutdown()'s STT/TTS drain so the fixed-name room and its
+        agent/track are gone before a rapid re-JOIN (plan §10 follow-up). No-op
+        when no callback is wired (direct-construction / tests).
+        """
+        cb = getattr(self, "_on_session_closed", None)
+        if cb is None:
+            return
+        try:
+            await cb()
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] on_session_closed (prompt room delete) failed"
+            )
+
+    def _start_proactive_consumer(self) -> None:
+        """Spawn the background proactive-report stream (best-effort)."""
+        if self._proactive_task is not None and not self._proactive_task.done():
+            return
+        self._proactive_task = asyncio.create_task(
+            self._run_proactive_consumer(),
+            name="eidolon-proactive-consumer",
+        )
+
+    async def _run_proactive_consumer(self) -> None:
+        """Open the proactive stream against the brain and keep it running.
+
+        Only the eidolon_agent gRPC LLM backend can push proactive reports; any
+        other LLM plugin (e.g. direct_llm) lacks ``open_proactive_subscriber``
+        and is skipped silently. The subscriber's own ``run()`` handles
+        reconnect/backoff, so this returns only on cancellation or close.
+        """
+        llm_plugin = getattr(getattr(self._factory, "llm", None), "llm", None)
+        opener = getattr(llm_plugin, "open_proactive_subscriber", None)
+        if opener is None:
+            logger.info(
+                "[StreamingPipeline] proactive consumer disabled "
+                "(LLM backend has no proactive stream)"
+            )
+            return
+        try:
+            subscriber = await opener(on_event=self._on_proactive_report)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[StreamingPipeline] failed to open proactive stream")
+            return
+        self._proactive_subscriber = subscriber
+        try:
+            await subscriber.run()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await subscriber.aclose()
+            self._proactive_subscriber = None
+
+    async def _on_proactive_report(self, report: Any) -> None:
+        """Speak a proactive brain report into the room via TTS."""
+        text = (getattr(report, "text", "") or "").strip()
+        if not text:
+            return
+        session = self._session
+        if session is None:
+            logger.info(
+                "[StreamingPipeline] dropping proactive report (session closed) "
+                "intent=%s",
+                getattr(report, "intent", ""),
+            )
+            return
+        logger.info(
+            "[StreamingPipeline] proactive report intent=%s chars=%d — speaking",
+            getattr(report, "intent", ""),
+            len(text),
+        )
+        self._mark_activity()
+        # allow_interruptions so the user can cut in if they start talking, the
+        # same contract as the welcome message.
+        session.say(text, allow_interruptions=True)
+
+    def _stop_proactive_consumer(self) -> None:
+        task = self._proactive_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._proactive_task = None
+
     async def shutdown(self) -> None:
         """Gracefully shut down the session."""
         logger.info("[StreamingPipeline] shutting down")
+        self._stop_proactive_consumer()
         # Cancel any pending soft interrupt / duck timeout before closing.
         self._cancel_soft_interrupt()
         self._cancel_stable_signal_timer()
@@ -1627,6 +1778,73 @@ class StreamingPipeline(BasePipeline):
         # audio state (so do NOT handle_packet again here — that would double-count).
         self._sync_room_data_compat_attrs()
         self._handle_explicit_client_interrupt(packet)
+        self._handle_ptt_turn_edges(packet)
+
+    def _handle_ptt_turn_edges(self, packet: Any) -> None:
+        """Half-duplex (manual) turn boundary: commit one turn on PTT release.
+
+        With ``turn_detection="manual"`` nothing commits automatically; the PTT
+        button is the sole turn boundary (plan §10). On the rising edge (press) we
+        arm a fresh turn; on the falling edge (release) we commit exactly once —
+        guarded by 守空 so a no-speech press doesn't fire an empty EOU.
+        """
+        if not self._is_half_duplex:
+            return
+        if getattr(packet, "topic", None) != CLIENT_AUDIO_STATE_TOPIC:
+            return
+        participant = getattr(packet, "participant", None)
+        identity = getattr(participant, "identity", "") or None
+        state = self._latest_client_audio_state(participant_identity=identity)
+        # Only react to a participant that actually publishes a ptt-bearing audio
+        # state (the device). A stray packet from another identity yields no state
+        # — ignore it rather than read it as ptt=False, which (mid-hold) would
+        # fake a release edge and commit early. One voice room == one device (I4),
+        # so a single held flag is sufficient.
+        if state is None:
+            return
+        held = bool(state.ptt)
+        was_held = self._last_ptt_held
+        self._last_ptt_held = held
+        if held and not was_held:
+            # Press: start a fresh turn's 守空 accounting.
+            self._ptt_turn_had_speech = False
+            return
+        if was_held and not held:
+            self._commit_ptt_release_turn()
+
+    def _commit_ptt_release_turn(self) -> None:
+        """Commit the held turn on PTT release (manual turn_detection).
+
+        Calls ``session.commit_user_turn`` exactly once, letting the framework
+        wait (``transcript_timeout``) for a still-in-flight FINAL — so a tail like
+        「北京的」 spoken just before release is included — and read its own
+        complete accumulated transcript. NEVER calls ``clear_user_turn`` (that
+        heavy reset is what dropped turns before, see §10). 守空: skip if no
+        speech arrived this hold.
+        """
+        session = self._session
+        if session is None:
+            return
+        if not self._ptt_turn_had_speech:
+            logger.info(
+                "[ptt-manual] release with no speech this hold; skipping commit (守空)"
+            )
+            return
+        self._ptt_turn_had_speech = False
+        try:
+            self._get_eot_model().reset()
+        except Exception:
+            logger.debug("[ptt-manual] eot reset failed (non-fatal)", exc_info=True)
+        try:
+            session.commit_user_turn(
+                transcript_timeout=self._stt_commit_transcript_timeout
+            )
+            logger.info(
+                "[ptt-manual] PTT release → commit_user_turn(transcript_timeout=%.1fs)",
+                self._stt_commit_transcript_timeout,
+            )
+        except Exception:
+            logger.exception("[ptt-manual] commit_user_turn on release failed")
 
     def _on_room_data_received(self, packet: Any) -> None:
         # Full manual processing for direct callers/tests. The production path
@@ -1670,6 +1888,27 @@ class StreamingPipeline(BasePipeline):
         # must still cancel the agent's speech.
         self._duck_cancel_and_interrupt(force=True)
 
+    def _turn_detection_for_mode(self) -> Any:
+        """The Agent ``turn_detection`` for this session's mode (plan §10).
+
+        half_duplex → ``"manual"`` (PTT owns the turn boundary; no auto EOU);
+        full_duplex → the EOT model instance (VAD + semantic EOT, unchanged).
+        """
+        return "manual" if self._is_half_duplex else self._get_eot_model()
+
+    def _welcome_on_enter_text(self) -> str | None:
+        """Welcome line to speak on session start, or None to stay silent.
+
+        Plan §4.3.1 / §5.1: a proactive_initiated session was woken to deliver a
+        report — the report (spoken by the proactive consumer) IS the opening, so
+        the canned welcome is suppressed (otherwise the device would say "你好…"
+        and then the report). A user_initiated session keeps its welcome (None
+        when unconfigured → wait for the user to speak first).
+        """
+        if self._is_proactive:
+            return None
+        return self._welcome_message or None
+
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
         from livekit.agents.voice import Agent
@@ -1682,8 +1921,26 @@ class StreamingPipeline(BasePipeline):
 
         class VoiceAgent(Agent):
             async def on_enter(self) -> None:
-                logger.info("[VoiceAgent] on_enter welcome=%r",
-                            welcome_message[:30] if welcome_message else "")
+                # [lifecycle] welcome timestamp — anchors "welcome played" so Phase
+                # 0 can measure the gap to a later idle room-delete and confirm
+                # whether "回 JOIN after welcome" is the idle watchdog firing.
+                room_name = getattr(getattr(pipeline, "_room", None), "name", None)
+                welcome = pipeline._welcome_on_enter_text()
+                if welcome is None:
+                    # Suppressed: proactive session (report is the opening, §4.3.1)
+                    # or no configured welcome (wait for the user to speak first).
+                    logger.info(
+                        "[lifecycle] welcome on_enter room=%s suppressed "
+                        "(proactive=%s)",
+                        room_name,
+                        pipeline._is_proactive,
+                    )
+                    return
+                logger.info(
+                    "[lifecycle] welcome on_enter room=%s welcome=%r",
+                    room_name,
+                    welcome[:30],
+                )
                 # Round 8 R8.9: use ``session.say(welcome)`` instead of
                 # ``session.generate_reply()`` for the initial greeting.
                 # generate_reply with no user message hands an empty
@@ -1691,9 +1948,7 @@ class StreamingPipeline(BasePipeline):
                 # system prompt template back as the "welcome". Fixed text
                 # is faster (no LLM call), more deterministic, and avoids
                 # leaking instruction text to users.
-                if welcome_message:
-                    self.session.say(welcome_message, allow_interruptions=True)
-                # else: silent welcome — agent waits for user to speak first
+                self.session.say(welcome, allow_interruptions=True)
 
             async def on_user_turn_completed(
                 self,
@@ -1712,13 +1967,21 @@ class StreamingPipeline(BasePipeline):
         # AGENTSESSION, not Agent. Putting it here was silently ignored.
         # Agent only carries per-agent override of ``turn_detection`` (the
         # EOT model instance, which is per-agent semantic).
+        # Turn detection by mode (plan §10):
+        #   half_duplex (PTT) → "manual": the framework runs NO automatic
+        #     end-of-utterance. The PTT button owns the turn boundary, so a
+        #     mid-sentence pause can't make the framework commit early and drop
+        #     the continuation ("…今天的天气 <pause> 北京的"). The whole hold
+        #     accumulates into one transcript; PTT release commits it once.
+        #   full_duplex → the EOT model instance (unchanged: VAD + semantic EOT).
+        turn_detection = self._turn_detection_for_mode()
         return VoiceAgent(
             instructions=self._instructions,
             stt=self._factory.stt.stt,
             llm=self._factory.llm.llm,
             tts=self._factory.tts.tts,
             vad=self._factory.vad.vad if self._factory.vad else None,
-            turn_detection=self._get_eot_model(),
+            turn_detection=turn_detection,
         )
 
     def _on_session_close(self, event: Any) -> None:
@@ -1800,8 +2063,14 @@ class StreamingPipeline(BasePipeline):
             self._idle_timeout_sec = 0.0
         if not hasattr(self, "_on_idle_disconnect"):
             self._on_idle_disconnect = None
+        if not hasattr(self, "_on_session_end"):
+            self._on_session_end = None
         if not hasattr(self, "_idle_disconnect_grace_sec"):
             self._idle_disconnect_grace_sec = 0.3
+        if not hasattr(self, "_idle_end_reason"):
+            self._idle_end_reason = "idle_normal_end"
+        if not hasattr(self, "_idle_keep_alive_half_duplex"):
+            self._idle_keep_alive_half_duplex = True
         if not hasattr(self, "_idle_watchdog_controller"):
             self._idle_watchdog_controller = IdleWatchdog(
                 timeout_sec=self._idle_timeout_sec,
@@ -1810,7 +2079,10 @@ class StreamingPipeline(BasePipeline):
                 get_timeline=lambda: getattr(self, "_timeline", None),
                 session_closed_event=self._session_closed_event,
                 on_idle_disconnect=self._on_idle_disconnect,
+                on_session_end=self._on_session_end,
                 disconnect_grace_sec=self._idle_disconnect_grace_sec,
+                idle_end_reason=self._idle_end_reason,
+                keep_alive_half_duplex=self._idle_keep_alive_half_duplex,
             )
             self._idle_watchdog_controller.last_activity_monotonic = getattr(
                 self,
@@ -2083,7 +2355,17 @@ class StreamingPipeline(BasePipeline):
 
                 self._callbacks.on_user_ended_speaking()
                 self._skip_commit_after_interrupt_cancel = False
-                if self._session is not None:
+                if self._is_half_duplex:
+                    # Manual turn_detection (plan §10): VAD silence is NOT a turn
+                    # boundary in half_duplex — the PTT release is (see
+                    # _handle_ptt_release_edge). A mid-utterance pause must NOT
+                    # commit/defer here, or the turn would split and the
+                    # continuation be dropped. Keep accumulating; do not clear
+                    # _latest_asr_text.
+                    logger.debug(
+                        "[ptt-manual] VAD silence ignored, awaiting PTT release"
+                    )
+                elif self._session is not None:
                     transcript = (
                         self._user_turns.selected_text or self._latest_asr_text
                     )
@@ -2186,6 +2468,10 @@ class StreamingPipeline(BasePipeline):
             # room still trips the idle watchdog.
             self._mark_activity()
             self._latest_asr_text = event.transcript
+            # Half-duplex 守空 guard: any recognized speech this PTT hold makes the
+            # eventual release commit (an empty hold stays uncommitted).
+            if self._is_half_duplex and event.transcript.strip():
+                self._ptt_turn_had_speech = True
             self._ensure_user_turn_coordinator()
             self._user_turns.add_transcript(
                 event.transcript,

@@ -175,29 +175,37 @@ def _prewarm(proc) -> None:
         logger.warning("[Agent] prewarm: voiceprint load failed: %s", e)
 
 
-async def _resolve_session_interaction_mode(ctx) -> str:
-    """Read the session's interaction_mode from the joined participant.
+async def _resolve_session_metadata(ctx) -> tuple[str, str]:
+    """Resolve ``(interaction_mode, session_intent)`` from the joined participant.
 
-    Phase 5: hub stamped ``interaction_mode`` into the LiveKit token's
-    ``participant_metadata``; ``wait_for_participant`` connects the room (if
-    needed) and returns once the device/web client is present, so we read the
-    authoritative value before building the pipeline. Any failure degrades to
-    the safe default (``half_duplex``) — see ``runtime.interaction_mode``.
+    Single resolution point for the session-metadata bus (plan §3.2): hub stamps
+    both into the LiveKit token's ``participant_metadata``;
+    ``wait_for_participant`` returns once the device/web client is present, so we
+    read the authoritative values — from ONE metadata read — before building the
+    pipeline (both are AgentSession-construction inputs). Any failure degrades to
+    the safe defaults (``half_duplex`` / ``user_initiated``).
     """
     from eidolon.livekit.agent.runtime import (
+        INTENT_USER_INITIATED,
         INTERACTION_MODE_HALF_DUPLEX,
         resolve_interaction_mode,
+        resolve_session_intent,
     )
 
     try:
         participant = await ctx.wait_for_participant()
     except Exception:
         logger.exception(
-            "[Agent] wait_for_participant failed; defaulting interaction_mode=%s",
+            "[Agent] wait_for_participant failed; defaulting mode=%s intent=%s",
             INTERACTION_MODE_HALF_DUPLEX,
+            INTENT_USER_INITIATED,
         )
-        return INTERACTION_MODE_HALF_DUPLEX
-    return resolve_interaction_mode(getattr(participant, "metadata", None))
+        return INTERACTION_MODE_HALF_DUPLEX, INTENT_USER_INITIATED
+    metadata = getattr(participant, "metadata", None)
+    return (
+        resolve_interaction_mode(metadata),
+        resolve_session_intent(metadata),
+    )
 
 
 async def run_agent(ctx, cfg: AgentConfig) -> None:
@@ -239,10 +247,66 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     from livekit import api as lk_api
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
+    # session_end{reason} — the room is going away; tell the still-connected
+    # client WHY so it can distinguish a normal end of conversation from a join
+    # failure (plan §3.2). reason ∈ {idle_normal_end, user_left, error,
+    # superseded, proactive_done}. idle_normal_end is routed here by the idle
+    # watchdog; user_left/error come from the job-shutdown path; superseded and
+    # proactive_done are reserved for Phase 3. Idempotent: the first reason wins,
+    # so the shutdown callback that always follows an idle delete does not
+    # overwrite idle_normal_end with user_left.
+    _SESSION_CONTROL_TOPIC = "eidolon.session_control"
+    session_end_state: dict[str, str | bool] = {"sent": False}
+
+    async def _publish_session_end(reason: str) -> None:
+        if session_end_state["sent"]:
+            return
+        session_end_state["sent"] = True
+        local = getattr(room, "local_participant", None)
+        if local is None:
+            logger.info(
+                "[lifecycle] session_end reason=%s room=%s skipped (no local participant)",
+                reason, room.name,
+            )
+            return
+        import json as _json
+
+        try:
+            await local.publish_data(
+                _json.dumps({"type": "session_end", "reason": reason}).encode("utf-8"),
+                reliable=True,
+                topic=_SESSION_CONTROL_TOPIC,
+            )
+            logger.info("[lifecycle] session_end reason=%s room=%s sent", reason, room.name)
+        except Exception:
+            logger.debug(
+                "[lifecycle] session_end reason=%s room=%s publish failed",
+                reason, room.name, exc_info=True,
+            )
+
     async def _delete_room(context: str) -> None:
+        # [lifecycle] is the grep anchor that aligns server room-teardown with the
+        # ESP32 controller's [lifecycle] logs by room_name + timestamp (plan Phase
+        # 0). context distinguishes a normal idle end ("idle timeout") from the
+        # job-shutdown path ("shutdown callback"); the pre-delete snapshot shows
+        # whether anyone was still in the room when we tore it down.
+        try:
+            remote = getattr(room, "remote_participants", {}) or {}
+            local = getattr(room, "local_participant", None)
+            logger.info(
+                "[lifecycle] deleting room=%s context=%s remote_participants=%d "
+                "remote_identities=%s local_identity=%s",
+                room.name,
+                context,
+                len(remote),
+                list(remote.keys()),
+                getattr(local, "identity", None),
+            )
+        except Exception:  # pragma: no cover - logging must never break teardown
+            logger.debug("[lifecycle] pre-delete snapshot failed", exc_info=True)
         try:
             await ctx.api.room.delete_room(lk_api.DeleteRoomRequest(room=room.name))
-            logger.info("[Agent] room=%s deleted (%s)", room.name, context)
+            logger.info("[lifecycle] room=%s deleted (context=%s)", room.name, context)
         except TwirpError as e:
             if e.code == TwirpErrorCode.NOT_FOUND:
                 logger.debug(
@@ -261,18 +325,21 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     if cfg.behavior.agent_mode == "batch":
         pipeline = BatchPipeline(factory)
     else:
-        # Phase 5: pick a per-session turn policy from the device-declared
-        # interaction_mode (half_duplex → no barge-in). Never mutates the
-        # shared global cfg.
-        interaction_mode = await _resolve_session_interaction_mode(ctx)
+        # Phase 5 / Phase 2: resolve the session-metadata bus (interaction_mode +
+        # session_intent) from the device-declared token metadata in one read,
+        # then derive a per-session turn policy (half_duplex → no barge-in).
+        # Never mutates the shared global cfg.
+        interaction_mode, session_intent = await _resolve_session_metadata(ctx)
         session_turn_policy, allow_interruptions = apply_interaction_mode(
             turn_policy=cfg.turn_policy,
             allow_interruptions=True,
             interaction_mode=interaction_mode,
         )
         logger.info(
-            "[Agent] interaction_mode=%s allow_interruptions=%s attention_enabled=%s",
+            "[Agent] interaction_mode=%s session_intent=%s allow_interruptions=%s "
+            "attention_enabled=%s",
             interaction_mode,
+            session_intent,
             allow_interruptions,
             session_turn_policy.attention.enabled,
         )
@@ -284,15 +351,34 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             turn_policy=session_turn_policy,
             interaction_mode=interaction_mode,
+            session_intent=session_intent,
             observability=cfg.observability,
             # Idle watchdog disconnect: delete the room so the still-connected
             # client is actively kicked (ROOM_DELETED) and the job's
             # shutdown_fut resolves — session.aclose() alone leaves the client
             # in a dead room and the job hanging on shutdown_fut.
             on_idle_disconnect=lambda: _delete_room("idle timeout"),
+            # The idle watchdog routes its client notice through this as
+            # reason=idle_normal_end (sent before the grace + delete above).
+            on_session_end=_publish_session_end,
+            # On session close (device left / error), delete the room PROMPTLY —
+            # before the slow STT/TTS shutdown drain — so this fixed-name room
+            # (device-<id>) is gone before a rapid re-JOIN. Otherwise the old
+            # agent + its audio track linger here for the whole drain; an
+            # auto_subscribe=false client re-joining subscribes to that stale
+            # track and gets "in room + agent_speaking state but NO audio"
+            # (real-device confirmed: JOIN→X→quick JOIN → silent).
+            on_session_closed=lambda: _delete_room("session closed (device left)"),
         )
 
-    async def _delete_room_cb(_reason: str) -> None:
+    async def _delete_room_cb(reason: str) -> None:
+        # The job is shutting down (user left, or an error tore the session down).
+        # Send session_end first so a client that is still connected learns the
+        # reason before ROOM_DELETED arrives. No-op if idle already sent
+        # idle_normal_end (idempotent). Map the framework reason to our taxonomy.
+        text = str(reason or "").lower()
+        end_reason = "error" if ("error" in text or "fail" in text) else "user_left"
+        await _publish_session_end(end_reason)
         await _delete_room("shutdown callback")
 
     ctx.add_shutdown_callback(_delete_room_cb)

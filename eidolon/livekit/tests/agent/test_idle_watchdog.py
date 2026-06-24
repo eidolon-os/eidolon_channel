@@ -55,14 +55,15 @@ async def test_idle_watchdog_deletes_room_and_notifies_client():
     # Room deleted via the wired callback (not a bare session.aclose).
     on_idle.assert_awaited_once()
     pipeline._session.aclose.assert_not_awaited()
-    # Client notified on the eidolon.session_control topic before the room went away.
+    # Client told the session is ending normally (idle) on eidolon.session_control
+    # before the room went away — distinguishable from a join failure (plan §3.2).
     pipeline._room.local_participant.publish_data.assert_awaited_once()
     kwargs = pipeline._room.local_participant.publish_data.await_args.kwargs
     assert kwargs["topic"] == "eidolon.session_control"
     import json
     assert json.loads(pipeline._room.local_participant.publish_data.await_args.args[0]) == {
-        "type": "idle_timeout",
-        "reason": "idle_timeout",
+        "type": "session_end",
+        "reason": "idle_normal_end",
     }
     # run() is released to shut down.
     assert pipeline._session_closed_event.is_set()

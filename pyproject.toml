@@ -86,4 +86,4 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-eidolon-sdk = { path = "../eidolon_sdk" }
+eidolon-sdk = { path = "../eidolon_sdk", editable = true }

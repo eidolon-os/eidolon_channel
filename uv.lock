@@ -584,7 +584,7 @@ requires-dist = [
     { name = "addict", specifier = ">=2.4" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "datasets", specifier = ">=4.0" },
-    { name = "eidolon-sdk", directory = "../eidolon_sdk" },
+    { name = "eidolon-sdk", editable = "../eidolon_sdk" },
     { name = "grpcio", specifier = ">=1.68" },
     { name = "grpcio-tools", marker = "extra == 'dev'", specifier = ">=1.68" },
     { name = "livekit-agents", specifier = ">=1.5" },
@@ -614,13 +614,14 @@ provides-extras = ["dev"]
 [[package]]
 name = "eidolon-sdk"
 version = "0.1.0"
-source = { directory = "../eidolon_sdk" }
+source = { editable = "../eidolon_sdk" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "cryptography" },
     { name = "grpcio" },
     { name = "httpx" },
     { name = "livekit-api" },
+    { name = "protobuf" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -640,6 +641,8 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27" },
     { name = "livekit-api", specifier = ">=0.5" },
     { name = "livekit-api", marker = "extra == 'livekit'", specifier = ">=0.5" },
+    { name = "protobuf", specifier = ">=4.25" },
+    { name = "protobuf", marker = "extra == 'grpc'", specifier = ">=4.25" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pyjwt", specifier = ">=2.8" },
     { name = "pyjwt", marker = "extra == 'runtime'", specifier = ">=2.8" },

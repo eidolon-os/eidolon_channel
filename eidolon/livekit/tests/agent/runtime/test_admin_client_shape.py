@@ -14,7 +14,7 @@ internal refactors don't silently break the wrapper handling).
 
 from __future__ import annotations
 
-from eidolon_sdk.admin import ResolvedContext
+from eidolon_sdk.biz.admin import ResolvedContext
 
 
 def _expected_manson() -> dict:

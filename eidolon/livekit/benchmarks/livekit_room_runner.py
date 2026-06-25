@@ -19,10 +19,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from eidolon_sdk.livekit import build_livekit_token
+from eidolon_sdk.integrations.livekit import build_livekit_token
 from livekit import rtc
 
-from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
+from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 

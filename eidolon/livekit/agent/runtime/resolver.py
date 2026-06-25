@@ -25,12 +25,12 @@ import logging
 import uuid
 from typing import Any, Awaitable, Callable
 
-from eidolon_sdk.admin import (
+from eidolon_sdk.biz.admin import (
     AdminResolveClient,
     AdminResolveError,
     ResolvedContext,
 )
-from eidolon_sdk.runtime import sign_device_token
+from eidolon_sdk.biz.runtime import sign_device_token
 
 _log = logging.getLogger(__name__)
 

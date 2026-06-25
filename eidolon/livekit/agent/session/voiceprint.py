@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from eidolon_sdk.admin import AdminResolveClient, ResolvedContext
+from eidolon_sdk.biz.admin import AdminResolveClient, ResolvedContext
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.runtime.resolver import (

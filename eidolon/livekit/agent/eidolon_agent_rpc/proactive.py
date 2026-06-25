@@ -23,7 +23,7 @@ from typing import Awaitable, Callable
 
 import grpc
 import grpc.aio
-from eidolon_sdk.grpc import (
+from eidolon_sdk.core.grpc import (
     GrpcTlsConfig,
     authorization_metadata,
     build_channel_credentials,

@@ -21,7 +21,7 @@ from typing import AsyncIterator
 
 import grpc
 import grpc.aio
-from eidolon_sdk.grpc import (
+from eidolon_sdk.core.grpc import (
     DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS,
     GrpcTlsConfig,
     authorization_metadata,

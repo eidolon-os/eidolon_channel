@@ -81,7 +81,7 @@ def _build_device_token_source(
 
     # Resolve secret: env (loaded via _secret() at config time) →
     # ~/eidolon/run/jwt-secret (shared with eidolon-agent).
-    from eidolon_sdk.runtime import resolve_shared_secret
+    from eidolon_sdk.biz.runtime import resolve_shared_secret
     secret = resolve_shared_secret(rt.jwt_secret)
     if not secret:
         raise RuntimeError(
@@ -107,7 +107,7 @@ def _build_device_token_source(
     # close it lazily; one channel-worker handles one job at a time
     # so leaks are bounded.
     import httpx
-    from eidolon_sdk.admin import AdminResolveClient
+    from eidolon_sdk.biz.admin import AdminResolveClient
     from eidolon.livekit.agent.runtime import make_device_token_resolver
 
     http_client = httpx.AsyncClient(

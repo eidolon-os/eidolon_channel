@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 
-from eidolon_sdk.admin import (
+from eidolon_sdk.biz.admin import (
     AdminResolveClient,
     AdminResolveNotFound,
     ResolvedContext,

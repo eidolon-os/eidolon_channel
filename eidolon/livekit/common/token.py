@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from eidolon_sdk.livekit import build_livekit_token
+from eidolon_sdk.integrations.livekit import build_livekit_token
 
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
 

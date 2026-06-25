@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from eidolon_sdk.admin import ResolvedContext
+from eidolon_sdk.biz.admin import ResolvedContext
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnObserver

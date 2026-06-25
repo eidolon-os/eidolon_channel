@@ -22,7 +22,7 @@ if TYPE_CHECKING:
         ProactiveSubscriber,
     )
 
-from eidolon_sdk.grpc import TokenSource, build_channel_credentials, resolve_token_source
+from eidolon_sdk.core.grpc import TokenSource, build_channel_credentials, resolve_token_source
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice

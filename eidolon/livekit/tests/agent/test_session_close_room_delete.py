@@ -14,6 +14,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from eidolon_sdk.biz.contracts import SESSION_END_ERROR, SESSION_END_USER_LEFT
 
 from eidolon.livekit.agent.streaming import StreamingPipeline
 
@@ -40,3 +41,45 @@ async def test_session_close_delete_swallows_errors():
     p._on_session_closed = AsyncMock(side_effect=RuntimeError("boom"))
     await p._delete_room_on_close()  # must not raise
     p._on_session_closed.assert_awaited_once()
+
+
+# B2 (plan §3.2): every room-deletion path carries a session_end reason.
+
+
+@pytest.mark.asyncio
+async def test_session_close_publishes_user_left_before_delete():
+    """Clean close → session_end{user_left} published BEFORE the prompt delete."""
+    p = StreamingPipeline.__new__(StreamingPipeline)
+    calls: list[tuple[str, str | None]] = []
+
+    async def _end(reason: str) -> None:
+        calls.append(("end", reason))
+
+    async def _closed() -> None:
+        calls.append(("delete", None))
+
+    p._on_session_end = _end
+    p._on_session_closed = _closed
+    p._close_error = None
+    await p._delete_room_on_close()
+    assert calls == [("end", SESSION_END_USER_LEFT), ("delete", None)]
+
+
+@pytest.mark.asyncio
+async def test_session_close_publishes_error_on_error_close():
+    """An error-close maps to session_end{error}, not user_left."""
+    p = StreamingPipeline.__new__(StreamingPipeline)
+    calls: list[tuple[str, str | None]] = []
+
+    async def _end(reason: str) -> None:
+        calls.append(("end", reason))
+
+    async def _closed() -> None:
+        calls.append(("delete", None))
+
+    p._on_session_end = _end
+    p._on_session_closed = _closed
+    p._close_error = RuntimeError("boom")
+    await p._delete_room_on_close()
+    assert calls[0] == ("end", SESSION_END_ERROR)
+    assert ("delete", None) in calls

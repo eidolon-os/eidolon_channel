@@ -6,7 +6,8 @@ import time
 from dataclasses import replace
 from types import SimpleNamespace
 
-from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
+from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session import RoomDataHandler
 

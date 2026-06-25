@@ -23,9 +23,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
+from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
-from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
 from eidolon.livekit.agent.streaming import StreamingPipeline
 
 

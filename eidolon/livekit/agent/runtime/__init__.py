@@ -1,10 +1,6 @@
 """Runtime identity resolution helpers for the channel worker."""
 
 from eidolon.livekit.agent.runtime.interaction_mode import (
-    INTENT_PROACTIVE,
-    INTENT_USER_INITIATED,
-    INTERACTION_MODE_FULL_DUPLEX,
-    INTERACTION_MODE_HALF_DUPLEX,
     apply_interaction_mode,
     resolve_device_id,
     resolve_interaction_mode,
@@ -18,10 +14,6 @@ from eidolon.livekit.agent.runtime.resolver import (
 __all__ = [
     "DeviceTokenResolverError",
     "make_device_token_resolver",
-    "INTENT_PROACTIVE",
-    "INTENT_USER_INITIATED",
-    "INTERACTION_MODE_FULL_DUPLEX",
-    "INTERACTION_MODE_HALF_DUPLEX",
     "apply_interaction_mode",
     "resolve_device_id",
     "resolve_interaction_mode",

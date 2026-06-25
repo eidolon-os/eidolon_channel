@@ -5,10 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from eidolon.livekit.agent.client_audio_state import (
-    PLAYBACK_STATE_AGENT_SPEAKING,
-    ClientAudioState,
-)
+from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
+
+from eidolon.livekit.agent.client_audio_state import ClientAudioState
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .constants import TRANSCRIPT_PREVIEW_MAX_CHARS

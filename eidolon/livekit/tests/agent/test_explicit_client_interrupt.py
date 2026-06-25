@@ -16,10 +16,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.client_audio_state import (
-    CLIENT_AUDIO_STATE_TOPIC,
-    ClientAudioState,
-)
+from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+
+from eidolon.livekit.agent.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.streaming import StreamingPipeline

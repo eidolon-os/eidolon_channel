@@ -359,6 +359,14 @@ class VoiceprintTurnObserver:
             commit_reason,
             signal.error,
         )
+        if commit_allowed and signal.error and not trusted_paired_device:
+            logger.warning(
+                "[VoiceprintTurnObserver] fail-open: committing turn=%s despite "
+                "verify error=%s (speaker unverified — our-side capture/verify "
+                "failure, not a wrong-speaker signal)",
+                timeline.turn_id,
+                signal.error,
+            )
         return VoiceprintTurnResult(
             signal=signal,
             cached=cached,
@@ -376,7 +384,15 @@ class VoiceprintTurnObserver:
         if trusted_paired_device:
             return True, "trusted_paired_device"
         if signal.error:
-            return False, signal.error
+            # ``context_error`` means we couldn't resolve the agent context — the
+            # turn literally cannot run, so it must still block (task #9 surfaces
+            # it to the user). Any OTHER verify error (audio_not_captured,
+            # provider/timeout, …) is an OUR-SIDE failure to verify the speaker,
+            # NOT evidence of a wrong speaker — fail OPEN (allow + warn) instead
+            # of silently dropping the user's turn.
+            if signal.error.startswith("context_error"):
+                return False, signal.error
+            return True, f"verify_error_failopen:{signal.error}"
         if not signal.known:
             return False, "speaker_not_owner"
         score = signal.score if signal.score is not None else signal.owner_confidence

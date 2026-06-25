@@ -55,24 +55,30 @@ if TYPE_CHECKING:
     from livekit.agents.voice import AgentSession
     from livekit.rtc import Room
 
+from eidolon_sdk.biz.contracts import (
+    CLIENT_AUDIO_STATE_TOPIC,
+    COMPANION_UI_STATE_TOPIC,
+    CONTROL_OP_PLAYBACK_STOP,
+    CONTROL_TOPIC,
+    INTERACTION_MODE_FULL_DUPLEX,
+    INTERACTION_MODE_HALF_DUPLEX,
+    PLAYBACK_STATE_AGENT_SPEAKING,
+    SESSION_END_ERROR,
+    SESSION_END_IDLE_NORMAL,
+    SESSION_END_USER_LEFT,
+    SESSION_INTENT_PROACTIVE,
+    SESSION_INTENT_USER_INITIATED,
+    WIRE_SCHEMA_VERSION,
+)
 from eidolon.livekit.common.config import (
     ObservabilityConfig,
     TurnPolicyConfig,
 )
 
 from . import _framework_patches
-from .client_audio_state import (
-    CLIENT_AUDIO_STATE_TOPIC,
-    PLAYBACK_STATE_AGENT_SPEAKING,
-    ClientAudioState,
-)
+from .client_audio_state import ClientAudioState
 from .context import InterruptedContextManager
-from .runtime.interaction_mode import (
-    INTENT_PROACTIVE,
-    INTENT_USER_INITIATED,
-    INTERACTION_MODE_FULL_DUPLEX,
-    INTERACTION_MODE_HALF_DUPLEX,
-)
+from .runtime.interaction_mode import resolve_idle_policy
 from .turn_policy import (
     Decision,
     TurnPolicyRuntime,
@@ -105,8 +111,6 @@ logger = logging.getLogger("agent")
 _INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC = 2.0
 _LOW_EOT_COMMIT_GRACE_MAX_SEC = 2.0
 _SHORT_STATEMENT_DEFER_MAX_CJK_CHARS = 12
-_COMPANION_UI_STATE_TOPIC = "eidolon.ui_state"
-_CLIENT_CONTROL_TOPIC = "eidolon.control"
 
 
 # Module-level cache for the EOT model singleton.
@@ -182,7 +186,7 @@ class StreamingPipeline(BasePipeline):
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_session_closed: Callable[[], Awaitable[None]] | None = None,
         interaction_mode: str = INTERACTION_MODE_FULL_DUPLEX,
-        session_intent: str = INTENT_USER_INITIATED,
+        session_intent: str = SESSION_INTENT_USER_INITIATED,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         # Session-level interaction mode (plan Phase 5), authoritative from the
@@ -199,7 +203,7 @@ class StreamingPipeline(BasePipeline):
         # exemption applies. Defaults user_initiated for a directly-constructed
         # pipeline; the worker passes the resolved value.
         self._session_intent = session_intent
-        self._is_proactive = session_intent == INTENT_PROACTIVE
+        self._is_proactive = session_intent == SESSION_INTENT_PROACTIVE
         # Half-duplex (manual turn_detection) PTT turn boundary (plan §10):
         #   _last_ptt_held       — track the ptt edge so release (True→False)
         #                          commits exactly one turn.
@@ -307,18 +311,12 @@ class StreamingPipeline(BasePipeline):
         # reclaimed on a short window with reason=proactive_done and gets NO
         # half_duplex keep-alive; a user session keeps the 60s window,
         # idle_normal_end, and the half_duplex keep-alive.
-        if self._is_proactive:
-            self._idle_timeout_sec: float = (
-                self._turn_policy.idle.proactive_disconnect_after_idle_ms / 1000.0
-            )
-            self._idle_end_reason = "proactive_done"
-            self._idle_keep_alive_half_duplex = False
-        else:
-            self._idle_timeout_sec = (
-                self._turn_policy.idle.disconnect_after_idle_ms / 1000.0
-            )
-            self._idle_end_reason = "idle_normal_end"
-            self._idle_keep_alive_half_duplex = True
+        idle_policy = resolve_idle_policy(
+            session_intent=session_intent, idle_config=self._turn_policy.idle
+        )
+        self._idle_timeout_sec: float = idle_policy.timeout_sec
+        self._idle_end_reason = idle_policy.end_reason
+        self._idle_keep_alive_half_duplex = idle_policy.keep_alive_half_duplex
         self._idle_watchdog_task: asyncio.Task | None = None
         self._last_activity_monotonic: float = 0.0
         # Called when the idle timeout fires — deletes the room so the
@@ -897,6 +895,47 @@ class StreamingPipeline(BasePipeline):
             logger.exception(
                 "[StreamingPipeline] failed to clear user turn reason=%s",
                 reason,
+            )
+        # task #9: a turn cleared because the session CONTEXT could not be
+        # resolved (e.g. the user/device is bound to a deleted agent →
+        # AdminResolveNotFound) is an operator-actionable misconfiguration, not a
+        # routine voiceprint reject. Every turn will be dropped, so don't leave
+        # the user in an indefinite silent dead-end ("connects, plays welcome,
+        # never answers"): surface it loudly + tell them ONCE.
+        if "context_error" in (reason or ""):
+            self._notify_context_error_once(reason)
+
+    def _notify_context_error_once(self, reason: str) -> None:
+        """Loudly report an unresolved-context turn drop and tell the user once."""
+        if getattr(self, "_context_error_notified", False):
+            return
+        self._context_error_notified = True
+        logger.error(
+            "[StreamingPipeline] conversation blocked: session context unresolved "
+            "(reason=%s). The user/device likely references a missing agent "
+            "binding; turns are dropped until it is rebound in admin.",
+            reason,
+        )
+        session = getattr(self, "_session", None)
+        say = getattr(session, "say", None) if session is not None else None
+        if not callable(say):
+            return
+        try:
+            say(
+                "抱歉，我暂时无法连接到你的助手，请检查账号绑定或联系管理员。",
+                allow_interruptions=True,
+            )
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] context-error fallback announcement failed"
+            )
+            return
+        try:
+            self._mark_activity()
+        except Exception:
+            logger.debug(
+                "[StreamingPipeline] mark_activity after context-error say failed",
+                exc_info=True,
             )
 
     async def _voiceprint_allows_completed_turn(self, *, new_message: Any) -> bool:
@@ -1655,7 +1694,27 @@ class StreamingPipeline(BasePipeline):
         Runs before shutdown()'s STT/TTS drain so the fixed-name room and its
         agent/track are gone before a rapid re-JOIN (plan §10 follow-up). No-op
         when no callback is wired (direct-construction / tests).
+
+        B2 (plan §3.2): every room-deletion path must carry a ``session_end``
+        reason. Publish it (idempotent — no-op if the idle watchdog already sent
+        ``idle_normal_end``) BEFORE the prompt delete, so an error-close while the
+        client is still connected is not a silent ROOM_DELETED. The close event's
+        ``error`` distinguishes ``error`` from a clean ``user_left``.
         """
+        on_end = getattr(self, "_on_session_end", None)
+        if on_end is not None:
+            reason = (
+                SESSION_END_ERROR
+                if getattr(self, "_close_error", None)
+                else SESSION_END_USER_LEFT
+            )
+            try:
+                await on_end(reason)
+            except Exception:
+                logger.exception(
+                    "[StreamingPipeline] session_end on close failed (reason=%s)",
+                    reason,
+                )
         cb = getattr(self, "_on_session_closed", None)
         if cb is None:
             return
@@ -1999,6 +2058,10 @@ class StreamingPipeline(BasePipeline):
         """
         reason = getattr(event, "reason", None)
         error = getattr(event, "error", None)
+        # Captured for _delete_room_on_close → session_end reason (B2): error
+        # close → "error", clean close → "user_left".
+        self._close_reason = reason
+        self._close_error = error
         logger.info(
             "[StreamingPipeline] session close event received reason=%s error=%s",
             reason, error,
@@ -2068,7 +2131,7 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_idle_disconnect_grace_sec"):
             self._idle_disconnect_grace_sec = 0.3
         if not hasattr(self, "_idle_end_reason"):
-            self._idle_end_reason = "idle_normal_end"
+            self._idle_end_reason = SESSION_END_IDLE_NORMAL
         if not hasattr(self, "_idle_keep_alive_half_duplex"):
             self._idle_keep_alive_half_duplex = True
         if not hasattr(self, "_idle_watchdog_controller"):
@@ -2143,7 +2206,8 @@ class StreamingPipeline(BasePipeline):
             return
 
         payload = {
-            "type": _COMPANION_UI_STATE_TOPIC,
+            "schema_v": WIRE_SCHEMA_VERSION,
+            "type": COMPANION_UI_STATE_TOPIC,
             "state": state,
             "reason": reason,
             "ts_ms": int(time.time() * 1000),
@@ -2153,7 +2217,7 @@ class StreamingPipeline(BasePipeline):
             await local.publish_data(
                 json.dumps(payload, separators=(",", ":")).encode("utf-8"),
                 reliable=True,
-                topic=_COMPANION_UI_STATE_TOPIC,
+                topic=COMPANION_UI_STATE_TOPIC,
             )
 
         task = loop.create_task(_send())
@@ -2209,7 +2273,7 @@ class StreamingPipeline(BasePipeline):
             await local.publish_data(
                 json.dumps(payload, separators=(",", ":")).encode("utf-8"),
                 reliable=True,
-                topic=_CLIENT_CONTROL_TOPIC,
+                topic=CONTROL_TOPIC,
             )
 
         task = loop.create_task(_send())
@@ -2945,7 +3009,7 @@ class StreamingPipeline(BasePipeline):
         )
         self._cancel_stable_signal_timer()
         self._snapshot_interrupted_context()
-        self._publish_client_control("playback.stop", reason="interrupt_cancel")
+        self._publish_client_control(CONTROL_OP_PLAYBACK_STOP, reason="interrupt_cancel")
         self._ducking.cancel_output()
         self._callbacks.on_duck_resolved("cancel")
         if self._timeline is not None:

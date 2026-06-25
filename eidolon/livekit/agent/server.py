@@ -35,6 +35,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit.agents import AgentServer
 
+from eidolon_sdk.biz.contracts import (
+    INTERACTION_MODE_HALF_DUPLEX,
+    SESSION_CONTROL_TOPIC,
+    SESSION_END_ERROR,
+    SESSION_END_TYPE,
+    SESSION_END_USER_LEFT,
+    SESSION_INTENT_USER_INITIATED,
+    WIRE_SCHEMA_VERSION,
+)
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
 
 logger = logging.getLogger("agent_server")
@@ -186,8 +195,6 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str]:
     the safe defaults (``half_duplex`` / ``user_initiated``).
     """
     from eidolon.livekit.agent.runtime import (
-        INTENT_USER_INITIATED,
-        INTERACTION_MODE_HALF_DUPLEX,
         resolve_interaction_mode,
         resolve_session_intent,
     )
@@ -198,9 +205,9 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str]:
         logger.exception(
             "[Agent] wait_for_participant failed; defaulting mode=%s intent=%s",
             INTERACTION_MODE_HALF_DUPLEX,
-            INTENT_USER_INITIATED,
+            SESSION_INTENT_USER_INITIATED,
         )
-        return INTERACTION_MODE_HALF_DUPLEX, INTENT_USER_INITIATED
+        return INTERACTION_MODE_HALF_DUPLEX, SESSION_INTENT_USER_INITIATED
     metadata = getattr(participant, "metadata", None)
     return (
         resolve_interaction_mode(metadata),
@@ -255,7 +262,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     # proactive_done are reserved for Phase 3. Idempotent: the first reason wins,
     # so the shutdown callback that always follows an idle delete does not
     # overwrite idle_normal_end with user_left.
-    _SESSION_CONTROL_TOPIC = "eidolon.session_control"
+    _SESSION_CONTROL_TOPIC = SESSION_CONTROL_TOPIC
     session_end_state: dict[str, str | bool] = {"sent": False}
 
     async def _publish_session_end(reason: str) -> None:
@@ -273,7 +280,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
 
         try:
             await local.publish_data(
-                _json.dumps({"type": "session_end", "reason": reason}).encode("utf-8"),
+                _json.dumps(
+                    {
+                        "schema_v": WIRE_SCHEMA_VERSION,
+                        "type": SESSION_END_TYPE,
+                        "reason": reason,
+                    }
+                ).encode("utf-8"),
                 reliable=True,
                 topic=_SESSION_CONTROL_TOPIC,
             )
@@ -377,7 +390,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         # reason before ROOM_DELETED arrives. No-op if idle already sent
         # idle_normal_end (idempotent). Map the framework reason to our taxonomy.
         text = str(reason or "").lower()
-        end_reason = "error" if ("error" in text or "fail" in text) else "user_left"
+        end_reason = SESSION_END_ERROR if ("error" in text or "fail" in text) else SESSION_END_USER_LEFT
         await _publish_session_end(end_reason)
         await _delete_room("shutdown callback")
 

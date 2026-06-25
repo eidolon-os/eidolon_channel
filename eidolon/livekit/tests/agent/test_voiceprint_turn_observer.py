@@ -192,3 +192,55 @@ async def test_voiceprint_turn_observer_allows_trusted_paired_device() -> None:
     assert timeline.attrs["voiceprint"]["trusted_paired_device"] is True
     assert timeline.attrs["voiceprint"]["commit_allowed"] is True
     assert timeline.attrs["voiceprint"]["commit_reason"] == "trusted_paired_device"
+
+
+async def _resolve_context_raises(_room):
+    raise RuntimeError("admin down")
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_fail_open_on_capture_error() -> None:
+    """A verify/capture error (here: no audio captured — the web case) must NOT
+    silently drop the user's turn. It fails OPEN: commit allowed, reason marked
+    so it's auditable. Speaker was never proven owner, but blocking on OUR
+    capture failure is worse than letting the owner's turn through."""
+    service = _Service()
+    observer = VoiceprintTurnObserver(
+        service=service,
+        context_resolver=_resolve_context,  # web user: device_id=None
+    )
+    timeline = TurnTimeline("turn_1")
+
+    observer.start_turn(timeline=timeline)
+    # No append_frame → audio buffer empty → "audio_not_captured".
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    assert service.calls == []  # never reached the verifier (no audio)
+    vp = timeline.attrs["voiceprint"]
+    assert vp["error"] == "audio_not_captured"
+    assert vp["commit_allowed"] is True
+    assert vp["commit_reason"] == "verify_error_failopen:audio_not_captured"
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_context_error_still_blocks() -> None:
+    """context_error is the one error that must STILL block — we can't run the
+    turn without an agent context (task #9 surfaces it to the user)."""
+    service = _Service()
+    observer = VoiceprintTurnObserver(
+        service=service,
+        context_resolver=_resolve_context_raises,
+    )
+    timeline = TurnTimeline("turn_1")
+
+    observer.start_turn(timeline=timeline)
+    observer.append_frame(_Frame(samples_per_channel=16000 * 3))
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    vp = timeline.attrs["voiceprint"]
+    assert vp["commit_allowed"] is False
+    assert vp["commit_reason"].startswith("context_error")

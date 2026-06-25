@@ -209,6 +209,27 @@ DEFAULT_SLO_GATES: tuple[SloGate, ...] = (
         description="VAD start -> interrupt resolution P95",
         min_samples=_PERCENTILE_MIN_SAMPLES,
     ),
+    # Offline decision-path gate (policy runner — CI-pure). The real first-
+    # response / barge-in LATENCY SLOs above are livekit_room (live) by nature:
+    # you cannot honestly measure them without real STT/LLM/TTS. This gate
+    # instead guards the barge-in DECISION path offline. interrupt_decision_ms is
+    # driven by the policy's configured stabilization/decision windows on
+    # scripted inputs — deterministic across machines, NOT wall-clock compute —
+    # so a generous p95 ceiling catches a gross regression (decisions blowing
+    # past the decision-timeout) in CI without a live room. min_samples=0: the
+    # scripted suite is deterministic, so the value is a valid hard ceiling
+    # rather than a noisy sample percentile.
+    *_tier_pair(
+        base_name="policy_interrupt_decision",
+        runner="policy",
+        source="summary",
+        metric="interrupt_decision_ms",
+        statistic="p95",
+        target=350.0,
+        acceptable=500.0,
+        description="Offline interrupt decision latency P95 (policy runner)",
+        required_acceptable=True,
+    ),
 )
 
 

@@ -7,8 +7,9 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+
 from eidolon.livekit.agent.client_audio_state import (
-    CLIENT_AUDIO_STATE_TOPIC,
     ClientAudioState,
     parse_client_audio_state,
 )

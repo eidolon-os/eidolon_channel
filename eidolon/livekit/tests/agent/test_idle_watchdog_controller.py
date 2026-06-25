@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from eidolon_sdk.biz.contracts import WIRE_SCHEMA_VERSION
+
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session import IdleWatchdog
 
@@ -63,6 +65,7 @@ async def test_idle_watchdog_notifies_client_and_calls_disconnect_callback() -> 
     # Idle disconnect is a normal end of conversation, not a join failure: the
     # client is told so via session_end{reason=idle_normal_end} (plan §3.2).
     assert json.loads(payload) == {
+        "schema_v": WIRE_SCHEMA_VERSION,
         "type": "session_end",
         "reason": "idle_normal_end",
     }

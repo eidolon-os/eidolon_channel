@@ -3,25 +3,48 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import time
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any
+
+# Wire-contract vocabulary is defined once in eidolon_sdk.biz.contracts; this module
+# imports only what it uses to parse the packet. Other modules import these
+# constants directly from eidolon_sdk.biz.contracts, not from here.
+from eidolon_sdk.biz.contracts import (
+    CLIENT_AUDIO_STATE_KNOWN_KEYS,
+    CLIENT_AUDIO_STATE_TYPE,
+    INPUT_MODE_UNKNOWN,
+    PLAYBACK_STATE_UNKNOWN,
+    VALID_INPUT_MODES,
+    VALID_PLAYBACK_STATES,
+    WIRE_SCHEMA_VERSION,
+    InputMode,
+    PlaybackState,
+)
+
+logger = logging.getLogger("agent.client_audio_state")
+
+# Fail-loud strictness. Inbound contract drift (an unknown key like ``ppt``, an
+# unrecognized enum value, an unsupported ``schema_v``) is surfaced instead of
+# silently degrading to ``unknown``. In strict mode it raises (use in dev/CI so a
+# typo fails a test); otherwise it logs a ``[contract]`` warning and parses
+# best-effort (production: never drop a live device over a cosmetic drift). Off by
+# default; opt in with ``EIDOLON_CONTRACT_STRICT=1`` (or pass ``strict=True``).
+_STRICT_DEFAULT = os.getenv("EIDOLON_CONTRACT_STRICT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
-CLIENT_AUDIO_STATE_TOPIC = "eidolon.audio_state"
-# Payload "type" label, decoupled from the LiveKit topic name above. Clients
-# (ESP32 / web) stamp this into the JSON body; it is NOT the routing topic.
-CLIENT_AUDIO_STATE_TYPE = "client.audio_state"
-INPUT_MODE_AUTO = "auto"
-INPUT_MODE_PTT = "ptt"
-INPUT_MODE_MANUAL = "manual"
-INPUT_MODE_UNKNOWN = "unknown"
-PLAYBACK_STATE_IDLE = "idle"
-PLAYBACK_STATE_AGENT_SPEAKING = "agent_speaking"
-PLAYBACK_STATE_UNKNOWN = "unknown"
-
-InputMode = Literal["auto", "ptt", "manual", "unknown"]
-PlaybackState = Literal["idle", "agent_speaking", "unknown"]
+def _contract_violation(message: str, *, strict: bool) -> None:
+    """Loudly surface a contract drift: raise in strict mode, else warn."""
+    if strict:
+        raise ValueError(f"client.audio_state contract violation: {message}")
+    logger.warning("[contract] client.audio_state %s", message)
 
 
 @dataclass(frozen=True)
@@ -52,8 +75,17 @@ def parse_client_audio_state(
     *,
     participant_identity: str,
     received_at: float | None = None,
+    strict: bool | None = None,
 ) -> ClientAudioState:
-    """Parse and sanitize the lightweight Web/ESP32 audio-state packet."""
+    """Parse and validate the lightweight Web/ESP32 audio-state packet.
+
+    Malformed framing (non-JSON, non-object, wrong ``type``) is always rejected.
+    Field-level contract drift — an unknown key (e.g. ``ppt``), an unrecognized
+    enum value, or an unsupported ``schema_v`` — is surfaced via
+    :func:`_contract_violation` (raise in strict mode, warn otherwise) and then
+    parsed best-effort. ``strict`` defaults to ``_STRICT_DEFAULT`` (env).
+    """
+    is_strict = _STRICT_DEFAULT if strict is None else strict
 
     try:
         raw = json.loads(data.decode("utf-8"))
@@ -64,12 +96,26 @@ def parse_client_audio_state(
     if raw.get("type") not in (None, CLIENT_AUDIO_STATE_TYPE):
         raise ValueError("client.audio_state has unexpected type")
 
+    schema_v = raw.get("schema_v")
+    if schema_v is not None and schema_v != WIRE_SCHEMA_VERSION:
+        _contract_violation(
+            f"unsupported schema_v={schema_v!r} (expected {WIRE_SCHEMA_VERSION})",
+            strict=is_strict,
+        )
+
+    unknown = set(raw) - CLIENT_AUDIO_STATE_KNOWN_KEYS
+    if unknown:
+        _contract_violation(
+            f"unknown field(s) {sorted(unknown)} (typo, or add to the contract)",
+            strict=is_strict,
+        )
+
     return ClientAudioState(
         participant_identity=participant_identity,
-        input_mode=_input_mode(raw.get("input_mode")),
+        input_mode=_input_mode(raw.get("input_mode"), strict=is_strict),
         ptt=bool(raw.get("ptt", False)),
         manual_interrupt=bool(raw.get("manual_interrupt", False)),
-        playback_state=_playback_state(raw.get("playback_state")),
+        playback_state=_playback_state(raw.get("playback_state"), strict=is_strict),
         mic_muted=bool(raw.get("mic_muted", False)),
         rms=_optional_float(raw.get("rms")),
         snr_hint=_optional_float(raw.get("snr_hint")),
@@ -78,15 +124,21 @@ def parse_client_audio_state(
     )
 
 
-def _input_mode(value: Any) -> InputMode:
-    if value in (INPUT_MODE_AUTO, INPUT_MODE_PTT, INPUT_MODE_MANUAL):
+def _input_mode(value: Any, *, strict: bool) -> InputMode:
+    if value is None:
+        return INPUT_MODE_UNKNOWN
+    if value in VALID_INPUT_MODES:
         return value
+    _contract_violation(f"unrecognized input_mode={value!r}", strict=strict)
     return INPUT_MODE_UNKNOWN
 
 
-def _playback_state(value: Any) -> PlaybackState:
-    if value in (PLAYBACK_STATE_IDLE, PLAYBACK_STATE_AGENT_SPEAKING):
+def _playback_state(value: Any, *, strict: bool) -> PlaybackState:
+    if value is None:
+        return PLAYBACK_STATE_UNKNOWN
+    if value in VALID_PLAYBACK_STATES:
         return value
+    _contract_violation(f"unrecognized playback_state={value!r}", strict=strict)
     return PLAYBACK_STATE_UNKNOWN
 
 

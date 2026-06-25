@@ -32,15 +32,18 @@ import json
 import logging
 from typing import Any
 
-from eidolon.livekit.common.config.schema import TurnPolicyConfig
+from eidolon.livekit.common.config.schema import IdlePolicyConfig, TurnPolicyConfig
+from eidolon_sdk.biz.contracts import (
+    INTERACTION_MODE_HALF_DUPLEX,
+    SESSION_END_IDLE_NORMAL,
+    SESSION_END_PROACTIVE_DONE,
+    SESSION_INTENT_PROACTIVE,
+    SESSION_INTENT_USER_INITIATED,
+    VALID_INTERACTION_MODES,
+    VALID_SESSION_INTENTS,
+)
 
 logger = logging.getLogger("agent.interaction_mode")
-
-INTERACTION_MODE_HALF_DUPLEX = "half_duplex"
-INTERACTION_MODE_FULL_DUPLEX = "full_duplex"
-_VALID_MODES = frozenset(
-    {INTERACTION_MODE_HALF_DUPLEX, INTERACTION_MODE_FULL_DUPLEX}
-)
 
 # Session intent (plan §3.2) — why this voice session exists. Rides the SAME
 # join-metadata bus as interaction_mode (resolved once, from the same
@@ -52,9 +55,8 @@ _VALID_MODES = frozenset(
 #     the half_duplex keep-alive that a user_initiated PTT session enjoys.
 # Default user_initiated: today nothing stamps proactive intent (Phase 3 wires
 # the wake path), so every current session is correctly user_initiated.
-INTENT_USER_INITIATED = "user_initiated"
-INTENT_PROACTIVE = "proactive_initiated"
-_VALID_INTENTS = frozenset({INTENT_USER_INITIATED, INTENT_PROACTIVE})
+# The INTENT_* / INTERACTION_MODE_* names + validity sets are sourced from
+# ``eidolon_sdk.biz.contracts`` (single source) and re-exported above.
 
 
 def resolve_interaction_mode(
@@ -81,13 +83,13 @@ def resolve_interaction_mode(
     if not meta:
         return default
     candidate = str(meta.get("interaction_mode") or "").strip().lower()
-    return candidate if candidate in _VALID_MODES else default
+    return candidate if candidate in VALID_INTERACTION_MODES else default
 
 
 def resolve_session_intent(
     raw_metadata: str | dict[str, Any] | None,
     *,
-    default: str = INTENT_USER_INITIATED,
+    default: str = SESSION_INTENT_USER_INITIATED,
 ) -> str:
     """Parse ``session_intent`` out of a participant's metadata.
 
@@ -109,7 +111,7 @@ def resolve_session_intent(
     if not meta:
         return default
     candidate = str(meta.get("session_intent") or "").strip().lower()
-    return candidate if candidate in _VALID_INTENTS else default
+    return candidate if candidate in VALID_SESSION_INTENTS else default
 
 
 def resolve_device_id(
@@ -160,3 +162,36 @@ def apply_interaction_mode(
         )
         return half_policy, False
     return turn_policy, allow_interruptions
+
+
+@dataclasses.dataclass(frozen=True)
+class IdlePolicy:
+    """Per-session idle behaviour derived from session_intent (plan §3.2/§3.3)."""
+
+    timeout_sec: float
+    end_reason: str
+    keep_alive_half_duplex: bool
+
+
+def resolve_idle_policy(
+    *, session_intent: str, idle_config: IdlePolicyConfig
+) -> IdlePolicy:
+    """Map ``session_intent`` → idle window + teardown reason + keep-alive.
+
+    Single source for the intent→idle decision that used to be inlined in the
+    pipeline constructor. A proactive wake-up nobody answers is reclaimed on a
+    SHORT window with ``reason=proactive_done`` and gets NO half_duplex keep-alive
+    (so a PTT appliance doesn't pin an unanswered report open); a user session
+    keeps the long window, ``idle_normal_end``, and the keep-alive exemption.
+    """
+    if session_intent == SESSION_INTENT_PROACTIVE:
+        return IdlePolicy(
+            timeout_sec=idle_config.proactive_disconnect_after_idle_ms / 1000.0,
+            end_reason=SESSION_END_PROACTIVE_DONE,
+            keep_alive_half_duplex=False,
+        )
+    return IdlePolicy(
+        timeout_sec=idle_config.disconnect_after_idle_ms / 1000.0,
+        end_reason=SESSION_END_IDLE_NORMAL,
+        keep_alive_half_duplex=True,
+    )

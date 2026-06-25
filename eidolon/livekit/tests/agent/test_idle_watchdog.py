@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from eidolon_sdk.biz.contracts import WIRE_SCHEMA_VERSION
 
 
 def _make_pipeline(
@@ -62,6 +63,7 @@ async def test_idle_watchdog_deletes_room_and_notifies_client():
     assert kwargs["topic"] == "eidolon.session_control"
     import json
     assert json.loads(pipeline._room.local_participant.publish_data.await_args.args[0]) == {
+        "schema_v": WIRE_SCHEMA_VERSION,
         "type": "session_end",
         "reason": "idle_normal_end",
     }

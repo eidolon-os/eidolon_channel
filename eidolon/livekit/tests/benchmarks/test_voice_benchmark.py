@@ -998,7 +998,7 @@ async def test_livekit_room_case_retry_records_room_connect_transient(
 
 @pytest.mark.asyncio
 async def test_livekit_room_publishes_client_audio_state() -> None:
-    from eidolon.livekit.agent.client_audio_state import CLIENT_AUDIO_STATE_TOPIC
+    from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
     from eidolon.livekit.benchmarks.livekit_room_runner import (
         _publish_client_audio_state,
     )

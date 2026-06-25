@@ -15,15 +15,21 @@ import json
 
 import pytest
 
-from eidolon.livekit.agent.runtime import (
-    INTENT_PROACTIVE,
-    INTENT_USER_INITIATED,
+from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
+    SESSION_END_IDLE_NORMAL,
+    SESSION_END_PROACTIVE_DONE,
+    SESSION_INTENT_PROACTIVE,
+    SESSION_INTENT_USER_INITIATED,
+)
+
+from eidolon.livekit.agent.runtime import (
     apply_interaction_mode,
     resolve_interaction_mode,
     resolve_session_intent,
 )
+from eidolon.livekit.agent.runtime.interaction_mode import resolve_idle_policy
 from eidolon.livekit.common.config.schema import TurnPolicyConfig
 
 
@@ -72,7 +78,7 @@ def test_resolve_explicit_default_override():
 
 def test_resolve_intent_from_metadata():
     raw = json.dumps({"interaction_mode": "half_duplex", "session_intent": "proactive_initiated"})
-    assert resolve_session_intent(raw) == INTENT_PROACTIVE
+    assert resolve_session_intent(raw) == SESSION_INTENT_PROACTIVE
 
 
 @pytest.mark.parametrize(
@@ -82,19 +88,19 @@ def test_resolve_intent_from_metadata():
 def test_resolve_intent_defaults_user_initiated(raw):
     # Missing / unparseable / unknown → safe user_initiated (today nothing
     # stamps proactive; Phase 3 wires the wake path).
-    assert resolve_session_intent(raw) == INTENT_USER_INITIATED
+    assert resolve_session_intent(raw) == SESSION_INTENT_USER_INITIATED
 
 
 def test_resolve_intent_is_case_insensitive():
     raw = json.dumps({"session_intent": "PROACTIVE_INITIATED"})
-    assert resolve_session_intent(raw) == INTENT_PROACTIVE
+    assert resolve_session_intent(raw) == SESSION_INTENT_PROACTIVE
 
 
 def test_mode_and_intent_resolve_from_one_metadata():
     # The session-metadata bus: one participant.metadata read yields both.
     meta = {"interaction_mode": "full_duplex", "session_intent": "proactive_initiated"}
     assert resolve_interaction_mode(meta) == INTERACTION_MODE_FULL_DUPLEX
-    assert resolve_session_intent(meta) == INTENT_PROACTIVE
+    assert resolve_session_intent(meta) == SESSION_INTENT_PROACTIVE
 
 
 # ── apply_interaction_mode ──────────────────────────────────────────────
@@ -139,3 +145,39 @@ def test_apply_does_not_mutate_input():
     )
     # Global config object is untouched (frozen dataclass + replace).
     assert base.attention.enabled is True
+
+
+# ── resolve_idle_policy (centralized intent→idle mapping) ────────────────
+
+
+def test_idle_policy_user_initiated():
+    idle = TurnPolicyConfig().idle
+    policy = resolve_idle_policy(
+        session_intent=SESSION_INTENT_USER_INITIATED, idle_config=idle
+    )
+    assert policy.timeout_sec == idle.disconnect_after_idle_ms / 1000.0
+    assert policy.end_reason == SESSION_END_IDLE_NORMAL
+    assert policy.keep_alive_half_duplex is True
+
+
+def test_idle_policy_proactive_is_short_no_keepalive():
+    idle = TurnPolicyConfig().idle
+    policy = resolve_idle_policy(
+        session_intent=SESSION_INTENT_PROACTIVE, idle_config=idle
+    )
+    assert policy.timeout_sec == idle.proactive_disconnect_after_idle_ms / 1000.0
+    assert policy.end_reason == SESSION_END_PROACTIVE_DONE
+    assert policy.keep_alive_half_duplex is False
+    # Proactive window is strictly shorter than a user session's.
+    assert (
+        idle.proactive_disconnect_after_idle_ms < idle.disconnect_after_idle_ms
+    )
+
+
+def test_idle_policy_unknown_intent_defaults_user_like():
+    # Defense default: anything that isn't proactive behaves like a user session
+    # (long window, keep-alive) — never the aggressive short teardown.
+    idle = TurnPolicyConfig().idle
+    policy = resolve_idle_policy(session_intent="bogus", idle_config=idle)
+    assert policy.end_reason == SESSION_END_IDLE_NORMAL
+    assert policy.keep_alive_half_duplex is True

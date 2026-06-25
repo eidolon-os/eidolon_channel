@@ -9,6 +9,13 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from eidolon_sdk.biz.contracts import (
+    SESSION_CONTROL_TOPIC,
+    SESSION_END_IDLE_NORMAL,
+    SESSION_END_TYPE,
+    WIRE_SCHEMA_VERSION,
+)
+
 from eidolon.livekit.agent.observability import TurnTimeline
 
 logger = logging.getLogger("agent.session.idle")
@@ -29,7 +36,7 @@ class IdleWatchdog:
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         disconnect_grace_sec: float = 0.3,
         is_half_duplex: Callable[[], bool] | None = None,
-        idle_end_reason: str = "idle_normal_end",
+        idle_end_reason: str = SESSION_END_IDLE_NORMAL,
         keep_alive_half_duplex: bool = True,
     ) -> None:
         self.timeout_sec = timeout_sec
@@ -188,10 +195,14 @@ class IdleWatchdog:
             return
         try:
             payload = json.dumps(
-                {"type": "session_end", "reason": reason}
+                {
+                    "schema_v": WIRE_SCHEMA_VERSION,
+                    "type": SESSION_END_TYPE,
+                    "reason": reason,
+                }
             ).encode("utf-8")
             await local.publish_data(
-                payload, reliable=True, topic="eidolon.session_control"
+                payload, reliable=True, topic=SESSION_CONTROL_TOPIC
             )
             logger.info(
                 "[lifecycle][IdleWatchdog] sent session_end reason=%s "

@@ -114,22 +114,7 @@ def _reject_unknown_fields(
 
 
 def _behavior_pipeline_mode(raw: dict[str, Any]) -> str:
-    has_pipeline = "pipeline_mode" in raw
-    has_legacy = "agent_mode" in raw
-    if has_pipeline and has_legacy:
-        raise ValueError(
-            "behavior.pipeline_mode and deprecated behavior.agent_mode "
-            "cannot both be set"
-        )
-    if has_legacy:
-        logger.warning(
-            "deprecated config field behavior.agent_mode used; "
-            "rename it to behavior.pipeline_mode"
-        )
-        value = raw.get("agent_mode")
-    else:
-        value = raw.get("pipeline_mode")
-    return str(value or "streaming").lower()
+    return str(raw.get("pipeline_mode") or "streaming").lower()
 
 
 def _secret(section: dict[str, Any], field: str, env_var: str) -> str:
@@ -224,7 +209,6 @@ def load_effective_config() -> EffectiveAgentConfig:
         behavior_y,
         allowed={
             "pipeline_mode",
-            "agent_mode",
             "instructions",
             "welcome_message",
             "audio_sample_rate",

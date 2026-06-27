@@ -36,11 +36,6 @@ class AgentBehaviorConfig:
     welcome_message: str = "你好！我是你的 AI 助手，请问有什么可以帮你的？"
     audio_sample_rate: int = 16000
 
-    @property
-    def agent_mode(self) -> str:
-        """Backward-compatible alias for the old config name."""
-        return self.pipeline_mode
-
 
 @dataclass(frozen=True)
 class ProvidersConfig:

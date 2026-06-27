@@ -16,7 +16,9 @@ worker:
   num_idle_processes: 1
 
 behavior:
-  agent_mode: streaming
+  # Channel worker pipeline mode (streaming|batch). This is not Hub's
+  # LiveKit dispatch agent_mode (streaming|ptt), and not duplex/barge-in capability.
+  pipeline_mode: streaming
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.
   welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
   audio_sample_rate: 16000
@@ -41,10 +43,13 @@ remote_agent_rpc:
   # runtime_admin 块统一处理。
   conversation_id_prefix: livekit
 
-# Phase 32.B: per-session token via admin /api/resolve. jwt_secret 共享
-# eidolon-agent (env PAIRING_JWT_SECRET, fallback ~/eidolon/run/jwt-secret).
+# Per-session token via Eidolon Data local resolve, with admin /api/resolve as
+# cross-process fallback. jwt_secret 共享 eidolon-agent
+# (env PAIRING_JWT_SECRET, fallback ~/eidolon/run/jwt-secret).
 runtime_admin:
   enabled: true
+  data_resolve_enabled: true
+  admin_fallback_enabled: true
   admin_api_url: http://127.0.0.1:9000
   jwt_secret: PAIRING_JWT_SECRET
   jwt_algorithm: HS256
@@ -67,8 +72,6 @@ voiceprint:
 
 turn_policy:
   profile: balanced_semantic
-  # balanced: current robust semantic gate; responsive: high-sensitivity barge-in.
-  interrupt_mode: balanced
   vad:
     activation_threshold: 0.50
     prefix_padding_ms: 300

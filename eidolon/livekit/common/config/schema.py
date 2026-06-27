@@ -31,10 +31,15 @@ class CoreConfig:
 
 @dataclass(frozen=True)
 class AgentBehaviorConfig:
-    agent_mode: str = "streaming"
+    pipeline_mode: str = "streaming"
     instructions: str = "You are a helpful, friendly voice assistant. Keep responses concise."
     welcome_message: str = "你好！我是你的 AI 助手，请问有什么可以帮你的？"
     audio_sample_rate: int = 16000
+
+    @property
+    def agent_mode(self) -> str:
+        """Backward-compatible alias for the old config name."""
+        return self.pipeline_mode
 
 
 @dataclass(frozen=True)
@@ -84,22 +89,23 @@ class RemoteAgentRpcConfig:
 @dataclass(frozen=True)
 class RuntimeAdminConfig:
     """Phase 32.B: channel resolves participant identity → user / agent
-    / template by querying admin's ``/api/resolve`` aggregator, then
-    signs a device JWT using the shared HMAC secret.
+    / template from Eidolon Data, then signs a device JWT using the shared
+    HMAC secret. Admin HTTP can remain as a cross-process fallback.
 
-    ``enabled=false`` keeps the legacy code path (channel uses
-    ``remote_agent_rpc.device_token`` statically). Defaults to True on
-    fresh installs; set False if admin is down and you need channel to
-    still bring up demo sessions.
+    ``enabled`` must remain True for ``eidolon_agent``. The legacy static
+    ``remote_agent_rpc.device_token`` fallback was removed, so setting
+    ``enabled=false`` now fails loudly instead of silently chatting with a
+    stale or shared identity.
 
     ``jwt_secret`` placeholder convention follows hub: the literal
     string ``PAIRING_JWT_SECRET`` in YAML means "read the env var of
     that name"; if both env and ~/eidolon/run/jwt-secret are empty,
-    the resolver fails loud and channel falls back to the legacy
-    static token (or refuses the session if that's also empty).
+    the resolver fails loud; there is no static-token fallback.
     """
 
     enabled: bool = True
+    data_resolve_enabled: bool = True
+    admin_fallback_enabled: bool = True
     admin_api_url: str = "http://127.0.0.1:9000"
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
@@ -271,7 +277,6 @@ class EffectiveAgentConfig:
         for path in (
             ("core", "api_secret"),
             ("llm", "api_key"),
-            ("remote_agent_rpc", "device_token"),
             ("bailian_stt", "api_key"),
             ("sensetime_stt", "api_key"),
             ("bailian_tts", "api_key"),

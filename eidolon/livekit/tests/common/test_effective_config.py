@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -53,8 +54,13 @@ providers:
   tts_provider: sensetime
   vad_provider: firered
   brain_provider: direct_llm
+behavior:
+  pipeline_mode: batch
 worker:
   num_idle_processes: 1
+runtime_admin:
+  data_resolve_enabled: false
+  admin_fallback_enabled: true
 llm:
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
@@ -80,7 +86,11 @@ voiceprint:
     assert cfg.voiceprint.enabled is True
     assert cfg.voiceprint.threshold == 0.42
     assert cfg.voiceprint.min_audio_ms == 2000
+    assert cfg.behavior.pipeline_mode == "batch"
+    assert cfg.behavior.agent_mode == "batch"
     assert cfg.worker.num_idle_processes == 1
+    assert cfg.runtime_admin.data_resolve_enabled is False
+    assert cfg.runtime_admin.admin_fallback_enabled is True
 
 
 
@@ -161,8 +171,24 @@ def test_settings_example_keeps_interrupt_lexicons_in_python_defaults() -> None:
     assert "correction_lexicon" not in interrupt
 
 
+def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = Path(__file__).resolve().parents[4]
+    settings = root / "config" / "settings.example.yaml"
+
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
+    monkeypatch.delenv("LIVEKIT_API_SECRET", raising=False)
+    monkeypatch.delenv("OPENAI_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("PAIRING_JWT_SECRET", raising=False)
+
+    cfg = load_effective_config()
+
+    assert cfg.providers.brain_provider == "eidolon_agent"
+    assert cfg.turn_policy.profile == "balanced_semantic"
+
+
 def test_remote_agent_validates_its_own_required_fields(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = _write_settings(
         tmp_path,
@@ -189,9 +215,109 @@ llm:
     monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
     monkeypatch.setenv("REMOTE_AGENT_RPC_DEVICE_TOKEN", "token")
     monkeypatch.delenv("OPENAI_LLM_API_KEY", raising=False)
-    cfg = load_effective_config()
+    with caplog.at_level(logging.WARNING, logger="agent.config"):
+        cfg = load_effective_config()
     assert cfg.providers.brain_provider == "eidolon_agent"
     assert cfg.remote_agent_rpc.target == "127.0.0.1:45051"
+    assert "deprecated config field remote_agent_rpc.device_token ignored" in caplog.text
+
+
+def test_manual_config_sections_reject_unknown_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+behavior:
+  pipeline_mode: streaming
+  typo_mode: streaming
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: direct_llm
+llm:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: OPENAI_LLM_API_KEY
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    with pytest.raises(ValueError, match="unknown config field behavior.typo_mode"):
+        load_effective_config()
+
+
+def test_legacy_behavior_agent_mode_warns_and_maps_to_pipeline_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+behavior:
+  agent_mode: batch
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: direct_llm
+llm:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: OPENAI_LLM_API_KEY
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    with caplog.at_level(logging.WARNING, logger="agent.config"):
+        cfg = load_effective_config()
+
+    assert cfg.behavior.pipeline_mode == "batch"
+    assert "deprecated config field behavior.agent_mode used" in caplog.text
+
+
+def test_behavior_pipeline_mode_rejects_legacy_alias_ambiguity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+behavior:
+  pipeline_mode: streaming
+  agent_mode: batch
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: direct_llm
+llm:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: OPENAI_LLM_API_KEY
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    with pytest.raises(ValueError, match="cannot both be set"):
+        load_effective_config()
 
 
 def test_brain_provider_must_be_explicit_for_remote_agent(

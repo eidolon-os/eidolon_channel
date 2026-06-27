@@ -94,6 +94,44 @@ def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
     return sec if isinstance(sec, dict) else {}
 
 
+def _reject_unknown_fields(
+    section_name: str,
+    raw: dict[str, Any],
+    *,
+    allowed: set[str],
+    deprecated: set[str] | None = None,
+) -> None:
+    deprecated = deprecated or set()
+    for key in raw:
+        if key in allowed:
+            continue
+        if key in deprecated:
+            logger.warning(
+                "deprecated config field %s.%s ignored", section_name, key
+            )
+            continue
+        raise ValueError(f"unknown config field {section_name}.{key}")
+
+
+def _behavior_pipeline_mode(raw: dict[str, Any]) -> str:
+    has_pipeline = "pipeline_mode" in raw
+    has_legacy = "agent_mode" in raw
+    if has_pipeline and has_legacy:
+        raise ValueError(
+            "behavior.pipeline_mode and deprecated behavior.agent_mode "
+            "cannot both be set"
+        )
+    if has_legacy:
+        logger.warning(
+            "deprecated config field behavior.agent_mode used; "
+            "rename it to behavior.pipeline_mode"
+        )
+        value = raw.get("agent_mode")
+    else:
+        value = raw.get("pipeline_mode")
+    return str(value or "streaming").lower()
+
+
 def _secret(section: dict[str, Any], field: str, env_var: str) -> str:
     val = str(section.get(field) or "").strip()
     if val and val != env_var:
@@ -176,6 +214,62 @@ def load_effective_config() -> EffectiveAgentConfig:
     sensetime_stt_y = _section(y, "sensetime_stt")
     sensetime_tts_y = _section(y, "sensetime_tts")
 
+    _reject_unknown_fields(
+        "core",
+        core_y,
+        allowed={"livekit_url", "api_key", "api_secret", "host", "port"},
+    )
+    _reject_unknown_fields(
+        "behavior",
+        behavior_y,
+        allowed={
+            "pipeline_mode",
+            "agent_mode",
+            "instructions",
+            "welcome_message",
+            "audio_sample_rate",
+        },
+    )
+    _reject_unknown_fields(
+        "llm",
+        llm_y,
+        allowed={
+            "base_url",
+            "model",
+            "api_key",
+            "temperature",
+            "timeout",
+            "max_completion_tokens",
+        },
+    )
+    _reject_unknown_fields(
+        "remote_agent_rpc",
+        rpc_y,
+        allowed={
+            "target",
+            "locale",
+            "conversation_id_prefix",
+            "tls_mode",
+            "tls_ca_path",
+            "tls_client_cert_path",
+            "tls_client_key_path",
+        },
+        deprecated={"device_token"},
+    )
+    _reject_unknown_fields(
+        "runtime_admin",
+        rt_admin_y,
+        allowed={
+            "enabled",
+            "data_resolve_enabled",
+            "admin_fallback_enabled",
+            "admin_api_url",
+            "jwt_secret",
+            "jwt_algorithm",
+            "device_token_ttl_seconds",
+        },
+    )
+
     cfg = EffectiveAgentConfig(
         core=CoreConfig(
             livekit_url=str(core_y.get("livekit_url") or "ws://localhost:7880"),
@@ -186,7 +280,7 @@ def load_effective_config() -> EffectiveAgentConfig:
             port=int(core_y.get("port") or 8766),
         ),
         behavior=AgentBehaviorConfig(
-            agent_mode=str(behavior_y.get("agent_mode") or "streaming").lower(),
+            pipeline_mode=_behavior_pipeline_mode(behavior_y),
             instructions=str(
                 behavior_y.get("instructions")
                 or AgentBehaviorConfig().instructions
@@ -211,10 +305,9 @@ def load_effective_config() -> EffectiveAgentConfig:
             target=str(rpc_y.get("target") or "").strip(),
             locale=str(rpc_y.get("locale") or "zh").strip() or "zh",
             # Phase 32.D: device_token field removed; per-session token
-            # is signed by runtime_admin.resolver. If config/.env or
-            # settings.yaml still mentions the field, the loader silently
-            # ignores it — no deprecation warning needed because the
-            # field's gone from the dataclass.
+            # is signed by runtime_admin.resolver. Legacy yaml may still
+            # mention the field; _reject_unknown_fields allows that single
+            # deprecated key and logs that it is ignored.
             conversation_id_prefix=str(
                 rpc_y.get("conversation_id_prefix") or "livekit"
             ).strip()
@@ -226,6 +319,8 @@ def load_effective_config() -> EffectiveAgentConfig:
         ),
         runtime_admin=RuntimeAdminConfig(
             enabled=bool(rt_admin_y.get("enabled", True)),
+            data_resolve_enabled=bool(rt_admin_y.get("data_resolve_enabled", True)),
+            admin_fallback_enabled=bool(rt_admin_y.get("admin_fallback_enabled", True)),
             admin_api_url=str(
                 rt_admin_y.get("admin_api_url") or "http://127.0.0.1:9000"
             ).strip(),

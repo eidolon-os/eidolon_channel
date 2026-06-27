@@ -13,7 +13,9 @@ worker:
   num_idle_processes: 1
 
 behavior:
-  agent_mode: streaming
+  # Channel worker pipeline mode (streaming|batch). This is not Hub's
+  # LiveKit dispatch agent_mode (streaming|ptt), and not duplex/barge-in capability.
+  pipeline_mode: streaming
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.
   welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
   audio_sample_rate: 16000
@@ -29,30 +31,36 @@ providers:
   stt_provider: bailian
   tts_provider: bailian
   vad_provider: firered_pvad
-  brain_provider: eidolon_agent
+  brain_provider: direct_llm
 
 remote_agent_rpc:
   target: 127.0.0.1:45051
   locale: zh
   # Phase 32.D 删了 device_token 字段。Token 现在由 runtime_admin 块
   # 描述的 per-session 流程签发。如果你 fork 了 .yaml 还带这一行,
-  # loader 会静默忽略它(不是错误,只是死字段)。
+  # loader 会记录 deprecated warning 后忽略它(不是错误,只是死字段)。
   conversation_id_prefix: livekit
 
-# Phase 32.B: per-session runtime token signing. participant 进 LiveKit
-# 后,channel 查 admin /api/resolve/{kind}/{identity} 拿 (tenant, user,
-# template),用 jwt_secret 现签 device JWT 接 agent gRPC。secret 跟
-# eidolon-agent 共享 — placeholder PAIRING_JWT_SECRET 是 env 名;空时
-# 会 fallback 到 ~/eidolon/run/jwt-secret 文件 (agent auto-persist)。
+# Per-session runtime token signing. participant 进 LiveKit 后，channel 优先
+# 从 Eidolon Data 本地解析 (tenant, user, companion/template)，再用
+# jwt_secret 现签 device JWT 接 agent gRPC；admin HTTP 只作为跨进程 fallback。
+# secret 跟 eidolon-agent 共享 — placeholder PAIRING_JWT_SECRET 是 env 名；
+# 空时会 fallback 到 ~/eidolon/run/jwt-secret 文件 (agent auto-persist)。
 runtime_admin:
   enabled: true
+  data_resolve_enabled: true
+  admin_fallback_enabled: true
   admin_api_url: http://127.0.0.1:9000
   jwt_secret: PAIRING_JWT_SECRET
   jwt_algorithm: HS256
   device_token_ttl_seconds: 86400
 
 voiceprint:
-  enabled: true
+  # direct_llm + Hub dev_direct_voice 联调时，设备可以 approved 但未绑定 agent；
+  # 此时 voiceprint 会为上下文校验调用 Admin resolve，并因 unbound 返回
+  # AdminResolvePrecondition 而拦截用户 turn。测试 ESP32 barge-in 时先关闭；
+  # 回到正常 eidolon_agent/已绑定设备链路时再改回 true。
+  enabled: false
   provider: 3d_speaker
   model: campplus_zh_16k_common
   root: ~/eidolon/voiceprints

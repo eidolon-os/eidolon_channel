@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -102,26 +103,90 @@ def _build_device_token_source(
             "the agent entrypoint."
         )
 
-    # Build the resolver. The httpx client lives for the resolver's
-    # lifetime — same lifetime as the LLM, which is the LK job. We
-    # close it lazily; one channel-worker handles one job at a time
-    # so leaks are bounded.
-    import httpx
-    from eidolon_sdk.biz.admin import AdminResolveClient
+    resolve_client = _build_runtime_resolve_client(rt)
     from eidolon.livekit.agent.runtime import make_device_token_resolver
 
-    http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(10.0, connect=3.0),
-        trust_env=False,  # avoid macOS Clash :7890 hijacking loopback
-    )
-    admin = AdminResolveClient(http_client, rt.admin_api_url)
     return make_device_token_resolver(
         room=livekit_room,
-        admin=admin,
+        admin=resolve_client,
         jwt_secret=secret,
         jwt_algorithm=rt.jwt_algorithm,
         ttl_seconds=rt.device_token_ttl_seconds,
     )
+
+
+def _build_runtime_resolve_client(rt: "Any") -> "Any":
+    """Build local Eidolon Data resolver with optional admin HTTP fallback."""
+
+    local = None
+    if getattr(rt, "data_resolve_enabled", True):
+        try:
+            from eidolon_data import DataStore
+            from eidolon_data import load_settings as load_data_settings
+            from eidolon_data.adapters import EidolonDataResolveClient
+
+            data_settings = load_data_settings()
+            sqlite_path = Path(data_settings.sqlite_path).expanduser()
+            if sqlite_path.exists():
+                local_store = DataStore.open(data_settings)
+                local = EidolonDataResolveClient(local_store)
+                logger.info("[device_token] using Eidolon Data resolver at %s", sqlite_path)
+            else:
+                logger.warning(
+                    "[device_token] Eidolon Data SQLite not found at %s; "
+                    "runtime resolve will use admin fallback if enabled",
+                    sqlite_path,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[device_token] Eidolon Data resolver unavailable: %s", exc)
+
+    http = None
+    if getattr(rt, "admin_fallback_enabled", True):
+        import httpx
+        from eidolon_sdk.biz.admin import AdminResolveClient
+
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=3.0),
+            trust_env=False,  # avoid macOS Clash :7890 hijacking loopback
+        )
+        http = AdminResolveClient(http_client, rt.admin_api_url)
+
+    if local is None and http is None:
+        raise RuntimeError(
+            "[device_token] no runtime resolve client configured. Enable "
+            "runtime_admin.data_resolve_enabled or runtime_admin.admin_fallback_enabled."
+        )
+    if local is None:
+        return http
+    if http is None:
+        return local
+    return _FallbackResolveClient(primary=local, fallback=http)
+
+
+class _FallbackResolveClient:
+    def __init__(self, *, primary: "Any", fallback: "Any") -> None:
+        self._primary = primary
+        self._fallback = fallback
+
+    async def resolve_user(self, user_id: str):
+        return await self._resolve("resolve_user", user_id)
+
+    async def resolve_device(self, device_id: str):
+        return await self._resolve("resolve_device", device_id)
+
+    async def _resolve(self, method: str, value: str):
+        from eidolon_sdk.biz.admin import AdminResolveNotFound, AdminResolveUnreachable
+
+        try:
+            return await getattr(self._primary, method)(value)
+        except (AdminResolveNotFound, AdminResolveUnreachable) as exc:
+            logger.warning(
+                "[device_token] Eidolon Data %s(%r) failed (%s); using admin fallback",
+                method,
+                value,
+                exc,
+            )
+            return await getattr(self._fallback, method)(value)
 
 
 class SharedStageFactory:

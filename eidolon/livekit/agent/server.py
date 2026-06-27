@@ -227,7 +227,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     logger.info(
         "[Agent] starting room=%s mode=%s stt=%s tts=%s vad=%s",
         ctx.room.name,
-        cfg.behavior.agent_mode,
+        cfg.behavior.pipeline_mode,
         cfg.providers.stt_provider,
         cfg.providers.tts_provider,
         cfg.providers.vad_provider,
@@ -335,7 +335,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 "[Agent] failed to delete room=%s (%s)", room.name, context
             )
 
-    if cfg.behavior.agent_mode == "batch":
+    if cfg.behavior.pipeline_mode == "batch":
         pipeline = BatchPipeline(factory)
     else:
         # Phase 5 / Phase 2: resolve the session-metadata bus (interaction_mode +
@@ -542,7 +542,7 @@ async def _serve() -> None:
         "[Server] starting env=%s url=%s mode=%s llm=%s idle_procs=%s",
         os.getenv("EIDOLON_ENV", "prod"),
         cfg.core.livekit_url,
-        cfg.behavior.agent_mode,
+        cfg.behavior.pipeline_mode,
         cfg.llm.model,
         _resolve_num_idle_processes(cfg),
     )

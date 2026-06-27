@@ -1,4 +1,4 @@
-"""Compose admin lookup + JWT signing into one callable.
+"""Compose runtime identity lookup + JWT signing into one callable.
 
 Phase 32.B: when ``EidolonAgentGrpcLlm`` opens its session (first
 ``chat()`` call), it invokes the device_token callable to get a fresh
@@ -6,8 +6,8 @@ bearer. The resolver here is what that callable does:
 
   1. Inspect the LiveKit room for a remote participant.
   2. Parse ``participant.metadata`` → ``kind`` (``user`` | ``device``).
-  3. GET ``/api/resolve/{kind}/{identity}`` on admin (one HTTP call —
-     admin composes user_id → agent → template → memory_url for us).
+  3. Resolve ``{kind}/{identity}`` through Eidolon Data, with admin HTTP as
+     an optional cross-process fallback.
   4. Sign a device JWT with the resolved (tenant, user, template) so
      agent's ``PairingTokenVerifier`` accepts it.
   5. Cache the result for the lifetime of this resolver instance —
@@ -25,11 +25,7 @@ import logging
 import uuid
 from typing import Any, Awaitable, Callable
 
-from eidolon_sdk.biz.admin import (
-    AdminResolveClient,
-    AdminResolveError,
-    ResolvedContext,
-)
+from eidolon_sdk.biz.admin import AdminResolveError, ResolvedContext
 from eidolon_sdk.biz.runtime import sign_device_token
 
 _log = logging.getLogger(__name__)
@@ -78,12 +74,11 @@ def _participant_identity_and_metadata(
 
 async def _resolve_context(
     *,
-    admin: AdminResolveClient,
+    admin: Any,
     identity: str,
     metadata: dict[str, Any],
 ) -> ResolvedContext:
-    """Dispatch to /api/resolve/user or /api/resolve/device based on
-    ``metadata.kind``.
+    """Dispatch to resolve_user or resolve_device based on ``metadata.kind``.
 
     Accepted values: ``user`` | ``device``. Anything else (including
     empty / missing) raises :class:`DeviceTokenResolverError` — no
@@ -114,7 +109,7 @@ async def _resolve_context(
 def make_device_token_resolver(
     *,
     room: Any,
-    admin: AdminResolveClient,
+    admin: Any,
     jwt_secret: str,
     jwt_algorithm: str = "HS256",
     ttl_seconds: int = 24 * 3600,

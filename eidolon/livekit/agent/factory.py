@@ -54,11 +54,9 @@ def _build_device_token_source(
 ) -> "Any":
     """Build the per-session device-token resolver used by the gRPC LLM.
 
-    Phase 32.D (this rewrite): the legacy static-token fallback is
-    gone. The only token source is the runtime resolver — which reads
-    ``participant.identity`` from the LiveKit room, dispatches to
-    admin's ``/api/resolve/{user|device}/{id}``, and signs a JWT with
-    the shared HMAC secret. If any prerequisite is missing (secret
+    The only token source is the runtime resolver — which reads
+    ``participant.identity`` from the LiveKit room, resolves that explicit
+    device binding, and signs a JWT with the shared HMAC secret. If any prerequisite is missing (secret
     absent, no room, runtime_admin disabled) we raise instead of
     silently using "alice" — the operator must fix the config rather
     than ship the wrong identity.
@@ -123,13 +121,11 @@ def _build_runtime_resolve_client(rt: "Any") -> "Any":
         try:
             from eidolon_data import DataStore
             from eidolon_data import load_settings as load_data_settings
-            from eidolon_data.adapters import EidolonDataResolveClient
-
             data_settings = load_data_settings()
             sqlite_path = Path(data_settings.sqlite_path).expanduser()
             if sqlite_path.exists():
                 local_store = DataStore.open(data_settings)
-                local = EidolonDataResolveClient(local_store)
+                local = _DataStoreRuntimeResolveClient(local_store)
                 logger.info("[device_token] using Eidolon Data resolver at %s", sqlite_path)
             else:
                 logger.warning(
@@ -168,9 +164,6 @@ class _FallbackResolveClient:
         self._primary = primary
         self._fallback = fallback
 
-    async def resolve_user(self, user_id: str):
-        return await self._resolve("resolve_user", user_id)
-
     async def resolve_device(self, device_id: str):
         return await self._resolve("resolve_device", device_id)
 
@@ -187,6 +180,66 @@ class _FallbackResolveClient:
                 exc,
             )
             return await getattr(self._fallback, method)(value)
+
+
+class _DataStoreRuntimeResolveClient:
+    """Local eidolon_data implementation of AdminResolveClient's device API."""
+
+    def __init__(self, store: "Any") -> None:
+        self._store = store
+
+    async def resolve_device(self, device_id: str):
+        from eidolon_sdk.biz.admin import (
+            AdminResolveNotFound,
+            AdminResolvePrecondition,
+            ResolvedContext,
+        )
+
+        device = await self._store.devices.get_device(device_id)
+        if device is None:
+            raise AdminResolveNotFound(
+                f"device {device_id!r} is not registered in eidolon_data"
+            )
+        if not device.owner_id:
+            raise AdminResolvePrecondition(
+                412, f"device {device_id!r} is not claimed"
+            )
+        if device.status in {"disabled", "revoked"}:
+            raise AdminResolvePrecondition(
+                412, f"device {device_id!r} is {device.status}"
+            )
+        if not device.bound_companion_id:
+            raise AdminResolvePrecondition(
+                412, f"device {device_id!r} is not bound to a companion"
+            )
+
+        companion = await self._store.companions.get(device.bound_companion_id)
+        if companion is None:
+            raise AdminResolveNotFound(
+                f"companion {device.bound_companion_id!r} not found"
+            )
+        if companion.owner_id != device.owner_id:
+            raise AdminResolvePrecondition(
+                412,
+                f"device {device_id!r} is bound outside owner {device.owner_id!r}",
+            )
+        if not companion.default_memory_realm_id:
+            raise AdminResolvePrecondition(
+                412,
+                f"companion {companion.companion_id!r} has no default memory realm",
+            )
+        if not companion.current_genome_id:
+            raise AdminResolvePrecondition(
+                412,
+                f"companion {companion.companion_id!r} has no current genome",
+            )
+        return ResolvedContext(
+            owner_id=device.owner_id,
+            companion_id=companion.companion_id,
+            memory_realm_id=companion.default_memory_realm_id,
+            genome_id=companion.current_genome_id,
+            device_id=device.device_id,
+        )
 
 
 class SharedStageFactory:

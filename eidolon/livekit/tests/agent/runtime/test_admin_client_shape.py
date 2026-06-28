@@ -1,12 +1,5 @@
 """Pin the shape contract with admin's ``/api/resolve`` envelope.
 
-Regression hunt 2026-06-03: admin's response is wrapped
-``{"context": {tenant_id, user_id, ...}}`` (ResolveUserResponse /
-ResolveDeviceResponse) but ``ResolvedContext.from_json`` was reading
-flat fields, producing an all-blank context. JWT then got signed with
-``user_id=""``, agent's memory.search("") returned no hits, every
-recall over the companion path looked like "the AI forgot my data".
-
 These tests lock the contract: ``from_json`` must accept both the
 envelope shape (the truth admin emits today) AND a flat dict (so future
 internal refactors don't silently break the wrapper handling).
@@ -19,15 +12,11 @@ from eidolon_sdk.biz.admin import ResolvedContext
 
 def _expected_manson() -> dict:
     return {
-        "tenant_id": "default",
-        "user_id": "manson",
-        "agent_id": "ag_5f3184c6b9ba",
-        "template_id": "caretaker_jiezhi",
-        "template_revision": 1,
-        "agent_runtime_url": "",
-        "memory_mcp_url": "http://127.0.0.1:8031/mcp",
-        "soul_preview": "metadata:...",
-        "device_id": None,
+        "owner_id": "owner-1",
+        "companion_id": "companion-1",
+        "memory_realm_id": "realm-1",
+        "genome_id": "genome-1",
+        "device_id": "dev-1",
     }
 
 
@@ -38,12 +27,11 @@ def test_from_json_unwraps_admin_envelope() -> None:
     every memory recall for companion-path sessions."""
     payload = {"context": _expected_manson()}
     ctx = ResolvedContext.from_json(payload)
-    assert ctx.tenant_id == "default"
-    assert ctx.user_id == "manson"
-    assert ctx.agent_id == "ag_5f3184c6b9ba"
-    assert ctx.template_id == "caretaker_jiezhi"
-    assert ctx.memory_mcp_url == "http://127.0.0.1:8031/mcp"
-    assert ctx.device_id is None
+    assert ctx.owner_id == "owner-1"
+    assert ctx.companion_id == "companion-1"
+    assert ctx.memory_realm_id == "realm-1"
+    assert ctx.genome_id == "genome-1"
+    assert ctx.device_id == "dev-1"
 
 
 def test_from_json_accepts_flat_shape() -> None:
@@ -51,8 +39,8 @@ def test_from_json_accepts_flat_shape() -> None:
     hands us a flat dict, from_json should still build the right
     context. Cheap insurance against the next envelope reshape."""
     ctx = ResolvedContext.from_json(_expected_manson())
-    assert ctx.user_id == "manson"
-    assert ctx.tenant_id == "default"
+    assert ctx.owner_id == "owner-1"
+    assert ctx.companion_id == "companion-1"
 
 
 def test_from_json_envelope_with_blank_fields_does_not_silently_pass() -> None:
@@ -63,25 +51,23 @@ def test_from_json_envelope_with_blank_fields_does_not_silently_pass() -> None:
     without someone updating this test.
     """
     ctx = ResolvedContext.from_json({"context": {}})
-    assert ctx.user_id == ""
-    assert ctx.tenant_id == ""
-    assert ctx.agent_id == ""
-    assert ctx.memory_mcp_url == ""
-    assert ctx.template_id is None
+    assert ctx.owner_id == ""
+    assert ctx.companion_id == ""
+    assert ctx.memory_realm_id == ""
+    assert ctx.genome_id == ""
+    assert ctx.device_id is None
 
 
 def test_envelope_takes_precedence_over_root() -> None:
     """If somehow both root and nested fields are present (legacy
-    shape during a contract migration), the envelope wins — matching
-    admin's actual ResolveUserResponse where root is reserved for the
-    envelope and never carries flat fields."""
+    shape during a contract migration), the envelope wins."""
     payload = {
         # Root carries old/stale flat shape...
-        "tenant_id": "stale",
-        "user_id": "stale-user",
+        "owner_id": "stale",
+        "companion_id": "stale-companion",
         # ...but envelope is the truth.
         "context": _expected_manson(),
     }
     ctx = ResolvedContext.from_json(payload)
-    assert ctx.user_id == "manson"
-    assert ctx.tenant_id == "default"
+    assert ctx.owner_id == "owner-1"
+    assert ctx.companion_id == "companion-1"

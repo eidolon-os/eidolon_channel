@@ -1,16 +1,15 @@
-"""Compose runtime identity lookup + JWT signing into one callable.
+"""Compose device-bound runtime identity lookup + JWT signing into one callable.
 
 Phase 32.B: when ``EidolonAgentGrpcLlm`` opens its session (first
 ``chat()`` call), it invokes the device_token callable to get a fresh
 bearer. The resolver here is what that callable does:
 
   1. Inspect the LiveKit room for a remote participant.
-  2. Parse ``participant.metadata`` → ``kind`` (``user`` | ``device``).
-  3. Resolve ``{kind}/{identity}`` through Eidolon Data, with Admin HTTP as
-     an optional cross-process fallback. Channel consumes Admin's runtime
-     context; it does not own or mutate the device registry/binding table.
-  4. Sign a device JWT with the resolved (tenant, user, template) so
-     agent's ``PairingTokenVerifier`` accepts it.
+  2. Require ``participant.metadata.kind == "device"``.
+  3. Resolve the device through Eidolon Data/Admin into the explicit
+     owner/companion/device/runtime identity.
+  4. Sign a device JWT with owner/companion/device/memory_realm/genome so
+     eidolon_agent accepts it.
   5. Cache the result for the lifetime of this resolver instance —
      subsequent invocations within the session return the same token.
 
@@ -23,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from typing import Any, Awaitable, Callable
 
 from eidolon_sdk.biz.admin import AdminResolveError, ResolvedContext
@@ -79,31 +77,13 @@ async def _resolve_context(
     identity: str,
     metadata: dict[str, Any],
 ) -> ResolvedContext:
-    """Dispatch to resolve_user or resolve_device based on ``metadata.kind``.
-
-    Accepted values: ``user`` | ``device``. Anything else (including
-    empty / missing) raises :class:`DeviceTokenResolverError` — no
-    silent fallback (Phase 33.A5 tightening, 29.H principle).
-
-    Both supported callers tag the participant correctly:
-      - hub web path: kind=user (Phase 32.A)
-      - hub esp32 path: kind=device (Phase 32.B follow-up)
-
-    If you're seeing this error: either the caller is a new client
-    type that needs hub to start tagging it, or a legacy ESP32
-    firmware that hasn't been updated since the pre-Phase-32 era.
-    Don't reintroduce the device default — fix the caller.
-    """
+    """Resolve only explicit device bindings."""
     kind = str(metadata.get("kind") or "").strip().lower()
-    if kind == "user":
-        return await admin.resolve_user(identity)
     if kind == "device":
         return await admin.resolve_device(identity)
     raise DeviceTokenResolverError(
-        f"participant.metadata.kind missing or unknown ({kind!r}) for "
-        f"identity={identity!r}. All clients must set kind=user|device; "
-        "see hub /api/config for the tagging contract. Legacy ESP32 "
-        "firmware predating Phase 32.B must be updated."
+        f"participant.metadata.kind must be 'device' for identity={identity!r}; "
+        f"got {kind!r}. Runtime sessions must use an eidolon_data device binding."
     )
 
 
@@ -122,30 +102,9 @@ def make_device_token_resolver(
     of how many chat() turns happen. If the first call fails, the next
     one retries (we don't cache failures).
 
-    **Identity changes mid-session are NOT re-resolved.**
-
-    Once a session's first turn has bound the token to ``(user_id,
-    agent_id, tenant_id)``, that binding is sticky for the remainder of
-    the LiveKit room — even if the participant updates their metadata
-    or the operator switches the user's ``active_agent`` from the admin
-    UI. The reasons for "sticky" being the right default:
-
-      - LiveKit sessions are short-lived (a single conversation turn
-        sequence). Refreshing the token mid-turn would split an
-        audio/text stream between two different agent backends.
-      - Admin's ``set_active_agent`` semantics: switching ``active``
-        affects *future* sessions, not in-flight ones. This matches
-        what operators expect — the admin UI hint in Phase 33.B4 makes
-        that contract visible.
-      - Hot-rotating mid-session would require revalidating cached
-        prompts, memory threads, and audio context — a separate (and
-        much larger) feature. The escape hatch today is to revoke the
-        user's sessions (POST ``/api/admin/users/{id}/revoke-sessions``
-        in agent, see Phase 33.B1) which forces a reconnect.
-
-    If you need the new identity to take effect *now*: end the session
-    (close the LK room) and start a new one. The token will be
-    re-resolved on the next chat() call's first invocation.
+    **Identity changes mid-session are NOT re-resolved.** Device binding
+    changes require a new LiveKit session so conversation history and memory
+    stay inside one companion boundary.
     """
     cache: dict[str, str] = {}
 
@@ -172,21 +131,16 @@ def make_device_token_resolver(
                 f"kind={metadata.get('kind')!r}: {exc}"
             ) from exc
 
-        # Channel mints a fresh runtime device_id distinct from the LK
-        # participant.identity. This gives agent's audit logs a "session
-        # came in via channel-worker" handle without conflating it with
-        # the underlying user/device identity.
-        runtime_device_id = (
-            ctx.device_id or f"channel-{uuid.uuid4().hex[:8]}"
-        )
+        runtime_device_id = ctx.device_id or identity
         try:
             token, exp = sign_device_token(
                 secret=jwt_secret,
                 algorithm=jwt_algorithm,
                 device_id=runtime_device_id,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                template_id=ctx.template_id,
+                owner_id=ctx.owner_id,
+                companion_id=ctx.companion_id,
+                memory_realm_id=ctx.memory_realm_id,
+                genome_id=ctx.genome_id,
                 ttl_seconds=ttl_seconds,
             )
         except ValueError as exc:
@@ -194,8 +148,8 @@ def make_device_token_resolver(
 
         cache["token"] = token
         _log.info(
-            "resolved device token user=%s agent=%s tenant=%s exp=%s",
-            ctx.user_id, ctx.agent_id, ctx.tenant_id, exp.isoformat(),
+            "resolved device token owner=%s companion=%s device=%s exp=%s",
+            ctx.owner_id, ctx.companion_id, runtime_device_id, exp.isoformat(),
         )
         return token
 

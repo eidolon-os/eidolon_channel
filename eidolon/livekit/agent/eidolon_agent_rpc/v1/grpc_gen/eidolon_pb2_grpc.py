@@ -26,10 +26,9 @@ if _version_not_supported:
 
 
 class EidolonAgentStub(object):
-    """The EidolonAgent service is the brain that LiveKit voice agents (and other
-    callers — web, IoT, desktop) invoke instead of a raw LLM. It bundles
-    streaming chat, signal ingest, proactive subscription, and the pairing
-    handshake into one connection.
+    """The EidolonAgent service is the companion runtime that LiveKit voice agents
+    and other authenticated callers invoke instead of a raw LLM. Identity,
+    device binding, and token issuance live outside this service.
     """
 
     def __init__(self, channel):
@@ -43,11 +42,6 @@ class EidolonAgentStub(object):
                 request_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatRequest.SerializeToString,
                 response_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.TurnEvent.FromString,
                 _registered_method=True)
-        self.ChatOnce = channel.unary_unary(
-                '/eidolon.agent.v1.EidolonAgent/ChatOnce',
-                request_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatOnceRequest.SerializeToString,
-                response_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatOnceResponse.FromString,
-                _registered_method=True)
         self.PushSignal = channel.unary_unary(
                 '/eidolon.agent.v1.EidolonAgent/PushSignal',
                 request_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.SignalRequest.SerializeToString,
@@ -58,18 +52,12 @@ class EidolonAgentStub(object):
                 request_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.SubscribeRequest.SerializeToString,
                 response_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ProactiveEvent.FromString,
                 _registered_method=True)
-        self.ExchangePairingCode = channel.unary_unary(
-                '/eidolon.agent.v1.EidolonAgent/ExchangePairingCode',
-                request_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ExchangeRequest.SerializeToString,
-                response_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ExchangeResponse.FromString,
-                _registered_method=True)
 
 
 class EidolonAgentServicer(object):
-    """The EidolonAgent service is the brain that LiveKit voice agents (and other
-    callers — web, IoT, desktop) invoke instead of a raw LLM. It bundles
-    streaming chat, signal ingest, proactive subscription, and the pairing
-    handshake into one connection.
+    """The EidolonAgent service is the companion runtime that LiveKit voice agents
+    and other authenticated callers invoke instead of a raw LLM. Identity,
+    device binding, and token issuance live outside this service.
     """
 
     def Chat(self, request_iterator, context):
@@ -77,14 +65,6 @@ class EidolonAgentServicer(object):
         frames (initial + optional cancels + optional signals); the server emits
         a stream of TurnEvent frames. Both directions stay open for the duration
         of a session (multiple turns share the connection).
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ChatOnce(self, request, context):
-        """One-shot non-streaming call. Useful for simple text-only callers that
-        don't need barge-in. Equivalent to a single ChatRequest + collected reply.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -107,14 +87,6 @@ class EidolonAgentServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ExchangePairingCode(self, request, context):
-        """Trade a pairing_code for a long-lived device_token. THIS IS THE ONLY
-        RPC that does NOT require Authorization metadata.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
 
 def add_EidolonAgentServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -122,11 +94,6 @@ def add_EidolonAgentServicer_to_server(servicer, server):
                     servicer.Chat,
                     request_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatRequest.FromString,
                     response_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.TurnEvent.SerializeToString,
-            ),
-            'ChatOnce': grpc.unary_unary_rpc_method_handler(
-                    servicer.ChatOnce,
-                    request_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatOnceRequest.FromString,
-                    response_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatOnceResponse.SerializeToString,
             ),
             'PushSignal': grpc.unary_unary_rpc_method_handler(
                     servicer.PushSignal,
@@ -138,11 +105,6 @@ def add_EidolonAgentServicer_to_server(servicer, server):
                     request_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.SubscribeRequest.FromString,
                     response_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ProactiveEvent.SerializeToString,
             ),
-            'ExchangePairingCode': grpc.unary_unary_rpc_method_handler(
-                    servicer.ExchangePairingCode,
-                    request_deserializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ExchangeRequest.FromString,
-                    response_serializer=eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ExchangeResponse.SerializeToString,
-            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'eidolon.agent.v1.EidolonAgent', rpc_method_handlers)
@@ -152,10 +114,9 @@ def add_EidolonAgentServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class EidolonAgent(object):
-    """The EidolonAgent service is the brain that LiveKit voice agents (and other
-    callers — web, IoT, desktop) invoke instead of a raw LLM. It bundles
-    streaming chat, signal ingest, proactive subscription, and the pairing
-    handshake into one connection.
+    """The EidolonAgent service is the companion runtime that LiveKit voice agents
+    and other authenticated callers invoke instead of a raw LLM. Identity,
+    device binding, and token issuance live outside this service.
     """
 
     @staticmethod
@@ -175,33 +136,6 @@ class EidolonAgent(object):
             '/eidolon.agent.v1.EidolonAgent/Chat',
             eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatRequest.SerializeToString,
             eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.TurnEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ChatOnce(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/eidolon.agent.v1.EidolonAgent/ChatOnce',
-            eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatOnceRequest.SerializeToString,
-            eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ChatOnceResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -256,33 +190,6 @@ class EidolonAgent(object):
             '/eidolon.agent.v1.EidolonAgent/SubscribeProactive',
             eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.SubscribeRequest.SerializeToString,
             eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ProactiveEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ExchangePairingCode(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/eidolon.agent.v1.EidolonAgent/ExchangePairingCode',
-            eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ExchangeRequest.SerializeToString,
-            eidolon_dot_livekit_dot_agent_dot_eidolon__agent__rpc_dot_v1_dot_grpc__gen_dot_eidolon__pb2.ExchangeResponse.FromString,
             options,
             channel_credentials,
             insecure,

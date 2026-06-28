@@ -6,8 +6,9 @@ bearer. The resolver here is what that callable does:
 
   1. Inspect the LiveKit room for a remote participant.
   2. Parse ``participant.metadata`` → ``kind`` (``user`` | ``device``).
-  3. Resolve ``{kind}/{identity}`` through Eidolon Data, with admin HTTP as
-     an optional cross-process fallback.
+  3. Resolve ``{kind}/{identity}`` through Eidolon Data, with Admin HTTP as
+     an optional cross-process fallback. Channel consumes Admin's runtime
+     context; it does not own or mutate the device registry/binding table.
   4. Sign a device JWT with the resolved (tenant, user, template) so
      agent's ``PairingTokenVerifier`` accepts it.
   5. Cache the result for the lifetime of this resolver instance —

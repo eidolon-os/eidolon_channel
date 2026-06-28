@@ -632,6 +632,7 @@ async def test_streaming_pipeline_publishes_client_playback_stop_control() -> No
     assert payload["v"] == 1
     assert payload["kind"] == "cmd"
     assert payload["op"] == "playback.stop"
+    assert payload["src"] == {"type": "channel", "id": "eidolon_channel"}
     assert payload["payload"] == {
         "reason": "interrupt_cancel",
         "turn_id": "turn-playback-stop",

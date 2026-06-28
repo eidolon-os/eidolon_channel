@@ -2234,7 +2234,11 @@ class StreamingPipeline(BasePipeline):
         task.add_done_callback(_log_failure)
 
     def _publish_client_control(self, op: str, *, reason: str) -> None:
-        """Best-effort server-authoritative command for thin clients."""
+        """Best-effort session-local command for thin clients.
+
+        Uses the shared ``eidolon.control`` topic with ``src.type=channel`` so
+        clients can distinguish it from Hub's audited cross-session commands.
+        """
         room = getattr(self, "_room", None)
         local = getattr(room, "local_participant", None) if room else None
         if local is None:
@@ -2251,6 +2255,7 @@ class StreamingPipeline(BasePipeline):
             "kind": "cmd",
             "id": f"{op}:{int(time.time() * 1000)}",
             "op": op,
+            "src": {"type": "channel", "id": "eidolon_channel"},
             "payload": {
                 "reason": reason,
                 "turn_id": turn_id,

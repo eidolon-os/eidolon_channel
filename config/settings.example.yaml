@@ -2,8 +2,12 @@
 # Copy to config/settings.yaml and adjust. Secret fields hold the ENV VAR NAME
 # as a placeholder (resolved from config/.env / the environment); real secrets
 # never live here. Field set mirrors config/settings.yaml.
+# Channel uses the same LiveKit server/key/secret as Hub, but as an agent worker
+# and voice-room participant. Keep this role-specific config until a unified
+# LiveKit Profile is worth the extra abstraction.
 
 core:
+  # Agent-worker signaling URL for the shared LiveKit server.
   livekit_url: ws://127.0.0.1:7880
   api_key: LIVEKIT_API_KEY
   api_secret: LIVEKIT_API_SECRET

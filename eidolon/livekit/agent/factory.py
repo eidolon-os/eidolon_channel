@@ -167,6 +167,9 @@ class _FallbackResolveClient:
     async def resolve_device(self, device_id: str):
         return await self._resolve("resolve_device", device_id)
 
+    async def resolve_owner(self, owner_id: str):
+        return await self._resolve("resolve_owner", owner_id)
+
     async def _resolve(self, method: str, value: str):
         from eidolon_sdk.biz.admin import AdminResolveNotFound, AdminResolveUnreachable
 
@@ -183,16 +186,46 @@ class _FallbackResolveClient:
 
 
 class _DataStoreRuntimeResolveClient:
-    """Local eidolon_data implementation of AdminResolveClient's device API."""
+    """Local eidolon_data implementation of AdminResolveClient's resolve API."""
 
     def __init__(self, store: "Any") -> None:
         self._store = store
+
+    async def resolve_owner(self, owner_id: str):
+        from eidolon_sdk.biz.admin import (
+            AdminResolveNotFound,
+            AdminResolvePrecondition,
+        )
+
+        owner = await self._store.owners.get(owner_id)
+        if owner is None:
+            raise AdminResolveNotFound(
+                f"owner {owner_id!r} is not registered in eidolon_data"
+            )
+        if owner.status != "active":
+            raise AdminResolvePrecondition(412, f"owner {owner_id!r} is {owner.status}")
+
+        companions = [
+            row
+            for row in await self._store.companions.list_for_owner(owner_id)
+            if row.status == "active"
+        ]
+        ready = [
+            row
+            for row in companions
+            if row.default_memory_realm_id and row.current_genome_id
+        ]
+        if not ready:
+            raise AdminResolvePrecondition(
+                412,
+                f"owner {owner_id!r} has no active companion with memory/genome",
+            )
+        return await self._context_for_companion(ready[0], device_id=None)
 
     async def resolve_device(self, device_id: str):
         from eidolon_sdk.biz.admin import (
             AdminResolveNotFound,
             AdminResolvePrecondition,
-            ResolvedContext,
         )
 
         device = await self._store.devices.get_device(device_id)
@@ -223,6 +256,20 @@ class _DataStoreRuntimeResolveClient:
                 412,
                 f"device {device_id!r} is bound outside owner {device.owner_id!r}",
             )
+        return await self._context_for_companion(companion, device_id=device.device_id)
+
+    async def _context_for_companion(self, companion: "Any", *, device_id: str | None):
+        from eidolon_sdk.biz.admin import (
+            AdminResolveNotFound,
+            AdminResolvePrecondition,
+            ResolvedContext,
+        )
+
+        if companion.status != "active":
+            raise AdminResolvePrecondition(
+                412,
+                f"companion {companion.companion_id!r} is {companion.status}",
+            )
         if not companion.default_memory_realm_id:
             raise AdminResolvePrecondition(
                 412,
@@ -233,12 +280,40 @@ class _DataStoreRuntimeResolveClient:
                 412,
                 f"companion {companion.companion_id!r} has no current genome",
             )
+        realm = await self._store.memory_repo.get_realm(
+            companion.default_memory_realm_id
+        )
+        if realm is None:
+            raise AdminResolveNotFound(
+                f"memory realm {companion.default_memory_realm_id!r} not found"
+            )
+        if realm.status != "active":
+            raise AdminResolvePrecondition(
+                412,
+                f"memory realm {companion.default_memory_realm_id!r} is {realm.status}",
+            )
+        genome = await self._store.persona_repo.get_genome(companion.current_genome_id)
+        if genome is None:
+            raise AdminResolveNotFound(
+                f"genome {companion.current_genome_id!r} not found"
+            )
+        if genome.companion_id != companion.companion_id:
+            raise AdminResolvePrecondition(
+                412,
+                f"genome {genome.genome_id!r} belongs to companion "
+                f"{genome.companion_id!r}, not {companion.companion_id!r}",
+            )
+        if genome.status != "committed":
+            raise AdminResolvePrecondition(
+                412,
+                f"genome {genome.genome_id!r} is {genome.status}",
+            )
         return ResolvedContext(
-            owner_id=device.owner_id,
+            owner_id=companion.owner_id,
             companion_id=companion.companion_id,
             memory_realm_id=companion.default_memory_realm_id,
             genome_id=companion.current_genome_id,
-            device_id=device.device_id,
+            device_id=device_id,
         )
 
 

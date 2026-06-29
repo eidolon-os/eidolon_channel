@@ -47,7 +47,7 @@ if _env_path.exists():
 
 def _fake_livekit_room() -> SimpleNamespace:
     """Return the minimal Room shape required by runtime-token resolution."""
-    participant = SimpleNamespace(identity="integration-user", metadata='{"kind": "user"}')
+    participant = SimpleNamespace(identity="integration-owner", metadata='{"kind": "owner"}')
     return SimpleNamespace(
         name="integration-room",
         remote_participants={participant.identity: participant},

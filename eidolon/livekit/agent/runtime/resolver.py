@@ -1,14 +1,14 @@
-"""Compose device-bound runtime identity lookup + JWT signing into one callable.
+"""Compose runtime identity lookup + JWT signing into one callable.
 
 Phase 32.B: when ``EidolonAgentGrpcLlm`` opens its session (first
 ``chat()`` call), it invokes the device_token callable to get a fresh
 bearer. The resolver here is what that callable does:
 
   1. Inspect the LiveKit room for a remote participant.
-  2. Require ``participant.metadata.kind == "device"``.
-  3. Resolve the device through Eidolon Data/Admin into the explicit
-     owner/companion/device/runtime identity.
-  4. Sign a device JWT with owner/companion/device/memory_realm/genome so
+  2. Dispatch by ``participant.metadata.kind``.
+  3. Resolve the entrance through Eidolon Data/Admin into the explicit
+     owner/companion/runtime identity envelope.
+  4. Sign a runtime JWT with owner/companion/memory_realm/genome so
      eidolon_agent accepts it.
   5. Cache the result for the lifetime of this resolver instance —
      subsequent invocations within the session return the same token.
@@ -25,11 +25,12 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from eidolon_sdk.biz.admin import AdminResolveError, ResolvedContext
-from eidolon_sdk.biz.runtime import sign_device_token
+from eidolon_sdk.biz.runtime import sign_runtime_token
 
 _log = logging.getLogger(__name__)
 
 DeviceTokenResolver = Callable[[], Awaitable[str]]
+RuntimeTokenResolver = DeviceTokenResolver
 
 
 class DeviceTokenResolverError(Exception):
@@ -76,14 +77,29 @@ async def _resolve_context(
     admin: Any,
     identity: str,
     metadata: dict[str, Any],
-) -> ResolvedContext:
-    """Resolve only explicit device bindings."""
+) -> tuple[str, str, ResolvedContext]:
+    """Resolve a participant into ``(actor_kind, actor_id, context)``."""
     kind = str(metadata.get("kind") or "").strip().lower()
     if kind == "device":
-        return await admin.resolve_device(identity)
+        device_id = str(metadata.get("device_id") or identity).strip()
+        if not device_id:
+            raise DeviceTokenResolverError("device participant missing device_id")
+        return "device", device_id, await admin.resolve_device(device_id)
+    if kind == "owner":
+        owner_id = str(metadata.get("owner_id") or identity).strip()
+        if not owner_id:
+            raise DeviceTokenResolverError("owner participant missing owner_id")
+        return "owner", owner_id, await admin.resolve_owner(owner_id)
+    if kind == "user":
+        owner_id = str(
+            metadata.get("owner_id") or metadata.get("user_id") or identity
+        ).strip()
+        if not owner_id:
+            raise DeviceTokenResolverError("user participant missing owner_id/user_id")
+        return "owner", owner_id, await admin.resolve_owner(owner_id)
     raise DeviceTokenResolverError(
-        f"participant.metadata.kind must be 'device' for identity={identity!r}; "
-        f"got {kind!r}. Runtime sessions must use an eidolon_data device binding."
+        f"participant.metadata.kind must be one of 'device' or 'owner' for "
+        f"identity={identity!r}; got {kind!r}."
     )
 
 
@@ -122,7 +138,7 @@ def make_device_token_resolver(
         identity, metadata = peek
 
         try:
-            ctx = await _resolve_context(
+            actor_kind, actor_id, ctx = await _resolve_context(
                 admin=admin, identity=identity, metadata=metadata
             )
         except AdminResolveError as exc:
@@ -131,12 +147,13 @@ def make_device_token_resolver(
                 f"kind={metadata.get('kind')!r}: {exc}"
             ) from exc
 
-        runtime_device_id = ctx.device_id or identity
         try:
-            token, exp = sign_device_token(
+            token, exp = sign_runtime_token(
                 secret=jwt_secret,
                 algorithm=jwt_algorithm,
-                device_id=runtime_device_id,
+                actor_kind=actor_kind,
+                actor_id=actor_id,
+                device_id=ctx.device_id,
                 owner_id=ctx.owner_id,
                 companion_id=ctx.companion_id,
                 memory_realm_id=ctx.memory_realm_id,
@@ -148,8 +165,13 @@ def make_device_token_resolver(
 
         cache["token"] = token
         _log.info(
-            "resolved device token owner=%s companion=%s device=%s exp=%s",
-            ctx.owner_id, ctx.companion_id, runtime_device_id, exp.isoformat(),
+            "resolved runtime token actor=%s:%s owner=%s companion=%s device=%s exp=%s",
+            actor_kind,
+            actor_id,
+            ctx.owner_id,
+            ctx.companion_id,
+            ctx.device_id,
+            exp.isoformat(),
         )
         return token
 

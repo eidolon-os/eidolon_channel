@@ -1,7 +1,7 @@
 """Device token resolver for LiveKit sessions.
 
 Verifies the closure correctly:
-  - requires participant.metadata.kind=device
+  - dispatches participant.metadata.kind=device/owner
   - caches the resolved token (one HTTP + one sign per session)
   - propagates admin errors as DeviceTokenResolverError
   - fails clearly when no participant is connected yet
@@ -68,13 +68,42 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["memory_realm_id"] == "realm-1"
     assert payload["genome_id"] == "genome-1"
     assert payload["device_id"] == "esp32-007"
+    assert payload["actor_kind"] == "device"
+    assert payload["actor_id"] == "esp32-007"
     admin.resolve_device.assert_awaited_once_with("esp32-007")
+
+
+async def test_resolver_dispatches_to_owner_for_kind_owner():
+    admin = _fake_admin()
+    admin.resolve_owner.return_value = ResolvedContext(
+        owner_id="owner-1",
+        companion_id="companion-1",
+        memory_realm_id="realm-1",
+        genome_id="genome-1",
+        device_id=None,
+    )
+    room = _room_with(
+        _participant("owner-1", '{"kind": "owner", "owner_id": "owner-1"}')
+    )
+    resolve = make_device_token_resolver(
+        room=room, admin=admin, jwt_secret=SECRET,
+    )
+    token = await resolve()
+    payload = jwt.decode(token, SECRET, algorithms=["HS256"])
+    assert payload["owner_id"] == "owner-1"
+    assert payload["companion_id"] == "companion-1"
+    assert payload["memory_realm_id"] == "realm-1"
+    assert payload["genome_id"] == "genome-1"
+    assert payload["actor_kind"] == "owner"
+    assert payload["actor_id"] == "owner-1"
+    assert "device_id" not in payload
+    admin.resolve_owner.assert_awaited_once_with("owner-1")
+    admin.resolve_device.assert_not_called()
 
 
 async def test_resolver_raises_when_metadata_missing_kind():
     """Phase 33.A5 tightening: no silent device-fallback for missing
-    or unknown ``kind``. Both supported clients (hub web + esp32) now
-    tag kind explicitly (32.A / 32.B follow-up). A participant with no
+    or unknown ``kind``. Supported clients tag kind explicitly. A participant with no
     ``kind`` is a misconfigured / pre-32-era client — surface it
     loudly rather than guess."""
     from eidolon.livekit.agent.runtime.resolver import DeviceTokenResolverError

@@ -43,5 +43,12 @@ async def test_runtime_resolve_client_prefers_eidolon_data(tmp_path, monkeypatch
         assert device_ctx.memory_realm_id == "realm-a"
         assert device_ctx.genome_id == "genome-a"
         assert device_ctx.device_id == "esp32-a"
+
+        owner_ctx = await client.resolve_owner("owner-a")
+        assert owner_ctx.owner_id == "owner-a"
+        assert owner_ctx.companion_id == "companion-a"
+        assert owner_ctx.memory_realm_id == "realm-a"
+        assert owner_ctx.genome_id == "genome-a"
+        assert owner_ctx.device_id is None
     finally:
         await store.close()

@@ -5,8 +5,7 @@ The parser must:
   - be *loud* on field-level drift — an unknown key (the canonical ``ppt`` typo),
     an unrecognized enum value, or an unsupported ``schema_v`` — raising in
     strict mode and degrading best-effort (no raise) otherwise,
-  - always reject malformed framing regardless of strictness,
-  - tolerate the deprecated-but-known ``manual_interrupt`` field.
+  - always reject malformed framing regardless of strictness.
 """
 
 from __future__ import annotations
@@ -114,15 +113,19 @@ def test_missing_schema_v_is_accepted() -> None:
     assert state.input_mode == INPUT_MODE_PTT
 
 
-# ── deprecated-but-known field ──────────────────────────────────────────────
+# ── removed field ───────────────────────────────────────────────────────────
 
 
-def test_manual_interrupt_is_tolerated_even_in_strict() -> None:
-    # Deprecated but a KNOWN key: firmware still emitting it must not trip the
-    # unknown-key check. It is parsed (for logging) but the policy layer ignores it.
-    assert "manual_interrupt" in CLIENT_AUDIO_STATE_KNOWN_KEYS
-    state = _parse(_packet(manual_interrupt=True), strict=True)
+def test_manual_interrupt_is_unknown_in_strict() -> None:
+    assert "manual_interrupt" not in CLIENT_AUDIO_STATE_KNOWN_KEYS
+    with pytest.raises(ValueError, match="unknown field"):
+        _parse(_packet(manual_interrupt=True), strict=True)
+
+
+def test_manual_interrupt_degrades_in_non_strict(caplog) -> None:
+    state = _parse(_packet(manual_interrupt=True), strict=False)
     assert state.manual_interrupt is True
+    assert any("[contract]" in r.message for r in caplog.records)
 
 
 # ── malformed framing: always rejected ──────────────────────────────────────

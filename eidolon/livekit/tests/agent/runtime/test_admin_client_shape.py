@@ -1,11 +1,12 @@
 """Pin the shape contract with admin's ``/api/resolve`` envelope.
 
-These tests lock the contract: ``from_json`` must accept both the
-envelope shape (the truth admin emits today) AND a flat dict (so future
-internal refactors don't silently break the wrapper handling).
+These tests lock the contract: ``from_json`` accepts only the admin
+``{"context": ...}`` envelope shape.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from eidolon_sdk.biz.admin import ResolvedContext
 
@@ -34,13 +35,9 @@ def test_from_json_unwraps_admin_envelope() -> None:
     assert ctx.device_id == "dev-1"
 
 
-def test_from_json_accepts_flat_shape() -> None:
-    """Backwards-compatible: if a caller (or future admin variant) ever
-    hands us a flat dict, from_json should still build the right
-    context. Cheap insurance against the next envelope reshape."""
-    ctx = ResolvedContext.from_json(_expected_manson())
-    assert ctx.owner_id == "owner-1"
-    assert ctx.companion_id == "companion-1"
+def test_from_json_rejects_flat_shape() -> None:
+    with pytest.raises(ValueError, match="missing context"):
+        ResolvedContext.from_json(_expected_manson())
 
 
 def test_from_json_envelope_with_blank_fields_does_not_silently_pass() -> None:
@@ -59,8 +56,7 @@ def test_from_json_envelope_with_blank_fields_does_not_silently_pass() -> None:
 
 
 def test_envelope_takes_precedence_over_root() -> None:
-    """If somehow both root and nested fields are present (legacy
-    shape during a contract migration), the envelope wins."""
+    """If root fields are present, the envelope remains the only source."""
     payload = {
         # Root carries old/stale flat shape...
         "owner_id": "stale",

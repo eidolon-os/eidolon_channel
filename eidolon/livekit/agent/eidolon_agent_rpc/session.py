@@ -77,9 +77,9 @@ _CHANNEL_OPTIONS = list(DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS)
 class DeltaPayload:
     text: str
     # "answer" (default) is spoken content; non-answer roles (e.g.
-    # "tool_preamble") are status lines the renderer may speak at most once or
-    # route to UI instead of treating as answer text. Missing role on the wire
-    # defaults to "answer" for backward compatibility.
+    # "tool_preamble") are status lines the renderer routes to UI instead of
+    # treating as answer text. "slow_tool_hint" is a delayed spoken wait hint.
+    # Missing role on the wire defaults to "answer" for backward compatibility.
     role: str = "answer"
 
 

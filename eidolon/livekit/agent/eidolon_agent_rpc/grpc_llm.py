@@ -454,10 +454,10 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
                 if isinstance(payload, DeltaPayload):
-                    # Non-answer status lines (e.g. tool preambles) are spoken at
-                    # most once per turn and never accumulated as answer content.
-                    # The brain already de-dupes per turn; this is the channel's
-                    # role-aware guarantee on top of that.
+                    # Non-answer status lines are status chrome by default: emit
+                    # them as provider events for UI/observability, but keep them
+                    # out of TTS. A slow-tool hint is the one non-answer role that
+                    # is intentionally spoken, and is still de-duped per turn.
                     if payload.role != "answer":
                         if payload.role in spoken_preamble_roles:
                             continue
@@ -470,6 +470,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             attempt=attempt,
                             role=payload.role,
                         )
+                        if payload.role != "slow_tool_hint":
+                            continue
                     if not first_delta_seen:
                         first_delta_seen = True
                         llm_v.emit_provider_event(

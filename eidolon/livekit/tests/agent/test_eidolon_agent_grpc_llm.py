@@ -187,10 +187,10 @@ class _ToolEventServicer(pbg.EidolonAgentServicer):
 
 
 class _PreambleServicer(pbg.EidolonAgentServicer):
-    """Emits the same role=tool_preamble delta twice, then a role=answer delta.
+    """Emits repeated status deltas, then a role=answer delta.
 
-    Verifies the channel speaks a status preamble at most once per turn while
-    still rendering the real answer."""
+    Verifies the channel keeps ordinary status out of TTS, speaks a delayed
+    slow-tool hint at most once, and still renders the real answer."""
 
     def __init__(self) -> None:
         self.starts: list[pb.StartTurn] = []
@@ -202,8 +202,10 @@ class _PreambleServicer(pbg.EidolonAgentServicer):
                 tid = req.start.turn_id
                 yield _delta_role(tid, 1, "我先调用相关工具处理一下。", "tool_preamble")
                 yield _delta_role(tid, 2, "我先调用相关工具处理一下。", "tool_preamble")
-                yield _delta_role(tid, 3, "北京今天晴。", "answer")
-                yield _done(tid, 4)
+                yield _delta_role(tid, 3, "稍等，我处理一下。", "slow_tool_hint")
+                yield _delta_role(tid, 4, "稍等，我处理一下。", "slow_tool_hint")
+                yield _delta_role(tid, 5, "北京今天晴。", "answer")
+                yield _done(tid, 6)
                 return
 
 
@@ -928,9 +930,8 @@ async def test_tool_events_surface_at_info(caplog) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_preamble_role_spoken_once() -> None:
-    """② role-aware rendering: a repeated tool_preamble is spoken at most once;
-    the answer delta still renders. Default-role answer deltas are unaffected."""
+async def test_tool_status_roles_are_rendered_by_latency_policy() -> None:
+    """Status roles go to provider events; only slow hints are spoken."""
     servicer = _PreambleServicer()
     server, target = await _serve(servicer)
     try:
@@ -948,12 +949,16 @@ async def test_tool_preamble_role_spoken_once() -> None:
                 if chunk.delta and chunk.delta.content:
                     spoken.append(chunk.delta.content)
 
-            assert spoken.count("我先调用相关工具处理一下。") == 1, spoken
+            assert "我先调用相关工具处理一下。" not in spoken
+            assert spoken.count("稍等，我处理一下。") == 1, spoken
             assert "北京今天晴。" in spoken
-            assert (
-                sum(1 for e in provider_events if e.get("event") == "brain_tool_preamble")
-                == 1
-            ), provider_events
+            preamble_events = [
+                e for e in provider_events if e.get("event") == "brain_tool_preamble"
+            ]
+            assert [e.get("role") for e in preamble_events] == [
+                "tool_preamble",
+                "slow_tool_hint",
+            ], provider_events
         finally:
             await adapter.aclose()
     finally:

@@ -62,13 +62,14 @@ message PushSignalInline {
 //
 //   STATE        { state: "thinking" | "speaking" | ... }
 //   DELTA        { text: string,
-//                  role?: "answer" (default) | "tool_preamble",
+//                  role?: "answer" (default) | "tool_preamble" | "slow_tool_hint",
 //                  prosody?: object }
 //                  - role distinguishes spoken *answer* content from
 //                    non-answer status lines (e.g. a tool preamble). Absent
-//                    role means "answer". Renderers may speak a non-answer
-//                    role at most once per turn / route it to UI, and must
-//                    not treat it as answer text.
+//                    role means "answer". Renderers route most non-answer
+//                    roles to UI only; "slow_tool_hint" is a delayed spoken
+//                    wait hint. Non-answer roles must not be treated as answer
+//                    text.
 //   TOOL_CALL    { id: string, name: string, arguments: object }
 //   TOOL_RESULT  { name: string, ok: bool, content: any, error?: string }
 //   CITATION     { ... }

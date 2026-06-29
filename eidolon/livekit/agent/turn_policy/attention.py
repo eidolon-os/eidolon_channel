@@ -41,6 +41,7 @@ class AttentionInput:
     client_state: ClientAudioState | None = None
     transcript: str = ""
     eot_score: float = 0.0
+    speech_started: bool = False
 
 
 class AttentionAdmission:
@@ -104,6 +105,17 @@ class AttentionAdmission:
             self._config.require_direct_signal_during_playback
             and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
         ):
+            if (
+                signal.speech_started
+                and not text
+                and self._config.soft_duck_on_playback_speech_start
+            ):
+                return AttentionDecision(
+                    AdmissionAction.DUCK_AND_DECIDE,
+                    "playback_speech_start_soft_duck",
+                    transcript_preview=preview,
+                    client_state_used=True,
+                )
             if text:
                 intent = hard_stop_intent(text)
                 if intent is InterruptIntent.HARD_STOP:

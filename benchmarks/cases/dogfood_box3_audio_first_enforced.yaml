@@ -1,0 +1,118 @@
+suite_id: dogfood_box3_audio_first_enforced
+# Human+device dogfood scenarios for ESP32 box-3 style full-duplex sessions.
+# This suite is explicit-only (`*_enforced.yaml`) so default benchmark runs do
+# not unexpectedly add acoustic mixing or LiveKit-room device cadence checks.
+cases:
+  - case_id: dogfood_box3_owner_followup_during_playback_001
+    suite: dogfood_box3_audio_first
+    description: box-3 全双工 dogfood：agent 播放中主人提出完整追问；应先让出声道，并在证据充分后取消当前回答。
+    timeout_sec: 60
+    tags: ["dogfood", "box3", "full_duplex", "owner_directed", "audio_first"]
+    dogfood:
+      enabled: true
+      device:
+        model: esp32_box_3
+        mode: full_duplex
+        audio_state_hz: 10
+        playback_ack: simulated
+      agent:
+        speaking_text: 我会先讲系统结构，然后讲交互体验、延迟指标和测试边界。
+        tts_duration_ms: 6000
+      acoustics:
+        echo:
+          enabled: true
+          delay_ms: 80
+          attenuation_db: -18
+        noise:
+          enabled: true
+          type: room
+          snr_db: 20
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmarks/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: owner_followup_capability
+        text: 那你现在能帮我做什么？
+        path: benchmarks/audio/generated/owner_followup_capability.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 那你现在能帮我做什么
+        audio: owner_followup_capability
+        start_ms: 1800
+        duration_ms: 1250
+        interims:
+          - 那
+          - 那你
+          - 那你现在能帮我
+          - 那你现在能帮我做什么
+        eot_scores: [0.0, 0.0, 0.62, 0.74]
+        final_delay_ms: 100
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会先讲系统结构，然后讲交互体验、延迟指标和测试边界，这段回答用于制造主人追问时的可打断窗口。
+    expect:
+      action: cancel
+      intent: uncertain
+      min_user_finals: 2
+      min_agent_messages: 1
+      max_interrupt_decision_ms: 1000
+      max_speech_start_to_suspend_ms: 120
+      max_speech_start_to_cancel_ms: 500
+      playback_stop_sent: true
+      no_full_assistant_context_commit: true
+
+  - case_id: dogfood_box3_backchannel_during_playback_001
+    suite: dogfood_box3_audio_first
+    description: box-3 全双工 dogfood：agent 播放中主人短附和“嗯嗯”；允许短暂让出声道，但不可取消当前回答。
+    timeout_sec: 45
+    tags: ["dogfood", "box3", "full_duplex", "backchannel", "false_interruption"]
+    dogfood:
+      enabled: true
+      device:
+        model: esp32_box_3
+        mode: full_duplex
+        audio_state_hz: 10
+      agent:
+        speaking_text: 我继续说明这个方案的几个关键部分。
+        tts_duration_ms: 4500
+      acoustics:
+        echo:
+          enabled: true
+          delay_ms: 80
+          attenuation_db: -18
+        noise:
+          enabled: true
+          type: room
+          snr_db: 22
+    audio_clips:
+      - id: backchannel_mm
+        text: 嗯嗯
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: backchannel
+    user_steps:
+      - text: 嗯嗯
+        audio: backchannel_mm
+        start_ms: 240
+        duration_ms: 400
+        interims: ["嗯嗯"]
+        eot_scores: [0.0]
+        final_delay_ms: 80
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+      agent_audio_response: first
+      max_speech_start_to_suspend_ms: 120
+      max_speech_start_to_resume_ms: 900

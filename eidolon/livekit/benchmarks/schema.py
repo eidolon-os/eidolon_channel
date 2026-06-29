@@ -49,6 +49,67 @@ class AgentReply:
 
 
 @dataclass(frozen=True)
+class DogfoodDevice:
+    """Device-side behavior for human+device dogfood scenarios.
+
+    This is benchmark DSL only. Runtime code should continue to consume the
+    actual wire packets, not import benchmark types.
+    """
+
+    model: str = "generic"
+    mode: str = "full_duplex"
+    audio_state_hz: float = 2.0
+    playback_ack: str = "simulated"
+    state_jitter_ms: int = 0
+
+
+@dataclass(frozen=True)
+class DogfoodAgentPlayback:
+    """Synthetic agent playback used to model mic echo in dogfood cases."""
+
+    speaking_text: str = ""
+    tts_duration_ms: int = 0
+    echo_source: str = "synthetic_voice"
+
+
+@dataclass(frozen=True)
+class DogfoodEcho:
+    enabled: bool = False
+    delay_ms: int = 80
+    attenuation_db: float = -18.0
+
+
+@dataclass(frozen=True)
+class DogfoodNoise:
+    enabled: bool = False
+    type: str = "room"
+    snr_db: float | None = None
+    amplitude: float = 0.0
+
+
+@dataclass(frozen=True)
+class DogfoodAcoustics:
+    """Acoustic conditions for synthetic dogfood mic rendering."""
+
+    echo: DogfoodEcho = field(default_factory=DogfoodEcho)
+    noise: DogfoodNoise = field(default_factory=DogfoodNoise)
+
+
+@dataclass(frozen=True)
+class DogfoodSpec:
+    """Human + device dogfood extension for a benchmark case.
+
+    Existing policy/headless/component runners can ignore it safely. Room and
+    future HIL runners use it to emulate device state cadence and acoustic mess.
+    """
+
+    enabled: bool = False
+    device: DogfoodDevice = field(default_factory=DogfoodDevice)
+    agent: DogfoodAgentPlayback = field(default_factory=DogfoodAgentPlayback)
+    acoustics: DogfoodAcoustics = field(default_factory=DogfoodAcoustics)
+
+
+@dataclass(frozen=True)
 class Expectations:
     action: str = "none"
     intent: str = "uncertain"
@@ -80,6 +141,14 @@ class Expectations:
     # Room-participant bound on user-audio-done -> next agent audio. Doubles as
     # the resume-latency bound for false-interruption recovery cases.
     max_user_done_to_agent_audio_ms: float | None = None
+    # Dogfood / timeline-level assertions. They may be enforced by room timeline
+    # expectations or future HIL runners; deterministic runners simply carry
+    # them through reports.
+    max_speech_start_to_suspend_ms: float | None = None
+    max_speech_start_to_cancel_ms: float | None = None
+    max_speech_start_to_resume_ms: float | None = None
+    playback_stop_sent: bool | None = None
+    no_full_assistant_context_commit: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,6 +159,7 @@ class BenchmarkCase:
     audio_clips: tuple[AudioClip, ...]
     user_steps: tuple[UserStep, ...]
     agent_replies: tuple[AgentReply, ...] = ()
+    dogfood: DogfoodSpec = field(default_factory=DogfoodSpec)
     expectations: Expectations = field(default_factory=Expectations)
     tags: tuple[str, ...] = ()
     timeout_sec: float = 15.0
@@ -140,6 +210,27 @@ def _tuple_of(cls, raw: Any) -> tuple:
     return tuple(cls(**item) for item in raw)
 
 
+def _dogfood_spec(raw: Any) -> DogfoodSpec:
+    if raw is None:
+        return DogfoodSpec()
+    if not isinstance(raw, dict):
+        raise ValueError(f"expected mapping for DogfoodSpec, got {type(raw).__name__}")
+    device = DogfoodDevice(**dict(raw.get("device") or {}))
+    agent = DogfoodAgentPlayback(**dict(raw.get("agent") or {}))
+    acoustics_raw = dict(raw.get("acoustics") or {})
+    acoustics = DogfoodAcoustics(
+        echo=DogfoodEcho(**dict(acoustics_raw.get("echo") or {})),
+        noise=DogfoodNoise(**dict(acoustics_raw.get("noise") or {})),
+    )
+    enabled = bool(raw.get("enabled", True))
+    return DogfoodSpec(
+        enabled=enabled,
+        device=device,
+        agent=agent,
+        acoustics=acoustics,
+    )
+
+
 def load_suite(path: str | Path) -> BenchmarkSuite:
     p = Path(path)
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
@@ -157,6 +248,7 @@ def load_suite(path: str | Path) -> BenchmarkSuite:
                 audio_clips=_tuple_of(AudioClip, case_raw.get("audio_clips")),
                 user_steps=_tuple_of(UserStep, case_raw.get("user_steps")),
                 agent_replies=_tuple_of(AgentReply, case_raw.get("agent_replies")),
+                dogfood=_dogfood_spec(case_raw.get("dogfood")),
                 expectations=expectations,
                 tags=tuple(case_raw.get("tags") or ()),
                 timeout_sec=float(case_raw.get("timeout_sec") or 15.0),

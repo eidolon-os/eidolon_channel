@@ -92,6 +92,69 @@ voiceprint:
     assert cfg.runtime_admin.admin_fallback_enabled is True
 
 
+def test_load_effective_config_applies_settings_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  livekit_url: ws://127.0.0.1:7880
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: eidolon_agent
+behavior:
+  pipeline_mode: streaming
+runtime_admin:
+  data_resolve_enabled: false
+llm:
+  base_url: http://llm.local/v1
+  model: test-model
+  api_key: OPENAI_LLM_API_KEY
+remote_agent_rpc:
+  target: 127.0.0.1:45051
+turn_policy:
+  attention:
+    enforce: false
+    soft_duck_on_playback_speech_start: false
+voiceprint:
+  enabled: true
+""",
+    )
+    overlay = tmp_path / "box3_full_duplex.yaml"
+    overlay.write_text(
+        """
+providers:
+  brain_provider: direct_llm
+turn_policy:
+  attention:
+    enforce: true
+    soft_duck_on_playback_speech_start: true
+voiceprint:
+  enabled: false
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML", str(overlay))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    cfg = load_effective_config()
+
+    assert cfg.providers.brain_provider == "direct_llm"
+    assert cfg.turn_policy.attention.enforce is True
+    assert cfg.turn_policy.attention.soft_duck_on_playback_speech_start is True
+    assert cfg.voiceprint.enabled is False
+    assert cfg.turn_policy.attention.require_direct_signal_during_playback is True
+
+
 
 
 def test_invalid_voiceprint_threshold_fails_validation(

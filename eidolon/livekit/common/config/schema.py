@@ -183,6 +183,7 @@ class AttentionPolicyConfig:
     enforce: bool = False
     client_state_max_age_ms: int = 2_000
     require_direct_signal_during_playback: bool = True
+    soft_duck_on_playback_speech_start: bool = False
     ignore_when_mic_muted: bool = True
 
 

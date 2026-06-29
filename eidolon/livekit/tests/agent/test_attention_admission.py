@@ -59,6 +59,51 @@ def test_attention_observes_substantive_overlap_during_playback_without_eot() ->
     assert decision.reason == "client_playback_active_without_direct_signal"
 
 
+def test_attention_soft_ducks_playback_speech_start_when_configured() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        attention=replace(
+            AttentionPolicyConfig(),
+            soft_duck_on_playback_speech_start=True,
+        ),
+    )
+    admission = AttentionAdmission(policy)
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="",
+            speech_started=True,
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "playback_speech_start_soft_duck"
+
+
+def test_attention_keeps_blank_transcript_observe_without_speech_start() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        attention=replace(
+            AttentionPolicyConfig(),
+            soft_duck_on_playback_speech_start=True,
+        ),
+    )
+    admission = AttentionAdmission(policy)
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="",
+        )
+    )
+
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "client_playback_active_without_direct_signal"
+
+
 def test_attention_allows_high_eot_overlap_during_playback() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
@@ -166,10 +211,18 @@ def test_attention_manual_interrupt_without_evidence_does_not_hard_cut() -> None
     assert decision.action is not AdmissionAction.HARD_INTERRUPT
 
 
-def _turn_policy(*, enforce: bool) -> TurnPolicyConfig:
+def _turn_policy(
+    *,
+    enforce: bool,
+    soft_duck_on_playback_speech_start: bool = False,
+) -> TurnPolicyConfig:
     return replace(
         TurnPolicyConfig(),
-        attention=replace(AttentionPolicyConfig(), enforce=enforce),
+        attention=replace(
+            AttentionPolicyConfig(),
+            enforce=enforce,
+            soft_duck_on_playback_speech_start=soft_duck_on_playback_speech_start,
+        ),
     )
 
 
@@ -178,9 +231,13 @@ def _pipeline_with_client_state(
     *,
     enforce: bool = True,
     pipeline_state: PipelineState = PipelineState.SPEAKING,
+    soft_duck_on_playback_speech_start: bool = False,
 ) -> StreamingPipeline:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._turn_policy = _turn_policy(enforce=enforce)
+    pipeline._turn_policy = _turn_policy(
+        enforce=enforce,
+        soft_duck_on_playback_speech_start=soft_duck_on_playback_speech_start,
+    )
     pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
     pipeline._state = pipeline_state
     pipeline._duck_mixer = None
@@ -210,6 +267,42 @@ def test_pipeline_attention_observes_substantive_playback_speech_without_eot() -
     pipeline = _pipeline_with_client_state(_client_state())
 
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
+
+    assert allowed is False
+    pipeline._duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
+
+
+def test_pipeline_attention_soft_ducks_on_playback_speech_start() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(),
+        soft_duck_on_playback_speech_start=True,
+    )
+
+    pipeline._ensure_runtime_defaults()
+    pipeline._attention_effects.handle_speaking_started()
+
+    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["action"]
+        == "duck_and_decide"
+    )
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "playback_speech_start_soft_duck"
+    )
+
+
+def test_pipeline_attention_keeps_low_evidence_transcript_observed_after_soft_duck() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(),
+        soft_duck_on_playback_speech_start=True,
+    )
+
+    pipeline._ensure_runtime_defaults()
+    pipeline._attention_effects.handle_speaking_started()
+    pipeline._duck_and_arm_timeout.reset_mock()
+    allowed = _allows_eot(pipeline, "嗯嗯")
 
     assert allowed is False
     pipeline._duck_and_arm_timeout.assert_not_called()

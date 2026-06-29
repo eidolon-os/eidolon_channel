@@ -22,12 +22,22 @@ from typing import Any
 from eidolon_sdk.integrations.livekit import build_livekit_token
 from livekit import rtc
 
-from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+from eidolon_sdk.biz.contracts import (
+    CLIENT_AUDIO_STATE_TOPIC,
+    INPUT_MODE_AUTO,
+    INPUT_MODE_PTT,
+    WIRE_SCHEMA_VERSION,
+)
 
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
 from .audio_assets import load_clip_pcm
+from .dogfood import (
+    audio_state_interval_sec,
+    dogfood_metrics,
+    render_dogfood_mic_pcm,
+)
 from .realcall import provider_config_from_cfg
 from .schema import (
     ROOM_NAME_PREFIX,
@@ -341,6 +351,7 @@ async def _run_room_case(
 
     metrics.setdefault("elapsed_ms", _elapsed_ms(started))
     metrics["room_name"] = room_name
+    metrics.update(dogfood_metrics(case))
     return CaseResult(
         case_id=case.case_id,
         suite=case.suite,
@@ -384,6 +395,7 @@ async def _feed_case_audio(
                     events=events,
                     started=started,
                     playback_state=playback_state,
+                    input_mode=_case_input_mode(case),
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
@@ -410,6 +422,7 @@ async def _feed_case_audio(
                     events=events,
                     started=started,
                     playback_state=playback_state,
+                    input_mode=_case_input_mode(case),
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
@@ -418,6 +431,12 @@ async def _feed_case_audio(
         if rel is None:
             raise ValueError(f"{case.case_id}: missing audio clip id {step.audio!r}")
         pcm, sample_rate = load_clip_pcm(root / rel)
+        pcm = render_dogfood_mic_pcm(
+            case,
+            step,
+            pcm,
+            sample_rate=sample_rate,
+        )
         events.append(
             {
                 "type": "user_audio_started",
@@ -433,9 +452,11 @@ async def _feed_case_audio(
                     events=events,
                     started=started,
                     playback_state=playback_state,
+                    input_mode=_case_input_mode(case),
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
+                    interval_sec=audio_state_interval_sec(case),
                 )
             )
             if publish_client_state
@@ -466,6 +487,12 @@ def _step_playback_state(step: Any, *, default: str) -> str:
     return default
 
 
+def _case_input_mode(case: BenchmarkCase) -> str:
+    if case.dogfood.enabled and case.dogfood.device.mode == "half_duplex":
+        return INPUT_MODE_PTT
+    return INPUT_MODE_AUTO
+
+
 async def _publish_client_audio_state(
     local_participant: Any | None,
     *,
@@ -476,11 +503,14 @@ async def _publish_client_audio_state(
     ptt: bool = False,
     manual_interrupt: bool = False,
     mic_muted: bool = False,
+    rms: float | None = None,
+    snr_hint: float | None = None,
 ) -> None:
     """Publish benchmark client audio hints through the real data channel."""
     if local_participant is None:
         return
     payload = {
+        "schema_v": WIRE_SCHEMA_VERSION,
         "type": "client.audio_state",
         "input_mode": input_mode,
         "ptt": ptt,
@@ -489,6 +519,10 @@ async def _publish_client_audio_state(
         "mic_muted": mic_muted,
         "client_ts_ms": int(time.time() * 1000),
     }
+    if rms is not None:
+        payload["rms"] = rms
+    if snr_hint is not None:
+        payload["snr_hint"] = snr_hint
     await local_participant.publish_data(
         json.dumps(payload).encode("utf-8"),
         reliable=False,
@@ -502,6 +536,8 @@ async def _publish_client_audio_state(
             "ptt": ptt,
             "manual_interrupt": manual_interrupt,
             "mic_muted": mic_muted,
+            "input_mode": input_mode,
+            "schema_v": WIRE_SCHEMA_VERSION,
             "topic": CLIENT_AUDIO_STATE_TOPIC,
         }
     )
@@ -513,6 +549,7 @@ async def _refresh_client_audio_state(
     events: list[dict[str, Any]],
     started: float,
     playback_state: str,
+    input_mode: str = INPUT_MODE_AUTO,
     ptt: bool = False,
     manual_interrupt: bool = False,
     mic_muted: bool = False,
@@ -525,6 +562,7 @@ async def _refresh_client_audio_state(
             events=events,
             started=started,
             playback_state=playback_state,
+            input_mode=input_mode,
             ptt=ptt,
             manual_interrupt=manual_interrupt,
             mic_muted=mic_muted,

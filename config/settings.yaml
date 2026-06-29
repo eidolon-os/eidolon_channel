@@ -109,12 +109,13 @@ turn_policy:
     enabled: false
     preemptive_tts: false
   attention:
-    # Dev dogfood: enforce admission before duck/interrupt when fresh
-    # client.audio_state says the agent is currently speaking.
+    # Default keeps playback speech-start soft-duck rollout explicit. Use
+    # config/overlays/box3_full_duplex.yaml for local box-3 full-duplex checks.
     enabled: true
     enforce: true
     client_state_max_age_ms: 2000
     require_direct_signal_during_playback: true
+    soft_duck_on_playback_speech_start: false
     ignore_when_mic_muted: true
 
 observability:

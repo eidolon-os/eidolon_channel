@@ -218,6 +218,83 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         elif expected.action not in ("", "any", "none"):
             errors.append("timeline missing interrupt started-to-resolved duration")
 
+    max_speech_start_to_suspend_ms = getattr(
+        expected,
+        "max_speech_start_to_suspend_ms",
+        None,
+    )
+    if max_speech_start_to_suspend_ms is not None:
+        durations = _speech_start_to_suspend_durations_ms(records)
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > max_speech_start_to_suspend_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline speech-start-to-suspend exceeded "
+                    f"{max_speech_start_to_suspend_ms}ms: {slow}"
+                )
+        else:
+            errors.append("timeline missing speech-start-to-suspend duration")
+
+    max_speech_start_to_cancel_ms = getattr(
+        expected,
+        "max_speech_start_to_cancel_ms",
+        None,
+    )
+    if max_speech_start_to_cancel_ms is not None:
+        durations = _speech_start_to_cancel_durations_ms(records)
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > max_speech_start_to_cancel_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline speech-start-to-cancel exceeded "
+                    f"{max_speech_start_to_cancel_ms}ms: {slow}"
+                )
+        else:
+            errors.append("timeline missing speech-start-to-cancel duration")
+
+    max_speech_start_to_resume_ms = getattr(
+        expected,
+        "max_speech_start_to_resume_ms",
+        None,
+    )
+    if max_speech_start_to_resume_ms is not None:
+        durations = _speech_start_to_resume_durations_ms(records)
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > max_speech_start_to_resume_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline speech-start-to-resume exceeded "
+                    f"{max_speech_start_to_resume_ms}ms: {slow}"
+                )
+        else:
+            errors.append("timeline missing speech-start-to-resume duration")
+
+    playback_stop_sent = getattr(expected, "playback_stop_sent", None)
+    if playback_stop_sent is not None:
+        saw_stop = _client_control_sent(records, "playback.stop")
+        if playback_stop_sent and not saw_stop:
+            errors.append("timeline expected playback.stop client control")
+        elif not playback_stop_sent and saw_stop:
+            errors.append("timeline expected no playback.stop client control")
+
+    if bool(getattr(expected, "no_full_assistant_context_commit", False)):
+        if _has_cancel(records) and not _has_interrupted_context(records):
+            errors.append(
+                "timeline expected interrupted_context for truncated assistant reply"
+            )
+
     if not records:
         errors.append(f"timeline missing for case={case_id}")
     return errors
@@ -517,6 +594,123 @@ def _interrupt_resolution_after_started_ms(records: list[dict[str, Any]]) -> lis
         if start is not None and end is not None:
             durations.append(max(0.0, (end - start) * 1000.0))
     return durations
+
+
+def _speech_start_to_suspend_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+    durations: list[float] = []
+    for record in records:
+        duration = _timestamp_delta_ms(
+            record,
+            "speech_started_at",
+            "interrupt_started_at",
+        )
+        if duration is None:
+            duration = _duck_started_duration_ms(record)
+        if duration is not None:
+            durations.append(duration)
+    return durations
+
+
+def _speech_start_to_cancel_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+    durations: list[float] = []
+    for record in records:
+        if not _record_is_cancel(record):
+            continue
+        duration = _speech_start_to_resolved_ms(record)
+        if duration is not None:
+            durations.append(duration)
+    return durations
+
+
+def _speech_start_to_resume_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+    durations: list[float] = []
+    for record in records:
+        if not _record_is_resume(record):
+            continue
+        duration = _speech_start_to_resolved_ms(record)
+        if duration is not None:
+            durations.append(duration)
+    return durations
+
+
+def _speech_start_to_resolved_ms(record: dict[str, Any]) -> float | None:
+    duration = _number(_mapping(record.get("durations_ms")).get("vad_start_to_interrupt_resolved"))
+    if duration is not None:
+        return max(0.0, duration)
+    return _timestamp_delta_ms(record, "speech_started_at", "interrupt_resolved_at")
+
+
+def _timestamp_delta_ms(
+    record: dict[str, Any],
+    start_key: str,
+    end_key: str,
+) -> float | None:
+    timestamps = _mapping(record.get("timestamps"))
+    start = _number(timestamps.get(start_key))
+    end = _number(timestamps.get(end_key))
+    if start is None or end is None:
+        return None
+    return max(0.0, (end - start) * 1000.0)
+
+
+def _duck_started_duration_ms(record: dict[str, Any]) -> float | None:
+    for event in _duck_events(record):
+        if event.get("event") != "duck_started":
+            continue
+        duration = _number(event.get("vad_to_duck_ms"))
+        if duration is not None:
+            return max(0.0, duration)
+    return None
+
+
+def _client_control_sent(records: list[dict[str, Any]], op: str) -> bool:
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        events = attrs.get("client_control_events")
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if isinstance(event, dict) and event.get("op") == op:
+                return True
+    return False
+
+
+def _has_interrupted_context(records: list[dict[str, Any]]) -> bool:
+    for record in records:
+        context = _mapping(_mapping(record.get("attrs")).get("interrupted_context"))
+        if context:
+            return True
+    return False
+
+
+def _has_cancel(records: list[dict[str, Any]]) -> bool:
+    return any(_record_is_cancel(record) for record in records)
+
+
+def _record_is_cancel(record: dict[str, Any]) -> bool:
+    attrs = _mapping(record.get("attrs"))
+    if attrs.get("interrupt_action") == "cancel":
+        return True
+    if isinstance(attrs.get("cancel_reason"), str) and attrs.get("cancel_reason"):
+        return True
+    return any(event.get("event") == "duck_cancelled" for event in _duck_events(record))
+
+
+def _record_is_resume(record: dict[str, Any]) -> bool:
+    attrs = _mapping(record.get("attrs"))
+    if attrs.get("interrupt_action") == "rollback":
+        return True
+    if isinstance(attrs.get("rollback_reason"), str) and attrs.get("rollback_reason"):
+        return True
+    return any(event.get("event") == "duck_unducked" for event in _duck_events(record))
+
+
+def _duck_events(record: dict[str, Any]) -> list[dict[str, Any]]:
+    attrs = _mapping(record.get("attrs"))
+    events = attrs.get("duck_events")
+    if not isinstance(events, list):
+        return []
+    return [event for event in events if isinstance(event, dict)]
 
 
 def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:

@@ -30,10 +30,15 @@ def _client_state(**kwargs) -> ClientAudioState:
 def _policy(
     *,
     enforce: bool = True,
+    soft_duck_on_playback_speech_start: bool = False,
 ) -> TurnPolicyConfig:
     return replace(
         TurnPolicyConfig(),
-        attention=replace(AttentionPolicyConfig(), enforce=enforce),
+        attention=replace(
+            AttentionPolicyConfig(),
+            enforce=enforce,
+            soft_duck_on_playback_speech_start=soft_duck_on_playback_speech_start,
+        ),
     )
 
 
@@ -43,8 +48,12 @@ def _handler(
     enforce: bool = True,
     agent_speaking: bool = True,
     eot_score: float = 0.0,
+    soft_duck_on_playback_speech_start: bool = False,
 ):
-    policy = _policy(enforce=enforce)
+    policy = _policy(
+        enforce=enforce,
+        soft_duck_on_playback_speech_start=soft_duck_on_playback_speech_start,
+    )
     timeline = TurnTimeline("turn-attention")
     on_duck = MagicMock()
     on_interrupt = MagicMock()
@@ -165,6 +174,22 @@ def test_speaking_started_ptt_interrupt_marks_and_interrupts() -> None:
     on_duck.assert_not_called()
     on_interrupt.assert_called_once_with()
     assert "interrupt_started_at" in timeline.timestamps
+
+
+def test_speaking_started_soft_ducks_playback_when_configured() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(
+        client_state=_client_state(),
+        soft_duck_on_playback_speech_start=True,
+    )
+
+    handler.handle_speaking_started()
+
+    on_duck.assert_called_once_with()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert timeline.attrs["attention_admission"]["reason"] == (
+        "playback_speech_start_soft_duck"
+    )
 
 
 def test_observe_only_rollout_records_but_allows_eot() -> None:

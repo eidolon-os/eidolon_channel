@@ -45,7 +45,7 @@ class AttentionEffectHandler:
         self._on_interrupt = on_interrupt
 
     def handle_speaking_started(self) -> None:
-        decision = self.decide("")
+        decision = self.decide("", speech_started=True)
         self.record_admission(decision)
         if not self._turn_policy.attention.enforce:
             self._on_duck()
@@ -94,6 +94,7 @@ class AttentionEffectHandler:
         transcript: str,
         *,
         participant_identity: str | None = None,
+        speech_started: bool = False,
     ) -> AttentionDecision:
         return self._turn_runtime.admit_attention(
             AttentionInput(
@@ -101,6 +102,7 @@ class AttentionEffectHandler:
                 client_state=self._latest_client_audio_state(participant_identity),
                 transcript=transcript,
                 eot_score=self._get_eot_score(),
+                speech_started=speech_started,
             )
         )
 

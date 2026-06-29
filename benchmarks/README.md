@@ -218,3 +218,74 @@ benchmarks/runs/<run-id>/livekit_room/turn_timeline.jsonl
 
 The current baseline is intentionally small and should grow with real failure
 cases from production sessions.
+
+## Human + Device Dogfood Suites
+
+Dogfood cases model the whole product envelope: a human speaks while a device is
+playing agent audio, the device publishes `client.audio_state`, and the mic
+input can include deterministic echo/noise. The first suite is explicit-only:
+
+```bash
+./.venv/bin/python scripts/bench_voice.py \
+  --cases benchmarks/cases/dogfood_box3_audio_first_enforced.yaml \
+  --runner headless \
+  --run-id dogfood-headless
+
+./.venv/bin/python scripts/bench_voice.py \
+  --cases benchmarks/cases/dogfood_box3_audio_first_enforced.yaml \
+  --runner livekit_room \
+  --run-id dogfood-room
+```
+
+For local ESP32 box-3 full-duplex runtime validation, keep the runtime switch
+explicit by loading the overlay:
+
+```bash
+EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML=config/overlays/box3_full_duplex.yaml
+```
+
+After a real device dogfood attempt, inspect the worker timeline evidence:
+
+```bash
+./.venv/bin/python scripts/analyze_hil_barge_in.py \
+  --timeline benchmarks/runs/channel-worker-turn-timeline.jsonl \
+  --latest 8 \
+  --require-cancel
+```
+
+The YAML extension is intentionally benchmark-owned:
+
+```yaml
+dogfood:
+  enabled: true
+  device:
+    model: esp32_box_3
+    mode: full_duplex
+    audio_state_hz: 10
+  agent:
+    speaking_text: "..."
+    tts_duration_ms: 6000
+  acoustics:
+    echo:
+      enabled: true
+      delay_ms: 80
+      attenuation_db: -18
+    noise:
+      enabled: true
+      snr_db: 20
+```
+
+Runner responsibilities stay separated:
+
+- schema parses dogfood intent and expectations.
+- `benchmarks.dogfood` renders synthetic mic audio and device cadence.
+- `headless` replays the rendered mic audio in memory.
+- `component` applies the same mic rendering to VAD/STT inputs.
+- `livekit_room` publishes `client.audio_state` at the configured device cadence.
+- `livekit_room` timeline expectations enforce dogfood SLOs for
+  speech-start-to-suspend, speech-start-to-cancel/resume, `playback.stop`, and
+  interrupted-context capture.
+- `scripts/analyze_hil_barge_in.py` checks real-device timeline records that do
+  not use benchmark room names.
+- future HIL runners should consume the same YAML, replacing synthetic echo with
+  captured playback reference audio and real device logs.

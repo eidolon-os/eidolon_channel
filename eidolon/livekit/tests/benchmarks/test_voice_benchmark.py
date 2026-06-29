@@ -31,6 +31,12 @@ from eidolon.livekit.benchmarks.livekit_room_runner import (
     _agent_audio_wait_mode,
     _agent_audio_wait_timeout_sec,
 )
+from eidolon.livekit.benchmarks.dogfood import (
+    audio_state_interval_sec,
+    render_dogfood_mic_pcm,
+)
+from eidolon.livekit.benchmarks.hil_barge_in import analyze_hil_barge_in
+from eidolon.livekit.tests._harness.audio import pcm_rms
 from eidolon.livekit.benchmarks.policy_runner import run_policy_suite
 from eidolon.livekit.benchmarks.slo import (
     DEFAULT_SLO_GATES,
@@ -127,6 +133,52 @@ def test_default_voice_benchmark_cases_skip_enforced_suites() -> None:
     assert "attention_admission_enforced.yaml" not in cases
     assert "v1_interrupt_tiers_enforced.yaml" not in cases
     assert "v1_realistic_interaction_flows_enforced.yaml" not in cases
+    assert "dogfood_box3_audio_first_enforced.yaml" not in cases
+
+
+def test_load_dogfood_box3_audio_first_suite() -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+
+    assert suite.suite_id == "dogfood_box3_audio_first_enforced"
+    followup = next(
+        case
+        for case in suite.cases
+        if case.case_id == "dogfood_box3_owner_followup_during_playback_001"
+    )
+    assert followup.dogfood.enabled is True
+    assert followup.dogfood.device.model == "esp32_box_3"
+    assert followup.dogfood.device.mode == "full_duplex"
+    assert followup.dogfood.device.audio_state_hz == 10
+    assert followup.dogfood.acoustics.echo.enabled is True
+    assert followup.expectations.max_speech_start_to_suspend_ms == 120
+    assert followup.expectations.playback_stop_sent is True
+
+
+def test_dogfood_audio_state_interval_uses_device_cadence() -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    case = suite.cases[0]
+
+    assert audio_state_interval_sec(case) == pytest.approx(0.1)
+
+
+def test_dogfood_mic_render_adds_echo_and_noise() -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    case = suite.cases[0]
+    step = case.user_steps[1]
+    pcm = b"\x00\x00" * 1600
+
+    rendered = render_dogfood_mic_pcm(case, step, pcm, sample_rate=16000)
+
+    assert len(rendered) == len(pcm)
+    assert pcm_rms(rendered) > pcm_rms(pcm)
+
+
+def test_livekit_room_dogfood_input_mode_tracks_device_mode() -> None:
+    from eidolon.livekit.benchmarks.livekit_room_runner import _case_input_mode
+
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+
+    assert _case_input_mode(suite.cases[0]) == "auto"
 
 
 def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> None:
@@ -998,7 +1050,7 @@ async def test_livekit_room_case_retry_records_room_connect_transient(
 
 @pytest.mark.asyncio
 async def test_livekit_room_publishes_client_audio_state() -> None:
-    from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+    from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC, WIRE_SCHEMA_VERSION
     from eidolon.livekit.benchmarks.livekit_room_runner import (
         _publish_client_audio_state,
     )
@@ -1019,6 +1071,8 @@ async def test_livekit_room_publishes_client_audio_state() -> None:
     local_participant.publish_data.assert_awaited_once()
     payload = json.loads(local_participant.publish_data.await_args.args[0])
     assert payload["type"] == "client.audio_state"
+    assert payload["schema_v"] == WIRE_SCHEMA_VERSION
+    assert payload["input_mode"] == "auto"
     assert payload["playback_state"] == "agent_speaking"
     assert payload["ptt"] is True
     assert payload["manual_interrupt"] is True
@@ -1028,6 +1082,8 @@ async def test_livekit_room_publishes_client_audio_state() -> None:
         "topic": CLIENT_AUDIO_STATE_TOPIC,
     }
     assert events[-1]["type"] == "client_audio_state_published"
+    assert events[-1]["schema_v"] == WIRE_SCHEMA_VERSION
+    assert events[-1]["input_mode"] == "auto"
     assert events[-1]["ptt"] is True
     assert events[-1]["manual_interrupt"] is True
     assert events[-1]["mic_muted"] is True
@@ -1051,7 +1107,12 @@ async def test_livekit_room_refreshes_client_audio_state_periodically() -> None:
             interval_sec=0.01,
         )
     )
-    await asyncio.sleep(0.035)
+    deadline = asyncio.get_running_loop().time() + 0.2
+    while (
+        local_participant.publish_data.await_count < 2
+        and asyncio.get_running_loop().time() < deadline
+    ):
+        await asyncio.sleep(0.005)
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
@@ -2001,6 +2062,237 @@ def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
 
     assert run.cases[0].passed is True
     assert not run.cases[0].errors
+
+
+def test_dogfood_timeline_expectations_pass_cancel_chain(tmp_path) -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    case_id = "dogfood_box3_owner_followup_during_playback_001"
+    run = RunResult(
+        run_id="dogfood-expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id=case_id,
+                suite="dogfood_box3_audio_first",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-dogfood_box3_owner_followup_during_playback_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"normal_interrupt"},'
+            '"client_control_events":[{"op":"playback.stop",'
+            '"reason":"interrupt_cancel"}],'
+            '"interrupted_context":{"source":"tts_in_flight",'
+            '"played_seconds":1.1,"text_preview":"我会先讲系统结构"}},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.08,'
+            '"interrupt_resolved_at":10.42}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_dogfood_timeline_expectations_fail_missing_suspend(tmp_path) -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    case_id = "dogfood_box3_owner_followup_during_playback_001"
+    run = RunResult(
+        run_id="dogfood-expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id=case_id,
+                suite="dogfood_box3_audio_first",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-dogfood_box3_owner_followup_during_playback_001-1234abcd",'
+            '"attention_admission":{"action":"observe"}},'
+            '"timestamps":{"speech_started_at":10.0}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any("speech-start-to-suspend" in error for error in run.cases[0].errors)
+
+
+def test_dogfood_timeline_expectations_fail_missing_stop_and_context(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    case_id = "dogfood_box3_owner_followup_during_playback_001"
+    run = RunResult(
+        run_id="dogfood-expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id=case_id,
+                suite="dogfood_box3_audio_first",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-dogfood_box3_owner_followup_during_playback_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"normal_interrupt"}},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.04,'
+            '"interrupt_resolved_at":10.28}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any("playback.stop" in error for error in run.cases[0].errors)
+    assert any("interrupted_context" in error for error in run.cases[0].errors)
+
+
+def test_dogfood_timeline_expectations_pass_false_interrupt_resume(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    case_id = "dogfood_box3_backchannel_during_playback_001"
+    run = RunResult(
+        run_id="dogfood-expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id=case_id,
+                suite="dogfood_box3_audio_first",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-dogfood_box3_backchannel_during_playback_001-1234abcd",'
+            '"rollback_reason":"backchannel",'
+            '"duck_events":[{"event":"duck_started","vad_to_duck_ms":55},'
+            '{"event":"duck_unducked","reason":"backchannel"}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_resolved_at":10.44}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
+def test_hil_barge_in_analyzer_passes_cancel_chain(tmp_path) -> None:
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"attention_admission":{"action":"duck_and_decide",'
+            '"reason":"playback_speech_start_soft_duck"},'
+            '"interrupt_action":"cancel",'
+            '"client_control_events":[{"op":"playback.stop"}],'
+            '"interrupted_context":{"played_seconds":1.2},'
+            '"duck_events":[{"event":"duck_started","vad_to_duck_ms":45},'
+            '{"event":"duck_cancelled"}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.04,'
+            '"interrupt_resolved_at":10.32}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(
+        timeline_path,
+        room_contains="box3",
+        require_cancel=True,
+    )
+
+    assert report.passed is True
+    assert report.evidence["speech_start_to_suspend_ms"] == pytest.approx(40.0)
+    assert report.evidence["speech_start_to_cancel_ms"] == pytest.approx(320.0)
+    assert not report.findings
+
+
+def test_hil_barge_in_analyzer_fails_observe_only_path(tmp_path) -> None:
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"attention_admission":{"action":"observe",'
+            '"reason":"client_playback_active_without_direct_signal"}},'
+            '"timestamps":{"speech_started_at":10.0}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(timeline_path, room_contains="box3")
+
+    assert report.passed is False
+    assert "missing playback_speech_start_soft_duck admission" in report.findings
+    assert any("old blocked path" in finding for finding in report.findings)
+
+
+def test_hil_barge_in_analyzer_passes_resume_chain(tmp_path) -> None:
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"attention_admission":{"action":"duck_and_decide",'
+            '"reason":"playback_speech_start_soft_duck"},'
+            '"rollback_reason":"backchannel",'
+            '"duck_events":[{"event":"duck_started","vad_to_duck_ms":50},'
+            '{"event":"duck_unducked"}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.05,'
+            '"interrupt_resolved_at":10.58}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(
+        timeline_path,
+        room_contains="box3",
+        require_resume=True,
+    )
+
+    assert report.passed is True
+    assert report.evidence["speech_start_to_resume_ms"] == pytest.approx(580.0)
 
 
 def test_load_conversation_turn_taking_suite() -> None:

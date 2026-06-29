@@ -25,8 +25,9 @@ from eidolon.livekit.plugins.eot import ChineseModel
 from eidolon.livekit.tests._harness.audio import frames_from_pcm
 
 from .audio_assets import load_clip_pcm
+from .dogfood import render_dogfood_mic_pcm
 from .realcall import provider_config_from_cfg
-from .schema import AudioClip, BenchmarkCase, BenchmarkSuite, CaseResult, RunResult
+from .schema import AudioClip, BenchmarkCase, BenchmarkSuite, CaseResult, RunResult, UserStep
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,12 @@ async def _run_vad_clip(
     task = asyncio.create_task(consume())
     try:
         pcm, sample_rate = load_clip_pcm(root / clip.path)
+        pcm = render_dogfood_mic_pcm(
+            case,
+            _step_for_clip(case, clip),
+            pcm,
+            sample_rate=sample_rate,
+        )
         for frame in frames_from_pcm(pcm, sample_rate=sample_rate, frame_ms=20):
             stream.push_frame(frame)
         stream.end_input()
@@ -223,6 +230,12 @@ async def _run_stt_clip(
     errors: list[str] = []
     try:
         pcm, _sample_rate = load_clip_pcm(root / clip.path)
+        pcm = render_dogfood_mic_pcm(
+            case,
+            _step_for_clip(case, clip),
+            pcm,
+            sample_rate=_sample_rate,
+        )
         text = await asyncio.wait_for(
             stages.stt.recognize_streaming(pcm),
             timeout=timeouts.stt_sec,
@@ -406,6 +419,21 @@ def _event_type_name(event_type: Any) -> str:
 
 def _elapsed_ms(started: float) -> int:
     return round((time.monotonic() - started) * 1000)
+
+
+def _step_for_clip(case: BenchmarkCase, clip: AudioClip) -> UserStep:
+    for step in case.user_steps:
+        if step.audio == clip.id:
+            return step
+    if case.user_steps:
+        return case.user_steps[0]
+    return UserStep(
+        text=clip.text,
+        audio=clip.id,
+        start_ms=0,
+        duration_ms=700,
+        agent_speaking=False,
+    )
 
 
 def _normalize_text(text: str) -> str:

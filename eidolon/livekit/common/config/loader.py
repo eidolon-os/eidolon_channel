@@ -56,6 +56,16 @@ def _resolve_settings_yaml() -> Path:
     )
 
 
+def _resolve_settings_overlay_yaml() -> Path | None:
+    explicit = os.environ.get("EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML", "").strip()
+    if not explicit:
+        return None
+    p = Path(explicit).expanduser()
+    if not p.is_file():
+        raise FileNotFoundError(f"EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML missing: {p}")
+    return p.resolve()
+
+
 def _resolve_env_file() -> Path | None:
     raw = (
         os.environ.get("EIDOLON_CHANNEL_ENV_FILE", "").strip()
@@ -86,7 +96,24 @@ def _load_yaml() -> dict[str, Any]:
     data = yaml.safe_load(_resolve_settings_yaml().read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError("channel settings.yaml must be a mapping")
-    return data
+    overlay_path = _resolve_settings_overlay_yaml()
+    if overlay_path is None:
+        return data
+    overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(overlay, dict):
+        raise ValueError("channel settings overlay YAML must be a mapping")
+    return _deep_merge_dicts(data, overlay)
+
+
+def _deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_dicts(current, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _section(data: dict[str, Any], key: str) -> dict[str, Any]:

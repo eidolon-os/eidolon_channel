@@ -119,6 +119,7 @@ turn_policy:
     enforce: false
     client_state_max_age_ms: 2000
     require_direct_signal_during_playback: true
+    soft_duck_on_playback_speech_start: false
     ignore_when_mic_muted: true
 
 observability:

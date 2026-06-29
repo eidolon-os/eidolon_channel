@@ -17,7 +17,7 @@ async def test_runtime_resolve_client_prefers_eidolon_data(tmp_path, monkeypatch
     try:
         await store.init_schema()
         await store.owner_service.create_owner(owner_id="owner-a", display_name="Owner A")
-        workspace = await store.companion_workspace.initialize_workspace(
+        workspace = await store.workspace_provisioning.provision_workspace(
             owner_id="owner-a",
             companion_id="companion-a",
             genome_id="genome-a",

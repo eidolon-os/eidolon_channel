@@ -18,9 +18,16 @@ config/settings.yaml
 # Local test secrets
 eidolon/livekit/tests/.env
 
-# Benchmark run outputs are local artifacts; committed baselines live under
-# benchmarks/baselines.
+# Benchmark artifacts. Committed cases/baselines/audio stay under benchmarks/.
 benchmarks/runs/
+benchmark/runs/
+reports/benchmark*/
+reports/*benchmark*/
+reports/*_benchmark_*/
+reports/memory_perf_*/
+reports/memory_quality_*/
+reports/memory_multi_device_*/
+reports/e2e_*/
 **/.trash/
 
 # macOS Finder metadata

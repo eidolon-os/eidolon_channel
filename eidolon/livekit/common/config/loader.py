@@ -99,16 +99,9 @@ def _reject_unknown_fields(
     raw: dict[str, Any],
     *,
     allowed: set[str],
-    deprecated: set[str] | None = None,
 ) -> None:
-    deprecated = deprecated or set()
     for key in raw:
         if key in allowed:
-            continue
-        if key in deprecated:
-            logger.warning(
-                "deprecated config field %s.%s ignored", section_name, key
-            )
             continue
         raise ValueError(f"unknown config field {section_name}.{key}")
 
@@ -238,7 +231,6 @@ def load_effective_config() -> EffectiveAgentConfig:
             "tls_client_cert_path",
             "tls_client_key_path",
         },
-        deprecated={"device_token"},
     )
     _reject_unknown_fields(
         "runtime_admin",
@@ -288,10 +280,6 @@ def load_effective_config() -> EffectiveAgentConfig:
         remote_agent_rpc=RemoteAgentRpcConfig(
             target=str(rpc_y.get("target") or "").strip(),
             locale=str(rpc_y.get("locale") or "zh").strip() or "zh",
-            # Phase 32.D: device_token field removed; per-session token
-            # is signed by runtime_admin.resolver. Legacy yaml may still
-            # mention the field; _reject_unknown_fields allows that single
-            # deprecated key and logs that it is ignored.
             conversation_id_prefix=str(
                 rpc_y.get("conversation_id_prefix") or "livekit"
             ).strip()

@@ -12,7 +12,7 @@ from typing import Awaitable, Callable
 
 import pytest
 
-from eidolon.livekit.plugins.tts.sensetime._aggregator import (
+from eidolon.livekit.plugins.tts._aggregator import (
     SentenceAggregator,
 )
 
@@ -342,4 +342,3 @@ async def test_first_sentence_defaults_off_preserves_legacy_behavior() -> None:
         assert segments == ["你好，再见。"]
     finally:
         await agg.aclose()
-

@@ -438,14 +438,13 @@ def _validate_config(cfg: AgentConfig) -> None:
     else:
         if not cfg.remote_agent_rpc.target:
             errors.append("REMOTE_AGENT_RPC target is not set")
-        # Phase 32.D: only the runtime_admin path remains — the legacy
-        # static REMOTE_AGENT_RPC_DEVICE_TOKEN was deleted. Channel
-        # MUST have a usable HMAC secret at startup; without one,
-        # every session would die at first chat() with no fallback.
+        # The runtime_admin path is mandatory for eidolon_agent. Channel must
+        # have a usable HMAC secret at startup; without one, every session
+        # would die at first chat().
         if not cfg.runtime_admin.enabled:
             errors.append(
-                "runtime_admin.enabled=false but the legacy static-token "
-                "fallback was removed in Phase 32.D. Set enabled=true."
+                "runtime_admin.enabled=false is not valid for eidolon_agent. "
+                "Set enabled=true."
             )
         elif not (
             cfg.runtime_admin.jwt_secret

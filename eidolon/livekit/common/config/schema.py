@@ -59,17 +59,9 @@ class LLMConfig:
 class RemoteAgentRpcConfig:
     """Static config for the gRPC channel to eidolon-agent.
 
-    ``device_token`` used to live here (Phase 25 era — channel signed
-    a single long-lived JWT into config/.env and used it for every
-    session). Phase 32.B introduced per-session token resolution via
-    admin's /api/resolve, and Phase 32.D (this commit) removed the
-    static fallback entirely. The runtime token now ALWAYS comes from
-    :class:`RuntimeAdminConfig` + the shared HMAC secret.
-
-    Reasoning: keeping a static fallback invited the "everyone is
-    alice" bug (the legacy token's payload pinned user_id=alice). 凡是
-    保留的 fallback 都会被某次匆忙的运维拿来用,然后忘了关。删掉
-    比记得关好。
+    Runtime tokens are resolved from :class:`RuntimeAdminConfig` and the
+    LiveKit participant identity. This section only describes where the agent
+    gRPC service lives and how to connect to it.
     """
 
     target: str = ""
@@ -83,19 +75,15 @@ class RemoteAgentRpcConfig:
 
 @dataclass(frozen=True)
 class RuntimeAdminConfig:
-    """Phase 32.B: channel resolves participant identity → user / agent
-    / template from Eidolon Data, then signs a device JWT using the shared
-    HMAC secret. Admin HTTP can remain as a cross-process fallback.
+    """Channel resolves participant identity, then signs a runtime JWT using
+    the shared HMAC secret. Admin HTTP can remain as a cross-process fallback.
 
-    ``enabled`` must remain True for ``eidolon_agent``. The legacy static
-    ``remote_agent_rpc.device_token`` fallback was removed, so setting
-    ``enabled=false`` now fails loudly instead of silently chatting with a
-    stale or shared identity.
+    ``enabled`` must remain True for ``eidolon_agent``.
 
     ``jwt_secret`` placeholder convention follows hub: the literal
     string ``PAIRING_JWT_SECRET`` in YAML means "read the env var of
     that name"; if both env and ~/eidolon/run/jwt-secret are empty,
-    the resolver fails loud; there is no static-token fallback.
+    the resolver fails loud.
     """
 
     enabled: bool = True

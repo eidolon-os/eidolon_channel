@@ -16,17 +16,34 @@ from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
 pytestmark = pytest.mark.asyncio
 
 
-async def test_static_device_token_path_unchanged():
-    """Legacy path: device_token=str → eagerly stored, _resolve returns it
-    without calling anything fancy. This pins backward compat with
-    Phase 25 callers (and the fallback path in factory)."""
+async def test_static_device_token_rejected():
+    """Static device tokens are no longer accepted by the gRPC LLM adapter."""
+    with pytest.raises(TypeError, match="callable resolver"):
+        EidolonAgentGrpcLlm(
+            target="127.0.0.1:1",
+            device_token="static-token-abc",  # type: ignore[arg-type]
+            conversation_id="livekit:test",
+        )
+
+
+async def test_sync_callable_device_token_resolved_lazily():
+    """Resolver returning a plain string is invoked lazily and cached."""
+    calls: list[int] = []
+
+    def resolver() -> str:
+        calls.append(1)
+        return "fresh-token-abc"
+
     llm = EidolonAgentGrpcLlm(
         target="127.0.0.1:1",
-        device_token="static-token-abc",
+        device_token=resolver,
         conversation_id="livekit:test",
     )
-    resolved = await llm._resolve_device_token()
-    assert resolved == "static-token-abc"
+    t1 = await llm._resolve_device_token()
+    t2 = await llm._resolve_device_token()
+    assert t1 == "fresh-token-abc"
+    assert t1 == t2
+    assert len(calls) == 1
 
 
 async def test_async_callable_device_token_resolved_lazily():
@@ -50,9 +67,7 @@ async def test_async_callable_device_token_resolved_lazily():
     assert len(calls) == 1, "resolver should be invoked exactly once"
 
 
-async def test_sync_callable_device_token_supported():
-    """Resolver returning a plain string (not awaitable) works too —
-    helps tests + alternate implementations avoid coroutine plumbing."""
+async def test_inline_sync_callable_device_token_supported():
     llm = EidolonAgentGrpcLlm(
         target="127.0.0.1:1",
         device_token=lambda: "sync-token",
@@ -61,15 +76,13 @@ async def test_sync_callable_device_token_supported():
     assert await llm._resolve_device_token() == "sync-token"
 
 
-async def test_empty_static_token_still_raises_at_init():
-    """Backward compat: an explicit empty string is still a programming
-    error. Phase 25's eager validation contract preserved."""
+async def test_empty_static_token_rejected_as_non_callable():
     import pytest as _pytest
 
-    with _pytest.raises(ValueError, match="device_token is required"):
+    with _pytest.raises(TypeError, match="callable resolver"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
-            device_token="",
+            device_token="",  # type: ignore[arg-type]
             conversation_id="livekit:test",
         )
 

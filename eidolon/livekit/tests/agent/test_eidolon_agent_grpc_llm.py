@@ -247,7 +247,7 @@ async def test_forwards_deltas_then_finishes() -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:room-abc",
         )
         try:
@@ -283,7 +283,7 @@ async def test_next_user_text_override_supplies_canonical_turn_text() -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:canonical-text",
         )
         try:
@@ -317,7 +317,7 @@ async def test_next_user_text_override_is_consumed_once() -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:canonical-text-once",
         )
         try:
@@ -372,7 +372,7 @@ async def test_next_user_text_override_survives_retry_attempt() -> None:
 
     adapter = EidolonAgentGrpcLlm(
         target="unused",
-        device_token="test-token",
+        device_token=lambda: "test-token",
         conversation_id=_conversation_id,
     )
     session = _FlakySession()
@@ -479,7 +479,7 @@ async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
 
     adapter = EidolonAgentGrpcLlm(
         target="unused",
-        device_token="test-token",
+        device_token=lambda: "test-token",
         conversation_id="livekit:first-delta-timeout",
     )
     session = _TimeoutThenFastSession()
@@ -536,7 +536,7 @@ async def test_cancel_writes_cancel_turn() -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:room-xyz",
         )
         try:
@@ -581,7 +581,7 @@ def test_tls_config_validation_unknown_mode() -> None:
     with pytest.raises(ValueError, match="unrecognized"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
-            device_token="x",
+            device_token=lambda: "x",
             conversation_id="livekit:test",
             tls=TlsConfig(mode="please-no"),
         )
@@ -593,7 +593,7 @@ def test_tls_config_validation_mtls_missing_cert(tmp_path) -> None:
     with pytest.raises(ValueError, match="mtls"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
-            device_token="x",
+            device_token=lambda: "x",
             conversation_id="livekit:test",
             tls=TlsConfig(mode="mtls"),  # no client cert paths set
         )
@@ -605,7 +605,7 @@ def test_tls_config_validation_missing_ca_file(tmp_path) -> None:
     with pytest.raises(ValueError, match="ca_path"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
-            device_token="x",
+            device_token=lambda: "x",
             conversation_id="livekit:test",
             tls=TlsConfig(mode="tls", ca_path=str(tmp_path / "nope.pem")),
         )
@@ -630,7 +630,7 @@ async def test_conversation_id_lazy_resolver_called_per_chat() -> None:
 
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id=resolver,
         )
         try:
@@ -663,7 +663,7 @@ async def test_conversation_id_resolver_failure_falls_back() -> None:
 
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id=broken_resolver,
             display_model="brain-test-model",
         )
@@ -772,7 +772,7 @@ async def test_state_and_usage_events_surface(caplog) -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:cphase",
         )
         try:
@@ -837,7 +837,7 @@ async def test_error_code_mapping(
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:error-test",
         )
         try:
@@ -885,7 +885,7 @@ async def test_tool_events_surface_at_info(caplog) -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:tools",
         )
         try:
@@ -936,7 +936,7 @@ async def test_tool_preamble_role_spoken_once() -> None:
     try:
         adapter = EidolonAgentGrpcLlm(
             target=target,
-            device_token="test-token",
+            device_token=lambda: "test-token",
             conversation_id="livekit:preamble",
         )
         try:

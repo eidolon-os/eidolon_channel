@@ -186,8 +186,8 @@ def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPa
     assert cfg.turn_policy.profile == "balanced_semantic"
 
 
-def test_remote_agent_validates_its_own_required_fields(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_remote_agent_rejects_legacy_device_token_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = _write_settings(
         tmp_path,
@@ -212,13 +212,9 @@ llm:
     monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
     monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
-    monkeypatch.setenv("REMOTE_AGENT_RPC_DEVICE_TOKEN", "token")
     monkeypatch.delenv("OPENAI_LLM_API_KEY", raising=False)
-    with caplog.at_level(logging.WARNING, logger="agent.config"):
-        cfg = load_effective_config()
-    assert cfg.providers.brain_provider == "eidolon_agent"
-    assert cfg.remote_agent_rpc.target == "127.0.0.1:45051"
-    assert "deprecated config field remote_agent_rpc.device_token ignored" in caplog.text
+    with pytest.raises(ValueError, match="unknown config field remote_agent_rpc.device_token"):
+        load_effective_config()
 
 
 def test_manual_config_sections_reject_unknown_fields(

@@ -708,14 +708,6 @@ class ContextEnhancedEot:
         )
         return semantic_score
 
-    # Alias for backward compat — old call sites still reference should_cut.
-    def should_cut(self, text: str, is_final: bool = False) -> float:
-        """
-        Alias for compute_score(). Returns the context-enhanced EOT score (0-1).
-        Threshold comparison is no longer done here; it is handled by the caller.
-        """
-        return self.compute_score(text, is_final=is_final)
-
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics."""
         stats = {

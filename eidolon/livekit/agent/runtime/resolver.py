@@ -13,9 +13,7 @@ bearer. The resolver here is what that callable does:
   5. Cache the result for the lifetime of this resolver instance —
      subsequent invocations within the session return the same token.
 
-If metadata is missing or admin says no, the caller can choose to fall
-back to a legacy static token (see ``factory.py``). The resolver itself
-does NOT fall back — it raises clear errors so the caller decides.
+If metadata is missing or admin says no, the resolver raises a clear error.
 """
 
 from __future__ import annotations

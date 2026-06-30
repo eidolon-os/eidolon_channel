@@ -87,6 +87,8 @@ turn_policy:
     tail_hang_silence_ms: 2000
   interrupt:
     decision_timeout_ms: 500
+    post_speech_evidence_timeout_ms: 6000
+    post_speech_evidence_min_speech_ms: 250
     min_interim_chars: 2
     early_cancel_score_threshold: 0.70
     early_resume_score_threshold: 0.20
@@ -109,13 +111,13 @@ turn_policy:
     enabled: false
     preemptive_tts: false
   attention:
-    # Default keeps playback speech-start soft-duck rollout explicit. Use
-    # config/overlays/box3_full_duplex.yaml for local box-3 full-duplex checks.
+    # Channel owns full-duplex interruption orchestration: playback speech-start
+    # may soft-duck immediately, while cancel/commit stays evidence-gated.
     enabled: true
     enforce: true
     client_state_max_age_ms: 2000
     require_direct_signal_during_playback: true
-    soft_duck_on_playback_speech_start: false
+    soft_duck_on_playback_speech_start: true
     ignore_when_mic_muted: true
 
 observability:

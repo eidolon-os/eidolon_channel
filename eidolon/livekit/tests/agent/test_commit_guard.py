@@ -22,7 +22,7 @@ import pytest
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
 from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
-from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
+from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
 from eidolon.livekit.common.config import EotPolicyConfig, TurnPolicyConfig
 
 
@@ -467,6 +467,35 @@ async def test_completed_turn_hook_allows_owner_voiceprint() -> None:
     assert allowed is True
     pipeline._session.clear_user_turn.assert_not_called()
     assert pipeline._timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_stops_hard_stop_without_voiceprint_task() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("hard-stop-completed-turn")
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._timeline.record_decision(
+        action=Action.CANCEL.value,
+        reason="intent:hard_stop",
+        rollback_drop_buffered=False,
+        intent=InterruptIntent.HARD_STOP.value,
+        source="strong_intent",
+        transcript_preview="别说了。",
+        vad_active=True,
+    )
+
+    allowed = await pipeline._voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="别说了。")
+    )
+
+    assert allowed is False
+    pipeline._session.clear_user_turn.assert_called_once()
+    assert pipeline._user_turns.active is not None
+    assert pipeline._user_turns.active.state == "rejected"
+    assert pipeline._user_turns.active.reject_reason == (
+        "non_semantic_completed_turn:hard_stop"
+    )
 
 
 @pytest.mark.asyncio

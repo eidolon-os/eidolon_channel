@@ -113,19 +113,19 @@ def test_missing_schema_v_is_accepted() -> None:
     assert state.input_mode == INPUT_MODE_PTT
 
 
-# ── removed field ───────────────────────────────────────────────────────────
+# ── deprecated-but-known auxiliary signal ──────────────────────────────────
 
 
-def test_manual_interrupt_is_unknown_in_strict() -> None:
-    assert "manual_interrupt" not in CLIENT_AUDIO_STATE_KNOWN_KEYS
-    with pytest.raises(ValueError, match="unknown field"):
-        _parse(_packet(manual_interrupt=True), strict=True)
+def test_manual_interrupt_is_known_in_strict() -> None:
+    assert "manual_interrupt" in CLIENT_AUDIO_STATE_KNOWN_KEYS
+    state = _parse(_packet(manual_interrupt=True), strict=True)
+    assert state.manual_interrupt is True
 
 
-def test_manual_interrupt_degrades_in_non_strict(caplog) -> None:
+def test_manual_interrupt_parses_in_non_strict(caplog) -> None:
     state = _parse(_packet(manual_interrupt=True), strict=False)
     assert state.manual_interrupt is True
-    assert any("[contract]" in r.message for r in caplog.records)
+    assert not any("[contract]" in r.message for r in caplog.records)
 
 
 # ── malformed framing: always rejected ──────────────────────────────────────

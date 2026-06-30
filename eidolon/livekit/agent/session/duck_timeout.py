@@ -42,6 +42,8 @@ class DuckSuspendTimeoutHandler:
         get_vad_active: Callable[[], bool],
         get_eot_model: Callable[[], Any],
         apply_decision: Callable[..., None],
+        should_hold_for_evidence: Callable[[], bool] | None = None,
+        get_max_suspend_sec: Callable[[], float] | None = None,
     ) -> None:
         self._turn_runtime = turn_runtime
         self._sleep = sleep
@@ -54,6 +56,8 @@ class DuckSuspendTimeoutHandler:
         self._get_vad_active = get_vad_active
         self._get_eot_model = get_eot_model
         self._apply_decision = apply_decision
+        self._should_hold_for_evidence = should_hold_for_evidence or (lambda: False)
+        self._get_max_suspend_sec = get_max_suspend_sec or (lambda: 0.0)
 
     async def run(self, timeout_sec: float) -> None:
         """Wait for the decision budget, then resolve or re-arm ducking."""
@@ -72,6 +76,18 @@ class DuckSuspendTimeoutHandler:
                 transcript=latest_asr_text,
                 eot_score=eot_model.current_eot_score,
             )
+            if (
+                not vad_still_active
+                and decision.action is Action.ROLLBACK
+                and self._should_hold_for_evidence()
+            ):
+                decision = Decision(
+                    action=Action.HOLD,
+                    reason="deadline_wait_for_post_speech_evidence",
+                    intent=InterruptIntent.UNCERTAIN,
+                    intent_source="timeout",
+                    intent_confidence=0.0,
+                )
             if decision.action is Action.HOLD:
                 decision = self._resolve_hold_or_rearm(
                     decision,
@@ -110,6 +126,7 @@ class DuckSuspendTimeoutHandler:
         max_suspend_sec = max(
             timeout_sec,
             getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
+            self._get_max_suspend_sec(),
         )
         suspend_sec = time.monotonic() - self._get_suspend_start()
         if suspend_sec >= max_suspend_sec:

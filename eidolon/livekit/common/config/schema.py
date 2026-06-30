@@ -113,6 +113,8 @@ class EotPolicyConfig:
 @dataclass(frozen=True)
 class InterruptPolicyConfig:
     decision_timeout_ms: int = 500
+    post_speech_evidence_timeout_ms: int = 6_000
+    post_speech_evidence_min_speech_ms: int = 250
     min_interim_chars: int = 2
     early_cancel_score_threshold: float = 0.70
     early_resume_score_threshold: float = 0.20
@@ -183,7 +185,7 @@ class AttentionPolicyConfig:
     enforce: bool = False
     client_state_max_age_ms: int = 2_000
     require_direct_signal_during_playback: bool = True
-    soft_duck_on_playback_speech_start: bool = False
+    soft_duck_on_playback_speech_start: bool = True
     ignore_when_mic_muted: bool = True
 
 

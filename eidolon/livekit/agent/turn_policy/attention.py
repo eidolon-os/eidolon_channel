@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
-
 from eidolon.livekit.agent.client_audio_state import ClientAudioState
 from eidolon.livekit.common.config import TurnPolicyConfig
 
@@ -47,8 +45,8 @@ class AttentionInput:
 class AttentionAdmission:
     """Gate raw VAD/STT activity before output ducking or cancellation.
 
-    The default is intentionally conservative for compatibility: without a
-    fresh client audio-state signal it preserves the existing duck/decide path.
+    Channel owns interruption orchestration. Client audio state is treated as a
+    useful hint, not as permission to start the server-side soft-duck path.
     """
 
     def __init__(self, config: TurnPolicyConfig) -> None:
@@ -101,44 +99,26 @@ class AttentionAdmission:
         # through to the transcript-evidence gate so only real near-end content cuts
         # (mirrors the fast-path duck-then-confirm in _handle_explicit_client_interrupt).
 
-        if (
-            self._config.require_direct_signal_during_playback
-            and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
-        ):
-            if (
-                signal.speech_started
-                and not text
-                and self._config.soft_duck_on_playback_speech_start
-            ):
+        if signal.speech_started and not text:
+            if self._config.soft_duck_on_playback_speech_start:
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,
                     "playback_speech_start_soft_duck",
                     transcript_preview=preview,
                     client_state_used=True,
                 )
-            if text:
-                intent = hard_stop_intent(text)
-                if intent is InterruptIntent.HARD_STOP:
-                    return AttentionDecision(
-                        AdmissionAction.HARD_INTERRUPT,
-                        "transcript_hard_stop",
-                        transcript_preview=preview,
-                        client_state_used=True,
-                    )
-                evidence = self._evidence_gate.evaluate_attention(
-                    text,
-                    eot_score=signal.eot_score,
+            if self._config.require_direct_signal_during_playback:
+                return AttentionDecision(
+                    AdmissionAction.OBSERVE,
+                    "playback_speech_start_soft_duck_disabled",
+                    transcript_preview=preview,
+                    client_state_used=True,
                 )
-                if evidence.allow_decision and evidence.reason == "high_eot_transcript":
-                    return AttentionDecision(
-                        AdmissionAction.DUCK_AND_DECIDE,
-                        f"transcript_evidence:{evidence.reason}",
-                        transcript_preview=preview,
-                        client_state_used=True,
-                    )
+
+        if not text:
             return AttentionDecision(
                 AdmissionAction.OBSERVE,
-                "client_playback_active_without_direct_signal",
+                "playback_empty_transcript",
                 transcript_preview=preview,
                 client_state_used=True,
             )
@@ -157,10 +137,17 @@ class AttentionAdmission:
                 text,
                 eot_score=signal.eot_score,
             )
-            if evidence.allow_decision:
+            if evidence.allow_decision and evidence.reason == "high_eot_transcript":
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,
                     f"transcript_evidence:{evidence.reason}",
+                    transcript_preview=preview,
+                    client_state_used=True,
+                )
+            if self._config.require_direct_signal_during_playback:
+                return AttentionDecision(
+                    AdmissionAction.OBSERVE,
+                    f"playback_low_evidence_transcript:{evidence.reason}",
                     transcript_preview=preview,
                     client_state_used=True,
                 )

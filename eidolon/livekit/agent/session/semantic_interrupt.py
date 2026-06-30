@@ -83,6 +83,8 @@ class SemanticInterruptHandler:
                     text,
                     decision=decision,
                     duck_active=duck_active,
+                    score=score,
+                    vad_active=vad_active,
                 )
                 return
             logger.info(
@@ -150,11 +152,21 @@ class SemanticInterruptHandler:
         *,
         decision: Decision,
         duck_active: bool,
+        score: float,
+        vad_active: bool,
     ) -> None:
         logger.info(
             "[SemanticInterruptHandler] EOT: strong interrupt intent, text=%r",
             text[:50],
         )
+        if duck_active:
+            self._apply_decision(
+                decision,
+                eot_score=score,
+                transcript=text,
+                vad_active=vad_active,
+            )
+            return
         signal = self._turn_runtime.control_signal_from_decision(decision)
         metadata = signal.as_metadata()
         self._publish_turn_control(metadata)
@@ -167,9 +179,6 @@ class SemanticInterruptHandler:
                 vad_active=True,
             )
             timeline.set_attr("turn_control", metadata)
-        if duck_active:
-            self._cancel_duck_and_interrupt()
-            return
         if timeline is not None:
             timeline.mark("interrupt_resolved_at")
             timeline.set_attr("cancel_reason", "strong_intent_cancel")

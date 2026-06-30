@@ -1,10 +1,10 @@
-# Explicit local validation overlay for ESP32 box-3 full-duplex barge-in.
+# Local validation overlay for ESP32 box-3 full-duplex direct-LLM checks.
 #
 # Usage:
 #   EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML=config/overlays/box3_full_duplex.yaml
 #
-# This is intentionally an overlay, not a product default: it enables the
-# channel-owned soft-duck path while keeping production rollout explicit.
+# Production full-duplex interruption semantics live in config/settings.yaml.
+# This overlay only narrows dependencies for local hardware validation.
 providers:
   brain_provider: direct_llm
 

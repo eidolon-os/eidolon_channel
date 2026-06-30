@@ -49,22 +49,20 @@ class _Service:
 
 async def _resolve_context(_room):
     return ResolvedContext(
-        tenant_id="default",
-        user_id="manson",
-        agent_id="agent_1",
-        template_id="caretaker_jiezhi",
-        memory_mcp_url="http://127.0.0.1:8765/mcp",
+        owner_id="manson",
+        companion_id="companion_1",
+        memory_realm_id="realm_1",
+        genome_id="genome_1",
         device_id=None,
     )
 
 
 async def _resolve_device_context(_room):
     return ResolvedContext(
-        tenant_id="default",
-        user_id="manson",
-        agent_id="agent_1",
-        template_id="caretaker_jiezhi",
-        memory_mcp_url="http://127.0.0.1:8765/mcp",
+        owner_id="manson",
+        companion_id="companion_1",
+        memory_realm_id="realm_1",
+        genome_id="genome_1",
         device_id="1c:db:d4:7a:ef:0c",
     )
 

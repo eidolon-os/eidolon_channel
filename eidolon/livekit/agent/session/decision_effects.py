@@ -32,6 +32,7 @@ class DecisionEffectApplier:
         on_cancel: Callable[[], None],
         on_rollback: Callable[[str, bool], None],
         on_hold: Callable[[Decision, str, float | None, bool | None], None] | None = None,
+        on_decision: Callable[..., object] | None = None,
     ) -> None:
         self._factory = factory
         self._turn_runtime = turn_runtime
@@ -39,6 +40,7 @@ class DecisionEffectApplier:
         self._on_cancel = on_cancel
         self._on_rollback = on_rollback
         self._on_hold = on_hold
+        self._on_decision = on_decision
 
     def apply(
         self,
@@ -56,6 +58,14 @@ class DecisionEffectApplier:
             transcript=transcript,
             vad_active=vad_active,
         )
+        if self._on_decision is not None:
+            self._on_decision(
+                decision,
+                source=resolved_reason or "turn_policy",
+                transcript=transcript,
+                vad_active=vad_active,
+                eot_score=eot_score,
+            )
         if decision.action is Action.CANCEL:
             self._publish_control_signal(decision)
             self._on_cancel()

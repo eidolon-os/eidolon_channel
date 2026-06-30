@@ -88,6 +88,32 @@ def test_strong_interrupt_without_duck_interrupts_immediately() -> None:
     calls.timeline.set_attr.assert_any_call("cancel_reason", "strong_intent_cancel")
 
 
+def test_strong_interrupt_with_duck_uses_decision_effect_path() -> None:
+    runtime = MagicMock()
+    decision = Decision(
+        action=Action.CANCEL,
+        reason="intent:hard_stop",
+        intent=InterruptIntent.HARD_STOP,
+    )
+    runtime.decide_from_transcript.return_value = decision
+    handler, calls = _handler(
+        eot_model=_eot_model(strong_intent=True, score=0.9),
+        turn_runtime=runtime,
+        duck_active=True,
+    )
+
+    handler.run("别说了")
+
+    calls.apply_decision.assert_called_once_with(
+        decision,
+        eot_score=0.9,
+        transcript="别说了",
+        vad_active=True,
+    )
+    calls.cancel_duck_and_interrupt.assert_not_called()
+    calls.interrupt_current_turn.assert_not_called()
+
+
 def test_legacy_strong_signal_keeps_correction_intent() -> None:
     runtime = MagicMock()
     decision = Decision(

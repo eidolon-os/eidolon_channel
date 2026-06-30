@@ -82,6 +82,14 @@ class AttentionEffectHandler:
             if self._get_agent_speaking() and not self._get_duck_active():
                 self._on_duck()
             return True
+        if decision.action is AdmissionAction.OBSERVE and self._get_duck_active():
+            logger.info(
+                "[AttentionEffectHandler] attention admission: %s reason=%s; "
+                "duck active, route transcript as interruption evidence",
+                decision.action.value,
+                decision.reason,
+            )
+            return True
         logger.info(
             "[AttentionEffectHandler] attention admission: %s reason=%s; skip EOT",
             decision.action.value,

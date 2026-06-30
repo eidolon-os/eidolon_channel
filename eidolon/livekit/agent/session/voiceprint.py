@@ -23,6 +23,7 @@ from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
 logger = logging.getLogger("agent.session.voiceprint")
 
 ContextResolver = Callable[[Any], Awaitable[ResolvedContext]]
+_DEFAULT_VOICEPRINT_TENANT_ID = "default"
 
 
 @dataclass
@@ -225,10 +226,10 @@ class VoiceprintTurnObserver:
             ctx = await self._resolve_context()
         except Exception as exc:  # noqa: BLE001 - observe-only failure
             signal = SpeakerSignal.error_signal(
-                    provider=self._provider_name(),
-                    model=self._model_name(),
-                    error=f"context_error:{type(exc).__name__}",
-                    audio_ms=audio_ms,
+                provider=self._provider_name(),
+                model=self._model_name(),
+                error=f"context_error:{type(exc).__name__}",
+                audio_ms=audio_ms,
             )
             return self._record_result(
                 timeline,
@@ -238,12 +239,27 @@ class VoiceprintTurnObserver:
             )
 
         trusted_paired_device = self._is_trusted_paired_device(ctx)
+        tenant_id = self._voiceprint_tenant_id(ctx)
+        user_id = self._voiceprint_user_id(ctx)
+        if not user_id:
+            signal = SpeakerSignal.error_signal(
+                provider=self._provider_name(),
+                model=self._model_name(),
+                error="context_error:missing_owner_id",
+                audio_ms=audio_ms,
+            )
+            return self._record_result(
+                timeline,
+                signal,
+                cached=False,
+                trusted_paired_device=trusted_paired_device,
+            )
         if not audio:
             signal = SpeakerSignal.error_signal(
-                    provider=self._provider_name(),
-                    model=self._model_name(),
-                    error="audio_not_captured",
-                    audio_ms=audio_ms,
+                provider=self._provider_name(),
+                model=self._model_name(),
+                error="audio_not_captured",
+                audio_ms=audio_ms,
             )
             return self._record_result(
                 timeline,
@@ -252,7 +268,7 @@ class VoiceprintTurnObserver:
                 trusted_paired_device=trusted_paired_device,
             )
 
-        cache_key = (ctx.tenant_id, ctx.user_id)
+        cache_key = (tenant_id, user_id)
         cached = self._cached_accept(cache_key)
         if cached is not None and audio_ms < 3_000:
             return self._record_result(
@@ -263,8 +279,8 @@ class VoiceprintTurnObserver:
             )
 
         signal = await self._service.verify_turn(
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
             audio=audio,
             sample_rate=turn.sample_rate,
             audio_ms=audio_ms,
@@ -409,7 +425,25 @@ class VoiceprintTurnObserver:
     def _is_trusted_paired_device(self, ctx: ResolvedContext) -> bool:
         if not self._trust_paired_devices:
             return False
-        return bool(ctx.device_id and ctx.user_id and ctx.tenant_id)
+        return bool(
+            ctx.device_id
+            and self._voiceprint_user_id(ctx)
+            and self._voiceprint_tenant_id(ctx)
+        )
+
+    @staticmethod
+    def _voiceprint_tenant_id(ctx: ResolvedContext) -> str:
+        return str(
+            getattr(ctx, "tenant_id", None) or _DEFAULT_VOICEPRINT_TENANT_ID
+        )
+
+    @staticmethod
+    def _voiceprint_user_id(ctx: ResolvedContext) -> str:
+        return str(
+            getattr(ctx, "user_id", None)
+            or getattr(ctx, "owner_id", None)
+            or ""
+        )
 
     def _provider_name(self) -> str:
         provider = getattr(self._service, "_provider", None)

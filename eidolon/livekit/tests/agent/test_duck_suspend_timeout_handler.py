@@ -32,6 +32,8 @@ def _handler(
     latest_asr_text: str = "",
     vad_active: bool = True,
     eot_model: SimpleNamespace | None = None,
+    should_hold_for_evidence: bool = False,
+    max_suspend_sec: float = 0.0,
 ) -> tuple[DuckSuspendTimeoutHandler, SimpleNamespace]:
     calls = SimpleNamespace(
         create_task=MagicMock(),
@@ -52,6 +54,8 @@ def _handler(
         get_vad_active=lambda: vad_active,
         get_eot_model=lambda: eot_model or _eot_model(),
         apply_decision=calls.apply_decision,
+        should_hold_for_evidence=lambda: should_hold_for_evidence,
+        get_max_suspend_sec=lambda: max_suspend_sec,
     )
     return handler, calls
 
@@ -149,3 +153,29 @@ async def test_hold_rolls_back_after_max_suspend_budget() -> None:
     assert applied.action is Action.ROLLBACK
     assert applied.rollback_drop_buffered is True
     assert applied.intent is InterruptIntent.UNCERTAIN
+
+
+@pytest.mark.asyncio
+async def test_vad_idle_can_hold_for_post_speech_evidence_window() -> None:
+    runtime = MagicMock()
+    runtime.deadline_decision.return_value = Decision(
+        action=Action.ROLLBACK,
+        reason="deadline_vad_idle_drop_stale",
+        rollback_drop_buffered=True,
+        intent=InterruptIntent.UNCERTAIN,
+    )
+    handler, calls = _handler(
+        runtime=runtime,
+        suspend_start=time.monotonic(),
+        vad_active=False,
+        should_hold_for_evidence=True,
+        max_suspend_sec=6.0,
+    )
+
+    await handler.run(0.5)
+
+    calls.create_task.assert_called_once()
+    applied = calls.apply_decision.call_args.args[0]
+    assert applied.action is Action.HOLD
+    assert applied.reason == "deadline_wait_for_post_speech_evidence"
+    calls.create_task.call_args.args[0].close()

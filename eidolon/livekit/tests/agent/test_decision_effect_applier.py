@@ -101,3 +101,33 @@ def test_apply_hold_calls_hold_callback() -> None:
     applier.apply(decision, transcript="不是", eot_score=0.1, vad_active=True)
 
     on_hold.assert_called_once_with(decision, "不是", 0.1, True)
+
+
+def test_apply_notifies_owner_before_side_effects() -> None:
+    on_cancel = MagicMock()
+    on_decision = MagicMock()
+    factory = SimpleNamespace(llm=SimpleNamespace(llm=SimpleNamespace()))
+    applier = DecisionEffectApplier(
+        factory=factory,
+        turn_runtime=TurnPolicyRuntime(TurnPolicyConfig()),
+        get_timeline=lambda: None,
+        on_cancel=on_cancel,
+        on_rollback=MagicMock(),
+        on_decision=on_decision,
+    )
+    decision = Decision(
+        action=Action.CANCEL,
+        reason="intent:hard_stop",
+        intent=InterruptIntent.HARD_STOP,
+    )
+
+    applier.apply(decision, transcript="停一下", vad_active=True, eot_score=0.9)
+
+    on_decision.assert_called_once_with(
+        decision,
+        source="turn_policy",
+        transcript="停一下",
+        vad_active=True,
+        eot_score=0.9,
+    )
+    on_cancel.assert_called_once_with()

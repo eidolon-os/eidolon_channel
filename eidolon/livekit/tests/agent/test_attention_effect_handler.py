@@ -47,6 +47,7 @@ def _handler(
     client_state=None,
     enforce: bool = True,
     agent_speaking: bool = True,
+    duck_active: bool = False,
     eot_score: float = 0.0,
     soft_duck_on_playback_speech_start: bool = False,
 ):
@@ -61,7 +62,7 @@ def _handler(
         turn_policy=policy,
         turn_runtime=TurnPolicyRuntime(policy),
         get_agent_speaking=lambda: agent_speaking,
-        get_duck_active=lambda: False,
+        get_duck_active=lambda: duck_active,
         latest_client_audio_state=lambda participant_identity: client_state,
         get_timeline=lambda: timeline,
         on_duck=on_duck,
@@ -105,6 +106,20 @@ def test_allows_eot_observes_short_low_score_playback_speech() -> None:
     allowed = handler.allows_eot_check("不是")
 
     assert allowed is False
+    on_duck.assert_not_called()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "observe"
+
+
+def test_duck_active_routes_low_evidence_transcript_as_evidence() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(
+        client_state=_client_state(),
+        duck_active=True,
+    )
+
+    allowed = handler.allows_eot_check("不是")
+
+    assert allowed is True
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["action"] == "observe"
@@ -157,7 +172,7 @@ def test_single_char_prefix_observes_without_direct_intent_mark() -> None:
     on_interrupt.assert_not_called()
     assert (
         timeline.attrs["attention_admission"]["reason"]
-        == "client_playback_active_without_direct_signal"
+        == "playback_low_evidence_transcript:insufficient_transcript_evidence"
     )
     assert "interrupt_intent_admitted_at" not in timeline.timestamps
 
@@ -206,13 +221,13 @@ def test_observe_only_rollout_records_but_allows_eot() -> None:
     assert timeline.attrs["attention_admission"]["enforced"] is False
 
 
-def test_attention_enforce_observes_substantive_overlap_without_eot() -> None:
+def test_attention_enforce_observes_short_overlap_without_direct_signal() -> None:
     # Regression: the retired responsive mode used to force attention_enforce=
     # False, silently overriding the operator's turn_policy.attention.enforce and
     # disabling the manual_interrupt / mic_muted gates (full-duplex barge-in bug).
     # The interrupt_mode axis is gone; enforcement comes solely from config. With
-    # enforce=True, a substantive playback overlap without EOT is observed (not
-    # admitted as an EOT check).
+    # enforce=True, short low-evidence playback speech is observed without being
+    # committed or escalated.
     handler, timeline, on_duck, on_interrupt = _handler(
         client_state=_client_state(),
         enforce=True,

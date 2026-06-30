@@ -7,6 +7,12 @@ from .decision_effects import DecisionEffectApplier
 from .duck_timeout import DuckSuspendTimeoutHandler
 from .idle import IdleWatchdog
 from .interruption import SoftInterruptController
+from .interruption_orchestrator import (
+    InterruptionDecision,
+    InterruptionDecisionAction,
+    InterruptionOrchestrator,
+    InterruptionState,
+)
 from .provider_events import ProviderEventObserver
 from .room_data import RoomDataHandler, participant_identity_from_packet
 from .semantic_interrupt import SemanticInterruptHandler
@@ -22,6 +28,10 @@ __all__ = [
     "DecisionEffectApplier",
     "DuckSuspendTimeoutHandler",
     "IdleWatchdog",
+    "InterruptionDecision",
+    "InterruptionDecisionAction",
+    "InterruptionOrchestrator",
+    "InterruptionState",
     "ProviderEventObserver",
     "RoomDataHandler",
     "SemanticInterruptHandler",

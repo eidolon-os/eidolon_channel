@@ -56,7 +56,7 @@ def test_attention_observes_substantive_overlap_during_playback_without_eot() ->
     )
 
     assert decision.action is AdmissionAction.OBSERVE
-    assert decision.reason == "client_playback_active_without_direct_signal"
+    assert decision.reason == "playback_low_evidence_transcript:substantive_cjk_transcript"
 
 
 def test_attention_soft_ducks_playback_speech_start_when_configured() -> None:
@@ -68,6 +68,22 @@ def test_attention_soft_ducks_playback_speech_start_when_configured() -> None:
         ),
     )
     admission = AttentionAdmission(policy)
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="",
+            speech_started=True,
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "playback_speech_start_soft_duck"
+
+
+def test_attention_soft_ducks_playback_speech_start_by_default() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
         AttentionInput(
@@ -101,7 +117,7 @@ def test_attention_keeps_blank_transcript_observe_without_speech_start() -> None
     )
 
     assert decision.action is AdmissionAction.OBSERVE
-    assert decision.reason == "client_playback_active_without_direct_signal"
+    assert decision.reason == "playback_empty_transcript"
 
 
 def test_attention_allows_high_eot_overlap_during_playback() -> None:
@@ -162,7 +178,7 @@ def test_attention_observes_short_prefix_during_playback() -> None:
     )
 
     assert decision.action is AdmissionAction.OBSERVE
-    assert decision.reason == "client_playback_active_without_direct_signal"
+    assert decision.reason == "playback_low_evidence_transcript:insufficient_transcript_evidence"
 
 
 def test_attention_observes_single_char_prefix_during_playback() -> None:
@@ -177,7 +193,7 @@ def test_attention_observes_single_char_prefix_during_playback() -> None:
     )
 
     assert decision.action is AdmissionAction.OBSERVE
-    assert decision.reason == "client_playback_active_without_direct_signal"
+    assert decision.reason == "playback_low_evidence_transcript:insufficient_transcript_evidence"
 
 
 def test_attention_ptt_is_hard_interrupt() -> None:
@@ -245,6 +261,7 @@ def _pipeline_with_client_state(
     pipeline._client_audio_states = (
         {state.participant_identity: state} if state is not None else {}
     )
+    pipeline._is_half_duplex = False
     pipeline._duck_and_arm_timeout = MagicMock()
     pipeline._callbacks = MagicMock()
     return pipeline
@@ -293,7 +310,7 @@ def test_pipeline_attention_soft_ducks_on_playback_speech_start() -> None:
     )
 
 
-def test_pipeline_attention_keeps_low_evidence_transcript_observed_after_soft_duck() -> None:
+def test_pipeline_attention_routes_low_evidence_transcript_after_soft_duck() -> None:
     pipeline = _pipeline_with_client_state(
         _client_state(),
         soft_duck_on_playback_speech_start=True,
@@ -301,10 +318,11 @@ def test_pipeline_attention_keeps_low_evidence_transcript_observed_after_soft_du
 
     pipeline._ensure_runtime_defaults()
     pipeline._attention_effects.handle_speaking_started()
+    pipeline._ducking.mixer = SimpleNamespace(state="SUSPENDED")
     pipeline._duck_and_arm_timeout.reset_mock()
     allowed = _allows_eot(pipeline, "嗯嗯")
 
-    assert allowed is False
+    assert allowed is True
     pipeline._duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
@@ -480,7 +498,7 @@ def test_pipeline_attention_observes_short_prefix_during_playback() -> None:
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "client_playback_active_without_direct_signal"
+        == "playback_low_evidence_transcript:insufficient_transcript_evidence"
     )
 
 
@@ -494,7 +512,7 @@ def test_pipeline_attention_observes_single_char_prefix_during_playback() -> Non
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "client_playback_active_without_direct_signal"
+        == "playback_low_evidence_transcript:insufficient_transcript_evidence"
     )
 
 
@@ -530,6 +548,33 @@ def test_pipeline_attention_records_decision_history() -> None:
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
 
 
+def test_pipeline_rejects_playback_low_evidence_artifact_before_commit() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+    pipeline._timeline.set_attr(
+        "attention_admission_events",
+        [
+            {
+                "action": "observe",
+                "reason": (
+                    "playback_low_evidence_transcript:"
+                    "insufficient_transcript_evidence"
+                ),
+            }
+        ],
+    )
+    eot = MagicMock()
+    eot.current_eot_score = 0.0
+
+    reason = pipeline._playback_low_evidence_reject_reason(
+        transcript="所",
+        eot_model=eot,
+    )
+
+    assert reason == (
+        "playback_low_evidence_artifact:insufficient_transcript_evidence"
+    )
+
+
 def test_pipeline_attention_prefers_speaker_client_state() -> None:
     now = time.monotonic()
     alice = _client_state(
@@ -551,9 +596,9 @@ def test_pipeline_attention_prefers_speaker_client_state() -> None:
         speaker_id="bob",
     )
 
-    assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_called_once()
+    assert allowed is False
+    pipeline._duck_and_arm_timeout.assert_not_called()
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "transcript_evidence:substantive_cjk_transcript"
+        == "playback_low_evidence_transcript:substantive_cjk_transcript"
     )

@@ -1,6 +1,6 @@
 # LiveKit Agent Server 架构分析
 
-> 最近更新: 2026-06-07
+> 最近更新: 2026-07-01
 > 代码路径: `eidolon/livekit/agent/`
 
 ---
@@ -73,16 +73,20 @@
 
 ```
 eidolon/livekit/agent/
+├── README.md                 # 代码地图: entrypoints / integration / session / policy / output
 ├── server.py                 # 主入口: AgentServer 启动、配置加载、session 回调注册
 ├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
-├── streaming.py              # StreamingPipeline: 实时会话总编排器
+├── streaming.py              # StreamingPipeline: 实时 AgentSession wrapper / 主编排器
 ├── batch.py                  # BatchPipeline: 批量音频 blob 处理
-├── client_audio_state.py     # Web/硬件客户端 audio_state 数据模型
-├── _framework_patches.py     # LiveKit framework 兼容性 patch
+├── client_audio_state.py     # 兼容入口: re-export integration.client_audio_state
+├── _framework_patches.py     # 兼容入口: re-export integration.framework_patches
 ├── output_controller.py      # 兼容入口: re-export output.controller
 ├── filler.py                 # 兼容入口: re-export output.filler
-├── ducking.py                # 兼容入口: ducking 模块迁移后的旧路径
 ├── interrupt_decider.py      # 兼容入口: re-export turn_policy
+├── integration/
+│   ├── __init__.py           # LiveKit/framework 外部契约边界
+│   ├── framework_patches.py  # LiveKit internal API patch，升级时唯一审计点
+│   └── client_audio_state.py # client.audio_state data-channel payload parser/model
 ├── pipeline/
 │   ├── base.py               # VoicePipeline 抽象基类
 │   ├── stt.py                # SttStage: 封装 STT provider
@@ -115,6 +119,9 @@ eidolon/livekit/agent/
 │   ├── client_interaction.py # ClientInteractionHandler: PTT/tap-to-stop/client controls
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── duck_timeout.py       # DuckSuspendTimeoutHandler: duck deadline policy effects
+│   ├── eot_model.py          # shared EOT model cache/loading helper
+│   ├── interaction_mode.py   # Full/Half duplex interaction behavior strategy
+│   ├── messages.py           # LiveKit chat/message text helper
 │   ├── provider_events.py    # STT/TTS provider event 观测
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发
@@ -126,9 +133,8 @@ eidolon/livekit/agent/
 ├── context/
 │   └── interrupted.py        # InterruptedContextManager: 被打断回复注入上下文
 ├── runtime/
-│   ├── admin_client.py       # admin service 查询
-│   ├── resolver.py           # tenant/user/template 解析
-│   └── resolver.py           # admin resolve + SDK runtime token 签名
+│   ├── interaction_mode.py   # session metadata parsing + mode/intent policy
+│   └── resolver.py           # tenant/user/template 解析
 ├── eidolon_agent_rpc/
 │   ├── grpc_llm.py           # remote Agent LLM adapter
 │   └── session.py            # remote Agent session client
@@ -142,6 +148,8 @@ eidolon/livekit/agent/
 `streaming.py` 是实时会话的主编排器，仍然负责把 LiveKit `AgentSession`、Room、pipeline stage、打断决策、输出控制和观测串起来。它可以持有流程状态，但不应继续承载可独立测试的副作用模块。
 
 `turn_policy/` 负责“是否打断、如何标注 tier、是否 rollback/observe”的决策。这里应尽量保持输入输出结构化，不直接操作 LiveKit Room、播放句柄或 chat context。
+
+`integration/` 负责 LiveKit/framework 边界代码，包括 internal API patch 和 data-channel payload parser。任何需要碰外部协议、框架 underscore API、线缆格式的代码都优先放在这里，业务逻辑层只消费结构化对象。
 
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
@@ -171,7 +179,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 ### 2.2 兼容入口
 
-`output_controller.py`、`filler.py`、`interrupt_decider.py` 等旧路径仍保留 re-export，是为了不一次性破坏已有导入与测试。新代码应优先从 `output.*`、`turn_policy.*`、`session.*`、`context.*` 导入。
+`_framework_patches.py`、`client_audio_state.py`、`output_controller.py`、`filler.py`、`interrupt_decider.py` 等旧路径仍保留 re-export，是为了不一次性破坏已有导入与测试。新代码应优先从 `integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 导入。
 
 ### 2.3 Plugin 目录结构
 
@@ -263,7 +271,7 @@ eidolon/livekit/plugins/
 | Tier 3 noise/backchannel | “嗯”、“好”、“啊”、咳嗽 | rollback / unduck | 短暂 duck 后恢复 | `turn_policy/tiers/tier3_noise.py` |
 | Tier 4 attention observe | agent 正在说话时的环境人声 | observe / ignore | 不 cancel | `turn_policy/tiers/tier4_attention.py` |
 
-`client_audio_state.py` 提供来自 Web/硬件客户端的播放态信号。`attention.enforce=true` 时，如果客户端明确处于 Agent speaking，普通环境人声默认不会直接进入 EOT cancel；只有 Tier 0、Tier 1、PTT/manual interrupt 或足够强的语义 evidence 才会更快取消。
+`integration/client_audio_state.py` 提供来自 Web/硬件客户端的播放态信号。`attention.enforce=true` 时，如果客户端明确处于 Agent speaking，普通环境人声默认不会直接进入 EOT cancel；只有 Tier 0、Tier 1、PTT/manual interrupt 或足够强的语义 evidence 才会更快取消。
 
 ### Batch 模式数据流
 

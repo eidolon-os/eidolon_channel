@@ -30,10 +30,10 @@ IS NOT a replacement for AgentSession — it's a thin wrapper that:
      path is owned by channel in the default hybrid profile.
 
   5. **Forces framework's auto-interrupt OFF** via
-     ``_framework_patches.disable_audio_activity_interruption`` —
+     ``integration.framework_patches.disable_audio_activity_interruption`` —
      so Eidolon's InterruptionOrchestrator / turn policy is the sole
      authority. See
-     ``_framework_patches.py`` for the rationale (no public API
+     ``integration/framework_patches.py`` for the rationale (no public API
      does this without breaking endpointing).
 
 If you find yourself adding logic here that AgentSession already
@@ -76,15 +76,14 @@ from eidolon.livekit.common.config import (
     VoiceprintConfig,
 )
 
-from . import _framework_patches
-from .client_audio_state import ClientAudioState
 from .context import InterruptedContextManager
+from .integration import framework_patches
+from .integration.client_audio_state import ClientAudioState
 from .runtime.interaction_mode import resolve_idle_policy
 from .turn_policy import (
     Decision,
     TranscriptEvidenceGate,
     TurnPolicyRuntime,
-    eot_kwargs_from_turn_policy,
 )
 from .turn_policy.constants import STABLE_SIGNAL_WAIT_REASON_PREFIX
 from .observability import TurnTimeline
@@ -111,46 +110,11 @@ from .session import (
     UserTurnCoordinator,
     VoiceprintTurnObserver,
     build_interaction_mode_behavior,
+    get_shared_eot_model,
+    message_text,
 )
 
 logger = logging.getLogger("agent")
-
-# Module-level cache for the EOT model singleton.
-# All StreamingPipeline instances share the same ChineseModel instance, which in turn
-# shares the same EotManager singleton (and thus the same ONNX session).
-_eot_model_cache: Any = None
-_eot_model_cache_key: tuple | None = None
-
-
-def _get_shared_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
-    """Lazily create and cache the shared ChineseModel instance.
-
-    The EotManager inside ChineseModel is a thread-safe singleton that holds
-    the ONNX session, so all callers share the same model weights in memory.
-    """
-    global _eot_model_cache, _eot_model_cache_key
-    kwargs = eot_kwargs_from_turn_policy(turn_policy)
-    key = tuple(sorted(kwargs.items()))
-    if _eot_model_cache is None or _eot_model_cache_key != key:
-        from eidolon.livekit.plugins.eot import ChineseModel
-
-        logger.info("[StreamingPipeline] loading EOT model...")
-        _eot_model_cache = ChineseModel(**kwargs)
-        _eot_model_cache_key = key
-        logger.info("[StreamingPipeline] EOT model loaded")
-    return _eot_model_cache
-
-
-def _message_text(message: Any) -> str:
-    text_content = getattr(message, "text_content", None)
-    if isinstance(text_content, str):
-        return text_content
-    content = getattr(message, "content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(str(item) for item in content)
-    return str(content or "")
 
 
 class StreamingPipeline(BasePipeline):
@@ -418,12 +382,12 @@ class StreamingPipeline(BasePipeline):
         # Eagerly trigger EOT model loading so the ONNX session is ready before
         # the first user audio frame arrives. This avoids cold-start delay after
         # session.start() is called.
-        _get_shared_eot_model(self._turn_policy)
+        get_shared_eot_model(self._turn_policy)
         self._install_provider_observers()
 
     def _get_eot_model(self) -> Any:
         """Return the shared EOT model instance."""
-        return _get_shared_eot_model(self._turn_policy)
+        return get_shared_eot_model(self._turn_policy)
 
     def _build_interaction_mode_behavior(
         self,
@@ -1154,7 +1118,7 @@ class StreamingPipeline(BasePipeline):
         timeline = getattr(self, "_completed_turn_voiceprint_timeline", None) or getattr(
             self, "_timeline", None
         )
-        completed_transcript = _message_text(new_message)
+        completed_transcript = message_text(new_message)
         if timeline is not None:
             timeline.set_attr(
                 "framework_completed_turn",
@@ -2028,12 +1992,12 @@ class StreamingPipeline(BasePipeline):
             # Disable framework's built-in audio-activity auto-interrupt so
             # Eidolon's InterruptionOrchestrator / turn policy (and the
             # DuckingMixer below) is the sole authority on interrupt decisions.
-            # See _framework_patches.disable_audio_activity_interruption for the
+            # See integration.framework_patches.disable_audio_activity_interruption for the
             # full rationale (no public API alternative — internal flags must be
             # patched). The patch sets BOTH the runtime flag AND the default-
             # value flag, so framework's restore logic on agent state transitions
             # doesn't undo us. No re-patch needed in _on_agent_state_changed.
-            _framework_patches.disable_audio_activity_interruption(session)
+            framework_patches.disable_audio_activity_interruption(session)
 
         # Install the DuckingMixer between TTS frames and the RoomIO sink.
         # Must run AFTER session.start() because that's when the framework

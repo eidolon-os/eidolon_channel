@@ -9,7 +9,7 @@ from typing import Any
 
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
-from eidolon.livekit.agent.client_audio_state import (
+from eidolon.livekit.agent.integration.client_audio_state import (
     ClientAudioState,
     parse_client_audio_state,
 )
@@ -77,8 +77,7 @@ class RoomDataHandler:
             timeline.set_attr("room_data_packet_count", packet_count)
         if packet_count <= 3 or topic == CLIENT_AUDIO_STATE_TOPIC:
             logger.debug(
-                "[RoomDataHandler] room data received topic=%s identity=%s "
-                "bytes=%d count=%d",
+                "[RoomDataHandler] room data received topic=%s identity=%s bytes=%d count=%d",
                 topic,
                 participant_identity_from_packet(packet),
                 len(getattr(packet, "data", b"") or b""),

@@ -128,10 +128,10 @@ def _prewarm(proc) -> None:
     # Validate framework-internal patches are still applicable on this
     # SDK version. Logs WARNING (not fatal) on untested versions —
     # surfaces SDK upgrades that may have broken our patches before
-    # users see weird behaviour. See _framework_patches.py for details.
-    from eidolon.livekit.agent import _framework_patches
+    # users see weird behaviour. See integration/framework_patches.py for details.
+    from eidolon.livekit.agent.integration import framework_patches
 
-    _framework_patches.check_framework_version()
+    framework_patches.check_framework_version()
 
     try:
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD

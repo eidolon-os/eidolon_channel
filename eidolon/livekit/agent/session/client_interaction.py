@@ -16,7 +16,7 @@ from typing import Any
 
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
-from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.turn_policy import (
     Action,

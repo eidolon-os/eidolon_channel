@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.turn_policy import (
     AdmissionAction,
     AttentionInput,

@@ -7,6 +7,12 @@ from .client_interaction import ClientInteractionHandler, ExplicitClientInterrup
 from .decision_effects import DecisionEffectApplier
 from .duck_timeout import DuckSuspendTimeoutHandler
 from .idle import IdleWatchdog
+from .interaction_mode import (
+    FullDuplexInteractionMode,
+    HalfDuplexInteractionMode,
+    InteractionModeBehavior,
+    build_interaction_mode_behavior,
+)
 from .interruption import SoftInterruptController
 from .interruption_orchestrator import (
     InterruptionDecision,
@@ -31,6 +37,10 @@ __all__ = [
     "DecisionEffectApplier",
     "DuckSuspendTimeoutHandler",
     "IdleWatchdog",
+    "FullDuplexInteractionMode",
+    "HalfDuplexInteractionMode",
+    "InteractionModeBehavior",
+    "build_interaction_mode_behavior",
     "InterruptionDecision",
     "InterruptionDecisionAction",
     "InterruptionOrchestrator",

@@ -100,6 +100,7 @@ from .session import (
     DuckSuspendTimeoutHandler,
     ExplicitClientInterruptLedger,
     IdleWatchdog,
+    InteractionModeBehavior,
     InterruptionOrchestrator,
     ProviderEventObserver,
     RoomDataHandler,
@@ -109,6 +110,7 @@ from .session import (
     UserTurnCommitter,
     UserTurnCoordinator,
     VoiceprintTurnObserver,
+    build_interaction_mode_behavior,
 )
 
 logger = logging.getLogger("agent")
@@ -199,6 +201,7 @@ class StreamingPipeline(BasePipeline):
         # worker (server.py) always passes the resolved mode.
         self._interaction_mode = interaction_mode
         self._is_half_duplex = interaction_mode == INTERACTION_MODE_HALF_DUPLEX
+        self._interaction_mode_behavior = self._build_interaction_mode_behavior(interaction_mode)
         # Session intent (plan §3.2/§3.3) — orthogonal to interaction_mode. Drives
         # the idle window + teardown reason + whether the half_duplex keep-alive
         # exemption applies. Defaults user_initiated for a directly-constructed
@@ -356,7 +359,7 @@ class StreamingPipeline(BasePipeline):
             on_idle_disconnect=self._on_idle_disconnect,
             on_session_end=self._on_session_end,
             disconnect_grace_sec=self._idle_disconnect_grace_sec,
-            is_half_duplex=lambda: self._is_half_duplex,
+            is_half_duplex=lambda: self._ensure_interaction_mode_behavior().is_half_duplex,
             idle_end_reason=self._idle_end_reason,
             keep_alive_half_duplex=self._idle_keep_alive_half_duplex,
         )
@@ -421,6 +424,43 @@ class StreamingPipeline(BasePipeline):
     def _get_eot_model(self) -> Any:
         """Return the shared EOT model instance."""
         return _get_shared_eot_model(self._turn_policy)
+
+    def _build_interaction_mode_behavior(
+        self,
+        interaction_mode: str,
+    ) -> InteractionModeBehavior:
+        return build_interaction_mode_behavior(interaction_mode)
+
+    def _ensure_interaction_mode_behavior(self) -> InteractionModeBehavior:
+        """Return the mode behavior, preserving legacy test compatibility.
+
+        Production construction sets both ``_interaction_mode`` and the behavior.
+        Several focused unit tests still instantiate via ``__new__`` and set only
+        ``_is_half_duplex``; for those objects, derive the session mode from that
+        legacy flag.
+        """
+        legacy_has_mode_flag = hasattr(self, "_is_half_duplex")
+        legacy_is_half = bool(getattr(self, "_is_half_duplex", False))
+        mode = getattr(self, "_interaction_mode", None)
+        behavior = getattr(self, "_interaction_mode_behavior", None)
+        if (
+            legacy_has_mode_flag
+            and behavior is not None
+            and getattr(behavior, "is_half_duplex", None) != legacy_is_half
+        ):
+            mode = INTERACTION_MODE_HALF_DUPLEX if legacy_is_half else INTERACTION_MODE_FULL_DUPLEX
+        elif behavior is None and legacy_has_mode_flag:
+            mode = INTERACTION_MODE_HALF_DUPLEX if legacy_is_half else INTERACTION_MODE_FULL_DUPLEX
+        elif mode is None:
+            mode = getattr(behavior, "name", None) or (
+                INTERACTION_MODE_HALF_DUPLEX if legacy_is_half else INTERACTION_MODE_FULL_DUPLEX
+            )
+        if behavior is None or getattr(behavior, "name", None) != mode:
+            behavior = self._build_interaction_mode_behavior(mode)
+        self._interaction_mode_behavior = behavior
+        self._interaction_mode = behavior.name
+        self._is_half_duplex = behavior.is_half_duplex
+        return behavior
 
     @property
     def _duck_mixer(self) -> OutputController | None:
@@ -564,7 +604,7 @@ class StreamingPipeline(BasePipeline):
 
     def _build_client_interaction_handler(self) -> ClientInteractionHandler:
         return ClientInteractionHandler(
-            is_half_duplex=lambda: bool(getattr(self, "_is_half_duplex", False)),
+            is_half_duplex=lambda: self._ensure_interaction_mode_behavior().is_half_duplex,
             latest_client_audio_state=lambda participant_identity=None: (
                 self._latest_client_audio_state(participant_identity=participant_identity)
             ),
@@ -708,9 +748,7 @@ class StreamingPipeline(BasePipeline):
         self._ensure_runtime_defaults()
         if not transcript.strip():
             return False
-        # Half-duplex (push-to-talk): button release is an explicit, final
-        # end-of-turn — never defer for a continuation that won't come.
-        if self._is_half_duplex:
+        if not self._ensure_interaction_mode_behavior().allows_low_eot_defer():
             return False
         score = float(
             getattr(
@@ -730,7 +768,10 @@ class StreamingPipeline(BasePipeline):
         transcript: str,
         eot_model: Any,
     ) -> str:
-        if self._is_half_duplex or not transcript.strip():
+        if (
+            not self._ensure_interaction_mode_behavior().allows_playback_low_evidence_reject()
+            or not transcript.strip()
+        ):
             return ""
         timeline = getattr(self, "_timeline", None)
         if timeline is None:
@@ -1238,9 +1279,7 @@ class StreamingPipeline(BasePipeline):
 
     def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
         self._ensure_user_turn_coordinator()
-        # Half-duplex (push-to-talk): button release is an explicit, final
-        # end-of-turn — never hold it for a possible continuation.
-        if self._is_half_duplex:
+        if not self._ensure_interaction_mode_behavior().allows_low_eot_defer():
             return False
         candidate = self._user_turns.active
         if candidate is None:
@@ -1744,6 +1783,10 @@ class StreamingPipeline(BasePipeline):
 
     def _ensure_provider_event_observer(self) -> None:
         if not hasattr(self, "_provider_events"):
+            if not hasattr(self, "_observability"):
+                self._observability = ObservabilityConfig()
+            if not hasattr(self, "_timeline"):
+                self._timeline = None
             self._provider_events = ProviderEventObserver(
                 factory=self._factory,
                 get_timeline=lambda: self._timeline,
@@ -1808,6 +1851,7 @@ class StreamingPipeline(BasePipeline):
             self._interaction_mode = INTERACTION_MODE_FULL_DUPLEX
         if not hasattr(self, "_is_half_duplex"):
             self._is_half_duplex = self._interaction_mode == INTERACTION_MODE_HALF_DUPLEX
+        self._ensure_interaction_mode_behavior()
         if not hasattr(self, "_suppress_transcripts_until_next_speech"):
             self._suppress_transcripts_until_next_speech = False
         if not hasattr(self, "_completed_turn_voiceprint_task"):
@@ -1883,14 +1927,11 @@ class StreamingPipeline(BasePipeline):
         the final matches, else cancels via gRPC CancelTurn. ``preemptive_tts``
         stays gated by our commit so no partial audio leaks.
         """
-        interruption = {
-            "enabled": self._allow_interruptions,
-            "discard_audio_if_uninterruptible": not self._is_half_duplex,
-            "false_interruption_timeout": self._false_interruption_timeout,
-        }
-        if self._uses_livekit_native_adaptive_interruption():
-            interruption["mode"] = "adaptive"
-            interruption["resume_false_interruption"] = True
+        interruption = self._ensure_interaction_mode_behavior().interruption_options(
+            allow_interruptions=self._allow_interruptions,
+            false_interruption_timeout=self._false_interruption_timeout,
+            turn_policy=self._turn_policy,
+        )
 
         return {
             "interruption": interruption,
@@ -1901,11 +1942,9 @@ class StreamingPipeline(BasePipeline):
         }
 
     def _uses_livekit_native_adaptive_interruption(self) -> bool:
-        turn_policy = getattr(self, "_turn_policy", None)
-        return (
-            getattr(turn_policy, "interruption_owner", "channel") == "livekit_native_adaptive"
-            and not getattr(self, "_is_half_duplex", False)
-            and bool(getattr(self, "_allow_interruptions", False))
+        return self._ensure_interaction_mode_behavior().uses_livekit_native_adaptive_interruption(
+            turn_policy=getattr(self, "_turn_policy", None),
+            allow_interruptions=bool(getattr(self, "_allow_interruptions", False)),
         )
 
     async def run(self, room: Room) -> None:
@@ -2294,7 +2333,7 @@ class StreamingPipeline(BasePipeline):
         half_duplex → ``"manual"`` (PTT owns the turn boundary; no auto EOU);
         full_duplex → the EOT model instance (VAD + semantic EOT, unchanged).
         """
-        return "manual" if self._is_half_duplex else self._get_eot_model()
+        return self._ensure_interaction_mode_behavior().turn_detection(self._get_eot_model)
 
     def _welcome_on_enter_text(self) -> str | None:
         """Welcome line to speak on session start, or None to stay silent.
@@ -2720,7 +2759,10 @@ class StreamingPipeline(BasePipeline):
                     # If agent is speaking and interruptions are allowed, EOT check is
                     # triggered synchronously in _on_user_transcribed as soon as STT
                     # delivers the first transcript (INTERIM or FINAL) — no polling needed.
-                    if self._ducking.is_suspended and not self._is_half_duplex:
+                    if (
+                        self._ducking.is_suspended
+                        and self._ensure_interaction_mode_behavior().starts_natural_interruption_candidate()
+                    ):
                         self._interruption_orchestrator.start_candidate(
                             timeline=self._timeline,
                         )
@@ -2776,7 +2818,7 @@ class StreamingPipeline(BasePipeline):
                 if defer_post_speech_evidence:
                     self._remember_candidate_voiceprint_task(voiceprint_task)
                     return
-                if self._is_half_duplex:
+                if not self._ensure_interaction_mode_behavior().treats_vad_silence_as_turn_boundary():
                     # Manual turn_detection (plan §10): VAD silence is NOT a turn
                     # boundary in half_duplex — the PTT release is (see
                     # _handle_ptt_release_edge). A mid-utterance pause must NOT
@@ -2882,7 +2924,7 @@ class StreamingPipeline(BasePipeline):
         # half_duplex — the device gates the mic during playback, so there is no
         # echo to suppress.
         if (
-            not self._is_half_duplex
+            self._ensure_interaction_mode_behavior().applies_agent_echo_gate()
             and self._agent_output_active_for_interrupts(
                 participant_identity=getattr(event, "speaker_id", None),
             )

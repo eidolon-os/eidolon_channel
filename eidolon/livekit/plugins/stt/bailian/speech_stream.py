@@ -40,7 +40,7 @@ from livekit.agents import APIError
 from livekit.agents import stt as lk_stt
 
 if TYPE_CHECKING:
-    from livekit.agents.types import APIConnectOptions
+    from livekit.agents.types import APIConnectOptions, TimedString
     from .stt import BailianFunASRSTT
 
 logger = logging.getLogger("bailian.stt_stream")
@@ -679,21 +679,25 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_timed_strings(*sentences: FunASRSentence) -> list:
+    @staticmethod
+    def build_timed_strings(*sentences: FunASRSentence) -> list["TimedString"]:
         """Convert FunASR word-level data to LiveKit SpeechData word list."""
+        from livekit.agents.types import TimedString
+
         result = []
         for sentence in sentences:
             for word in sentence.words:
                 result.append(
-                    dict(
-                        language="",
-                        text=word.text,
+                    TimedString(
+                        word.text,
                         start_time=word.begin_time / 1000.0,
                         end_time=word.end_time / 1000.0,
                         confidence=1.0,
                     )
                 )
         return result
+
+    _build_timed_strings = build_timed_strings
 
     def _push_event(self, event: "lk_stt.SpeechEvent") -> None:
         try:

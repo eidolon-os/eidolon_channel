@@ -18,6 +18,7 @@ TurnPolicyProfile = Literal[
     "patient_companion",
     "custom",
 ]
+InterruptionOwner = Literal["channel", "livekit_native_adaptive"]
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,7 @@ class AttentionPolicyConfig:
 @dataclass(frozen=True)
 class TurnPolicyConfig:
     profile: TurnPolicyProfile = "balanced_semantic"
+    interruption_owner: InterruptionOwner = "channel"
     vad: VadPolicyConfig = field(default_factory=VadPolicyConfig)
     eot: EotPolicyConfig = field(default_factory=EotPolicyConfig)
     interrupt: InterruptPolicyConfig = field(default_factory=InterruptPolicyConfig)

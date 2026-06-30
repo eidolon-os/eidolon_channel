@@ -1,0 +1,234 @@
+suite_id: barge_in_ab_matrix_enforced
+cases:
+  - case_id: ab_tier0_hard_stop_tingyixia_fast_cancel_001
+    suite: barge_in_ab_matrix
+    description: 播放期明确说“停一下”，应按 Tier0 快速取消。
+    tags: ["ab", "barge_in", "tier0", "hard_stop"]
+    audio_clips:
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmarks/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 240
+        duration_ms: 520
+        interims: ["停一下"]
+        eot_scores: [0.0]
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+
+  - case_id: ab_tier0_productive_hard_stop_buyaojiangle_001
+    suite: barge_in_ab_matrix
+    description: 播放期说“不要讲了”，应由生产式中文硬停规则覆盖，而不是依赖单条硬编码。
+    tags: ["ab", "barge_in", "tier0", "hard_stop", "productive_rule"]
+    audio_clips:
+      - id: hard_stop_buyaojiang
+        text: 不要讲了。
+        path: benchmarks/audio/generated/hard_stop_dont.wav
+        intent: hard_stop
+    user_steps:
+      - text: 不要讲了
+        audio: hard_stop_buyaojiang
+        start_ms: 240
+        duration_ms: 620
+        interims: ["不要讲了"]
+        eot_scores: [0.0]
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      intent: hard_stop
+      max_interrupt_decision_ms: 500
+
+  - case_id: ab_backchannel_mm_does_not_cancel_001
+    suite: barge_in_ab_matrix
+    description: 播放期短附和“嗯嗯”可以短暂让出声道，但不应取消 agent。
+    tags: ["ab", "barge_in", "backchannel", "false_interruption"]
+    audio_clips:
+      - id: backchannel_mm
+        text: 嗯嗯
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: backchannel
+    user_steps:
+      - text: 嗯嗯
+        audio: backchannel_mm
+        start_ms: 240
+        duration_ms: 400
+        interims: ["嗯嗯"]
+        eot_scores: [0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: ab_ack_haode_does_not_cancel_001
+    suite: barge_in_ab_matrix
+    description: 播放期确认式“好的”属于 continuer，不应取消 agent。
+    tags: ["ab", "barge_in", "backchannel", "ack"]
+    audio_clips:
+      - id: backchannel_ok
+        text: 好的
+        path: benchmarks/audio/generated/backchannel_ok.wav
+        intent: backchannel
+    user_steps:
+      - text: 好的
+        audio: backchannel_ok
+        start_ms: 240
+        duration_ms: 400
+        interims: ["好的"]
+        eot_scores: [0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: ab_false_start_wojuede_waits_for_more_evidence_001
+    suite: barge_in_ab_matrix
+    description: 播放期“我觉得”只是低证据开头，应等待更多证据，不应第一信号直接取消。
+    tags: ["ab", "barge_in", "false_start", "evidence_gate"]
+    audio_clips:
+      - id: reaction_start
+        text: 我觉得
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 我觉得
+        audio: reaction_start
+        start_ms: 240
+        duration_ms: 500
+        interims: ["我觉得"]
+        eot_scores: [0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: ab_normal_interrupt_high_eot_cancels_001
+    suite: barge_in_ab_matrix
+    description: 播放期完整追问在 EOT/语义证据足够后应取消当前回答。
+    tags: ["ab", "barge_in", "normal_interrupt", "eot"]
+    audio_clips:
+      - id: owner_followup_capability
+        text: 那你现在能帮我做什么？
+        path: benchmarks/audio/generated/owner_followup_capability.wav
+        intent: normal
+    user_steps:
+      - text: 那你现在能帮我做什么
+        audio: owner_followup_capability
+        start_ms: 240
+        duration_ms: 1250
+        interims:
+          - 那你
+          - 那你现在能帮我
+          - 那你现在能帮我做什么
+        eot_scores: [0.0, 0.55, 0.74]
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      intent: uncertain
+      max_interrupt_decision_ms: 500
+
+  - case_id: ab_low_evidence_playback_transcript_observes_001
+    suite: barge_in_ab_matrix
+    description: 播放期有较长文本但 EOT 低、没有直接证据时，应 observe 防回声/环境声误杀。
+    tags: ["ab", "barge_in", "low_evidence", "echo_safety"]
+    audio_clips:
+      - id: substantive_opinion
+        text: 我对这个有别的想法
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 我对这个有别的想法
+        audio: substantive_opinion
+        start_ms: 240
+        duration_ms: 1000
+        interims: ["我对这个", "我对这个有别的想法"]
+        eot_scores: [0.0, 0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: ab_echo_like_agent_words_observes_001
+    suite: barge_in_ab_matrix
+    description: 播放期文本像 agent 正在说的话且语义证据低，应保持 observe，不污染上下文。
+    tags: ["ab", "barge_in", "echo_safety"]
+    audio_clips:
+      - id: echo_like_agent_words
+        text: 我会先讲系统结构
+        path: benchmarks/audio/generated/normal_followup.wav
+        intent: echo
+    user_steps:
+      - text: 我会先讲系统结构
+        audio: echo_like_agent_words
+        start_ms: 240
+        duration_ms: 900
+        interims: ["我会先讲", "我会先讲系统结构"]
+        eot_scores: [0.0, 0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      forbid_actions: ["cancel"]
+
+  - case_id: ab_mic_muted_hard_stop_is_ignored_001
+    suite: barge_in_ab_matrix
+    description: mic_muted 时即使出现硬停文本，也应忽略，避免静音态残留事件误触发。
+    tags: ["ab", "barge_in", "mic_muted", "safety"]
+    audio_clips:
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmarks/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 240
+        duration_ms: 520
+        interims: ["停一下"]
+        eot_scores: [0.0]
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_mic_muted: true
+    expect:
+      action: none
+      forbid_actions: ["cancel"]
+
+  - case_id: ab_ptt_explicit_hard_interrupt_cancels_001
+    suite: barge_in_ab_matrix
+    description: PTT 是显式用户手势，播放期无文本也应立即取消。
+    tags: ["ab", "barge_in", "ptt", "explicit_signal"]
+    audio_clips:
+      - id: ptt_signal
+        text: ""
+        path: benchmarks/audio/generated/backchannel_mm.wav
+        intent: manual_interrupt
+    user_steps:
+      - text: ""
+        audio: ptt_signal
+        start_ms: 240
+        duration_ms: 200
+        eot_scores: [0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_ptt: true
+    expect:
+      action: cancel

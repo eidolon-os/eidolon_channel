@@ -76,6 +76,10 @@ voiceprint:
 
 turn_policy:
   profile: balanced_semantic
+  # channel = Eidolon owns duck/cancel/resume/context ledger.
+  # livekit_native_adaptive = LiveKit AgentActivity + AdaptiveInterruptionDetector
+  # owns interruption; use only for controlled real-room A/B.
+  interruption_owner: channel
   vad:
     activation_threshold: 0.50
     prefix_padding_ms: 300

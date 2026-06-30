@@ -88,7 +88,7 @@ class BailianFunASRSTT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 offline_recognize=True,
-                aligned_transcript=False,
+                aligned_transcript="word",
                 diarization=False,
             )
         )
@@ -358,18 +358,7 @@ class BailianFunASRSTT(stt.STT):
         s_start = all_sentences[0].begin_time / 1000.0
         s_end = all_sentences[-1].end_time / 1000.0
 
-        words: list[SpeechData] = []
-        for sentence in all_sentences:
-            for word in sentence.words:
-                words.append(
-                    SpeechData(
-                        language=lang,
-                        text=word.text,
-                        start_time=word.begin_time / 1000.0,
-                        end_time=word.end_time / 1000.0,
-                        confidence=1.0,
-                    )
-                )
+        words = BailianFunASRSpeechStream.build_timed_strings(*all_sentences)
 
         return SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,

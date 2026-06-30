@@ -279,7 +279,7 @@ def test_policy_runner_enforced_ambient_playback_is_observed_not_cancelled() -> 
     # =False, so ambient playback speech was first_signal-cancelled even when the
     # operator set enforce=true. With the interrupt_mode axis gone and enforce
     # =True, the ambient overlap is observed (not cancelled). Speed for genuine
-    # barge-in comes from the device manual_interrupt fast path.
+    # barge-in comes from channel-owned VAD-start ducking plus transcript/EOT evidence.
     suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
@@ -502,6 +502,54 @@ def test_policy_runner_v1_realistic_extended_suite() -> None:
         if case.case_id == "extended_backchannel_en_during_agent_reply_001"
     )
     assert backchannel.metrics["actual_action"] in {"hold", "rollback", "none"}
+
+
+def test_load_barge_in_ab_matrix_suite() -> None:
+    suite = load_suite("benchmarks/cases/barge_in_ab_matrix_enforced.yaml")
+
+    assert suite.suite_id == "barge_in_ab_matrix_enforced"
+    assert {case.case_id for case in suite.cases} == {
+        "ab_tier0_hard_stop_tingyixia_fast_cancel_001",
+        "ab_tier0_productive_hard_stop_buyaojiangle_001",
+        "ab_backchannel_mm_does_not_cancel_001",
+        "ab_ack_haode_does_not_cancel_001",
+        "ab_false_start_wojuede_waits_for_more_evidence_001",
+        "ab_normal_interrupt_high_eot_cancels_001",
+        "ab_low_evidence_playback_transcript_observes_001",
+        "ab_echo_like_agent_words_observes_001",
+        "ab_mic_muted_hard_stop_is_ignored_001",
+        "ab_ptt_explicit_hard_interrupt_cancels_001",
+    }
+
+
+def test_policy_runner_barge_in_ab_matrix_suite() -> None:
+    suite = load_suite("benchmarks/cases/barge_in_ab_matrix_enforced.yaml")
+    policy = TurnPolicyConfig(
+        attention=replace(AttentionPolicyConfig(), enforce=True),
+    )
+
+    run = run_policy_suite([suite], turn_policy=policy, run_id="test")
+
+    assert all(case.passed for case in run.cases)
+    hard_stop = next(
+        case
+        for case in run.cases
+        if case.case_id == "ab_tier0_productive_hard_stop_buyaojiangle_001"
+    )
+    assert hard_stop.metrics["actual_action"] == "cancel"
+    assert hard_stop.metrics["actual_intent"] == "hard_stop"
+    false_start = next(
+        case
+        for case in run.cases
+        if case.case_id == "ab_false_start_wojuede_waits_for_more_evidence_001"
+    )
+    assert false_start.metrics["actual_action"] != "cancel"
+    normal_interrupt = next(
+        case
+        for case in run.cases
+        if case.case_id == "ab_normal_interrupt_high_eot_cancels_001"
+    )
+    assert normal_interrupt.metrics["actual_action"] == "cancel"
 
 
 def test_aggregate_case_metrics() -> None:

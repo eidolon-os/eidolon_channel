@@ -106,7 +106,7 @@ cases:
 
   - case_id: probe_substantive_text_without_signal_holds_001
     suite: fullduplex_barge_in_probe
-    description: 回声安全——全双工设备播放期上行含回声。实质多词文本但**无设备信号**（mic_muted/manual_interrupt 都没有、无 EOT）可能是回声，**不应取消**（OBSERVE）。真正的实质打断会带设备 manual_interrupt（见 manual_interrupt 用例）。顶级产品的 min_words 假设音频已无回声；我们把回声判别交给设备信号，故裸文本不取消是正确的。
+    description: 回声安全——全双工设备播放期上行含回声。实质多词文本但没有 EOT/intent 等足够证据时可能是回声或环境声，**不应取消**（OBSERVE）。真正的实质打断由 channel 汇聚 transcript/EOT/intent/acoustic evidence 后确认，ESP32 的 manual_interrupt 只能作为辅助信号，不能一票硬切。
     tags: ["fullduplex", "barge_in", "echo_safety", "probe"]
     audio_clips:
       - id: substantive_opinion
@@ -128,10 +128,10 @@ cases:
       action: any
       forbid_actions: ["cancel"]
 
-  - case_id: probe_manual_interrupt_hard_cancels_001
+  - case_id: probe_manual_interrupt_without_text_does_not_cancel_001
     suite: fullduplex_barge_in_probe
-    description: P0——设备 manual_interrupt（能量门限确认的真打断信号）在 agent 播放期到达、STT 尚无文本，应立即硬取消。假设：responsive(attention_enforce=False) 下被忽略=红；--attention-enforce 下=绿。
-    tags: ["fullduplex", "barge_in", "manual_interrupt", "P0", "probe"]
+    description: 架构约束——ESP32 不判断“是否打断”。manual_interrupt 是不可靠能量/手势辅助信号；没有 PTT、文本、EOT 或 intent 证据时，不应单独硬取消。
+    tags: ["fullduplex", "barge_in", "manual_interrupt", "advisory_signal", "probe"]
     audio_clips:
       - id: manual_interrupt_signal
         text: ""
@@ -149,11 +149,12 @@ cases:
         client_playback_state: agent_speaking
         client_manual_interrupt: true
     expect:
-      action: cancel
+      action: any
+      forbid_actions: ["cancel"]
 
   - case_id: probe_manual_interrupt_backchannel_should_not_cancel_001
     suite: fullduplex_barge_in_probe
-    description: Step 2 核心——设备能量门限只判"有真人声音"，分不清 backchannel 和夺话。用户说"嗯嗯"时设备也会发 manual_interrupt，但 backchannel 不应停 agent。当前(Step-1 无条件硬取消)=红；加薄 backchannel 词表护栏后=绿。这是"信任设备信号但不完全无条件"的关键。
+    description: 核心护栏——设备能量门限只判"有真人声音"，分不清 backchannel 和夺话。用户说"嗯嗯"时即使设备也发 manual_interrupt，channel 也应等待文本/语义证据，backchannel 不应停 agent。
     tags: ["fullduplex", "barge_in", "manual_interrupt", "backchannel_guard", "P1-C", "probe"]
     audio_clips:
       - id: backchannel_with_signal

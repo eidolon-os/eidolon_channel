@@ -569,8 +569,10 @@ async def test_word_timestamps(mock_server, audio_chunks):
     assert words, "FINAL_TRANSCRIPT should contain word-level data"
     # Mock server sends 4 words: 你 好 北 京
     assert len(words) >= 4, f"Expected >=4 words, got {len(words)}: {words}"
-    assert words[0]["text"] == "你"
-    assert words[-1]["text"] == "京"
+    assert str(words[0]) == "你"
+    assert words[0].start_time == pytest.approx(0.0)
+    assert words[0].end_time == pytest.approx(0.2)
+    assert str(words[-1]) == "京"
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +590,7 @@ async def test_stt_properties():
     )
     assert stt.provider == "bailian"
     assert stt.model == "fun-asr-realtime-2026-02-28"
+    assert stt.capabilities.aligned_transcript == "word"
     assert "Bailian" in stt.label
 
 

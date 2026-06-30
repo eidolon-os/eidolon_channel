@@ -1816,17 +1816,30 @@ class StreamingPipeline(BasePipeline):
         the final matches, else cancels via gRPC CancelTurn. ``preemptive_tts``
         stays gated by our commit so no partial audio leaks.
         """
+        interruption = {
+            "enabled": self._allow_interruptions,
+            "discard_audio_if_uninterruptible": not self._is_half_duplex,
+            "false_interruption_timeout": self._false_interruption_timeout,
+        }
+        if self._uses_livekit_native_adaptive_interruption():
+            interruption["mode"] = "adaptive"
+            interruption["resume_false_interruption"] = True
+
         return {
-            "interruption": {
-                "enabled": self._allow_interruptions,
-                "discard_audio_if_uninterruptible": not self._is_half_duplex,
-                "false_interruption_timeout": self._false_interruption_timeout,
-            },
+            "interruption": interruption,
             "preemptive_generation": {
                 "enabled": self._turn_policy.preemptive.enabled,
                 "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
             },
         }
+
+    def _uses_livekit_native_adaptive_interruption(self) -> bool:
+        return (
+            getattr(self._turn_policy, "interruption_owner", "channel")
+            == "livekit_native_adaptive"
+            and not self._is_half_duplex
+            and self._allow_interruptions
+        )
 
     async def run(self, room: Room) -> None:
         """Start the streaming pipeline. Blocks until room disconnects."""
@@ -1900,14 +1913,20 @@ class StreamingPipeline(BasePipeline):
             ),
         )
         self._publish_companion_ui_state("listening", "session_started")
-        # Disable framework's built-in audio-activity auto-interrupt so EOT
-        # PolicyChain (and the DuckingMixer below) is the sole authority on
-        # interrupt decisions. See _framework_patches.disable_audio_activity_interruption
-        # for the full rationale (no public API alternative — internal flags must be
-        # patched). The patch sets BOTH the runtime flag AND the default-
-        # value flag, so framework's restore logic on agent state transitions
-        # doesn't undo us. No re-patch needed in _on_agent_state_changed.
-        _framework_patches.disable_audio_activity_interruption(session)
+        if self._uses_livekit_native_adaptive_interruption():
+            logger.info(
+                "[StreamingPipeline] LiveKit native adaptive interruption owner "
+                "enabled; channel audio-activity patch skipped"
+            )
+        else:
+            # Disable framework's built-in audio-activity auto-interrupt so EOT
+            # PolicyChain (and the DuckingMixer below) is the sole authority on
+            # interrupt decisions. See _framework_patches.disable_audio_activity_interruption
+            # for the full rationale (no public API alternative — internal flags must be
+            # patched). The patch sets BOTH the runtime flag AND the default-
+            # value flag, so framework's restore logic on agent state transitions
+            # doesn't undo us. No re-patch needed in _on_agent_state_changed.
+            _framework_patches.disable_audio_activity_interruption(session)
 
         # Install the DuckingMixer between TTS frames and the RoomIO sink.
         # Must run AFTER session.start() because that's when the framework
@@ -2649,19 +2668,25 @@ class StreamingPipeline(BasePipeline):
                 # Feed VAD signal into EOT model so VADState reflects user activity.
                 self._get_eot_model().update_vad(True)
 
-                # Phase C: immediately fade agent output to silence and arm
-                # the suspend-window fallback. EOT decisions in
-                # the semantic interrupt handler will resolve SUSPENDED output
-                # before the timeout fires in the typical case.
-                self._attention_effects.handle_speaking_started()
+                if self._uses_livekit_native_adaptive_interruption():
+                    if self._timeline is not None:
+                        self._timeline.set_attr(
+                            "interruption_owner", "livekit_native_adaptive"
+                        )
+                else:
+                    # Phase C: immediately fade agent output to silence and arm
+                    # the suspend-window fallback. EOT decisions in
+                    # the semantic interrupt handler will resolve SUSPENDED output
+                    # before the timeout fires in the typical case.
+                    self._attention_effects.handle_speaking_started()
 
-                # If agent is speaking and interruptions are allowed, EOT check is
-                # triggered synchronously in _on_user_transcribed as soon as STT
-                # delivers the first transcript (INTERIM or FINAL) — no polling needed.
-                if self._ducking.is_suspended and not self._is_half_duplex:
-                    self._interruption_orchestrator.start_candidate(
-                        timeline=self._timeline,
-                    )
+                    # If agent is speaking and interruptions are allowed, EOT check is
+                    # triggered synchronously in _on_user_transcribed as soon as STT
+                    # delivers the first transcript (INTERIM or FINAL) — no polling needed.
+                    if self._ducking.is_suspended and not self._is_half_duplex:
+                        self._interruption_orchestrator.start_candidate(
+                            timeline=self._timeline,
+                        )
 
             elif old == "speaking" and new == "listening":
                 self._user_speaking_start_time = None
@@ -2690,7 +2715,10 @@ class StreamingPipeline(BasePipeline):
                 # decision. If the agent is suspended and no transcript has
                 # arrived yet, let the interruption owner keep the candidate
                 # alive for delayed STT evidence before any resume.
-                if self._ducking.is_suspended:
+                if (
+                    self._ducking.is_suspended
+                    and not self._uses_livekit_native_adaptive_interruption()
+                ):
                     defer_post_speech_evidence = (
                         self._interruption_orchestrator.defer_false_resume_after_speech_end(
                             transcript=self._latest_asr_text,
@@ -2848,7 +2876,10 @@ class StreamingPipeline(BasePipeline):
             if self._is_half_duplex and event.transcript.strip():
                 self._ptt_turn_had_speech = True
             orchestrator = getattr(self, "_interruption_orchestrator", None)
-            if orchestrator is not None:
+            if (
+                orchestrator is not None
+                and not self._uses_livekit_native_adaptive_interruption()
+            ):
                 orchestrator.note_transcript(
                     event.transcript,
                     is_final=bool(getattr(event, "is_final", False)),
@@ -2886,6 +2917,7 @@ class StreamingPipeline(BasePipeline):
         interrupt_window_active = self._interrupt_window_active()
         if (
             self._allow_interruptions
+            and not self._uses_livekit_native_adaptive_interruption()
             and event.transcript
             and (agent_is_speaking or interrupt_window_active)
         ):

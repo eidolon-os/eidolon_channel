@@ -58,11 +58,61 @@ DEFAULT_HARD_STOP_PREFIX_LEXICON: tuple[str, ...] = (
     "先别讲",
     "不要说",
     "不要再说",
+    "不要讲",
+    "不要再讲",
     "不用说",
     "不用讲",
     "停下",
     "先停",
     "你先停",
+)
+
+# Tier0 hard-stop speech patterns are still deterministic policy assets, not a
+# trained classifier.  They cover high-precision "stop speaking" commands without
+# adding one-off phrases for every ASR variant.
+DEFAULT_HARD_STOP_NEGATION_PREFIXES: tuple[str, ...] = (
+    "别",
+    "先别",
+    "你别",
+    "你先别",
+    "不要",
+    "先不要",
+    "你不要",
+    "你先不要",
+    "不要再",
+    "别再",
+    "不用",
+    "先不用",
+)
+
+DEFAULT_HARD_STOP_SPEECH_VERBS: tuple[str, ...] = (
+    "说",
+    "讲",
+    "聊",
+    "念",
+    "播",
+    "解释",
+    "继续说",
+    "继续讲",
+    "继续聊",
+)
+
+DEFAULT_HARD_STOP_CONTROL_SUFFIXES: tuple[str, ...] = (
+    "",
+    "了",
+    "啦",
+    "啊",
+    "呀",
+    "吧",
+    "呢",
+    "一下",
+    "一会",
+    "一会儿",
+    "先",
+    "现在",
+    "好吗",
+    "行吗",
+    "可以吗",
 )
 
 _TOPIC_SWITCH_ZH: tuple[str, ...] = (

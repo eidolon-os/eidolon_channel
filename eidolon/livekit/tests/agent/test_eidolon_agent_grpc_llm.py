@@ -341,6 +341,30 @@ async def test_next_user_text_override_is_consumed_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_clear_next_user_text_discards_pending_override() -> None:
+    servicer = _ScriptedServicer(deltas=["ok"])
+    server, target = await _serve(servicer)
+    try:
+        adapter = EidolonAgentGrpcLlm(
+            target=target,
+            device_token=lambda: "test-token",
+            conversation_id="livekit:canonical-text-clear",
+        )
+        try:
+            adapter.set_next_user_text("不应该提交的文本", source="test")
+            adapter.clear_next_user_text(reason="interruption_owner_reject")
+
+            async for _ in adapter.chat(chat_ctx=_ctx("framework 文本")):
+                pass
+
+            assert [start.text for start in servicer.starts] == ["framework 文本"]
+        finally:
+            await adapter.aclose()
+    finally:
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
 async def test_next_user_text_override_survives_retry_attempt() -> None:
     from livekit.agents._exceptions import APIConnectionError
     from livekit.agents.types import APIConnectOptions

@@ -115,6 +115,17 @@ def test_hard_stop_prefix_still_cancels() -> None:
     assert decision.intent_source == "lexicon_prefix"
 
 
+def test_hard_stop_speech_control_pattern_cancels_without_eot_score() -> None:
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("不要讲了。", score=0.0, is_final=True)
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent is not None
+    assert decision.intent.value == "hard_stop"
+    assert decision.intent_source == "lexicon_pattern"
+
+
 def test_backchannel_with_fast_lexical_rolls_back() -> None:
     # fast_lexical_intents is now a config flag (default off). When on, the
     # classifier rolls back a backchannel before any cancel path.

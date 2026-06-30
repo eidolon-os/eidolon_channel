@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session import (
     InterruptionDecisionAction,
@@ -186,3 +188,116 @@ def test_turn_policy_cancel_emits_confirm_cancel_decision() -> None:
 
     assert decision.action is InterruptionDecisionAction.CONFIRM_CANCEL
     assert owner.state is InterruptionState.CONFIRMED_CANCELLED
+
+
+def test_owner_decides_from_transcript_and_records_policy_once() -> None:
+    timeline = TurnTimeline("turn-owner-decide")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=timeline)
+    runtime = MagicMock()
+    runtime.decide_from_transcript.return_value = Decision(
+        action=Action.HOLD,
+        reason="semantic_score_wait score=0.00 evidence=interim_substantive",
+        intent=InterruptIntent.UNCERTAIN,
+    )
+
+    decision = owner.decide_from_transcript(
+        runtime,
+        "我想问一下",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        is_final=False,
+    )
+
+    assert decision.action is Action.HOLD
+    runtime.decide_from_transcript.assert_called_once_with(
+        "我想问一下",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        is_final=False,
+        event_time_ms=None,
+    )
+    events = timeline.attrs["interruption_orchestrator_events"]
+    assert [event["event"] for event in events].count("turn_policy_decision") == 1
+    assert owner.blocks_framework_completed_turn() is True
+
+
+def test_owner_blocks_framework_completed_turn_during_post_speech_wait() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=TurnTimeline("turn-framework-block"))
+    now = 10.5
+    assert owner.defer_false_resume_after_speech_end(
+        transcript="我想问一下",
+        duck_suspended=True,
+    )
+
+    assert owner.blocks_framework_completed_turn() is True
+
+
+def test_owner_only_commits_semantic_post_speech_cancel() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=TurnTimeline("turn-normal-cancel"))
+    now = 10.5
+    assert owner.defer_false_resume_after_speech_end(
+        transcript="我想问一下",
+        duck_suspended=True,
+    )
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            reason="final_eot_score_high score=0.80",
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+        ),
+        transcript="我想问一下",
+        vad_active=False,
+        eot_score=0.8,
+    )
+
+    assert owner.should_commit_after_confirmed_cancel() is True
+
+    hard_stop_owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        clock=clock,
+    )
+    hard_stop_owner.start_candidate(timeline=TurnTimeline("turn-hard-stop"))
+    now = 11.0
+    assert hard_stop_owner.defer_false_resume_after_speech_end(
+        transcript="不要讲了",
+        duck_suspended=True,
+    )
+    hard_stop_owner.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            reason="intent:hard_stop_speech_control",
+            intent=InterruptIntent.HARD_STOP,
+        ),
+        transcript="不要讲了",
+        vad_active=False,
+        eot_score=0.0,
+    )
+
+    assert hard_stop_owner.should_commit_after_confirmed_cancel() is False

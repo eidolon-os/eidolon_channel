@@ -7,8 +7,11 @@ from enum import Enum
 
 from eidolon.livekit.common.config.defaults import (
     DEFAULT_CORRECTION_LEXICON,
+    DEFAULT_HARD_STOP_CONTROL_SUFFIXES,
     DEFAULT_HARD_STOP_PREFIX_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,
+    DEFAULT_HARD_STOP_NEGATION_PREFIXES,
+    DEFAULT_HARD_STOP_SPEECH_VERBS,
     DEFAULT_TOPIC_SWITCH_LEXICON,
 )
 from eidolon.livekit.plugins.eot.impl.constants import (
@@ -72,6 +75,23 @@ def canonicalize_interrupt_text(text: str) -> str:
     return stripped
 
 
+_HARD_STOP_PREFIXES = tuple(
+    normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_PREFIX_LEXICON
+)
+_HARD_STOPS = tuple(
+    normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_LEXICON
+)
+_HARD_STOP_NEGATION_PREFIXES = tuple(
+    normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_NEGATION_PREFIXES
+)
+_HARD_STOP_SPEECH_VERBS = tuple(
+    normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_SPEECH_VERBS
+)
+_HARD_STOP_CONTROL_SUFFIXES = tuple(
+    normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_CONTROL_SUFFIXES
+)
+
+
 def hard_stop_prefix_intent(
     text: str,
     *,
@@ -83,11 +103,9 @@ def hard_stop_prefix_intent(
     stripped = canonicalize_interrupt_text(text)
     if len(stripped) < min_chars or _count_cjk(stripped) < min_cjk_chars:
         return None
-    prefixes = tuple(
-        normalize_interrupt_text(item)
-        for item in DEFAULT_HARD_STOP_PREFIX_LEXICON
-    )
-    return InterruptIntent.HARD_STOP if stripped in prefixes else None
+    if stripped in _HARD_STOP_PREFIXES or _hard_stop_speech_pattern(stripped):
+        return InterruptIntent.HARD_STOP
+    return None
 
 
 def hard_stop_intent(text: str) -> InterruptIntent | None:
@@ -101,17 +119,45 @@ def hard_stop_intent(text: str) -> InterruptIntent | None:
     stripped = canonicalize_interrupt_text(text)
     if not stripped:
         return None
-    hard_stops = tuple(
-        normalize_interrupt_text(item)
-        for item in DEFAULT_HARD_STOP_LEXICON
-    )
-    if any(candidate and candidate in stripped for candidate in hard_stops):
+    if any(candidate and candidate in stripped for candidate in _HARD_STOPS):
+        return InterruptIntent.HARD_STOP
+    if _hard_stop_speech_pattern(stripped):
         return InterruptIntent.HARD_STOP
     return hard_stop_prefix_intent(stripped)
 
 
 def _count_cjk(text: str) -> int:
     return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+
+
+def _hard_stop_speech_pattern(
+    text: str,
+    *,
+    require_control_suffix: bool = False,
+) -> bool:
+    """Match high-precision Chinese "stop talking" commands.
+
+    This covers the productive Tier0 family ("不要讲了", "先别继续说了")
+    without treating ordinary questions such as "不要讲英文怎么说" as stops.
+    """
+
+    stripped = canonicalize_interrupt_text(text)
+    if not stripped:
+        return False
+    for prefix in _HARD_STOP_NEGATION_PREFIXES:
+        if not prefix or not stripped.startswith(prefix):
+            continue
+        after_prefix = stripped[len(prefix) :]
+        for verb in _HARD_STOP_SPEECH_VERBS:
+            if not verb or not after_prefix.startswith(verb):
+                continue
+            suffix = after_prefix[len(verb) :]
+            if (
+                suffix in _HARD_STOP_CONTROL_SUFFIXES
+                and (suffix or not require_control_suffix)
+            ):
+                return True
+    return False
 
 
 class LexiconInterruptClassifier(InterruptIntentClassifier):
@@ -151,6 +197,13 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
         if self._contains_any(stripped, self._hard_stop):
             return InterruptIntentResult(
                 InterruptIntent.HARD_STOP, 1.0, "lexicon", "hard_stop"
+            )
+        if _hard_stop_speech_pattern(stripped, require_control_suffix=True):
+            return InterruptIntentResult(
+                InterruptIntent.HARD_STOP,
+                0.98,
+                "lexicon_pattern",
+                "hard_stop_speech_control",
             )
         if self._fast_intents and self._contains_any(stripped, self._topic_switch):
             return InterruptIntentResult(

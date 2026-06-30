@@ -44,6 +44,7 @@ class DuckSuspendTimeoutHandler:
         apply_decision: Callable[..., None],
         should_hold_for_evidence: Callable[[], bool] | None = None,
         get_max_suspend_sec: Callable[[], float] | None = None,
+        deadline_decision: Callable[..., Decision] | None = None,
     ) -> None:
         self._turn_runtime = turn_runtime
         self._sleep = sleep
@@ -58,6 +59,7 @@ class DuckSuspendTimeoutHandler:
         self._apply_decision = apply_decision
         self._should_hold_for_evidence = should_hold_for_evidence or (lambda: False)
         self._get_max_suspend_sec = get_max_suspend_sec or (lambda: 0.0)
+        self._deadline_decision = deadline_decision or turn_runtime.deadline_decision
 
     async def run(self, timeout_sec: float) -> None:
         """Wait for the decision budget, then resolve or re-arm ducking."""
@@ -70,7 +72,7 @@ class DuckSuspendTimeoutHandler:
             vad_still_active = self._get_vad_active()
             latest_asr_text = self._get_latest_asr_text().strip()
             eot_model = self._get_eot_model()
-            decision = self._turn_runtime.deadline_decision(
+            decision = self._deadline_decision(
                 vad_still_active,
                 has_transcript=bool(latest_asr_text),
                 transcript=latest_asr_text,

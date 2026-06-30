@@ -945,7 +945,25 @@ class StreamingPipeline(BasePipeline):
                 exc_info=True,
             )
 
+    def _clear_pending_canonical_user_text(self, reason: str) -> None:
+        try:
+            factory = getattr(self, "_factory", None)
+            llm_plugin = getattr(getattr(factory, "llm", None), "llm", None)
+            clearer = getattr(llm_plugin, "clear_next_user_text", None)
+            if clearer is not None:
+                clearer(reason=reason)
+                return
+            setter = getattr(llm_plugin, "set_next_user_text", None)
+            if setter is not None:
+                setter("", source=f"clear:{reason}")
+        except Exception:
+            logger.debug(
+                "[StreamingPipeline] failed to clear canonical user text",
+                exc_info=True,
+            )
+
     def _clear_session_user_turn(self, reason: str) -> None:
+        self._clear_pending_canonical_user_text(reason)
         session = getattr(self, "_session", None)
         if session is None:
             return
@@ -1025,6 +1043,11 @@ class StreamingPipeline(BasePipeline):
                     "text_length": len(completed_transcript),
                 },
             )
+        if self._stop_active_interruption_framework_completed_turn(
+            completed_transcript,
+            timeline=timeline,
+        ):
+            return False
         if task is None and result is None:
             if self._stop_non_semantic_framework_completed_turn(
                 completed_transcript,
@@ -1067,6 +1090,11 @@ class StreamingPipeline(BasePipeline):
         reason = str(getattr(result, "commit_reason", "") or "unknown")
         self._record_voiceprint_commit_gate(timeline, allowed=allowed, reason=reason)
         if allowed:
+            if self._stop_active_interruption_framework_completed_turn(
+                completed_transcript,
+                timeline=timeline,
+            ):
+                return False
             if self._stop_non_semantic_framework_completed_turn(
                 completed_transcript,
                 timeline=timeline,
@@ -1315,6 +1343,105 @@ class StreamingPipeline(BasePipeline):
         )
         return True
 
+    def _stop_active_interruption_framework_completed_turn(
+        self,
+        completed_transcript: str,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> bool:
+        """Block framework context commit while Channel still owns evidence."""
+
+        owner = getattr(self, "_interruption_orchestrator", None)
+        if owner is None or not owner.blocks_framework_completed_turn():
+            return False
+        reason = "interruption_owner_waiting_for_evidence"
+        self._cancel_deferred_low_eot_commit(reason)
+        self._clear_session_user_turn(reason)
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_blocked_by_interruption_owner",
+                {
+                    "reason": reason,
+                    "state": owner.state.value,
+                    "text_preview": completed_transcript[:120],
+                    "text_length": len(completed_transcript),
+                },
+            )
+            self._append_turn_timeline_snapshot(timeline, reason)
+        logger.info(
+            "[StreamingPipeline] blocked framework completed turn while "
+            "interruption owner waits reason=%s state=%s transcript=%r",
+            reason,
+            owner.state.value,
+            completed_transcript[:80],
+        )
+        return True
+
+    def _commit_post_speech_interruption_candidate(
+        self,
+        reason: str,
+        *,
+        transcript_override: str = "",
+    ) -> bool:
+        """Commit a confirmed semantic interrupt after output cancellation."""
+
+        owner = getattr(self, "_interruption_orchestrator", None)
+        self._ensure_user_turn_coordinator()
+        owner_transcript = owner.current_transcript if owner is not None else ""
+        transcript = (
+            transcript_override
+            or owner_transcript
+            or self._user_turns.selected_text
+            or self._latest_asr_text
+        ).strip()
+        if not transcript:
+            return False
+        timeline = getattr(self, "_timeline", None)
+        self._cancel_deferred_low_eot_commit(reason)
+        if self._user_turns.active is None:
+            if self._timeline is None:
+                self._timeline = TurnTimeline(generate_turn_id())
+                self._timeline_debug_flushed = False
+                timeline = self._timeline
+            self._user_turns.start_speech(timeline=self._timeline)
+        self._user_turns.add_transcript(transcript, is_final=True)
+        eot_model = self._get_eot_model()
+        decision = self._user_turns.finish_speech(
+            eot_score=getattr(
+                eot_model,
+                "current_eot_score",
+                getattr(eot_model, "_current_eot_score", None),
+            ),
+            should_defer=False,
+        )
+        if decision.action == "reject":
+            self._clear_session_user_turn(decision.reason)
+            return False
+        committed_text = decision.transcript or transcript
+        if timeline is not None:
+            timeline.set_attr(
+                "post_speech_interruption_candidate_committed",
+                {
+                    "reason": reason,
+                    "transcript_preview": committed_text[:120],
+                    "text_length": len(committed_text),
+                },
+            )
+        self._schedule_voiceprint_gated_commit(
+            verify_task=self._candidate_voiceprint_gate_task(),
+            eot_model=eot_model,
+            transcript=committed_text,
+            timeline=timeline,
+        )
+        self._latest_asr_text = ""
+        logger.info(
+            "[StreamingPipeline] committed post-speech interruption candidate "
+            "reason=%s transcript=%r",
+            reason,
+            committed_text[:80],
+        )
+        return True
+
     def _reject_post_speech_interruption_candidate(self, reason: str) -> None:
         """Close a false interruption that waited for delayed STT evidence."""
 
@@ -1446,6 +1573,16 @@ class StreamingPipeline(BasePipeline):
             cancel_duck_and_interrupt=lambda: self._duck_cancel_and_interrupt(),
             interrupt_current_turn=lambda: self._interrupt_current_turn(),
             enter_soft_interrupt=lambda: self._enter_soft_interrupt(),
+            decide_from_transcript=(
+                lambda text, score, **kwargs: (
+                    self._interruption_orchestrator.decide_from_transcript(
+                        self._turn_runtime,
+                        text,
+                        score,
+                        **kwargs,
+                    )
+                )
+            ),
         )
 
     def _ensure_semantic_interrupt_handler(self) -> None:
@@ -1477,6 +1614,15 @@ class StreamingPipeline(BasePipeline):
             ),
             get_max_suspend_sec=lambda: (
                 self._interruption_orchestrator.max_suspend_sec()
+            ),
+            deadline_decision=(
+                lambda vad_still_active, **kwargs: (
+                    self._interruption_orchestrator.deadline_decision(
+                        self._turn_runtime,
+                        vad_still_active,
+                        **kwargs,
+                    )
+                )
             ),
         )
 
@@ -2104,9 +2250,6 @@ class StreamingPipeline(BasePipeline):
         from livekit.agents.voice import Agent
         from livekit.agents import StopResponse
 
-        # Bind welcome to a closure so the inner Agent class can read it
-        # without us touching its constructor signature.
-        welcome_message = self._welcome_message
         pipeline = self
 
         class VoiceAgent(Agent):
@@ -2568,6 +2711,7 @@ class StreamingPipeline(BasePipeline):
                 self._callbacks.on_user_ended_speaking()
                 self._skip_commit_after_interrupt_cancel = False
                 if defer_post_speech_evidence:
+                    self._remember_candidate_voiceprint_task(voiceprint_task)
                     return
                 if self._is_half_duplex:
                     # Manual turn_detection (plan §10): VAD silence is NOT a turn
@@ -3172,6 +3316,14 @@ class StreamingPipeline(BasePipeline):
                 "output already CANCELLED"
             )
             return
+        commit_post_speech_candidate = (
+            self._interruption_orchestrator.should_commit_after_confirmed_cancel()
+        )
+        post_speech_transcript = (
+            self._interruption_orchestrator.current_transcript
+            if commit_post_speech_candidate
+            else ""
+        )
         stats = self._ducking.stats()
         logger.info(
             "[StreamingPipeline] duck resolved  reason=eot_cancel  "
@@ -3208,6 +3360,13 @@ class StreamingPipeline(BasePipeline):
             time.monotonic() + _INTERRUPT_CANCEL_RESIDUAL_COMMIT_SUPPRESS_SEC
         )
         self._interrupt_current_turn(force=force)
+        if commit_post_speech_candidate:
+            committed = self._commit_post_speech_interruption_candidate(
+                "post_speech_confirmed_cancel",
+                transcript_override=post_speech_transcript,
+            )
+            if committed:
+                self._skip_commit_after_interrupt_cancel = False
 
     def _duck_unduck_if_suspended(
         self, reason: str = "user_silent", *, drop_buffered: bool = False

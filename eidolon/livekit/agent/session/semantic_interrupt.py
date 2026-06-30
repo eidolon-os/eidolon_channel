@@ -44,6 +44,7 @@ class SemanticInterruptHandler:
         cancel_duck_and_interrupt: Callable[[], None],
         interrupt_current_turn: Callable[[], None],
         enter_soft_interrupt: Callable[[], None],
+        decide_from_transcript: Callable[..., Decision] | None = None,
     ) -> None:
         self._get_eot_model = get_eot_model
         self._turn_runtime = turn_runtime
@@ -59,6 +60,9 @@ class SemanticInterruptHandler:
         self._cancel_duck_and_interrupt = cancel_duck_and_interrupt
         self._interrupt_current_turn = interrupt_current_turn
         self._enter_soft_interrupt = enter_soft_interrupt
+        self._decide_from_transcript = (
+            decide_from_transcript or turn_runtime.decide_from_transcript
+        )
 
     def run(self, text: str, *, is_final: bool = False) -> None:
         """Run the synchronous EOT semantic check for one transcript update."""
@@ -71,7 +75,7 @@ class SemanticInterruptHandler:
         score = eot_model.current_eot_score
 
         if hard_stop_intent(text) is InterruptIntent.HARD_STOP:
-            decision = self._turn_runtime.decide_from_transcript(
+            decision = self._decide_from_transcript(
                 text,
                 score,
                 vad_active=vad_active,
@@ -192,7 +196,7 @@ class SemanticInterruptHandler:
         vad_active: bool,
         is_final: bool,
     ) -> None:
-        decision = self._turn_runtime.decide_from_transcript(
+        decision = self._decide_from_transcript(
             text,
             score,
             vad_active=vad_active,
@@ -224,7 +228,7 @@ class SemanticInterruptHandler:
         vad_active: bool,
         is_final: bool,
     ) -> bool:
-        semantic_decision = self._turn_runtime.decide_from_transcript(
+        semantic_decision = self._decide_from_transcript(
             text,
             score,
             vad_active=vad_active,

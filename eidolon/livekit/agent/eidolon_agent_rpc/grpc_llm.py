@@ -236,6 +236,11 @@ class EidolonAgentGrpcLlm(llm.LLM):
             else None
         )
 
+    def clear_next_user_text(self, *, reason: str = "") -> None:
+        """Discard any pending canonical user-text override."""
+        _ = reason
+        self._pending_user_text_override = None
+
     def _pop_next_user_text_for_chat(
         self,
         *,

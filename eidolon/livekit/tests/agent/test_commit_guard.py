@@ -170,6 +170,43 @@ def test_new_speech_reopens_transcript_admission() -> None:
     assert pipeline._suppress_transcripts_until_next_speech is False
 
 
+@pytest.mark.asyncio
+async def test_completed_turn_hook_blocks_while_interruption_owner_waits() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="我想问一下")
+    pipeline._timeline = TurnTimeline("active-interruption-owner")
+    clear_next = MagicMock()
+    set_next = MagicMock()
+    pipeline._factory = SimpleNamespace(
+        llm=SimpleNamespace(
+            llm=SimpleNamespace(
+                clear_next_user_text=clear_next,
+                set_next_user_text=set_next,
+            )
+        )
+    )
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._user_turns.add_transcript("我想问一下", is_final=True)
+    pipeline._interruption_orchestrator.start_candidate(timeline=pipeline._timeline)
+
+    allowed = await pipeline._voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="我想问一下")
+    )
+
+    assert allowed is False
+    pipeline._session.clear_user_turn.assert_called_once()
+    clear_next.assert_called_once_with(reason="interruption_owner_waiting_for_evidence")
+    set_next.assert_not_called()
+    assert pipeline._user_turns.active is not None
+    assert pipeline._user_turns.active.state == "open"
+    assert (
+        pipeline._timeline.attrs[
+            "framework_completed_blocked_by_interruption_owner"
+        ]["reason"]
+        == "interruption_owner_waiting_for_evidence"
+    )
+
+
 def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:
     pipeline = _make_pipeline_with_session(latest_asr_text="")
     pipeline._get_eot_model.return_value.current_eot_score = 0.99

@@ -9,7 +9,12 @@ from enum import Enum
 from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.turn_policy import Action, Decision
+from eidolon.livekit.agent.turn_policy import (
+    Action,
+    Decision,
+    InterruptIntent,
+    TurnPolicyRuntime,
+)
 
 logger = logging.getLogger("agent.session.interruption_orchestrator")
 
@@ -66,6 +71,10 @@ class InterruptionCandidate:
     last_policy_action: Action | None = None
     last_policy_reason: str = ""
     last_policy_source: str = ""
+    last_intent: InterruptIntent | None = None
+    last_eot_score: float | None = None
+    last_vad_active: bool | None = None
+    last_decision_signature: tuple[object, ...] | None = None
 
     @property
     def speech_duration_sec(self) -> float:
@@ -116,6 +125,13 @@ class InterruptionOrchestrator:
             and not candidate.resolved
             and candidate.awaiting_post_speech_evidence
         )
+
+    @property
+    def current_transcript(self) -> str:
+        candidate = self._candidate
+        if candidate is None:
+            return ""
+        return candidate.final_transcript or candidate.transcript
 
     def start_candidate(
         self,
@@ -171,6 +187,63 @@ class InterruptionOrchestrator:
             text_preview=transcript[:80],
         )
 
+    def decide_from_transcript(
+        self,
+        turn_runtime: TurnPolicyRuntime,
+        text: str,
+        eot_score: float,
+        *,
+        vad_active: bool,
+        agent_speaking: bool,
+        is_final: bool = False,
+        event_time_ms: float | None = None,
+    ) -> Decision:
+        """Route transcript evidence through the owner-owned policy path."""
+
+        self.note_transcript(text, is_final=is_final)
+        decision = turn_runtime.decide_from_transcript(
+            text,
+            eot_score,
+            vad_active=vad_active,
+            agent_speaking=agent_speaking,
+            is_final=is_final,
+            event_time_ms=event_time_ms,
+        )
+        self.note_turn_policy_decision(
+            decision,
+            source="turn_policy",
+            transcript=text,
+            vad_active=vad_active,
+            eot_score=eot_score,
+        )
+        return decision
+
+    def deadline_decision(
+        self,
+        turn_runtime: TurnPolicyRuntime,
+        vad_still_active: bool,
+        *,
+        has_transcript: bool = False,
+        transcript: str = "",
+        eot_score: float = 0.0,
+    ) -> Decision:
+        """Route duck-deadline evidence through the owner-owned policy path."""
+
+        decision = turn_runtime.deadline_decision(
+            vad_still_active,
+            has_transcript=has_transcript,
+            transcript=transcript,
+            eot_score=eot_score,
+        )
+        self.note_turn_policy_decision(
+            decision,
+            source="timeout",
+            transcript=transcript,
+            vad_active=vad_still_active,
+            eot_score=eot_score,
+        )
+        return decision
+
     def note_turn_policy_decision(
         self,
         decision: Decision,
@@ -199,19 +272,35 @@ class InterruptionOrchestrator:
         candidate.last_policy_action = decision.action
         candidate.last_policy_reason = decision.reason
         candidate.last_policy_source = source
+        candidate.last_intent = decision.intent
+        candidate.last_eot_score = eot_score
+        candidate.last_vad_active = vad_active
         if transcript.strip():
             candidate.transcript = transcript.strip()
 
-        self._record_event(
-            "turn_policy_decision",
-            source=source,
-            action=decision.action.value,
-            reason=decision.reason,
-            vad_active=vad_active,
-            eot_score=eot_score,
-            transcript_preview=transcript[:80],
-            drop_buffered=decision.rollback_drop_buffered,
+        signature = (
+            source,
+            decision.action.value,
+            decision.reason,
+            decision.intent.value if decision.intent is not None else None,
+            transcript.strip(),
+            vad_active,
+            round(float(eot_score), 4) if eot_score is not None else None,
+            decision.rollback_drop_buffered,
         )
+        if signature != candidate.last_decision_signature:
+            candidate.last_decision_signature = signature
+            self._record_event(
+                "turn_policy_decision",
+                source=source,
+                action=decision.action.value,
+                reason=decision.reason,
+                intent=decision.intent.value if decision.intent is not None else None,
+                vad_active=vad_active,
+                eot_score=eot_score,
+                transcript_preview=transcript[:80],
+                drop_buffered=decision.rollback_drop_buffered,
+            )
 
         if decision.action is Action.CANCEL:
             candidate.state = InterruptionState.CONFIRMED_CANCELLED
@@ -333,6 +422,46 @@ class InterruptionOrchestrator:
         if not self.awaiting_post_speech_evidence:
             return 0.0
         return self._evidence_timeout_sec
+
+    def blocks_framework_completed_turn(self) -> bool:
+        """True while LiveKit must not commit a not-yet-owned interrupt turn."""
+
+        candidate = self._candidate
+        if candidate is None or candidate.resolved:
+            return False
+        if candidate.awaiting_post_speech_evidence:
+            return True
+        return (
+            candidate.state
+            in {
+                InterruptionState.SUSPENDED_WAITING_EVIDENCE,
+                InterruptionState.SUSPENDED_POST_SPEECH_WAIT,
+            }
+            and candidate.last_policy_action in (None, Action.HOLD)
+        )
+
+    def should_commit_after_confirmed_cancel(self) -> bool:
+        """Whether a confirmed cancel should become the next user turn.
+
+        Hard-stop/backchannel/noise are control or false-interruption signals.
+        Normal/topic/correction interrupts are user utterances and must be
+        committed after the agent is cancelled, subject to voiceprint gating.
+        """
+
+        candidate = self._candidate
+        if candidate is None or candidate.resolved:
+            return False
+        if not candidate.awaiting_post_speech_evidence:
+            return False
+        if candidate.last_policy_action is not Action.CANCEL:
+            return False
+        if candidate.last_intent in (
+            InterruptIntent.HARD_STOP,
+            InterruptIntent.BACKCHANNEL,
+            InterruptIntent.NOISE,
+        ):
+            return False
+        return bool((candidate.final_transcript or candidate.transcript).strip())
 
     def resolve(self, *, action: str, reason: str) -> None:
         candidate = self._candidate

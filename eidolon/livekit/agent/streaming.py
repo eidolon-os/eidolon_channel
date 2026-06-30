@@ -26,12 +26,13 @@ IS NOT a replacement for AgentSession — it's a thin wrapper that:
      ``false_interruption_timeout`` for similar intent, but we need
      a state machine that can be cancelled by silence (the user
      paused, didn't actually interrupt) AND that integrates with
-     our PolicyChain decisions. Our soft-interrupt is in addition
-     to (not replacing) framework's.
+     Eidolon's multi-signal interruption owner. Our soft-interrupt
+     path is owned by channel in the default hybrid profile.
 
   5. **Forces framework's auto-interrupt OFF** via
      ``_framework_patches.disable_audio_activity_interruption`` —
-     so EOT PolicyChain is the sole authority. See
+     so Eidolon's InterruptionOrchestrator / turn policy is the sole
+     authority. See
      ``_framework_patches.py`` for the rationale (no public API
      does this without breaking endpointing).
 
@@ -1834,11 +1835,12 @@ class StreamingPipeline(BasePipeline):
         }
 
     def _uses_livekit_native_adaptive_interruption(self) -> bool:
+        turn_policy = getattr(self, "_turn_policy", None)
         return (
-            getattr(self._turn_policy, "interruption_owner", "channel")
+            getattr(turn_policy, "interruption_owner", "channel")
             == "livekit_native_adaptive"
-            and not self._is_half_duplex
-            and self._allow_interruptions
+            and not getattr(self, "_is_half_duplex", False)
+            and bool(getattr(self, "_allow_interruptions", False))
         )
 
     async def run(self, room: Room) -> None:
@@ -1919,10 +1921,11 @@ class StreamingPipeline(BasePipeline):
                 "enabled; channel audio-activity patch skipped"
             )
         else:
-            # Disable framework's built-in audio-activity auto-interrupt so EOT
-            # PolicyChain (and the DuckingMixer below) is the sole authority on
-            # interrupt decisions. See _framework_patches.disable_audio_activity_interruption
-            # for the full rationale (no public API alternative — internal flags must be
+            # Disable framework's built-in audio-activity auto-interrupt so
+            # Eidolon's InterruptionOrchestrator / turn policy (and the
+            # DuckingMixer below) is the sole authority on interrupt decisions.
+            # See _framework_patches.disable_audio_activity_interruption for the
+            # full rationale (no public API alternative — internal flags must be
             # patched). The patch sets BOTH the runtime flag AND the default-
             # value flag, so framework's restore logic on agent state transitions
             # doesn't undo us. No re-patch needed in _on_agent_state_changed.

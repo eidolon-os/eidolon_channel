@@ -25,8 +25,6 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock
 
-import pytest
-
 from eidolon.livekit.agent import _framework_patches
 
 

@@ -75,6 +75,7 @@ logger = logging.getLogger("agent.framework_patches")
 #
 # Ordered newest-first for readability.
 TESTED_VERSIONS: tuple[str, ...] = (
+    "1.6.4",
     "1.5.8",
     "1.5.6",
 )
@@ -128,14 +129,16 @@ def disable_audio_activity_interruption(session: Any) -> None:
 
     What we want:
       - Framework should NOT auto-interrupt the agent based on raw VAD or
-        STT events. Our :class:`PolicyChain` (eidolon.plugins.eot) handles
-        interruption decisions with multi-signal fusion (backchannel
-        filtering, VAD confidence gating, conversation phase, semantic EOT
+        STT events. Eidolon's interruption owner
+        (:class:`InterruptionOrchestrator`, ``TurnPolicyRuntime``, and the
+        attention/effect handlers) handles interruption decisions with
+        multi-signal fusion (VAD, transcript, hard-stop intent,
+        backchannel/echo guards, client state, conversation phase, and EOT
         scoring).
       - Framework should still call our ``eot_model.predict_end_of_turn``
         for endpointing (deciding when user turn ends).
       - Framework should still respect manual ``session.interrupt()`` calls
-        from our PolicyChain.
+        from Eidolon's owner.
 
     Why no public API works:
 
@@ -164,13 +167,19 @@ def disable_audio_activity_interruption(session: Any) -> None:
       the disable sticks.
 
     Targeted file: ``livekit/agents/voice/agent_activity.py``
+    Targeted lines (1.6.4): 246, 250, 1781-1792, 3926-3932
+      Notes: 1.6.4 also keeps adaptive interruption/backchannel logic in the
+      framework; ``turn.InterruptionOptions.backchannel_boundary`` now defaults
+      to ``(1.0, 1.0)`` in the installed source. That matters for native
+      LiveKit owner A/B profiles, but this patch is still required for the
+      Eidolon-owner hybrid profile.
     Targeted lines (1.5.6): 202, 207, 1565-1576, 3450-3453
 
     Targeted attr on AgentSession (1.5.6): ``_activity`` (was ``_agent_activity``
     in earlier prerelease snapshots). We try the canonical name first then the
     legacy one — if neither exists, log a loud WARNING and bail.
 
-    Last validated: livekit-agents 1.5.6 (2026-05-07)
+    Last validated: livekit-agents 1.6.4 (2026-06-30), 1.5.8, 1.5.6
 
     Idempotent — safe to call multiple times.
     """
@@ -181,7 +190,7 @@ def disable_audio_activity_interruption(session: Any) -> None:
         logger.warning(
             "[framework_patches] session has neither _activity nor _agent_activity — "
             "framework refactor or version mismatch. Auto-interrupt path "
-            "will REMAIN ACTIVE and may conflict with our PolicyChain. "
+            "will REMAIN ACTIVE and may conflict with Eidolon's interruption owner. "
             "Re-validate ``disable_audio_activity_interruption`` in "
             "%s.",
             __name__,
@@ -237,7 +246,7 @@ PATCHES_APPLIED: tuple[tuple[str, str], ...] = (
     (
         "disable_audio_activity_interruption",
         "Disables livekit-agents' built-in VAD/STT-driven auto-interrupt "
-        "so our PolicyChain in eidolon.plugins.eot is the sole authority "
+        "so Eidolon's InterruptionOrchestrator/turn policy is the sole authority "
         "on interruption decisions.",
     ),
 )

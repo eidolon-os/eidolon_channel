@@ -18,8 +18,8 @@ classifiers = [
 
 dependencies = [
     "livekit-api>=0.5",
-    "livekit-agents>=1.5",
-    "livekit-plugins-openai>=0.4",
+    "livekit-agents>=1.6.4",
+    "livekit-plugins-openai>=1.6.4",
     "grpcio>=1.68",
     "aiohttp>=3.9",
     "numpy>=1.26",

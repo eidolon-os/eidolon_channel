@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 
-"""Tests for ``agent/_framework_patches.py``.
+"""Tests for ``agent/integration/framework_patches.py``.
 
 These tests verify that:
 1. The current ``livekit-agents`` version is on the tested-against list,
@@ -16,7 +16,7 @@ These tests verify that:
 4. The patch is idempotent: calling twice is safe.
 
 If livekit-agents is upgraded and these tests start failing, the
-upgrade audit (see ``_framework_patches.py`` module docstring) is
+upgrade audit (see ``integration/framework_patches.py`` module docstring) is
 overdue.
 """
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent import _framework_patches
+from eidolon.livekit.agent.integration import framework_patches
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -39,18 +39,18 @@ class TestVersionCheck:
         else the audit checklist hasn't been run for this version."""
         import livekit.agents as _lk_agents
         current = getattr(_lk_agents, "__version__", "unknown")
-        assert current in _framework_patches.TESTED_VERSIONS, (
+        assert current in framework_patches.TESTED_VERSIONS, (
             f"livekit-agents {current} is not in TESTED_VERSIONS "
-            f"{_framework_patches.TESTED_VERSIONS}. Either: (a) downgrade to "
+            f"{framework_patches.TESTED_VERSIONS}. Either: (a) downgrade to "
             f"a tested version, or (b) run the upgrade audit (see "
-            f"_framework_patches.py module docstring) and add this version."
+            f"integration/framework_patches.py module docstring) and add this version."
         )
 
     def test_check_framework_version_is_idempotent(self, caplog) -> None:
         """Repeated calls are safe — only emit a single INFO/WARNING line each."""
         with caplog.at_level(logging.INFO, logger="agent.framework_patches"):
-            _framework_patches.check_framework_version()
-            _framework_patches.check_framework_version()
+            framework_patches.check_framework_version()
+            framework_patches.check_framework_version()
         # Either info (tested version) or warning (untested), but each
         # invocation must log exactly one line.
         records = [
@@ -79,7 +79,7 @@ class TestDisableAudioActivityInterruption:
         session = MagicMock()
         session._activity = activity
 
-        _framework_patches.disable_audio_activity_interruption(session)
+        framework_patches.disable_audio_activity_interruption(session)
 
         assert activity._interruption_by_audio_activity_enabled is False
         assert activity._default_interruption_by_audio_activity_enabled is False
@@ -92,8 +92,8 @@ class TestDisableAudioActivityInterruption:
         session = MagicMock()
         session._activity = activity
 
-        _framework_patches.disable_audio_activity_interruption(session)
-        _framework_patches.disable_audio_activity_interruption(session)
+        framework_patches.disable_audio_activity_interruption(session)
+        framework_patches.disable_audio_activity_interruption(session)
         assert activity._interruption_by_audio_activity_enabled is False
         assert activity._default_interruption_by_audio_activity_enabled is False
 
@@ -107,7 +107,7 @@ class TestDisableAudioActivityInterruption:
         with caplog.at_level(
             logging.WARNING, logger="agent.framework_patches"
         ):
-            _framework_patches.disable_audio_activity_interruption(session)
+            framework_patches.disable_audio_activity_interruption(session)
 
         assert any(
             "neither _activity nor _agent_activity" in r.getMessage()
@@ -128,7 +128,7 @@ class TestDisableAudioActivityInterruption:
         with caplog.at_level(
             logging.WARNING, logger="agent.framework_patches"
         ):
-            _framework_patches.disable_audio_activity_interruption(session)
+            framework_patches.disable_audio_activity_interruption(session)
 
         assert any(
             "_interruption_by_audio_activity_enabled" in r.getMessage()
@@ -147,7 +147,7 @@ class TestDisableAudioActivityInterruption:
         with caplog.at_level(
             logging.WARNING, logger="agent.framework_patches"
         ):
-            _framework_patches.disable_audio_activity_interruption(session)
+            framework_patches.disable_audio_activity_interruption(session)
 
         assert any(
             "_default_interruption_by_audio_activity_enabled" in r.getMessage()
@@ -167,7 +167,7 @@ class TestDisableAudioActivityInterruption:
         with caplog.at_level(
             logging.WARNING, logger="agent.framework_patches"
         ):
-            _framework_patches.disable_audio_activity_interruption(session)
+            framework_patches.disable_audio_activity_interruption(session)
 
         assert any(
             "missing both" in r.getMessage()
@@ -187,7 +187,7 @@ class TestRealFrameworkAttributesExist:
     If they fail on a new framework version, that's the signal to:
     1. Read the framework changelog.
     2. Re-validate or rewrite the affected patch in
-       ``_framework_patches.py``.
+       ``integration/framework_patches.py``.
     3. Update ``TESTED_VERSIONS``.
     """
 
@@ -207,12 +207,12 @@ class TestRealFrameworkAttributesExist:
         assert "_interruption_by_audio_activity_enabled" in source, (
             "AgentActivity.__init__ no longer initializes "
             "_interruption_by_audio_activity_enabled — patch is broken. "
-            "Audit _framework_patches.py."
+            "Audit integration/framework_patches.py."
         )
         assert "_default_interruption_by_audio_activity_enabled" in source, (
             "AgentActivity.__init__ no longer initializes "
             "_default_interruption_by_audio_activity_enabled — patch is broken. "
-            "Audit _framework_patches.py."
+            "Audit integration/framework_patches.py."
         )
 
     def test_restore_method_still_exists(self) -> None:
@@ -224,7 +224,7 @@ class TestRealFrameworkAttributesExist:
         assert hasattr(AgentActivity, "_restore_interruption_by_audio_activity"), (
             "Framework removed _restore_interruption_by_audio_activity — "
             "patching the default flag may no longer be needed. "
-            "Re-evaluate _framework_patches.disable_audio_activity_interruption."
+            "Re-evaluate integration.framework_patches.disable_audio_activity_interruption."
         )
 
 
@@ -239,10 +239,10 @@ class TestPatchRegistry:
         in ``PATCHES_APPLIED`` so the registry stays the single source
         of truth for "what internal APIs we touch"."""
         public_apply_fns = [
-            name for name in dir(_framework_patches)
+            name for name in dir(framework_patches)
             if name.startswith("disable_") or name.startswith("apply_")
         ]
-        registered_names = {n for n, _ in _framework_patches.PATCHES_APPLIED}
+        registered_names = {n for n, _ in framework_patches.PATCHES_APPLIED}
 
         for fn in public_apply_fns:
             assert fn in registered_names, (

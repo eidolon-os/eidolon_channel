@@ -16,7 +16,6 @@ Tests verify:
 
 from __future__ import annotations
 
-import asyncio
 from typing import List
 
 import numpy as np
@@ -24,7 +23,7 @@ import pytest
 from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
-from eidolon.livekit.agent.output_controller import OutputController as DuckingMixer
+from eidolon.livekit.agent.output.controller import OutputController as DuckingMixer
 
 SAMPLE_RATE = 32000
 FRAME_MS = 10  # standard livekit frame duration
@@ -165,7 +164,6 @@ async def test_unduck_drains_buffer_with_fade_in() -> None:
     for _ in range(3):
         await mixer.capture_frame(_make_frame(10000))
     assert mixer.buffered_frames == 3
-    forwarded_before = len(inner.frames)
     inner.frames.clear()
 
     mixer.unduck()

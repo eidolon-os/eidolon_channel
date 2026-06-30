@@ -24,7 +24,7 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
 )
 
-from eidolon.livekit.agent.client_audio_state import parse_client_audio_state
+from eidolon.livekit.agent.integration.client_audio_state import parse_client_audio_state
 
 
 def _packet(**fields) -> bytes:

@@ -26,7 +26,7 @@ from eidolon_sdk.biz.contracts import (
     SESSION_INTENT_USER_INITIATED,
 )
 
-from eidolon.livekit.agent.client_audio_state import parse_client_audio_state
+from eidolon.livekit.agent.integration.client_audio_state import parse_client_audio_state
 from eidolon.livekit.agent.runtime import (
     apply_interaction_mode,
     resolve_interaction_mode,

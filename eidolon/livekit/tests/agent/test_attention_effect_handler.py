@@ -6,7 +6,7 @@ import time
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session import AttentionEffectHandler
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime

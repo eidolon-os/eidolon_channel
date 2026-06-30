@@ -7,9 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
-from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.streaming import StreamingPipeline

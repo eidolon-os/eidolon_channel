@@ -11,7 +11,7 @@ import pytest
 
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
-from eidolon.livekit.agent.client_audio_state import parse_client_audio_state
+from eidolon.livekit.agent.integration.client_audio_state import parse_client_audio_state
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.config import ObservabilityConfig

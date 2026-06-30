@@ -1,8 +1,7 @@
 # Eidolon Channel Agent Code Map
 
-This package is the LiveKit-backed channel worker. The root keeps only the
-public entrypoints and legacy import shims; real implementation code should live
-under a named boundary package.
+This package is the LiveKit-backed channel worker. The root keeps only public
+entrypoints; implementation code lives under named boundary packages.
 
 ## Entry Points
 
@@ -27,15 +26,12 @@ under a named boundary package.
   and filler playback.
 - `pipeline/` contains provider-neutral stage wrappers for STT, TTS, VAD, and
   LLM.
-- `runtime/` contains worker runtime resolution: metadata parsing, admin
-  resolve, token/runtime helpers.
+- `runtime/` contains worker runtime resolution: metadata parsing and admin
+  resolve helpers.
 - `context/` contains conversation-context ledger helpers.
 - `observability/` contains timeline and metrics helpers.
 - `eidolon_agent_rpc/` contains the remote Eidolon Agent LLM/proactive bridge.
 - `speaker_verification/` contains voiceprint service/provider code.
 
-## Compatibility Shims
-
-The root files `_framework_patches.py`, `client_audio_state.py`,
-`output_controller.py`, `filler.py`, and `interrupt_decider.py` are legacy
-import shims. New code should import from the boundary packages above.
+New code should import from these boundary packages directly. Do not add root
+compatibility modules for moved code.

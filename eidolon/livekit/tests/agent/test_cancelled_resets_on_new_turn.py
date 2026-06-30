@@ -24,14 +24,13 @@ These tests verify both halves: the reset() helper, and the wiring.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
-from eidolon.livekit.agent.output_controller import OutputController
+from eidolon.livekit.agent.output.controller import OutputController
 
 
 SAMPLE_RATE = 16000

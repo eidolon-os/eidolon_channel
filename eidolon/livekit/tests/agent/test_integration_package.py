@@ -21,19 +21,3 @@ def test_integration_package_exports_framework_patches() -> None:
     assert framework_patches.disable_audio_activity_interruption is (
         disable_audio_activity_interruption
     )
-
-
-def test_legacy_client_audio_state_path_reexports_integration_model() -> None:
-    from eidolon.livekit.agent.client_audio_state import ClientAudioState as Legacy
-    from eidolon.livekit.agent.integration import ClientAudioState
-
-    assert Legacy is ClientAudioState
-
-
-def test_legacy_framework_patch_path_reexports_integration_patch() -> None:
-    from eidolon.livekit.agent import _framework_patches as Legacy
-    from eidolon.livekit.agent.integration import framework_patches
-
-    assert Legacy.disable_audio_activity_interruption is (
-        framework_patches.disable_audio_activity_interruption
-    )

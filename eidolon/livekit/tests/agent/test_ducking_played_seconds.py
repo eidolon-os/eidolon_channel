@@ -15,13 +15,11 @@ Buffered-during-SUSPENDED frames do NOT count (user heard silence).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
-from eidolon.livekit.agent.output_controller import OutputController as DuckingMixer
+from eidolon.livekit.agent.output.controller import OutputController as DuckingMixer
 
 
 def _silent_frame(samples: int = 800, sample_rate: int = 16000) -> rtc.AudioFrame:

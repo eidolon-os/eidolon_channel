@@ -12,11 +12,12 @@ from dataclasses import replace
 
 import pytest
 
-from eidolon.livekit.agent.interrupt_decider import (
+from eidolon.livekit.agent.turn_policy import (
     Action,
     Decision,
+    InterruptIntentResult,
     InterruptDecider,
-    is_backchannel_text,
+    LexiconInterruptClassifier,
 )
 from eidolon.livekit.common.config import InterruptPolicyConfig
 
@@ -44,7 +45,15 @@ from eidolon.livekit.common.config import InterruptPolicyConfig
     ],
 )
 def test_is_backchannel_text(text: str, expected: bool) -> None:
-    assert is_backchannel_text(text) is expected
+    classifier = LexiconInterruptClassifier()
+    result: InterruptIntentResult = classifier.classify(
+        text,
+        vad_active=True,
+        agent_speaking=True,
+        eot_score=0.0,
+    )
+    is_backchannel = result.intent.value in ("backchannel", "noise")
+    assert is_backchannel is expected
 
 
 # ---------------------------------------------------------------------------

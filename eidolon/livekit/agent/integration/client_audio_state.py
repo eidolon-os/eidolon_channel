@@ -24,7 +24,7 @@ from eidolon_sdk.biz.contracts import (
     PlaybackState,
 )
 
-logger = logging.getLogger("agent.client_audio_state")
+logger = logging.getLogger("agent.integration.client_audio_state")
 
 # Fail-loud strictness. Inbound contract drift (an unknown key like ``ppt``, an
 # unrecognized enum value, an unsupported ``schema_v``) is surfaced instead of

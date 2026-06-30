@@ -22,9 +22,8 @@ fade-out + buffer machinery used by the fast-path soft-unduck. G17c
 (Phase 2 tail) will collapse SUSPENDED → MUTED once we've verified
 production runs no longer need the soft-buffer/drain path.
 
-Legacy ``DuckingMixer`` and root ``output_controller.py`` module paths remain
-as shims; new code MUST import ``OutputController`` from
-``eidolon.livekit.agent.output``.
+Import ``OutputController`` from ``eidolon.livekit.agent.output`` or
+``eidolon.livekit.agent.output.controller``.
 
 ============================================================================
 WHY

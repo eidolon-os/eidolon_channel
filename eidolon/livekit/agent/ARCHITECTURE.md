@@ -78,11 +78,6 @@ eidolon/livekit/agent/
 ├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
 ├── streaming.py              # StreamingPipeline: 实时 AgentSession wrapper / 主编排器
 ├── batch.py                  # BatchPipeline: 批量音频 blob 处理
-├── client_audio_state.py     # 兼容入口: re-export integration.client_audio_state
-├── _framework_patches.py     # 兼容入口: re-export integration.framework_patches
-├── output_controller.py      # 兼容入口: re-export output.controller
-├── filler.py                 # 兼容入口: re-export output.filler
-├── interrupt_decider.py      # 兼容入口: re-export turn_policy
 ├── integration/
 │   ├── __init__.py           # LiveKit/framework 外部契约边界
 │   ├── framework_patches.py  # LiveKit internal API patch，升级时唯一审计点
@@ -177,9 +172,9 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 `pipeline/` 只封装 STT/TTS/VAD/LLM stage 的 provider-neutral 接口，避免把实时会话策略写进 provider stage。
 
-### 2.2 兼容入口
+### 2.2 导入规则
 
-`_framework_patches.py`、`client_audio_state.py`、`output_controller.py`、`filler.py`、`interrupt_decider.py` 等旧路径仍保留 re-export，是为了不一次性破坏已有导入与测试。新代码应优先从 `integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 导入。
+根目录只保留 entrypoints，不再保留旧 re-export shim。新代码必须从 `integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。
 
 ### 2.3 Plugin 目录结构
 

@@ -9,6 +9,7 @@ import pytest
 from scripts.bench_barge_in_e2e_ab import (
     _fmt_ms,
     _overlay_payload,
+    _participant_metadata,
     _profile_brief,
     _recommendation,
     _summary_stat,
@@ -57,6 +58,25 @@ def test_summary_stat_reads_report_metric_distribution() -> None:
         == 110.0
     )
     assert _summary_stat(payload, "missing") is None
+
+
+def test_participant_metadata_defaults_to_full_duplex_user_initiated() -> None:
+    class Args:
+        livekit_interaction_mode = "full_duplex"
+        livekit_session_intent = "user_initiated"
+
+    assert _participant_metadata(Args()) == {
+        "interaction_mode": "full_duplex",
+        "session_intent": "user_initiated",
+    }
+
+
+def test_participant_metadata_allows_half_duplex_override() -> None:
+    class Args:
+        livekit_interaction_mode = "half_duplex"
+        livekit_session_intent = ""
+
+    assert _participant_metadata(Args()) == {"interaction_mode": "half_duplex"}
 
 
 @pytest.mark.parametrize(

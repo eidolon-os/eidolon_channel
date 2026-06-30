@@ -273,6 +273,15 @@ def _suite_requires_runtime_identity(suites: list[BenchmarkSuite]) -> bool:
     )
 
 
+def _participant_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if args.livekit_interaction_mode:
+        metadata["interaction_mode"] = args.livekit_interaction_mode
+    if args.livekit_session_intent:
+        metadata["session_intent"] = args.livekit_session_intent
+    return metadata
+
+
 def _repeat_dir(output_dir: Path, index: int, repeat: int) -> Path:
     return output_dir if repeat <= 1 else output_dir / f"repeat-{index:02d}"
 
@@ -363,6 +372,7 @@ async def _run_profile(
                         agent_name=args.livekit_agent_name,
                         participant_identity=args.livekit_participant_identity,
                         participant_kind=args.livekit_participant_kind,
+                        participant_metadata=_participant_metadata(args),
                     ),
                 )
                 if args.livekit_timeline_flush_grace_sec > 0:
@@ -692,6 +702,23 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--livekit-participant-kind",
         default=os.environ.get("EIDOLON_BENCH_LIVEKIT_PARTICIPANT_KIND", "user"),
+    )
+    parser.add_argument(
+        "--livekit-interaction-mode",
+        choices=["full_duplex", "half_duplex"],
+        default=os.environ.get(
+            "EIDOLON_BENCH_LIVEKIT_INTERACTION_MODE",
+            "full_duplex",
+        ),
+        help="Participant interaction_mode metadata. Barge-in A/B defaults to full_duplex.",
+    )
+    parser.add_argument(
+        "--livekit-session-intent",
+        default=os.environ.get(
+            "EIDOLON_BENCH_LIVEKIT_SESSION_INTENT",
+            "user_initiated",
+        ),
+        help="Participant session_intent metadata for the benchmark room.",
     )
     return parser.parse_args()
 

@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from eidolon.livekit.benchmarks.hil_barge_in import analyze_hil_barge_in
+from benchmark.hil_barge_in import analyze_hil_barge_in
 
 
 def main() -> int:
@@ -15,7 +15,7 @@ def main() -> int:
     parser.add_argument(
         "--timeline",
         type=Path,
-        default=Path("benchmarks/runs/channel-worker-turn-timeline.jsonl"),
+        default=Path("benchmark/runs/channel-worker-turn-timeline.jsonl"),
         help="Timeline JSONL file or directory to inspect.",
     )
     parser.add_argument(

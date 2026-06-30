@@ -13,49 +13,49 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 
-from eidolon.livekit.benchmarks.compare import compare_metrics
-from eidolon.livekit.benchmarks.dashboard import DashboardRunner, write_dashboard
-from eidolon.livekit.benchmarks.realcall import (
+from benchmark.compare import compare_metrics
+from benchmark.dashboard import DashboardRunner, write_dashboard
+from benchmark.realcall import (
     apply_real_call_verification,
     verify_provider_config,
     verify_real_call,
 )
-from eidolon.livekit.benchmarks.report import (
+from benchmark.report import (
     aggregate,
     aggregate_runs,
     write_repeated_reports,
 )
-from eidolon.livekit.benchmarks.schema import CaseResult, RunResult, load_suite
-from eidolon.livekit.benchmarks.livekit_room_runner import (
+from benchmark.schema import CaseResult, RunResult, load_suite
+from benchmark.livekit_room_runner import (
     LiveKitRoomOptions,
     _agent_audio_wait_mode,
     _agent_audio_wait_timeout_sec,
 )
-from eidolon.livekit.benchmarks.dogfood import (
+from benchmark.dogfood import (
     audio_state_interval_sec,
     render_dogfood_mic_pcm,
 )
-from eidolon.livekit.benchmarks.hil_barge_in import analyze_hil_barge_in
+from benchmark.hil_barge_in import analyze_hil_barge_in
 from eidolon.livekit.tests._harness.audio import pcm_rms
-from eidolon.livekit.benchmarks.policy_runner import run_policy_suite
-from eidolon.livekit.benchmarks.slo import (
+from benchmark.policy_runner import run_policy_suite
+from benchmark.slo import (
     DEFAULT_SLO_GATES,
     SloGate,
     enforcement_failures,
     evaluate_slo_gates,
 )
 from eidolon.livekit.common.config import AttentionPolicyConfig, TurnPolicyConfig
-from eidolon.livekit.benchmarks.timeline import (
+from benchmark.timeline import (
     TimelineCapture,
     load_timeline_records,
     summarize_timeline_records,
 )
-from eidolon.livekit.benchmarks.timeline_expectations import apply_timeline_expectations
+from benchmark.timeline_expectations import apply_timeline_expectations
 from scripts.bench_voice import _default_cases
 
 
 def test_load_core_benchmark_suite() -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
 
     assert suite.suite_id == "core_voice_baseline"
     assert {case.case_id for case in suite.cases} >= {
@@ -72,7 +72,7 @@ def test_load_core_benchmark_suite() -> None:
 
 
 def test_load_attention_admission_benchmark_suite() -> None:
-    suite = load_suite("benchmarks/cases/attention_admission_baseline.yaml")
+    suite = load_suite("benchmark/cases/attention_admission_baseline.yaml")
 
     assert suite.suite_id == "attention_admission_baseline"
     assert {case.case_id for case in suite.cases} >= {
@@ -108,7 +108,7 @@ def test_load_attention_admission_benchmark_suite() -> None:
 
 
 def test_load_attention_admission_enforced_suite() -> None:
-    suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
+    suite = load_suite("benchmark/cases/attention_admission_enforced.yaml")
 
     assert suite.suite_id == "attention_admission_enforced"
     assert {case.case_id for case in suite.cases} == {
@@ -138,7 +138,7 @@ def test_default_voice_benchmark_cases_skip_enforced_suites() -> None:
 
 
 def test_load_dogfood_box3_audio_first_suite() -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
 
     assert suite.suite_id == "dogfood_box3_audio_first_enforced"
     followup = next(
@@ -156,14 +156,14 @@ def test_load_dogfood_box3_audio_first_suite() -> None:
 
 
 def test_dogfood_audio_state_interval_uses_device_cadence() -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case = suite.cases[0]
 
     assert audio_state_interval_sec(case) == pytest.approx(0.1)
 
 
 def test_dogfood_mic_render_adds_echo_and_noise() -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case = suite.cases[0]
     step = case.user_steps[1]
     pcm = b"\x00\x00" * 1600
@@ -175,15 +175,15 @@ def test_dogfood_mic_render_adds_echo_and_noise() -> None:
 
 
 def test_livekit_room_dogfood_input_mode_tracks_device_mode() -> None:
-    from eidolon.livekit.benchmarks.livekit_room_runner import _case_input_mode
+    from benchmark.livekit_room_runner import _case_input_mode
 
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
 
     assert _case_input_mode(suite.cases[0]) == "auto"
 
 
 def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> None:
-    suite = load_suite("benchmarks/cases/synthetic_default_voiceprint_e2e.yaml")
+    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     cases = {case.case_id: case for case in suite.cases}
 
     assert (
@@ -223,7 +223,7 @@ def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> N
 
 
 def test_livekit_room_audio_wait_mode_uses_explicit_expectation() -> None:
-    suite = load_suite("benchmarks/cases/synthetic_default_voiceprint_e2e.yaml")
+    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     cases = {case.case_id: case for case in suite.cases}
 
     assert (
@@ -238,7 +238,7 @@ def test_livekit_room_audio_wait_mode_uses_explicit_expectation() -> None:
 
 
 def test_livekit_room_audio_wait_timeout_respects_long_case_timeout() -> None:
-    suite = load_suite("benchmarks/cases/synthetic_default_voiceprint_e2e.yaml")
+    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     case = next(
         case
         for case in suite.cases
@@ -252,7 +252,7 @@ def test_livekit_room_audio_wait_timeout_respects_long_case_timeout() -> None:
 
 
 def test_policy_runner_attention_enforced_suite() -> None:
-    suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
+    suite = load_suite("benchmark/cases/attention_admission_enforced.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
@@ -282,7 +282,7 @@ def test_policy_runner_enforced_ambient_playback_is_observed_not_cancelled() -> 
     # operator set enforce=true. With the interrupt_mode axis gone and enforce
     # =True, the ambient overlap is observed (not cancelled). Speed for genuine
     # barge-in comes from channel-owned VAD-start ducking plus transcript/EOT evidence.
-    suite = load_suite("benchmarks/cases/attention_admission_enforced.yaml")
+    suite = load_suite("benchmark/cases/attention_admission_enforced.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
@@ -303,7 +303,7 @@ def test_policy_runner_enforced_ambient_playback_is_observed_not_cancelled() -> 
 
 
 def test_load_v1_interrupt_tiers_enforced_suite() -> None:
-    suite = load_suite("benchmarks/cases/v1_interrupt_tiers_enforced.yaml")
+    suite = load_suite("benchmark/cases/v1_interrupt_tiers_enforced.yaml")
 
     assert suite.suite_id == "v1_interrupt_tiers_enforced"
     assert {case.case_id for case in suite.cases} == {
@@ -327,7 +327,7 @@ def test_load_v1_interrupt_tiers_enforced_suite() -> None:
 
 
 def test_policy_runner_v1_interrupt_tiers_enforced_suite() -> None:
-    suite = load_suite("benchmarks/cases/v1_interrupt_tiers_enforced.yaml")
+    suite = load_suite("benchmark/cases/v1_interrupt_tiers_enforced.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
@@ -353,7 +353,7 @@ def test_policy_runner_v1_interrupt_tiers_enforced_suite() -> None:
 
 
 def test_load_v1_realistic_interaction_flows_enforced_suite() -> None:
-    suite = load_suite("benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml")
+    suite = load_suite("benchmark/cases/v1_realistic_interaction_flows_enforced.yaml")
 
     assert suite.suite_id == "v1_realistic_interaction_flows_enforced"
     assert len(suite.cases) == 13
@@ -383,7 +383,7 @@ def test_load_v1_realistic_interaction_flows_enforced_suite() -> None:
 
 
 def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
-    suite = load_suite("benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml")
+    suite = load_suite("benchmark/cases/v1_realistic_interaction_flows_enforced.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
@@ -450,7 +450,7 @@ def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
 
 
 def test_load_v1_realistic_extended_suite() -> None:
-    suite = load_suite("benchmarks/cases/v1_realistic_extended.yaml")
+    suite = load_suite("benchmark/cases/v1_realistic_extended.yaml")
 
     assert suite.suite_id == "v1_realistic_extended"
     assert {case.case_id for case in suite.cases} == {
@@ -478,7 +478,7 @@ def test_load_v1_realistic_extended_suite() -> None:
 
 
 def test_policy_runner_v1_realistic_extended_suite() -> None:
-    suite = load_suite("benchmarks/cases/v1_realistic_extended.yaml")
+    suite = load_suite("benchmark/cases/v1_realistic_extended.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
@@ -510,7 +510,7 @@ def test_policy_runner_v1_realistic_extended_suite() -> None:
 
 
 def test_load_barge_in_ab_matrix_suite() -> None:
-    suite = load_suite("benchmarks/cases/barge_in_ab_matrix_enforced.yaml")
+    suite = load_suite("benchmark/cases/barge_in_ab_matrix_enforced.yaml")
 
     assert suite.suite_id == "barge_in_ab_matrix_enforced"
     assert {case.case_id for case in suite.cases} == {
@@ -546,7 +546,7 @@ def test_load_barge_in_ab_matrix_suite() -> None:
 
 
 def test_policy_runner_barge_in_ab_matrix_suite() -> None:
-    suite = load_suite("benchmarks/cases/barge_in_ab_matrix_enforced.yaml")
+    suite = load_suite("benchmark/cases/barge_in_ab_matrix_enforced.yaml")
     policy = TurnPolicyConfig(
         attention=replace(AttentionPolicyConfig(), enforce=True),
     )
@@ -966,7 +966,7 @@ def test_component_runner_name_is_supported() -> None:
 
 
 def test_livekit_room_state_marks_agent_connected() -> None:
-    from eidolon.livekit.benchmarks.livekit_room_runner import _RoomCaseState
+    from benchmark.livekit_room_runner import _RoomCaseState
 
     state = _RoomCaseState(started=0.0, events=[])
     assert not state.agent_connected.is_set()
@@ -977,7 +977,7 @@ def test_livekit_room_state_marks_agent_connected() -> None:
 
 
 def test_livekit_room_retries_only_pre_audio_infrastructure_failures() -> None:
-    from eidolon.livekit.benchmarks.livekit_room_runner import _should_retry_room_case
+    from benchmark.livekit_room_runner import _should_retry_room_case
 
     missing_agent = CaseResult(
         case_id="topic_switch_001",
@@ -1024,8 +1024,8 @@ def test_livekit_room_retries_only_pre_audio_infrastructure_failures() -> None:
 
 @pytest.mark.asyncio
 async def test_livekit_room_case_retry_records_previous_attempt(monkeypatch) -> None:
-    from eidolon.livekit.benchmarks import livekit_room_runner
-    from eidolon.livekit.benchmarks.livekit_room_runner import (
+    from benchmark import livekit_room_runner
+    from benchmark.livekit_room_runner import (
         LiveKitRoomOptions,
         _run_room_case_with_retries,
     )
@@ -1053,7 +1053,7 @@ async def test_livekit_room_case_retry_records_previous_attempt(monkeypatch) -> 
         )
 
     monkeypatch.setattr(livekit_room_runner, "_run_room_case", fake_run_room_case)
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     case = next(case for case in suite.cases if case.case_id == "topic_switch_001")
 
     result = await _run_room_case_with_retries(
@@ -1076,8 +1076,8 @@ async def test_livekit_room_case_retry_records_previous_attempt(monkeypatch) -> 
 async def test_livekit_room_case_retry_records_room_connect_transient(
     monkeypatch,
 ) -> None:
-    from eidolon.livekit.benchmarks import livekit_room_runner
-    from eidolon.livekit.benchmarks.livekit_room_runner import (
+    from benchmark import livekit_room_runner
+    from benchmark.livekit_room_runner import (
         LiveKitRoomOptions,
         _run_room_case_with_retries,
     )
@@ -1108,7 +1108,7 @@ async def test_livekit_room_case_retry_records_room_connect_transient(
         )
 
     monkeypatch.setattr(livekit_room_runner, "_run_room_case", fake_run_room_case)
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     case = next(case for case in suite.cases if case.case_id == "topic_switch_001")
 
     result = await _run_room_case_with_retries(
@@ -1130,7 +1130,7 @@ async def test_livekit_room_case_retry_records_room_connect_transient(
 @pytest.mark.asyncio
 async def test_livekit_room_publishes_client_audio_state() -> None:
     from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC, WIRE_SCHEMA_VERSION
-    from eidolon.livekit.benchmarks.livekit_room_runner import (
+    from benchmark.livekit_room_runner import (
         _publish_client_audio_state,
     )
 
@@ -1170,7 +1170,7 @@ async def test_livekit_room_publishes_client_audio_state() -> None:
 
 @pytest.mark.asyncio
 async def test_livekit_room_refreshes_client_audio_state_periodically() -> None:
-    from eidolon.livekit.benchmarks.livekit_room_runner import (
+    from benchmark.livekit_room_runner import (
         _refresh_client_audio_state,
     )
 
@@ -1201,7 +1201,7 @@ async def test_livekit_room_refreshes_client_audio_state_periodically() -> None:
 
 
 def test_livekit_dispatch_token_includes_participant_metadata() -> None:
-    from eidolon.livekit.benchmarks.livekit_room_runner import (
+    from benchmark.livekit_room_runner import (
         LiveKitRoomOptions,
         _make_dispatch_token,
         _participant_metadata,
@@ -1294,7 +1294,7 @@ def test_timeline_capture_writes_only_new_lines(tmp_path) -> None:
 
 
 def test_dashboard_includes_timeline_section(tmp_path) -> None:
-    from eidolon.livekit.benchmarks.report import write_reports
+    from benchmark.report import write_reports
 
     run_dir = tmp_path / "candidate"
     write_reports(
@@ -1486,7 +1486,7 @@ def test_timeline_exposes_tts_and_endpoint_segments(tmp_path) -> None:
 
 
 def test_dashboard_findings_include_slo_failure(tmp_path) -> None:
-    from eidolon.livekit.benchmarks.report import write_reports
+    from benchmark.report import write_reports
 
     run_dir = tmp_path / "livekit_room"
     write_reports(
@@ -1518,7 +1518,7 @@ def test_dashboard_findings_include_slo_failure(tmp_path) -> None:
 
 
 def test_dashboard_renders_slo_gate_table(tmp_path) -> None:
-    from eidolon.livekit.benchmarks.report import write_reports
+    from benchmark.report import write_reports
 
     run_dir = tmp_path / "livekit_room"
     write_reports(
@@ -1554,7 +1554,7 @@ def test_dashboard_renders_slo_gate_table(tmp_path) -> None:
 def test_dashboard_warns_when_livekit_room_timeline_coverage_is_partial(
     tmp_path,
 ) -> None:
-    from eidolon.livekit.benchmarks.report import write_reports
+    from benchmark.report import write_reports
 
     run_dir = tmp_path / "livekit_room"
     write_reports(
@@ -1602,7 +1602,7 @@ def test_dashboard_warns_when_livekit_room_timeline_coverage_is_partial(
 def test_livekit_room_timeline_expectations_fail_unexpected_cancel(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1637,7 +1637,7 @@ def test_livekit_room_timeline_expectations_fail_unexpected_cancel(
 def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1672,7 +1672,7 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
 def test_livekit_room_timeline_actions_count_only_resolved_interrupts(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1721,7 +1721,7 @@ def test_livekit_room_timeline_actions_count_only_resolved_interrupts(
 def test_livekit_room_timeline_rejected_turn_brain_forbidden_allows_setup_brain(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/synthetic_default_voiceprint_e2e.yaml")
+    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1764,7 +1764,7 @@ def test_livekit_room_timeline_rejected_turn_brain_forbidden_allows_setup_brain(
 def test_livekit_room_backchannel_accepts_decision_rollback_without_resolved_interrupt(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/synthetic_default_voiceprint_e2e.yaml")
+    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1809,7 +1809,7 @@ def test_livekit_room_backchannel_accepts_decision_rollback_without_resolved_int
 def test_livekit_room_timeline_rejected_turn_brain_forbidden_fails_leak(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/synthetic_default_voiceprint_e2e.yaml")
+    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1847,7 +1847,7 @@ def test_livekit_room_timeline_rejected_turn_brain_forbidden_fails_leak(
 def test_livekit_room_timeline_expectations_export_latency_metrics(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1910,7 +1910,7 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
 def test_livekit_room_timeline_expectations_ignore_stale_retry_room(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1960,7 +1960,7 @@ def test_livekit_room_timeline_expectations_ignore_stale_retry_room(
 def test_livekit_room_timeline_expectations_fail_slow_interrupt(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -1995,7 +1995,7 @@ def test_livekit_room_timeline_expectations_fail_slow_interrupt(
 def test_livekit_room_timeline_expectations_pass_fast_tier1_after_start(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -2033,7 +2033,7 @@ def test_livekit_room_timeline_expectations_pass_fast_tier1_after_start(
 def test_livekit_room_timeline_expectations_use_direct_intent_admission_time(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -2071,7 +2071,7 @@ def test_livekit_room_timeline_expectations_use_direct_intent_admission_time(
 def test_livekit_room_timeline_expectations_fail_slow_tier1_after_start(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -2111,7 +2111,7 @@ def test_livekit_room_timeline_expectations_fail_slow_tier1_after_start(
 def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/core.yaml")
+    suite = load_suite("benchmark/cases/core.yaml")
     run = RunResult(
         run_id="expectation-test",
         git_sha="abc123",
@@ -2144,7 +2144,7 @@ def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
 
 
 def test_dogfood_timeline_expectations_pass_cancel_chain(tmp_path) -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case_id = "dogfood_box3_owner_followup_during_playback_001"
     run = RunResult(
         run_id="dogfood-expectation-test",
@@ -2185,7 +2185,7 @@ def test_dogfood_timeline_expectations_pass_cancel_chain(tmp_path) -> None:
 
 
 def test_dogfood_timeline_expectations_fail_missing_suspend(tmp_path) -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case_id = "dogfood_box3_owner_followup_during_playback_001"
     run = RunResult(
         run_id="dogfood-expectation-test",
@@ -2221,7 +2221,7 @@ def test_dogfood_timeline_expectations_fail_missing_suspend(tmp_path) -> None:
 def test_dogfood_timeline_expectations_fail_missing_stop_and_context(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case_id = "dogfood_box3_owner_followup_during_playback_001"
     run = RunResult(
         run_id="dogfood-expectation-test",
@@ -2261,7 +2261,7 @@ def test_dogfood_timeline_expectations_fail_missing_stop_and_context(
 def test_dogfood_timeline_expectations_pass_false_interrupt_resume(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/dogfood_box3_audio_first_enforced.yaml")
+    suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case_id = "dogfood_box3_backchannel_during_playback_001"
     run = RunResult(
         run_id="dogfood-expectation-test",
@@ -2375,7 +2375,7 @@ def test_hil_barge_in_analyzer_passes_resume_chain(tmp_path) -> None:
 
 
 def test_load_conversation_turn_taking_suite() -> None:
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
 
     assert suite.suite_id == "conversation_turn_taking"
     assert {case.case_id for case in suite.cases} == {
@@ -2440,7 +2440,7 @@ def _committed_turn_record(case_id: str, *, turn_id: str) -> str:
 def test_timeline_expectations_fail_split_turn_with_max_brain_requests(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     run = _expectation_run("pause_mid_utterance_single_turn_001", "turn_boundary")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
@@ -2458,7 +2458,7 @@ def test_timeline_expectations_fail_split_turn_with_max_brain_requests(
 
 
 def test_timeline_expectations_require_min_brain_requests(tmp_path) -> None:
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     run = _expectation_run("multi_turn_three_rounds_001", "conversation_flow")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
@@ -2474,7 +2474,7 @@ def test_timeline_expectations_require_min_brain_requests(tmp_path) -> None:
 
 
 def test_timeline_expectations_pass_single_merged_turn(tmp_path) -> None:
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     run = _expectation_run("pause_mid_utterance_single_turn_001", "turn_boundary")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
@@ -2490,7 +2490,7 @@ def test_timeline_expectations_pass_single_merged_turn(tmp_path) -> None:
 
 
 def test_timeline_expectations_fail_slow_speech_stop_to_commit(tmp_path) -> None:
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     run = _expectation_run("eot_prompt_commit_001", "eot_latency")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
@@ -2520,7 +2520,7 @@ def test_timeline_expectations_fail_slow_speech_stop_to_commit(tmp_path) -> None
 def test_timeline_expectations_speech_stop_to_commit_timestamp_fallback(
     tmp_path,
 ) -> None:
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     run = _expectation_run("eot_prompt_commit_001", "eot_latency")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
@@ -2546,11 +2546,11 @@ def test_timeline_expectations_speech_stop_to_commit_timestamp_fallback(
 
 
 def test_room_user_done_audio_latency_bound() -> None:
-    from eidolon.livekit.benchmarks.livekit_room_runner import (
+    from benchmark.livekit_room_runner import (
         _user_done_audio_latency_errors,
     )
 
-    suite = load_suite("benchmarks/cases/conversation_turn_taking.yaml")
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     case = next(
         case for case in suite.cases if case.case_id == "backchannel_resume_001"
     )
@@ -2597,7 +2597,7 @@ def test_event_recorder_waits_for_multiple_agent_messages() -> None:
 
 
 def test_synthesize_composite_pcm_inserts_silence() -> None:
-    from eidolon.livekit.benchmarks.audio_assets import (
+    from benchmark.audio_assets import (
         silence_pcm,
         synthesize_composite_pcm,
     )

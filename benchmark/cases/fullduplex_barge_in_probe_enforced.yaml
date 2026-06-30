@@ -15,7 +15,7 @@ cases:
     audio_clips:
       - id: backchannel_mm
         text: 嗯嗯
-        path: benchmarks/audio/generated/backchannel_mm.wav
+        path: benchmark/audio/generated/backchannel_mm.wav
         intent: backchannel
     user_steps:
       - text: 嗯嗯
@@ -39,7 +39,7 @@ cases:
     audio_clips:
       - id: backchannel_ok
         text: 好的
-        path: benchmarks/audio/generated/backchannel_ok.wav
+        path: benchmark/audio/generated/backchannel_ok.wav
         intent: backchannel
     user_steps:
       - text: 好的
@@ -63,7 +63,7 @@ cases:
     audio_clips:
       - id: hesit_nage
         text: 那个
-        path: benchmarks/audio/generated/hesit_nage.wav
+        path: benchmark/audio/generated/hesit_nage.wav
         intent: hesitation
     user_steps:
       - text: 那个
@@ -87,7 +87,7 @@ cases:
     audio_clips:
       - id: reaction_start
         text: 我觉得
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 我觉得
@@ -111,7 +111,7 @@ cases:
     audio_clips:
       - id: substantive_opinion
         text: 我对这个有别的想法
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 我对这个有别的想法
@@ -135,7 +135,7 @@ cases:
     audio_clips:
       - id: manual_interrupt_signal
         text: ""
-        path: benchmarks/audio/generated/backchannel_mm.wav
+        path: benchmark/audio/generated/backchannel_mm.wav
         intent: manual_interrupt
     user_steps:
       - text: ""
@@ -159,7 +159,7 @@ cases:
     audio_clips:
       - id: backchannel_with_signal
         text: 嗯嗯
-        path: benchmarks/audio/generated/backchannel_mm.wav
+        path: benchmark/audio/generated/backchannel_mm.wav
         intent: backchannel
     user_steps:
       - text: 嗯嗯
@@ -184,7 +184,7 @@ cases:
     audio_clips:
       - id: topic_switch
         text: 换个话题
-        path: benchmarks/audio/generated/topic_switch.wav
+        path: benchmark/audio/generated/topic_switch.wav
         intent: topic_switch
     user_steps:
       - text: 换个话题

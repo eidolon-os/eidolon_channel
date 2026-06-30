@@ -26,32 +26,32 @@ from urllib.parse import urlparse
 
 import yaml
 
-from eidolon.livekit.benchmarks.livekit_room_runner import (
+from benchmark.livekit_room_runner import (
     LiveKitRoomOptions,
     run_livekit_room_suite,
     write_livekit_room_outputs,
 )
-from eidolon.livekit.benchmarks.realcall import (
+from benchmark.realcall import (
     apply_real_call_verification,
     preflight_real_stack,
 )
-from eidolon.livekit.benchmarks.report import write_repeated_reports
-from eidolon.livekit.benchmarks.schema import BenchmarkSuite, load_suites
-from eidolon.livekit.benchmarks.timeline import (
+from benchmark.report import write_repeated_reports
+from benchmark.schema import BenchmarkSuite, load_suites
+from benchmark.timeline import (
     TimelineCapture,
     load_timeline_records,
     summarize_timeline_records,
 )
-from eidolon.livekit.benchmarks.timeline_expectations import apply_timeline_expectations
+from benchmark.timeline_expectations import apply_timeline_expectations
 from eidolon.livekit.common.config import load_effective_config
 
 
 OWNER_PROFILES = ("channel", "livekit_native_adaptive")
 DEFAULT_CASES = (
-    "benchmarks/cases/barge_in_ab_matrix_enforced.yaml",
-    "benchmarks/cases/v1_interrupt_tiers_enforced.yaml",
-    "benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml",
-    "benchmarks/cases/dogfood_box3_audio_first_enforced.yaml",
+    "benchmark/cases/barge_in_ab_matrix_enforced.yaml",
+    "benchmark/cases/v1_interrupt_tiers_enforced.yaml",
+    "benchmark/cases/v1_realistic_interaction_flows_enforced.yaml",
+    "benchmark/cases/dogfood_box3_audio_first_enforced.yaml",
 )
 KEY_LATENCY_METRICS = (
     "timeline_interrupt_speech_to_started_ms",
@@ -658,7 +658,7 @@ def _parse_args() -> argparse.Namespace:
         default=list(DEFAULT_CASES),
         help="Benchmark case YAML files. Defaults to enforced real-audio barge-in suites.",
     )
-    parser.add_argument("--output-dir", default="benchmarks/runs")
+    parser.add_argument("--output-dir", default="benchmark/runs")
     parser.add_argument(
         "--run-id",
         default=f"barge-in-e2e-ab-{time.strftime('%Y%m%d-%H%M%S')}",

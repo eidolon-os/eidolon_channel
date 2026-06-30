@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from eidolon.livekit.benchmarks.audio_assets import write_wav
-from eidolon.livekit.benchmarks.hard_stop_detector import (
+from benchmark.audio_assets import write_wav
+from benchmark.hard_stop_detector import (
     load_livekit_stt_actionable_metrics,
     run_template_detector_comparison,
     summarize_metric,

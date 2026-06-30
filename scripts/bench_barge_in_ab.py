@@ -22,23 +22,23 @@ from pathlib import Path
 from typing import Any
 
 from eidolon.livekit.agent.streaming import StreamingPipeline
-from eidolon.livekit.benchmarks.policy_runner import (
+from benchmark.policy_runner import (
     run_policy_suite,
     write_policy_outputs,
 )
-from eidolon.livekit.benchmarks.report import write_repeated_reports
-from eidolon.livekit.benchmarks.schema import load_suites
+from benchmark.report import write_repeated_reports
+from benchmark.schema import load_suites
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
 from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT
 
 
 DEFAULT_CASES = (
-    "benchmarks/cases/barge_in_ab_matrix_enforced.yaml",
-    "benchmarks/cases/fullduplex_barge_in_probe_enforced.yaml",
-    "benchmarks/cases/v1_interrupt_tiers_enforced.yaml",
-    "benchmarks/cases/v1_realistic_interaction_flows_enforced.yaml",
-    "benchmarks/cases/v1_realistic_extended.yaml",
-    "benchmarks/cases/dogfood_box3_audio_first_enforced.yaml",
+    "benchmark/cases/barge_in_ab_matrix_enforced.yaml",
+    "benchmark/cases/fullduplex_barge_in_probe_enforced.yaml",
+    "benchmark/cases/v1_interrupt_tiers_enforced.yaml",
+    "benchmark/cases/v1_realistic_interaction_flows_enforced.yaml",
+    "benchmark/cases/v1_realistic_extended.yaml",
+    "benchmark/cases/dogfood_box3_audio_first_enforced.yaml",
 )
 
 
@@ -323,7 +323,7 @@ def _render_markdown(summary: dict[str, Any]) -> str:
 def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cases", nargs="*", default=list(DEFAULT_CASES))
-    parser.add_argument("--output-dir", default="benchmarks/runs")
+    parser.add_argument("--output-dir", default="benchmark/runs")
     parser.add_argument("--run-id", default=f"barge-in-ab-{time.strftime('%Y%m%d-%H%M%S')}")
     parser.add_argument("--repeat", type=int, default=10)
     parser.add_argument(

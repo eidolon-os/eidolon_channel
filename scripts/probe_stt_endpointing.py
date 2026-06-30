@@ -5,7 +5,7 @@ Validates whether lowering the STT endpointing silence (the ``eos`` knob that
 cuts first-audio latency) changes mid-utterance / hesitation splitting. It
 synthesizes hesitant utterances via the configured TTS (a fragment, a spoken
 filler like 嗯/那个, then a completion, separated by short gaps), saves them as
-reusable WAV fixtures under ``benchmarks/audio/generated/``, then streams each
+reusable WAV fixtures under ``benchmark/audio/generated/``, then streams each
 through the real STT at several ``max_sentence_silence`` values and reports how
 many FINAL transcripts come back (>1 = a premature split).
 
@@ -33,7 +33,7 @@ from eidolon.livekit.plugins.stt.bailian.stt import BailianFunASRSTT
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
 SR = 16_000
-OUTDIR = Path("benchmarks/audio/generated")
+OUTDIR = Path("benchmark/audio/generated")
 EOS_VALUES = (400, 600, 800)
 
 # (label, fragment_a, spoken_filler, gap_ms, fragment_b) — one intended utterance.

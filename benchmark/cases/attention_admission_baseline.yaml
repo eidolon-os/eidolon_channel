@@ -7,7 +7,7 @@ cases:
     audio_clips:
       - id: hard_stop_dont
         text: 别说了。
-        path: benchmarks/audio/generated/hard_stop_dont.wav
+        path: benchmark/audio/generated/hard_stop_dont.wav
         intent: hard_stop
     user_steps:
       - text: 别说了
@@ -31,7 +31,7 @@ cases:
     audio_clips:
       - id: hard_stop_dont
         text: 别说了。
-        path: benchmarks/audio/generated/hard_stop_dont.wav
+        path: benchmark/audio/generated/hard_stop_dont.wav
         intent: hard_stop
     user_steps:
       - text: 别说了
@@ -55,7 +55,7 @@ cases:
     audio_clips:
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 那它的主要风险是什么
@@ -85,7 +85,7 @@ cases:
     audio_clips:
       - id: backchannel_ok
         text: 好。
-        path: benchmarks/audio/generated/backchannel_ok.wav
+        path: benchmark/audio/generated/backchannel_ok.wav
         intent: backchannel
     user_steps:
       - text: 好的
@@ -113,11 +113,11 @@ cases:
     audio_clips:
       - id: noise_like_cough
         text: 咳。
-        path: benchmarks/audio/generated/noise_like_cough.wav
+        path: benchmark/audio/generated/noise_like_cough.wav
         intent: noise
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 咳
@@ -150,7 +150,7 @@ cases:
     audio_clips:
       - id: normal_ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案

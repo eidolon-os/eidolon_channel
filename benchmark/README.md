@@ -10,7 +10,7 @@ turn-taking work.
 ```
 
 The script uses the configured TTS provider and writes WAV clips to
-`benchmarks/audio/generated`.
+`benchmark/audio/generated`.
 
 ## Run Benchmark
 
@@ -96,9 +96,9 @@ a `bad` "real call NOT verified" finding.
 Outputs are written to:
 
 ```text
-benchmarks/runs/<run-id>/policy
-benchmarks/runs/<run-id>/headless
-benchmarks/runs/<run-id>/component
+benchmark/runs/<run-id>/policy
+benchmark/runs/<run-id>/headless
+benchmark/runs/<run-id>/component
 ```
 
 Each runner writes JSONL, `metrics.json`, `report.md`, and `report.html`.
@@ -107,16 +107,16 @@ Each runner writes JSONL, `metrics.json`, `report.md`, and `report.html`.
 
 ```bash
 ./.venv/bin/python scripts/compare_voice_bench.py \
-  --baseline benchmarks/baselines/current/policy \
-  --candidate benchmarks/runs/candidate/policy
+  --baseline benchmark/baselines/current/policy \
+  --candidate benchmark/runs/candidate/policy
 
 ./.venv/bin/python scripts/compare_voice_bench.py \
-  --baseline benchmarks/baselines/current/headless \
-  --candidate benchmarks/runs/candidate/headless
+  --baseline benchmark/baselines/current/headless \
+  --candidate benchmark/runs/candidate/headless
 
 ./.venv/bin/python scripts/compare_voice_bench.py \
-  --baseline benchmarks/baselines/current/component \
-  --candidate benchmarks/runs/candidate-components/component \
+  --baseline benchmark/baselines/current/component \
+  --candidate benchmark/runs/candidate-components/component \
   --max-p95-regression-pct 30
 ```
 
@@ -128,10 +128,10 @@ latency; failed cases and empty outputs still fail regardless of this threshold.
 
 ```bash
 ./.venv/bin/python scripts/report_voice_bench_dashboard.py \
-  --full-run benchmarks/runs/candidate \
-  --direct-run benchmarks/runs/candidate-direct/headless \
-  --livekit-room-run benchmarks/runs/candidate-room/livekit_room \
-  --output benchmarks/runs/candidate/dashboard.html
+  --full-run benchmark/runs/candidate \
+  --direct-run benchmark/runs/candidate-direct/headless \
+  --livekit-room-run benchmark/runs/candidate-room/livekit_room \
+  --output benchmark/runs/candidate/dashboard.html
 ```
 
 The dashboard contains three layers of judgment:
@@ -193,14 +193,14 @@ For real room timeline collection, set the channel worker config:
 
 ```yaml
 observability:
-  timeline_debug_path: "benchmarks/runs/channel-worker-turn-timeline.jsonl"
+  timeline_debug_path: "benchmark/runs/channel-worker-turn-timeline.jsonl"
 ```
 
 The `livekit_room` runner snapshots only the new lines written during that
 benchmark run into:
 
 ```text
-benchmarks/runs/<run-id>/livekit_room/turn_timeline.jsonl
+benchmark/runs/<run-id>/livekit_room/turn_timeline.jsonl
 ```
 
 ## Runner Boundaries
@@ -227,12 +227,12 @@ input can include deterministic echo/noise. The first suite is explicit-only:
 
 ```bash
 ./.venv/bin/python scripts/bench_voice.py \
-  --cases benchmarks/cases/dogfood_box3_audio_first_enforced.yaml \
+  --cases benchmark/cases/dogfood_box3_audio_first_enforced.yaml \
   --runner headless \
   --run-id dogfood-headless
 
 ./.venv/bin/python scripts/bench_voice.py \
-  --cases benchmarks/cases/dogfood_box3_audio_first_enforced.yaml \
+  --cases benchmark/cases/dogfood_box3_audio_first_enforced.yaml \
   --runner livekit_room \
   --run-id dogfood-room
 ```
@@ -248,7 +248,7 @@ After a real device dogfood attempt, inspect the worker timeline evidence:
 
 ```bash
 ./.venv/bin/python scripts/analyze_hil_barge_in.py \
-  --timeline benchmarks/runs/channel-worker-turn-timeline.jsonl \
+  --timeline benchmark/runs/channel-worker-turn-timeline.jsonl \
   --latest 8 \
   --require-cancel
 ```
@@ -278,7 +278,7 @@ dogfood:
 Runner responsibilities stay separated:
 
 - schema parses dogfood intent and expectations.
-- `benchmarks.dogfood` renders synthetic mic audio and device cadence.
+- `benchmark.dogfood` renders synthetic mic audio and device cadence.
 - `headless` replays the rendered mic audio in memory.
 - `component` applies the same mic rendering to VAD/STT inputs.
 - `livekit_room` publishes `client.audio_state` at the configured device cadence.

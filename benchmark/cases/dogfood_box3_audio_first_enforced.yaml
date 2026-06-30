@@ -30,11 +30,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: owner_followup_capability
         text: 那你现在能帮我做什么？
-        path: benchmarks/audio/generated/owner_followup_capability.wav
+        path: benchmark/audio/generated/owner_followup_capability.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -97,7 +97,7 @@ cases:
     audio_clips:
       - id: backchannel_mm
         text: 嗯嗯
-        path: benchmarks/audio/generated/backchannel_mm.wav
+        path: benchmark/audio/generated/backchannel_mm.wav
         intent: backchannel
     user_steps:
       - text: 嗯嗯

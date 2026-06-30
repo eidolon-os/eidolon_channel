@@ -8,7 +8,7 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -35,11 +35,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: hard_stop_stop
         text: 停一下。
-        path: benchmarks/audio/generated/hard_stop_stop.wav
+        path: benchmark/audio/generated/hard_stop_stop.wav
         intent: hard_stop
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -75,11 +75,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: hard_stop_ok_dont
         text: 行，不要说了。
-        path: benchmarks/audio/generated/hard_stop_ok_dont.wav
+        path: benchmark/audio/generated/hard_stop_ok_dont.wav
         intent: hard_stop
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -115,11 +115,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: topic_switch
         text: 换个话题，我们聊点别的。
-        path: benchmarks/audio/generated/topic_switch.wav
+        path: benchmark/audio/generated/topic_switch.wav
         intent: topic_switch
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -156,11 +156,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: correction
         text: 不是，我刚才说错了。
-        path: benchmarks/audio/generated/correction.wav
+        path: benchmark/audio/generated/correction.wav
         intent: correction
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -197,11 +197,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -245,11 +245,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: owner_followup_capability
         text: 那你现在能帮我做什么？
-        path: benchmarks/audio/generated/owner_followup_capability.wav
+        path: benchmark/audio/generated/owner_followup_capability.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -291,11 +291,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: language_switch_english
         text: 我们换成英文，然后聊。
-        path: benchmarks/audio/generated/language_switch_english.wav
+        path: benchmark/audio/generated/language_switch_english.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -336,11 +336,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: wait_one_second
         text: 等一秒。
-        path: benchmarks/audio/generated/wait_one_second.wav
+        path: benchmark/audio/generated/wait_one_second.wav
         intent: correction
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -377,11 +377,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: backchannel_ok
         text: 好。
-        path: benchmarks/audio/generated/backchannel_ok.wav
+        path: benchmark/audio/generated/backchannel_ok.wav
         intent: backchannel
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -417,11 +417,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: noise_like_cough
         text: 咳。
-        path: benchmarks/audio/generated/noise_like_cough.wav
+        path: benchmark/audio/generated/noise_like_cough.wav
         intent: noise
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -457,11 +457,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -501,11 +501,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: hard_stop_dont
         text: 别说了。
-        path: benchmarks/audio/generated/hard_stop_dont.wav
+        path: benchmark/audio/generated/hard_stop_dont.wav
         intent: hard_stop
     user_steps:
       - text: 帮我详细介绍一下这个方案

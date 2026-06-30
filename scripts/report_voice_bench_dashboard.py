@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from eidolon.livekit.benchmarks.dashboard import DashboardRunner, write_dashboard
+from benchmark.dashboard import DashboardRunner, write_dashboard
 
 
 def _main() -> int:
@@ -26,25 +26,25 @@ def _main() -> int:
             DashboardRunner(
                 name="policy",
                 candidate=full_run / "policy",
-                baseline=Path("benchmarks/baselines/current/policy"),
+                baseline=Path("benchmark/baselines/current/policy"),
                 max_p95_regression_pct=10.0,
             ),
             DashboardRunner(
                 name="headless",
                 candidate=full_run / "headless",
-                baseline=Path("benchmarks/baselines/current/headless"),
+                baseline=Path("benchmark/baselines/current/headless"),
                 max_p95_regression_pct=10.0,
             ),
             DashboardRunner(
                 name="component",
                 candidate=full_run / "component",
-                baseline=Path("benchmarks/baselines/current/component"),
+                baseline=Path("benchmark/baselines/current/component"),
                 max_p95_regression_pct=args.component_regression_pct,
             ),
             DashboardRunner(
                 name="headless_direct",
                 candidate=direct_run,
-                baseline=Path("benchmarks/baselines/current/headless_direct"),
+                baseline=Path("benchmark/baselines/current/headless_direct"),
                 max_p95_regression_pct=args.direct_regression_pct,
             ),
         ]

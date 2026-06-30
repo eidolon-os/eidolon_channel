@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import wave
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +19,7 @@ import httpx
 import yaml
 
 from eidolon.livekit.agent.factory import SharedStageFactory
-from eidolon.livekit.benchmarks.audio_assets import (
-    load_clip_pcm,
+from benchmark.audio_assets import (
     synthesize_composite_pcm,
     synthesize_pcm,
     wav_duration_ms,
@@ -496,14 +494,14 @@ async def _main() -> int:
     parser.add_argument("--user-id", default="default")
     parser.add_argument("--template-id", default="caretaker_jiezhi")
     parser.add_argument("--admin-url", default="http://127.0.0.1:9000")
-    parser.add_argument("--out-dir", default="benchmarks/audio/synthetic_default")
+    parser.add_argument("--out-dir", default="benchmark/audio/synthetic_default")
     parser.add_argument(
         "--cases-out",
-        default="benchmarks/cases/synthetic_default_voiceprint_e2e.yaml",
+        default="benchmark/cases/synthetic_default_voiceprint_e2e.yaml",
     )
     parser.add_argument(
         "--manifest-out",
-        default="benchmarks/audio/synthetic_default/manifest.yaml",
+        default="benchmark/audio/synthetic_default/manifest.yaml",
     )
     parser.add_argument(
         "--negative-sample",

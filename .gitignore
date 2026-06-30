@@ -18,8 +18,7 @@ config/settings.yaml
 # Local test secrets
 eidolon/livekit/tests/.env
 
-# Benchmark artifacts. Committed cases/baselines/audio stay under benchmarks/.
-benchmarks/runs/
+# Benchmark artifacts. Committed cases/baselines/audio stay under benchmark/.
 benchmark/runs/
 reports/benchmark*/
 reports/*benchmark*/

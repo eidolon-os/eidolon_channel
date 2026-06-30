@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from eidolon.livekit.benchmarks.hard_stop_detector import (
+from benchmark.hard_stop_detector import (
     DetectorComparison,
     load_livekit_stt_actionable_metrics,
     run_template_detector_comparison,
@@ -19,17 +19,17 @@ from eidolon.livekit.benchmarks.hard_stop_detector import (
 
 
 DEFAULT_RUN_DIR = Path(
-    "benchmarks/runs/realistic-extended-actionable-transcript-repeat3-20260608/livekit_room"
+    "benchmark/runs/realistic-extended-actionable-transcript-repeat3-20260608/livekit_room"
 )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", default="benchmarks/audio/generated/manifest.yaml")
+    parser.add_argument("--manifest", default="benchmark/audio/generated/manifest.yaml")
     parser.add_argument("--livekit-run", default=str(DEFAULT_RUN_DIR))
     parser.add_argument(
         "--out-dir",
-        default="benchmarks/runs/hard-stop-detector-comparison-20260608",
+        default="benchmark/runs/hard-stop-detector-comparison-20260608",
     )
     parser.add_argument("--min-window-ms", type=int, default=180)
     parser.add_argument("--max-window-ms", type=int, default=900)
@@ -103,8 +103,8 @@ def _load_manifest_clips(manifest_path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _resolve_clip_path(manifest_path: Path, path: Path) -> Path:
-    if path.parts and path.parts[0] == "benchmarks":
-        return manifest_path.parent.parent.parent / path.relative_to("benchmarks")
+    if path.parts and path.parts[0] == "benchmark":
+        return manifest_path.parent.parent.parent / path.relative_to("benchmark")
     return manifest_path.parent / path
 
 

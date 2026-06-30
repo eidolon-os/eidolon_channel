@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from eidolon.livekit.benchmarks.report import render_html, render_markdown
+from benchmark.report import render_html, render_markdown
 
 
 def _main() -> int:

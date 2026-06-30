@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from eidolon.livekit.agent.factory import SharedStageFactory
-from eidolon.livekit.benchmarks.audio_assets import (
+from benchmark.audio_assets import (
     CompositeParts,
     synthesize_composite_pcm,
     synthesize_pcm,
@@ -55,8 +55,8 @@ COMPOSITE_CLIPS: dict[str, CompositeParts] = {
 
 async def _main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default="benchmarks/audio/generated")
-    parser.add_argument("--manifest", default="benchmarks/audio/generated/manifest.yaml")
+    parser.add_argument("--out-dir", default="benchmark/audio/generated")
+    parser.add_argument("--manifest", default="benchmark/audio/generated/manifest.yaml")
     args = parser.parse_args()
 
     cfg = load_effective_config()

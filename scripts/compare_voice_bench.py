@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from eidolon.livekit.benchmarks.compare import compare_metrics, load_metrics
+from benchmark.compare import compare_metrics, load_metrics
 
 
 def _main() -> int:

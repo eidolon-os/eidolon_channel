@@ -12,45 +12,45 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
-from eidolon.livekit.benchmarks.component_runner import (
+from benchmark.component_runner import (
     ComponentTimeouts,
     run_component_suite,
     write_component_outputs,
 )
-from eidolon.livekit.benchmarks.headless_runner import (
+from benchmark.headless_runner import (
     run_headless_suite,
     write_headless_outputs,
 )
-from eidolon.livekit.benchmarks.livekit_room_runner import (
+from benchmark.livekit_room_runner import (
     LiveKitRoomOptions,
     run_livekit_room_suite,
     write_livekit_room_outputs,
 )
-from eidolon.livekit.benchmarks.policy_runner import (
+from benchmark.policy_runner import (
     run_policy_suite,
     write_policy_outputs,
 )
-from eidolon.livekit.benchmarks.realcall import (
+from benchmark.realcall import (
     apply_real_call_verification,
     preflight_real_stack,
 )
-from eidolon.livekit.benchmarks.compare import load_metrics
-from eidolon.livekit.benchmarks.report import write_repeated_reports
-from eidolon.livekit.benchmarks.schema import load_suites
-from eidolon.livekit.benchmarks.slo import enforcement_failures, evaluate_slo_gates
-from eidolon.livekit.benchmarks.timeline import (
+from benchmark.compare import load_metrics
+from benchmark.report import write_repeated_reports
+from benchmark.schema import load_suites
+from benchmark.slo import enforcement_failures, evaluate_slo_gates
+from benchmark.timeline import (
     TimelineCapture,
     load_timeline_records,
     summarize_timeline_records,
 )
-from eidolon.livekit.benchmarks.timeline_expectations import apply_timeline_expectations
+from benchmark.timeline_expectations import apply_timeline_expectations
 from eidolon.livekit.common.config import load_effective_config
 
 
 def _default_cases() -> list[str]:
     return [
         str(p)
-        for p in sorted(Path("benchmarks/cases").glob("*.yaml"))
+        for p in sorted(Path("benchmark/cases").glob("*.yaml"))
         if not p.name.endswith("_enforced.yaml")
     ]
 
@@ -269,7 +269,7 @@ async def _main() -> int:
     )
     parser.add_argument("--llm-mode", choices=["mock", "direct"], default="mock")
     parser.add_argument("--cases", nargs="*", default=None)
-    parser.add_argument("--output-dir", default="benchmarks/runs")
+    parser.add_argument("--output-dir", default="benchmark/runs")
     parser.add_argument("--run-id", default=time.strftime("%Y%m%d-%H%M%S"))
     parser.add_argument(
         "--attention-enforce",

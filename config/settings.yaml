@@ -149,7 +149,7 @@ turn_policy:
 observability:
   structured_logs: true
   metrics_enabled: true
-  timeline_debug_path: "benchmarks/runs/channel-worker-turn-timeline.jsonl"
+  timeline_debug_path: "benchmark/runs/channel-worker-turn-timeline.jsonl"
   llm_first_delta_timeout_ms: 3000
 
 # Bailian STT/TTS provider config (non-secret). API keys stay in .env

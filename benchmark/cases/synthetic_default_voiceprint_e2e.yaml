@@ -12,7 +12,7 @@ cases:
   audio_clips:
   - id: owner_medical_project
     text: 今天我想聊一下一个新的医疗项目。
-    path: benchmarks/audio/synthetic_default/owner_medical_project.wav
+    path: benchmark/audio/synthetic_default/owner_medical_project.wav
     intent: normal
   user_steps:
   - text: 今天我想聊一下一个新的医疗项目
@@ -44,7 +44,7 @@ cases:
   audio_clips:
   - id: owner_pause_private_hospital
     text: 私立医院的。主要给医生做的系统。不是给患者的。
-    path: benchmarks/audio/synthetic_default/owner_pause_private_hospital.wav
+    path: benchmark/audio/synthetic_default/owner_pause_private_hospital.wav
     intent: normal
   user_steps:
   - text: 私立医院的，主要给医生做的系统，不是给患者的
@@ -76,11 +76,11 @@ cases:
   audio_clips:
   - id: normal_ask_intro
     text: 帮我详细介绍一下这个方案。
-    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    path: benchmark/audio/synthetic_default/normal_ask_intro.wav
     intent: normal
   - id: hard_stop_stop
     text: 停一下。
-    path: benchmarks/audio/synthetic_default/hard_stop_stop.wav
+    path: benchmark/audio/synthetic_default/hard_stop_stop.wav
     intent: hard_stop
   user_steps:
   - text: 帮我详细介绍一下这个方案
@@ -120,11 +120,11 @@ cases:
   audio_clips:
   - id: normal_ask_intro
     text: 帮我详细介绍一下这个方案。
-    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    path: benchmark/audio/synthetic_default/normal_ask_intro.wav
     intent: normal
   - id: topic_switch_pricing
     text: 换个话题，我们聊一下定价。
-    path: benchmarks/audio/synthetic_default/topic_switch_pricing.wav
+    path: benchmark/audio/synthetic_default/topic_switch_pricing.wav
     intent: topic_switch
   user_steps:
   - text: 帮我详细介绍一下这个方案
@@ -166,11 +166,11 @@ cases:
   audio_clips:
   - id: normal_ask_intro
     text: 帮我详细介绍一下这个方案。
-    path: benchmarks/audio/synthetic_default/normal_ask_intro.wav
+    path: benchmark/audio/synthetic_default/normal_ask_intro.wav
     intent: normal
   - id: backchannel_duiya
     text: 对呀。
-    path: benchmarks/audio/synthetic_default/backchannel_duiya.wav
+    path: benchmark/audio/synthetic_default/backchannel_duiya.wav
     intent: backchannel
   user_steps:
   - text: 帮我详细介绍一下这个方案

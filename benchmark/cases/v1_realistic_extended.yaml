@@ -8,7 +8,7 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -35,11 +35,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: hard_stop_dont
         text: 别说了。
-        path: benchmarks/audio/generated/hard_stop_dont.wav
+        path: benchmark/audio/generated/hard_stop_dont.wav
         intent: hard_stop
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -75,11 +75,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: hard_stop_stop
         text: 停一下。
-        path: benchmarks/audio/generated/hard_stop_stop.wav
+        path: benchmark/audio/generated/hard_stop_stop.wav
         intent: hard_stop
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -115,11 +115,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: topic_switch
         text: 换个话题，我们聊点别的。
-        path: benchmarks/audio/generated/topic_switch.wav
+        path: benchmark/audio/generated/topic_switch.wav
         intent: topic_switch
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -159,11 +159,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: backchannel_en
         text: 嗯。
-        path: benchmarks/audio/generated/backchannel_en.wav
+        path: benchmark/audio/generated/backchannel_en.wav
         intent: backchannel
     user_steps:
       - text: 帮我详细介绍一下这个方案
@@ -199,11 +199,11 @@ cases:
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
-        path: benchmarks/audio/generated/normal_ask_intro.wav
+        path: benchmark/audio/generated/normal_ask_intro.wav
         intent: normal
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 帮我详细介绍一下这个方案

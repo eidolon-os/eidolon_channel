@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from eidolon.livekit.benchmarks.dashboard import DashboardRunner, write_dashboard
-from eidolon.livekit.benchmarks.policy_runner import run_policy_suite
-from eidolon.livekit.benchmarks.report import write_repeated_reports
-from eidolon.livekit.benchmarks.schema import load_suite
-from eidolon.livekit.benchmarks.slo import enforcement_failures
+from benchmark.dashboard import DashboardRunner, write_dashboard
+from benchmark.policy_runner import run_policy_suite
+from benchmark.report import write_repeated_reports
+from benchmark.schema import load_suite
+from benchmark.slo import enforcement_failures
 from scripts.bench_voice import _default_cases
 
 

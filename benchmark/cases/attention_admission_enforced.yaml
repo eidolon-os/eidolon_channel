@@ -7,7 +7,7 @@ cases:
     audio_clips:
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 那它的主要风险是什么
@@ -40,7 +40,7 @@ cases:
     audio_clips:
       - id: hard_stop_dont
         text: 别说了。
-        path: benchmarks/audio/generated/hard_stop_dont.wav
+        path: benchmark/audio/generated/hard_stop_dont.wav
         intent: hard_stop
     user_steps:
       - text: 别说了
@@ -65,7 +65,7 @@ cases:
     audio_clips:
       - id: normal_followup
         text: 那它的主要风险是什么？
-        path: benchmarks/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/normal_followup.wav
         intent: normal
     user_steps:
       - text: 那它的主要风险是什么

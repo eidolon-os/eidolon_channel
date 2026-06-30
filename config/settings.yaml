@@ -67,7 +67,7 @@ voiceprint:
   model: campplus_zh_16k_common
   root: ~/eidolon/voiceprints
   # Empty means use the bundled model in
-  # eidolon/livekit/plugins/speaker_verification/resources/3dspeaker.
+  # eidolon/livekit/agent/speaker_verification/resources/3dspeaker.
   model_dir: ""
   threshold: 0.31
   min_audio_ms: 1500

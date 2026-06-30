@@ -27,18 +27,10 @@ from typing import Any
 
 import yaml
 
+from eidolon.livekit.agent.speaker_verification import default_campplus_model_dir
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL_DIR = (
-    _REPO_ROOT
-    / "eidolon"
-    / "livekit"
-    / "plugins"
-    / "speaker_verification"
-    / "resources"
-    / "3dspeaker"
-    / "campplus_zh_16k_common"
-)
+
+DEFAULT_MODEL_DIR = default_campplus_model_dir()
 
 
 class ValidationError(RuntimeError):

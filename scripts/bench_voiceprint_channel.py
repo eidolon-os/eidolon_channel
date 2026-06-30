@@ -15,24 +15,12 @@ from pathlib import Path
 from eidolon.livekit.agent.speaker_verification import (
     SpeakerVerificationService,
     VoiceprintStore,
+    default_campplus_model_dir,
     default_voiceprint_root,
 )
 from eidolon.livekit.agent.speaker_verification.providers import (
     ModelScopeCampPlusSpeakerVerificationProvider,
 )
-
-
-def _default_model_dir() -> Path:
-    return (
-        Path(__file__).resolve().parents[1]
-        / "eidolon"
-        / "livekit"
-        / "plugins"
-        / "speaker_verification"
-        / "resources"
-        / "3dspeaker"
-        / "campplus_zh_16k_common"
-    )
 
 
 def _crop_wav(src: Path, dst: Path, seconds: int) -> int:
@@ -149,7 +137,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tenant-id", default="default")
     parser.add_argument("--user-id", default="manson")
     parser.add_argument("--voiceprint-root", type=Path, default=default_voiceprint_root())
-    parser.add_argument("--model-dir", type=Path, default=_default_model_dir())
+    parser.add_argument("--model-dir", type=Path, default=default_campplus_model_dir())
     parser.add_argument(
         "--sample",
         type=Path,

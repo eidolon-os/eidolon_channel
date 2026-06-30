@@ -14,7 +14,7 @@ from eidolon.livekit.common.config.defaults import (
     DEFAULT_HARD_STOP_SPEECH_VERBS,
     DEFAULT_TOPIC_SWITCH_LEXICON,
 )
-from eidolon.livekit.plugins.eot.impl.constants import (
+from eidolon.livekit.common.conversation_signals import (
     BACKCHANNEL_WORDS,
     NOISE_LIKE_TRANSCRIPTIONS,
 )

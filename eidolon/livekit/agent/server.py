@@ -45,19 +45,9 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
+from eidolon.livekit.agent.speaker_verification.model_paths import default_campplus_model_dir
 
 logger = logging.getLogger("agent_server")
-
-
-def _default_voiceprint_model_dir() -> Path:
-    return (
-        Path(__file__).resolve().parents[1]
-        / "plugins"
-        / "speaker_verification"
-        / "resources"
-        / "3dspeaker"
-        / "campplus_zh_16k_common"
-    )
 
 
 # Suppress noisy debug logs from websockets library (BINARY frame dumps)
@@ -173,7 +163,7 @@ def _prewarm(proc) -> None:
         model_dir = (
             Path(vp_cfg.model_dir).expanduser()
             if vp_cfg.model_dir.strip()
-            else _default_voiceprint_model_dir()
+            else default_campplus_model_dir()
         )
         provider = ModelScopeCampPlusSpeakerVerificationProvider(
             model_dir=model_dir,

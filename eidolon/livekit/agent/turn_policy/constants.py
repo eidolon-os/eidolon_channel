@@ -6,6 +6,10 @@ belong in ``config/settings.yaml`` and ``InterruptPolicyConfig`` instead.
 
 from __future__ import annotations
 
+from eidolon.livekit.common.conversation_signals import (
+    REPEATED_NOISE_CHARS as _REPEATED_NOISE_CHARS,
+)
+
 INTERRUPT_TEXT_TRAILING_CHARS = "。.!？?！,， "
 
 ASR_EXACT_CANONICALIZATIONS: dict[str, str] = {
@@ -17,7 +21,7 @@ ASR_EXACT_CANONICALIZATIONS: dict[str, str] = {
 
 ASR_PREFIX_CANONICALIZATIONS: tuple[tuple[str, str], ...] = ()
 
-REPEATED_NOISE_CHARS = "啊嗯哈咳哎哦唉"
+REPEATED_NOISE_CHARS = _REPEATED_NOISE_CHARS
 
 TRANSCRIPT_PREVIEW_MAX_CHARS = 80
 

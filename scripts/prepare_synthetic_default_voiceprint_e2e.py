@@ -55,19 +55,6 @@ ENROLLMENT_CLIPS = (
 )
 
 
-def _default_model_dir() -> Path:
-    return (
-        Path(__file__).resolve().parents[1]
-        / "eidolon"
-        / "livekit"
-        / "plugins"
-        / "speaker_verification"
-        / "resources"
-        / "3dspeaker"
-        / "campplus_zh_16k_common"
-    )
-
-
 async def _generate_audio(args: argparse.Namespace) -> dict[str, Path]:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

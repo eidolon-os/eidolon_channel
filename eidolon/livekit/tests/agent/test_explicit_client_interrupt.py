@@ -19,9 +19,11 @@ from unittest.mock import MagicMock
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
 from eidolon.livekit.agent.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 
@@ -30,11 +32,16 @@ def _pipeline(
     state: ClientAudioState | None,
     pipeline_state: PipelineState = PipelineState.SPEAKING,
     output_cancelled: bool = False,
+    timeline: TurnTimeline | None = None,
 ) -> StreamingPipeline:
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._turn_policy = TurnPolicyConfig()
     p._state = pipeline_state
-    p._timeline = None
+    p._timeline = timeline
+    p._pending_explicit_client_interrupt = None
+    p._turn_runtime = TurnPolicyRuntime(p._turn_policy)
+    p._ensure_decision_effect_applier = MagicMock()
+    p._decision_effects = MagicMock()
     if output_cancelled:
         # is_cancelled requires a mixer in CANCELLED state; stub it directly.
         p._ducking = MagicMock(is_cancelled=True)
@@ -69,6 +76,55 @@ def test_ptt_while_speaking_force_cancels() -> None:
     p = _pipeline(state=_state(ptt=True))
     p._handle_explicit_client_interrupt(_packet())
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
+
+
+def test_ptt_fast_path_records_owner_decision() -> None:
+    timeline = TurnTimeline("turn-ptt")
+    p = _pipeline(state=_state(ptt=True), timeline=timeline)
+
+    p._handle_explicit_client_interrupt(_packet())
+
+    p._decision_effects.record_decision_attrs.assert_called_once()
+    decision = p._decision_effects.record_decision_attrs.call_args.args[0]
+    assert decision.action is Action.CANCEL
+    assert decision.intent is InterruptIntent.HARD_STOP
+    assert decision.intent_source == "client_ptt"
+    assert timeline.attrs["turn_control"]["source"] == "client_ptt"
+    assert timeline.attrs["turn_control"]["reason"] == "explicit_client_ptt"
+    assert "interrupt_started_at" in timeline.timestamps
+
+
+def test_ptt_before_turn_timeline_is_attached_to_next_speech_timeline() -> None:
+    p = _pipeline(state=_state(ptt=True), timeline=None)
+
+    p._handle_explicit_client_interrupt(_packet())
+
+    p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
+    p._decision_effects.record_decision_attrs.assert_not_called()
+    pending = p._pending_explicit_client_interrupt
+    assert pending is not None
+    assert pending["state_attr"]["ptt"] is True
+    assert isinstance(pending["received_at"], float)
+    assert isinstance(pending["resolved_at"], float)
+
+    timeline = TurnTimeline("turn-ptt-delayed")
+    p._timeline = timeline
+    timeline.mark("speech_started_at")
+
+    p._apply_pending_explicit_client_interrupt(timeline)
+
+    p._decision_effects.record_decision_attrs.assert_called_once()
+    decision = p._decision_effects.record_decision_attrs.call_args.args[0]
+    assert decision.action is Action.CANCEL
+    assert decision.intent is InterruptIntent.HARD_STOP
+    assert decision.intent_source == "client_ptt"
+    assert p._pending_explicit_client_interrupt is None
+    assert timeline.attrs["explicit_client_interrupt"]["ptt"] is True
+    assert timeline.attrs["turn_control"]["source"] == "client_ptt"
+    assert timeline.attrs["turn_control"]["reason"] == "explicit_client_ptt"
+    assert "interrupt_started_at" in timeline.timestamps
+    assert "interrupt_resolved_at" in timeline.timestamps
+    assert timeline.attrs["cancel_reason"] == "explicit_client_ptt"
 
 
 def test_no_signal_does_not_cancel() -> None:

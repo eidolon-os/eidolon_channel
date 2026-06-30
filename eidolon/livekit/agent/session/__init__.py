@@ -3,6 +3,7 @@
 from .agent_state import AgentStateEffectHandler
 from .agent_output_coordinator import AgentOutputCoordinator
 from .attention_effects import AttentionEffectHandler
+from .client_interaction import ClientInteractionHandler, ExplicitClientInterruptLedger
 from .decision_effects import DecisionEffectApplier
 from .duck_timeout import DuckSuspendTimeoutHandler
 from .idle import IdleWatchdog
@@ -25,6 +26,8 @@ __all__ = [
     "AgentStateEffectHandler",
     "AgentOutputCoordinator",
     "AttentionEffectHandler",
+    "ClientInteractionHandler",
+    "ExplicitClientInterruptLedger",
     "DecisionEffectApplier",
     "DuckSuspendTimeoutHandler",
     "IdleWatchdog",

@@ -68,9 +68,7 @@ class InterruptDecider:
             base = replace(
                 base,
                 min_interim_chars=(
-                    min_interim_chars
-                    if min_interim_chars is not None
-                    else base.min_interim_chars
+                    min_interim_chars if min_interim_chars is not None else base.min_interim_chars
                 ),
                 early_cancel_score_threshold=(
                     early_cancel_score_threshold
@@ -82,10 +80,12 @@ class InterruptDecider:
                     if early_resume_score_threshold is not None
                     else base.early_resume_score_threshold
                 ),
-        )
+            )
         self._config = base
         self._classifier = classifier or LexiconInterruptClassifier(
-            fast_intents=self._config.fast_lexical_intents
+            fast_intents=self._config.fast_lexical_intents,
+            repeated_noise_min_chars=self._config.repeated_noise_min_chars,
+            repeated_noise_max_chars=self._config.repeated_noise_max_chars,
         )
         self._evidence_gate = TranscriptEvidenceGate(base)
 
@@ -125,6 +125,7 @@ class InterruptDecider:
         hard_prefix = hard_stop_prefix_intent(
             stripped,
             min_chars=self._config.min_interim_chars,
+            min_cjk_chars=self._config.hard_stop_prefix_min_cjk_chars,
         )
         if hard_prefix is InterruptIntent.HARD_STOP:
             return Decision(
@@ -313,8 +314,7 @@ class InterruptDecider:
                 return Decision(
                     action=Action.HOLD,
                     reason=(
-                        "deadline_wait_for_semantic_score:"
-                        f"{evidence.reason} score={eot_score:.2f}"
+                        f"deadline_wait_for_semantic_score:{evidence.reason} score={eot_score:.2f}"
                     ),
                     intent=InterruptIntent.UNCERTAIN,
                     intent_source="timeout",

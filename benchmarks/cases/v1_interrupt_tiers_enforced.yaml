@@ -98,6 +98,7 @@ cases:
           - 那它的主要风险是什么
           - 那它的主要风险是什么
           - 那它的主要风险是什么
+        eot_scores: [0.0, 0.25, 0.25, 0.25, 0.25, 0.74]
         final_delay_ms: 80
         vad_probability: 0.9
         agent_speaking: true
@@ -179,7 +180,8 @@ cases:
         agent_speaking: true
         client_playback_state: agent_speaking
     expect:
-      action: none
+      action: any
       intent: uncertain
+      decision_action: hold
       forbid_actions: ["cancel"]
       min_user_finals: 1

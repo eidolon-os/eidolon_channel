@@ -83,6 +83,28 @@ def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
 
     runtime.decide_from_transcript(
         "那它的主要风险是什么",
+        0.25,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.decide_from_transcript(
+        "那它的主要风险是什么",
+        0.25,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=470.0,
+    )
+
+    assert decision.tier == "tier2_interruption"
+    assert decision.reason.startswith("stable_normal_interrupt")
+
+
+def test_runtime_low_score_normal_interrupt_stays_hold() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    runtime.decide_from_transcript(
+        "那它的主要风险是什么",
         0.0,
         vad_active=True,
         agent_speaking=True,
@@ -96,8 +118,8 @@ def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
         event_time_ms=470.0,
     )
 
-    assert decision.tier == "tier2_interruption"
-    assert decision.reason.startswith("stable_normal_interrupt")
+    assert decision.action is Action.HOLD
+    assert decision.reason.startswith("semantic_score_wait")
 
 
 def test_runtime_annotates_short_weak_signal_as_tier3() -> None:
@@ -112,7 +134,7 @@ def test_runtime_annotates_short_weak_signal_as_tier3() -> None:
     )
 
     assert decision.tier == "tier3_backchannel_noise"
-    assert decision.tier_reason.startswith("weak_signal_short_transcript")
+    assert decision.tier_reason.startswith("intent:backchannel_await_more_speech")
 
 
 def test_runtime_hard_stop_bypasses_stable_signal_window() -> None:
@@ -185,21 +207,21 @@ def test_runtime_long_topic_text_uses_normal_stability_window() -> None:
 
     first = runtime.decide_from_transcript(
         "换个话",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=100.0,
     )
     too_soon = runtime.decide_from_transcript(
         "换个话",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=180.0,
     )
     stable = runtime.decide_from_transcript(
         "换个话",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=470.0,
@@ -253,21 +275,21 @@ def test_runtime_normal_interrupt_requires_stable_substantive_text() -> None:
 
     first = runtime.decide_from_transcript(
         "那它的主要风险是什么",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=100.0,
     )
     too_soon = runtime.decide_from_transcript(
         "那它的主要风险是什么",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=260.0,
     )
     stable = runtime.decide_from_transcript(
         "那它的主要风险是什么",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=470.0,
@@ -430,14 +452,14 @@ def test_runtime_stable_normal_interrupt_does_not_bypass_weak_followup_hold() ->
     )
     runtime.decide_from_transcript(
         "那它的主要风险是什么",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=500.0,
     )
     followup = runtime.decide_from_transcript(
         "那它的主要风险是什么",
-        0.0,
+        0.25,
         vad_active=True,
         agent_speaking=True,
         event_time_ms=900.0,

@@ -19,6 +19,7 @@ from eidolon.livekit.agent.runtime.resolver import (
 )
 from eidolon.livekit.agent.speaker_verification import SpeakerVerificationService
 from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
+from eidolon.livekit.common.config import RuntimeAdminConfig, VoiceprintConfig
 
 logger = logging.getLogger("agent.session.voiceprint")
 
@@ -82,18 +83,39 @@ class VoiceprintTurnObserver:
         service: SpeakerVerificationService | None,
         runtime_admin: Any | None = None,
         sample_rate: int = 16000,
-        max_audio_ms: int = 12_000,
-        accept_cache_ttl_sec: float = 180.0,
-        commit_threshold: float = 0.58,
+        max_audio_ms: int | None = None,
+        accept_cache_ttl_sec: float | None = None,
+        accept_cache_short_audio_max_ms: int | None = None,
+        commit_threshold: float | None = None,
+        owner_short_audio_bypass_ms: int | None = None,
         trust_paired_devices: bool = True,
         context_resolver: ContextResolver | None = None,
     ) -> None:
+        voiceprint_defaults = VoiceprintConfig()
         self._service = service
         self._runtime_admin = runtime_admin
         self._sample_rate = sample_rate
-        self._max_audio_ms = max_audio_ms
-        self._accept_cache_ttl_sec = accept_cache_ttl_sec
-        self._commit_threshold = commit_threshold
+        self._max_audio_ms = max_audio_ms or voiceprint_defaults.turn_max_audio_ms
+        self._accept_cache_ttl_sec = (
+            accept_cache_ttl_sec
+            if accept_cache_ttl_sec is not None
+            else voiceprint_defaults.accept_cache_ttl_ms / 1000.0
+        )
+        self._accept_cache_short_audio_max_ms = (
+            accept_cache_short_audio_max_ms
+            if accept_cache_short_audio_max_ms is not None
+            else voiceprint_defaults.accept_cache_short_audio_max_ms
+        )
+        self._commit_threshold = (
+            commit_threshold
+            if commit_threshold is not None
+            else voiceprint_defaults.owner_commit_threshold
+        )
+        self._owner_short_audio_bypass_ms = (
+            owner_short_audio_bypass_ms
+            if owner_short_audio_bypass_ms is not None
+            else voiceprint_defaults.owner_short_audio_bypass_ms
+        )
         self._trust_paired_devices = trust_paired_devices
         self._context_resolver = context_resolver
         self._room: Any | None = None
@@ -181,8 +203,7 @@ class VoiceprintTurnObserver:
             )
         except Exception:
             logger.exception(
-                "[VoiceprintTurnObserver] failed to start audio stream "
-                "participant=%s",
+                "[VoiceprintTurnObserver] failed to start audio stream participant=%s",
                 getattr(participant, "identity", ""),
             )
             return
@@ -270,7 +291,7 @@ class VoiceprintTurnObserver:
 
         cache_key = (tenant_id, user_id)
         cached = self._cached_accept(cache_key)
-        if cached is not None and audio_ms < 3_000:
+        if cached is not None and audio_ms < self._accept_cache_short_audio_max_ms:
             return self._record_result(
                 timeline,
                 replace(cached, audio_ms=audio_ms, latency_ms=0.0),
@@ -323,8 +344,24 @@ class VoiceprintTurnObserver:
         import httpx
 
         if self._http_client is None:
+            runtime_defaults = RuntimeAdminConfig()
             self._http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, connect=3.0),
+                timeout=httpx.Timeout(
+                    float(
+                        getattr(
+                            self._runtime_admin,
+                            "http_timeout_sec",
+                            runtime_defaults.http_timeout_sec,
+                        )
+                    ),
+                    connect=float(
+                        getattr(
+                            self._runtime_admin,
+                            "http_connect_timeout_sec",
+                            runtime_defaults.http_connect_timeout_sec,
+                        )
+                    ),
+                ),
                 trust_env=False,
             )
         return AdminResolveClient(
@@ -416,7 +453,7 @@ class VoiceprintTurnObserver:
             return False, "score_missing"
         if cached:
             return True, "cached_owner_context"
-        if signal.audio_ms is not None and signal.audio_ms < 1500:
+        if signal.audio_ms is not None and signal.audio_ms < self._owner_short_audio_bypass_ms:
             return True, "owner_known_short_audio"
         if score < self._commit_threshold:
             return True, f"owner_above_provider_threshold:{score:.3f}<{self._commit_threshold:.3f}"
@@ -426,24 +463,16 @@ class VoiceprintTurnObserver:
         if not self._trust_paired_devices:
             return False
         return bool(
-            ctx.device_id
-            and self._voiceprint_user_id(ctx)
-            and self._voiceprint_tenant_id(ctx)
+            ctx.device_id and self._voiceprint_user_id(ctx) and self._voiceprint_tenant_id(ctx)
         )
 
     @staticmethod
     def _voiceprint_tenant_id(ctx: ResolvedContext) -> str:
-        return str(
-            getattr(ctx, "tenant_id", None) or _DEFAULT_VOICEPRINT_TENANT_ID
-        )
+        return str(getattr(ctx, "tenant_id", None) or _DEFAULT_VOICEPRINT_TENANT_ID)
 
     @staticmethod
     def _voiceprint_user_id(ctx: ResolvedContext) -> str:
-        return str(
-            getattr(ctx, "user_id", None)
-            or getattr(ctx, "owner_id", None)
-            or ""
-        )
+        return str(getattr(ctx, "user_id", None) or getattr(ctx, "owner_id", None) or "")
 
     def _provider_name(self) -> str:
         provider = getattr(self._service, "_provider", None)

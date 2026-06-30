@@ -229,8 +229,9 @@ cases:
       - when: 详细介绍
         reply: 我会先讲系统结构，然后讲多端协同、音频打断、状态同步、测试方法和后续优化，这段回答会持续更久一些。
     expect:
-      action: none
+      action: any
       intent: uncertain
+      decision_action: hold
       forbid_actions: ["cancel"]
       min_user_finals: 2
       min_agent_messages: 1

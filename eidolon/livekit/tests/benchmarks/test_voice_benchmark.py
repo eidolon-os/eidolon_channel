@@ -122,7 +122,8 @@ def test_load_attention_admission_enforced_suite() -> None:
         if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
     )
     assert ambient_case.user_steps[0].client_playback_state == "agent_speaking"
-    assert ambient_case.expectations.action == "none"
+    assert ambient_case.expectations.action == "any"
+    assert ambient_case.expectations.decision_action == "hold"
     assert "cancel" in ambient_case.expectations.forbid_actions
 
 
@@ -268,8 +269,9 @@ def test_policy_runner_attention_enforced_suite() -> None:
         for case in run.cases
         if case.case_id == "enforced_ambient_playback_speech_does_not_cancel_001"
     )
-    assert ambient.metrics["actual_action"] == "none"
-    assert ambient.decisions[0]["attention_admission"]["action"] == "observe"
+    assert ambient.metrics["actual_action"] == "hold"
+    assert ambient.metrics["actual_decision_action"] == "hold"
+    assert ambient.decisions[0]["attention_admission"]["action"] == "duck_and_decide"
     assert ambient.decisions[0]["attention_admission"]["client_state_used"] is True
     assert ambient.decisions[0]["decision"] is None
 
@@ -294,8 +296,9 @@ def test_policy_runner_enforced_ambient_playback_is_observed_not_cancelled() -> 
     )
     assert run.profile == "balanced_semantic"
     assert ambient.passed is True
-    assert ambient.metrics["actual_action"] == "none"
-    assert ambient.decisions[0]["attention_admission"]["action"] == "observe"
+    assert ambient.metrics["actual_action"] == "hold"
+    assert ambient.metrics["actual_decision_action"] == "hold"
+    assert ambient.decisions[0]["attention_admission"]["action"] == "duck_and_decide"
     assert ambient.decisions[0]["decision"] is None
 
 
@@ -318,7 +321,8 @@ def test_load_v1_interrupt_tiers_enforced_suite() -> None:
         if case.case_id == "tier4_ambient_speech_enforced_observes_001"
     )
     assert ambient.user_steps[0].client_playback_state == "agent_speaking"
-    assert ambient.expectations.action == "none"
+    assert ambient.expectations.action == "any"
+    assert ambient.expectations.decision_action == "hold"
     assert "cancel" in ambient.expectations.forbid_actions
 
 
@@ -342,8 +346,9 @@ def test_policy_runner_v1_interrupt_tiers_enforced_suite() -> None:
     tier4 = next(
         case for case in run.cases if case.case_id == "tier4_ambient_speech_enforced_observes_001"
     )
-    assert tier4.metrics["actual_action"] == "none"
-    assert tier4.decisions[0]["attention_admission"]["action"] == "observe"
+    assert tier4.metrics["actual_action"] == "hold"
+    assert tier4.metrics["actual_decision_action"] == "hold"
+    assert tier4.decisions[0]["attention_admission"]["action"] == "duck_and_decide"
     assert tier4.decisions[0]["decision"] is None
 
 
@@ -520,6 +525,24 @@ def test_load_barge_in_ab_matrix_suite() -> None:
         "ab_mic_muted_hard_stop_is_ignored_001",
         "ab_ptt_explicit_hard_interrupt_cancels_001",
     }
+    backchannel = next(
+        case
+        for case in suite.cases
+        if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
+    )
+    assert backchannel.expectations.decision_action == "rollback"
+    false_start = next(
+        case
+        for case in suite.cases
+        if case.case_id == "ab_false_start_wojuede_waits_for_more_evidence_001"
+    )
+    assert false_start.expectations.decision_action == "hold"
+    muted = next(
+        case
+        for case in suite.cases
+        if case.case_id == "ab_mic_muted_hard_stop_is_ignored_001"
+    )
+    assert muted.expectations.decision_action == "none"
 
 
 def test_policy_runner_barge_in_ab_matrix_suite() -> None:
@@ -544,12 +567,20 @@ def test_policy_runner_barge_in_ab_matrix_suite() -> None:
         if case.case_id == "ab_false_start_wojuede_waits_for_more_evidence_001"
     )
     assert false_start.metrics["actual_action"] != "cancel"
+    assert false_start.metrics["actual_decision_action"] == "hold"
+    backchannel = next(
+        case
+        for case in run.cases
+        if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
+    )
+    assert backchannel.metrics["actual_decision_action"] == "rollback"
     normal_interrupt = next(
         case
         for case in run.cases
         if case.case_id == "ab_normal_interrupt_high_eot_cancels_001"
     )
     assert normal_interrupt.metrics["actual_action"] == "cancel"
+    assert normal_interrupt.metrics["actual_decision_action"] == "cancel"
 
 
 def test_aggregate_case_metrics() -> None:

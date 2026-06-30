@@ -78,9 +78,7 @@ def canonicalize_interrupt_text(text: str) -> str:
 _HARD_STOP_PREFIXES = tuple(
     normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_PREFIX_LEXICON
 )
-_HARD_STOPS = tuple(
-    normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_LEXICON
-)
+_HARD_STOPS = tuple(normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_LEXICON)
 _HARD_STOP_NEGATION_PREFIXES = tuple(
     normalize_interrupt_text(item) for item in DEFAULT_HARD_STOP_NEGATION_PREFIXES
 )
@@ -152,10 +150,7 @@ def _hard_stop_speech_pattern(
             if not verb or not after_prefix.startswith(verb):
                 continue
             suffix = after_prefix[len(verb) :]
-            if (
-                suffix in _HARD_STOP_CONTROL_SUFFIXES
-                and (suffix or not require_control_suffix)
-            ):
+            if suffix in _HARD_STOP_CONTROL_SUFFIXES and (suffix or not require_control_suffix):
                 return True
     return False
 
@@ -168,17 +163,24 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
     evidence or a separately validated model.
     """
 
-    def __init__(self, *, fast_intents: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fast_intents: bool = False,
+        repeated_noise_min_chars: int = 2,
+        repeated_noise_max_chars: int = 6,
+    ) -> None:
         self._fast_intents = fast_intents
-        self._hard_stop = tuple(
-            normalize_interrupt_text(x) for x in DEFAULT_HARD_STOP_LEXICON
+        self._repeated_noise_min_chars = max(1, int(repeated_noise_min_chars))
+        self._repeated_noise_max_chars = max(
+            self._repeated_noise_min_chars,
+            int(repeated_noise_max_chars),
         )
+        self._hard_stop = tuple(normalize_interrupt_text(x) for x in DEFAULT_HARD_STOP_LEXICON)
         self._topic_switch = tuple(
             normalize_interrupt_text(x) for x in DEFAULT_TOPIC_SWITCH_LEXICON
         )
-        self._correction = tuple(
-            normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_LEXICON
-        )
+        self._correction = tuple(normalize_interrupt_text(x) for x in DEFAULT_CORRECTION_LEXICON)
 
     def classify(
         self,
@@ -190,14 +192,10 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
     ) -> InterruptIntentResult:
         stripped = canonicalize_interrupt_text(text)
         if not stripped:
-            return InterruptIntentResult(
-                InterruptIntent.NOISE, 1.0, "lexicon", "empty_transcript"
-            )
+            return InterruptIntentResult(InterruptIntent.NOISE, 1.0, "lexicon", "empty_transcript")
 
         if self._contains_any(stripped, self._hard_stop):
-            return InterruptIntentResult(
-                InterruptIntent.HARD_STOP, 1.0, "lexicon", "hard_stop"
-            )
+            return InterruptIntentResult(InterruptIntent.HARD_STOP, 1.0, "lexicon", "hard_stop")
         if _hard_stop_speech_pattern(stripped, require_control_suffix=True):
             return InterruptIntentResult(
                 InterruptIntent.HARD_STOP,
@@ -205,33 +203,27 @@ class LexiconInterruptClassifier(InterruptIntentClassifier):
                 "lexicon_pattern",
                 "hard_stop_speech_control",
             )
+        if stripped in BACKCHANNEL_WORDS:
+            return InterruptIntentResult(
+                InterruptIntent.BACKCHANNEL, 0.95, "lexicon", "backchannel"
+            )
+        if stripped in NOISE_LIKE_TRANSCRIPTIONS:
+            return InterruptIntentResult(InterruptIntent.NOISE, 0.90, "lexicon", "noise_like")
         if self._fast_intents and self._contains_any(stripped, self._topic_switch):
             return InterruptIntentResult(
                 InterruptIntent.TOPIC_SWITCH, 0.95, "lexicon", "topic_switch"
             )
         if self._fast_intents and self._contains_any(stripped, self._correction):
-            return InterruptIntentResult(
-                InterruptIntent.CORRECTION, 0.85, "lexicon", "correction"
-            )
-        if self._fast_intents and stripped in BACKCHANNEL_WORDS:
-            return InterruptIntentResult(
-                InterruptIntent.BACKCHANNEL, 0.95, "lexicon", "backchannel"
-            )
-        if self._fast_intents and stripped in NOISE_LIKE_TRANSCRIPTIONS:
-            return InterruptIntentResult(
-                InterruptIntent.NOISE, 0.90, "lexicon", "noise_like"
-            )
+            return InterruptIntentResult(InterruptIntent.CORRECTION, 0.85, "lexicon", "correction")
         if (
-            2 <= len(stripped) <= 6
+            self._repeated_noise_min_chars <= len(stripped) <= self._repeated_noise_max_chars
             and len(set(stripped)) == 1
             and stripped[0] in REPEATED_NOISE_CHARS
         ):
             return InterruptIntentResult(
                 InterruptIntent.NOISE, 0.85, "lexicon", "repeated_noise_char"
             )
-        return InterruptIntentResult(
-            InterruptIntent.UNCERTAIN, 0.0, "lexicon", "no_lexical_match"
-        )
+        return InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, "lexicon", "no_lexical_match")
 
     @staticmethod
     def _contains_any(text: str, candidates: tuple[str, ...]) -> bool:

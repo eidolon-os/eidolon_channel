@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from eidolon.livekit.common.config import ObservabilityConfig
 from eidolon.livekit.agent.observability import TurnTimeline
 from .agent_output_coordinator import AgentOutputCoordinator
 
@@ -23,12 +24,14 @@ class ProviderEventObserver:
         get_timeline: Callable[[], TurnTimeline | None],
         flush_timeline: Callable[[TurnTimeline, str], None] | None = None,
         append_timeline_snapshot: Callable[[TurnTimeline, str], None] | None = None,
-        first_delta_timeout_sec: float = 3.0,
+        first_delta_timeout_sec: float | None = None,
     ) -> None:
         self._factory = factory
         self._get_timeline = get_timeline
         self._flush_timeline = flush_timeline
         self._append_timeline_snapshot = append_timeline_snapshot
+        if first_delta_timeout_sec is None:
+            first_delta_timeout_sec = ObservabilityConfig().llm_first_delta_timeout_ms / 1000.0
         self._first_delta_timeout_sec = first_delta_timeout_sec
         self._first_delta_watchdog: asyncio.Task | None = None
         self.llm_metrics_observer_installed = False
@@ -95,8 +98,7 @@ class ProviderEventObserver:
             return
         if not self._timeline_has_reply_context(timeline):
             logger.debug(
-                "[ProviderEventObserver] ignored LLM error outside current turn "
-                "timeline=%s",
+                "[ProviderEventObserver] ignored LLM error outside current turn timeline=%s",
                 timeline.turn_id,
             )
             return
@@ -279,18 +281,15 @@ class ProviderEventObserver:
         if event_name == "brain_request_started":
             return self._timeline_has_reply_context(timeline)
         if event_name == "brain_request_sent":
-            return (
-                self._timeline_has_reply_context(timeline)
-                and (
-                    self._event_identity_matches_brain_rpc(
-                        timeline,
-                        turn_id=str(event.get("turn_id") or ""),
-                        request_id=str(event.get("request_id") or ""),
-                    )
-                    or self._is_retry_attempt_after_terminal_brain_event(
-                        timeline,
-                        event,
-                    )
+            return self._timeline_has_reply_context(timeline) and (
+                self._event_identity_matches_brain_rpc(
+                    timeline,
+                    turn_id=str(event.get("turn_id") or ""),
+                    request_id=str(event.get("request_id") or ""),
+                )
+                or self._is_retry_attempt_after_terminal_brain_event(
+                    timeline,
+                    event,
                 )
             )
 
@@ -387,10 +386,7 @@ class ProviderEventObserver:
             return
         if "brain_first_delta_at" in timeline.timestamps:
             return
-        if (
-            self._first_delta_watchdog is not None
-            and not self._first_delta_watchdog.done()
-        ):
+        if self._first_delta_watchdog is not None and not self._first_delta_watchdog.done():
             return
         try:
             loop = asyncio.get_running_loop()
@@ -564,6 +560,4 @@ class ProviderEventObserver:
             )
             timeline.set_attr("stt_turn_audio_observer_installed", observed)
         except Exception:
-            logger.exception(
-                "[ProviderEventObserver] failed to arm STT turn-audio observer"
-            )
+            logger.exception("[ProviderEventObserver] failed to arm STT turn-audio observer")

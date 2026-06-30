@@ -274,9 +274,7 @@ def test_framework_completed_turn_can_wait_for_continuation() -> None:
     assert decision.transcript == "私立医院的。 给医生做的系统。"
     assert coordinator.snapshot()["state"] == "waiting_merge"
     assert coordinator.snapshot()["voiceprint_reason"] == "owner_high_confidence"
-    assert timeline.attrs["user_turn_coordinator"]["event"] == (
-        "framework_completed_deferred"
-    )
+    assert timeline.attrs["user_turn_coordinator"]["event"] == ("framework_completed_deferred")
 
 
 def test_inconclusive_voiceprint_can_wait_for_continuation() -> None:
@@ -365,10 +363,7 @@ def test_framework_completed_respects_inconclusive_voiceprint_merge_window() -> 
     decision = coordinator.finish_speech(eot_score=0.9, should_defer=False)
 
     assert decision.action == "commit"
-    assert (
-        decision.transcript
-        == "私立医院的。主要给医生做的系统。不是给患者的。"
-    )
+    assert decision.transcript == "私立医院的。主要给医生做的系统。不是给患者的。"
 
 
 def test_statement_sequence_can_extend_framework_completed_merge_window() -> None:
@@ -410,7 +405,29 @@ def test_statement_sequence_can_extend_framework_completed_merge_window() -> Non
     decision = coordinator.finish_speech(eot_score=0.9, should_defer=False)
 
     assert decision.action == "commit"
-    assert (
-        decision.transcript
-        == "私立医院的。主要给医生做的系统。不是给患者的。"
+    assert decision.transcript == "私立医院的。主要给医生做的系统。不是给患者的。"
+
+
+def test_statement_sequence_merge_max_cjk_chars_is_configurable() -> None:
+    clock = _Clock()
+    coordinator = UserTurnCoordinator(
+        merge_grace_sec=0.8,
+        statement_deferred_merge_grace_sec=3.5,
+        low_eot_delay_sec=0.8,
+        statement_sequence_merge_max_cjk_chars=4,
+        clock=clock,
     )
+    timeline = TurnTimeline("turn-statement-sequence-threshold")
+
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("私立医院的。", is_final=True)
+    coordinator.finish_speech(eot_score=0.01, should_defer=True)
+
+    clock.advance(0.7)
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("主要给医生做的系统。", is_final=True)
+    coordinator.finish_speech(eot_score=0.55, should_defer=True)
+
+    assert not coordinator.should_wait_for_statement_sequence_merge()
+    clock.advance(0.9)
+    assert not coordinator.can_merge_new_speech()

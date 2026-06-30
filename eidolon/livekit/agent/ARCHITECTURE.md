@@ -112,6 +112,7 @@ eidolon/livekit/agent/
 ├── session/
 │   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
+│   ├── client_interaction.py # ClientInteractionHandler: PTT/tap-to-stop/client controls
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── duck_timeout.py       # DuckSuspendTimeoutHandler: duck deadline policy effects
 │   ├── provider_events.py    # STT/TTS provider event 观测
@@ -145,6 +146,24 @@ eidolon/livekit/agent/
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
 `session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；它不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+
+#### 2.1.1 产品交互模式边界
+
+Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达：
+
+1. **Push-to-talk / half-duplex**
+   - 入口证据：`client.audio_state.ptt`、设备 playback state、LiveKit manual turn boundary。
+   - 所有按钮/手势只是显式输入信号，不是设备侧决策。ESP32 不判断“要不要打断”。
+   - `ClientInteractionHandler` 负责 PTT press/release 状态机：press 只 arm turn，release 只在本 hold 有真实 transcript 时 `commit_user_turn`。
+   - PTT/tap-to-stop 发生在 agent playback 时，是高优先级 explicit evidence；由 Channel 记录 owner decision，并通过 `force=True` 取消 agent 输出。
+
+2. **流式自然语言 / full-duplex**
+   - 入口证据：VAD speech start/end、STT interim/final、EOT score、client acoustic/playback telemetry、voiceprint、echo/backchannel/noise/hard-stop intent。
+   - VAD speech start 只负责快速 soft duck / suspend；terminal decision 由 `TurnPolicyRuntime` + `InterruptionOrchestrator` + session handlers 统一输出。
+   - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
+   - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
+
+`StreamingPipeline` 可以编排两条路径的连接点，但不应继续内聚新的 PTT 状态机、client control 判定、或可独立测试的 evidence adapter。新增产品体验时，优先判断它属于 explicit client control、natural full-duplex evidence、turn ledger，还是 output side-effect，再放入对应模块。
 
 `context/` 负责对 conversation/chat context 的局部改写。当前只放被打断回复注入，后续如果扩展 memory recall/write 的会话内上下文拼装，也应先判断是否属于 agent 项目还是上游 brain 项目。
 

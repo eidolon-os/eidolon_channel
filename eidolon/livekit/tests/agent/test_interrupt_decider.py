@@ -29,13 +29,13 @@ from eidolon.livekit.common.config import InterruptPolicyConfig
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("嗯", False),
+        ("嗯", True),
         ("嗯嗯", True),
-        ("好的", False),
-        ("OK", False),
-        ("ok", False),
-        ("Yeah", False),
-        ("嗯。", False),  # no backchannel lexicon in turn_policy hot path
+        ("好的", True),
+        ("OK", True),
+        ("ok", True),
+        ("Yeah", True),
+        ("嗯。", True),
         ("", True),  # empty counts as backchannel
         ("   ", True),  # whitespace-only stripped → empty
         ("你好", False),
@@ -68,6 +68,19 @@ def test_hard_stop_prefix_cancels_on_hot_path() -> None:
     assert decision.intent is not None
     assert decision.intent.value == "hard_stop"
     assert decision.intent_source == "lexicon_prefix"
+
+
+def test_hard_stop_prefix_cjk_threshold_is_configurable() -> None:
+    d = InterruptDecider(
+        InterruptPolicyConfig(
+            min_interim_chars=2,
+            hard_stop_prefix_min_cjk_chars=3,
+        )
+    )
+
+    decision = d.on_stt_interim("别说", score=0.0)
+
+    assert decision.action is not Action.CANCEL
 
 
 def test_ambiguous_hard_stop_fragment_does_not_cancel() -> None:
@@ -216,7 +229,7 @@ def test_final_low_eot_score_rolls_back_substantive_text() -> None:
     """A final transcript with explicit low EOT confidence is a false interrupt."""
     d = InterruptDecider(min_interim_chars=2, early_resume_score_threshold=0.2)
 
-    decision = d.on_stt_interim("好的", score=0.1, is_final=True)
+    decision = d.on_stt_interim("我想问一下", score=0.1, is_final=True)
 
     assert decision.action is Action.ROLLBACK
     assert decision.reason.startswith("final_eot_score_low")
@@ -455,7 +468,7 @@ def test_user_silent_fast_rollback_drains() -> None:
 
 def test_user_silent_text_rolls_back_without_lexical_intent() -> None:
     d = InterruptDecider()
-    decision = d.on_user_silent("好")
+    decision = d.on_user_silent("我想问一下")
     assert decision.action is Action.ROLLBACK
     assert decision.intent is not None
     assert decision.intent.value == "uncertain"

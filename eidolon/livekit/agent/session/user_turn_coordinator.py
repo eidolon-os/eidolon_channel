@@ -112,6 +112,9 @@ class UserTurnCoordinator:
         statement_deferred_merge_grace_sec: float = 3.5,
         voiceprint_deferred_merge_grace_sec: float = 4.0,
         low_eot_delay_sec: float = 0.8,
+        statement_sequence_merge_max_cjk_chars: int = 28,
+        statement_sequence_fragment_max_cjk_chars: int = 14,
+        transcript_revision_min_normalized_chars: int = 4,
         clock: Any | None = None,
     ) -> None:
         self._merge_grace_sec = max(0.0, float(merge_grace_sec))
@@ -124,6 +127,18 @@ class UserTurnCoordinator:
             float(voiceprint_deferred_merge_grace_sec),
         )
         self._low_eot_delay_sec = max(0.0, float(low_eot_delay_sec))
+        self._statement_sequence_merge_max_cjk_chars = max(
+            1,
+            int(statement_sequence_merge_max_cjk_chars),
+        )
+        self._statement_sequence_fragment_max_cjk_chars = max(
+            1,
+            int(statement_sequence_fragment_max_cjk_chars),
+        )
+        self._transcript_revision_min_normalized_chars = max(
+            1,
+            int(transcript_revision_min_normalized_chars),
+        )
         self._clock = clock or time.monotonic
         self._active: UserTurnCandidate | None = None
         self._counter = 0
@@ -198,11 +213,7 @@ class UserTurnCoordinator:
             return candidate
 
         self._counter += 1
-        candidate_id = (
-            timeline.turn_id
-            if timeline is not None
-            else f"user-turn-{self._counter}"
-        )
+        candidate_id = timeline.turn_id if timeline is not None else f"user-turn-{self._counter}"
         candidate = UserTurnCandidate(
             candidate_id=candidate_id,
             timeline=timeline,
@@ -251,7 +262,9 @@ class UserTurnCoordinator:
             )
         )
         candidate.updated_at = current_time
-        self._record_attrs(candidate, event="transcript_final" if is_final else "transcript_interim")
+        self._record_attrs(
+            candidate, event="transcript_final" if is_final else "transcript_interim"
+        )
 
     def finish_speech(
         self,
@@ -439,16 +452,14 @@ class UserTurnCoordinator:
             if not (
                 preserve_statement_window
                 and selected
-                and _normalize_revision_text(selected)
-                == _normalize_revision_text(stripped)
+                and _normalize_revision_text(selected) == _normalize_revision_text(stripped)
             ):
                 self._merge_framework_transcript(candidate, stripped, now=current_time)
         candidate.state = "waiting_merge"
         if not candidate.merge_reason:
             candidate.merge_reason = reason
-        if (
-            voiceprint_reason
-            and not candidate.voiceprint_reason.startswith("voiceprint_inconclusive:")
+        if voiceprint_reason and not candidate.voiceprint_reason.startswith(
+            "voiceprint_inconclusive:"
         ):
             candidate.voiceprint_reason = voiceprint_reason
         candidate.updated_at = current_time
@@ -509,8 +520,7 @@ class UserTurnCoordinator:
             candidate_id=candidate.candidate_id,
             transcript=canonical,
             reason=reason,
-            delay_sec=self.merge_remaining_sec(now=current_time)
-            or self._low_eot_delay_sec,
+            delay_sec=self.merge_remaining_sec(now=current_time) or self._low_eot_delay_sec,
         )
 
     def reject_active(
@@ -564,9 +574,7 @@ class UserTurnCoordinator:
         self._counter += 1
         return UserTurnCandidate(
             candidate_id=(
-                timeline.turn_id
-                if timeline is not None
-                else f"user-turn-{self._counter}"
+                timeline.turn_id if timeline is not None else f"user-turn-{self._counter}"
             ),
             timeline=timeline,
             state=state,
@@ -600,16 +608,20 @@ class UserTurnCoordinator:
             return False
         if selected.startswith(("帮我", "请", "麻烦", "换个话题", "换一个话题")):
             return False
-        if _count_cjk_chars(selected) > 28:
+        if _count_cjk_chars(selected) > self._statement_sequence_merge_max_cjk_chars:
             return False
         fragments = [
-            segment.selected_text
-            for segment in candidate.segments
-            if segment.selected_text
+            segment.selected_text for segment in candidate.segments if segment.selected_text
         ]
         if len(fragments) < 2:
             return False
-        return all(_looks_like_statement_fragment(text) for text in fragments[-2:])
+        return all(
+            _looks_like_statement_fragment(
+                text,
+                max_cjk_chars=self._statement_sequence_fragment_max_cjk_chars,
+            )
+            for text in fragments[-2:]
+        )
 
     def _select_segment_for_revision(
         self,
@@ -627,12 +639,12 @@ class UserTurnCoordinator:
             return current_index, current
 
         current_text = current.selected_text
-        if current_text and _text_matches_revision(current_text, text):
+        if current_text and self._text_matches_revision(current_text, text):
             return current_index, current
 
         for index in range(len(candidate.segments) - 2, -1, -1):
             segment = candidate.segments[index]
-            if _text_matches_revision(segment.selected_text, text):
+            if self._text_matches_revision(segment.selected_text, text):
                 return index, segment
 
         if not current_text:
@@ -661,7 +673,7 @@ class UserTurnCoordinator:
             return
         if selected and transcript in selected:
             return
-        if selected and _text_matches_revision(selected, transcript):
+        if selected and self._text_matches_revision(selected, transcript):
             return
         candidate.segments.append(
             SpeechSegment(
@@ -702,6 +714,13 @@ class UserTurnCoordinator:
             "reject_reason": candidate.reject_reason,
         }
 
+    def _text_matches_revision(self, existing: str, revision: str) -> bool:
+        return _text_matches_revision(
+            existing,
+            revision,
+            min_normalized_chars=self._transcript_revision_min_normalized_chars,
+        )
+
 
 def _merge_text(left: str, right: str) -> str:
     left = left.strip()
@@ -727,20 +746,25 @@ def _count_cjk_chars(text: str) -> int:
     return sum(1 for char in text if _looks_cjk(char))
 
 
-def _looks_like_statement_fragment(text: str) -> bool:
+def _looks_like_statement_fragment(text: str, *, max_cjk_chars: int = 14) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
     if any(mark in stripped for mark in ("？", "?", "！", "!")):
         return False
-    if _count_cjk_chars(stripped) > 14:
+    if _count_cjk_chars(stripped) > max(1, max_cjk_chars):
         return False
     if stripped.startswith(("帮我", "请", "麻烦", "换个话题", "换一个话题")):
         return False
     return stripped.endswith(("。", "，", ",", "、", "的", "了", "呢", "吧"))
 
 
-def _text_matches_revision(existing: str, revision: str) -> bool:
+def _text_matches_revision(
+    existing: str,
+    revision: str,
+    *,
+    min_normalized_chars: int = 4,
+) -> bool:
     existing_norm = _normalize_revision_text(existing)
     revision_norm = _normalize_revision_text(revision)
     if not existing_norm or not revision_norm:
@@ -749,7 +773,7 @@ def _text_matches_revision(existing: str, revision: str) -> bool:
         return True
     if existing_norm.startswith(revision_norm) or revision_norm.startswith(existing_norm):
         return True
-    if min(len(existing_norm), len(revision_norm)) < 4:
+    if min(len(existing_norm), len(revision_norm)) < max(1, min_normalized_chars):
         return False
     shorter, longer = (
         (existing_norm, revision_norm)

@@ -49,6 +49,8 @@ def run_policy_suite(
             decisions: list[dict] = []
             action = Action.NONE
             intent = "uncertain"
+            decision_action = "none"
+            decision_intent = "uncertain"
             topic_switch_hint = False
             correction_hint = False
             decision_start_ms: int | None = None
@@ -58,6 +60,57 @@ def run_policy_suite(
                 if not step.agent_speaking:
                     continue
                 texts = step.interims or (step.text,)
+                duck_active = False
+                speech_start_attention = runtime.admit_attention(
+                    AttentionInput(
+                        agent_speaking=step.agent_speaking,
+                        client_state=_client_audio_state(step),
+                        transcript="",
+                        eot_score=0.0,
+                        speech_started=True,
+                    )
+                )
+                decisions.append(
+                    {
+                        "step_text": step.text,
+                        "interim_index": -1,
+                        "interim_text": "",
+                        "speech_started": True,
+                        "attention_admission": {
+                            "action": speech_start_attention.action.value,
+                            "reason": speech_start_attention.reason,
+                            "client_state_used": (
+                                speech_start_attention.client_state_used
+                            ),
+                        },
+                        "decision": None,
+                    }
+                )
+                if attention_enforced:
+                    if speech_start_attention.action is AdmissionAction.IGNORE:
+                        continue
+                    if speech_start_attention.action is AdmissionAction.HARD_INTERRUPT:
+                        action = Action.CANCEL
+                        intent = "hard_stop"
+                        decision_action = action.value
+                        decision_intent = intent
+                        decision_start_ms = step.start_ms
+                        decision_at_ms = step.start_ms
+                        decisions[-1]["decision"] = {
+                            "action": action.value,
+                            "reason": speech_start_attention.reason,
+                            "intent": intent,
+                            "intent_source": "attention_admission",
+                            "intent_confidence": 1.0,
+                            "topic_switch_hint": False,
+                            "correction_hint": False,
+                            "rollback_drop_buffered": False,
+                        }
+                        break
+                    duck_active = (
+                        speech_start_attention.action
+                        is AdmissionAction.DUCK_AND_DECIDE
+                    )
                 for index, text in enumerate(texts):
                     is_final = index == len(texts) - 1
                     event_time_ms = step.start_ms + index * 80
@@ -89,8 +142,12 @@ def run_policy_suite(
                         AdmissionAction.IGNORE,
                         AdmissionAction.OBSERVE,
                     ):
-                        decisions.append(decision_record)
-                        continue
+                        if not (
+                            attention.action is AdmissionAction.OBSERVE
+                            and duck_active
+                        ):
+                            decisions.append(decision_record)
+                            continue
                     if (
                         attention_enforced
                         and attention.action is AdmissionAction.HARD_INTERRUPT
@@ -98,6 +155,8 @@ def run_policy_suite(
                     ):
                         action = Action.CANCEL
                         intent = "hard_stop"
+                        decision_action = action.value
+                        decision_intent = intent
                         decision_start_ms = step.start_ms
                         decision_at_ms = event_time_ms
                         decision_record["decision"] = {
@@ -131,9 +190,13 @@ def run_policy_suite(
                         "rollback_drop_buffered": decision.rollback_drop_buffered,
                     }
                     decisions.append(decision_record)
+                    decision_action = decision.action.value
+                    decision_intent = (
+                        decision.intent.value if decision.intent else "unknown"
+                    )
                     if decision.action is not Action.HOLD:
                         action = decision.action
-                        intent = decision.intent.value if decision.intent else "unknown"
+                        intent = decision_intent
                         topic_switch_hint = decision.topic_switch_hint
                         correction_hint = decision.correction_hint
                         decision_start_ms = step.start_ms
@@ -141,7 +204,7 @@ def run_policy_suite(
                         break
                     if action is Action.NONE:
                         action = Action.HOLD
-                        intent = decision.intent.value if decision.intent else "unknown"
+                        intent = decision_intent
                 if action is not Action.NONE:
                     break
 
@@ -156,6 +219,28 @@ def run_policy_suite(
                 )
             if case.expectations.intent not in ("", "uncertain") and intent != case.expectations.intent:
                 errors.append(f"expected intent={case.expectations.intent}, got {intent}")
+            expected_decision_action = case.expectations.decision_action
+            if expected_decision_action == "none":
+                if decision_action != "none":
+                    errors.append(
+                        f"expected no decision_action, got {decision_action}"
+                    )
+            elif expected_decision_action not in ("", "any"):
+                if decision_action != expected_decision_action:
+                    errors.append(
+                        "expected decision_action="
+                        f"{expected_decision_action}, got {decision_action}"
+                    )
+            expected_decision_intent = case.expectations.decision_intent
+            if (
+                expected_decision_action != "none"
+                and expected_decision_intent not in ("", "uncertain")
+                and decision_intent != expected_decision_intent
+            ):
+                errors.append(
+                    "expected decision_intent="
+                    f"{expected_decision_intent}, got {decision_intent}"
+                )
             if (
                 case.expectations.topic_switch_hint
                 and topic_switch_hint != case.expectations.topic_switch_hint
@@ -193,9 +278,13 @@ def run_policy_suite(
                 "interrupt_decision_ms": decision_latency_ms,
                 "expected_action": case.expectations.action,
                 "actual_action": action.value,
+                "expected_decision_action": case.expectations.decision_action,
+                "actual_decision_action": decision_action,
                 "forbid_actions": ",".join(case.expectations.forbid_actions),
                 "expected_intent": case.expectations.intent,
                 "actual_intent": intent,
+                "expected_decision_intent": case.expectations.decision_intent,
+                "actual_decision_intent": decision_intent,
                 "topic_switch_hint": topic_switch_hint,
                 "correction_hint": correction_hint,
                 **dogfood_metrics(case),

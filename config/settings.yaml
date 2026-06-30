@@ -54,6 +54,8 @@ runtime_admin:
   jwt_secret: PAIRING_JWT_SECRET
   jwt_algorithm: HS256
   device_token_ttl_seconds: 86400
+  http_timeout_sec: 10.0
+  http_connect_timeout_sec: 3.0
 
 voiceprint:
   # direct_llm + Hub dev_direct_voice 联调时，设备可以 approved 但未绑定 agent；
@@ -73,6 +75,11 @@ voiceprint:
   # Paired ESP32 devices are already approved and user-bound in admin.
   # Keep voiceprint as telemetry, but don't hard-block those device turns by default.
   trust_paired_devices: true
+  turn_max_audio_ms: 12000
+  accept_cache_ttl_ms: 180000
+  accept_cache_short_audio_max_ms: 3000
+  owner_commit_threshold: 0.58
+  owner_short_audio_bypass_ms: 1500
 
 turn_policy:
   # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.
@@ -89,6 +96,13 @@ turn_policy:
   eot:
     eot_unlikely_threshold: 0.50
     tail_hang_silence_ms: 2000
+    low_eot_commit_grace_max_ms: 2000
+    statement_deferred_merge_grace_ms: 3500
+    voiceprint_deferred_merge_grace_ms: 4000
+    short_statement_defer_max_cjk_chars: 12
+    statement_sequence_merge_max_cjk_chars: 28
+    statement_sequence_fragment_max_cjk_chars: 14
+    transcript_revision_min_normalized_chars: 4
   interrupt:
     decision_timeout_ms: 500
     post_speech_evidence_timeout_ms: 6000
@@ -96,8 +110,16 @@ turn_policy:
     min_interim_chars: 2
     early_cancel_score_threshold: 0.70
     early_resume_score_threshold: 0.20
+    transcript_evidence_gate_enabled: true
+    min_normal_interim_cjk_chars: 3
+    latin_artifact_hold_max_chars: 4
     correction_topic_stability_window_ms: 120
     normal_interrupt_stability_window_ms: 350
+    cancel_residual_commit_suppress_ms: 2000
+    hard_stop_prefix_min_cjk_chars: 2
+    repeated_noise_min_chars: 2
+    repeated_noise_max_chars: 6
+    weak_signal_followup_hold_ms: 1500
   ducking:
     enabled: true
     fade_out_ms: 30
@@ -128,6 +150,7 @@ observability:
   structured_logs: true
   metrics_enabled: true
   timeline_debug_path: "benchmarks/runs/channel-worker-turn-timeline.jsonl"
+  llm_first_delta_timeout_ms: 3000
 
 # Bailian STT/TTS provider config (non-secret). API keys stay in .env
 # (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).

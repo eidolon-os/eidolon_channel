@@ -26,9 +26,7 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("providers.brain_provider must be 'direct_llm' or 'eidolon_agent'")
 
     worker = cfg.worker
-    if worker.num_idle_processes is not None and not (
-        0 <= worker.num_idle_processes <= 64
-    ):
+    if worker.num_idle_processes is not None and not (0 <= worker.num_idle_processes <= 64):
         errors.append("worker.num_idle_processes must be in [0, 64]")
 
     if not (1 <= cfg.core.port <= 65535):
@@ -47,6 +45,16 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         # PAIRING_JWT_SECRET-or-file check at startup; here we only
         # require the gRPC target so this validator stays infrastructure-
         # focused (vs runtime-secret-focused).
+    if (
+        not 0.1
+        <= cfg.runtime_admin.http_connect_timeout_sec
+        <= cfg.runtime_admin.http_timeout_sec
+        <= 60.0
+    ):
+        errors.append(
+            "runtime_admin HTTP timeouts must satisfy "
+            "0.1 <= http_connect_timeout_sec <= http_timeout_sec <= 60.0"
+        )
 
     vad = cfg.turn_policy.vad
     if not 0.0 < vad.activation_threshold < 1.0:
@@ -58,23 +66,41 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 100 <= vad.min_silence_duration_ms <= 5_000:
         errors.append("turn_policy.vad.min_silence_duration_ms must be in [100, 5000]")
 
+    eot = cfg.turn_policy.eot
+    if not 0 <= eot.low_eot_commit_grace_max_ms <= 10_000:
+        errors.append("turn_policy.eot.low_eot_commit_grace_max_ms must be in [0, 10000]")
+    if not 0 <= eot.statement_deferred_merge_grace_ms <= 15_000:
+        errors.append("turn_policy.eot.statement_deferred_merge_grace_ms must be in [0, 15000]")
+    if not 0 <= eot.voiceprint_deferred_merge_grace_ms <= 15_000:
+        errors.append("turn_policy.eot.voiceprint_deferred_merge_grace_ms must be in [0, 15000]")
+    if not 1 <= eot.short_statement_defer_max_cjk_chars <= 40:
+        errors.append("turn_policy.eot.short_statement_defer_max_cjk_chars must be in [1, 40]")
+    if not 1 <= eot.statement_sequence_merge_max_cjk_chars <= 80:
+        errors.append("turn_policy.eot.statement_sequence_merge_max_cjk_chars must be in [1, 80]")
+    if not 1 <= eot.statement_sequence_fragment_max_cjk_chars <= 40:
+        errors.append(
+            "turn_policy.eot.statement_sequence_fragment_max_cjk_chars must be in [1, 40]"
+        )
+    if not 1 <= eot.transcript_revision_min_normalized_chars <= 20:
+        errors.append("turn_policy.eot.transcript_revision_min_normalized_chars must be in [1, 20]")
+
     intr = cfg.turn_policy.interrupt
     if not 200 <= intr.decision_timeout_ms <= 1_000:
         errors.append("turn_policy.interrupt.decision_timeout_ms must be in [200, 1000]")
     if not 1 <= intr.min_interim_chars <= 12:
         errors.append("turn_policy.interrupt.min_interim_chars must be in [1, 12]")
     if not 1 <= intr.min_normal_interim_cjk_chars <= 12:
-        errors.append(
-            "turn_policy.interrupt.min_normal_interim_cjk_chars must be in [1, 12]"
-        )
+        errors.append("turn_policy.interrupt.min_normal_interim_cjk_chars must be in [1, 12]")
     if not 0 <= intr.latin_artifact_hold_max_chars <= 12:
+        errors.append("turn_policy.interrupt.latin_artifact_hold_max_chars must be in [0, 12]")
+    if not 1 <= intr.hard_stop_prefix_min_cjk_chars <= 8:
+        errors.append("turn_policy.interrupt.hard_stop_prefix_min_cjk_chars must be in [1, 8]")
+    if not 1 <= intr.repeated_noise_min_chars <= intr.repeated_noise_max_chars <= 20:
         errors.append(
-            "turn_policy.interrupt.latin_artifact_hold_max_chars must be in [0, 12]"
+            "turn_policy.interrupt repeated noise chars must satisfy 1 <= min <= max <= 20"
         )
     if not 0 <= intr.weak_signal_followup_hold_ms <= 5_000:
-        errors.append(
-            "turn_policy.interrupt.weak_signal_followup_hold_ms must be in [0, 5000]"
-        )
+        errors.append("turn_policy.interrupt.weak_signal_followup_hold_ms must be in [0, 5000]")
     if not 0 <= intr.correction_topic_stability_window_ms <= 1_000:
         errors.append(
             "turn_policy.interrupt.correction_topic_stability_window_ms must be in [0, 1000]"
@@ -85,8 +111,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         )
     if not 0.0 <= intr.early_resume_score_threshold <= intr.early_cancel_score_threshold <= 1.0:
         errors.append(
-            "turn_policy interrupt score thresholds must satisfy "
-            "0 <= resume <= cancel <= 1"
+            "turn_policy interrupt score thresholds must satisfy 0 <= resume <= cancel <= 1"
+        )
+    if not 0 <= intr.cancel_residual_commit_suppress_ms <= 10_000:
+        errors.append(
+            "turn_policy.interrupt.cancel_residual_commit_suppress_ms must be in [0, 10000]"
         )
 
     duck = cfg.turn_policy.ducking
@@ -99,9 +128,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
 
     attention = cfg.turn_policy.attention
     if not 100 <= attention.client_state_max_age_ms <= 10_000:
-        errors.append(
-            "turn_policy.attention.client_state_max_age_ms must be in [100, 10000]"
-        )
+        errors.append("turn_policy.attention.client_state_max_age_ms must be in [100, 10000]")
+
+    obs = cfg.observability
+    if not 0 <= obs.llm_first_delta_timeout_ms <= 60_000:
+        errors.append("observability.llm_first_delta_timeout_ms must be in [0, 60000]")
 
     vp = cfg.voiceprint
     if vp.enabled:
@@ -113,6 +144,16 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
             errors.append("voiceprint.threshold must be in (0, 1)")
         if not 500 <= vp.min_audio_ms <= 30_000:
             errors.append("voiceprint.min_audio_ms must be in [500, 30000]")
+        if not 500 <= vp.turn_max_audio_ms <= 60_000:
+            errors.append("voiceprint.turn_max_audio_ms must be in [500, 60000]")
+        if not 0 <= vp.accept_cache_ttl_ms <= 3_600_000:
+            errors.append("voiceprint.accept_cache_ttl_ms must be in [0, 3600000]")
+        if not 0 <= vp.accept_cache_short_audio_max_ms <= 30_000:
+            errors.append("voiceprint.accept_cache_short_audio_max_ms must be in [0, 30000]")
+        if not 0.0 < vp.owner_commit_threshold < 1.0:
+            errors.append("voiceprint.owner_commit_threshold must be in (0, 1)")
+        if not 0 <= vp.owner_short_audio_bypass_ms <= vp.min_audio_ms:
+            errors.append("voiceprint.owner_short_audio_bypass_ms must be in [0, min_audio_ms]")
 
     if errors:
         raise ValueError("EffectiveAgentConfig validation failed:\n  - " + "\n  - ".join(errors))

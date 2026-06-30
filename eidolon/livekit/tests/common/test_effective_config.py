@@ -61,18 +61,39 @@ worker:
 runtime_admin:
   data_resolve_enabled: false
   admin_fallback_enabled: true
+  http_timeout_sec: 8.5
+  http_connect_timeout_sec: 1.5
 llm:
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
   api_key: OPENAI_LLM_API_KEY
 turn_policy:
   profile: balanced_semantic
+  eot:
+    low_eot_commit_grace_max_ms: 1700
+    statement_deferred_merge_grace_ms: 3200
+    voiceprint_deferred_merge_grace_ms: 4100
+    short_statement_defer_max_cjk_chars: 10
+    statement_sequence_merge_max_cjk_chars: 24
+    statement_sequence_fragment_max_cjk_chars: 11
+    transcript_revision_min_normalized_chars: 5
   interrupt:
     decision_timeout_ms: 450
+    cancel_residual_commit_suppress_ms: 1800
+    hard_stop_prefix_min_cjk_chars: 3
+    repeated_noise_min_chars: 3
+    repeated_noise_max_chars: 8
+observability:
+  llm_first_delta_timeout_ms: 2500
 voiceprint:
   enabled: true
   threshold: 0.42
   min_audio_ms: 2000
+  turn_max_audio_ms: 9000
+  accept_cache_ttl_ms: 120000
+  accept_cache_short_audio_max_ms: 2400
+  owner_commit_threshold: 0.64
+  owner_short_audio_bypass_ms: 1200
 """,
     )
     monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
@@ -82,14 +103,33 @@ voiceprint:
     cfg = load_effective_config()
     assert cfg.providers.brain_provider == "direct_llm"
     assert cfg.turn_policy.interrupt.decision_timeout_ms == 450
+    assert cfg.turn_policy.interrupt.cancel_residual_commit_suppress_ms == 1800
+    assert cfg.turn_policy.interrupt.hard_stop_prefix_min_cjk_chars == 3
+    assert cfg.turn_policy.interrupt.repeated_noise_min_chars == 3
+    assert cfg.turn_policy.interrupt.repeated_noise_max_chars == 8
+    assert cfg.turn_policy.eot.low_eot_commit_grace_max_ms == 1700
+    assert cfg.turn_policy.eot.statement_deferred_merge_grace_ms == 3200
+    assert cfg.turn_policy.eot.voiceprint_deferred_merge_grace_ms == 4100
+    assert cfg.turn_policy.eot.short_statement_defer_max_cjk_chars == 10
+    assert cfg.turn_policy.eot.statement_sequence_merge_max_cjk_chars == 24
+    assert cfg.turn_policy.eot.statement_sequence_fragment_max_cjk_chars == 11
+    assert cfg.turn_policy.eot.transcript_revision_min_normalized_chars == 5
+    assert cfg.observability.llm_first_delta_timeout_ms == 2500
     assert cfg.llm.api_key == "test"
     assert cfg.voiceprint.enabled is True
     assert cfg.voiceprint.threshold == 0.42
     assert cfg.voiceprint.min_audio_ms == 2000
+    assert cfg.voiceprint.turn_max_audio_ms == 9000
+    assert cfg.voiceprint.accept_cache_ttl_ms == 120000
+    assert cfg.voiceprint.accept_cache_short_audio_max_ms == 2400
+    assert cfg.voiceprint.owner_commit_threshold == 0.64
+    assert cfg.voiceprint.owner_short_audio_bypass_ms == 1200
     assert cfg.behavior.pipeline_mode == "batch"
     assert cfg.worker.num_idle_processes == 1
     assert cfg.runtime_admin.data_resolve_enabled is False
     assert cfg.runtime_admin.admin_fallback_enabled is True
+    assert cfg.runtime_admin.http_timeout_sec == 8.5
+    assert cfg.runtime_admin.http_connect_timeout_sec == 1.5
 
 
 def test_load_effective_config_applies_settings_overlay(
@@ -153,8 +193,6 @@ voiceprint:
     assert cfg.turn_policy.attention.soft_duck_on_playback_speech_start is True
     assert cfg.voiceprint.enabled is False
     assert cfg.turn_policy.attention.require_direct_signal_during_playback is True
-
-
 
 
 def test_invalid_voiceprint_threshold_fails_validation(
@@ -312,9 +350,7 @@ llm:
         load_effective_config()
 
 
-def test_behavior_agent_mode_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_behavior_agent_mode_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _write_settings(
         tmp_path,
         """

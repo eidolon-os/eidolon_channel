@@ -81,6 +81,7 @@ def _build_device_token_source(
     # Resolve secret: env (loaded via _secret() at config time) →
     # ~/eidolon/run/jwt-secret (shared with eidolon-agent).
     from eidolon_sdk.biz.runtime import resolve_shared_secret
+
     secret = resolve_shared_secret(rt.jwt_secret)
     if not secret:
         raise RuntimeError(
@@ -115,12 +116,16 @@ def _build_device_token_source(
 
 def _build_runtime_resolve_client(rt: "Any") -> "Any":
     """Build local Eidolon Data resolver with optional admin HTTP fallback."""
+    from eidolon.livekit.common.config import RuntimeAdminConfig
+
+    runtime_defaults = RuntimeAdminConfig()
 
     local = None
     if getattr(rt, "data_resolve_enabled", True):
         try:
             from eidolon_data import DataStore
             from eidolon_data import load_settings as load_data_settings
+
             data_settings = load_data_settings()
             sqlite_path = Path(data_settings.sqlite_path).expanduser()
             if sqlite_path.exists():
@@ -142,7 +147,22 @@ def _build_runtime_resolve_client(rt: "Any") -> "Any":
         from eidolon_sdk.biz.admin import AdminResolveClient
 
         http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=3.0),
+            timeout=httpx.Timeout(
+                float(
+                    getattr(
+                        rt,
+                        "http_timeout_sec",
+                        runtime_defaults.http_timeout_sec,
+                    )
+                ),
+                connect=float(
+                    getattr(
+                        rt,
+                        "http_connect_timeout_sec",
+                        runtime_defaults.http_connect_timeout_sec,
+                    )
+                ),
+            ),
             trust_env=False,  # avoid macOS Clash :7890 hijacking loopback
         )
         http = AdminResolveClient(http_client, rt.admin_api_url)
@@ -199,9 +219,7 @@ class _DataStoreRuntimeResolveClient:
 
         owner = await self._store.owners.get(owner_id)
         if owner is None:
-            raise AdminResolveNotFound(
-                f"owner {owner_id!r} is not registered in eidolon_data"
-            )
+            raise AdminResolveNotFound(f"owner {owner_id!r} is not registered in eidolon_data")
         if owner.status != "active":
             raise AdminResolvePrecondition(412, f"owner {owner_id!r} is {owner.status}")
 
@@ -210,11 +228,7 @@ class _DataStoreRuntimeResolveClient:
             for row in await self._store.companions.list_for_owner(owner_id)
             if row.status == "active"
         ]
-        ready = [
-            row
-            for row in companions
-            if row.default_memory_realm_id and row.current_genome_id
-        ]
+        ready = [row for row in companions if row.default_memory_realm_id and row.current_genome_id]
         if not ready:
             raise AdminResolvePrecondition(
                 412,
@@ -230,27 +244,17 @@ class _DataStoreRuntimeResolveClient:
 
         device = await self._store.devices.get_device(device_id)
         if device is None:
-            raise AdminResolveNotFound(
-                f"device {device_id!r} is not registered in eidolon_data"
-            )
+            raise AdminResolveNotFound(f"device {device_id!r} is not registered in eidolon_data")
         if not device.owner_id:
-            raise AdminResolvePrecondition(
-                412, f"device {device_id!r} is not claimed"
-            )
+            raise AdminResolvePrecondition(412, f"device {device_id!r} is not claimed")
         if device.status in {"disabled", "revoked"}:
-            raise AdminResolvePrecondition(
-                412, f"device {device_id!r} is {device.status}"
-            )
+            raise AdminResolvePrecondition(412, f"device {device_id!r} is {device.status}")
         if not device.bound_companion_id:
-            raise AdminResolvePrecondition(
-                412, f"device {device_id!r} is not bound to a companion"
-            )
+            raise AdminResolvePrecondition(412, f"device {device_id!r} is not bound to a companion")
 
         companion = await self._store.companions.get(device.bound_companion_id)
         if companion is None:
-            raise AdminResolveNotFound(
-                f"companion {device.bound_companion_id!r} not found"
-            )
+            raise AdminResolveNotFound(f"companion {device.bound_companion_id!r} not found")
         if companion.owner_id != device.owner_id:
             raise AdminResolvePrecondition(
                 412,
@@ -280,9 +284,7 @@ class _DataStoreRuntimeResolveClient:
                 412,
                 f"companion {companion.companion_id!r} has no current genome",
             )
-        realm = await self._store.memory_repo.get_realm(
-            companion.default_memory_realm_id
-        )
+        realm = await self._store.memory_repo.get_realm(companion.default_memory_realm_id)
         if realm is None:
             raise AdminResolveNotFound(
                 f"memory realm {companion.default_memory_realm_id!r} not found"
@@ -294,9 +296,7 @@ class _DataStoreRuntimeResolveClient:
             )
         genome = await self._store.persona_repo.get_genome(companion.current_genome_id)
         if genome is None:
-            raise AdminResolveNotFound(
-                f"genome {companion.current_genome_id!r} not found"
-            )
+            raise AdminResolveNotFound(f"genome {companion.current_genome_id!r} not found")
         if genome.companion_id != companion.companion_id:
             raise AdminResolvePrecondition(
                 412,
@@ -444,20 +444,14 @@ class SharedStageFactory:
             # lookup + a format string, no caching needed.
             if livekit_room is not None:
                 room_ref = livekit_room  # closed over by the resolver
-                room_name_static = (
-                    getattr(room_ref, "name", None) or session_key
-                )
+                room_name_static = getattr(room_ref, "name", None) or session_key
 
                 def _resolve_cid() -> str:
                     try:
                         from eidolon.livekit.agent.runtime import resolve_device_id
 
-                        participants = list(
-                            getattr(room_ref, "remote_participants", {}).values()
-                        )
-                        room_name = (
-                            getattr(room_ref, "name", None) or room_name_static
-                        )
+                        participants = list(getattr(room_ref, "remote_participants", {}).values())
+                        room_name = getattr(room_ref, "name", None) or room_name_static
                         if participants:
                             p = participants[0]
                             ident = getattr(p, "identity", "") or "anon"
@@ -474,10 +468,7 @@ class SharedStageFactory:
                             # device's history across two keys. Web/other
                             # participants carry no device_id and keep the
                             # room-scoped id.
-                            is_device = (
-                                resolve_device_id(getattr(p, "metadata", None))
-                                is not None
-                            )
+                            is_device = resolve_device_id(getattr(p, "metadata", None)) is not None
                             if is_device:
                                 return f"{prefix}:{ident}"
                             return f"{prefix}:{ident}:{room_name}"
@@ -507,9 +498,7 @@ class SharedStageFactory:
             # (the static fallback was deleted). _build_device_token_source
             # raises RuntimeError if prerequisites are missing — operator
             # sees a clear failure rather than silently chatting as "alice".
-            device_token_source = _build_device_token_source(
-                cfg=cfg, livekit_room=livekit_room
-            )
+            device_token_source = _build_device_token_source(cfg=cfg, livekit_room=livekit_room)
 
             llm = EidolonAgentGrpcLlm(
                 target=cfg.remote_agent_rpc.target,
@@ -637,8 +626,7 @@ class SharedStageFactory:
             )
         else:
             raise ValueError(
-                f"Unknown STT provider: {provider!r} "
-                f"(supported: 'bailian', 'sensetime')"
+                f"Unknown STT provider: {provider!r} (supported: 'bailian', 'sensetime')"
             )
 
         return SttStage(stt, params=params)
@@ -669,8 +657,7 @@ class SharedStageFactory:
             )
         else:
             raise ValueError(
-                f"Unknown TTS provider: {provider!r} "
-                f"(supported: 'sensetime', 'bailian')"
+                f"Unknown TTS provider: {provider!r} (supported: 'sensetime', 'bailian')"
             )
         return TtsStage(tts, params=params)
 
@@ -687,6 +674,7 @@ class SharedStageFactory:
         if provider in ("firered", "firered_pvad"):
             try:
                 from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
+
                 return FireredPvadVAD.load(
                     min_speech_duration=vad_cfg.min_speech_duration_ms / 1000.0,
                     min_silence_duration=vad_cfg.min_silence_duration_ms / 1000.0,
@@ -703,9 +691,8 @@ class SharedStageFactory:
 
         try:
             from livekit.agents.plugins import silero_vad
+
             return silero_vad.VAD.load()
         except ImportError:
-            logger.warning(
-                "[SharedStageFactory] silero_vad not installed; VAD disabled"
-            )
+            logger.warning("[SharedStageFactory] silero_vad not installed; VAD disabled")
             return None

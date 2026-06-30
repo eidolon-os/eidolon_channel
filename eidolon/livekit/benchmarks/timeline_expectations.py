@@ -89,7 +89,13 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
             )
 
     decision_action = str(getattr(expected, "decision_action", "") or "")
-    if decision_action not in ("", "any"):
+    if decision_action == "none":
+        if decision_actions:
+            errors.append(
+                "timeline expected no decision_action, got "
+                f"{decision_actions or ['<none>']}"
+            )
+    elif decision_action not in ("", "any"):
         if decision_action not in decision_actions:
             errors.append(
                 "timeline expected decision_action="
@@ -97,7 +103,9 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
             )
 
     decision_intent = str(getattr(expected, "decision_intent", "") or "")
-    if decision_intent not in ("", "uncertain"):
+    if decision_action == "none":
+        pass
+    elif decision_intent not in ("", "uncertain"):
         if decision_intent not in decision_intents:
             errors.append(
                 "timeline expected decision_intent="

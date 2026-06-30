@@ -270,6 +270,8 @@ def load_effective_config() -> EffectiveAgentConfig:
             "jwt_secret",
             "jwt_algorithm",
             "device_token_ttl_seconds",
+            "http_timeout_sec",
+            "http_connect_timeout_sec",
         },
     )
 
@@ -277,17 +279,13 @@ def load_effective_config() -> EffectiveAgentConfig:
         core=CoreConfig(
             livekit_url=str(core_y.get("livekit_url") or "ws://localhost:7880"),
             api_key=_secret(core_y, "api_key", "LIVEKIT_API_KEY") or "devkey",
-            api_secret=_secret(core_y, "api_secret", "LIVEKIT_API_SECRET")
-            or "devkey_secret",
+            api_secret=_secret(core_y, "api_secret", "LIVEKIT_API_SECRET") or "devkey_secret",
             host=str(core_y.get("host") or "0.0.0.0"),
             port=int(core_y.get("port") or 8766),
         ),
         behavior=AgentBehaviorConfig(
             pipeline_mode=_behavior_pipeline_mode(behavior_y),
-            instructions=str(
-                behavior_y.get("instructions")
-                or AgentBehaviorConfig().instructions
-            ),
+            instructions=str(behavior_y.get("instructions") or AgentBehaviorConfig().instructions),
             welcome_message=str(
                 behavior_y.get("welcome_message")
                 if behavior_y.get("welcome_message") is not None
@@ -307,9 +305,7 @@ def load_effective_config() -> EffectiveAgentConfig:
         remote_agent_rpc=RemoteAgentRpcConfig(
             target=str(rpc_y.get("target") or "").strip(),
             locale=str(rpc_y.get("locale") or "zh").strip() or "zh",
-            conversation_id_prefix=str(
-                rpc_y.get("conversation_id_prefix") or "livekit"
-            ).strip()
+            conversation_id_prefix=str(rpc_y.get("conversation_id_prefix") or "livekit").strip()
             or "livekit",
             tls_mode=str(rpc_y.get("tls_mode") or "off").strip().lower() or "off",
             tls_ca_path=str(rpc_y.get("tls_ca_path") or "").strip(),
@@ -320,16 +316,12 @@ def load_effective_config() -> EffectiveAgentConfig:
             enabled=bool(rt_admin_y.get("enabled", True)),
             data_resolve_enabled=bool(rt_admin_y.get("data_resolve_enabled", True)),
             admin_fallback_enabled=bool(rt_admin_y.get("admin_fallback_enabled", True)),
-            admin_api_url=str(
-                rt_admin_y.get("admin_api_url") or "http://127.0.0.1:9000"
-            ).strip(),
-            jwt_secret=_secret(
-                rt_admin_y, "jwt_secret", "PAIRING_JWT_SECRET"
-            ),
+            admin_api_url=str(rt_admin_y.get("admin_api_url") or "http://127.0.0.1:9000").strip(),
+            jwt_secret=_secret(rt_admin_y, "jwt_secret", "PAIRING_JWT_SECRET"),
             jwt_algorithm=str(rt_admin_y.get("jwt_algorithm") or "HS256").strip(),
-            device_token_ttl_seconds=int(
-                rt_admin_y.get("device_token_ttl_seconds") or 24 * 3600
-            ),
+            device_token_ttl_seconds=int(rt_admin_y.get("device_token_ttl_seconds") or 24 * 3600),
+            http_timeout_sec=float(rt_admin_y.get("http_timeout_sec") or 10.0),
+            http_connect_timeout_sec=float(rt_admin_y.get("http_connect_timeout_sec") or 3.0),
         ),
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),

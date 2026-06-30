@@ -94,6 +94,8 @@ class RuntimeAdminConfig:
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     device_token_ttl_seconds: int = 24 * 3600
+    http_timeout_sec: float = 10.0
+    http_connect_timeout_sec: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,13 @@ class VadPolicyConfig:
 class EotPolicyConfig:
     eot_unlikely_threshold: float = 0.50
     tail_hang_silence_ms: int = 2_000
+    low_eot_commit_grace_max_ms: int = 2_000
+    statement_deferred_merge_grace_ms: int = 3_500
+    voiceprint_deferred_merge_grace_ms: int = 4_000
+    short_statement_defer_max_cjk_chars: int = 12
+    statement_sequence_merge_max_cjk_chars: int = 28
+    statement_sequence_fragment_max_cjk_chars: int = 14
+    transcript_revision_min_normalized_chars: int = 4
 
 
 @dataclass(frozen=True)
@@ -122,9 +131,13 @@ class InterruptPolicyConfig:
     transcript_evidence_gate_enabled: bool = True
     min_normal_interim_cjk_chars: int = 3
     latin_artifact_hold_max_chars: int = 4
+    hard_stop_prefix_min_cjk_chars: int = 2
+    repeated_noise_min_chars: int = 2
+    repeated_noise_max_chars: int = 6
     weak_signal_followup_hold_ms: int = 1500
     correction_topic_stability_window_ms: int = 120
     normal_interrupt_stability_window_ms: int = 350
+    cancel_residual_commit_suppress_ms: int = 2_000
     # Interrupt behavior flags (formerly the separate `interrupt_mode` axis,
     # collapsed into the single profile/config axis). Defaults = the stable
     # "balanced" behavior; the retired "responsive" mode flipped these on/off.
@@ -208,6 +221,7 @@ class ObservabilityConfig:
     structured_logs: bool = True
     metrics_enabled: bool = True
     timeline_debug_path: str = ""
+    llm_first_delta_timeout_ms: int = 3_000
 
 
 @dataclass(frozen=True)
@@ -221,6 +235,11 @@ class VoiceprintConfig:
     min_audio_ms: int = 1500
     prewarm: bool = True
     trust_paired_devices: bool = True
+    turn_max_audio_ms: int = 12_000
+    accept_cache_ttl_ms: int = 180_000
+    accept_cache_short_audio_max_ms: int = 3_000
+    owner_commit_threshold: float = 0.58
+    owner_short_audio_bypass_ms: int = 1_500
 
 
 @dataclass(frozen=True)

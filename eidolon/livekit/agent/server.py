@@ -59,6 +59,7 @@ def _default_voiceprint_model_dir() -> Path:
         / "campplus_zh_16k_common"
     )
 
+
 # Suppress noisy debug logs from websockets library (BINARY frame dumps)
 logging.getLogger("websockets").setLevel(logging.INFO)
 logging.getLogger("websockets.client").setLevel(logging.INFO)
@@ -104,12 +105,14 @@ def _register_plugins() -> None:
 
     try:
         from eidolon.livekit.plugins.vad.firered import register_plugin
+
         register_plugin()
     except ImportError:
         logger.warning("firered pvad plugin not available")
 
     try:
         from eidolon.livekit.plugins.eot import register_plugin
+
         register_plugin()
     except ImportError:
         logger.warning("eidolon eot plugin not available")
@@ -127,6 +130,7 @@ def _prewarm(proc) -> None:
     # surfaces SDK upgrades that may have broken our patches before
     # users see weird behaviour. See _framework_patches.py for details.
     from eidolon.livekit.agent import _framework_patches
+
     _framework_patches.check_framework_version()
 
     try:
@@ -234,9 +238,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     )
 
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
-    prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get(
-        "voiceprint_provider"
-    )
+    prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
     # session_key still passed as a synchronous fallback (Room.sid is async,
     # Room.name is set pre-connect). D1: also pass the room reference so the
@@ -273,7 +275,8 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         if local is None:
             logger.info(
                 "[lifecycle] session_end reason=%s room=%s skipped (no local participant)",
-                reason, room.name,
+                reason,
+                room.name,
             )
             return
         import json as _json
@@ -294,7 +297,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         except Exception:
             logger.debug(
                 "[lifecycle] session_end reason=%s room=%s publish failed",
-                reason, room.name, exc_info=True,
+                reason,
+                room.name,
+                exc_info=True,
             )
 
     async def _delete_room(context: str) -> None:
@@ -327,13 +332,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                     room.name,
                 )
                 return
-            logger.exception(
-                "[Agent] failed to delete room=%s (%s)", room.name, context
-            )
+            logger.exception("[Agent] failed to delete room=%s (%s)", room.name, context)
         except Exception:
-            logger.exception(
-                "[Agent] failed to delete room=%s (%s)", room.name, context
-            )
+            logger.exception("[Agent] failed to delete room=%s (%s)", room.name, context)
 
     if cfg.behavior.pipeline_mode == "batch":
         pipeline = BatchPipeline(factory)
@@ -366,6 +367,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             interaction_mode=interaction_mode,
             session_intent=session_intent,
             observability=cfg.observability,
+            voiceprint_config=cfg.voiceprint,
             # Idle watchdog disconnect: delete the room so the still-connected
             # client is actively kicked (ROOM_DELETED) and the job's
             # shutdown_fut resolves — session.aclose() alone leaves the client
@@ -390,7 +392,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         # reason before ROOM_DELETED arrives. No-op if idle already sent
         # idle_normal_end (idempotent). Map the framework reason to our taxonomy.
         text = str(reason or "").lower()
-        end_reason = SESSION_END_ERROR if ("error" in text or "fail" in text) else SESSION_END_USER_LEFT
+        end_reason = (
+            SESSION_END_ERROR if ("error" in text or "fail" in text) else SESSION_END_USER_LEFT
+        )
         await _publish_session_end(end_reason)
         await _delete_room("shutdown callback")
 
@@ -443,12 +447,10 @@ def _validate_config(cfg: AgentConfig) -> None:
         # would die at first chat().
         if not cfg.runtime_admin.enabled:
             errors.append(
-                "runtime_admin.enabled=false is not valid for eidolon_agent. "
-                "Set enabled=true."
+                "runtime_admin.enabled=false is not valid for eidolon_agent. Set enabled=true."
             )
         elif not (
-            cfg.runtime_admin.jwt_secret
-            or Path("~/eidolon/run/jwt-secret").expanduser().is_file()
+            cfg.runtime_admin.jwt_secret or Path("~/eidolon/run/jwt-secret").expanduser().is_file()
         ):
             errors.append(
                 "PAIRING_JWT_SECRET empty AND ~/eidolon/run/jwt-secret "

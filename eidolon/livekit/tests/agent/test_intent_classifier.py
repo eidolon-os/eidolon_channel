@@ -56,7 +56,7 @@ def classifier() -> LexiconInterruptClassifier:
         ("是不是应该这样", InterruptIntent.UNCERTAIN),
         ("对不对呢", InterruptIntent.UNCERTAIN),
         ("not enough detail", InterruptIntent.UNCERTAIN),
-        ("嗯", InterruptIntent.UNCERTAIN),
+        ("嗯", InterruptIntent.BACKCHANNEL),
         ("咳咳", InterruptIntent.NOISE),
         ("帮我查一下天气", InterruptIntent.UNCERTAIN),
         ("亭子旁边有什么", InterruptIntent.UNCERTAIN),
@@ -100,6 +100,36 @@ def test_fast_intents_mode_keeps_legacy_semantic_lexicon(
         eot_score=0.0,
     )
     assert result.intent is intent
+
+
+def test_repeated_noise_shape_thresholds_are_configurable() -> None:
+    classifier = LexiconInterruptClassifier(
+        repeated_noise_min_chars=3,
+        repeated_noise_max_chars=4,
+    )
+
+    too_short = classifier.classify(
+        "哈哈",
+        vad_active=True,
+        agent_speaking=True,
+        eot_score=0.0,
+    )
+    in_range = classifier.classify(
+        "哈哈哈",
+        vad_active=True,
+        agent_speaking=True,
+        eot_score=0.0,
+    )
+    too_long = classifier.classify(
+        "哈哈哈哈哈",
+        vad_active=True,
+        agent_speaking=True,
+        eot_score=0.0,
+    )
+
+    assert too_short.intent is InterruptIntent.UNCERTAIN
+    assert in_range.intent is InterruptIntent.NOISE
+    assert too_long.intent is InterruptIntent.UNCERTAIN
 
 
 def test_interrupt_lexicons_are_non_empty_and_unique() -> None:

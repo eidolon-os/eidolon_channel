@@ -184,6 +184,7 @@ class _StableSignalStabilizer:
             self._config.interrupt.stabilize_normal_interrupts
             and self._is_normal_interrupt_wait(decision)
             and self._is_substantive_text(text)
+            and score > self._config.interrupt.early_resume_score_threshold
         ):
             return self._stabilize_normal_interrupt(
                 decision,

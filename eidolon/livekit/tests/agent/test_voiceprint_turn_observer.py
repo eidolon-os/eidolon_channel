@@ -126,6 +126,33 @@ async def test_voiceprint_turn_observer_reuses_accept_cache_for_short_turn() -> 
 
 
 @pytest.mark.asyncio
+async def test_voiceprint_accept_cache_short_audio_window_is_configurable() -> None:
+    service = _Service(score=0.95)
+    observer = VoiceprintTurnObserver(
+        service=service,
+        accept_cache_short_audio_max_ms=500,
+        context_resolver=_resolve_context,
+    )
+
+    first = TurnTimeline("turn_1")
+    observer.start_turn(timeline=first)
+    observer.append_frame(_Frame(samples_per_channel=16000 * 4))
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    second = TurnTimeline("turn_2")
+    observer.start_turn(timeline=second)
+    observer.append_frame(_Frame(samples_per_channel=16000))
+    task = observer.finish_turn()
+    assert task is not None
+    await task
+
+    assert len(service.calls) == 2
+    assert second.attrs["voiceprint"]["cached"] is False
+
+
+@pytest.mark.asyncio
 async def test_voiceprint_turn_observer_allows_provider_known_below_high_confidence() -> None:
     service = _Service(score=0.5734381675720215)
     observer = VoiceprintTurnObserver(

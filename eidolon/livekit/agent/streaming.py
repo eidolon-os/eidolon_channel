@@ -116,6 +116,8 @@ from .session import (
 
 logger = logging.getLogger("agent")
 
+_UNSET = object()
+
 
 class StreamingPipeline(BasePipeline):
     """
@@ -142,10 +144,10 @@ class StreamingPipeline(BasePipeline):
         callbacks: PipelineCallbacks | None = None,
         allow_interruptions: bool = True,
         welcome_message: str = "",
-        false_interruption_timeout: float | None = 6.0,
+        false_interruption_timeout: float | None | object = _UNSET,
         audio_sample_rate: int = 16000,
-        stt_commit_transcript_timeout: float = 5.0,
-        aec_warmup_duration: float | None = 1.0,
+        stt_commit_transcript_timeout: float | object = _UNSET,
+        aec_warmup_duration: float | None | object = _UNSET,
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
         voiceprint_config: VoiceprintConfig | None = None,
@@ -187,6 +189,7 @@ class StreamingPipeline(BasePipeline):
         self._voiceprint_config = voiceprint_config or VoiceprintConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
+        self._pending_client_control_events: list[dict[str, Any]] = []
         self._skip_commit_after_interrupt_cancel = False
         self._suppress_commit_after_interrupt_until = 0.0
         # Ducking state is shared by several effect handlers. It must exist
@@ -248,20 +251,37 @@ class StreamingPipeline(BasePipeline):
         # only a system prompt context tends to echo back instruction
         # templates, which the user heard as garbled "welcome".
         self._welcome_message = welcome_message
+        interrupt_policy = self._turn_policy.interrupt
         # Round 8 R8.9: framework default 2.0s is too short for Chinese
-        # STT (SenseAudio) which often takes 3-5s to deliver a final
-        # transcript. The framework misclassifies real interrupts as
-        # false and resumes the agent's speech mid-utterance. 6.0s gives
-        # STT enough headroom.
-        self._false_interruption_timeout = false_interruption_timeout
+        # STT, which often takes 3-5s to deliver a final transcript. Source of
+        # truth is config: turn_policy.interrupt.framework_false_interruption_timeout_ms.
+        self._false_interruption_timeout = (
+            interrupt_policy.framework_false_interruption_timeout_ms / 1000.0
+            if false_interruption_timeout is _UNSET
+            else false_interruption_timeout
+        )
         self._audio_sample_rate = audio_sample_rate
         # F1 fix (2026-05-16): pass to session.commit_user_turn() so STT FINAL
         # has enough time to arrive before framework promotes the latest INTERIM
-        # to a FINAL (which causes a doomed LLM call + cancel).
-        self._stt_commit_transcript_timeout = stt_commit_transcript_timeout
+        # to a FINAL. Source of truth is config:
+        # turn_policy.interrupt.stt_commit_transcript_timeout_ms.
+        self._stt_commit_transcript_timeout = (
+            interrupt_policy.stt_commit_transcript_timeout_ms / 1000.0
+            if stt_commit_transcript_timeout is _UNSET
+            else float(stt_commit_transcript_timeout)
+        )
         # G9 (2026-05-17): seconds the framework will ignore user audio after
-        # the first agent-speaking transition. None / 0 disables.
-        self._aec_warmup_duration = aec_warmup_duration
+        # the first agent-speaking transition. None / 0 disables. Source of
+        # truth is config: turn_policy.interrupt.aec_warmup_ms.
+        self._aec_warmup_duration = (
+            None
+            if aec_warmup_duration is _UNSET and interrupt_policy.aec_warmup_ms is None
+            else (
+                interrupt_policy.aec_warmup_ms / 1000.0
+                if aec_warmup_duration is _UNSET
+                else aec_warmup_duration
+            )
+        )
 
         self._session: AgentSession | None = None
         # Proactive report consumer: a background stream that lets the brain
@@ -1482,6 +1502,7 @@ class StreamingPipeline(BasePipeline):
                 timeline = self._timeline
             self._user_turns.start_speech(timeline=self._timeline)
             self._apply_pending_explicit_client_interrupt(self._timeline)
+            self._apply_pending_client_control_events(self._timeline)
         self._user_turns.add_transcript(transcript, is_final=True)
         eot_model = self._get_eot_model()
         decision = self._user_turns.finish_speech(
@@ -1794,6 +1815,8 @@ class StreamingPipeline(BasePipeline):
             self._timeline = None
         if not hasattr(self, "_timeline_debug_flushed"):
             self._timeline_debug_flushed = False
+        if not hasattr(self, "_pending_client_control_events"):
+            self._pending_client_control_events = []
         if not hasattr(self, "_pending_explicit_client_interrupt"):
             self._pending_explicit_client_interrupt = None
         if not hasattr(self, "_skip_commit_after_interrupt_cancel"):
@@ -1865,6 +1888,28 @@ class StreamingPipeline(BasePipeline):
         self._ensure_semantic_interrupt_handler()
         self._ensure_duck_suspend_timeout_handler()
         self._ensure_room_data_handler()
+
+    def _record_client_control_event(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+        op: str,
+        reason: str,
+        turn_id: str,
+    ) -> None:
+        event = {
+            "op": op,
+            "reason": reason,
+            "turn_id": turn_id,
+        }
+        if timeline is None:
+            pending = list(getattr(self, "_pending_client_control_events", []) or [])
+            pending.append(event)
+            self._pending_client_control_events = pending[-12:]
+            return
+        events = list(timeline.attrs.get("client_control_events") or ())
+        events.append(event)
+        timeline.set_attr("client_control_events", events[-12:])
 
     def _build_turn_handling(self) -> dict:
         """AgentSession ``turn_handling`` options (Round 8 R8.9: must live on the
@@ -2278,6 +2323,26 @@ class StreamingPipeline(BasePipeline):
         self._explicit_interrupts.apply_pending(timeline)
         self._sync_explicit_client_interrupt_compat_attrs()
 
+    def _apply_pending_client_control_events(
+        self,
+        timeline: TurnTimeline | None = None,
+    ) -> None:
+        pending = list(getattr(self, "_pending_client_control_events", []) or [])
+        if not pending:
+            return
+        timeline = timeline or getattr(self, "_timeline", None)
+        if timeline is None:
+            return
+        turn_id = getattr(timeline, "turn_id", "")
+        events = list(timeline.attrs.get("client_control_events") or ())
+        for event in pending:
+            attached = dict(event)
+            if not attached.get("turn_id"):
+                attached["turn_id"] = turn_id
+            events.append(attached)
+        timeline.set_attr("client_control_events", events[-12:])
+        self._pending_client_control_events = []
+
     def _mark_explicit_client_interrupt_resolved(
         self,
         received_at: float,
@@ -2582,7 +2647,7 @@ class StreamingPipeline(BasePipeline):
         except RuntimeError:
             return
 
-        timeline = self._timeline
+        timeline = getattr(self, "_timeline", None)
         turn_id = getattr(timeline, "turn_id", "") if timeline is not None else ""
         payload = {
             "v": 1,
@@ -2597,16 +2662,12 @@ class StreamingPipeline(BasePipeline):
             "ts": int(time.time() * 1000),
             "ttl_ms": 5000,
         }
-        if timeline is not None:
-            events = list(timeline.attrs.get("client_control_events") or ())
-            events.append(
-                {
-                    "op": op,
-                    "reason": reason,
-                    "turn_id": turn_id,
-                }
-            )
-            timeline.set_attr("client_control_events", events[-12:])
+        self._record_client_control_event(
+            timeline=timeline,
+            op=op,
+            reason=reason,
+            turn_id=turn_id,
+        )
 
         async def _send() -> None:
             await local.publish_data(
@@ -2701,6 +2762,7 @@ class StreamingPipeline(BasePipeline):
                 self._user_turns.start_speech(timeline=self._timeline)
                 self._timeline.mark("speech_started_at")
                 self._apply_pending_explicit_client_interrupt(self._timeline)
+                self._apply_pending_client_control_events(self._timeline)
                 self._voiceprint_turns.start_turn(timeline=self._timeline)
                 self._apply_pending_stt_provider_events()
                 self._observe_stt_turn_audio()
@@ -2800,6 +2862,7 @@ class StreamingPipeline(BasePipeline):
                             self._timeline_debug_flushed = False
                         self._user_turns.start_speech(timeline=self._timeline)
                         self._apply_pending_explicit_client_interrupt(self._timeline)
+                        self._apply_pending_client_control_events(self._timeline)
                         self._user_turns.add_transcript(transcript, is_final=True)
                     low_evidence_reason = self._playback_low_evidence_reject_reason(
                         transcript=transcript,

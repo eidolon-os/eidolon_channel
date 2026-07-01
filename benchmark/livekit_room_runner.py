@@ -395,7 +395,7 @@ async def _feed_case_audio(
                     events=events,
                     started=started,
                     playback_state=playback_state,
-                    input_mode=_case_input_mode(case),
+                    input_mode=_step_input_mode(case, step),
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
@@ -422,7 +422,7 @@ async def _feed_case_audio(
                     events=events,
                     started=started,
                     playback_state=playback_state,
-                    input_mode=_case_input_mode(case),
+                    input_mode=_step_input_mode(case, step),
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
@@ -452,7 +452,7 @@ async def _feed_case_audio(
                     events=events,
                     started=started,
                     playback_state=playback_state,
-                    input_mode=_case_input_mode(case),
+                    input_mode=_step_input_mode(case, step),
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
@@ -469,6 +469,21 @@ async def _feed_case_audio(
                 refresh_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await refresh_task
+        if publish_client_state and step.client_ptt:
+            # Real PTT devices publish the falling edge immediately on button
+            # release. In half-duplex/manual mode that edge is the turn boundary;
+            # without it, room benchmarks only validate "press cancels" and never
+            # exercise release-driven commit.
+            await _publish_client_audio_state(
+                local_participant,
+                events=events,
+                started=started,
+                playback_state=playback_state,
+                input_mode=INPUT_MODE_PTT,
+                ptt=False,
+                manual_interrupt=False,
+                mic_muted=True,
+            )
         events.append(
             {
                 "type": "user_audio_finished",
@@ -491,6 +506,12 @@ def _case_input_mode(case: BenchmarkCase) -> str:
     if case.dogfood.enabled and case.dogfood.device.mode == "half_duplex":
         return INPUT_MODE_PTT
     return INPUT_MODE_AUTO
+
+
+def _step_input_mode(case: BenchmarkCase, step: Any) -> str:
+    if getattr(step, "client_ptt", False):
+        return INPUT_MODE_PTT
+    return _case_input_mode(case)
 
 
 async def _publish_client_audio_state(

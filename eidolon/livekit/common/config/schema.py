@@ -125,6 +125,9 @@ class InterruptPolicyConfig:
     decision_timeout_ms: int = 500
     post_speech_evidence_timeout_ms: int = 6_000
     post_speech_evidence_min_speech_ms: int = 250
+    framework_false_interruption_timeout_ms: int = 6_000
+    stt_commit_transcript_timeout_ms: int = 5_000
+    aec_warmup_ms: int | None = 1_000
     min_interim_chars: int = 2
     early_cancel_score_threshold: float = 0.70
     early_resume_score_threshold: float = 0.20

@@ -175,11 +175,79 @@ def test_dogfood_mic_render_adds_echo_and_noise() -> None:
 
 
 def test_livekit_room_dogfood_input_mode_tracks_device_mode() -> None:
-    from benchmark.livekit_room_runner import _case_input_mode
+    from benchmark.livekit_room_runner import _case_input_mode, _step_input_mode
 
     suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
 
     assert _case_input_mode(suite.cases[0]) == "auto"
+    ptt_suite = load_suite("benchmark/cases/barge_in_ab_matrix_enforced.yaml")
+    ptt_case = {
+        case.case_id: case
+        for case in ptt_suite.cases
+    }["ab_ptt_explicit_hard_interrupt_cancels_001"]
+    assert _step_input_mode(ptt_case, ptt_case.user_steps[0]) == "ptt"
+
+
+def test_half_duplex_ptt_phase_a_suite_is_mode_specific() -> None:
+    suite = load_suite("benchmark/cases/half_duplex_ptt_phase_a_enforced.yaml")
+    cases = {case.case_id: case for case in suite.cases}
+
+    normal = cases["phase_a_ptt_normal_release_commits_001"]
+    assert normal.dogfood.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
+    assert normal.dogfood.device.mode == "half_duplex"
+    assert normal.user_steps[0].client_ptt is True
+    assert normal.expectations.agent_audio_response == "after_user_done"
+
+    tap_to_stop = cases["phase_a_ptt_tap_to_stop_cancels_001"]
+    assert tap_to_stop.dogfood.device.mode == "half_duplex"
+    assert tap_to_stop.expectations.decision_action == "cancel"
+    assert tap_to_stop.expectations.playback_stop_sent is True
+    assert tap_to_stop.expectations.agent_audio_response == "none"
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchmark import livekit_room_runner as runner
+
+    suite = load_suite("benchmark/cases/barge_in_ab_matrix_enforced.yaml")
+    case = {
+        item.case_id: item
+        for item in suite.cases
+    }["ab_ptt_explicit_hard_interrupt_cancels_001"]
+    local_participant = AsyncMock()
+    events: list[dict] = []
+
+    async def fake_wait_for_agent_speaking(*_args, **_kwargs) -> None:
+        return None
+
+    async def fake_capture_pcm(*_args, **_kwargs) -> int:
+        return 200
+
+    monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
+    monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
+    monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
+    monkeypatch.setattr(runner, "render_dogfood_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+
+    await runner._feed_case_audio(
+        object(),
+        case=case,
+        root=Path("."),
+        events=events,
+        started=0.0,
+        state=object(),
+        options=LiveKitRoomOptions(),
+        local_participant=local_participant,
+    )
+
+    payloads = [
+        json.loads(call.args[0])
+        for call in local_participant.publish_data.await_args_list
+    ]
+    assert payloads[0]["input_mode"] == "ptt"
+    assert payloads[0]["ptt"] is True
+    assert payloads[-1]["input_mode"] == "ptt"
+    assert payloads[-1]["ptt"] is False
+    assert payloads[-1]["mic_muted"] is True
 
 
 def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -79,6 +78,9 @@ turn_policy:
     transcript_revision_min_normalized_chars: 5
   interrupt:
     decision_timeout_ms: 450
+    framework_false_interruption_timeout_ms: 5500
+    stt_commit_transcript_timeout_ms: 4200
+    aec_warmup_ms: 750
     cancel_residual_commit_suppress_ms: 1800
     hard_stop_prefix_min_cjk_chars: 3
     repeated_noise_min_chars: 3
@@ -103,6 +105,9 @@ voiceprint:
     cfg = load_effective_config()
     assert cfg.providers.brain_provider == "direct_llm"
     assert cfg.turn_policy.interrupt.decision_timeout_ms == 450
+    assert cfg.turn_policy.interrupt.framework_false_interruption_timeout_ms == 5500
+    assert cfg.turn_policy.interrupt.stt_commit_transcript_timeout_ms == 4200
+    assert cfg.turn_policy.interrupt.aec_warmup_ms == 750
     assert cfg.turn_policy.interrupt.cancel_residual_commit_suppress_ms == 1800
     assert cfg.turn_policy.interrupt.hard_stop_prefix_min_cjk_chars == 3
     assert cfg.turn_policy.interrupt.repeated_noise_min_chars == 3

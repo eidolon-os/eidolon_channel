@@ -353,6 +353,17 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             allow_interruptions=allow_interruptions,
             welcome_message=cfg.behavior.welcome_message,
             audio_sample_rate=cfg.behavior.audio_sample_rate,
+            false_interruption_timeout=(
+                session_turn_policy.interrupt.framework_false_interruption_timeout_ms / 1000.0
+            ),
+            stt_commit_transcript_timeout=(
+                session_turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
+            ),
+            aec_warmup_duration=(
+                None
+                if session_turn_policy.interrupt.aec_warmup_ms is None
+                else session_turn_policy.interrupt.aec_warmup_ms / 1000.0
+            ),
             turn_policy=session_turn_policy,
             interaction_mode=interaction_mode,
             session_intent=session_intent,

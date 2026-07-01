@@ -644,6 +644,95 @@ async def test_streaming_pipeline_publishes_client_playback_stop_control() -> No
     }
 
 
+@pytest.mark.asyncio
+async def test_client_playback_stop_before_timeline_attaches_to_next_turn() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = None
+    pipeline._pending_client_control_events = []
+    pipeline._room = SimpleNamespace(local_participant=SimpleNamespace())
+    pipeline._room.local_participant.publish_data = AsyncMock()
+
+    pipeline._publish_client_control("playback.stop", reason="interrupt_cancel")
+    await asyncio.sleep(0)
+
+    pipeline._room.local_participant.publish_data.assert_awaited_once()
+    payload = json.loads(pipeline._room.local_participant.publish_data.await_args.args[0])
+    assert payload["payload"] == {
+        "reason": "interrupt_cancel",
+        "turn_id": "",
+    }
+    assert pipeline._pending_client_control_events == [
+        {
+            "op": "playback.stop",
+            "reason": "interrupt_cancel",
+            "turn_id": "",
+        }
+    ]
+
+    timeline = TurnTimeline("turn-after-ptt-press")
+    pipeline._apply_pending_client_control_events(timeline)
+
+    assert pipeline._pending_client_control_events == []
+    assert timeline.attrs["client_control_events"] == [
+        {
+            "op": "playback.stop",
+            "reason": "interrupt_cancel",
+            "turn_id": "turn-after-ptt-press",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_duck_cancel_publishes_playback_stop_control() -> None:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    class FakeDucking:
+        is_cancelled = False
+
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def stats(self) -> SimpleNamespace:
+            return SimpleNamespace(suspend_ms=0.0, buffered_frames=0, buffered_sec=0.0)
+
+        def cancel_output(self) -> None:
+            self.cancelled = True
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._ensure_runtime_defaults = lambda: None
+    pipeline._timeline = TurnTimeline("turn-ptt-stop")
+    pipeline._room = SimpleNamespace(local_participant=SimpleNamespace())
+    pipeline._room.local_participant.publish_data = AsyncMock()
+    pipeline._ducking = FakeDucking()
+    pipeline._interruption_orchestrator = SimpleNamespace(
+        should_commit_after_confirmed_cancel=lambda: False,
+        current_transcript="",
+        resolve=MagicMock(),
+    )
+    pipeline._cancel_stable_signal_timer = MagicMock()
+    pipeline._snapshot_interrupted_context = MagicMock()
+    pipeline._callbacks = MagicMock()
+    pipeline._record_duck_event = MagicMock()
+    pipeline._cancel_residual_commit_suppress_sec = lambda: 2.0
+    pipeline._interrupt_current_turn = MagicMock()
+
+    pipeline._duck_cancel_and_interrupt(force=True)
+    await asyncio.sleep(0)
+
+    pipeline._room.local_participant.publish_data.assert_awaited_once()
+    payload = json.loads(pipeline._room.local_participant.publish_data.await_args.args[0])
+    assert payload["op"] == "playback.stop"
+    assert payload["payload"] == {
+        "reason": "interrupt_cancel",
+        "turn_id": "turn-ptt-stop",
+    }
+    assert pipeline._timeline.attrs["client_control_events"][-1]["op"] == "playback.stop"
+    assert pipeline._ducking.cancelled is True
+    pipeline._interrupt_current_turn.assert_called_once_with(force=True)
+
+
 def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
     from eidolon.livekit.agent.streaming import StreamingPipeline
 

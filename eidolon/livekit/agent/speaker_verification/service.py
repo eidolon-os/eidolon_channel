@@ -5,9 +5,13 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 
-from .base import SpeakerVerificationProvider
-from .signal import SpeakerSignal
-from .store import VoiceprintProfile, VoiceprintStore
+from eidolon.livekit.common.speaker_verification import (
+    SpeakerSignal,
+    SpeakerVerificationProvider,
+    VoiceprintProfile,
+)
+
+from .store import VoiceprintStore
 
 
 class SpeakerVerificationService:

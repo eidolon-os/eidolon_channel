@@ -10,7 +10,7 @@ from eidolon.livekit.agent.speaker_verification import (
     default_profile_id,
     default_voiceprint_root,
 )
-from eidolon.livekit.agent.speaker_verification.providers import (
+from eidolon.livekit.plugins.speaker_verification import (
     NoopSpeakerVerificationProvider,
 )
 

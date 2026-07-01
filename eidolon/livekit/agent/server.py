@@ -45,7 +45,7 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
-from eidolon.livekit.agent.speaker_verification.model_paths import default_campplus_model_dir
+from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
 
 logger = logging.getLogger("agent_server")
 
@@ -150,7 +150,7 @@ def _prewarm(proc) -> None:
         logger.warning("[Agent] prewarm: EOT load failed: %s", e)
 
     try:
-        from eidolon.livekit.agent.speaker_verification.providers import (
+        from eidolon.livekit.plugins.speaker_verification import (
             ModelScopeCampPlusSpeakerVerificationProvider,
         )
         from eidolon.livekit.common.config import load_effective_config

@@ -27,7 +27,7 @@ from typing import Any
 
 import yaml
 
-from eidolon.livekit.agent.speaker_verification import default_campplus_model_dir
+from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
 
 
 DEFAULT_MODEL_DIR = default_campplus_model_dir()

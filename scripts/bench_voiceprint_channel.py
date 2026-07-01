@@ -15,10 +15,10 @@ from pathlib import Path
 from eidolon.livekit.agent.speaker_verification import (
     SpeakerVerificationService,
     VoiceprintStore,
-    default_campplus_model_dir,
     default_voiceprint_root,
 )
-from eidolon.livekit.agent.speaker_verification.providers import (
+from eidolon.livekit.plugins.speaker_verification import (
+    default_campplus_model_dir,
     ModelScopeCampPlusSpeakerVerificationProvider,
 )
 

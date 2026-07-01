@@ -21,7 +21,7 @@ import pytest
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
-from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
+from eidolon.livekit.common.speaker_verification import SpeakerSignal
 from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
 from eidolon.livekit.common.config import EotPolicyConfig, TurnPolicyConfig
 

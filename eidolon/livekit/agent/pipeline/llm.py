@@ -6,13 +6,15 @@ non-streaming (manual mode) and streaming (streaming mode) generation.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING, AsyncGenerator
 
 from livekit.agents.types import APIConnectOptions
+
+if TYPE_CHECKING:
+    from livekit.agents import llm as lk_llm
 
 logger = logging.getLogger("pipeline.llm")
 
@@ -78,7 +80,6 @@ class LivekitLlmStage(LlmStage):
         params: LlmParams | None = None,
         fnc_ctx: "lk_llm.FunctionContext | None" = None,
     ) -> None:
-        from livekit.agents import llm as lk_llm
         from livekit.agents.llm import ChatContext
 
         self._llm = llm
@@ -100,8 +101,6 @@ class LivekitLlmStage(LlmStage):
         conn_options: "APIConnectOptions | None" = None,
     ) -> LlmOutput:
         """Non-streaming chat for manual mode."""
-        from livekit.agents import llm as lk_llm
-        from livekit.agents.llm import ChatContext, ChatMessage
 
         logger.debug("[LivekitLlmStage] chat() input=%r", input.text[:100])
 
@@ -133,8 +132,7 @@ class LivekitLlmStage(LlmStage):
         conn_options: "APIConnectOptions | None" = None,
     ) -> AsyncGenerator[str, None]:
         """Streaming token generation for streaming mode."""
-        from livekit.agents import llm as lk_llm
-        from livekit.agents.llm import ChatContext, ChatMessage
+        from livekit.agents.llm import ChatContext
 
         logger.debug("[LivekitLlmStage] generate() input=%r", input.text[:100])
 

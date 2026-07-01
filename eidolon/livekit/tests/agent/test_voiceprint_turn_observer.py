@@ -7,7 +7,7 @@ from eidolon_sdk.biz.admin import ResolvedContext
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnObserver
-from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
+from eidolon.livekit.common.speaker_verification import SpeakerSignal
 
 
 @dataclass

@@ -18,7 +18,7 @@ from eidolon.livekit.agent.runtime.resolver import (
     _resolve_context,
 )
 from eidolon.livekit.agent.speaker_verification import SpeakerVerificationService
-from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
+from eidolon.livekit.common.speaker_verification import SpeakerSignal
 from eidolon.livekit.common.config import RuntimeAdminConfig, VoiceprintConfig
 
 logger = logging.getLogger("agent.session.voiceprint")

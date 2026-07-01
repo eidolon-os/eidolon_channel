@@ -18,7 +18,6 @@ To add a new TTS provider:
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass
@@ -26,6 +25,7 @@ from typing import TYPE_CHECKING, AsyncGenerator
 
 if TYPE_CHECKING:
     from livekit.agents import tts as lk_tts
+    from livekit.rtc import AudioFrame
 
 logger = logging.getLogger("pipeline.tts")
 

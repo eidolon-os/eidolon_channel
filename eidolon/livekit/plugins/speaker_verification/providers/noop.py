@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from eidolon.livekit.agent.speaker_verification.signal import SpeakerSignal
-from eidolon.livekit.agent.speaker_verification.store import (
+from eidolon.livekit.common.speaker_verification import (
+    SpeakerSignal,
     VoiceprintProfile,
     default_profile_id,
 )

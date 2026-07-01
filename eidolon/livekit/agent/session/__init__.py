@@ -22,6 +22,7 @@ from .interruption_orchestrator import (
     InterruptionState,
 )
 from .provider_events import ProviderEventObserver
+from .ptt_turn import PttTurnFinalizer
 from .room_data import RoomDataHandler, participant_identity_from_packet
 from .semantic_interrupt import SemanticInterruptHandler
 from .signals import SessionSignalBridge
@@ -49,6 +50,7 @@ __all__ = [
     "InterruptionOrchestrator",
     "InterruptionState",
     "ProviderEventObserver",
+    "PttTurnFinalizer",
     "RoomDataHandler",
     "SemanticInterruptHandler",
     "SessionSignalBridge",

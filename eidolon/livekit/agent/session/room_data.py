@@ -18,6 +18,12 @@ from eidolon.livekit.agent.observability import TurnTimeline
 logger = logging.getLogger("agent.session.room_data")
 
 
+def _optional_float_log(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.4f}"
+
+
 def participant_identity_from_packet(packet: Any) -> str:
     participant = getattr(packet, "participant", None)
     return getattr(participant, "identity", "") or "unknown"
@@ -111,12 +117,15 @@ class RoomDataHandler:
             )
         logger.info(
             "[RoomDataHandler] client.audio_state received identity=%s "
-            "playback=%s mic_muted=%s manual_interrupt=%s ptt=%s count=%d",
+            "playback=%s mic_muted=%s manual_interrupt=%s ptt=%s rms=%s "
+            "snr_hint=%s count=%d",
             state.participant_identity,
             state.playback_state,
             state.mic_muted,
             state.manual_interrupt,
             state.ptt,
+            _optional_float_log(state.rms),
+            _optional_float_log(state.snr_hint),
             client_packet_count,
         )
 

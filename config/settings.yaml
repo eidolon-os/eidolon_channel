@@ -109,6 +109,7 @@ turn_policy:
     post_speech_evidence_min_speech_ms: 250
     framework_false_interruption_timeout_ms: 6000
     stt_commit_transcript_timeout_ms: 5000
+    ptt_commit_transcript_timeout_ms: 1000
     aec_warmup_ms: 1000
     min_interim_chars: 2
     early_cancel_score_threshold: 0.70

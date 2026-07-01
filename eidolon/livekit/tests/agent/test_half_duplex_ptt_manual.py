@@ -7,9 +7,9 @@ the half-duplex reply was locked).
 
 The fix:
   - half_duplex Agent uses ``turn_detection="manual"`` → NO automatic EOU.
-  - the PTT release (ptt True→False edge) is the SOLE turn boundary → exactly one
-    ``commit_user_turn`` (with transcript_timeout so an in-flight tail FINAL is
-    included); never ``clear_user_turn``.
+  - the PTT release (ptt True→False edge, after the device-side release tail) is
+    the SOLE turn boundary → exactly one ``commit_user_turn`` with the
+    PTT-specific transcript timeout; never ``clear_user_turn``.
   - 守空: a no-speech press does not commit (manual would otherwise fire empty EOU).
   - the VAD speaking→listening transition no longer commits in half_duplex.
   - full_duplex is unchanged (EOT model turn_detection; VAD commits).
@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
+from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.streaming import StreamingPipeline
 
 
@@ -35,6 +36,7 @@ def _pipeline(*, half_duplex: bool) -> StreamingPipeline:
     p._last_ptt_held = False
     p._ptt_turn_had_speech = False
     p._stt_commit_transcript_timeout = 5.0
+    p._ptt_commit_transcript_timeout = 1.0
     p._session = MagicMock()
     p._session.commit_user_turn = MagicMock()
     p._get_eot_model = lambda: MagicMock()
@@ -78,7 +80,7 @@ def test_ptt_release_with_speech_commits_once():
     _send_ptt(p, True)          # press
     p._ptt_turn_had_speech = True  # speech arrived this hold
     _send_ptt(p, False)         # release → commit
-    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
+    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
     # 守空 accounting reset for the next hold.
     assert p._ptt_turn_had_speech is False
 
@@ -280,7 +282,31 @@ def test_interrupt_then_speak_commits_on_release():
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
     p._ptt_turn_had_speech = True                          # user then speaks
     _send_full_packet(p, ptt=False, playback_active=False)  # release → commit
-    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
+    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
+
+
+def test_ptt_press_during_generating_preempts_before_release_commit():
+    """PTT owns the floor even before audio playback starts.
+
+    If the agent is still generating the prior reply, a new PTT press must cancel
+    that silent speech handle. Otherwise the release commit succeeds but LiveKit
+    refuses to schedule the reply because a non-interruptible generation is
+    still current.
+    """
+    p = _pipeline(half_duplex=True)
+    p._state = PipelineState.GENERATING
+    p._cancel_silent_agent_generation_for_ptt = MagicMock()
+    p._duck_cancel_and_interrupt = MagicMock()
+
+    _send_full_packet(p, ptt=True, playback_active=False)
+
+    p._cancel_silent_agent_generation_for_ptt.assert_called_once_with()
+    p._duck_cancel_and_interrupt.assert_not_called()
+    assert p._ptt_turn_had_speech is False
+
+    p._ptt_turn_had_speech = True
+    _send_full_packet(p, ptt=False, playback_active=False)
+    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
 
 
 def test_full_packet_normal_turn_commits_once():
@@ -396,4 +422,4 @@ def test_scenario_s1_pause_then_continuation_single_commit():
     _drive_transcript(p, "北京的天气")        # continuation (the tail)
     _send_ptt(p, False)                      # release → single commit
 
-    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
+    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)

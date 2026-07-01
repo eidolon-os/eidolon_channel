@@ -359,6 +359,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             stt_commit_transcript_timeout=(
                 session_turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
             ),
+            ptt_commit_transcript_timeout=(
+                session_turn_policy.interrupt.ptt_commit_transcript_timeout_ms / 1000.0
+            ),
             aec_warmup_duration=(
                 None
                 if session_turn_policy.interrupt.aec_warmup_ms is None

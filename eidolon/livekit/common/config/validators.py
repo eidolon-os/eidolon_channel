@@ -96,6 +96,10 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "turn_policy.interrupt.stt_commit_transcript_timeout_ms must be in [0, 30000]"
         )
+    if not 0 <= intr.ptt_commit_transcript_timeout_ms <= 5_000:
+        errors.append(
+            "turn_policy.interrupt.ptt_commit_transcript_timeout_ms must be in [0, 5000]"
+        )
     if intr.aec_warmup_ms is not None and not 0 <= intr.aec_warmup_ms <= 30_000:
         errors.append("turn_policy.interrupt.aec_warmup_ms must be null or in [0, 30000]")
     if not 1 <= intr.min_interim_chars <= 12:

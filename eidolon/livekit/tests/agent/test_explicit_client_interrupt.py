@@ -78,6 +78,23 @@ def test_ptt_while_speaking_force_cancels() -> None:
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
 
 
+def test_ptt_while_generating_preempts_silent_reply() -> None:
+    # Real-room regression: after a tap-to-stop, the user can press PTT again
+    # while the prior reply is still in LiveKit's GENERATING state. This must
+    # cancel that silent speech handle, otherwise commit_user_turn skips the new
+    # reply with "current speech generation cannot be interrupted".
+    p = _pipeline(
+        state=_state(ptt=True, playback_state="idle"),
+        pipeline_state=PipelineState.GENERATING,
+    )
+    p._cancel_silent_agent_generation_for_ptt = MagicMock()
+
+    p._handle_explicit_client_interrupt(_packet())
+
+    p._cancel_silent_agent_generation_for_ptt.assert_called_once_with()
+    p._duck_cancel_and_interrupt.assert_not_called()
+
+
 def test_ptt_fast_path_records_owner_decision() -> None:
     timeline = TurnTimeline("turn-ptt")
     p = _pipeline(state=_state(ptt=True), timeline=timeline)

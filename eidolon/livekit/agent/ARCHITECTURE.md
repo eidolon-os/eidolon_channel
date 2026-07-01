@@ -157,8 +157,10 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 1. **Push-to-talk / half-duplex**
    - 入口证据：`client.audio_state.ptt`、设备 playback state、LiveKit manual turn boundary。
    - 所有按钮/手势只是显式输入信号，不是设备侧决策。ESP32 不判断“要不要打断”。
-   - `ClientInteractionHandler` 负责 PTT press/release 状态机：press 只 arm turn，release 只在本 hold 有真实 transcript 时 `commit_user_turn`。
-   - PTT/tap-to-stop 发生在 agent playback 时，是高优先级 explicit evidence；由 Channel 记录 owner decision，并通过 `force=True` 取消 agent 输出。
+   - ESP32 release 后保留一个很短的采集尾窗（`EIDOLON_PTT_RELEASE_TAIL_MS`），尾窗结束后才发布 `ptt=false`，避免截断末尾音节。
+   - `ClientInteractionHandler` 负责 PTT press/release 边沿识别：press 会 arm 当前 hold，并在 agent turn 仍处于 playback 或 silent generation 时抢占该 turn；release 交给 `PttTurnFinalizer`，只在本 hold 有真实 transcript 时 `commit_user_turn`。
+   - PTT release 的 STT final 等待使用 `turn_policy.interrupt.ptt_commit_transcript_timeout_ms`，独立于 full-duplex/VAD 通用的 `stt_commit_transcript_timeout_ms`。
+   - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时走 audible playback interrupt，记录用户实际听到的 assistant context 并发送 `playback.stop`；发生在 agent silent generation 时走 generation preempt，只取消 LiveKit speech/generation handle 和晚到 TTS frame，不注入未听到的 assistant context。
 
 2. **流式自然语言 / full-duplex**
    - 入口证据：VAD speech start/end、STT interim/final、EOT score、client acoustic/playback telemetry、voiceprint、echo/backchannel/noise/hard-stop intent。

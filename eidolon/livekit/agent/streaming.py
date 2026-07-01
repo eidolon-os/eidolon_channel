@@ -102,6 +102,7 @@ from .session import (
     InteractionModeBehavior,
     InterruptionOrchestrator,
     ProviderEventObserver,
+    PttTurnFinalizer,
     RoomDataHandler,
     SemanticInterruptHandler,
     SessionSignalBridge,
@@ -147,6 +148,7 @@ class StreamingPipeline(BasePipeline):
         false_interruption_timeout: float | None | object = _UNSET,
         audio_sample_rate: int = 16000,
         stt_commit_transcript_timeout: float | object = _UNSET,
+        ptt_commit_transcript_timeout: float | object = _UNSET,
         aec_warmup_duration: float | None | object = _UNSET,
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
@@ -204,6 +206,7 @@ class StreamingPipeline(BasePipeline):
         self._session_signals = self._build_session_signal_bridge()
         self._client_interactions = self._build_client_interaction_handler()
         self._turn_committer = UserTurnCommitter()
+        self._ptt_turn_finalizer = PttTurnFinalizer()
         self._user_turns = self._build_user_turn_coordinator()
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
@@ -269,6 +272,11 @@ class StreamingPipeline(BasePipeline):
             interrupt_policy.stt_commit_transcript_timeout_ms / 1000.0
             if stt_commit_transcript_timeout is _UNSET
             else float(stt_commit_transcript_timeout)
+        )
+        self._ptt_commit_transcript_timeout = (
+            interrupt_policy.ptt_commit_transcript_timeout_ms / 1000.0
+            if ptt_commit_transcript_timeout is _UNSET
+            else float(ptt_commit_transcript_timeout)
         )
         # G9 (2026-05-17): seconds the framework will ignore user audio after
         # the first agent-speaking transition. None / 0 disables. Source of
@@ -616,6 +624,12 @@ class StreamingPipeline(BasePipeline):
                 "_ptt_turn_had_speech",
                 had_speech,
             ),
+            agent_turn_active_for_ptt_preemption=lambda participant_identity=None: (
+                self._agent_turn_active_for_ptt_preemption(
+                    participant_identity=participant_identity,
+                )
+            ),
+            preempt_agent_turn_for_ptt=self._preempt_agent_turn_for_ptt,
         )
 
     def _ensure_client_interaction_handler(self) -> None:
@@ -625,6 +639,10 @@ class StreamingPipeline(BasePipeline):
     def _ensure_turn_committer(self) -> None:
         if not hasattr(self, "_turn_committer"):
             self._turn_committer = UserTurnCommitter()
+
+    def _ensure_ptt_turn_finalizer(self) -> None:
+        if not hasattr(self, "_ptt_turn_finalizer"):
+            self._ptt_turn_finalizer = PttTurnFinalizer()
 
     def _low_eot_commit_grace_max_sec(self) -> float:
         return max(self._turn_policy.eot.low_eot_commit_grace_max_ms, 0) / 1000.0
@@ -2259,32 +2277,27 @@ class StreamingPipeline(BasePipeline):
     def _commit_ptt_release_turn(self) -> None:
         """Commit the held turn on PTT release (manual turn_detection).
 
-        Calls ``session.commit_user_turn`` exactly once, letting the framework
-        wait (``transcript_timeout``) for a still-in-flight FINAL — so a tail like
-        「北京的」 spoken just before release is included — and read its own
-        complete accumulated transcript. NEVER calls ``clear_user_turn`` (that
-        heavy reset is what dropped turns before, see §10). 守空: skip if no
-        speech arrived this hold.
+        The device keeps capture open for a short release tail before publishing
+        ptt=false.  This method handles the server-side manual boundary after
+        that edge: it lets LiveKit wait briefly for a final transcript, then
+        commit the accumulated manual turn.  NEVER calls ``clear_user_turn``.
         """
-        session = self._session
-        if session is None:
-            return
-        if not self._ptt_turn_had_speech:
-            logger.info("[ptt-manual] release with no speech this hold; skipping commit (守空)")
-            return
-        self._ptt_turn_had_speech = False
-        try:
-            self._get_eot_model().reset()
-        except Exception:
-            logger.debug("[ptt-manual] eot reset failed (non-fatal)", exc_info=True)
-        try:
-            session.commit_user_turn(transcript_timeout=self._stt_commit_transcript_timeout)
-            logger.info(
-                "[ptt-manual] PTT release → commit_user_turn(transcript_timeout=%.1fs)",
-                self._stt_commit_transcript_timeout,
+        self._ensure_ptt_turn_finalizer()
+        transcript_timeout = float(
+            getattr(
+                self,
+                "_ptt_commit_transcript_timeout",
+                getattr(self, "_stt_commit_transcript_timeout", 0.0),
             )
-        except Exception:
-            logger.exception("[ptt-manual] commit_user_turn on release failed")
+        )
+        self._ptt_turn_finalizer.commit_release(
+            session=self._session,
+            had_speech=bool(getattr(self, "_ptt_turn_had_speech", False)),
+            reset_had_speech=lambda: setattr(self, "_ptt_turn_had_speech", False),
+            reset_eot=lambda: self._get_eot_model().reset(),
+            transcript_timeout=transcript_timeout,
+            timeline=getattr(self, "_timeline", None),
+        )
 
     def _on_room_data_received(self, packet: Any) -> None:
         # Full manual processing for direct callers/tests. The production path
@@ -2434,7 +2447,8 @@ class StreamingPipeline(BasePipeline):
         #     end-of-utterance. The PTT button owns the turn boundary, so a
         #     mid-sentence pause can't make the framework commit early and drop
         #     the continuation ("…今天的天气 <pause> 北京的"). The whole hold
-        #     accumulates into one transcript; PTT release commits it once.
+        #     accumulates into one transcript; PTT release (after the device-side
+        #     release tail) commits it once.
         #   full_duplex → the EOT model instance (unchanged: VAD + semantic EOT).
         turn_detection = self._turn_detection_for_mode()
         return VoiceAgent(
@@ -3115,6 +3129,72 @@ class StreamingPipeline(BasePipeline):
             and state.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
             for state in states.values()
         )
+
+    def _agent_turn_active_for_ptt_preemption(
+        self,
+        *,
+        participant_identity: str | None = None,
+    ) -> bool:
+        """Return true when a PTT press should own the floor.
+
+        PTT is a deliberate half-duplex control, so it must preempt both audible
+        playback and a still-silent reply generation. The latter is the real-room
+        failure mode: the user pressed again while LiveKit was still in
+        ``GENERATING`` for the prior turn, so release committed a new user turn
+        but LiveKit skipped the reply because the old speech handle was still
+        current.
+        """
+
+        if self._agent_output_active_for_interrupts(
+            participant_identity=participant_identity,
+        ):
+            return True
+        return getattr(self, "_state", PipelineState.IDLE) in {
+            PipelineState.GENERATING,
+            PipelineState.SPEAKING,
+        }
+
+    def _preempt_agent_turn_for_ptt(self) -> None:
+        """Apply the PTT press side effect for the active agent turn.
+
+        Audible output takes the full playback-interrupt path: stop playback,
+        capture what the user heard, and cancel the framework speech handle.
+        Silent generation takes a narrower path: cancel the generation/speech
+        handle and drop any late TTS frames, but do not snapshot interrupted
+        context because the user has not heard that assistant content yet.
+        """
+
+        if self._agent_output_active_for_interrupts():
+            self._duck_cancel_and_interrupt(force=True)
+            return
+        self._cancel_silent_agent_generation_for_ptt()
+
+    def _cancel_silent_agent_generation_for_ptt(self) -> None:
+        self._ensure_runtime_defaults()
+        self._cancel_stable_signal_timer()
+        self._ducking.cancel_output()
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "ptt_generation_preempt",
+                {
+                    "reason": "explicit_client_ptt",
+                    "agent_state": (
+                        self._state.name
+                        if hasattr(getattr(self, "_state", None), "name")
+                        else str(getattr(self, "_state", "unknown"))
+                    ),
+                    "playback_state": "not_audible",
+                },
+            )
+        logger.info(
+            "[StreamingPipeline] PTT preempted silent agent generation state=%s",
+            (
+                self._state.name
+                if hasattr(getattr(self, "_state", None), "name")
+                else getattr(self, "_state", "unknown")
+            ),
+        )
+        self._interrupt_current_turn(force=True)
 
     def _latest_client_audio_state(
         self,

@@ -80,6 +80,7 @@ turn_policy:
     decision_timeout_ms: 450
     framework_false_interruption_timeout_ms: 5500
     stt_commit_transcript_timeout_ms: 4200
+    ptt_commit_transcript_timeout_ms: 900
     aec_warmup_ms: 750
     cancel_residual_commit_suppress_ms: 1800
     hard_stop_prefix_min_cjk_chars: 3
@@ -107,6 +108,7 @@ voiceprint:
     assert cfg.turn_policy.interrupt.decision_timeout_ms == 450
     assert cfg.turn_policy.interrupt.framework_false_interruption_timeout_ms == 5500
     assert cfg.turn_policy.interrupt.stt_commit_transcript_timeout_ms == 4200
+    assert cfg.turn_policy.interrupt.ptt_commit_transcript_timeout_ms == 900
     assert cfg.turn_policy.interrupt.aec_warmup_ms == 750
     assert cfg.turn_policy.interrupt.cancel_residual_commit_suppress_ms == 1800
     assert cfg.turn_policy.interrupt.hard_stop_prefix_min_cjk_chars == 3

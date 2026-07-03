@@ -101,6 +101,7 @@ from .client_preempt import (
     ExplicitClientPreemptHandler,
     ExplicitClientPreemptLedger,
 )
+from .semantic_interrupt_gate import evaluate_semantic_interrupt_gate
 from .transcript_admission import TranscriptAdmissionGate
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
@@ -2817,23 +2818,34 @@ class StreamingPipeline(BasePipeline):
             participant_identity=getattr(event, "speaker_id", None),
         )
         interrupt_window_active = self._interrupt_window_active()
-        if (
-            self._allow_interruptions
-            and not self._uses_livekit_native_adaptive_interruption()
-            and event.transcript
-            and (agent_is_speaking or interrupt_window_active)
-        ):
-            if self._interrupt_decision_suppressed():
+        semantic_gate = evaluate_semantic_interrupt_gate(
+            allow_interruptions=self._allow_interruptions,
+            native_adaptive=self._uses_livekit_native_adaptive_interruption(),
+            transcript=getattr(event, "transcript", "") or "",
+            agent_output_active=agent_is_speaking,
+            interrupt_window_active=interrupt_window_active,
+            decision_suppressed=self._interrupt_decision_suppressed(),
+        )
+        if semantic_gate.should_forward_and_stop:
+            if semantic_gate.reason == "decision_suppressed":
                 logger.debug("[StreamingPipeline] interrupt decision suppressed after cancel")
+            super()._on_user_transcribed(event)
+            return
+        if semantic_gate.needs_attention:
+            semantic_gate = semantic_gate.with_attention_result(
+                self._attention_effects.allows_eot_check(
+                    event.transcript,
+                    speaker_id=getattr(event, "speaker_id", None),
+                )
+            )
+            if semantic_gate.should_forward_and_stop:
                 super()._on_user_transcribed(event)
                 return
-            if not self._attention_effects.allows_eot_check(
+        if semantic_gate.should_run:
+            self._semantic_interrupts.run(
                 event.transcript,
-                speaker_id=getattr(event, "speaker_id", None),
-            ):
-                super()._on_user_transcribed(event)
-                return
-            self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
+                is_final=event.is_final,
+            )
 
         super()._on_user_transcribed(event)
 

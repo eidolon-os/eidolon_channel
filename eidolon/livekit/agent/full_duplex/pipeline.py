@@ -104,6 +104,7 @@ from .client_preempt import (
 from .semantic_interrupt_gate import evaluate_semantic_interrupt_gate
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
+from .user_state_event import FullDuplexUserStateEvent
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
@@ -2738,17 +2739,56 @@ class StreamingPipeline(BasePipeline):
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()
         try:
-            old = event.old_state
-            new = event.new_state
+            state_event = FullDuplexUserStateEvent.from_event(event)
+            old = state_event.old_state
+            new = state_event.new_state
             logger.info("[StreamingPipeline] user_state: %s -> %s", old, new)
             self._publish_user_state_companion_ui(old=old, new=new)
             self._sync_stt_presence_from_user_state(old=old, new=new)
-            if new == "speaking":
+            if state_event.started_speaking:
                 self._handle_user_speaking_started()
-            elif old == "speaking" and new == "listening":
+            elif state_event.stopped_speaking:
                 self._handle_user_speaking_stopped()
         except Exception:
             logger.exception("[StreamingPipeline] error in _on_user_state_changed")
+
+    def _record_accepted_transcript_event(
+        self,
+        transcript_event: FullDuplexTranscriptEvent,
+    ) -> None:
+        if not transcript_event.has_transcript:
+            return
+
+        # Real recognized speech (interim or final) — keeps the session
+        # alive. Empty/noise transcripts deliberately don't, so a silent
+        # room still trips the idle watchdog.
+        self._mark_activity()
+        self._latest_asr_text = transcript_event.transcript
+        orchestrator = getattr(self, "_interruption_orchestrator", None)
+        if orchestrator is not None and not self._uses_livekit_native_adaptive_interruption():
+            orchestrator.note_transcript(
+                transcript_event.transcript,
+                is_final=transcript_event.is_final,
+            )
+        self._ensure_user_turn_coordinator()
+        self._user_turns.add_transcript(
+            transcript_event.transcript,
+            is_final=transcript_event.is_final,
+        )
+        if self._timeline is not None:
+            self._timeline.mark(transcript_event.timeline_mark)
+        # Round 8 R8.5.c: drive phase tracking + ONNX-debounced
+        # scoring on every ASR event (interim + final). The 200ms
+        # debounce inside update_asr coexists with EotManager's 50ms
+        # cache — both contribute to keeping CPU bounded under the
+        # ~100ms FunASR interim cadence.
+        try:
+            self._get_eot_model().update_asr(
+                transcript_event.transcript,
+                is_final=transcript_event.is_final,
+            )
+        except Exception:
+            logger.exception("[StreamingPipeline] eot_model.update_asr failed")
 
     def _on_user_transcribed(self, event: Any) -> None:
         """Handle user transcription events.
@@ -2781,37 +2821,7 @@ class StreamingPipeline(BasePipeline):
                     admission.transcript[:80],
                 )
             return
-        if transcript_event.has_transcript:
-            # Real recognized speech (interim or final) — keeps the session
-            # alive. Empty/noise transcripts deliberately don't, so a silent
-            # room still trips the idle watchdog.
-            self._mark_activity()
-            self._latest_asr_text = transcript_event.transcript
-            orchestrator = getattr(self, "_interruption_orchestrator", None)
-            if orchestrator is not None and not self._uses_livekit_native_adaptive_interruption():
-                orchestrator.note_transcript(
-                    transcript_event.transcript,
-                    is_final=transcript_event.is_final,
-                )
-            self._ensure_user_turn_coordinator()
-            self._user_turns.add_transcript(
-                transcript_event.transcript,
-                is_final=transcript_event.is_final,
-            )
-            if self._timeline is not None:
-                self._timeline.mark(transcript_event.timeline_mark)
-            # Round 8 R8.5.c: drive phase tracking + ONNX-debounced
-            # scoring on every ASR event (interim + final). The 200ms
-            # debounce inside update_asr coexists with EotManager's 50ms
-            # cache — both contribute to keeping CPU bounded under the
-            # ~100ms FunASR interim cadence.
-            try:
-                self._get_eot_model().update_asr(
-                    transcript_event.transcript,
-                    is_final=transcript_event.is_final,
-                )
-            except Exception:
-                logger.exception("[StreamingPipeline] eot_model.update_asr failed")
+        self._record_accepted_transcript_event(transcript_event)
 
         # Event-driven EOT check: react immediately when STT delivers text,
         # instead of polling for it. This ensures we analyze the CURRENT

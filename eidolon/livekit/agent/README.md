@@ -20,9 +20,12 @@ entrypoints; implementation code lives under named boundary packages.
 - `session/` contains per-session handlers and effect appliers: room data,
   provider events, idle, semantic interruption effects, commit guards, shared
   EOT helpers, session-local `eidolon.control` envelope helpers, full-duplex
-  transcript echo gating, message helpers, and user-turn coordination. Import
-  helpers from their concrete modules; `session/__init__.py` is intentionally
-  not a broad facade.
+  transcript echo gating, message helpers, and user-turn coordination.
+  `ProviderEventObserver` owns provider event observer installation, pending
+  STT replay, STT turn-audio observation, and timeline recording; full-duplex
+  pipeline code should use that owner instead of reintroducing pipeline proxy
+  methods. Import helpers from their concrete modules; `session/__init__.py`
+  is intentionally not a broad facade.
 - `full_duplex/` contains the full-duplex realtime AgentSession pipeline:
   open-mic VAD/STT/EOT, natural interruption ownership, backchannel/false
   interruption handling, user-state/transcript event normalization,

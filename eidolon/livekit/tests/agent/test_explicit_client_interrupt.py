@@ -198,7 +198,7 @@ def test_room_data_registration_drives_explicit_interrupt() -> None:
     # ``_on_room_data_received`` called it and that was never registered — so the
     # logic above was correct but never ran, and half-duplex PTT barge-in never
     # fired.
-    from eidolon.livekit.agent.session import RoomDataHandler
+    from eidolon.livekit.agent.session.room_data import RoomDataHandler
 
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._ensure_room_data_handler = MagicMock()

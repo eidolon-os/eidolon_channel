@@ -211,13 +211,11 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str]:
 
 async def run_agent(ctx, cfg: AgentConfig) -> None:
     """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
-    from eidolon.livekit.agent import (
-        BatchPipeline,
-        HalfDuplexPttPipeline,
-        SharedStageFactory,
-        StreamingPipeline,
-    )
+    from eidolon.livekit.agent.batch import BatchPipeline
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
     from eidolon.livekit.agent.runtime import apply_interaction_mode
+    from eidolon.livekit.agent.streaming import StreamingPipeline
 
     logger.info(
         "[Agent] starting room=%s mode=%s stt=%s tts=%s vad=%s",

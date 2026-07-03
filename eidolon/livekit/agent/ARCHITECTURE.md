@@ -114,6 +114,7 @@ eidolon/livekit/agent/
 │   ├── ptt_transcriber.py    # release 后一次性 STT
 │   └── ptt_turn_controller.py # segment PTT 状态机
 ├── session/
+│   ├── __init__.py           # package marker only; no broad component re-export facade
 │   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
 │   ├── client_control.py     # session-local eidolon.control / PTT status helpers
@@ -142,6 +143,9 @@ eidolon/livekit/agent/
 ├── eidolon_agent_rpc/
 │   ├── grpc_llm.py           # remote Agent LLM adapter
 │   └── session.py            # remote Agent session client
+├── speaker_verification/
+│   ├── service.py            # voiceprint service orchestration
+│   └── store.py              # voiceprint metadata store; model providers live in plugins/
 └── observability/
     ├── metrics.py            # 指标聚合
     └── timeline.py           # timeline event 记录
@@ -188,7 +192,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 ### 2.2 导入规则
 
-根目录只保留 entrypoints，不再保留旧 re-export shim。新代码必须从 `integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。
+根目录只保留 entrypoints，不再保留旧 re-export shim。新代码必须从 `integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
 
 ### 2.3 Plugin 目录结构
 

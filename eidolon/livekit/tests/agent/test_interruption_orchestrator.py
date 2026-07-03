@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.session import (
+from eidolon.livekit.agent.session.interruption_orchestrator import (
     InterruptionDecisionAction,
     InterruptionOrchestrator,
     InterruptionState,

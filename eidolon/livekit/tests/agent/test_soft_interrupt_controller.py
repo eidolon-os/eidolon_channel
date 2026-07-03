@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from eidolon.livekit.agent.session import SoftInterruptController
+from eidolon.livekit.agent.session.interruption import SoftInterruptController
 
 
 @pytest.mark.asyncio

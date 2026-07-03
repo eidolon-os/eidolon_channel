@@ -12,7 +12,7 @@ import pytest
 from eidolon_sdk.biz.contracts import WIRE_SCHEMA_VERSION
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.session import IdleWatchdog
+from eidolon.livekit.agent.session.idle import IdleWatchdog
 
 
 def _watchdog(

@@ -92,39 +92,39 @@ from .factory import SharedStageFactory
 from .output import FillerManager, OutputController, OutputDuckingController
 from .pipeline.base import BasePipeline
 from .pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
-from .session import (
-    AgentStateEffectHandler,
-    AttentionEffectHandler,
-    ClientInteractionHandler,
-    DecisionEffectApplier,
-    DuckSuspendTimeoutHandler,
-    ExplicitClientInterruptLedger,
-    IdleWatchdog,
-    InteractionModeBehavior,
-    InterruptionOrchestrator,
+from .session.agent_state import AgentStateEffectHandler
+from .session.attention_effects import AttentionEffectHandler
+from .session.client_control import (
     PTT_OUTCOME_COMMITTED,
-    ProviderEventObserver,
-    PttManualTurnHandler,
-    PttTurnDecision,
-    RoomDataHandler,
-    SemanticInterruptHandler,
-    SessionSignalBridge,
-    SoftInterruptController,
-    TranscriptEchoGate,
-    UserTurnCommitter,
-    UserTurnCoordinator,
-    VoiceprintTurnObserver,
     append_client_control_event,
-    build_interaction_mode_behavior,
     build_client_control_event,
     build_ptt_turn_status_payload,
     build_session_client_control_envelope,
-    get_shared_eot_model,
-    message_text,
     ptt_rejected_outcome,
-    ptt_turn_owner_config_from_policy,
     should_drop_pending_client_control_event,
 )
+from .session.client_interaction import (
+    ClientInteractionHandler,
+    ExplicitClientInterruptLedger,
+)
+from .session.decision_effects import DecisionEffectApplier
+from .session.duck_timeout import DuckSuspendTimeoutHandler
+from .session.eot_model import get_shared_eot_model
+from .session.idle import IdleWatchdog
+from .session.interaction_mode import InteractionModeBehavior, build_interaction_mode_behavior
+from .session.interruption import SoftInterruptController
+from .session.interruption_orchestrator import InterruptionOrchestrator
+from .session.messages import message_text
+from .session.provider_events import ProviderEventObserver
+from .session.ptt_manual import PttManualTurnHandler, ptt_turn_owner_config_from_policy
+from .session.ptt_turn import PttTurnDecision
+from .session.room_data import RoomDataHandler
+from .session.semantic_interrupt import SemanticInterruptHandler
+from .session.signals import SessionSignalBridge
+from .session.transcript_echo import TranscriptEchoGate
+from .session.turn_commit import UserTurnCommitter
+from .session.user_turn_coordinator import UserTurnCoordinator
+from .session.voiceprint import VoiceprintTurnObserver
 
 logger = logging.getLogger("agent")
 

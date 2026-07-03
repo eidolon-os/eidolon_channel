@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.session import SessionSignalBridge
+from eidolon.livekit.agent.session.signals import SessionSignalBridge
 
 
 class _FakeVAD:

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output import OutputDuckingController
-from eidolon.livekit.agent.session import AgentStateEffectHandler
+from eidolon.livekit.agent.session.agent_state import AgentStateEffectHandler
 
 
 def test_agent_state_speaking_without_provider_audio_is_visible() -> None:

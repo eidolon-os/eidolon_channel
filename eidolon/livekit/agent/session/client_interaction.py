@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
@@ -24,7 +24,9 @@ from eidolon.livekit.agent.turn_policy import (
     InterruptIntent,
     TurnPolicyRuntime,
 )
-from eidolon.livekit.agent.session.decision_effects import DecisionEffectApplier
+
+if TYPE_CHECKING:
+    from eidolon.livekit.agent.session.decision_effects import DecisionEffectApplier
 
 logger = logging.getLogger("agent")
 
@@ -37,7 +39,7 @@ class ExplicitClientInterruptLedger:
         *,
         get_timeline: Callable[[], TurnTimeline | None],
         get_turn_runtime: Callable[[], TurnPolicyRuntime],
-        get_decision_effects: Callable[[], DecisionEffectApplier],
+        get_decision_effects: Callable[[], "DecisionEffectApplier"],
         ensure_decision_effects: Callable[[], None],
     ) -> None:
         self.pending: dict[str, Any] | None = None

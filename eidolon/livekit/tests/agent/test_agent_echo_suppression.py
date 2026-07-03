@@ -13,7 +13,7 @@ agent-playback and drops matched transcripts before they start a user turn.
 
 from __future__ import annotations
 
-from eidolon.livekit.agent.session import TranscriptEchoGate
+from eidolon.livekit.agent.session.transcript_echo import TranscriptEchoGate
 
 
 def _gate(agent_text: str) -> TranscriptEchoGate:

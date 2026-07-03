@@ -15,9 +15,11 @@ Regression assertions:
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
-import pytest
+if TYPE_CHECKING:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
 
 
 def _make_pipeline_with_history(messages: list) -> "StreamingPipeline":

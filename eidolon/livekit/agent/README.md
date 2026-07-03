@@ -21,7 +21,8 @@ entrypoints; implementation code lives under named boundary packages.
   events, idle, semantic interruption effects, commit guards, shared EOT helpers,
   session-local `eidolon.control` helpers, the streaming/manual PTT adapter,
   full-duplex transcript echo gating, message helpers, and user-turn
-  coordination.
+  coordination. Import helpers from their concrete modules; `session/__init__.py`
+  is intentionally not a broad facade.
 - `half_duplex/` contains the optional segment-based PTT pipeline: hold-scoped
   audio recording, one-shot STT, and the PTT controller that does not consume
   streaming transcript events or EOT.
@@ -36,7 +37,9 @@ entrypoints; implementation code lives under named boundary packages.
 - `context/` contains conversation-context ledger helpers.
 - `observability/` contains timeline and metrics helpers.
 - `eidolon_agent_rpc/` contains the remote Eidolon Agent LLM/proactive bridge.
-- `speaker_verification/` contains voiceprint service/provider code.
+- `speaker_verification/` contains voiceprint service/store orchestration.
+  Model providers and model resources live under `eidolon.livekit.plugins`.
 
-New code should import from these boundary packages directly. Do not add root
-compatibility modules for moved code.
+New internal code should import concrete modules directly. The root
+`eidolon.livekit.agent` package remains only a small public compatibility
+surface for pipeline entrypoints.

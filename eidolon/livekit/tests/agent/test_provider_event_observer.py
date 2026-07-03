@@ -6,7 +6,7 @@ import asyncio
 from types import SimpleNamespace
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.session import ProviderEventObserver
+from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 
 
 class _FakeProvider:

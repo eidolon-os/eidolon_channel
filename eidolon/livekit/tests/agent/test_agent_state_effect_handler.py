@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.session import AgentStateEffectHandler
+from eidolon.livekit.agent.session.agent_state import AgentStateEffectHandler
 
 
 class _Ducking:

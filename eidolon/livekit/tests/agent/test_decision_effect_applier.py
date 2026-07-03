@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.session import DecisionEffectApplier
+from eidolon.livekit.agent.session.decision_effects import DecisionEffectApplier
 from eidolon.livekit.agent.turn_policy import (
     Action,
     Decision,

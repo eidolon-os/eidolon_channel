@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.session import UserTurnCommitter
+from eidolon.livekit.agent.session.turn_commit import UserTurnCommitter
 
 
 def _session(audio=None):

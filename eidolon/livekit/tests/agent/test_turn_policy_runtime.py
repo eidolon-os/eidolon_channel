@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from eidolon.livekit.agent.turn_policy import Action, TurnPolicyRuntime
 from eidolon.livekit.common.config import TurnPolicyConfig
 

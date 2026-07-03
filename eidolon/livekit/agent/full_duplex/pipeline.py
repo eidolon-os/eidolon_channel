@@ -103,6 +103,7 @@ from .client_preempt import (
 )
 from .semantic_interrupt_gate import evaluate_semantic_interrupt_gate
 from .transcript_admission import TranscriptAdmissionGate
+from .transcript_event import FullDuplexTranscriptEvent
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
@@ -2763,7 +2764,8 @@ class StreamingPipeline(BasePipeline):
              polling approach).
         """
         self._ensure_runtime_defaults()
-        admission = self._ensure_transcript_admission_gate().evaluate(event)
+        transcript_event = FullDuplexTranscriptEvent.from_event(event)
+        admission = self._ensure_transcript_admission_gate().evaluate(transcript_event)
         if not admission.accepted:
             if admission.reason == "suppressed_until_next_speech":
                 logger.info(
@@ -2779,35 +2781,35 @@ class StreamingPipeline(BasePipeline):
                     admission.transcript[:80],
                 )
             return
-        if event.transcript:
+        if transcript_event.has_transcript:
             # Real recognized speech (interim or final) — keeps the session
             # alive. Empty/noise transcripts deliberately don't, so a silent
             # room still trips the idle watchdog.
             self._mark_activity()
-            self._latest_asr_text = event.transcript
+            self._latest_asr_text = transcript_event.transcript
             orchestrator = getattr(self, "_interruption_orchestrator", None)
             if orchestrator is not None and not self._uses_livekit_native_adaptive_interruption():
                 orchestrator.note_transcript(
-                    event.transcript,
-                    is_final=bool(getattr(event, "is_final", False)),
+                    transcript_event.transcript,
+                    is_final=transcript_event.is_final,
                 )
             self._ensure_user_turn_coordinator()
             self._user_turns.add_transcript(
-                event.transcript,
-                is_final=bool(getattr(event, "is_final", False)),
+                transcript_event.transcript,
+                is_final=transcript_event.is_final,
             )
             if self._timeline is not None:
-                if event.is_final:
-                    self._timeline.mark("transcript_final_at")
-                else:
-                    self._timeline.mark("transcript_interim_first_at")
+                self._timeline.mark(transcript_event.timeline_mark)
             # Round 8 R8.5.c: drive phase tracking + ONNX-debounced
             # scoring on every ASR event (interim + final). The 200ms
             # debounce inside update_asr coexists with EotManager's 50ms
             # cache — both contribute to keeping CPU bounded under the
             # ~100ms FunASR interim cadence.
             try:
-                self._get_eot_model().update_asr(event.transcript, is_final=event.is_final)
+                self._get_eot_model().update_asr(
+                    transcript_event.transcript,
+                    is_final=transcript_event.is_final,
+                )
             except Exception:
                 logger.exception("[StreamingPipeline] eot_model.update_asr failed")
 
@@ -2815,13 +2817,13 @@ class StreamingPipeline(BasePipeline):
         # instead of polling for it. This ensures we analyze the CURRENT
         # speech turn's text, not a stale one from a previous turn.
         agent_is_speaking = self._agent_output_active_for_interrupts(
-            participant_identity=getattr(event, "speaker_id", None),
+            participant_identity=transcript_event.speaker_id,
         )
         interrupt_window_active = self._interrupt_window_active()
         semantic_gate = evaluate_semantic_interrupt_gate(
             allow_interruptions=self._allow_interruptions,
             native_adaptive=self._uses_livekit_native_adaptive_interruption(),
-            transcript=getattr(event, "transcript", "") or "",
+            transcript=transcript_event.transcript,
             agent_output_active=agent_is_speaking,
             interrupt_window_active=interrupt_window_active,
             decision_suppressed=self._interrupt_decision_suppressed(),
@@ -2834,8 +2836,8 @@ class StreamingPipeline(BasePipeline):
         if semantic_gate.needs_attention:
             semantic_gate = semantic_gate.with_attention_result(
                 self._attention_effects.allows_eot_check(
-                    event.transcript,
-                    speaker_id=getattr(event, "speaker_id", None),
+                    transcript_event.transcript,
+                    speaker_id=transcript_event.speaker_id,
                 )
             )
             if semantic_gate.should_forward_and_stop:
@@ -2843,8 +2845,8 @@ class StreamingPipeline(BasePipeline):
                 return
         if semantic_gate.should_run:
             self._semantic_interrupts.run(
-                event.transcript,
-                is_final=event.is_final,
+                transcript_event.transcript,
+                is_final=transcript_event.is_final,
             )
 
         super()._on_user_transcribed(event)

@@ -117,6 +117,7 @@ eidolon/livekit/agent/
 │   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
 │   ├── semantic_interrupt_gate.py # SemanticInterruptGate: transcript-triggered semantic interrupt gate
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
+│   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
 │   └── pipeline.py           # StreamingPipeline: full-duplex realtime AgentSession pipeline
 ├── session/
 │   ├── __init__.py           # package marker only; no broad component re-export facade
@@ -165,6 +166,8 @@ eidolon/livekit/agent/
 `session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；它们都不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
 
 `full_duplex/transcript_admission.py` 是 full-duplex STT transcript 进入 turn/evidence 逻辑前的入口门禁。当前只拥有两类无副作用裁决：voiceprint ownership 后的 post-turn residual transcript 抑制，以及播放中 agent 自身 TTS echo transcript 抑制。它不负责 EOT、commit、cancel/resume，也不处理 half-duplex PTT。
+
+`full_duplex/transcript_event.py` 是 LiveKit `user_input_transcribed` 事件的归一化边界。`StreamingPipeline` 只在入口把框架事件转成 `FullDuplexTranscriptEvent`，后续 admission、recording、semantic gate 都消费稳定字段，避免 `event.transcript` / `getattr(event, ...)` 散落。
 
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 

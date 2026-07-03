@@ -8,6 +8,8 @@ from typing import Any
 
 from eidolon.livekit.agent.session.transcript_echo import TranscriptEchoGate
 
+from .transcript_event import FullDuplexTranscriptEvent
+
 
 @dataclass(frozen=True)
 class TranscriptAdmissionDecision:
@@ -33,9 +35,10 @@ class TranscriptAdmissionGate:
         self._echo_gate = echo_gate
 
     def evaluate(self, event: Any) -> TranscriptAdmissionDecision:
-        transcript = getattr(event, "transcript", "") or ""
-        speaker_id = getattr(event, "speaker_id", None)
-        is_final = getattr(event, "is_final", None)
+        transcript_event = FullDuplexTranscriptEvent.from_event(event)
+        transcript = transcript_event.transcript
+        speaker_id = transcript_event.speaker_id
+        is_final = transcript_event.is_final
         if self._suppress_until_next_speech() and transcript:
             return TranscriptAdmissionDecision(
                 accepted=False,

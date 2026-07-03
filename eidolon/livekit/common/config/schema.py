@@ -127,7 +127,6 @@ class InterruptPolicyConfig:
     post_speech_evidence_min_speech_ms: int = 250
     framework_false_interruption_timeout_ms: int = 6_000
     stt_commit_transcript_timeout_ms: int = 5_000
-    ptt_commit_transcript_timeout_ms: int = 1_000
     aec_warmup_ms: int | None = 1_000
     min_interim_chars: int = 2
     early_cancel_score_threshold: float = 0.70
@@ -152,15 +151,9 @@ class InterruptPolicyConfig:
 
 @dataclass(frozen=True)
 class PttPolicyConfig:
-    # Half-duplex push-to-talk owns its turn boundary explicitly: release closes
-    # the user audio window, then the channel waits briefly for VAD/STT evidence
-    # before committing or rejecting the turn.
-    turn_owner: str = "streaming"
-    empty_probe_ms: int = 250
-    finalization_timeout_ms: int = 1_200
-    post_vad_settle_ms: int = 150
-    stable_interim_ms: int = 700
-    commit_transcript_timeout_ms: int = 300
+    # Half-duplex push-to-talk owns its turn boundary explicitly: press opens a
+    # complete audio segment, release closes it, then the segment is transcribed
+    # once before committing or rejecting the turn.
     segment_stt_strategy: str = "streaming"
     segment_min_audio_ms: int = 80
     segment_max_audio_ms: int = 20_000

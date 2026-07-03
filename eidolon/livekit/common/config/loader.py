@@ -196,22 +196,7 @@ def _merge_dataclass(base: T, raw: dict[str, Any] | None) -> T:
 def _load_turn_policy(raw: dict[str, Any]) -> TurnPolicyConfig:
     profile = str(raw.get("profile") or "balanced_semantic").strip() or "balanced_semantic"
     base = profile_defaults(profile)
-    merged = _merge_dataclass(base, raw)
-    if "ptt" not in raw:
-        legacy_ptt_timeout = (
-            raw.get("interrupt", {}).get("ptt_commit_transcript_timeout_ms")
-            if isinstance(raw.get("interrupt"), dict)
-            else None
-        )
-        if legacy_ptt_timeout is not None:
-            merged = replace(
-                merged,
-                ptt=replace(
-                    merged.ptt,
-                    commit_transcript_timeout_ms=int(legacy_ptt_timeout),
-                ),
-            )
-    return merged
+    return _merge_dataclass(base, raw)
 
 
 def load_effective_config() -> EffectiveAgentConfig:

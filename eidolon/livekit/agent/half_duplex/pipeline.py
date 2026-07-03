@@ -34,19 +34,21 @@ from eidolon.livekit.agent.pipeline.types import (
     generate_turn_id,
 )
 from eidolon.livekit.agent.session.client_control import (
-    PTT_OUTCOME_COMMITTED,
-    PTT_OUTCOME_FINALIZING,
-    PTT_OUTCOME_RECORDING,
     append_client_control_event,
     build_client_control_event,
-    build_ptt_turn_status_payload,
     build_session_client_control_envelope,
-    ptt_rejected_outcome,
-    should_drop_pending_client_control_event,
 )
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
 
+from .control import (
+    PTT_OUTCOME_COMMITTED,
+    PTT_OUTCOME_FINALIZING,
+    PTT_OUTCOME_RECORDING,
+    build_ptt_turn_status_payload,
+    ptt_rejected_outcome,
+    should_drop_pending_ptt_control_event,
+)
 from .ptt_segment import PttAudioSegmentConfig, PttAudioSegmentRecorder
 from .ptt_transcriber import PttSegmentTranscriber, PttSegmentTranscriberConfig
 from .ptt_turn_controller import HalfDuplexPttTurnController, PttSegmentTurnResult
@@ -624,7 +626,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         turn_id = timeline.turn_id if timeline is not None else ""
         event = build_client_control_event(op=op, reason=reason, turn_id=turn_id)
         if timeline is None:
-            if should_drop_pending_client_control_event(
+            if should_drop_pending_ptt_control_event(
                 op=op,
                 reason=reason,
                 turn_id=turn_id,

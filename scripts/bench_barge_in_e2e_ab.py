@@ -166,8 +166,7 @@ class ManagedWorker:
 def _overlay_payload(
     *,
     interruption_owner: str,
-    ptt_turn_owner: str | None,
-    ptt_segment_stt_strategy: str | None,
+    ptt_segment_stt_strategy: str | None = None,
     server_port: int,
     timeline_path: Path,
 ) -> dict[str, Any]:
@@ -175,8 +174,6 @@ def _overlay_payload(
         "interruption_owner": interruption_owner,
         "attention": {"enforce": True},
     }
-    if ptt_turn_owner:
-        turn_policy["ptt"] = {"turn_owner": ptt_turn_owner}
     if ptt_segment_stt_strategy:
         ptt = dict(turn_policy.get("ptt") or {})
         ptt["segment_stt_strategy"] = ptt_segment_stt_strategy
@@ -194,13 +191,11 @@ def _write_overlay(
     profile: str,
     profile_dir: Path,
     server_port: int,
-    ptt_turn_owner: str | None = None,
     ptt_segment_stt_strategy: str | None = None,
 ) -> Path:
     overlay_path = profile_dir / "settings.overlay.yaml"
     payload = _overlay_payload(
         interruption_owner=profile,
-        ptt_turn_owner=ptt_turn_owner,
         ptt_segment_stt_strategy=ptt_segment_stt_strategy,
         server_port=server_port,
         timeline_path=profile_dir / "worker-turn-timeline.jsonl",
@@ -318,7 +313,6 @@ async def _run_profile(
             profile=profile,
             profile_dir=profile_dir,
             server_port=args.worker_base_port + profile_index,
-            ptt_turn_owner=args.ptt_turn_owner,
             ptt_segment_stt_strategy=args.ptt_segment_stt_strategy,
         )
         worker_log_path = profile_dir / "worker.stdout.log"
@@ -338,15 +332,6 @@ async def _run_profile(
             raise SystemExit(
                 "profile overlay did not take effect: expected "
                 f"{profile}, got {cfg.turn_policy.interruption_owner}"
-            )
-        if (
-            args.manage_worker
-            and args.ptt_turn_owner
-            and str(cfg.turn_policy.ptt.turn_owner) != args.ptt_turn_owner
-        ):
-            raise SystemExit(
-                "PTT turn owner overlay did not take effect: expected "
-                f"{args.ptt_turn_owner}, got {cfg.turn_policy.ptt.turn_owner}"
             )
         if (
             args.manage_worker
@@ -713,16 +698,6 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--ptt-turn-owner",
-        choices=["streaming", "segment"],
-        default=os.environ.get("EIDOLON_BENCH_PTT_TURN_OWNER") or None,
-        help=(
-            "Optional managed-worker overlay for turn_policy.ptt.turn_owner. "
-            "Use 'segment' to smoke the complete-audio PTT pipeline without "
-            "changing config/settings.yaml."
-        ),
-    )
-    parser.add_argument(
         "--ptt-segment-stt-strategy",
         choices=["auto", "offline", "streaming"],
         default=os.environ.get("EIDOLON_BENCH_PTT_SEGMENT_STT_STRATEGY") or None,
@@ -781,8 +756,8 @@ async def _main() -> int:
     args = _parse_args()
     if args.repeat < 1:
         raise SystemExit("--repeat must be >= 1")
-    if (args.ptt_turn_owner or args.ptt_segment_stt_strategy) and not args.manage_worker:
-        raise SystemExit("--ptt-turn-owner/--ptt-segment-stt-strategy require --manage-worker")
+    if args.ptt_segment_stt_strategy and not args.manage_worker:
+        raise SystemExit("--ptt-segment-stt-strategy requires --manage-worker")
     root = Path.cwd()
     suites = load_suites(args.cases)
     run_root = Path(args.output_dir) / args.run_id / "barge_in_e2e_ab"

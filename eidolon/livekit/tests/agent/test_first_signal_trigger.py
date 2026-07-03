@@ -200,7 +200,7 @@ async def test_timeout_with_vad_still_active_without_transcript_holds() -> None:
     """At the decision deadline, VAD alone is not enough evidence to cancel."""
     pipeline = _make_pipeline(vad_user_state="speaking")
 
-    with patch("eidolon.livekit.agent.streaming.asyncio.create_task") as create_task:
+    with patch("eidolon.livekit.agent.full_duplex.pipeline.asyncio.create_task") as create_task:
         await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.cancel.assert_not_called()
@@ -229,7 +229,7 @@ async def test_timeout_with_low_score_transcript_holds() -> None:
     pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.0)
     pipeline._latest_asr_text = "啊那你"
 
-    with patch("eidolon.livekit.agent.streaming.asyncio.create_task") as create_task:
+    with patch("eidolon.livekit.agent.full_duplex.pipeline.asyncio.create_task") as create_task:
         await _run_duck_deadline(pipeline, 0.01)
 
     pipeline._duck_mixer.cancel.assert_not_called()

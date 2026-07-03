@@ -215,7 +215,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     from eidolon.livekit.agent.factory import SharedStageFactory
     from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
     from eidolon.livekit.agent.runtime import apply_interaction_mode
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     logger.info(
         "[Agent] starting room=%s mode=%s stt=%s tts=%s vad=%s",
@@ -340,14 +340,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         )
         logger.info(
             "[Agent] interaction_mode=%s session_intent=%s allow_interruptions=%s "
-            "attention_enabled=%s ptt_turn_owner=%s",
+            "attention_enabled=%s",
             interaction_mode,
             session_intent,
             allow_interruptions,
             session_turn_policy.attention.enabled,
-            session_turn_policy.ptt.turn_owner,
         )
-        if _use_segment_ptt_pipeline(interaction_mode, session_turn_policy):
+        if _use_half_duplex_ptt_pipeline(interaction_mode):
             pipeline = HalfDuplexPttPipeline(
                 factory,
                 instructions=cfg.behavior.instructions,
@@ -370,9 +369,6 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 ),
                 stt_commit_transcript_timeout=(
                     session_turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
-                ),
-                ptt_commit_transcript_timeout=(
-                    session_turn_policy.ptt.commit_transcript_timeout_ms / 1000.0
                 ),
                 aec_warmup_duration=(
                     None
@@ -418,11 +414,8 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     await pipeline.run(room)
 
 
-def _use_segment_ptt_pipeline(interaction_mode: str, turn_policy) -> bool:
-    return (
-        interaction_mode == INTERACTION_MODE_HALF_DUPLEX
-        and getattr(getattr(turn_policy, "ptt", None), "turn_owner", "") == "segment"
-    )
+def _use_half_duplex_ptt_pipeline(interaction_mode: str) -> bool:
+    return interaction_mode == INTERACTION_MODE_HALF_DUPLEX
 
 
 # Module-level config shared between main process and spawned workers

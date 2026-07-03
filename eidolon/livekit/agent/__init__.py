@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from . import pipeline
 from .factory import SharedStageFactory
-from .streaming import StreamingPipeline
+from .full_duplex import StreamingPipeline
 from .batch import BatchPipeline
 from .half_duplex import HalfDuplexPttPipeline
 

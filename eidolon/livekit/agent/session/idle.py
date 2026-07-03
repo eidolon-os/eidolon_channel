@@ -35,9 +35,7 @@ class IdleWatchdog:
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         disconnect_grace_sec: float = 0.3,
-        is_half_duplex: Callable[[], bool] | None = None,
         idle_end_reason: str = SESSION_END_IDLE_NORMAL,
-        keep_alive_half_duplex: bool = True,
     ) -> None:
         self.timeout_sec = timeout_sec
         self._get_session = get_session
@@ -52,19 +50,9 @@ class IdleWatchdog:
         # publish when absent (keeps the unit-level watchdog usable standalone).
         self._on_session_end = on_session_end
         self.disconnect_grace_sec = disconnect_grace_sec
-        # Half-duplex (push-to-talk) clients are persistent appliances: the mic
-        # is closed between holds, so silence is the normal resting state, not an
-        # abandoned session. Idle-disconnecting them would force a reconnect (and
-        # replay the welcome) on the next hold.
-        self._is_half_duplex = is_half_duplex
         # The session_end reason emitted on idle teardown — idle_normal_end for a
         # user_initiated session, proactive_done for a proactive wake-up (§3.2).
         self._idle_end_reason = idle_end_reason
-        # Whether the half_duplex keep-alive exemption applies (plan §3.3): a
-        # user_initiated half_duplex appliance is kept alive; a proactive_initiated
-        # session is NOT — it must be reclaimed on its short window even on a PTT
-        # device. So the exemption is "half_duplex AND user_initiated".
-        self._keep_alive_half_duplex = keep_alive_half_duplex
         self.task: asyncio.Task | None = None
         self.last_activity_monotonic: float = 0.0
 
@@ -76,9 +64,6 @@ class IdleWatchdog:
         room = self._get_room()
         return getattr(room, "name", None) if room else None
 
-    def _half_duplex(self) -> bool:
-        return self._is_half_duplex is not None and self._is_half_duplex()
-
     def start(self) -> None:
         if self.timeout_sec <= 0:
             logger.info(
@@ -88,15 +73,10 @@ class IdleWatchdog:
             return
         self.mark_activity()
         self.task = asyncio.create_task(self.run())
-        # half_duplex==True means this device is exempt from idle-disconnect (it is
-        # a persistent push-to-talk appliance) — so for those clients the welcome
-        # is NEVER followed by an idle room-delete. This line lets Phase 0 confirm
-        # which regime a given session is in. See run()'s keep-alive branch.
         logger.info(
-            "[lifecycle][IdleWatchdog] armed room=%s timeout=%.0fs half_duplex=%s",
+            "[lifecycle][IdleWatchdog] armed room=%s timeout=%.0fs",
             self._room_name(),
             self.timeout_sec,
-            self._half_duplex(),
         )
 
     def stop(self) -> None:
@@ -119,23 +99,6 @@ class IdleWatchdog:
                     session.agent_state in ("thinking", "speaking")
                     or session.user_state == "speaking"
                 ):
-                    self.mark_activity()
-                    continue
-                if (
-                    self._keep_alive_half_duplex
-                    and self._is_half_duplex is not None
-                    and self._is_half_duplex()
-                ):
-                    # Persistent push-to-talk appliance on a user_initiated session:
-                    # stay connected so the next hold is instant and the welcome
-                    # isn't replayed. A proactive_initiated session disables this
-                    # (keep_alive_half_duplex=False) so an unanswered wake-up is
-                    # still reclaimed on its short window (plan §3.3).
-                    logger.info(
-                        "[lifecycle][IdleWatchdog] idle %.0fs >= %.0fs but half_duplex "
-                        "+ user_initiated; keeping room=%s alive (NOT deleting)",
-                        elapsed, timeout, self._room_name(),
-                    )
                     self.mark_activity()
                     continue
                 logger.info(

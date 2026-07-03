@@ -259,7 +259,6 @@ def _pipeline_with_client_state(
     pipeline._client_audio_states = (
         {state.participant_identity: state} if state is not None else {}
     )
-    pipeline._is_half_duplex = False
     pipeline._duck_and_arm_timeout = MagicMock()
     pipeline._callbacks = MagicMock()
     return pipeline

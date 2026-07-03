@@ -1,14 +1,15 @@
-"""Fast-path explicit client interrupt (PTT tap-to-stop) tests.
+"""Fast-path explicit client interrupt tests.
 
 ``_handle_explicit_client_interrupt`` is the low-latency barge-in path: it fires
 on the raw client.audio_state data packet, BEFORE STT produces a transcript, and
-hard-cancels the agent's TTS. This is the half_duplex tap-to-stop mechanism.
+hard-cancels the agent's TTS.
 
 PTT is the ONLY explicit client interrupt. The device's energy-gate
 ``manual_interrupt`` guess was removed (it falsely tripped on residual playback
 echo); open-mic full_duplex barge-in is judged server-side from the clean
-transcript/attention path instead. The cut uses ``force=True`` so it works even
-in half_duplex, where the session runs with allow_interruptions=False.
+transcript/attention path instead. Half-duplex PTT ownership now lives in
+``HalfDuplexPttPipeline``; this test covers the shared streaming fast-path for
+explicit client preemption.
 """
 
 from __future__ import annotations
@@ -72,7 +73,7 @@ def _state(**kwargs) -> ClientAudioState:
 
 def test_ptt_while_speaking_force_cancels() -> None:
     # PTT is a deliberate button press → immediate hard cut, force=True so it
-    # cuts through half_duplex's allow_interruptions=False.
+    # cuts through an uninterruptible framework speech handle.
     p = _pipeline(state=_state(ptt=True))
     p._handle_explicit_client_interrupt(_packet())
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
@@ -87,11 +88,11 @@ def test_ptt_while_generating_preempts_silent_reply() -> None:
         state=_state(ptt=True, playback_state="idle"),
         pipeline_state=PipelineState.GENERATING,
     )
-    p._cancel_silent_agent_generation_for_ptt = MagicMock()
+    p._cancel_silent_agent_generation_for_explicit_preempt = MagicMock()
 
     p._handle_explicit_client_interrupt(_packet())
 
-    p._cancel_silent_agent_generation_for_ptt.assert_called_once_with()
+    p._cancel_silent_agent_generation_for_explicit_preempt.assert_called_once_with()
     p._duck_cancel_and_interrupt.assert_not_called()
 
 
@@ -196,7 +197,7 @@ def test_room_data_registration_drives_explicit_interrupt() -> None:
     # arriving on the registered ``data_received`` callback must reach
     # ``_handle_explicit_client_interrupt``. It used to be dead code — only
     # ``_on_room_data_received`` called it and that was never registered — so the
-    # logic above was correct but never ran, and half-duplex PTT barge-in never
+    # logic above was correct but never ran, and explicit client preempt never
     # fired.
     from eidolon.livekit.agent.session.room_data import RoomDataHandler
 

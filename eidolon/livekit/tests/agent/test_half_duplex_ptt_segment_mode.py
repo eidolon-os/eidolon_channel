@@ -153,7 +153,6 @@ def _segment_policy() -> TurnPolicyConfig:
         base,
         ptt=replace(
             base.ptt,
-            turn_owner="segment",
             segment_min_audio_ms=10,
             segment_max_audio_ms=2_000,
         ),
@@ -189,16 +188,12 @@ def test_agent_session_supports_segment_ptt_text_reply_entrypoint() -> None:
     assert room_options.text_output is True
 
 
-def test_server_uses_segment_pipeline_only_for_half_duplex_segment_owner() -> None:
-    from eidolon.livekit.agent.server import _use_segment_ptt_pipeline
+def test_server_uses_half_duplex_pipeline_for_half_duplex_mode() -> None:
+    from eidolon.livekit.agent.server import _use_half_duplex_ptt_pipeline
     from eidolon_sdk.biz.contracts import INTERACTION_MODE_FULL_DUPLEX, INTERACTION_MODE_HALF_DUPLEX
 
-    segment = _segment_policy()
-    streaming = replace(segment, ptt=replace(segment.ptt, turn_owner="streaming"))
-
-    assert _use_segment_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX, segment) is True
-    assert _use_segment_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX, streaming) is False
-    assert _use_segment_ptt_pipeline(INTERACTION_MODE_FULL_DUPLEX, segment) is False
+    assert _use_half_duplex_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX) is True
+    assert _use_half_duplex_ptt_pipeline(INTERACTION_MODE_FULL_DUPLEX) is False
 
 
 @pytest.mark.asyncio

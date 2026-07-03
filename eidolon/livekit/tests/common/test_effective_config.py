@@ -80,19 +80,12 @@ turn_policy:
     decision_timeout_ms: 450
     framework_false_interruption_timeout_ms: 5500
     stt_commit_transcript_timeout_ms: 4200
-    ptt_commit_transcript_timeout_ms: 900
     aec_warmup_ms: 750
     cancel_residual_commit_suppress_ms: 1800
     hard_stop_prefix_min_cjk_chars: 3
     repeated_noise_min_chars: 3
     repeated_noise_max_chars: 8
   ptt:
-    turn_owner: segment
-    empty_probe_ms: 300
-    finalization_timeout_ms: 1300
-    post_vad_settle_ms: 180
-    stable_interim_ms: 750
-    commit_transcript_timeout_ms: 350
     segment_stt_strategy: streaming
     segment_min_audio_ms: 120
     segment_max_audio_ms: 18000
@@ -124,13 +117,6 @@ voiceprint:
     assert cfg.turn_policy.interrupt.decision_timeout_ms == 450
     assert cfg.turn_policy.interrupt.framework_false_interruption_timeout_ms == 5500
     assert cfg.turn_policy.interrupt.stt_commit_transcript_timeout_ms == 4200
-    assert cfg.turn_policy.interrupt.ptt_commit_transcript_timeout_ms == 900
-    assert cfg.turn_policy.ptt.empty_probe_ms == 300
-    assert cfg.turn_policy.ptt.finalization_timeout_ms == 1300
-    assert cfg.turn_policy.ptt.post_vad_settle_ms == 180
-    assert cfg.turn_policy.ptt.stable_interim_ms == 750
-    assert cfg.turn_policy.ptt.commit_transcript_timeout_ms == 350
-    assert cfg.turn_policy.ptt.turn_owner == "segment"
     assert cfg.turn_policy.ptt.segment_stt_strategy == "streaming"
     assert cfg.turn_policy.ptt.segment_min_audio_ms == 120
     assert cfg.turn_policy.ptt.segment_max_audio_ms == 18000
@@ -167,45 +153,6 @@ voiceprint:
     assert cfg.runtime_admin.admin_fallback_enabled is True
     assert cfg.runtime_admin.http_timeout_sec == 8.5
     assert cfg.runtime_admin.http_connect_timeout_sec == 1.5
-
-
-def test_legacy_interrupt_ptt_timeout_maps_to_ptt_policy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings = _write_settings(
-        tmp_path,
-        """
-core:
-  livekit_url: ws://127.0.0.1:7880
-  api_key: LIVEKIT_API_KEY
-  api_secret: LIVEKIT_API_SECRET
-providers:
-  stt_provider: sensetime
-  tts_provider: sensetime
-  vad_provider: firered
-  brain_provider: direct_llm
-behavior:
-  pipeline_mode: streaming
-llm:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-  api_key: OPENAI_LLM_API_KEY
-turn_policy:
-  profile: balanced_semantic
-  interrupt:
-    ptt_commit_transcript_timeout_ms: 850
-""",
-    )
-    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
-    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
-    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
-
-    cfg = load_effective_config()
-
-    assert cfg.turn_policy.interrupt.ptt_commit_transcript_timeout_ms == 850
-    assert cfg.turn_policy.ptt.commit_transcript_timeout_ms == 850
-
 
 def test_load_effective_config_applies_settings_overlay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

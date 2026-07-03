@@ -96,10 +96,6 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "turn_policy.interrupt.stt_commit_transcript_timeout_ms must be in [0, 30000]"
         )
-    if not 0 <= intr.ptt_commit_transcript_timeout_ms <= 5_000:
-        errors.append(
-            "turn_policy.interrupt.ptt_commit_transcript_timeout_ms must be in [0, 5000]"
-        )
     if intr.aec_warmup_ms is not None and not 0 <= intr.aec_warmup_ms <= 30_000:
         errors.append("turn_policy.interrupt.aec_warmup_ms must be null or in [0, 30000]")
     if not 1 <= intr.min_interim_chars <= 12:
@@ -134,18 +130,6 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         )
 
     ptt = cfg.turn_policy.ptt
-    if ptt.turn_owner not in ("streaming", "segment"):
-        errors.append("turn_policy.ptt.turn_owner must be 'streaming' or 'segment'")
-    if not 50 <= ptt.empty_probe_ms <= 1_000:
-        errors.append("turn_policy.ptt.empty_probe_ms must be in [50, 1000]")
-    if not 200 <= ptt.finalization_timeout_ms <= 3_000:
-        errors.append("turn_policy.ptt.finalization_timeout_ms must be in [200, 3000]")
-    if not 0 <= ptt.post_vad_settle_ms <= 1_000:
-        errors.append("turn_policy.ptt.post_vad_settle_ms must be in [0, 1000]")
-    if not 0 <= ptt.stable_interim_ms <= 1_000:
-        errors.append("turn_policy.ptt.stable_interim_ms must be in [0, 1000]")
-    if not 0 <= ptt.commit_transcript_timeout_ms <= 5_000:
-        errors.append("turn_policy.ptt.commit_transcript_timeout_ms must be in [0, 5000]")
     if ptt.segment_stt_strategy not in ("auto", "offline", "streaming"):
         errors.append(
             "turn_policy.ptt.segment_stt_strategy must be 'auto', 'offline', or 'streaming'"

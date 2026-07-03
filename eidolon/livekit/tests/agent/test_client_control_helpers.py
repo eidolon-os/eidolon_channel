@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from eidolon_sdk.biz.contracts import CONTROL_OP_PLAYBACK_STOP, CONTROL_OP_PTT_TURN_STATUS
 
-from eidolon.livekit.agent.session.client_control import (
+from eidolon.livekit.agent.half_duplex.control import (
     PTT_OUTCOME_COMMITTED,
     build_ptt_turn_status_payload,
-    build_session_client_control_envelope,
     ptt_rejected_outcome,
-    should_drop_pending_client_control_event,
+    should_drop_pending_ptt_control_event,
 )
+from eidolon.livekit.agent.session.client_control import build_session_client_control_envelope
 
 
 def test_session_client_control_envelope_keeps_channel_wire_shape() -> None:
@@ -52,17 +52,17 @@ def test_ptt_turn_status_payload_and_reject_outcome() -> None:
 
 
 def test_no_turn_ptt_terminal_status_does_not_attach_to_next_timeline() -> None:
-    assert should_drop_pending_client_control_event(
+    assert should_drop_pending_ptt_control_event(
         op=CONTROL_OP_PTT_TURN_STATUS,
         reason="empty_hold",
         turn_id="",
     )
-    assert not should_drop_pending_client_control_event(
+    assert not should_drop_pending_ptt_control_event(
         op=CONTROL_OP_PTT_TURN_STATUS,
         reason="empty_hold",
         turn_id="turn-active",
     )
-    assert not should_drop_pending_client_control_event(
+    assert not should_drop_pending_ptt_control_event(
         op=CONTROL_OP_PLAYBACK_STOP,
         reason="interrupt_cancel",
         turn_id="",

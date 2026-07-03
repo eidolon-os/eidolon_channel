@@ -76,7 +76,7 @@ eidolon/livekit/agent/
 ├── README.md                 # 代码地图: entrypoints / integration / session / policy / output
 ├── server.py                 # 主入口: AgentServer 启动、配置加载、session 回调注册
 ├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
-├── streaming.py              # StreamingPipeline: 实时 AgentSession wrapper / 主编排器
+├── streaming.py              # 兼容 shim: re-export full_duplex.StreamingPipeline
 ├── batch.py                  # BatchPipeline: 批量音频 blob 处理
 ├── integration/
 │   ├── __init__.py           # LiveKit/framework 外部契约边界
@@ -109,23 +109,23 @@ eidolon/livekit/agent/
 │   ├── ducking.py            # OutputDuckingController: duck 安装/状态迁移/timeout
 │   └── filler.py             # FillerManager: 填充语管理与播放
 ├── half_duplex/
+│   ├── control.py            # PTT turn_status / no-turn terminal helpers
 │   ├── pipeline.py           # HalfDuplexPttPipeline: segment PTT room pipeline
 │   ├── ptt_segment.py        # PTT hold 内完整音频段采集
 │   ├── ptt_transcriber.py    # release 后一次性 STT
 │   └── ptt_turn_controller.py # segment PTT 状态机
+├── full_duplex/
+│   └── pipeline.py           # StreamingPipeline: full-duplex realtime AgentSession pipeline
 ├── session/
 │   ├── __init__.py           # package marker only; no broad component re-export facade
 │   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
-│   ├── client_control.py     # session-local eidolon.control / PTT status helpers
-│   ├── client_interaction.py # ClientInteractionHandler: PTT/tap-to-stop/client controls
+│   ├── client_control.py     # session-local eidolon.control envelope / event helpers
+│   ├── client_interaction.py # ClientInteractionHandler: explicit client preempt controls
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── duck_timeout.py       # DuckSuspendTimeoutHandler: duck deadline policy effects
 │   ├── eot_model.py          # shared EOT model cache/loading helper
-│   ├── interaction_mode.py   # Full/Half duplex interaction behavior strategy
 │   ├── messages.py           # LiveKit chat/message text helper
-│   ├── ptt_turn.py           # PttTurnOwner: half-duplex press/release finalization state machine
-│   ├── ptt_manual.py         # PttManualTurnHandler: streaming/manual PTT owner adapter + finalize timer
 │   ├── provider_events.py    # STT/TTS provider event 观测
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发
@@ -153,7 +153,7 @@ eidolon/livekit/agent/
 
 ### 2.1 边界原则
 
-`streaming.py` 是实时会话的主编排器，仍然负责把 LiveKit `AgentSession`、Room、pipeline stage、打断决策、输出控制和观测串起来。它可以持有流程状态，但不应继续承载可独立测试的副作用模块。
+`full_duplex/pipeline.py` 是 full-duplex 实时会话的主编排器，负责把 LiveKit `AgentSession`、Room、pipeline stage、打断决策、输出控制和观测串起来。根部 `streaming.py` 只是兼容导入，新代码不得把实现继续写回根部。full-duplex pipeline 可以持有流程状态，但不应承载可独立测试的副作用模块。
 
 `turn_policy/` 负责“是否打断、如何标注 tier、是否 rollback/observe”的决策。这里应尽量保持输入输出结构化，不直接操作 LiveKit Room、播放句柄或 chat context。
 
@@ -168,15 +168,16 @@ eidolon/livekit/agent/
 Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达：
 
 1. **Push-to-talk / half-duplex**
-   - 入口证据：`client.audio_state.ptt`、设备 playback state、LiveKit manual turn boundary。
+   - 入口证据：`client.audio_state.ptt`、设备 playback state、服务端采集到的 press-to-release 音频段。
    - 所有按钮/手势只是显式输入信号，不是设备侧决策。ESP32 不判断“要不要打断”。
    - ESP32 release 后保留一个很短的采集尾窗（`EIDOLON_PTT_RELEASE_TAIL_MS`），尾窗结束后才发布 `ptt=false`，避免截断末尾音节。
-   - `ClientInteractionHandler` 负责 PTT press/release 边沿识别：press 会 arm 当前 hold，并在 agent turn 仍处于 playback 或 silent generation 时抢占该 turn；streaming owner 中 release 交给 `PttManualTurnHandler`，再由其驱动 `PttTurnOwner` finalization 状态机。
-   - `PttTurnOwner` 是 half-duplex turn owner：VAD 只提供 speech presence，STT interim/final 只提供文本材料，PTT release 才关闭用户音频窗口并进入短暂 finalization；最终只输出一个 terminal outcome：`commit` 或 `reject`。
-   - PTT 专用阈值使用 `turn_policy.ptt`：`empty_probe_ms`、`finalization_timeout_ms`、`post_vad_settle_ms`、`stable_interim_ms`、`commit_transcript_timeout_ms`。旧 `turn_policy.interrupt.ptt_commit_transcript_timeout_ms` 只作为 loader 兼容输入。
+   - `server.py` 按 session `interaction_mode=half_duplex` 直接进入 `HalfDuplexPttPipeline`；half-duplex 不再通过 `StreamingPipeline` 的 manual/STT transcript owner。
+   - `HalfDuplexPttTurnController` 是 half-duplex turn owner：press 打开音频段，release 关闭音频段，一次性 STT 转写后只输出一个 terminal outcome：`commit`、`tap_to_stop` 或 `reject`。
+   - PTT 专用阈值使用 `turn_policy.ptt`：`segment_stt_strategy`、`segment_min_audio_ms`、`segment_max_audio_ms`、`segment_min_rms_ppm`、`segment_tap_to_stop_max_audio_ms`。
    - 空按 / 无有效语音是显式协议结果：Channel 发布 session-local `eidolon.control` / `op=ptt.turn_status`，ESP32 只清理 UI 状态并 ACK，不参与 turn 裁决。
-   - `session/client_control.py` 是 streaming owner 与 segment owner 共享的 `eidolon.control` envelope、`ptt.turn_status` payload 与 timeline event 归属 helper；协议字段和 pending-event 丢弃规则不得在两个 pipeline 中各自手写。
-   - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时走 audible playback interrupt，记录用户实际听到的 assistant context 并发送 `playback.stop`；发生在 agent silent generation 时走 generation preempt，只取消 LiveKit speech/generation handle 和晚到 TTS frame，不注入未听到的 assistant context。
+   - `session/client_control.py` 是 full-duplex streaming path 与 half-duplex segment path 共享的 `eidolon.control` envelope 与 timeline event helper；PTT 专用 `ptt.turn_status` payload / no-turn terminal 规则位于 `half_duplex/control.py`。
+   - `session/client_interaction.py` 只保留 explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 half-duplex PTT turn lifecycle。
+   - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时由 half-duplex owner 抢占输出并发送 `playback.stop`；发生在空闲时则按音频段长度/能量裁决为空按或真实 turn。
 
 2. **流式自然语言 / full-duplex**
    - 入口证据：VAD speech start/end、STT interim/final、EOT score、client acoustic/playback telemetry、voiceprint、echo/backchannel/noise/hard-stop intent。
@@ -184,7 +185,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
    - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
 
-`StreamingPipeline` 可以编排两条路径的连接点，但不应继续内聚新的 PTT 状态机、client control 判定、或可独立测试的 evidence adapter。新增产品体验时，优先判断它属于 explicit client control、natural full-duplex evidence、turn ledger，还是 output side-effect，再放入对应模块。
+`StreamingPipeline` 的实现位于 `full_duplex/pipeline.py`，是 full-duplex realtime path，不承载 half-duplex PTT 状态机，也不再保留 half-duplex direct-construction fallback。新增产品体验时，优先判断它属于 explicit client control、natural full-duplex evidence、turn ledger，还是 output side-effect，再放入对应模块；half-duplex PTT 上层逻辑放入 `half_duplex/`。
 
 `context/` 负责对 conversation/chat context 的局部改写。当前只放被打断回复注入，后续如果扩展 memory recall/write 的会话内上下文拼装，也应先判断是否属于 agent 项目还是上游 brain 项目。
 
@@ -192,7 +193,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 ### 2.2 导入规则
 
-根目录只保留 entrypoints，不再保留旧 re-export shim。新代码必须从 `integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
+根目录只保留 entrypoints 和少量兼容 import。新代码必须从 `full_duplex.*`、`half_duplex.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
 
 ### 2.3 Plugin 目录结构
 

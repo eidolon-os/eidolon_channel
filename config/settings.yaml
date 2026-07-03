@@ -109,9 +109,6 @@ turn_policy:
     post_speech_evidence_min_speech_ms: 250
     framework_false_interruption_timeout_ms: 6000
     stt_commit_transcript_timeout_ms: 5000
-    # Deprecated compatibility fallback for older configs. PTT finalization now
-    # lives under turn_policy.ptt.
-    ptt_commit_transcript_timeout_ms: 1000
     aec_warmup_ms: 1000
     min_interim_chars: 2
     early_cancel_score_threshold: 0.70
@@ -127,16 +124,10 @@ turn_policy:
     repeated_noise_max_chars: 6
     weak_signal_followup_hold_ms: 1500
   ptt:
-    # streaming = current AgentSession manual STT commit owner.
-    # segment = press/release captures one complete audio segment, then STT once.
-    turn_owner: streaming
-    empty_probe_ms: 250
-    finalization_timeout_ms: 1200
-    post_vad_settle_ms: 150
-    stable_interim_ms: 700
-    commit_transcript_timeout_ms: 300
-    # streaming is the dogfood default: current offline recognize is too slow
-    # for PTT turn latency; auto/offline remain explicit experiment options.
+    # Half-duplex always uses the segment PTT owner: press/release captures one
+    # complete audio segment, then STT runs once on that closed segment.
+    # "streaming" here means one-shot recognition through the warmed streaming
+    # STT connection, not the retired StreamingPipeline PTT owner.
     segment_stt_strategy: streaming
     segment_min_audio_ms: 80
     segment_max_audio_ms: 20000

@@ -23,9 +23,7 @@ def _watchdog(
     timeline=None,
     on_idle_disconnect=None,
     on_session_end=None,
-    is_half_duplex=None,
     idle_end_reason="idle_normal_end",
-    keep_alive_half_duplex=True,
 ) -> tuple[IdleWatchdog, asyncio.Event]:
     closed = asyncio.Event()
     watchdog = IdleWatchdog(
@@ -37,9 +35,7 @@ def _watchdog(
         on_idle_disconnect=on_idle_disconnect,
         on_session_end=on_session_end,
         disconnect_grace_sec=0.0,
-        is_half_duplex=is_half_duplex,
         idle_end_reason=idle_end_reason,
-        keep_alive_half_duplex=keep_alive_half_duplex,
     )
     return watchdog, closed
 
@@ -136,10 +132,7 @@ async def test_idle_watchdog_rearms_while_agent_is_active() -> None:
 
 
 @pytest.mark.asyncio
-async def test_proactive_half_duplex_session_is_not_kept_alive() -> None:
-    """A proactive wake-up (keep_alive_half_duplex=False) must NOT get the
-    half_duplex keep-alive exemption: an unanswered report is reclaimed on its
-    short window with reason=proactive_done (plan §3.2/§3.3)."""
+async def test_idle_watchdog_uses_injected_proactive_reason() -> None:
     session = SimpleNamespace(
         agent_state="idle", user_state="listening", aclose=AsyncMock()
     )
@@ -149,43 +142,12 @@ async def test_proactive_half_duplex_session_is_not_kept_alive() -> None:
         session=session,
         on_idle_disconnect=on_idle,
         on_session_end=on_session_end,
-        is_half_duplex=lambda: True,          # PTT device …
-        keep_alive_half_duplex=False,         # … but proactive: no exemption
         idle_end_reason="proactive_done",
     )
 
     watchdog.start()
     await asyncio.wait_for(watchdog.task, timeout=2.0)
 
-    # It disconnected (not kept alive) and reported the proactive reason.
     on_idle.assert_awaited_once()
     on_session_end.assert_awaited_once_with("proactive_done")
     assert closed.is_set()
-
-
-@pytest.mark.asyncio
-async def test_idle_watchdog_does_not_disconnect_half_duplex_session() -> None:
-    """Half-duplex (push-to-talk) appliance: silent between holds is normal, so
-    the watchdog must keep the session alive instead of idle-disconnecting (which
-    would force a reconnect + welcome replay on the next hold)."""
-    session = SimpleNamespace(
-        agent_state="idle",
-        user_state="listening",
-        aclose=AsyncMock(),
-    )
-    on_idle = AsyncMock()
-    watchdog, closed = _watchdog(
-        session=session,
-        on_idle_disconnect=on_idle,
-        is_half_duplex=lambda: True,
-    )
-
-    watchdog.start()
-    await asyncio.sleep(0.2)
-
-    assert watchdog.task is not None
-    assert not watchdog.task.done()
-    on_idle.assert_not_awaited()
-    session.aclose.assert_not_awaited()
-    assert not closed.is_set()
-    watchdog.stop()

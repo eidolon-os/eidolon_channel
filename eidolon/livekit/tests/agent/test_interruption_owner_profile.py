@@ -18,7 +18,6 @@ def _speech_start_pipeline(owner: str) -> StreamingPipeline:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = _policy(owner)
     pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
-    pipeline._is_half_duplex = False
     pipeline._allow_interruptions = True
     pipeline._ensure_runtime_defaults = MagicMock()
     pipeline._publish_companion_ui_state = MagicMock()
@@ -55,7 +54,6 @@ def _transcript_pipeline(owner: str) -> StreamingPipeline:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = _policy(owner)
     pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
-    pipeline._is_half_duplex = False
     pipeline._allow_interruptions = True
     pipeline._ensure_runtime_defaults = MagicMock()
     pipeline._callbacks = MagicMock()
@@ -90,7 +88,6 @@ def _transcript_event(text: str, *, final: bool = False) -> SimpleNamespace:
 def test_livekit_native_profile_sets_adaptive_turn_handling() -> None:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = _policy("livekit_native_adaptive")
-    pipeline._is_half_duplex = False
     pipeline._allow_interruptions = True
     pipeline._false_interruption_timeout = 6.0
 
@@ -102,10 +99,9 @@ def test_livekit_native_profile_sets_adaptive_turn_handling() -> None:
     assert interruption["false_interruption_timeout"] == 6.0
 
 
-def test_half_duplex_ignores_livekit_native_profile() -> None:
+def test_native_profile_not_enabled_when_interruptions_disabled() -> None:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = _policy("livekit_native_adaptive")
-    pipeline._is_half_duplex = True
     pipeline._allow_interruptions = False
     pipeline._false_interruption_timeout = 6.0
 

@@ -157,17 +157,15 @@ def test_idle_policy_user_initiated():
     )
     assert policy.timeout_sec == idle.disconnect_after_idle_ms / 1000.0
     assert policy.end_reason == SESSION_END_IDLE_NORMAL
-    assert policy.keep_alive_half_duplex is True
 
 
-def test_idle_policy_proactive_is_short_no_keepalive():
+def test_idle_policy_proactive_is_short():
     idle = TurnPolicyConfig().idle
     policy = resolve_idle_policy(
         session_intent=SESSION_INTENT_PROACTIVE, idle_config=idle
     )
     assert policy.timeout_sec == idle.proactive_disconnect_after_idle_ms / 1000.0
     assert policy.end_reason == SESSION_END_PROACTIVE_DONE
-    assert policy.keep_alive_half_duplex is False
     # Proactive window is strictly shorter than a user session's.
     assert (
         idle.proactive_disconnect_after_idle_ms < idle.disconnect_after_idle_ms
@@ -176,8 +174,7 @@ def test_idle_policy_proactive_is_short_no_keepalive():
 
 def test_idle_policy_unknown_intent_defaults_user_like():
     # Defense default: anything that isn't proactive behaves like a user session
-    # (long window, keep-alive) — never the aggressive short teardown.
+    # (long window) — never the aggressive short teardown.
     idle = TurnPolicyConfig().idle
     policy = resolve_idle_policy(session_intent="bogus", idle_config=idle)
     assert policy.end_reason == SESSION_END_IDLE_NORMAL
-    assert policy.keep_alive_half_duplex is True

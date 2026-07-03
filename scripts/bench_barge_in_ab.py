@@ -21,7 +21,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon_sdk.biz.contracts import INTERACTION_MODE_HALF_DUPLEX
+
+from eidolon.livekit.agent.runtime import apply_interaction_mode
+from eidolon.livekit.agent.server import _use_half_duplex_ptt_pipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from benchmark.policy_runner import (
     run_policy_suite,
     write_policy_outputs,
@@ -118,7 +122,6 @@ def _native_contract() -> dict[str, Any]:
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = policy
-    pipeline._is_half_duplex = False
     pipeline._allow_interruptions = True
     pipeline._false_interruption_timeout = 6.0
     interruption = pipeline._build_turn_handling()["interruption"]
@@ -129,16 +132,17 @@ def _native_contract() -> dict[str, Any]:
         f"turn_handling.interruption={interruption}",
     )
 
-    half_pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    half_pipeline._turn_policy = policy
-    half_pipeline._is_half_duplex = True
-    half_pipeline._allow_interruptions = False
-    half_pipeline._false_interruption_timeout = 6.0
-    half_interruption = half_pipeline._build_turn_handling()["interruption"]
+    half_policy, half_allow_interruptions = apply_interaction_mode(
+        turn_policy=policy,
+        allow_interruptions=True,
+        interaction_mode=INTERACTION_MODE_HALF_DUPLEX,
+    )
     add(
-        "half_duplex_does_not_use_native_adaptive",
-        "mode" not in half_interruption and half_interruption.get("enabled") is False,
-        f"half_duplex interruption={half_interruption}",
+        "half_duplex_uses_dedicated_pipeline",
+        _use_half_duplex_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX)
+        and half_allow_interruptions is False
+        and half_policy.attention.enabled is False,
+        "half_duplex routes to HalfDuplexPttPipeline and disables streaming interruption owner",
     )
 
     detector_ready = _livekit_inference_ready_detail()

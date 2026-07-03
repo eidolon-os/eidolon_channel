@@ -1,53 +1,21 @@
 """Session-local client control helpers.
 
 Channel uses ``eidolon.control`` for best-effort commands that only make sense
-inside the current voice room, such as playback stop and PTT turn lifecycle
-status.  Keep the wire envelope and timeline event rules in one place so the
-streaming and half-duplex pipelines cannot drift.
+inside the current voice room.  Keep the shared wire envelope and generic
+timeline event rules in one place so the full-duplex and half-duplex pipelines
+cannot drift.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from eidolon_sdk.biz.contracts import CONTROL_OP_PTT_TURN_STATUS
 from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION, unix_ms
 
 CHANNEL_CONTROL_SOURCE_ID = "eidolon_channel"
 CHANNEL_CONTROL_SOURCE_TYPE = "channel"
 SESSION_LOCAL_CONTROL_TTL_MS = 5_000
 CLIENT_CONTROL_EVENT_LIMIT = 12
-
-PTT_OUTCOME_RECORDING = "recording"
-PTT_OUTCOME_FINALIZING = "finalizing"
-PTT_OUTCOME_COMMITTED = "committed"
-PTT_TRANSCRIPT_PREVIEW_CHARS = 80
-
-PTT_NO_TURN_TERMINAL_REASONS = frozenset(
-    {
-        "empty_hold",
-        "speech_without_transcript",
-        "tap_to_stop",
-    }
-)
-
-
-def ptt_rejected_outcome(reason: str) -> str:
-    return f"rejected:{reason or 'ptt_rejected'}"
-
-
-def build_ptt_turn_status_payload(
-    outcome: str,
-    reason: str,
-    *,
-    transcript: str = "",
-) -> dict[str, object]:
-    return {
-        "outcome": outcome,
-        "reason": reason,
-        "transcript_preview": transcript[:PTT_TRANSCRIPT_PREVIEW_CHARS],
-    }
-
 
 def build_client_control_event(
     *,
@@ -60,19 +28,6 @@ def build_client_control_event(
         "reason": reason,
         "turn_id": turn_id,
     }
-
-
-def should_drop_pending_client_control_event(
-    *,
-    op: str,
-    reason: str,
-    turn_id: str = "",
-) -> bool:
-    return (
-        not turn_id
-        and op == CONTROL_OP_PTT_TURN_STATUS
-        and reason in PTT_NO_TURN_TERMINAL_REASONS
-    )
 
 
 def append_client_control_event(

@@ -20,9 +20,9 @@ contract end-to-end before the device + hub halves ship.
 Relationship to the packet-level ``client_audio_state.input_mode == "ptt"``
 signal (commit 9642a0c): token metadata is the SESSION-LEVEL authority for the
 two config knobs above; the packet signal remains the RUNTIME signal for the
-fine-grained PTT behaviours (no-defer commit, echo-suppression bypass, no
-idle-disconnect). For a half_duplex device the two agree — it sends ``ptt``
-packets — and they act on orthogonal concerns, so they never fight.
+    fine-grained PTT behaviours. For a half_duplex device the two agree — it
+    sends ``ptt`` packets — and they act on orthogonal concerns, so they never
+    fight.
 """
 
 from __future__ import annotations
@@ -51,8 +51,7 @@ logger = logging.getLogger("agent.interaction_mode")
 #   - user_initiated   : the user tapped JOIN / is driving the conversation.
 #   - proactive_initiated : the session was woken to deliver a proactive report
 #     (Phase 3). Drives a shorter idle window + proactive_done teardown so a
-#     report nobody answers is reclaimed quickly (I2/I6), instead of leaning on
-#     the half_duplex keep-alive that a user_initiated PTT session enjoys.
+#     report nobody answers is reclaimed quickly (I2/I6).
 # Default user_initiated: today nothing stamps proactive intent (Phase 3 wires
 # the wake path), so every current session is correctly user_initiated.
 # The INTENT_* / INTERACTION_MODE_* names + validity sets are sourced from
@@ -166,32 +165,28 @@ def apply_interaction_mode(
 
 @dataclasses.dataclass(frozen=True)
 class IdlePolicy:
-    """Per-session idle behaviour derived from session_intent (plan §3.2/§3.3)."""
+    """Per-session idle behaviour derived from session_intent (plan §3.2)."""
 
     timeout_sec: float
     end_reason: str
-    keep_alive_half_duplex: bool
 
 
 def resolve_idle_policy(
     *, session_intent: str, idle_config: IdlePolicyConfig
 ) -> IdlePolicy:
-    """Map ``session_intent`` → idle window + teardown reason + keep-alive.
+    """Map ``session_intent`` → idle window + teardown reason.
 
     Single source for the intent→idle decision that used to be inlined in the
     pipeline constructor. A proactive wake-up nobody answers is reclaimed on a
-    SHORT window with ``reason=proactive_done`` and gets NO half_duplex keep-alive
-    (so a PTT appliance doesn't pin an unanswered report open); a user session
-    keeps the long window, ``idle_normal_end``, and the keep-alive exemption.
+    SHORT window with ``reason=proactive_done``; a user session keeps the long
+    window and ``idle_normal_end``.
     """
     if session_intent == SESSION_INTENT_PROACTIVE:
         return IdlePolicy(
             timeout_sec=idle_config.proactive_disconnect_after_idle_ms / 1000.0,
             end_reason=SESSION_END_PROACTIVE_DONE,
-            keep_alive_half_duplex=False,
         )
     return IdlePolicy(
         timeout_sec=idle_config.disconnect_after_idle_ms / 1000.0,
         end_reason=SESSION_END_IDLE_NORMAL,
-        keep_alive_half_duplex=True,
     )

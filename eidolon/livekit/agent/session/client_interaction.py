@@ -4,7 +4,8 @@ This module owns product-level client controls that arrive over LiveKit data
 packets.  It deliberately does not own natural open-mic interruption policy:
 full-duplex barge-in/backchannel decisions stay in ``TurnPolicyRuntime`` and
 ``InterruptionOrchestrator``.  The client path here is limited to explicit
-controls such as PTT/tap-to-stop and half-duplex PTT turn boundaries.
+controls such as PTT/tap-to-stop. Half-duplex turn ownership lives in
+``agent.half_duplex``.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ class ExplicitClientInterruptLedger:
         self._get_decision_effects = get_decision_effects
         self._ensure_decision_effects = ensure_decision_effects
 
-    def ptt_decision(self) -> Decision:
+    def explicit_interrupt_decision(self) -> Decision:
         return Decision(
             action=Action.CANCEL,
             reason="explicit_client_ptt",
@@ -80,7 +81,7 @@ class ExplicitClientInterruptLedger:
         if resolved_at is not None:
             timeline.mark_at("interrupt_resolved_at", resolved_at)
             timeline.set_attr("cancel_reason", "explicit_client_ptt")
-        decision = self.ptt_decision()
+        decision = self.explicit_interrupt_decision()
         self._get_decision_effects().record_decision_attrs(
             decision,
             source="client_ptt",
@@ -122,12 +123,11 @@ class ExplicitClientInterruptLedger:
 
 
 class ClientInteractionHandler:
-    """Handle explicit client controls and half-duplex PTT turn boundaries."""
+    """Handle explicit client controls that can preempt agent output."""
 
     def __init__(
         self,
         *,
-        is_half_duplex: Callable[[], bool],
         latest_client_audio_state: Callable[[str | None], ClientAudioState | None],
         agent_output_active_for_interrupts: Callable[[str | None], bool],
         ensure_ducking_controller: Callable[[], None],
@@ -135,65 +135,29 @@ class ClientInteractionHandler:
         record_explicit_client_interrupt: Callable[[dict[str, Any], float], None],
         mark_explicit_client_interrupt_resolved: Callable[[float, float], None],
         cancel_agent_output: Callable[[bool], None],
-        on_ptt_pressed: Callable[[], None],
-        on_ptt_released: Callable[[], None],
-        sync_room_data: Callable[[], None],
-        get_last_ptt_held: Callable[[], bool],
-        set_last_ptt_held: Callable[[bool], None],
-        agent_turn_active_for_ptt_preemption: Callable[[str | None], bool] | None = None,
-        preempt_agent_turn_for_ptt: Callable[[], None] | None = None,
+        agent_turn_active_for_explicit_preempt: Callable[[str | None], bool] | None = None,
+        preempt_agent_turn_for_explicit_control: Callable[[], None] | None = None,
     ) -> None:
-        self._is_half_duplex = is_half_duplex
         self._latest_client_audio_state = latest_client_audio_state
         self._agent_output_active_for_interrupts = agent_output_active_for_interrupts
-        self._agent_turn_active_for_ptt_preemption = (
-            agent_turn_active_for_ptt_preemption or agent_output_active_for_interrupts
+        self._agent_turn_active_for_explicit_preempt = (
+            agent_turn_active_for_explicit_preempt or agent_output_active_for_interrupts
         )
         self._ensure_ducking_controller = ensure_ducking_controller
         self._is_output_cancelled = is_output_cancelled
         self._record_explicit_client_interrupt = record_explicit_client_interrupt
         self._mark_explicit_client_interrupt_resolved = mark_explicit_client_interrupt_resolved
         self._cancel_agent_output = cancel_agent_output
-        self._preempt_agent_turn_for_ptt = (
-            preempt_agent_turn_for_ptt or (lambda: cancel_agent_output(True))
+        self._preempt_agent_turn_for_explicit_control = (
+            preempt_agent_turn_for_explicit_control or (lambda: cancel_agent_output(True))
         )
-        self._on_ptt_pressed = on_ptt_pressed
-        self._on_ptt_released = on_ptt_released
-        self._sync_room_data = sync_room_data
-        self._get_last_ptt_held = get_last_ptt_held
-        self._set_last_ptt_held = set_last_ptt_held
 
     def on_client_room_packet(self, packet: Any) -> None:
         """Run packet side effects after ``RoomDataHandler`` stores state."""
-        self._sync_room_data()
         self.handle_explicit_client_interrupt(packet)
-        self.handle_ptt_turn_edges(packet)
-
-    def handle_ptt_turn_edges(self, packet: Any) -> None:
-        """Commit exactly one half-duplex user turn on the PTT release edge."""
-        if not self._is_half_duplex():
-            return
-        if getattr(packet, "topic", None) != CLIENT_AUDIO_STATE_TOPIC:
-            return
-        participant = getattr(packet, "participant", None)
-        identity = getattr(participant, "identity", "") or None
-        state = self._latest_client_audio_state(identity)
-        # Only react to the participant that actually published a PTT-bearing
-        # audio state.  A stray packet must not fake a release while the device
-        # is still held.
-        if state is None:
-            return
-        held = bool(state.ptt)
-        was_held = self._get_last_ptt_held()
-        self._set_last_ptt_held(held)
-        if held and not was_held:
-            self._on_ptt_pressed()
-            return
-        if was_held and not held:
-            self._on_ptt_released()
 
     def handle_explicit_client_interrupt(self, packet: Any) -> None:
-        """Preempt the active agent turn for deliberate PTT/tap-to-stop controls."""
+        """Preempt the active agent turn for deliberate client controls."""
         if getattr(packet, "topic", None) != CLIENT_AUDIO_STATE_TOPIC:
             return
         participant = getattr(packet, "participant", None)
@@ -203,14 +167,14 @@ class ClientInteractionHandler:
         # server-side owner decision from transcript/attention evidence.
         if state is None or not state.ptt:
             return
-        if not self._agent_turn_active_for_ptt_preemption(identity):
+        if not self._agent_turn_active_for_explicit_preempt(identity):
             return
         self._ensure_ducking_controller()
         if self._is_output_cancelled():
             return
 
         logger.info(
-            "[ClientInteractionHandler] explicit client PTT preempt received "
+            "[ClientInteractionHandler] explicit client preempt received "
             "identity=%s playback=%s",
             state.participant_identity,
             state.playback_state,
@@ -220,7 +184,7 @@ class ClientInteractionHandler:
             state.as_timeline_attr(),
             received_at,
         )
-        self._preempt_agent_turn_for_ptt()
+        self._preempt_agent_turn_for_explicit_control()
         self._mark_explicit_client_interrupt_resolved(
             received_at,
             time.monotonic(),

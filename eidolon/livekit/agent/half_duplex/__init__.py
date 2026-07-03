@@ -17,6 +17,14 @@ from .ptt_turn_controller import (
     PttSegmentTurnResult,
 )
 from .pipeline import HalfDuplexPttPipeline
+from .control import (
+    PTT_OUTCOME_COMMITTED,
+    PTT_OUTCOME_FINALIZING,
+    PTT_OUTCOME_RECORDING,
+    build_ptt_turn_status_payload,
+    ptt_rejected_outcome,
+    should_drop_pending_ptt_control_event,
+)
 
 __all__ = [
     "HalfDuplexPttPipeline",
@@ -28,4 +36,10 @@ __all__ = [
     "PttSegmentTranscriberConfig",
     "PttSegmentTranscriptionResult",
     "PttSegmentTurnResult",
+    "PTT_OUTCOME_COMMITTED",
+    "PTT_OUTCOME_FINALIZING",
+    "PTT_OUTCOME_RECORDING",
+    "build_ptt_turn_status_payload",
+    "ptt_rejected_outcome",
+    "should_drop_pending_ptt_control_event",
 ]

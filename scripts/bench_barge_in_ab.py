@@ -43,6 +43,7 @@ DEFAULT_CASES = (
     "benchmark/cases/v1_realistic_interaction_flows_enforced.yaml",
     "benchmark/cases/v1_realistic_extended.yaml",
     "benchmark/cases/dogfood_box3_audio_first_enforced.yaml",
+    "benchmark/cases/no_lan_dogfood_regression_enforced.yaml",
 )
 
 

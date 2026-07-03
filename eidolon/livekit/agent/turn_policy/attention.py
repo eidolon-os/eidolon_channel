@@ -96,8 +96,7 @@ class AttentionAdmission:
             )
         # manual_interrupt is the device energy-gate barge-in guess, which residual
         # playback echo can falsely trip. Do NOT hard-cut on the signal alone; fall
-        # through to the transcript-evidence gate so only real near-end content cuts
-        # (mirrors the fast-path duck-then-confirm in _handle_explicit_client_interrupt).
+        # through to the transcript-evidence gate so only real near-end content cuts.
 
         if signal.speech_started and not text:
             if self._config.soft_duck_on_playback_speech_start:

@@ -19,14 +19,15 @@ entrypoints; implementation code lives under named boundary packages.
 - `integration/` contains direct external-contract adapters: LiveKit framework
   patches and LiveKit data-channel payload parsing.
 - `session/` contains per-session handlers and effect appliers: room data,
-  explicit client controls, provider events, idle, semantic
-  interruption effects, commit guards, shared EOT helpers, session-local
-  `eidolon.control` envelope helpers, full-duplex transcript echo gating,
-  message helpers, and user-turn coordination. Import helpers from their
-  concrete modules; `session/__init__.py` is intentionally not a broad facade.
+  provider events, idle, semantic interruption effects, commit guards, shared
+  EOT helpers, session-local `eidolon.control` envelope helpers, full-duplex
+  transcript echo gating, message helpers, and user-turn coordination. Import
+  helpers from their concrete modules; `session/__init__.py` is intentionally
+  not a broad facade.
 - `full_duplex/` contains the full-duplex realtime AgentSession pipeline:
   open-mic VAD/STT/EOT, natural interruption ownership, backchannel/false
-  interruption handling, and transcript echo gating.
+  interruption handling, transcript echo gating, and explicit client preempt
+  handling for deliberate full-duplex controls.
 - `half_duplex/` contains the half-duplex PTT pipeline: hold-scoped audio
   recording, one-shot STT, PTT control status helpers, and the PTT controller
   that does not consume streaming transcript events or EOT.

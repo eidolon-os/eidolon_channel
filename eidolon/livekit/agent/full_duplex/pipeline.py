@@ -97,9 +97,9 @@ from ..session.client_control import (
     build_client_control_event,
     build_session_client_control_envelope,
 )
-from ..session.client_interaction import (
-    ClientInteractionHandler,
-    ExplicitClientInterruptLedger,
+from .client_preempt import (
+    ExplicitClientPreemptHandler,
+    ExplicitClientPreemptLedger,
 )
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
@@ -184,11 +184,11 @@ class StreamingPipeline(BasePipeline):
         # a direct reference to the controller.
         self._ducking = OutputDuckingController()
         self._decision_effects = self._build_decision_effect_applier()
-        self._explicit_interrupts = self._build_explicit_client_interrupt_ledger()
+        self._explicit_preempts = self._build_explicit_client_preempt_ledger()
         self._interruption_orchestrator = self._build_interruption_orchestrator()
         self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
-        self._client_interactions = self._build_client_interaction_handler()
+        self._client_preempts = self._build_client_preempt_handler()
         self._turn_committer = UserTurnCommitter()
         self._transcript_echo_gate = self._build_transcript_echo_gate()
         self._user_turns = self._build_user_turn_coordinator()
@@ -502,20 +502,20 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_session_signals"):
             self._session_signals = self._build_session_signal_bridge()
 
-    def _build_explicit_client_interrupt_ledger(self) -> ExplicitClientInterruptLedger:
-        return ExplicitClientInterruptLedger(
+    def _build_explicit_client_preempt_ledger(self) -> ExplicitClientPreemptLedger:
+        return ExplicitClientPreemptLedger(
             get_timeline=lambda: getattr(self, "_timeline", None),
             get_turn_runtime=lambda: self._turn_runtime,
             get_decision_effects=lambda: self._decision_effects,
             ensure_decision_effects=self._ensure_decision_effect_applier,
         )
 
-    def _ensure_explicit_client_interrupt_ledger(self) -> None:
-        if not hasattr(self, "_explicit_interrupts"):
-            self._explicit_interrupts = self._build_explicit_client_interrupt_ledger()
+    def _ensure_explicit_client_preempt_ledger(self) -> None:
+        if not hasattr(self, "_explicit_preempts"):
+            self._explicit_preempts = self._build_explicit_client_preempt_ledger()
 
-    def _build_client_interaction_handler(self) -> ClientInteractionHandler:
-        return ClientInteractionHandler(
+    def _build_client_preempt_handler(self) -> ExplicitClientPreemptHandler:
+        return ExplicitClientPreemptHandler(
             latest_client_audio_state=lambda participant_identity=None: (
                 self._latest_client_audio_state(participant_identity=participant_identity)
             ),
@@ -526,13 +526,13 @@ class StreamingPipeline(BasePipeline):
             ),
             ensure_ducking_controller=self._ensure_ducking_controller,
             is_output_cancelled=lambda: self._ducking.is_cancelled,
-            record_explicit_client_interrupt=(
-                lambda state_attr, received_at: self._record_explicit_client_interrupt_decision(
+            record_explicit_client_preempt=(
+                lambda state_attr, received_at: self._record_explicit_client_preempt_decision(
                     state_attr=state_attr,
                     received_at=received_at,
                 )
             ),
-            mark_explicit_client_interrupt_resolved=(self._mark_explicit_client_interrupt_resolved),
+            mark_explicit_client_preempt_resolved=(self._mark_explicit_client_preempt_resolved),
             cancel_agent_output=lambda force: self._duck_cancel_and_interrupt(force=force),
             agent_turn_active_for_explicit_preempt=lambda participant_identity=None: (
                 self._agent_turn_active_for_explicit_preempt(
@@ -544,9 +544,9 @@ class StreamingPipeline(BasePipeline):
             ),
         )
 
-    def _ensure_client_interaction_handler(self) -> None:
-        if not hasattr(self, "_client_interactions"):
-            self._client_interactions = self._build_client_interaction_handler()
+    def _ensure_client_preempt_handler(self) -> None:
+        if not hasattr(self, "_client_preempts"):
+            self._client_preempts = self._build_client_preempt_handler()
 
     def _ensure_turn_committer(self) -> None:
         if not hasattr(self, "_turn_committer"):
@@ -1428,7 +1428,7 @@ class StreamingPipeline(BasePipeline):
                 self._timeline_debug_flushed = False
                 timeline = self._timeline
             self._user_turns.start_speech(timeline=self._timeline)
-            self._apply_pending_explicit_client_interrupt(self._timeline)
+            self._apply_pending_explicit_client_preempt(self._timeline)
             self._apply_pending_client_control_events(self._timeline)
         self._user_turns.add_transcript(transcript, is_final=True)
         eot_model = self._get_eot_model()
@@ -1772,11 +1772,11 @@ class StreamingPipeline(BasePipeline):
             )
         self._ensure_ducking_controller()
         self._ensure_decision_effect_applier()
-        self._ensure_explicit_client_interrupt_ledger()
+        self._ensure_explicit_client_preempt_ledger()
         self._ensure_interruption_orchestrator()
         self._ensure_attention_effect_handler()
         self._ensure_session_signal_bridge()
-        self._ensure_client_interaction_handler()
+        self._ensure_client_preempt_handler()
         self._ensure_turn_committer()
         self._ensure_agent_state_effect_handler()
         self._ensure_semantic_interrupt_handler()
@@ -2113,22 +2113,22 @@ class StreamingPipeline(BasePipeline):
         await super().shutdown()
 
     def _install_room_data_observer(self, room: Room) -> None:
-        """Observe client-side audio hints and drive explicit client interrupts.
+        """Observe client-side audio hints and drive explicit client preempt.
 
-        The explicit-interrupt fast path is wired into the SAME registered
+        The explicit-preempt fast path is wired into the SAME registered
         ``data_received`` callback (via ``on_packet``) so a ``client.audio_state``
-        explicit-control edge during playback actually interrupts the agent. (It
+        explicit-control edge during playback actually preempts the agent. (It
         used to be reachable only from ``_on_room_data_received``, which was never
         registered — dead code — so explicit client preempt never fired.)
         """
         self._ensure_room_data_handler()
-        self._ensure_client_interaction_handler()
+        self._ensure_client_preempt_handler()
         self._room_data.install(room, on_packet=self._on_client_room_packet)
 
     def _on_client_room_packet(self, packet: Any) -> None:
         # Runs after RoomDataHandler.handle_packet has stored the latest client
         # audio state (so do NOT handle_packet again here — that would double-count).
-        self._handle_explicit_client_interrupt(packet)
+        self._handle_explicit_client_preempt(packet)
 
     def _on_room_data_received(self, packet: Any) -> None:
         # Full manual processing for direct callers/tests. The production path
@@ -2138,7 +2138,7 @@ class StreamingPipeline(BasePipeline):
         self._room_data.handle_packet(packet)
         self._on_client_room_packet(packet)
 
-    def _record_explicit_client_interrupt_decision(
+    def _record_explicit_client_preempt_decision(
         self,
         *,
         state_attr: dict[str, Any],
@@ -2146,20 +2146,20 @@ class StreamingPipeline(BasePipeline):
         resolved_at: float | None = None,
         timeline: TurnTimeline | None = None,
     ) -> None:
-        self._ensure_explicit_client_interrupt_ledger()
-        self._explicit_interrupts.record(
+        self._ensure_explicit_client_preempt_ledger()
+        self._explicit_preempts.record(
             state_attr=state_attr,
             received_at=received_at,
             resolved_at=resolved_at,
             timeline=timeline,
         )
 
-    def _apply_pending_explicit_client_interrupt(
+    def _apply_pending_explicit_client_preempt(
         self,
         timeline: TurnTimeline | None = None,
     ) -> None:
-        self._ensure_explicit_client_interrupt_ledger()
-        self._explicit_interrupts.apply_pending(timeline)
+        self._ensure_explicit_client_preempt_ledger()
+        self._explicit_preempts.apply_pending(timeline)
 
     def _apply_pending_client_control_events(
         self,
@@ -2181,17 +2181,17 @@ class StreamingPipeline(BasePipeline):
         timeline.set_attr("client_control_events", events)
         self._pending_client_control_events = []
 
-    def _mark_explicit_client_interrupt_resolved(
+    def _mark_explicit_client_preempt_resolved(
         self,
         received_at: float,
         resolved_at: float,
     ) -> None:
-        self._ensure_explicit_client_interrupt_ledger()
-        self._explicit_interrupts.mark_resolved(received_at, resolved_at)
+        self._ensure_explicit_client_preempt_ledger()
+        self._explicit_preempts.mark_resolved(received_at, resolved_at)
 
-    def _handle_explicit_client_interrupt(self, packet: Any) -> None:
-        self._ensure_client_interaction_handler()
-        self._client_interactions.handle_explicit_client_interrupt(packet)
+    def _handle_explicit_client_preempt(self, packet: Any) -> None:
+        self._ensure_client_preempt_handler()
+        self._client_preempts.handle_explicit_client_preempt(packet)
 
     def _turn_detection(self) -> Any:
         """The full-duplex Agent ``turn_detection`` model."""
@@ -2573,7 +2573,7 @@ class StreamingPipeline(BasePipeline):
                 self._timeline.set_attr("room_name", self._room.name or "")
         self._user_turns.start_speech(timeline=self._timeline)
         self._timeline.mark("speech_started_at")
-        self._apply_pending_explicit_client_interrupt(self._timeline)
+        self._apply_pending_explicit_client_preempt(self._timeline)
         self._apply_pending_client_control_events(self._timeline)
         self._voiceprint_turns.start_turn(timeline=self._timeline)
         self._apply_pending_stt_provider_events()
@@ -2658,7 +2658,7 @@ class StreamingPipeline(BasePipeline):
                 self._timeline = TurnTimeline(generate_turn_id())
                 self._timeline_debug_flushed = False
             self._user_turns.start_speech(timeline=self._timeline)
-            self._apply_pending_explicit_client_interrupt(self._timeline)
+            self._apply_pending_explicit_client_preempt(self._timeline)
             self._apply_pending_client_control_events(self._timeline)
             self._user_turns.add_transcript(transcript, is_final=True)
         low_evidence_reason = self._playback_low_evidence_reject_reason(

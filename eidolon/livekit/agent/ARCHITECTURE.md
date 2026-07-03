@@ -114,13 +114,13 @@ eidolon/livekit/agent/
 │   ├── ptt_transcriber.py    # release 后一次性 STT
 │   └── ptt_turn_controller.py # segment PTT 状态机
 ├── full_duplex/
+│   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
 │   └── pipeline.py           # StreamingPipeline: full-duplex realtime AgentSession pipeline
 ├── session/
 │   ├── __init__.py           # package marker only; no broad component re-export facade
 │   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
 │   ├── client_control.py     # session-local eidolon.control envelope / event helpers
-│   ├── client_interaction.py # ClientInteractionHandler: explicit client preempt controls
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── duck_timeout.py       # DuckSuspendTimeoutHandler: duck deadline policy effects
 │   ├── eot_model.py          # shared EOT model cache/loading helper
@@ -175,7 +175,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - PTT 专用阈值使用 `turn_policy.ptt`：`segment_stt_strategy`、`segment_min_audio_ms`、`segment_max_audio_ms`、`segment_min_rms_ppm`、`segment_tap_to_stop_max_audio_ms`。
    - 空按 / 无有效语音是显式协议结果：Channel 发布 session-local `eidolon.control` / `op=ptt.turn_status`，ESP32 只清理 UI 状态并 ACK，不参与 turn 裁决。
    - `session/client_control.py` 是 full-duplex streaming path 与 half-duplex segment path 共享的 `eidolon.control` envelope 与 timeline event helper；PTT 专用 `ptt.turn_status` payload / no-turn terminal 规则位于 `half_duplex/control.py`。
-   - `session/client_interaction.py` 只保留 explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 half-duplex PTT turn lifecycle。
+   - `full_duplex/client_preempt.py` 只处理 full-duplex explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 half-duplex PTT turn lifecycle。
    - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时由 half-duplex owner 抢占输出并发送 `playback.stop`；发生在空闲时则按音频段长度/能量裁决为空按或真实 turn。
 
 2. **流式自然语言 / full-duplex**

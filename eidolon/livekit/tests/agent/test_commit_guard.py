@@ -64,8 +64,10 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
 
     # Stub interrupt-context capture path.
     pipeline._inject_interrupted_context = MagicMock()
-    pipeline._cancel_soft_interrupt = MagicMock()
-    pipeline._duck_unduck_if_suspended = MagicMock()
+    effects = MagicMock()
+    effects._ducking = pipeline._ducking
+    effects.soft_interrupt_active.return_value = False
+    pipeline._interruption_effects = effects
 
     return pipeline
 

@@ -106,6 +106,7 @@ eidolon/livekit/agent/
 │   └── ptt_turn_controller.py # segment PTT 状态机
 ├── full_duplex/
 │   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
+│   ├── interruption_effects.py # FullDuplexInterruptionEffects: output/framework effects
 │   ├── semantic_interrupt_gate.py # SemanticInterruptGate: transcript-triggered semantic interrupt gate
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
 │   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
@@ -172,6 +173,8 @@ eidolon/livekit/agent/
 
 `full_duplex/speech_lifecycle.py` 是 full-duplex VAD speech segment 生命周期 owner。它在 speech start 时打开/合并用户 turn 候选、建立 timeline、同步 EOT/VAD、启动 voiceprint 采集并触发快速 duck/candidate；在 speech stop 时关闭 voiceprint 采集、处理 post-speech interruption candidate、低证据 reject、低 EOT defer 和 voiceprint-gated commit 调度。它不取代 `TurnPolicyRuntime`、`InterruptionOrchestrator`、`UserTurnCoordinator` 或 context ledger 的 terminal decision owner。
 
+`full_duplex/interruption_effects.py` 是 full-duplex interruption output side-effect adapter。它承接 cancel / rollback / hold / explicit preempt 后对 LiveKit `AgentSession.interrupt()`、ducking output、soft interrupt timer、stable-signal recheck、`playback.stop` control 和 interrupted-context snapshot 的副作用；它不做 turn policy、semantic classification、user-turn commit 或 context ledger 裁决。
+
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 
 #### 2.1.1 产品交互模式边界
@@ -193,6 +196,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 2. **流式自然语言 / full-duplex**
    - 入口证据：VAD speech start/end、STT interim/final、EOT score、client acoustic/playback telemetry、voiceprint、echo/backchannel/noise/hard-stop intent。
    - `FullDuplexSpeechLifecycle` 负责 VAD speech start/end 的语音段生命周期；speech start 只负责快速 soft duck / suspend 和候选打开，terminal decision 由 `TurnPolicyRuntime` + `InterruptionOrchestrator` + session handlers 统一输出。
+   - `FullDuplexInterruptionEffects` 负责 terminal decision 之后的输出/框架副作用；它不判断“要不要打断”。
    - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
    - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
 

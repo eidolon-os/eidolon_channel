@@ -5,7 +5,7 @@ most-recent assistant message. Problem: ``session.history`` is only
 updated AFTER a speech_handle winds down (livekit-agents 1.5
 ``_play_text_step``: ``add_message(role='assistant', ...)`` after
 ``audio_output.wait_for_playout()`` returns). When we snapshot the
-context inside ``_duck_cancel_and_interrupt`` — which fires BEFORE the
+context inside ``FullDuplexInterruptionEffects.cancel_and_interrupt`` — which fires BEFORE the
 speech handle finishes — history still contains the PREVIOUS turn's
 assistant message, so the LLM hint would say "you just said: <wrong
 old text>".

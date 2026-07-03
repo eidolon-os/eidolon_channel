@@ -28,8 +28,8 @@ entrypoints; implementation code lives under named boundary packages.
   interruption handling, user-state/transcript event normalization,
   user-state/transcript entry routing, VAD speech segment lifecycle, transcript
   admission/echo gating before turn evidence, accepted transcript evidence
-  recording, semantic interrupt trigger gating, and explicit client preempt
-  handling for deliberate full-duplex controls.
+  recording, semantic interrupt trigger gating, interruption output side effects,
+  and explicit client preempt handling for deliberate full-duplex controls.
 - `half_duplex/` contains the half-duplex PTT pipeline: hold-scoped audio
   recording, one-shot STT, PTT control status helpers, and the PTT controller
   that does not consume streaming transcript events or EOT.

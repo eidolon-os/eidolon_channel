@@ -50,7 +50,14 @@ def _pipeline(
     # The state lookup itself is not under test (the packet was received per
     # production logs); the gate logic after it is.
     p._latest_client_audio_state = MagicMock(return_value=state)
-    p._duck_cancel_and_interrupt = MagicMock()
+    effects = SimpleNamespace(
+        cancel_and_interrupt=MagicMock(),
+        cancel_silent_generation_for_explicit_preempt=MagicMock(),
+        rollback_if_suspended=MagicMock(),
+        handle_hold_decision=MagicMock(),
+    )
+    p._interruption_effects = effects
+    p._ensure_interruption_effects = MagicMock(return_value=effects)
     return p
 
 
@@ -75,7 +82,7 @@ def test_ptt_while_speaking_force_cancels() -> None:
     # cuts through an uninterruptible framework speech handle.
     p = _pipeline(state=_state(ptt=True))
     p._handle_explicit_client_preempt(_packet())
-    p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
+    p._interruption_effects.cancel_and_interrupt.assert_called_once_with(force=True)
 
 
 def test_ptt_while_generating_preempts_silent_reply() -> None:
@@ -87,12 +94,10 @@ def test_ptt_while_generating_preempts_silent_reply() -> None:
         state=_state(ptt=True, playback_state="idle"),
         pipeline_state=PipelineState.GENERATING,
     )
-    p._cancel_silent_agent_generation_for_explicit_preempt = MagicMock()
-
     p._handle_explicit_client_preempt(_packet())
 
-    p._cancel_silent_agent_generation_for_explicit_preempt.assert_called_once_with()
-    p._duck_cancel_and_interrupt.assert_not_called()
+    p._interruption_effects.cancel_silent_generation_for_explicit_preempt.assert_called_once_with()
+    p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 def test_ptt_fast_path_records_owner_decision() -> None:
@@ -116,7 +121,7 @@ def test_ptt_before_turn_timeline_is_attached_to_next_speech_timeline() -> None:
 
     p._handle_explicit_client_preempt(_packet())
 
-    p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
+    p._interruption_effects.cancel_and_interrupt.assert_called_once_with(force=True)
     p._decision_effects.record_decision_attrs.assert_not_called()
     pending = p._explicit_preempts.pending
     assert pending is not None
@@ -148,14 +153,14 @@ def test_no_signal_does_not_cancel() -> None:
     # Plain audio_state (no ptt) must do nothing.
     p = _pipeline(state=_state())
     p._handle_explicit_client_preempt(_packet())
-    p._duck_cancel_and_interrupt.assert_not_called()
+    p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 def test_manual_interrupt_alone_does_nothing() -> None:
     # The removed energy-gate signal is no longer an interrupt trigger.
     p = _pipeline(state=_state(manual_interrupt=True))
     p._handle_explicit_client_preempt(_packet())
-    p._duck_cancel_and_interrupt.assert_not_called()
+    p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 def test_wrong_topic_ignored() -> None:
@@ -165,14 +170,14 @@ def test_wrong_topic_ignored() -> None:
         participant=SimpleNamespace(identity="dev1"),
     )
     p._handle_explicit_client_preempt(pkt)
-    p._duck_cancel_and_interrupt.assert_not_called()
+    p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 def test_no_action_when_output_already_cancelled() -> None:
     # Idempotent: if the agent output is already CANCELLED, the fast path bails.
     p = _pipeline(state=_state(ptt=True), output_cancelled=True)
     p._handle_explicit_client_preempt(_packet())
-    p._duck_cancel_and_interrupt.assert_not_called()
+    p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 class _FakeRoom:

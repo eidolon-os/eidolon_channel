@@ -80,11 +80,9 @@ from ..integration import framework_patches
 from ..integration.client_audio_state import ClientAudioState
 from ..runtime.interaction_mode import resolve_idle_policy
 from ..turn_policy import (
-    Decision,
     TranscriptEvidenceGate,
     TurnPolicyRuntime,
 )
-from ..turn_policy.constants import STABLE_SIGNAL_WAIT_REASON_PREFIX
 from ..observability import TurnTimeline
 from ..factory import SharedStageFactory
 from ..output import FillerManager, OutputDuckingController
@@ -101,6 +99,7 @@ from .client_preempt import (
     ExplicitClientPreemptHandler,
     ExplicitClientPreemptLedger,
 )
+from .interruption_effects import FullDuplexInterruptionEffects
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
 from .transcript_handler import FullDuplexTranscriptHandler
@@ -110,7 +109,6 @@ from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
 from ..session.idle import IdleWatchdog
-from ..session.interruption import SoftInterruptController
 from ..session.interruption_orchestrator import InterruptionOrchestrator
 from ..session.messages import message_text
 from ..session.provider_events import ProviderEventObserver
@@ -188,6 +186,8 @@ class StreamingPipeline(BasePipeline):
         # before those handlers are built, because AgentStateEffectHandler keeps
         # a direct reference to the controller.
         self._ducking = OutputDuckingController()
+        self._soft_interrupt_timeout: float = self._turn_runtime.decision_timeout_sec
+        self._interruption_effects = self._build_interruption_effects()
         self._decision_effects = self._build_decision_effect_applier()
         self._explicit_preempts = self._build_explicit_client_preempt_ledger()
         self._interruption_orchestrator = self._build_interruption_orchestrator()
@@ -200,7 +200,6 @@ class StreamingPipeline(BasePipeline):
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
         self._duck_deadline = self._build_duck_suspend_timeout_handler()
-        self._stable_signal_timer: asyncio.Task | None = None
         self._pending_voiceprint_commit_tasks: set[asyncio.Task] = set()
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._deferred_low_eot_commit_task: asyncio.Task | None = None
@@ -356,12 +355,9 @@ class StreamingPipeline(BasePipeline):
         # The soft-interrupt path here is kept as a fallback for the rare
         # cases where EOT signals a cut but the mixer isn't installed
         # (e.g. duck_enabled=False, or audio output sink not yet attached).
-        # Read timeout from EOT model config (can be overridden per-pipeline via arg).
-        self._soft_interrupt_timeout: float = self._turn_runtime.decision_timeout_sec
-        self._soft_interrupt = SoftInterruptController(
-            timeout_sec=self._soft_interrupt_timeout,
-            on_timeout=lambda: self._interrupt_current_turn(),
-        )
+        # Read timeout from turn policy (can be overridden in tests via
+        # ``_soft_interrupt_timeout``). The controller itself lives in
+        # ``FullDuplexInterruptionEffects``.
 
         # DuckingMixer + suspend-window timeout fallback task. Both lazy.
         # Mixer is installed in ``run()`` after ``session.start()`` returns,
@@ -397,17 +393,82 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_ducking"):
             self._ducking = OutputDuckingController()
 
+    def _pipeline_state_label(self) -> str:
+        state = getattr(self, "_state", "unknown")
+        return state.name if hasattr(state, "name") else str(state)
+
+    def _set_interrupt_cancel_suppression(self, active: bool, until: float) -> None:
+        self._skip_commit_after_interrupt_cancel = active
+        self._suppress_commit_after_interrupt_until = until
+
+    def _build_interruption_effects(self) -> FullDuplexInterruptionEffects:
+        return FullDuplexInterruptionEffects(
+            ducking=self._ducking,
+            callbacks=self._callbacks,
+            get_session=lambda: getattr(self, "_session", None),
+            allow_interruptions=lambda: self._allow_interruptions,
+            get_eot_model=lambda: self._get_eot_model(),
+            get_timeline=lambda: getattr(self, "_timeline", None),
+            get_latest_asr_text=lambda: self._latest_asr_text,
+            get_state_label=self._pipeline_state_label,
+            get_interruption_orchestrator=lambda: self._interruption_orchestrator,
+            publish_playback_stop=lambda reason: self._publish_client_control(
+                CONTROL_OP_PLAYBACK_STOP,
+                reason=reason,
+            ),
+            snapshot_interrupted_context=self._snapshot_interrupted_context,
+            commit_post_speech_interruption_candidate=(
+                lambda reason, transcript: self._commit_post_speech_interruption_candidate(
+                    reason,
+                    transcript_override=transcript,
+                )
+            ),
+            reject_post_speech_interruption_candidate=(
+                self._reject_post_speech_interruption_candidate
+            ),
+            cancel_residual_commit_suppress_sec=self._cancel_residual_commit_suppress_sec,
+            semantic_interrupt_run=lambda text: self._semantic_interrupts.run(
+                text,
+                is_final=False,
+            ),
+            correction_topic_stability_window_ms=(
+                lambda: self._turn_policy.interrupt.correction_topic_stability_window_ms
+            ),
+            set_interrupt_cancel_suppression=self._set_interrupt_cancel_suppression,
+            soft_interrupt_timeout_sec=lambda: self._soft_interrupt_timeout,
+        )
+
+    def _ensure_interruption_effects(self) -> FullDuplexInterruptionEffects:
+        if not hasattr(self, "_turn_policy"):
+            self._turn_policy = TurnPolicyConfig()
+        if not hasattr(self, "_turn_runtime"):
+            self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
+        if not hasattr(self, "_callbacks"):
+            self._callbacks = PipelineCallbacks()
+        if not hasattr(self, "_allow_interruptions"):
+            self._allow_interruptions = True
+        if not hasattr(self, "_state"):
+            self._state = PipelineState.IDLE
+        self._ensure_ducking_controller()
+        if not hasattr(self, "_soft_interrupt_timeout"):
+            self._soft_interrupt_timeout = self._turn_runtime.decision_timeout_sec
+        handler = getattr(self, "_interruption_effects", None)
+        if handler is None or getattr(handler, "_ducking", None) is not self._ducking:
+            self._interruption_effects = self._build_interruption_effects()
+        return self._interruption_effects
+
     def _build_decision_effect_applier(self) -> DecisionEffectApplier:
+        interruption_effects = self._ensure_interruption_effects()
         return DecisionEffectApplier(
             factory=getattr(self, "_factory", None),
             turn_runtime=self._turn_runtime,
             get_timeline=lambda: self._timeline,
-            on_cancel=lambda: self._duck_cancel_and_interrupt(),
-            on_rollback=lambda reason, drop_buffered: self._duck_unduck_if_suspended(
+            on_cancel=lambda: interruption_effects.cancel_and_interrupt(),
+            on_rollback=lambda reason, drop_buffered: interruption_effects.rollback_if_suspended(
                 reason=reason,
                 drop_buffered=drop_buffered,
             ),
-            on_hold=self._handle_hold_decision,
+            on_hold=interruption_effects.handle_hold_decision,
             on_decision=lambda decision, **kwargs: (
                 self._interruption_orchestrator.note_turn_policy_decision(
                     decision,
@@ -435,6 +496,7 @@ class StreamingPipeline(BasePipeline):
             self._interruption_orchestrator = self._build_interruption_orchestrator()
 
     def _build_attention_effect_handler(self) -> AttentionEffectHandler:
+        interruption_effects = self._ensure_interruption_effects()
         return AttentionEffectHandler(
             turn_policy=self._turn_policy,
             turn_runtime=self._turn_runtime,
@@ -445,7 +507,7 @@ class StreamingPipeline(BasePipeline):
             ),
             get_timeline=lambda: self._timeline,
             on_duck=lambda: self._duck_and_arm_timeout(),
-            on_interrupt=lambda: self._interrupt_current_turn(),
+            on_interrupt=lambda: interruption_effects.interrupt_current_turn(),
             get_eot_score=lambda: self._get_eot_model().current_eot_score,
         )
 
@@ -481,6 +543,7 @@ class StreamingPipeline(BasePipeline):
             self._explicit_preempts = self._build_explicit_client_preempt_ledger()
 
     def _build_client_preempt_handler(self) -> ExplicitClientPreemptHandler:
+        interruption_effects = self._ensure_interruption_effects()
         return ExplicitClientPreemptHandler(
             latest_client_audio_state=lambda participant_identity=None: (
                 self._latest_client_audio_state(participant_identity=participant_identity)
@@ -499,7 +562,9 @@ class StreamingPipeline(BasePipeline):
                 )
             ),
             mark_explicit_client_preempt_resolved=(self._mark_explicit_client_preempt_resolved),
-            cancel_agent_output=lambda force: self._duck_cancel_and_interrupt(force=force),
+            cancel_agent_output=lambda force: interruption_effects.cancel_and_interrupt(
+                force=force,
+            ),
             agent_turn_active_for_explicit_preempt=lambda participant_identity=None: (
                 self._agent_turn_active_for_explicit_preempt(
                     participant_identity=participant_identity,
@@ -1589,11 +1654,12 @@ class StreamingPipeline(BasePipeline):
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
 
     def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
+        interruption_effects = self._ensure_interruption_effects()
         return AgentStateEffectHandler(
             get_timeline=lambda: self._timeline,
             mark_activity=lambda: self._mark_activity(),
-            cancel_soft_interrupt=lambda: self._cancel_soft_interrupt(),
-            soft_interrupt_active=lambda: self._soft_interrupt_is_active(),
+            cancel_soft_interrupt=lambda: interruption_effects.cancel_soft_interrupt(),
+            soft_interrupt_active=lambda: interruption_effects.soft_interrupt_active(),
             ducking=self._ducking,
             get_filler=lambda: self._filler,
             flush_timeline_debug=lambda reason, clear: self._append_timeline_debug(
@@ -1618,6 +1684,7 @@ class StreamingPipeline(BasePipeline):
         return getattr(active, "state", "") in {"committed", "rejected"}
 
     def _build_semantic_interrupt_handler(self) -> SemanticInterruptHandler:
+        interruption_effects = self._ensure_interruption_effects()
         return SemanticInterruptHandler(
             get_eot_model=lambda: self._get_eot_model(),
             turn_runtime=self._turn_runtime,
@@ -1627,14 +1694,14 @@ class StreamingPipeline(BasePipeline):
             get_vad_active=lambda: (
                 self._session is not None and self._session.user_state == "speaking"
             ),
-            soft_interrupt_active=lambda: self._soft_interrupt_is_active(),
+            soft_interrupt_active=lambda: interruption_effects.soft_interrupt_active(),
             soft_interrupt_timeout=lambda: self._soft_interrupt_timeout,
             apply_decision=self._decision_effects.apply,
             record_decision_attrs=self._decision_effects.record_decision_attrs,
             publish_turn_control=self._decision_effects.publish_turn_control,
-            cancel_duck_and_interrupt=lambda: self._duck_cancel_and_interrupt(),
-            interrupt_current_turn=lambda: self._interrupt_current_turn(),
-            enter_soft_interrupt=lambda: self._enter_soft_interrupt(),
+            cancel_duck_and_interrupt=lambda: interruption_effects.cancel_and_interrupt(),
+            interrupt_current_turn=lambda: interruption_effects.interrupt_current_turn(),
+            enter_soft_interrupt=lambda: interruption_effects.enter_soft_interrupt(),
             decide_from_transcript=(
                 lambda text, score, **kwargs: (
                     self._interruption_orchestrator.decide_from_transcript(
@@ -1753,6 +1820,12 @@ class StreamingPipeline(BasePipeline):
             self._turn_policy = TurnPolicyConfig()
         if not hasattr(self, "_turn_runtime"):
             self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
+        if not hasattr(self, "_callbacks"):
+            self._callbacks = PipelineCallbacks()
+        if not hasattr(self, "_allow_interruptions"):
+            self._allow_interruptions = True
+        if not hasattr(self, "_state"):
+            self._state = PipelineState.IDLE
         if not hasattr(self, "_observability"):
             self._observability = ObservabilityConfig()
         if not hasattr(self, "_voiceprint_config"):
@@ -1769,8 +1842,6 @@ class StreamingPipeline(BasePipeline):
             self._suppress_commit_after_interrupt_until = 0.0
         if not hasattr(self, "_latest_asr_text"):
             self._latest_asr_text = ""
-        if not hasattr(self, "_stable_signal_timer"):
-            self._stable_signal_timer = None
         if not hasattr(self, "_pending_voiceprint_commit_tasks"):
             self._pending_voiceprint_commit_tasks = set()
         if not hasattr(self, "_candidate_voiceprint_tasks"):
@@ -1809,6 +1880,7 @@ class StreamingPipeline(BasePipeline):
                 ),
             )
         self._ensure_ducking_controller()
+        self._ensure_interruption_effects()
         self._ensure_decision_effect_applier()
         self._ensure_explicit_client_preempt_ledger()
         self._ensure_interruption_orchestrator()
@@ -2131,8 +2203,9 @@ class StreamingPipeline(BasePipeline):
         logger.info("[StreamingPipeline] shutting down")
         self._stop_proactive_consumer()
         # Cancel any pending soft interrupt / duck timeout before closing.
-        self._cancel_soft_interrupt()
-        self._cancel_stable_signal_timer()
+        if hasattr(self, "_interruption_effects"):
+            self._interruption_effects.cancel_soft_interrupt()
+            self._interruption_effects.cancel_stable_signal_timer()
         self._cancel_pending_voiceprint_commits("shutdown")
         if hasattr(self, "_provider_events"):
             self._provider_events.cancel_output_watchdog()
@@ -2624,7 +2697,10 @@ class StreamingPipeline(BasePipeline):
 
     def _interrupt_window_active(self) -> bool:
         """Return true while an actual interrupt decision window is open."""
-        return self._ducking.is_suspended or self._soft_interrupt_is_active()
+        return (
+            self._ducking.is_suspended
+            or self._ensure_interruption_effects().soft_interrupt_active()
+        )
 
     def _agent_output_active_for_interrupts(
         self,
@@ -2702,36 +2778,9 @@ class StreamingPipeline(BasePipeline):
         """
 
         if self._agent_output_active_for_interrupts():
-            self._duck_cancel_and_interrupt(force=True)
+            self._ensure_interruption_effects().cancel_and_interrupt(force=True)
             return
-        self._cancel_silent_agent_generation_for_explicit_preempt()
-
-    def _cancel_silent_agent_generation_for_explicit_preempt(self) -> None:
-        self._ensure_runtime_defaults()
-        self._cancel_stable_signal_timer()
-        self._ducking.cancel_output()
-        if self._timeline is not None:
-            self._timeline.set_attr(
-                "explicit_client_generation_preempt",
-                {
-                    "reason": "explicit_client_ptt",
-                    "agent_state": (
-                        self._state.name
-                        if hasattr(getattr(self, "_state", None), "name")
-                        else str(getattr(self, "_state", "unknown"))
-                    ),
-                    "playback_state": "not_audible",
-                },
-            )
-        logger.info(
-            "[StreamingPipeline] explicit client preempted silent agent generation state=%s",
-            (
-                self._state.name
-                if hasattr(getattr(self, "_state", None), "name")
-                else getattr(self, "_state", "unknown")
-            ),
-        )
-        self._interrupt_current_turn(force=True)
+        self._ensure_interruption_effects().cancel_silent_generation_for_explicit_preempt()
 
     def _latest_client_audio_state(
         self,
@@ -2746,132 +2795,6 @@ class StreamingPipeline(BasePipeline):
             max_age_sec=max_age_sec,
         )
 
-    def _interrupt_current_turn(self, *, force: bool = False) -> None:
-        """Interrupt the currently in-progress agent turn via session.interrupt().
-
-        ``force`` skips the ``allow_interruptions`` gate and passes through to
-        ``session.interrupt(force=True)``, which cancels even a speech handle
-        that was started with interruptions disabled. Used by explicit client
-        controls; policy-driven interrupts leave it False.
-        """
-        self._ensure_ducking_controller()
-        if not force and not self._allow_interruptions:
-            return
-        # The cancelled-output short-circuit is only for the policy path (avoid a
-        # redundant session.interrupt after cancel_output). The FORCED explicit
-        # client path MUST still call session.interrupt(force=True):
-        # _duck_cancel_and_interrupt already set is_cancelled=True, but without
-        # this an uninterruptible speech handle is never
-        # actually ended → agent_state stays "speaking" → the captured barge-in
-        # turn can't commit → no reply. force must reach the framework.
-        if not force and self._ducking.is_cancelled:
-            logger.debug("[StreamingPipeline] interrupt skipped — output already CANCELLED")
-            return
-
-        if self._session is not None:
-            self._session.interrupt(force=force)
-
-        # Reset VAD state so EOT doesn't carry stale state into the next turn.
-        self._get_eot_model().update_vad(False)
-
-        logger.info("[StreamingPipeline] turn interrupted")
-
-    def _enter_soft_interrupt(self) -> None:
-        """
-        Enter soft interrupt: wait for confirmation before performing a hard interrupt.
-
-        The soft interrupt timer is started. If it fires, we upgrade to a hard
-        interrupt. If the user falls silent (VAD inactive) during the wait, we
-        cancel the soft interrupt (false interruption).
-        """
-        self._ensure_soft_interrupt_controller()
-        self._soft_interrupt.enter()
-
-    async def _soft_interrupt_timeout_task(self) -> None:
-        """Timer task: fires after _soft_interrupt_timeout → upgrade to hard interrupt."""
-        self._ensure_soft_interrupt_controller()
-        await self._soft_interrupt.run_timeout_task()
-
-    def _cancel_soft_interrupt(self) -> None:
-        """Cancel soft interrupt (detected as a false interruption)."""
-        self._ensure_soft_interrupt_controller()
-        self._soft_interrupt.cancel()
-
-    def _handle_hold_decision(
-        self,
-        decision: Decision,
-        transcript: str,
-        eot_score: float | None,
-        vad_active: bool | None,
-    ) -> None:
-        if decision.hold_recheck_ms is None and not decision.reason.startswith(
-            STABLE_SIGNAL_WAIT_REASON_PREFIX
-        ):
-            return
-        if not self._ducking.is_suspended:
-            return
-        if not transcript.strip():
-            return
-        recheck_ms = decision.hold_recheck_ms
-        if recheck_ms is None:
-            recheck_ms = self._turn_policy.interrupt.correction_topic_stability_window_ms
-        timeout_sec = max(0.0, recheck_ms) / 1000.0
-        self._cancel_stable_signal_timer()
-        logger.info(
-            "[StreamingPipeline] stable-signal recheck armed "
-            "timeout=%.3fs reason=%s text=%r eot_score=%s vad_active=%s",
-            timeout_sec,
-            decision.reason,
-            transcript[:80],
-            f"{eot_score:.2f}" if eot_score is not None else "None",
-            vad_active,
-        )
-        self._stable_signal_timer = asyncio.create_task(
-            self._stable_signal_recheck(timeout_sec, transcript)
-        )
-
-    async def _stable_signal_recheck(self, timeout_sec: float, transcript: str) -> None:
-        current_task = asyncio.current_task()
-        try:
-            await asyncio.sleep(timeout_sec)
-            if not self._ducking.is_suspended:
-                return
-            latest = (self._latest_asr_text or transcript).strip()
-            if not latest:
-                return
-            logger.info(
-                "[StreamingPipeline] stable-signal recheck firing text=%r",
-                latest[:80],
-            )
-            self._semantic_interrupts.run(latest, is_final=False)
-        except asyncio.CancelledError:
-            return
-        finally:
-            if self._stable_signal_timer is current_task:
-                self._stable_signal_timer = None
-
-    def _cancel_stable_signal_timer(self) -> None:
-        task = getattr(self, "_stable_signal_timer", None)
-        if task is not None and not task.done():
-            task.cancel()
-        self._stable_signal_timer = None
-
-    def _ensure_soft_interrupt_controller(self) -> None:
-        if not hasattr(self, "_soft_interrupt_timeout"):
-            self._soft_interrupt_timeout = (
-                self._turn_runtime.decision_timeout_sec if hasattr(self, "_turn_runtime") else 0.5
-            )
-        if not hasattr(self, "_soft_interrupt"):
-            self._soft_interrupt = SoftInterruptController(
-                timeout_sec=self._soft_interrupt_timeout,
-                on_timeout=lambda: self._interrupt_current_turn(),
-            )
-        self._soft_interrupt.timeout_sec = self._soft_interrupt_timeout
-
-    def _soft_interrupt_is_active(self) -> bool:
-        self._ensure_soft_interrupt_controller()
-        return self._soft_interrupt.active
-
     # ------------------------------------------------------------------
     # DuckingMixer integration
     # ------------------------------------------------------------------
@@ -2885,7 +2808,8 @@ class StreamingPipeline(BasePipeline):
     #
     #   SemanticInterruptHandler.run (per STT interim/final):
     #     strong_interrupt_intent OR score >= duck_early_cancel_score_threshold
-    #       → _duck_cancel_and_interrupt()  (real interrupt, no resume)
+    #       → FullDuplexInterruptionEffects.cancel_and_interrupt()
+    #         (real interrupt, no resume)
     #     score <= duck_early_resume_score_threshold (and > 0)
     #       → _duck_unduck()  (false interrupt, smooth fade-in)
     #     mid-band → leave SUSPENDED, let timeout decide
@@ -3010,127 +2934,6 @@ class StreamingPipeline(BasePipeline):
         self._timeline_debug_flushed = True
         if clear:
             self._timeline = None
-
-    def _duck_cancel_and_interrupt(self, *, force: bool = False) -> None:
-        """Confirm interrupt: discard buffer + cancel TTS generation.
-
-        ``force`` propagates to ``session.interrupt(force=True)`` so an explicit
-        client request interrupts even when the current speech handle disallows
-        interruptions. Policy-driven callers leave it False so the
-        ``allow_interruptions`` gate still applies.
-        """
-        self._ensure_runtime_defaults()
-        if self._ducking.is_cancelled:
-            logger.debug(
-                "[StreamingPipeline] duplicate duck cancel ignored — output already CANCELLED"
-            )
-            return
-        commit_post_speech_candidate = (
-            self._interruption_orchestrator.should_commit_after_confirmed_cancel()
-        )
-        post_speech_transcript = (
-            self._interruption_orchestrator.current_transcript
-            if commit_post_speech_candidate
-            else ""
-        )
-        stats = self._ducking.stats()
-        logger.info(
-            "[StreamingPipeline] duck resolved  reason=eot_cancel  "
-            "action=cancel  suspend_ms=%.0f  discarded=%d frames (%.3fs)",
-            stats.suspend_ms,
-            stats.buffered_frames,
-            stats.buffered_sec,
-        )
-        self._cancel_stable_signal_timer()
-        self._snapshot_interrupted_context()
-        self._publish_client_control(CONTROL_OP_PLAYBACK_STOP, reason="interrupt_cancel")
-        self._ducking.cancel_output()
-        self._interruption_orchestrator.resolve(
-            action="cancel",
-            reason="eot_cancel",
-        )
-        self._callbacks.on_duck_resolved("cancel")
-        if self._timeline is not None:
-            self._record_duck_event(
-                "duck_cancelled",
-                reason="eot_cancel",
-                suspend_ms=stats.suspend_ms,
-                buffered_frames=stats.buffered_frames,
-                buffered_sec=stats.buffered_sec,
-                drop_buffered=True,
-            )
-            self._timeline.mark("interrupt_resolved_at")
-            self._timeline.set_attr("cancel_reason", "eot_cancel")
-            # Output interruption is no longer a terminal user-turn event.
-            # Keep the timeline open so the same owner utterance can still be
-            # assembled, voiceprint-gated, and committed after the agent yields.
-        self._skip_commit_after_interrupt_cancel = True
-        self._suppress_commit_after_interrupt_until = (
-            time.monotonic() + self._cancel_residual_commit_suppress_sec()
-        )
-        self._interrupt_current_turn(force=force)
-        if commit_post_speech_candidate:
-            committed = self._commit_post_speech_interruption_candidate(
-                "post_speech_confirmed_cancel",
-                transcript_override=post_speech_transcript,
-            )
-            if committed:
-                self._skip_commit_after_interrupt_cancel = False
-
-    def _duck_unduck_if_suspended(
-        self, reason: str = "user_silent", *, drop_buffered: bool = False
-    ) -> None:
-        """Resume the agent's TTS if we're SUSPENDED. No-op otherwise.
-
-        Args:
-            reason: log + telemetry reason string.
-            drop_buffered: passed through to ``OutputController.unduck``.
-                True for the timeout-deadline (G17a) path where the
-                buffered frames are stale.
-        """
-        self._ensure_runtime_defaults()
-        if not self._ducking.installed:
-            return
-        if self._ducking.is_suspended:
-            waiting_post_speech_evidence = (
-                self._interruption_orchestrator.awaiting_post_speech_evidence
-            )
-            stats = self._ducking.stats()
-            logger.info(
-                "[StreamingPipeline] duck resolved  reason=%s  "
-                "action=unduck(drop_buffered=%s)  suspend_ms=%.0f  "
-                "buffered=%d frames (%.3fs)",
-                reason,
-                drop_buffered,
-                stats.suspend_ms,
-                stats.buffered_frames,
-                stats.buffered_sec,
-            )
-            self._cancel_stable_signal_timer()
-            self._ducking.unduck_if_suspended(drop_buffered=drop_buffered)
-            self._interruption_orchestrator.resolve(
-                action="rollback",
-                reason=reason,
-            )
-            self._callbacks.on_duck_resolved("unduck")
-            if self._timeline is not None:
-                self._record_duck_event(
-                    "duck_unducked",
-                    reason=reason,
-                    suspend_ms=stats.suspend_ms,
-                    buffered_frames=stats.buffered_frames,
-                    buffered_sec=stats.buffered_sec,
-                    drop_buffered=drop_buffered,
-                )
-                self._timeline.mark("interrupt_resolved_at")
-                self._timeline.set_attr("rollback_reason", reason)
-            if waiting_post_speech_evidence:
-                reject_reason = (
-                    "post_speech_evidence_timeout"
-                    if reason == "timeout"
-                    else f"post_speech_false_interruption:{reason}"
-                )
-                self._reject_post_speech_interruption_candidate(reject_reason)
 
     # ------------------------------------------------------------------
     # Interrupted content tracking (Phase 3)

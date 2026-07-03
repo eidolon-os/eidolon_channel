@@ -16,7 +16,8 @@ certainly hasn't stopped talking).
 
 Fix: ``unduck(drop_buffered=True)`` discards the buffer instead of draining
 it. Caller (the timeout fallback) opts in. The fast-path soft-unduck
-(``_duck_unduck_if_suspended`` called on ``user_state: speaking→listening``
+(``FullDuplexInterruptionEffects.rollback_if_suspended`` called after
+``user_state: speaking→listening``
 within ~300ms) keeps the default ``drop_buffered=False`` because the buffer
 is genuinely fresh there.
 

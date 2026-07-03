@@ -154,12 +154,13 @@ class FullDuplexSpeechLifecycle:
 
     def _resolve_interruption_candidate_on_stop(self) -> bool:
         owner = self._owner
-        if owner._soft_interrupt_is_active():
+        interruption_effects = owner._ensure_interruption_effects()
+        if interruption_effects.soft_interrupt_active():
             logger.info(
                 "[StreamingPipeline] user fell silent during soft interrupt; "
                 "false interruption, cancelling"
             )
-            owner._cancel_soft_interrupt()
+            interruption_effects.cancel_soft_interrupt()
 
         if (
             owner._ducking.is_suspended

@@ -69,7 +69,6 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
 
     pipeline._callbacks = MagicMock()
     pipeline._snapshot_interrupted_context = MagicMock()
-    pipeline._interrupt_current_turn = MagicMock()
 
     return pipeline
 
@@ -97,7 +96,6 @@ def test_first_signal_holds_substantive_interim_without_semantic_score() -> None
 
     pipeline._snapshot_interrupted_context.assert_not_called()
     pipeline._ducking.mixer.cancel.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
 
 
 def test_first_signal_cancel_on_high_semantic_score() -> None:
@@ -107,7 +105,6 @@ def test_first_signal_cancel_on_high_semantic_score() -> None:
     _run_semantic_check(pipeline, "我不相信你", is_final=False)
 
     pipeline._ducking.mixer.cancel.assert_called_once()
-    pipeline._interrupt_current_turn.assert_called_once()
 
 
 def test_first_signal_holds_short_latin_artifact() -> None:
@@ -117,7 +114,6 @@ def test_first_signal_holds_short_latin_artifact() -> None:
     _run_semantic_check(pipeline, "If", is_final=False)
 
     pipeline._ducking.mixer.cancel.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
 
 
 def test_first_signal_skips_backchannel() -> None:
@@ -128,7 +124,6 @@ def test_first_signal_skips_backchannel() -> None:
     _run_semantic_check(pipeline, "嗯", is_final=False)
 
     pipeline._ducking.mixer.cancel.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
 
 
 def test_first_signal_skips_compound_backchannel() -> None:
@@ -188,7 +183,6 @@ def test_fallback_semantic_correction_waits_without_semantic_score() -> None:
     _run_semantic_check(pipeline, "我刚才说错了", is_final=False)
 
     pipeline._ducking.mixer.cancel.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +200,6 @@ async def test_timeout_with_vad_still_active_without_transcript_holds() -> None:
 
     pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._ducking.mixer.unduck.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
     create_task.assert_called_once()
     create_task.call_args.args[0].close()
 
@@ -221,7 +214,6 @@ async def test_timeout_with_vad_still_active_and_transcript_cancels() -> None:
 
     pipeline._ducking.mixer.cancel.assert_called_once()
     pipeline._ducking.mixer.unduck.assert_not_called()
-    pipeline._interrupt_current_turn.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -235,7 +227,6 @@ async def test_timeout_with_low_score_transcript_holds() -> None:
 
     pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._ducking.mixer.unduck.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
     create_task.assert_called_once()
     create_task.call_args.args[0].close()
 
@@ -255,7 +246,6 @@ async def test_timeout_hold_rolls_back_after_max_suspend_budget() -> None:
 
     pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=True)
     pipeline._ducking.mixer.cancel.assert_not_called()
-    pipeline._interrupt_current_turn.assert_not_called()
 
 
 @pytest.mark.asyncio

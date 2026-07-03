@@ -66,7 +66,9 @@ def test_speech_lifecycle_stop_defers_when_interruption_owner_waits_for_stt() ->
     owner._timeline = TurnTimeline("turn-wait")
     voiceprint_task = object()
     owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
-    owner._soft_interrupt_is_active = MagicMock(return_value=False)
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
     owner._interruption_orchestrator.defer_false_resume_after_speech_end.return_value = True
     owner._remember_candidate_voiceprint_task = MagicMock()
     owner._session = MagicMock()
@@ -85,7 +87,9 @@ def test_speech_lifecycle_stop_schedules_voiceprint_gated_commit() -> None:
     voiceprint_task = object()
     owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     owner._ducking = SimpleNamespace(is_suspended=False)
-    owner._soft_interrupt_is_active = MagicMock(return_value=False)
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
     owner._remember_candidate_voiceprint_task = MagicMock()
     owner._session = MagicMock()
     owner._user_turns.selected_text = "你好"

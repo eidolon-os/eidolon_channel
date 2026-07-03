@@ -12,6 +12,9 @@ import pytest
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
 from eidolon.livekit.agent.integration.client_audio_state import parse_client_audio_state
+from eidolon.livekit.agent.full_duplex.interruption_effects import (
+    FullDuplexInterruptionEffects,
+)
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.observability import TurnTimeline
@@ -590,7 +593,13 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
     pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
     pipeline._state = PipelineState.SPEAKING
     pipeline._ducking = SimpleNamespace(is_cancelled=False)
-    pipeline._duck_cancel_and_interrupt = MagicMock()
+    effects = SimpleNamespace(
+        cancel_and_interrupt=MagicMock(),
+        cancel_silent_generation_for_explicit_preempt=MagicMock(),
+        rollback_if_suspended=MagicMock(),
+        handle_hold_decision=MagicMock(),
+    )
+    pipeline._ensure_interruption_effects = MagicMock(return_value=effects)
 
     packet = SimpleNamespace(
         topic=CLIENT_AUDIO_STATE_TOPIC,
@@ -605,7 +614,7 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
     pipeline._room_data.handle_packet(packet)
     pipeline._on_client_room_packet(packet)
 
-    pipeline._duck_cancel_and_interrupt.assert_called_once_with(force=True)
+    effects.cancel_and_interrupt.assert_called_once_with(force=True)
     assert pipeline._timeline.attrs["explicit_client_interrupt"][
         "participant_identity"
     ] == "alice"
@@ -706,19 +715,44 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
     pipeline._room = SimpleNamespace(local_participant=SimpleNamespace())
     pipeline._room.local_participant.publish_data = AsyncMock()
     pipeline._ducking = FakeDucking()
+    pipeline._session = MagicMock()
+    pipeline._allow_interruptions = False
+    pipeline._get_eot_model = MagicMock(return_value=MagicMock())
     pipeline._interruption_orchestrator = SimpleNamespace(
         should_commit_after_confirmed_cancel=lambda: False,
         current_transcript="",
         resolve=MagicMock(),
     )
-    pipeline._cancel_stable_signal_timer = MagicMock()
     pipeline._snapshot_interrupted_context = MagicMock()
     pipeline._callbacks = MagicMock()
-    pipeline._record_duck_event = MagicMock()
     pipeline._cancel_residual_commit_suppress_sec = lambda: 2.0
-    pipeline._interrupt_current_turn = MagicMock()
+    effects = FullDuplexInterruptionEffects(
+        ducking=pipeline._ducking,
+        callbacks=pipeline._callbacks,
+        get_session=lambda: pipeline._session,
+        allow_interruptions=lambda: pipeline._allow_interruptions,
+        get_eot_model=lambda: pipeline._get_eot_model(),
+        get_timeline=lambda: pipeline._timeline,
+        get_latest_asr_text=lambda: "",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=lambda: pipeline._interruption_orchestrator,
+        publish_playback_stop=lambda reason: pipeline._publish_client_control(
+            "playback.stop",
+            reason=reason,
+        ),
+        snapshot_interrupted_context=pipeline._snapshot_interrupted_context,
+        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
+        reject_post_speech_interruption_candidate=MagicMock(),
+        cancel_residual_commit_suppress_sec=(
+            pipeline._cancel_residual_commit_suppress_sec
+        ),
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=MagicMock(),
+        soft_interrupt_timeout_sec=lambda: 0.5,
+    )
 
-    pipeline._duck_cancel_and_interrupt(force=True)
+    effects.cancel_and_interrupt(force=True)
     await asyncio.sleep(0)
 
     pipeline._room.local_participant.publish_data.assert_awaited_once()
@@ -730,20 +764,34 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
     }
     assert pipeline._timeline.attrs["client_control_events"][-1]["op"] == "playback.stop"
     assert pipeline._ducking.cancelled is True
-    pipeline._interrupt_current_turn.assert_called_once_with(force=True)
+    pipeline._session.interrupt.assert_called_once_with(force=True)
 
 
 def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
-    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+    callbacks = MagicMock()
+    session = MagicMock()
+    effects = FullDuplexInterruptionEffects(
+        ducking=SimpleNamespace(is_cancelled=True),
+        callbacks=callbacks,
+        get_session=lambda: session,
+        allow_interruptions=lambda: True,
+        get_eot_model=lambda: MagicMock(),
+        get_timeline=lambda: TurnTimeline("turn-duplicate-cancel"),
+        get_latest_asr_text=lambda: "",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=MagicMock(),
+        publish_playback_stop=MagicMock(),
+        snapshot_interrupted_context=MagicMock(),
+        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
+        reject_post_speech_interruption_candidate=MagicMock(),
+        cancel_residual_commit_suppress_sec=lambda: 0.0,
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=MagicMock(),
+        soft_interrupt_timeout_sec=lambda: 0.5,
+    )
 
-    pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._ducking = OutputDuckingController()
-    pipeline._ducking.mixer = SimpleNamespace(state="CANCELLED")
-    pipeline._callbacks = MagicMock()
-    pipeline._session = MagicMock()
-    pipeline._timeline = TurnTimeline("turn-duplicate-cancel")
+    effects.cancel_and_interrupt()
 
-    pipeline._duck_cancel_and_interrupt()
-
-    pipeline._callbacks.on_duck_resolved.assert_not_called()
-    pipeline._session.interrupt.assert_not_called()
+    callbacks.on_duck_resolved.assert_not_called()
+    session.interrupt.assert_not_called()

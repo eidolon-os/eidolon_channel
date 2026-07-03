@@ -30,8 +30,8 @@ def _owner() -> SimpleNamespace:
     owner._apply_pending_explicit_client_preempt = MagicMock()
     owner._apply_pending_client_control_events = MagicMock()
     owner._voiceprint_turns = MagicMock()
-    owner._apply_pending_stt_provider_events = MagicMock()
-    owner._observe_stt_turn_audio = MagicMock()
+    owner._ensure_provider_event_observer = MagicMock()
+    owner._provider_events = MagicMock()
     owner._latest_asr_text = "stale"
     owner._get_eot_model = MagicMock(return_value=MagicMock())
     owner._uses_livekit_native_adaptive_interruption = MagicMock(return_value=False)
@@ -54,6 +54,9 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._timeline.attrs["room_name"] == "room-a"
     owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
     owner._voiceprint_turns.start_turn.assert_called_once_with(timeline=owner._timeline)
+    owner._ensure_provider_event_observer.assert_called_once_with()
+    owner._provider_events.apply_pending_stt_provider_events.assert_called_once_with()
+    owner._provider_events.observe_stt_turn_audio.assert_called_once_with()
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_called_once_with(

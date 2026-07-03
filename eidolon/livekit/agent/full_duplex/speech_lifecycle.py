@@ -50,8 +50,9 @@ class FullDuplexSpeechLifecycle:
         owner._apply_pending_explicit_client_preempt(owner._timeline)
         owner._apply_pending_client_control_events(owner._timeline)
         owner._voiceprint_turns.start_turn(timeline=owner._timeline)
-        owner._apply_pending_stt_provider_events()
-        owner._observe_stt_turn_audio()
+        owner._ensure_provider_event_observer()
+        owner._provider_events.apply_pending_stt_provider_events()
+        owner._provider_events.observe_stt_turn_audio()
         owner._latest_asr_text = ""
 
         owner._get_eot_model().update_vad(True)

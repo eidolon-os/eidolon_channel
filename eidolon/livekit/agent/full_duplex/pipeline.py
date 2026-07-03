@@ -1773,38 +1773,6 @@ class StreamingPipeline(BasePipeline):
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
 
-    def _install_llm_metrics_observer(self) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.install_llm_metrics_observer()
-
-    def _install_brain_provider_event_observer(self) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.install_brain_provider_event_observer()
-
-    def _install_tts_provider_event_observer(self) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.install_tts_provider_event_observer()
-
-    def _install_stt_provider_event_observer(self) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.install_stt_provider_event_observer()
-
-    def _remember_pending_stt_provider_event(self, event: dict[str, Any]) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.remember_pending_stt_provider_event(event)
-
-    def _apply_pending_stt_provider_events(self) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.apply_pending_stt_provider_events()
-
-    def _record_stt_provider_event(self, event: dict[str, Any]) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.record_stt_provider_event(event)
-
-    def _observe_stt_turn_audio(self) -> None:
-        self._ensure_provider_event_observer()
-        self._provider_events.observe_stt_turn_audio()
-
     def _ensure_provider_event_observer(self) -> None:
         if not hasattr(self, "_provider_events"):
             if not hasattr(self, "_observability"):

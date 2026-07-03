@@ -38,8 +38,8 @@ def _speech_start_pipeline(owner: str) -> StreamingPipeline:
     pipeline._completed_turn_voiceprint_timeline = None
     pipeline._session_signals = MagicMock()
     pipeline._voiceprint_turns = MagicMock()
-    pipeline._apply_pending_stt_provider_events = MagicMock()
-    pipeline._observe_stt_turn_audio = MagicMock()
+    pipeline._ensure_provider_event_observer = MagicMock()
+    pipeline._provider_events = MagicMock()
     pipeline._user_turns = MagicMock()
     pipeline._user_turns.can_merge_new_speech.return_value = False
     pipeline._ducking = SimpleNamespace(is_suspended=True)

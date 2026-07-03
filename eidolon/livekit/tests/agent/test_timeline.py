@@ -209,7 +209,8 @@ def test_streaming_pipeline_records_llm_metrics_into_timeline() -> None:
     pipeline._timeline.mark("turn_committed_at")
     pipeline._timeline.mark("llm_started_at")
 
-    pipeline._install_llm_metrics_observer()
+    pipeline._ensure_provider_event_observer()
+    pipeline._provider_events.install_llm_metrics_observer()
     fake_llm.handlers["metrics_collected"](
         SimpleNamespace(
             request_id="req-1",
@@ -244,7 +245,8 @@ def test_streaming_pipeline_records_brain_provider_events_into_timeline() -> Non
     pipeline._timeline = TurnTimeline("turn-brain")
     pipeline._timeline.mark("turn_committed_at")
 
-    pipeline._install_brain_provider_event_observer()
+    pipeline._ensure_provider_event_observer()
+    pipeline._provider_events.install_brain_provider_event_observer()
     fake_llm.handlers["provider_event"](
         {
             "provider": "eidolon_agent_rpc",
@@ -299,7 +301,8 @@ def test_streaming_pipeline_records_stt_provider_events_into_timeline() -> None:
     pipeline._timeline = TurnTimeline("turn-stt")
     pipeline._timeline.mark_at("speech_started_at", 10.0)
 
-    pipeline._install_stt_provider_event_observer()
+    pipeline._ensure_provider_event_observer()
+    pipeline._provider_events.install_stt_provider_event_observer()
     fake_stt.handlers["provider_event"](
         {
             "provider": "bailian",
@@ -359,7 +362,8 @@ def test_streaming_pipeline_replays_pending_stt_provider_events() -> None:
     pipeline._factory = SimpleNamespace(stt=SimpleNamespace(stt=fake_stt))
     pipeline._timeline = None
 
-    pipeline._install_stt_provider_event_observer()
+    pipeline._ensure_provider_event_observer()
+    pipeline._provider_events.install_stt_provider_event_observer()
     fake_stt.handlers["provider_event"](
         {
             "provider": "bailian",
@@ -374,7 +378,7 @@ def test_streaming_pipeline_replays_pending_stt_provider_events() -> None:
 
     pipeline._timeline = TurnTimeline("turn-stt-pending")
     pipeline._timeline.mark_at("speech_started_at", 10.1)
-    pipeline._apply_pending_stt_provider_events()
+    pipeline._provider_events.apply_pending_stt_provider_events()
 
     snap = pipeline._timeline.snapshot()
     assert snap["timestamps"]["stt_first_audio_sent_at"] == 10.05
@@ -407,8 +411,9 @@ def test_streaming_pipeline_observes_next_stt_audio_for_turn() -> None:
     pipeline._timeline = TurnTimeline("turn-observe-audio")
     pipeline._timeline.mark_at("speech_started_at", 20.0)
 
-    pipeline._observe_stt_turn_audio()
-    pipeline._record_stt_provider_event(
+    pipeline._ensure_provider_event_observer()
+    pipeline._provider_events.observe_stt_turn_audio()
+    pipeline._provider_events.record_stt_provider_event(
         {
             "provider": "bailian",
             "model": "fun-asr",

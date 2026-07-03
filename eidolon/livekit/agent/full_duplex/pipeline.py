@@ -2576,6 +2576,35 @@ class StreamingPipeline(BasePipeline):
                 timeline=self._timeline,
             )
 
+    def _resolve_interruption_candidate_on_speech_stop(self) -> bool:
+        if self._soft_interrupt_is_active():
+            logger.info(
+                "[StreamingPipeline] user fell silent during soft interrupt; "
+                "false interruption, cancelling"
+            )
+            self._cancel_soft_interrupt()
+
+        # VAD silence is not itself a false-interruption decision. If the agent
+        # is suspended and no transcript has arrived yet, let the interruption
+        # owner keep the candidate alive for delayed STT evidence before resume.
+        if self._ducking.is_suspended and not self._uses_livekit_native_adaptive_interruption():
+            should_defer = (
+                self._interruption_orchestrator.defer_false_resume_after_speech_end(
+                    transcript=self._latest_asr_text,
+                    duck_suspended=True,
+                )
+            )
+            if not should_defer:
+                decision = self._turn_runtime.user_silent_decision(self._latest_asr_text)
+                self._decision_effects.apply(
+                    decision,
+                    resolved_reason="user_silent",
+                    transcript=self._latest_asr_text,
+                    vad_active=False,
+                )
+            return should_defer
+        return False
+
     def _handle_user_speaking_stopped(self) -> None:
         self._user_speaking_start_time = None
         if self._timeline is not None:
@@ -2588,33 +2617,7 @@ class StreamingPipeline(BasePipeline):
         eot_model = self._get_eot_model()
         eot_model.update_vad(False)
 
-        if self._soft_interrupt_is_active():
-            logger.info(
-                "[StreamingPipeline] user fell silent during soft interrupt; "
-                "false interruption, cancelling"
-            )
-            self._cancel_soft_interrupt()
-
-        defer_post_speech_evidence = False
-        # VAD silence is not itself a false-interruption decision. If the agent
-        # is suspended and no transcript has arrived yet, let the interruption
-        # owner keep the candidate alive for delayed STT evidence before resume.
-        if self._ducking.is_suspended and not self._uses_livekit_native_adaptive_interruption():
-            defer_post_speech_evidence = (
-                self._interruption_orchestrator.defer_false_resume_after_speech_end(
-                    transcript=self._latest_asr_text,
-                    duck_suspended=True,
-                )
-            )
-            if not defer_post_speech_evidence:
-                decision = self._turn_runtime.user_silent_decision(self._latest_asr_text)
-                self._decision_effects.apply(
-                    decision,
-                    resolved_reason="user_silent",
-                    transcript=self._latest_asr_text,
-                    vad_active=False,
-                )
-
+        defer_post_speech_evidence = self._resolve_interruption_candidate_on_speech_stop()
         self._callbacks.on_user_ended_speaking()
         self._skip_commit_after_interrupt_cancel = False
         if defer_post_speech_evidence:

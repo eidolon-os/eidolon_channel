@@ -26,8 +26,8 @@ entrypoints; implementation code lives under named boundary packages.
   not a broad facade.
 - `full_duplex/` contains the full-duplex realtime AgentSession pipeline:
   open-mic VAD/STT/EOT, natural interruption ownership, backchannel/false
-  interruption handling, transcript echo gating, and explicit client preempt
-  handling for deliberate full-duplex controls.
+  interruption handling, transcript admission/echo gating before turn evidence,
+  and explicit client preempt handling for deliberate full-duplex controls.
 - `half_duplex/` contains the half-duplex PTT pipeline: hold-scoped audio
   recording, one-shot STT, PTT control status helpers, and the PTT controller
   that does not consume streaming transcript events or EOT.

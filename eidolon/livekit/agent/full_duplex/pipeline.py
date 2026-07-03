@@ -101,6 +101,7 @@ from .client_preempt import (
     ExplicitClientPreemptHandler,
     ExplicitClientPreemptLedger,
 )
+from .transcript_admission import TranscriptAdmissionGate
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
@@ -200,6 +201,7 @@ class StreamingPipeline(BasePipeline):
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._deferred_low_eot_commit_task: asyncio.Task | None = None
         self._suppress_transcripts_until_next_speech = False
+        self._transcript_admission = self._build_transcript_admission_gate()
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
         self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
@@ -559,6 +561,24 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_transcript_echo_gate"):
             self._transcript_echo_gate = self._build_transcript_echo_gate()
         return self._transcript_echo_gate
+
+    def _build_transcript_admission_gate(self) -> TranscriptAdmissionGate:
+        return TranscriptAdmissionGate(
+            suppress_until_next_speech=(
+                lambda: self._suppress_transcripts_until_next_speech
+            ),
+            agent_output_active=lambda speaker_id: (
+                self._agent_output_active_for_interrupts(
+                    participant_identity=speaker_id,
+                )
+            ),
+            echo_gate=lambda: self._ensure_transcript_echo_gate(),
+        )
+
+    def _ensure_transcript_admission_gate(self) -> TranscriptAdmissionGate:
+        if not hasattr(self, "_transcript_admission"):
+            self._transcript_admission = self._build_transcript_admission_gate()
+        return self._transcript_admission
 
     def _low_eot_commit_grace_max_sec(self) -> float:
         return max(self._turn_policy.eot.low_eot_commit_grace_max_ms, 0) / 1000.0
@@ -1745,6 +1765,7 @@ class StreamingPipeline(BasePipeline):
             self._interaction_mode = INTERACTION_MODE_FULL_DUPLEX
         if not hasattr(self, "_suppress_transcripts_until_next_speech"):
             self._suppress_transcripts_until_next_speech = False
+        self._ensure_transcript_admission_gate()
         if not hasattr(self, "_completed_turn_voiceprint_task"):
             self._completed_turn_voiceprint_task = None
         if not hasattr(self, "_completed_turn_voiceprint_result"):
@@ -2741,32 +2762,21 @@ class StreamingPipeline(BasePipeline):
              polling approach).
         """
         self._ensure_runtime_defaults()
-        if self._suppress_transcripts_until_next_speech and getattr(event, "transcript", ""):
-            logger.info(
-                "[StreamingPipeline] dropping post-turn transcript after "
-                "voiceprint ownership gate transcript=%r final=%s",
-                event.transcript[:80],
-                getattr(event, "is_final", None),
-            )
-            return
-        # Content-based echo gate: with an open mic during
-        # playback, the hardware-AEC-cleaned mic can still leak residual-echo
-        # spikes that STT transcribes as the agent's OWN words (energy can't
-        # filter them — they exceed real speech). Drop a transcript contained in
-        # what the agent is currently saying so it never starts a user turn
-        # (which would churn the timeline and drop the real reply).
-        if (
-            self._agent_output_active_for_interrupts(
-                participant_identity=getattr(event, "speaker_id", None),
-            )
-            and self._ensure_transcript_echo_gate().is_echo(
-                getattr(event, "transcript", "")
-            )
-        ):
-            logger.info(
-                "[StreamingPipeline] dropping agent-echo transcript during playback transcript=%r",
-                getattr(event, "transcript", "")[:80],
-            )
+        admission = self._ensure_transcript_admission_gate().evaluate(event)
+        if not admission.accepted:
+            if admission.reason == "suppressed_until_next_speech":
+                logger.info(
+                    "[StreamingPipeline] dropping post-turn transcript after "
+                    "voiceprint ownership gate transcript=%r final=%s",
+                    admission.transcript[:80],
+                    admission.is_final,
+                )
+            elif admission.reason == "agent_echo":
+                logger.info(
+                    "[StreamingPipeline] dropping agent-echo transcript during playback "
+                    "transcript=%r",
+                    admission.transcript[:80],
+                )
             return
         if event.transcript:
             # Real recognized speech (interim or final) — keeps the session

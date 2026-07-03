@@ -115,6 +115,7 @@ eidolon/livekit/agent/
 │   └── ptt_turn_controller.py # segment PTT 状态机
 ├── full_duplex/
 │   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
+│   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
 │   └── pipeline.py           # StreamingPipeline: full-duplex realtime AgentSession pipeline
 ├── session/
 │   ├── __init__.py           # package marker only; no broad component re-export facade
@@ -161,6 +162,8 @@ eidolon/livekit/agent/
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
 `session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；它们都不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+
+`full_duplex/transcript_admission.py` 是 full-duplex STT transcript 进入 turn/evidence 逻辑前的入口门禁。当前只拥有两类无副作用裁决：voiceprint ownership 后的 post-turn residual transcript 抑制，以及播放中 agent 自身 TTS echo transcript 抑制。它不负责 EOT、commit、cancel/resume，也不处理 half-duplex PTT。
 
 #### 2.1.1 产品交互模式边界
 

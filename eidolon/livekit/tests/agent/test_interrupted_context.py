@@ -36,8 +36,12 @@ def _make_pipeline_with_history(messages: list) -> "StreamingPipeline":
     # legacy tests that pre-date G6.
     pipeline._duck_mixer = None
 
-    # Stub _get_eot_model() → cfg with interrupted_context_enabled=True
-    cfg = SimpleNamespace(interrupted_context_enabled=True)
+    # Stub _get_eot_model() → cfg with history fallback enabled for these
+    # legacy method-call regression tests.
+    cfg = SimpleNamespace(
+        interrupted_context_enabled=True,
+        interrupted_context_history_fallback_enabled=True,
+    )
     eot = SimpleNamespace(_config=cfg)
     pipeline._get_eot_model = MagicMock(return_value=eot)
 
@@ -139,6 +143,11 @@ def _make_pipeline_with_duck_mixer(
     pipeline._session.history.messages = MagicMock(
         return_value=[_msg("assistant", "你好世界，今天天气不错")]
     )
+    pipeline._factory = SimpleNamespace(
+        tts=SimpleNamespace(
+            tts=SimpleNamespace(current_pushed_text="你好世界，今天天气不错")
+        )
+    )
     pipeline._last_interrupted_context = None
 
     cfg = SimpleNamespace(interrupted_context_enabled=True)
@@ -175,7 +184,7 @@ def test_snapshot_records_context_preview_on_timeline() -> None:
     pipeline._snapshot_interrupted_context()
 
     attr = pipeline._timeline.attrs["interrupted_context"]
-    assert attr["source"] == "session_history_fallback"
+    assert attr["source"] == "tts_in_flight"
     assert attr["played_seconds"] == 1.5
     assert attr["text_preview"] == "你好世界，今天天气不错"
 

@@ -1,6 +1,6 @@
 # LiveKit Agent Server 架构分析
 
-> 最近更新: 2026-07-01
+> 最近更新: 2026-07-02
 > 代码路径: `eidolon/livekit/agent/`
 
 ---
@@ -108,21 +108,30 @@ eidolon/livekit/agent/
 │   ├── controller.py         # OutputController: TTS/播放句柄、取消、指标
 │   ├── ducking.py            # OutputDuckingController: duck 安装/状态迁移/timeout
 │   └── filler.py             # FillerManager: 填充语管理与播放
+├── half_duplex/
+│   ├── pipeline.py           # HalfDuplexPttPipeline: segment PTT room pipeline
+│   ├── ptt_segment.py        # PTT hold 内完整音频段采集
+│   ├── ptt_transcriber.py    # release 后一次性 STT
+│   └── ptt_turn_controller.py # segment PTT 状态机
 ├── session/
 │   ├── agent_state.py        # AgentStateEffectHandler: agent state side effects
 │   ├── attention_effects.py  # AttentionEffectHandler: attention admission effects
+│   ├── client_control.py     # session-local eidolon.control / PTT status helpers
 │   ├── client_interaction.py # ClientInteractionHandler: PTT/tap-to-stop/client controls
 │   ├── decision_effects.py   # DecisionEffectApplier: decision timeline/metadata/effects
 │   ├── duck_timeout.py       # DuckSuspendTimeoutHandler: duck deadline policy effects
 │   ├── eot_model.py          # shared EOT model cache/loading helper
 │   ├── interaction_mode.py   # Full/Half duplex interaction behavior strategy
 │   ├── messages.py           # LiveKit chat/message text helper
+│   ├── ptt_turn.py           # PttTurnOwner: half-duplex press/release finalization state machine
+│   ├── ptt_manual.py         # PttManualTurnHandler: streaming/manual PTT owner adapter + finalize timer
 │   ├── provider_events.py    # STT/TTS provider event 观测
 │   ├── idle.py               # IdleWatchdog: 空闲定时与主动问候
 │   ├── room_data.py          # LiveKit data packet 解析与分发
 │   ├── interruption.py       # SoftInterruptController: 软打断补偿路径
 │   ├── semantic_interrupt.py # SemanticInterruptHandler: STT/EOT 打断热路径副作用
 │   ├── signals.py            # SessionSignalBridge: VAD/STT provider 信号桥接
+│   ├── transcript_echo.py    # TranscriptEchoGate: full-duplex TTS echo content gate
 │   ├── user_turn_coordinator.py # UserTurnCoordinator: 用户 turn 候选、合并、提交/拒绝决策
 │   └── turn_commit.py        # UserTurnCommitter: VAD-end commit guard
 ├── context/
@@ -148,7 +157,7 @@ eidolon/livekit/agent/
 
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
-`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；它不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；它们都不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
 
 #### 2.1.1 产品交互模式边界
 
@@ -158,8 +167,11 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - 入口证据：`client.audio_state.ptt`、设备 playback state、LiveKit manual turn boundary。
    - 所有按钮/手势只是显式输入信号，不是设备侧决策。ESP32 不判断“要不要打断”。
    - ESP32 release 后保留一个很短的采集尾窗（`EIDOLON_PTT_RELEASE_TAIL_MS`），尾窗结束后才发布 `ptt=false`，避免截断末尾音节。
-   - `ClientInteractionHandler` 负责 PTT press/release 边沿识别：press 会 arm 当前 hold，并在 agent turn 仍处于 playback 或 silent generation 时抢占该 turn；release 交给 `PttTurnFinalizer`，只在本 hold 有真实 transcript 时 `commit_user_turn`。
-   - PTT release 的 STT final 等待使用 `turn_policy.interrupt.ptt_commit_transcript_timeout_ms`，独立于 full-duplex/VAD 通用的 `stt_commit_transcript_timeout_ms`。
+   - `ClientInteractionHandler` 负责 PTT press/release 边沿识别：press 会 arm 当前 hold，并在 agent turn 仍处于 playback 或 silent generation 时抢占该 turn；streaming owner 中 release 交给 `PttManualTurnHandler`，再由其驱动 `PttTurnOwner` finalization 状态机。
+   - `PttTurnOwner` 是 half-duplex turn owner：VAD 只提供 speech presence，STT interim/final 只提供文本材料，PTT release 才关闭用户音频窗口并进入短暂 finalization；最终只输出一个 terminal outcome：`commit` 或 `reject`。
+   - PTT 专用阈值使用 `turn_policy.ptt`：`empty_probe_ms`、`finalization_timeout_ms`、`post_vad_settle_ms`、`stable_interim_ms`、`commit_transcript_timeout_ms`。旧 `turn_policy.interrupt.ptt_commit_transcript_timeout_ms` 只作为 loader 兼容输入。
+   - 空按 / 无有效语音是显式协议结果：Channel 发布 session-local `eidolon.control` / `op=ptt.turn_status`，ESP32 只清理 UI 状态并 ACK，不参与 turn 裁决。
+   - `session/client_control.py` 是 streaming owner 与 segment owner 共享的 `eidolon.control` envelope、`ptt.turn_status` payload 与 timeline event 归属 helper；协议字段和 pending-event 丢弃规则不得在两个 pipeline 中各自手写。
    - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时走 audible playback interrupt，记录用户实际听到的 assistant context 并发送 `playback.stop`；发生在 agent silent generation 时走 generation preempt，只取消 LiveKit speech/generation handle 和晚到 TTS frame，不注入未听到的 assistant context。
 
 2. **流式自然语言 / full-duplex**

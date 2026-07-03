@@ -109,6 +109,8 @@ turn_policy:
     post_speech_evidence_min_speech_ms: 250
     framework_false_interruption_timeout_ms: 6000
     stt_commit_transcript_timeout_ms: 5000
+    # Deprecated compatibility fallback for older configs. PTT finalization now
+    # lives under turn_policy.ptt.
     ptt_commit_transcript_timeout_ms: 1000
     aec_warmup_ms: 1000
     min_interim_chars: 2
@@ -124,6 +126,22 @@ turn_policy:
     repeated_noise_min_chars: 2
     repeated_noise_max_chars: 6
     weak_signal_followup_hold_ms: 1500
+  ptt:
+    # streaming = current AgentSession manual STT commit owner.
+    # segment = press/release captures one complete audio segment, then STT once.
+    turn_owner: streaming
+    empty_probe_ms: 250
+    finalization_timeout_ms: 1200
+    post_vad_settle_ms: 150
+    stable_interim_ms: 700
+    commit_transcript_timeout_ms: 300
+    # streaming is the dogfood default: current offline recognize is too slow
+    # for PTT turn latency; auto/offline remain explicit experiment options.
+    segment_stt_strategy: streaming
+    segment_min_audio_ms: 80
+    segment_max_audio_ms: 20000
+    segment_min_rms_ppm: 0
+    segment_tap_to_stop_max_audio_ms: 900
   ducking:
     enabled: true
     fade_out_ms: 30
@@ -136,6 +154,8 @@ turn_policy:
     # Disconnect a session idle (no recognized speech / no agent activity)
     # for this long, so a forgotten-open client stops streaming STT. 0 disables.
     disconnect_after_idle_ms: 60000
+    # Delay room deletion briefly after session_end so the client receives it.
+    disconnect_grace_ms: 300
   preemptive:
     # Default off — A/B showed no first-audio gain with eos=400 (see docs).
     enabled: false

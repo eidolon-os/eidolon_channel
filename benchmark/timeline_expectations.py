@@ -297,6 +297,24 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         elif not playback_stop_sent and saw_stop:
             errors.append("timeline expected no playback.stop client control")
 
+    ptt_terminal_action = str(getattr(expected, "ptt_terminal_action", "") or "")
+    if ptt_terminal_action:
+        actions = _ptt_terminal_actions(records)
+        if ptt_terminal_action not in actions:
+            errors.append(
+                "timeline expected PTT terminal action="
+                f"{ptt_terminal_action}, got {actions or ['<none>']}"
+            )
+
+    ptt_terminal_reason = str(getattr(expected, "ptt_terminal_reason", "") or "")
+    if ptt_terminal_reason:
+        reasons = _ptt_terminal_reasons(records)
+        if ptt_terminal_reason not in reasons:
+            errors.append(
+                "timeline expected PTT terminal reason="
+                f"{ptt_terminal_reason}, got {reasons or ['<none>']}"
+            )
+
     if bool(getattr(expected, "no_full_assistant_context_commit", False)):
         if _has_cancel(records) and not _has_interrupted_context(records):
             errors.append(
@@ -681,6 +699,39 @@ def _client_control_sent(records: list[dict[str, Any]], op: str) -> bool:
             if isinstance(event, dict) and event.get("op") == op:
                 return True
     return False
+
+
+def _ptt_terminal_actions(records: list[dict[str, Any]]) -> list[str]:
+    return [
+        action
+        for action, _reason in (_ptt_terminal(record) for record in records)
+        if action
+    ]
+
+
+def _ptt_terminal_reasons(records: list[dict[str, Any]]) -> list[str]:
+    return [
+        reason
+        for _action, reason in (_ptt_terminal(record) for record in records)
+        if reason
+    ]
+
+
+def _ptt_terminal(record: dict[str, Any]) -> tuple[str, str]:
+    attrs = _mapping(record.get("attrs"))
+    segment_terminal = _mapping(attrs.get("ptt_segment_terminal"))
+    if segment_terminal:
+        return (
+            str(segment_terminal.get("action") or ""),
+            str(segment_terminal.get("reason") or ""),
+        )
+    owner = _mapping(attrs.get("ptt_turn_owner"))
+    if bool(owner.get("terminal")):
+        return str(owner.get("action") or ""), str(owner.get("reason") or "")
+    rejected = _mapping(attrs.get("ptt_turn_rejected"))
+    if rejected:
+        return "reject", str(rejected.get("reason") or "")
+    return "", ""
 
 
 def _has_interrupted_context(records: list[dict[str, Any]]) -> bool:

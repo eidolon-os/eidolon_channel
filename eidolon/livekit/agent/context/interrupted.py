@@ -54,6 +54,13 @@ class InterruptedContextManager:
                 )
                 return
 
+            if not getattr(config, "interrupted_context_history_fallback_enabled", False):
+                logger.info(
+                    "[InterruptedContextManager] skipped history fallback: "
+                    "no current TTS in-flight text"
+                )
+                return
+
             messages = session.history.messages()
             for msg in reversed(messages):
                 if msg.role == "assistant" and msg.text_content:

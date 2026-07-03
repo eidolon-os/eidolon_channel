@@ -17,7 +17,9 @@ in-progress round-3 reply hadn't reached history yet.
 G21 fix: prefer ``tts_plugin.current_pushed_text`` (BailianTTS /
 SenseTimeTTS both expose this via weakref to the active synth stream,
 reading the framework's accumulator on ``SynthesizeStream._pushed_text``).
-Fall back to history only when the TTS plugin doesn't have the property.
+History fallback is opt-in only because real-room logs showed it can capture
+the previous assistant turn when the active speech handle has not reached
+history yet.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ def _make_pipeline(
     history_messages: list,
     tts_pushed_text: str | None,
     played_sec: float | None = 1.0,
+    history_fallback_enabled: bool = False,
 ):
     """Build a stub StreamingPipeline configured for context-snapshot.
 
@@ -64,7 +67,10 @@ def _make_pipeline(
     pipeline._factory.tts.tts = tts_plugin
 
     # eot config
-    cfg = SimpleNamespace(interrupted_context_enabled=True)
+    cfg = SimpleNamespace(
+        interrupted_context_enabled=True,
+        interrupted_context_history_fallback_enabled=history_fallback_enabled,
+    )
     eot = SimpleNamespace(_config=cfg)
     pipeline._get_eot_model = MagicMock(return_value=eot)
 
@@ -121,19 +127,35 @@ def test_tts_in_flight_captures_chinese_correctly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fallback path: empty in-flight → history wins
+# Fallback path: empty in-flight → history only when explicitly enabled
 # ---------------------------------------------------------------------------
 
 
-def test_falls_back_to_history_when_tts_empty() -> None:
-    """No in-flight text (synth not started yet, or already drained) →
-    fall back to session.history."""
+def test_skips_history_fallback_by_default_when_tts_empty() -> None:
+    """No in-flight text should not capture stale session history by default."""
     pipeline = _make_pipeline(
         history_messages=[
             _msg("user", "hello"),
             _msg("assistant", "history fallback reply"),
         ],
         tts_pushed_text="",  # empty → fallback
+    )
+
+    pipeline._snapshot_interrupted_context()
+
+    assert pipeline._last_interrupted_context is None
+    pipeline._session.history.messages.assert_not_called()
+
+
+def test_falls_back_to_history_when_tts_empty_and_enabled() -> None:
+    """History fallback remains available for controlled integrations."""
+    pipeline = _make_pipeline(
+        history_messages=[
+            _msg("user", "hello"),
+            _msg("assistant", "history fallback reply"),
+        ],
+        tts_pushed_text="",
+        history_fallback_enabled=True,
     )
 
     pipeline._snapshot_interrupted_context()
@@ -151,6 +173,7 @@ def test_falls_back_to_history_when_tts_whitespace_only() -> None:
             _msg("assistant", "history reply"),
         ],
         tts_pushed_text="   \n\t  ",
+        history_fallback_enabled=True,
     )
 
     pipeline._snapshot_interrupted_context()
@@ -166,6 +189,7 @@ def test_falls_back_when_tts_plugin_lacks_property() -> None:
             _msg("assistant", "from history"),
         ],
         tts_pushed_text=None,  # property absent
+        history_fallback_enabled=True,
     )
 
     pipeline._snapshot_interrupted_context()
@@ -213,6 +237,7 @@ def test_played_seconds_recorded_on_fallback_path() -> None:
         history_messages=[_msg("assistant", "h")],
         tts_pushed_text="",
         played_sec=0.7,
+        history_fallback_enabled=True,
     )
     pipeline._snapshot_interrupted_context()
     assert pipeline._last_interrupted_context["played_seconds"] == 0.7

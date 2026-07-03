@@ -133,6 +133,38 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
             "turn_policy.interrupt.cancel_residual_commit_suppress_ms must be in [0, 10000]"
         )
 
+    ptt = cfg.turn_policy.ptt
+    if ptt.turn_owner not in ("streaming", "segment"):
+        errors.append("turn_policy.ptt.turn_owner must be 'streaming' or 'segment'")
+    if not 50 <= ptt.empty_probe_ms <= 1_000:
+        errors.append("turn_policy.ptt.empty_probe_ms must be in [50, 1000]")
+    if not 200 <= ptt.finalization_timeout_ms <= 3_000:
+        errors.append("turn_policy.ptt.finalization_timeout_ms must be in [200, 3000]")
+    if not 0 <= ptt.post_vad_settle_ms <= 1_000:
+        errors.append("turn_policy.ptt.post_vad_settle_ms must be in [0, 1000]")
+    if not 0 <= ptt.stable_interim_ms <= 1_000:
+        errors.append("turn_policy.ptt.stable_interim_ms must be in [0, 1000]")
+    if not 0 <= ptt.commit_transcript_timeout_ms <= 5_000:
+        errors.append("turn_policy.ptt.commit_transcript_timeout_ms must be in [0, 5000]")
+    if ptt.segment_stt_strategy not in ("auto", "offline", "streaming"):
+        errors.append(
+            "turn_policy.ptt.segment_stt_strategy must be 'auto', 'offline', or 'streaming'"
+        )
+    if not 0 <= ptt.segment_min_audio_ms <= 5_000:
+        errors.append("turn_policy.ptt.segment_min_audio_ms must be in [0, 5000]")
+    if not 1_000 <= ptt.segment_max_audio_ms <= 120_000:
+        errors.append("turn_policy.ptt.segment_max_audio_ms must be in [1000, 120000]")
+    if ptt.segment_min_audio_ms > ptt.segment_max_audio_ms:
+        errors.append(
+            "turn_policy.ptt.segment_min_audio_ms must be <= segment_max_audio_ms"
+        )
+    if not 0 <= ptt.segment_min_rms_ppm <= 1_000_000:
+        errors.append("turn_policy.ptt.segment_min_rms_ppm must be in [0, 1000000]")
+    if not 0 <= ptt.segment_tap_to_stop_max_audio_ms <= 5_000:
+        errors.append(
+            "turn_policy.ptt.segment_tap_to_stop_max_audio_ms must be in [0, 5000]"
+        )
+
     duck = cfg.turn_policy.ducking
     if not 1 <= duck.fade_out_ms <= 500:
         errors.append("turn_policy.ducking.fade_out_ms must be in [1, 500]")
@@ -140,6 +172,16 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.ducking.fade_in_ms must be in [1, 500]")
     if not 0.0 <= duck.suspend_volume <= 1.0:
         errors.append("turn_policy.ducking.suspend_volume must be in [0, 1]")
+
+    idle = cfg.turn_policy.idle
+    if not 0 <= idle.disconnect_after_idle_ms <= 3_600_000:
+        errors.append("turn_policy.idle.disconnect_after_idle_ms must be in [0, 3600000]")
+    if not 0 <= idle.proactive_disconnect_after_idle_ms <= 3_600_000:
+        errors.append(
+            "turn_policy.idle.proactive_disconnect_after_idle_ms must be in [0, 3600000]"
+        )
+    if not 0 <= idle.disconnect_grace_ms <= 10_000:
+        errors.append("turn_policy.idle.disconnect_grace_ms must be in [0, 10000]")
 
     attention = cfg.turn_policy.attention
     if not 100 <= attention.client_state_max_age_ms <= 10_000:

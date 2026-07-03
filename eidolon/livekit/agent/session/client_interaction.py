@@ -133,11 +133,11 @@ class ClientInteractionHandler:
         record_explicit_client_interrupt: Callable[[dict[str, Any], float], None],
         mark_explicit_client_interrupt_resolved: Callable[[float, float], None],
         cancel_agent_output: Callable[[bool], None],
-        commit_ptt_release_turn: Callable[[], None],
+        on_ptt_pressed: Callable[[], None],
+        on_ptt_released: Callable[[], None],
         sync_room_data: Callable[[], None],
         get_last_ptt_held: Callable[[], bool],
         set_last_ptt_held: Callable[[bool], None],
-        set_ptt_turn_had_speech: Callable[[bool], None],
         agent_turn_active_for_ptt_preemption: Callable[[str | None], bool] | None = None,
         preempt_agent_turn_for_ptt: Callable[[], None] | None = None,
     ) -> None:
@@ -155,22 +155,17 @@ class ClientInteractionHandler:
         self._preempt_agent_turn_for_ptt = (
             preempt_agent_turn_for_ptt or (lambda: cancel_agent_output(True))
         )
-        self._commit_ptt_release_turn = commit_ptt_release_turn
+        self._on_ptt_pressed = on_ptt_pressed
+        self._on_ptt_released = on_ptt_released
         self._sync_room_data = sync_room_data
         self._get_last_ptt_held = get_last_ptt_held
         self._set_last_ptt_held = set_last_ptt_held
-        self._set_ptt_turn_had_speech = set_ptt_turn_had_speech
 
     def on_client_room_packet(self, packet: Any) -> None:
         """Run packet side effects after ``RoomDataHandler`` stores state."""
         self._sync_room_data()
         self.handle_explicit_client_interrupt(packet)
         self.handle_ptt_turn_edges(packet)
-
-    def mark_recognized_speech(self, text: str) -> None:
-        """Arm the half-duplex empty-press guard when real transcript arrives."""
-        if self._is_half_duplex() and text.strip():
-            self._set_ptt_turn_had_speech(True)
 
     def handle_ptt_turn_edges(self, packet: Any) -> None:
         """Commit exactly one half-duplex user turn on the PTT release edge."""
@@ -190,10 +185,10 @@ class ClientInteractionHandler:
         was_held = self._get_last_ptt_held()
         self._set_last_ptt_held(held)
         if held and not was_held:
-            self._set_ptt_turn_had_speech(False)
+            self._on_ptt_pressed()
             return
         if was_held and not held:
-            self._commit_ptt_release_turn()
+            self._on_ptt_released()
 
     def handle_explicit_client_interrupt(self, packet: Any) -> None:
         """Preempt the active agent turn for deliberate PTT/tap-to-stop controls."""

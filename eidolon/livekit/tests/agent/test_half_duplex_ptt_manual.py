@@ -23,10 +23,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
+from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC, CONTROL_OP_PTT_TURN_STATUS
 
 from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.session.ptt_manual import PttManualTurnHandler
+from eidolon.livekit.agent.session.ptt_turn import PttTurnOwnerConfig
 from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.common.config import TurnPolicyConfig
 
 
 def _pipeline(*, half_duplex: bool) -> StreamingPipeline:
@@ -34,13 +37,40 @@ def _pipeline(*, half_duplex: bool) -> StreamingPipeline:
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._is_half_duplex = half_duplex
     p._last_ptt_held = False
-    p._ptt_turn_had_speech = False
+    p._ptt_preempted_agent_output = False
+    p._turn_policy = TurnPolicyConfig()
     p._stt_commit_transcript_timeout = 5.0
     p._ptt_commit_transcript_timeout = 1.0
     p._session = MagicMock()
     p._session.commit_user_turn = MagicMock()
     p._get_eot_model = lambda: MagicMock()
+    p._publish_canonical_user_text = MagicMock()
+    p._inject_interrupted_context = MagicMock()
+    p._ensure_user_turn_coordinator = lambda: None
+    p._user_turns = MagicMock()
+    p._publish_client_control = MagicMock()
+    p._clear_session_user_turn = MagicMock()
+    _install_ptt_manual_handler(p)
     return p
+
+
+def _install_ptt_manual_handler(
+    p: StreamingPipeline,
+    *,
+    config: PttTurnOwnerConfig | None = None,
+) -> None:
+    p._ptt_manual_turns = PttManualTurnHandler(
+        config=config
+        or PttTurnOwnerConfig(
+            empty_probe_sec=0.25,
+            finalization_timeout_sec=1.2,
+            post_vad_settle_sec=0.15,
+            stable_interim_sec=0.7,
+        ),
+        on_decision=p._record_ptt_turn_decision,
+        on_commit=p._commit_ptt_owner_turn,
+        on_reject=p._reject_ptt_owner_turn,
+    )
 
 
 def _ptt_packet(held: bool) -> SimpleNamespace:
@@ -54,6 +84,17 @@ def _send_ptt(p: StreamingPipeline, held: bool) -> None:
     # _handle_ptt_turn_edges reads ptt off the stored client audio state.
     p._latest_client_audio_state = lambda **_kw: SimpleNamespace(ptt=held)
     p._handle_ptt_turn_edges(_ptt_packet(held))
+
+
+def _mark_ptt_speech(
+    p: StreamingPipeline,
+    text: str = "北京的天气",
+    *,
+    is_final: bool = True,
+) -> None:
+    p._ensure_ptt_manual_turn_handler()
+    p._ptt_manual_turns.vad_started()
+    p._ptt_manual_turns.transcript(text, is_final=is_final)
 
 
 # ── turn_detection assembly (S1/S2 contrast) ────────────────────────────
@@ -78,11 +119,10 @@ def test_turn_detection_eot_model_for_full_duplex():
 def test_ptt_release_with_speech_commits_once():
     p = _pipeline(half_duplex=True)
     _send_ptt(p, True)          # press
-    p._ptt_turn_had_speech = True  # speech arrived this hold
+    _mark_ptt_speech(p)
     _send_ptt(p, False)         # release → commit
     p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
-    # 守空 accounting reset for the next hold.
-    assert p._ptt_turn_had_speech is False
+    assert p._ptt_manual_turns.state == "committed"
 
 
 def test_ptt_release_without_speech_is_guarded():
@@ -93,17 +133,45 @@ def test_ptt_release_without_speech_is_guarded():
     p._session.commit_user_turn.assert_not_called()
 
 
-def test_ptt_press_resets_had_speech():
+def test_ptt_release_without_speech_publishes_terminal_reject_status():
+    """The device UI must get an owner terminal status for an empty tap."""
     p = _pipeline(half_duplex=True)
-    p._ptt_turn_had_speech = True  # stale from a previous turn
+    _install_ptt_manual_handler(
+        p,
+        config=PttTurnOwnerConfig(
+            empty_probe_sec=0.0,
+            finalization_timeout_sec=1.2,
+            post_vad_settle_sec=0.15,
+            stable_interim_sec=0.7,
+        ),
+    )
+
+    _send_ptt(p, True)
+    _send_ptt(p, False)
+
+    p._session.commit_user_turn.assert_not_called()
+    p._publish_client_control.assert_called_once()
+    op, = p._publish_client_control.call_args.args
+    assert op == CONTROL_OP_PTT_TURN_STATUS
+    assert p._publish_client_control.call_args.kwargs["payload"]["outcome"] == (
+        "rejected:empty_hold"
+    )
+
+
+def test_ptt_press_resets_owner_speech_state():
+    p = _pipeline(half_duplex=True)
+    _send_ptt(p, True)
+    _mark_ptt_speech(p)
+    assert p._ptt_manual_turns.speech_detected is True
+    _send_ptt(p, False)
     _send_ptt(p, True)          # press → fresh accounting
-    assert p._ptt_turn_had_speech is False
+    assert p._ptt_manual_turns.speech_detected is False
 
 
 def test_repeated_held_packets_do_not_double_commit():
     p = _pipeline(half_duplex=True)
     _send_ptt(p, True)
-    p._ptt_turn_had_speech = True
+    _mark_ptt_speech(p)
     _send_ptt(p, True)          # still held (heartbeat) — no edge
     p._session.commit_user_turn.assert_not_called()
     _send_ptt(p, False)         # release → exactly one commit
@@ -114,19 +182,17 @@ def test_full_duplex_ptt_edges_are_noop():
     """full_duplex never commits on a ptt edge (its turn boundary is VAD/EOT)."""
     p = _pipeline(half_duplex=False)
     _send_ptt(p, True)
-    p._ptt_turn_had_speech = True
     _send_ptt(p, False)
     p._session.commit_user_turn.assert_not_called()
 
 
-# ── transcript arrival drives the 守空 flag (half_duplex only) ───────────
+# ── transcript arrival feeds the PTT owner (half_duplex only) ───────────
 
 
 def _drive_transcript(p: StreamingPipeline, text: str) -> None:
     p._ensure_runtime_defaults = lambda: None
     p._suppress_transcripts_until_next_speech = False
     p._agent_output_active_for_interrupts = lambda **_k: False
-    p._transcript_is_agent_echo = lambda _t: False
     p._mark_activity = lambda: None
     p._latest_asr_text = ""
     p._ensure_user_turn_coordinator = lambda: None
@@ -139,22 +205,24 @@ def _drive_transcript(p: StreamingPipeline, text: str) -> None:
     p._on_user_transcribed(SimpleNamespace(transcript=text, is_final=True, speaker_id=None))
 
 
-def test_transcript_sets_had_speech_half_duplex():
+def test_transcript_marks_owner_speech_half_duplex():
     p = _pipeline(half_duplex=True)
+    _send_ptt(p, True)
     _drive_transcript(p, "北京的天气")
-    assert p._ptt_turn_had_speech is True
+    assert p._ptt_manual_turns.speech_detected is True
 
 
-def test_empty_transcript_does_not_set_had_speech():
+def test_empty_transcript_does_not_mark_owner_speech():
     p = _pipeline(half_duplex=True)
+    _send_ptt(p, True)
     _drive_transcript(p, "   ")
-    assert p._ptt_turn_had_speech is False
+    assert p._ptt_manual_turns.speech_detected is False
 
 
-def test_full_duplex_transcript_does_not_touch_ptt_flag():
+def test_full_duplex_transcript_does_not_touch_ptt_owner():
     p = _pipeline(half_duplex=False)
     _drive_transcript(p, "北京的天气")
-    assert p._ptt_turn_had_speech is False
+    assert p._ptt_manual_turns.speech_detected is False
 
 
 # ── VAD silence is not a turn boundary in half_duplex (core anti-regression) ──
@@ -247,12 +315,12 @@ def test_multi_turn_each_release_commits_once():
     p = _pipeline(half_duplex=True)
     # turn 1
     _send_ptt(p, True)
-    p._ptt_turn_had_speech = True
+    _mark_ptt_speech(p, "第一句")
     _send_ptt(p, False)
     # turn 2
     _send_ptt(p, True)
-    assert p._ptt_turn_had_speech is False  # reset on press
-    p._ptt_turn_had_speech = True
+    assert p._ptt_manual_turns.speech_detected is False  # reset on press
+    _mark_ptt_speech(p, "第二句")
     _send_ptt(p, False)
     assert p._session.commit_user_turn.call_count == 2
 
@@ -266,7 +334,7 @@ def test_tap_to_stop_during_playback_interrupts_without_spurious_commit():
 
     _send_full_packet(p, ptt=True, playback_active=True)   # tap during playback
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)  # interrupt fired
-    assert p._ptt_turn_had_speech is False                 # turn armed, no speech
+    assert p._ptt_manual_turns.speech_detected is False    # turn armed, no speech
 
     _send_full_packet(p, ptt=False, playback_active=False)  # release (said nothing)
     p._session.commit_user_turn.assert_not_called()         # 守空: no spurious commit
@@ -280,9 +348,32 @@ def test_interrupt_then_speak_commits_on_release():
 
     _send_full_packet(p, ptt=True, playback_active=True)   # interrupt
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
-    p._ptt_turn_had_speech = True                          # user then speaks
+    _mark_ptt_speech(p)                                    # user then speaks
     _send_full_packet(p, ptt=False, playback_active=False)  # release → commit
     p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
+
+
+def test_interrupt_then_spoken_text_commits_as_user_turn():
+    """Channel preempts old output, but spoken PTT text remains a user turn.
+
+    Whether "停，不要说了" should be treated as a stop command is product logic
+    for the agent layer; Channel only owns the floor and ledger hygiene.
+    """
+    p = _pipeline(half_duplex=True)
+    p._duck_cancel_and_interrupt = MagicMock()
+
+    _send_full_packet(p, ptt=True, playback_active=True)
+    p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
+    _mark_ptt_speech(p, "停，不要说了。")
+    _send_full_packet(p, ptt=False, playback_active=False)
+
+    p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
+    p._publish_canonical_user_text.assert_called_once()
+    assert p._publish_canonical_user_text.call_args.args[0] == "停，不要说了。"
+    p._inject_interrupted_context.assert_called_once()
+    p._clear_session_user_turn.assert_not_called()
+    p._publish_client_control.assert_called_once()
+    assert p._publish_client_control.call_args.kwargs["payload"]["outcome"] == "committed"
 
 
 def test_ptt_press_during_generating_preempts_before_release_commit():
@@ -302,9 +393,9 @@ def test_ptt_press_during_generating_preempts_before_release_commit():
 
     p._cancel_silent_agent_generation_for_ptt.assert_called_once_with()
     p._duck_cancel_and_interrupt.assert_not_called()
-    assert p._ptt_turn_had_speech is False
+    assert p._ptt_manual_turns.speech_detected is False
 
-    p._ptt_turn_had_speech = True
+    _mark_ptt_speech(p)
     _send_full_packet(p, ptt=False, playback_active=False)
     p._session.commit_user_turn.assert_called_once_with(transcript_timeout=1.0)
 
@@ -315,7 +406,7 @@ def test_full_packet_normal_turn_commits_once():
     p = _pipeline(half_duplex=True)
     p._duck_cancel_and_interrupt = MagicMock()
     _send_full_packet(p, ptt=True, playback_active=False)
-    p._ptt_turn_had_speech = True
+    _mark_ptt_speech(p)
     _send_full_packet(p, ptt=False, playback_active=False)
     p._duck_cancel_and_interrupt.assert_not_called()       # nothing to interrupt
     p._session.commit_user_turn.assert_called_once()
@@ -338,7 +429,7 @@ def test_release_via_heartbeat_commits_once():
     heartbeat still produces the falling edge → one commit."""
     p = _pipeline(half_duplex=True)
     _send_ptt(p, True)
-    p._ptt_turn_had_speech = True
+    _mark_ptt_speech(p)
     # (release packet "dropped" — next thing we see is a heartbeat with ptt=False)
     _send_ptt(p, False)
     _send_ptt(p, False)   # further heartbeats — no second commit
@@ -351,7 +442,7 @@ def test_stray_participant_packet_does_not_fake_release():
     _handle_ptt_turn_edges)."""
     p = _pipeline(half_duplex=True)
     _send_ptt(p, True)              # device presses (held)
-    p._ptt_turn_had_speech = True
+    _mark_ptt_speech(p)
     # stray packet: _latest_client_audio_state returns None for this identity
     p._latest_client_audio_state = lambda **_k: None
     p._handle_ptt_turn_edges(
@@ -369,7 +460,7 @@ def test_noise_only_press_does_not_commit_full_path():
     p = _pipeline(half_duplex=True)
     p._duck_cancel_and_interrupt = MagicMock()
     _send_full_packet(p, ptt=True, playback_active=False)
-    _drive_transcript(p, "   ")   # noise → does not set had_speech
+    _drive_transcript(p, "   ")   # noise → does not mark owner speech
     _send_full_packet(p, ptt=False, playback_active=False)
     p._session.commit_user_turn.assert_not_called()
 

@@ -148,6 +148,8 @@ class Expectations:
     max_speech_start_to_cancel_ms: float | None = None
     max_speech_start_to_resume_ms: float | None = None
     playback_stop_sent: bool | None = None
+    ptt_terminal_action: str = ""
+    ptt_terminal_reason: str = ""
     no_full_assistant_context_commit: bool = False
 
 

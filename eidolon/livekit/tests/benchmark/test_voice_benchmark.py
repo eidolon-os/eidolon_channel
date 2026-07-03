@@ -1737,6 +1737,88 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
     assert not run.cases[0].errors
 
 
+def test_livekit_room_timeline_expectations_fail_wrong_ptt_terminal(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/half_duplex_ptt_phase_a_enforced.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="phase_a_ptt_tap_to_stop_cancels_001",
+                suite="half_duplex_ptt_phase_a",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-phase_a_ptt_tap_to_stop_cancels_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"action":"cancel","intent":"hard_stop"},'
+            '"client_control_events":[{"op":"playback.stop"}],'
+            '"ptt_segment_terminal":{"action":"commit","reason":"segment_transcribed"}},'
+            '"timestamps":{"speech_started_at":1.0,'
+            '"interrupt_started_at":1.0,'
+            '"interrupt_resolved_at":1.0,'
+            '"transcript_actionable_first_at":1.0}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any("PTT terminal action=reject" in err for err in run.cases[0].errors)
+
+
+def test_livekit_room_timeline_expectations_pass_ptt_terminal_reject(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/half_duplex_ptt_phase_a_enforced.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="phase_a_ptt_tap_to_stop_cancels_001",
+                suite="half_duplex_ptt_phase_a",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-phase_a_ptt_tap_to_stop_cancels_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"action":"cancel","intent":"hard_stop"},'
+            '"client_control_events":[{"op":"playback.stop"}],'
+            '"ptt_segment_terminal":{"action":"reject","reason":"tap_to_stop"}},'
+            '"timestamps":{"speech_started_at":1.0,'
+            '"interrupt_started_at":1.0,'
+            '"interrupt_resolved_at":1.0,'
+            '"transcript_actionable_first_at":1.0}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
 def test_livekit_room_timeline_actions_count_only_resolved_interrupts(
     tmp_path,
 ) -> None:

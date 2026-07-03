@@ -250,6 +250,13 @@ class EidolonEOTConfig:
     interrupted_context_max_age_sec: float = 30.0
     """Maximum age of interrupted context before it's discarded."""
 
+    interrupted_context_history_fallback_enabled: bool = False
+    """Allow falling back to session history when TTS cannot expose current text.
+
+    Disabled by default because history can lag the active speech handle and may
+    capture the previous assistant turn instead of the one being interrupted.
+    """
+
     # Model path (default points to the bundled FireRed model inside the plugin)
     # Can be overridden via EIDOLON_EOT_MODEL_DIR env var or model_dir argument
     model_dir: str | None = None

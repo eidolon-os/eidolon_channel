@@ -151,6 +151,24 @@ class InterruptPolicyConfig:
 
 
 @dataclass(frozen=True)
+class PttPolicyConfig:
+    # Half-duplex push-to-talk owns its turn boundary explicitly: release closes
+    # the user audio window, then the channel waits briefly for VAD/STT evidence
+    # before committing or rejecting the turn.
+    turn_owner: str = "streaming"
+    empty_probe_ms: int = 250
+    finalization_timeout_ms: int = 1_200
+    post_vad_settle_ms: int = 150
+    stable_interim_ms: int = 700
+    commit_transcript_timeout_ms: int = 300
+    segment_stt_strategy: str = "streaming"
+    segment_min_audio_ms: int = 80
+    segment_max_audio_ms: int = 20_000
+    segment_min_rms_ppm: int = 0
+    segment_tap_to_stop_max_audio_ms: int = 900
+
+
+@dataclass(frozen=True)
 class DuckingPolicyConfig:
     enabled: bool = True
     fade_out_ms: int = 30
@@ -174,6 +192,9 @@ class IdlePolicyConfig:
     # user_initiated 60s / half_duplex keep-alive. After this much silence a
     # proactive session ends gracefully (proactive_done). 0 disables.
     proactive_disconnect_after_idle_ms: int = 12_000
+    # Grace between session_end notification and room deletion, so the reliable
+    # data packet has a chance to reach the client before it is kicked.
+    disconnect_grace_ms: int = 300
 
 
 @dataclass(frozen=True)
@@ -214,6 +235,7 @@ class TurnPolicyConfig:
     vad: VadPolicyConfig = field(default_factory=VadPolicyConfig)
     eot: EotPolicyConfig = field(default_factory=EotPolicyConfig)
     interrupt: InterruptPolicyConfig = field(default_factory=InterruptPolicyConfig)
+    ptt: PttPolicyConfig = field(default_factory=PttPolicyConfig)
     ducking: DuckingPolicyConfig = field(default_factory=DuckingPolicyConfig)
     idle: IdlePolicyConfig = field(default_factory=IdlePolicyConfig)
     preemptive: PreemptivePolicyConfig = field(default_factory=PreemptivePolicyConfig)

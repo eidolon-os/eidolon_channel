@@ -9,11 +9,18 @@ and no agent activity. Bare VAD/noise (empty ASR) must NOT keep it alive.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from eidolon_sdk.biz.contracts import WIRE_SCHEMA_VERSION
+
+from eidolon.livekit.common.config import TurnPolicyConfig
+
+if TYPE_CHECKING:
+    from eidolon.livekit.agent.streaming import StreamingPipeline
 
 
 def _make_pipeline(
@@ -43,6 +50,21 @@ def _make_pipeline(
     session.user_state = "listening"
     pipeline._session = session
     return pipeline
+
+
+def test_idle_watchdog_grace_uses_turn_policy_config():
+    from eidolon.livekit.agent.streaming import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._turn_policy = replace(
+        TurnPolicyConfig(),
+        idle=replace(TurnPolicyConfig().idle, disconnect_grace_ms=450),
+    )
+    pipeline._idle_timeout_sec = 0.0
+    pipeline._ensure_idle_watchdog_controller()
+
+    assert pipeline._idle_disconnect_grace_sec == 0.45
+    assert pipeline._idle_watchdog_controller.disconnect_grace_sec == 0.45
 
 
 @pytest.mark.asyncio

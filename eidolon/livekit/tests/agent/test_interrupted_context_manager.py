@@ -38,6 +38,26 @@ def test_interrupted_context_manager_prefers_tts_in_flight_text() -> None:
     assert manager.last_context["played_seconds"] == 1.2
 
 
+def test_interrupted_context_manager_skips_history_fallback_by_default() -> None:
+    manager = InterruptedContextManager()
+    session = MagicMock()
+    session.history.messages = MagicMock(
+        return_value=[_msg("assistant", "stale history reply")]
+    )
+    factory = SimpleNamespace(tts=SimpleNamespace(tts=SimpleNamespace(current_pushed_text="")))
+    cfg = SimpleNamespace(interrupted_context_enabled=True)
+
+    manager.snapshot(
+        session=session,
+        factory=factory,
+        duck_mixer=None,
+        config=cfg,
+    )
+
+    assert manager.last_context is None
+    session.history.messages.assert_not_called()
+
+
 def test_interrupted_context_manager_injects_and_clears_hint() -> None:
     manager = InterruptedContextManager()
     manager.last_context = {

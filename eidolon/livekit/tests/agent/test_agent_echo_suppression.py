@@ -13,14 +13,12 @@ agent-playback and drops matched transcripts before they start a user turn.
 
 from __future__ import annotations
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.session import TranscriptEchoGate
 
 
-def _pipe(agent_text: str) -> StreamingPipeline:
-    p = StreamingPipeline.__new__(StreamingPipeline)
+def _gate(agent_text: str) -> TranscriptEchoGate:
     # Stub the agent-text source (live impl reads TTS current_pushed_text).
-    p._agent_recent_spoken_text = lambda: agent_text  # type: ignore[method-assign]
-    return p
+    return TranscriptEchoGate(get_agent_text=lambda: agent_text)
 
 
 # Real fragments observed on-device: the agent said
@@ -30,31 +28,31 @@ AGENT = "听起来你好像有两层意思——一个是想让我帮你，你�
 
 
 def test_echo_fragment_substring_is_detected() -> None:
-    p = _pipe(AGENT)
-    assert p._transcript_is_agent_echo("说前面那个") is True
-    assert p._transcript_is_agent_echo("一个是") is True
+    gate = _gate(AGENT)
+    assert gate.is_echo("说前面那个") is True
+    assert gate.is_echo("一个是") is True
 
 
 def test_echo_ignores_punctuation_and_spaces() -> None:
-    p = _pipe(AGENT)
-    assert p._transcript_is_agent_echo("说前面那个。") is True
-    assert p._transcript_is_agent_echo(" 你希望我叫你什么 ") is True
+    gate = _gate(AGENT)
+    assert gate.is_echo("说前面那个。") is True
+    assert gate.is_echo(" 你希望我叫你什么 ") is True
 
 
 def test_real_user_turn_not_flagged_as_echo() -> None:
-    p = _pipe(AGENT)
+    gate = _gate(AGENT)
     # Substantive user input the agent did not say → not echo.
-    assert p._transcript_is_agent_echo("查一下明天的天气") is False
-    assert p._transcript_is_agent_echo("帮我换个话题") is False
+    assert gate.is_echo("查一下明天的天气") is False
+    assert gate.is_echo("帮我换个话题") is False
 
 
 def test_no_agent_text_means_not_echo() -> None:
     # Agent not speaking (no in-flight TTS text) → nothing to echo.
-    p = _pipe("")
-    assert p._transcript_is_agent_echo("说前面那个") is False
+    gate = _gate("")
+    assert gate.is_echo("说前面那个") is False
 
 
 def test_empty_transcript_is_not_echo() -> None:
-    p = _pipe(AGENT)
-    assert p._transcript_is_agent_echo("") is False
-    assert p._transcript_is_agent_echo("   ") is False
+    gate = _gate(AGENT)
+    assert gate.is_echo("") is False
+    assert gate.is_echo("   ") is False

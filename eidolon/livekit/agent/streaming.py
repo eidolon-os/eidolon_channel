@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 from eidolon_sdk.biz.contracts import (
     COMPANION_UI_STATE_TOPIC,
     CONTROL_OP_PLAYBACK_STOP,
+    CONTROL_OP_PTT_TURN_STATUS,
     CONTROL_TOPIC,
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
@@ -101,18 +102,28 @@ from .session import (
     IdleWatchdog,
     InteractionModeBehavior,
     InterruptionOrchestrator,
+    PTT_OUTCOME_COMMITTED,
     ProviderEventObserver,
-    PttTurnFinalizer,
+    PttManualTurnHandler,
+    PttTurnDecision,
     RoomDataHandler,
     SemanticInterruptHandler,
     SessionSignalBridge,
     SoftInterruptController,
+    TranscriptEchoGate,
     UserTurnCommitter,
     UserTurnCoordinator,
     VoiceprintTurnObserver,
+    append_client_control_event,
     build_interaction_mode_behavior,
+    build_client_control_event,
+    build_ptt_turn_status_payload,
+    build_session_client_control_envelope,
     get_shared_eot_model,
     message_text,
+    ptt_rejected_outcome,
+    ptt_turn_owner_config_from_policy,
+    should_drop_pending_client_control_event,
 )
 
 logger = logging.getLogger("agent")
@@ -177,14 +188,11 @@ class StreamingPipeline(BasePipeline):
         self._session_intent = session_intent
         self._is_proactive = session_intent == SESSION_INTENT_PROACTIVE
         # Half-duplex (manual turn_detection) PTT turn boundary (plan §10):
-        #   _last_ptt_held       — track the ptt edge so release (True→False)
-        #                          commits exactly one turn.
-        #   _ptt_turn_had_speech — 守空 guard: only commit if some speech arrived
-        #                          this hold (manual mode would otherwise fire an
-        #                          empty EOU on a no-speech press). Reset on press
-        #                          and after the release commit.
+        #   _last_ptt_held tracks the PTT edge.
+        #   PttTurnOwner owns hold/release finalization and empty/no-speech
+        #   rejection.
         self._last_ptt_held = False
-        self._ptt_turn_had_speech = False
+        self._ptt_preempted_agent_output = False
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
@@ -206,7 +214,8 @@ class StreamingPipeline(BasePipeline):
         self._session_signals = self._build_session_signal_bridge()
         self._client_interactions = self._build_client_interaction_handler()
         self._turn_committer = UserTurnCommitter()
-        self._ptt_turn_finalizer = PttTurnFinalizer()
+        self._ptt_manual_turns = self._build_ptt_manual_turn_handler()
+        self._transcript_echo_gate = self._build_transcript_echo_gate()
         self._user_turns = self._build_user_turn_coordinator()
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
@@ -274,7 +283,7 @@ class StreamingPipeline(BasePipeline):
             else float(stt_commit_transcript_timeout)
         )
         self._ptt_commit_transcript_timeout = (
-            interrupt_policy.ptt_commit_transcript_timeout_ms / 1000.0
+            self._turn_policy.ptt.commit_transcript_timeout_ms / 1000.0
             if ptt_commit_transcript_timeout is _UNSET
             else float(ptt_commit_transcript_timeout)
         )
@@ -341,7 +350,9 @@ class StreamingPipeline(BasePipeline):
         self._on_session_closed = on_session_closed
         # Grace between notifying the client and deleting the room, so the
         # reliable data packet reaches the client before it is kicked.
-        self._idle_disconnect_grace_sec: float = 0.3
+        self._idle_disconnect_grace_sec: float = (
+            self._turn_policy.idle.disconnect_grace_ms / 1000.0
+        )
         self._idle_watchdog_controller = IdleWatchdog(
             timeout_sec=self._idle_timeout_sec,
             get_session=lambda: getattr(self, "_session", None),
@@ -615,15 +626,11 @@ class StreamingPipeline(BasePipeline):
             ),
             mark_explicit_client_interrupt_resolved=(self._mark_explicit_client_interrupt_resolved),
             cancel_agent_output=lambda force: self._duck_cancel_and_interrupt(force=force),
-            commit_ptt_release_turn=self._commit_ptt_release_turn,
+            on_ptt_pressed=self._on_ptt_pressed,
+            on_ptt_released=self._on_ptt_released,
             sync_room_data=self._sync_room_data_compat_attrs,
             get_last_ptt_held=lambda: bool(getattr(self, "_last_ptt_held", False)),
             set_last_ptt_held=lambda held: setattr(self, "_last_ptt_held", held),
-            set_ptt_turn_had_speech=lambda had_speech: setattr(
-                self,
-                "_ptt_turn_had_speech",
-                had_speech,
-            ),
             agent_turn_active_for_ptt_preemption=lambda participant_identity=None: (
                 self._agent_turn_active_for_ptt_preemption(
                     participant_identity=participant_identity,
@@ -640,9 +647,26 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_turn_committer"):
             self._turn_committer = UserTurnCommitter()
 
-    def _ensure_ptt_turn_finalizer(self) -> None:
-        if not hasattr(self, "_ptt_turn_finalizer"):
-            self._ptt_turn_finalizer = PttTurnFinalizer()
+    def _build_ptt_manual_turn_handler(self) -> PttManualTurnHandler:
+        policy = getattr(self, "_turn_policy", TurnPolicyConfig()).ptt
+        return PttManualTurnHandler(
+            config=ptt_turn_owner_config_from_policy(policy),
+            on_decision=self._record_ptt_turn_decision,
+            on_commit=self._commit_ptt_owner_turn,
+            on_reject=self._reject_ptt_owner_turn,
+        )
+
+    def _ensure_ptt_manual_turn_handler(self) -> None:
+        if not hasattr(self, "_ptt_manual_turns"):
+            self._ptt_manual_turns = self._build_ptt_manual_turn_handler()
+
+    def _build_transcript_echo_gate(self) -> TranscriptEchoGate:
+        return TranscriptEchoGate(factory=getattr(self, "_factory", None))
+
+    def _ensure_transcript_echo_gate(self) -> TranscriptEchoGate:
+        if not hasattr(self, "_transcript_echo_gate"):
+            self._transcript_echo_gate = self._build_transcript_echo_gate()
+        return self._transcript_echo_gate
 
     def _low_eot_commit_grace_max_sec(self) -> float:
         return max(self._turn_policy.eot.low_eot_commit_grace_max_ms, 0) / 1000.0
@@ -1915,19 +1939,25 @@ class StreamingPipeline(BasePipeline):
         reason: str,
         turn_id: str,
     ) -> None:
-        event = {
-            "op": op,
-            "reason": reason,
-            "turn_id": turn_id,
-        }
+        event = build_client_control_event(op=op, reason=reason, turn_id=turn_id)
         if timeline is None:
+            if should_drop_pending_client_control_event(
+                op=op,
+                reason=reason,
+                turn_id=turn_id,
+            ):
+                return
             pending = list(getattr(self, "_pending_client_control_events", []) or [])
-            pending.append(event)
-            self._pending_client_control_events = pending[-12:]
+            self._pending_client_control_events = append_client_control_event(
+                pending,
+                event,
+            )
             return
         events = list(timeline.attrs.get("client_control_events") or ())
-        events.append(event)
-        timeline.set_attr("client_control_events", events[-12:])
+        timeline.set_attr(
+            "client_control_events",
+            append_client_control_event(events, event),
+        )
 
     def _build_turn_handling(self) -> dict:
         """AgentSession ``turn_handling`` options (Round 8 R8.9: must live on the
@@ -2225,6 +2255,8 @@ class StreamingPipeline(BasePipeline):
         # Cancel any pending soft interrupt / duck timeout before closing.
         self._cancel_soft_interrupt()
         self._cancel_stable_signal_timer()
+        self._ensure_ptt_manual_turn_handler()
+        self._ptt_manual_turns.cancel_finalize_task("shutdown")
         self._cancel_pending_voiceprint_commits("shutdown")
         if hasattr(self, "_provider_events"):
             self._provider_events.cancel_output_watchdog()
@@ -2264,25 +2296,44 @@ class StreamingPipeline(BasePipeline):
         self._handle_ptt_turn_edges(packet)
 
     def _handle_ptt_turn_edges(self, packet: Any) -> None:
-        """Half-duplex (manual) turn boundary: commit one turn on PTT release.
+        """Half-duplex (manual) turn boundary: finalize one turn on PTT release.
 
         With ``turn_detection="manual"`` nothing commits automatically; the PTT
         button is the sole turn boundary (plan §10). On the rising edge (press) we
-        arm a fresh turn; on the falling edge (release) we commit exactly once —
-        guarded by 守空 so a no-speech press doesn't fire an empty EOU.
+        arm a fresh owner state; on the falling edge (release) the owner waits
+        briefly for VAD/STT evidence and emits exactly one terminal commit/reject.
         """
         self._ensure_client_interaction_handler()
         self._client_interactions.handle_ptt_turn_edges(packet)
 
-    def _commit_ptt_release_turn(self) -> None:
-        """Commit the held turn on PTT release (manual turn_detection).
+    def _on_ptt_pressed(self) -> None:
+        """Start a fresh half-duplex PTT hold."""
+        self._ensure_ptt_manual_turn_handler()
+        preempted = bool(getattr(self, "_ptt_preempted_agent_output", False))
+        self._ptt_preempted_agent_output = False
+        self._ptt_manual_turns.press(preempted_agent_output=preempted)
 
-        The device keeps capture open for a short release tail before publishing
-        ptt=false.  This method handles the server-side manual boundary after
-        that edge: it lets LiveKit wait briefly for a final transcript, then
-        commit the accumulated manual turn.  NEVER calls ``clear_user_turn``.
-        """
-        self._ensure_ptt_turn_finalizer()
+    def _on_ptt_released(self) -> None:
+        """Close the PTT audio window and let the owner finalize the turn."""
+        self._ensure_ptt_manual_turn_handler()
+        self._ptt_manual_turns.release()
+
+    def _commit_ptt_owner_turn(self, decision: PttTurnDecision) -> None:
+        self._ensure_user_turn_coordinator()
+        coordinator_text = getattr(self._user_turns, "selected_text", "")
+        transcript = (
+            coordinator_text.strip()
+            if isinstance(coordinator_text, str) and coordinator_text.strip()
+            else (decision.transcript or "").strip()
+        )
+        if not transcript:
+            self._reject_ptt_owner_turn(
+                PttTurnDecision(action="reject", reason="empty_selected_text", terminal=True)
+            )
+            return
+        session = getattr(self, "_session", None)
+        if session is None:
+            return
         transcript_timeout = float(
             getattr(
                 self,
@@ -2290,13 +2341,93 @@ class StreamingPipeline(BasePipeline):
                 getattr(self, "_stt_commit_transcript_timeout", 0.0),
             )
         )
-        self._ptt_turn_finalizer.commit_release(
-            session=self._session,
-            had_speech=bool(getattr(self, "_ptt_turn_had_speech", False)),
-            reset_had_speech=lambda: setattr(self, "_ptt_turn_had_speech", False),
-            reset_eot=lambda: self._get_eot_model().reset(),
-            transcript_timeout=transcript_timeout,
-            timeline=getattr(self, "_timeline", None),
+        timeline = getattr(self, "_timeline", None)
+        if timeline is not None:
+            timeline.mark("turn_committed_at")
+            timeline.set_attr(
+                "ptt_release_commit",
+                {
+                    "transcript_timeout_ms": int(round(transcript_timeout * 1000)),
+                    "text_source_policy": "ptt_owner_final_or_stable_interim",
+                    "reason": decision.reason,
+                    "selected_text_preview": transcript[:120],
+                },
+            )
+        self._publish_canonical_user_text(
+            transcript,
+            source="ptt_turn_owner",
+            timeline=timeline,
+        )
+        self._inject_interrupted_context()
+        try:
+            self._get_eot_model().reset()
+        except Exception:
+            logger.debug("[ptt-manual] eot reset failed during PTT commit", exc_info=True)
+        session.commit_user_turn(transcript_timeout=transcript_timeout)
+        self._user_turns.mark_committed(transcript=transcript, reason="ptt_release_commit")
+        self._publish_ptt_turn_status(
+            PTT_OUTCOME_COMMITTED,
+            decision.reason,
+            transcript=transcript,
+        )
+        logger.info(
+            "[ptt-manual] committed PTT turn reason=%s transcript_timeout=%.3fs text=%r",
+            decision.reason,
+            transcript_timeout,
+            transcript[:80],
+        )
+
+    def _reject_ptt_owner_turn(self, decision: PttTurnDecision) -> None:
+        reason = decision.reason or "ptt_rejected"
+        self._clear_session_user_turn(reason)
+        self._ensure_user_turn_coordinator()
+        self._user_turns.reject_active(reason)
+        try:
+            self._get_eot_model().reset()
+        except Exception:
+            logger.debug("[ptt-manual] eot reset failed during PTT reject", exc_info=True)
+        self._publish_ptt_turn_status(ptt_rejected_outcome(reason), reason)
+        timeline = getattr(self, "_timeline", None)
+        if timeline is not None:
+            timeline.set_attr("ptt_turn_rejected", {"reason": reason})
+        logger.info("[ptt-manual] rejected PTT turn reason=%s", reason)
+
+    def _record_ptt_turn_decision(self, decision: PttTurnDecision) -> None:
+        timeline = getattr(self, "_timeline", None)
+        if timeline is None:
+            return
+        timeline.set_attr(
+            "ptt_turn_owner",
+            {
+                "state": decision.state,
+                "action": decision.action,
+                "reason": decision.reason,
+                "terminal": decision.terminal,
+                "selected_text_preview": decision.transcript[:120],
+                "next_delay_ms": (
+                    int(round(decision.next_delay_sec * 1000))
+                    if decision.next_delay_sec is not None
+                    else None
+                ),
+                "preempted_agent_output": decision.preempted_agent_output,
+            },
+        )
+
+    def _publish_ptt_turn_status(
+        self,
+        outcome: str,
+        reason: str,
+        *,
+        transcript: str = "",
+    ) -> None:
+        self._publish_client_control(
+            CONTROL_OP_PTT_TURN_STATUS,
+            reason=reason,
+            payload=build_ptt_turn_status_payload(
+                outcome,
+                reason,
+                transcript=transcript,
+            ),
         )
 
     def _on_room_data_received(self, packet: Any) -> None:
@@ -2352,8 +2483,8 @@ class StreamingPipeline(BasePipeline):
             attached = dict(event)
             if not attached.get("turn_id"):
                 attached["turn_id"] = turn_id
-            events.append(attached)
-        timeline.set_attr("client_control_events", events[-12:])
+            events = append_client_control_event(events, attached)
+        timeline.set_attr("client_control_events", events)
         self._pending_client_control_events = []
 
     def _mark_explicit_client_interrupt_resolved(
@@ -2546,7 +2677,10 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_on_session_end"):
             self._on_session_end = None
         if not hasattr(self, "_idle_disconnect_grace_sec"):
-            self._idle_disconnect_grace_sec = 0.3
+            turn_policy = getattr(self, "_turn_policy", TurnPolicyConfig())
+            self._idle_disconnect_grace_sec = (
+                turn_policy.idle.disconnect_grace_ms / 1000.0
+            )
         if not hasattr(self, "_idle_end_reason"):
             self._idle_end_reason = SESSION_END_IDLE_NORMAL
         if not hasattr(self, "_idle_keep_alive_half_duplex"):
@@ -2646,7 +2780,13 @@ class StreamingPipeline(BasePipeline):
 
         task.add_done_callback(_log_failure)
 
-    def _publish_client_control(self, op: str, *, reason: str) -> None:
+    def _publish_client_control(
+        self,
+        op: str,
+        *,
+        reason: str,
+        payload: dict[str, object] | None = None,
+    ) -> None:
         """Best-effort session-local command for thin clients.
 
         Uses the shared ``eidolon.control`` topic with ``src.type=channel`` so
@@ -2655,27 +2795,34 @@ class StreamingPipeline(BasePipeline):
         room = getattr(self, "_room", None)
         local = getattr(room, "local_participant", None) if room else None
         if local is None:
+            logger.warning(
+                "[StreamingPipeline] skipped client control op=%s reason=%s "
+                "turn_id=%s because local participant is unavailable",
+                op,
+                reason,
+                getattr(getattr(self, "_timeline", None), "turn_id", ""),
+            )
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            logger.warning(
+                "[StreamingPipeline] skipped client control op=%s reason=%s "
+                "because no running event loop is available",
+                op,
+                reason,
+            )
             return
 
         timeline = getattr(self, "_timeline", None)
         turn_id = getattr(timeline, "turn_id", "") if timeline is not None else ""
-        payload = {
-            "v": 1,
-            "kind": "cmd",
-            "id": f"{op}:{int(time.time() * 1000)}",
-            "op": op,
-            "src": {"type": "channel", "id": "eidolon_channel"},
-            "payload": {
-                "reason": reason,
-                "turn_id": turn_id,
-            },
-            "ts": int(time.time() * 1000),
-            "ttl_ms": 5000,
-        }
+        envelope = build_session_client_control_envelope(
+            op=op,
+            reason=reason,
+            payload=payload,
+            turn_id=turn_id,
+        )
+        control_payload = envelope["payload"]
         self._record_client_control_event(
             timeline=timeline,
             op=op,
@@ -2683,9 +2830,20 @@ class StreamingPipeline(BasePipeline):
             turn_id=turn_id,
         )
 
+        outcome = control_payload.get("outcome")
+        logger.info(
+            "[StreamingPipeline] queued client control op=%s reason=%s outcome=%s "
+            "turn_id=%s topic=%s",
+            op,
+            reason,
+            outcome,
+            turn_id,
+            CONTROL_TOPIC,
+        )
+
         async def _send() -> None:
             await local.publish_data(
-                json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                json.dumps(envelope, separators=(",", ":")).encode("utf-8"),
                 reliable=True,
                 topic=CONTROL_TOPIC,
             )
@@ -2696,10 +2854,26 @@ class StreamingPipeline(BasePipeline):
             try:
                 done.result()
             except Exception:
-                logger.debug(
-                    "[StreamingPipeline] failed to publish client control",
+                logger.warning(
+                    "[StreamingPipeline] failed to publish client control op=%s "
+                    "reason=%s outcome=%s turn_id=%s topic=%s",
+                    op,
+                    reason,
+                    outcome,
+                    turn_id,
+                    CONTROL_TOPIC,
                     exc_info=True,
                 )
+                return
+            logger.info(
+                "[StreamingPipeline] published client control op=%s reason=%s "
+                "outcome=%s turn_id=%s topic=%s",
+                op,
+                reason,
+                outcome,
+                turn_id,
+                CONTROL_TOPIC,
+            )
 
         task.add_done_callback(_log_failure)
 
@@ -2723,214 +2897,209 @@ class StreamingPipeline(BasePipeline):
                 f"agent_state:{new}",
             )
 
+    def _publish_user_state_companion_ui(self, *, old: str, new: str) -> None:
+        if new == "speaking":
+            self._publish_companion_ui_state("listening", "user_state:speaking")
+        elif old == "speaking" and new == "listening":
+            self._publish_companion_ui_state("listening", "user_state:listening")
+        elif new == "away":
+            self._publish_companion_ui_state("idle", "user_state:away")
+
+    def _sync_stt_presence_from_user_state(self, *, old: str, new: str) -> None:
+        """Translate framework user_state into plugin-level STT presence."""
+
+        if new == "away":
+            self._session_signals.signal_stt_user_away()
+        elif old == "away" and new in ("listening", "speaking"):
+            self._session_signals.signal_stt_user_present()
+
+    def _handle_user_speaking_started(self) -> None:
+        self._ensure_user_turn_coordinator()
+        if self._ensure_interaction_mode_behavior().is_half_duplex:
+            self._ensure_ptt_manual_turn_handler()
+            self._ptt_manual_turns.vad_started()
+        merge_continuation = self._user_turns.can_merge_new_speech()
+        self._skip_commit_after_interrupt_cancel = False
+        self._suppress_transcripts_until_next_speech = False
+        self._cancel_deferred_low_eot_commit("new_speech_started")
+        if not merge_continuation:
+            self._cancel_pending_voiceprint_commits("new_speech_started")
+            self._completed_turn_voiceprint_task = None
+            self._completed_turn_voiceprint_result = None
+            self._completed_turn_voiceprint_timeline = None
+            self._reset_candidate_voiceprint_tasks()
+        self._callbacks.on_user_started_speaking()
+        self._user_speaking_start_time = time.monotonic()
+        if not merge_continuation or self._timeline is None:
+            self._timeline = TurnTimeline(generate_turn_id())
+            self._timeline_debug_flushed = False
+            if self._room is not None:
+                self._timeline.set_attr("room_name", self._room.name or "")
+        self._user_turns.start_speech(timeline=self._timeline)
+        self._timeline.mark("speech_started_at")
+        self._apply_pending_explicit_client_interrupt(self._timeline)
+        self._apply_pending_client_control_events(self._timeline)
+        self._voiceprint_turns.start_turn(timeline=self._timeline)
+        self._apply_pending_stt_provider_events()
+        self._observe_stt_turn_audio()
+        # Immediately clear stale text so EOT only sees text from THIS speech turn.
+        self._latest_asr_text = ""
+
+        # Feed VAD signal into EOT model so VADState reflects user activity.
+        self._get_eot_model().update_vad(True)
+
+        if self._uses_livekit_native_adaptive_interruption():
+            if self._timeline is not None:
+                self._timeline.set_attr("interruption_owner", "livekit_native_adaptive")
+            return
+
+        # Immediately fade agent output to silence and arm the suspend-window
+        # fallback. EOT decisions in the semantic interrupt handler will resolve
+        # SUSPENDED output before the timeout fires in the typical case.
+        self._attention_effects.handle_speaking_started()
+
+        # If agent is speaking and interruptions are allowed, EOT check is
+        # triggered synchronously in _on_user_transcribed as soon as STT delivers
+        # the first transcript (INTERIM or FINAL) -- no polling needed.
+        if (
+            self._ducking.is_suspended
+            and self._ensure_interaction_mode_behavior().starts_natural_interruption_candidate()
+        ):
+            self._interruption_orchestrator.start_candidate(
+                timeline=self._timeline,
+            )
+
+    def _handle_user_speaking_stopped(self) -> None:
+        self._user_speaking_start_time = None
+        if self._timeline is not None:
+            self._timeline.mark("speech_stopped_at")
+        voiceprint_task = self._voiceprint_turns.finish_turn()
+        self._completed_turn_voiceprint_task = voiceprint_task
+        self._completed_turn_voiceprint_result = None
+        self._completed_turn_voiceprint_timeline = self._timeline
+
+        eot_model = self._get_eot_model()
+        eot_model.update_vad(False)
+        if self._ensure_interaction_mode_behavior().is_half_duplex:
+            self._ensure_ptt_manual_turn_handler()
+            self._ptt_manual_turns.vad_stopped()
+
+        if self._soft_interrupt_active:
+            logger.info(
+                "[StreamingPipeline] user fell silent during soft interrupt; "
+                "false interruption, cancelling"
+            )
+            self._cancel_soft_interrupt()
+
+        defer_post_speech_evidence = False
+        # VAD silence is not itself a false-interruption decision. If the agent
+        # is suspended and no transcript has arrived yet, let the interruption
+        # owner keep the candidate alive for delayed STT evidence before resume.
+        if self._ducking.is_suspended and not self._uses_livekit_native_adaptive_interruption():
+            defer_post_speech_evidence = (
+                self._interruption_orchestrator.defer_false_resume_after_speech_end(
+                    transcript=self._latest_asr_text,
+                    duck_suspended=True,
+                )
+            )
+            if not defer_post_speech_evidence:
+                decision = self._turn_runtime.user_silent_decision(self._latest_asr_text)
+                self._decision_effects.apply(
+                    decision,
+                    resolved_reason="user_silent",
+                    transcript=self._latest_asr_text,
+                    vad_active=False,
+                )
+
+        self._callbacks.on_user_ended_speaking()
+        self._skip_commit_after_interrupt_cancel = False
+        if defer_post_speech_evidence:
+            self._remember_candidate_voiceprint_task(voiceprint_task)
+            return
+        if not self._ensure_interaction_mode_behavior().treats_vad_silence_as_turn_boundary():
+            # Manual turn_detection: VAD silence is NOT a turn boundary in
+            # half_duplex. A mid-utterance pause must not commit/defer here, or
+            # the turn would split and the continuation be dropped.
+            logger.debug("[ptt-manual] VAD silence ignored, awaiting PTT release")
+            return
+        if self._session is None:
+            self._latest_asr_text = ""
+            return
+
+        transcript = self._user_turns.selected_text or self._latest_asr_text
+        if transcript:
+            self._remember_candidate_voiceprint_task(voiceprint_task)
+        if self._user_turns.active is None and transcript:
+            if self._timeline is None:
+                self._timeline = TurnTimeline(generate_turn_id())
+                self._timeline_debug_flushed = False
+            self._user_turns.start_speech(timeline=self._timeline)
+            self._apply_pending_explicit_client_interrupt(self._timeline)
+            self._apply_pending_client_control_events(self._timeline)
+            self._user_turns.add_transcript(transcript, is_final=True)
+        low_evidence_reason = self._playback_low_evidence_reject_reason(
+            transcript=transcript,
+            eot_model=eot_model,
+        )
+        if low_evidence_reason:
+            logger.info(
+                "[StreamingPipeline] rejecting playback low-evidence turn reason=%s "
+                "transcript=%r",
+                low_evidence_reason,
+                transcript[:80],
+            )
+            self._user_turns.reject_active(low_evidence_reason)
+            eot_model.reset()
+            self._clear_session_user_turn(low_evidence_reason)
+            self._reset_candidate_voiceprint_tasks()
+            self._latest_asr_text = ""
+            return
+        should_defer = self._should_defer_low_eot_commit(
+            transcript=transcript,
+            eot_model=eot_model,
+        )
+        decision = self._user_turns.finish_speech(
+            eot_score=getattr(
+                eot_model,
+                "current_eot_score",
+                getattr(eot_model, "_current_eot_score", None),
+            ),
+            should_defer=should_defer,
+        )
+        if decision.action == "reject":
+            eot_model.reset()
+            self._clear_session_user_turn(decision.reason)
+            self._reset_candidate_voiceprint_tasks()
+            self._latest_asr_text = ""
+        elif decision.action == "defer":
+            self._schedule_deferred_low_eot_commit(
+                verify_task=None,
+                eot_model=eot_model,
+                transcript=decision.transcript,
+                timeline=self._timeline,
+                delay_sec=decision.delay_sec,
+            )
+        else:
+            self._schedule_voiceprint_gated_commit(
+                verify_task=self._candidate_voiceprint_gate_task(),
+                eot_model=eot_model,
+                transcript=decision.transcript or transcript,
+                timeline=self._timeline,
+            )
+            self._latest_asr_text = ""
+
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()
         try:
             old = event.old_state
             new = event.new_state
             logger.info("[StreamingPipeline] user_state: %s -> %s", old, new)
-
+            self._publish_user_state_companion_ui(old=old, new=new)
+            self._sync_stt_presence_from_user_state(old=old, new=new)
             if new == "speaking":
-                self._publish_companion_ui_state("listening", "user_state:speaking")
+                self._handle_user_speaking_started()
             elif old == "speaking" and new == "listening":
-                self._publish_companion_ui_state("listening", "user_state:listening")
-            elif new == "away":
-                self._publish_companion_ui_state("idle", "user_state:away")
-
-            # ------------------------------------------------------------
-            # State-sync bridge (Round 7 G11)
-            #
-            # Translate framework's high-level user_state transitions into
-            # plugin-level signals so plugins can react to authoritative
-            # decisions without waiting for their per-stream timeouts.
-            #
-            # Most important case: user_state -> "away" means the framework
-            # has determined no real user activity. Any in-flight STT stream
-            # is processing noise/echo, so signal it to abort immediately
-            # rather than burn 30 s of bandwidth + compute on the safety net.
-            # ------------------------------------------------------------
-            if new == "away":
-                self._session_signals.signal_stt_user_away()
-            elif old == "away" and new in ("listening", "speaking"):
-                self._session_signals.signal_stt_user_present()
-
-            if new == "speaking":
-                self._ensure_user_turn_coordinator()
-                merge_continuation = self._user_turns.can_merge_new_speech()
-                self._skip_commit_after_interrupt_cancel = False
-                self._suppress_transcripts_until_next_speech = False
-                self._cancel_deferred_low_eot_commit("new_speech_started")
-                if not merge_continuation:
-                    self._cancel_pending_voiceprint_commits("new_speech_started")
-                    self._completed_turn_voiceprint_task = None
-                    self._completed_turn_voiceprint_result = None
-                    self._completed_turn_voiceprint_timeline = None
-                    self._reset_candidate_voiceprint_tasks()
-                self._callbacks.on_user_started_speaking()
-                self._user_speaking_start_time = time.monotonic()
-                if not merge_continuation or self._timeline is None:
-                    self._timeline = TurnTimeline(generate_turn_id())
-                    self._timeline_debug_flushed = False
-                    if self._room is not None:
-                        self._timeline.set_attr("room_name", self._room.name or "")
-                self._user_turns.start_speech(timeline=self._timeline)
-                self._timeline.mark("speech_started_at")
-                self._apply_pending_explicit_client_interrupt(self._timeline)
-                self._apply_pending_client_control_events(self._timeline)
-                self._voiceprint_turns.start_turn(timeline=self._timeline)
-                self._apply_pending_stt_provider_events()
-                self._observe_stt_turn_audio()
-                # Immediately clear stale text so EOT only sees text from THIS speech turn.
-                self._latest_asr_text = ""
-
-                # Feed VAD signal into EOT model so VADState reflects user activity.
-                self._get_eot_model().update_vad(True)
-
-                if self._uses_livekit_native_adaptive_interruption():
-                    if self._timeline is not None:
-                        self._timeline.set_attr("interruption_owner", "livekit_native_adaptive")
-                else:
-                    # Phase C: immediately fade agent output to silence and arm
-                    # the suspend-window fallback. EOT decisions in
-                    # the semantic interrupt handler will resolve SUSPENDED output
-                    # before the timeout fires in the typical case.
-                    self._attention_effects.handle_speaking_started()
-
-                    # If agent is speaking and interruptions are allowed, EOT check is
-                    # triggered synchronously in _on_user_transcribed as soon as STT
-                    # delivers the first transcript (INTERIM or FINAL) — no polling needed.
-                    if (
-                        self._ducking.is_suspended
-                        and self._ensure_interaction_mode_behavior().starts_natural_interruption_candidate()
-                    ):
-                        self._interruption_orchestrator.start_candidate(
-                            timeline=self._timeline,
-                        )
-
-            elif old == "speaking" and new == "listening":
-                self._user_speaking_start_time = None
-                if self._timeline is not None:
-                    self._timeline.mark("speech_stopped_at")
-                voiceprint_task = self._voiceprint_turns.finish_turn()
-                self._completed_turn_voiceprint_task = voiceprint_task
-                self._completed_turn_voiceprint_result = None
-                self._completed_turn_voiceprint_timeline = self._timeline
-
-                # Feed VAD silence signal into EOT model.
-                eot_model = self._get_eot_model()
-                eot_model.update_vad(False)
-
-                # If a soft interrupt was pending and the user fell silent, this is a
-                # false interruption — cancel the pending hard interrupt.
-                if self._soft_interrupt_active:
-                    logger.info(
-                        "[StreamingPipeline] user fell silent during soft interrupt → "
-                        "false interruption, cancelling"
-                    )
-                    self._cancel_soft_interrupt()
-
-                defer_post_speech_evidence = False
-                # Phase C: VAD silence is not itself a false-interruption
-                # decision. If the agent is suspended and no transcript has
-                # arrived yet, let the interruption owner keep the candidate
-                # alive for delayed STT evidence before any resume.
-                if (
-                    self._ducking.is_suspended
-                    and not self._uses_livekit_native_adaptive_interruption()
-                ):
-                    defer_post_speech_evidence = (
-                        self._interruption_orchestrator.defer_false_resume_after_speech_end(
-                            transcript=self._latest_asr_text,
-                            duck_suspended=True,
-                        )
-                    )
-                    if not defer_post_speech_evidence:
-                        decision = self._turn_runtime.user_silent_decision(self._latest_asr_text)
-                        self._decision_effects.apply(
-                            decision,
-                            resolved_reason="user_silent",
-                            transcript=self._latest_asr_text,
-                            vad_active=False,
-                        )
-
-                self._callbacks.on_user_ended_speaking()
-                self._skip_commit_after_interrupt_cancel = False
-                if defer_post_speech_evidence:
-                    self._remember_candidate_voiceprint_task(voiceprint_task)
-                    return
-                if not self._ensure_interaction_mode_behavior().treats_vad_silence_as_turn_boundary():
-                    # Manual turn_detection (plan §10): VAD silence is NOT a turn
-                    # boundary in half_duplex — the PTT release is (see
-                    # _handle_ptt_release_edge). A mid-utterance pause must NOT
-                    # commit/defer here, or the turn would split and the
-                    # continuation be dropped. Keep accumulating; do not clear
-                    # _latest_asr_text.
-                    logger.debug("[ptt-manual] VAD silence ignored, awaiting PTT release")
-                elif self._session is not None:
-                    transcript = self._user_turns.selected_text or self._latest_asr_text
-                    if transcript:
-                        self._remember_candidate_voiceprint_task(voiceprint_task)
-                    if self._user_turns.active is None and transcript:
-                        if self._timeline is None:
-                            self._timeline = TurnTimeline(generate_turn_id())
-                            self._timeline_debug_flushed = False
-                        self._user_turns.start_speech(timeline=self._timeline)
-                        self._apply_pending_explicit_client_interrupt(self._timeline)
-                        self._apply_pending_client_control_events(self._timeline)
-                        self._user_turns.add_transcript(transcript, is_final=True)
-                    low_evidence_reason = self._playback_low_evidence_reject_reason(
-                        transcript=transcript,
-                        eot_model=eot_model,
-                    )
-                    if low_evidence_reason:
-                        logger.info(
-                            "[StreamingPipeline] rejecting playback low-evidence "
-                            "turn reason=%s transcript=%r",
-                            low_evidence_reason,
-                            transcript[:80],
-                        )
-                        self._user_turns.reject_active(low_evidence_reason)
-                        eot_model.reset()
-                        self._clear_session_user_turn(low_evidence_reason)
-                        self._reset_candidate_voiceprint_tasks()
-                        self._latest_asr_text = ""
-                        return
-                    should_defer = self._should_defer_low_eot_commit(
-                        transcript=transcript,
-                        eot_model=eot_model,
-                    )
-                    decision = self._user_turns.finish_speech(
-                        eot_score=getattr(
-                            eot_model,
-                            "current_eot_score",
-                            getattr(eot_model, "_current_eot_score", None),
-                        ),
-                        should_defer=should_defer,
-                    )
-                    if decision.action == "reject":
-                        eot_model.reset()
-                        self._clear_session_user_turn(decision.reason)
-                        self._reset_candidate_voiceprint_tasks()
-                        self._latest_asr_text = ""
-                    elif decision.action == "defer":
-                        self._schedule_deferred_low_eot_commit(
-                            verify_task=None,
-                            eot_model=eot_model,
-                            transcript=decision.transcript,
-                            timeline=self._timeline,
-                            delay_sec=decision.delay_sec,
-                        )
-                    else:
-                        self._schedule_voiceprint_gated_commit(
-                            verify_task=self._candidate_voiceprint_gate_task(),
-                            eot_model=eot_model,
-                            transcript=decision.transcript or transcript,
-                            timeline=self._timeline,
-                        )
-                        self._latest_asr_text = ""
-                else:
-                    self._latest_asr_text = ""
-
+                self._handle_user_speaking_stopped()
         except Exception:
             logger.exception("[StreamingPipeline] error in _on_user_state_changed")
 
@@ -2969,7 +3138,9 @@ class StreamingPipeline(BasePipeline):
             and self._agent_output_active_for_interrupts(
                 participant_identity=getattr(event, "speaker_id", None),
             )
-            and self._transcript_is_agent_echo(getattr(event, "transcript", ""))
+            and self._ensure_transcript_echo_gate().is_echo(
+                getattr(event, "transcript", "")
+            )
         ):
             logger.info(
                 "[StreamingPipeline] dropping agent-echo transcript during playback transcript=%r",
@@ -2982,10 +3153,16 @@ class StreamingPipeline(BasePipeline):
             # room still trips the idle watchdog.
             self._mark_activity()
             self._latest_asr_text = event.transcript
-            # Half-duplex 守空 guard: any recognized speech this PTT hold makes the
-            # eventual release commit (an empty hold stays uncommitted).
+            # Half-duplex PTT owner: transcript updates text evidence only. It is
+            # not the turn boundary; release owns the boundary, VAD owns speech
+            # presence, and the owner may finalize only after release.
             self._ensure_client_interaction_handler()
-            self._client_interactions.mark_recognized_speech(event.transcript)
+            if self._ensure_interaction_mode_behavior().is_half_duplex:
+                self._ensure_ptt_manual_turn_handler()
+                self._ptt_manual_turns.transcript(
+                    event.transcript,
+                    is_final=bool(getattr(event, "is_final", False)),
+                )
             orchestrator = getattr(self, "_interruption_orchestrator", None)
             if orchestrator is not None and not self._uses_livekit_native_adaptive_interruption():
                 orchestrator.note_transcript(
@@ -3038,46 +3215,6 @@ class StreamingPipeline(BasePipeline):
             self._semantic_interrupts.run(event.transcript, is_final=event.is_final)
 
         super()._on_user_transcribed(event)
-
-    @staticmethod
-    def _normalize_for_echo(text: str) -> str:
-        # Keep CJK + alphanumerics (CJK is .isalnum()==True), drop punctuation /
-        # spaces, lowercase — so echo matching ignores ASR punctuation noise.
-        return "".join(c for c in text if c.isalnum()).lower()
-
-    def _agent_recent_spoken_text(self) -> str:
-        """The text the agent is currently synthesizing (in-flight TTS).
-
-        Source of truth for content-based echo detection. Empty when the agent
-        isn't speaking, so the echo gate is naturally scoped to playback.
-        """
-        factory = getattr(self, "_factory", None)
-        try:
-            if factory is not None and getattr(factory, "tts", None) is not None:
-                return getattr(factory.tts.tts, "current_pushed_text", "") or ""
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] could not read TTS current_pushed_text",
-                exc_info=True,
-            )
-        return ""
-
-    def _transcript_is_agent_echo(self, transcript: str) -> bool:
-        """True when `transcript` is the agent's own current speech echoed back.
-
-        Content-based, NOT energy-based: on this board the cleaned-mic residual
-        echo spikes (RMS p99 ~1166) exceed real near-end speech (p50 ~67), so no
-        energy threshold can separate them. But the echo IS the agent's words,
-        which we know from the in-flight TTS text — so drop a (normalized)
-        transcript that is contained in it. Caller gates on agent playback.
-        """
-        t = self._normalize_for_echo(transcript)
-        if not t:
-            return False
-        agent = self._normalize_for_echo(self._agent_recent_spoken_text())
-        if not agent:
-            return False
-        return t in agent
 
     def _interrupt_decision_suppressed(self) -> bool:
         """Ignore residual ASR after a confirmed interrupt cancel."""
@@ -3164,6 +3301,7 @@ class StreamingPipeline(BasePipeline):
         context because the user has not heard that assistant content yet.
         """
 
+        self._ptt_preempted_agent_output = True
         if self._agent_output_active_for_interrupts():
             self._duck_cancel_and_interrupt(force=True)
             return

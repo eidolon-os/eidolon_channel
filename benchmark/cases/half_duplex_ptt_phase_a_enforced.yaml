@@ -37,6 +37,7 @@ cases:
       min_user_finals: 1
       min_agent_messages: 1
       agent_audio_response: after_user_done
+      ptt_terminal_action: commit
 
   - case_id: phase_a_ptt_tap_to_stop_cancels_001
     suite: half_duplex_ptt_phase_a
@@ -79,3 +80,4 @@ cases:
       max_speech_start_to_cancel_ms: 500
       max_interrupt_resolution_after_started_ms: 500
       playback_stop_sent: true
+      ptt_terminal_action: reject

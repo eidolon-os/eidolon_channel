@@ -64,7 +64,8 @@ def _transcript_pipeline(owner: str) -> StreamingPipeline:
     pipeline._timeline = TurnTimeline("test-turn")
     pipeline._mark_activity = MagicMock()
     pipeline._agent_output_active_for_interrupts = MagicMock(return_value=True)
-    pipeline._transcript_is_agent_echo = MagicMock(return_value=False)
+    pipeline._transcript_echo_gate = MagicMock()
+    pipeline._transcript_echo_gate.is_echo.return_value = False
     pipeline._interrupt_window_active = MagicMock(return_value=False)
     pipeline._interrupt_decision_suppressed = MagicMock(return_value=False)
     pipeline._ensure_user_turn_coordinator = MagicMock()

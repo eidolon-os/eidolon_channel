@@ -17,9 +17,14 @@ entrypoints; implementation code lives under named boundary packages.
 - `integration/` contains direct external-contract adapters: LiveKit framework
   patches and LiveKit data-channel payload parsing.
 - `session/` contains per-session handlers and effect appliers: room data,
-  client controls, interaction modes, provider events, idle, semantic
-  interruption effects, commit guards, shared EOT helpers, message helpers, and
-  user-turn coordination.
+  client controls, half-duplex PTT turn ownership, interaction modes, provider
+  events, idle, semantic interruption effects, commit guards, shared EOT helpers,
+  session-local `eidolon.control` helpers, the streaming/manual PTT adapter,
+  full-duplex transcript echo gating, message helpers, and user-turn
+  coordination.
+- `half_duplex/` contains the optional segment-based PTT pipeline: hold-scoped
+  audio recording, one-shot STT, and the PTT controller that does not consume
+  streaming transcript events or EOT.
 - `turn_policy/` contains owner logic and pure turn decisions: intent/evidence,
   attention admission, tier policy chain, and runtime state.
 - `output/` contains output-side components: playback controller, ducking state,

@@ -723,7 +723,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
         current_transcript="",
         resolve=MagicMock(),
     )
-    pipeline._snapshot_interrupted_context = MagicMock()
+    snapshot_interrupted_context = MagicMock()
     pipeline._callbacks = MagicMock()
     pipeline._cancel_residual_commit_suppress_sec = lambda: 2.0
     effects = FullDuplexInterruptionEffects(
@@ -740,7 +740,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
             "playback.stop",
             reason=reason,
         ),
-        snapshot_interrupted_context=pipeline._snapshot_interrupted_context,
+        snapshot_interrupted_context=snapshot_interrupted_context,
         commit_post_speech_interruption_candidate=MagicMock(return_value=False),
         reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=(

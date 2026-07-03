@@ -58,7 +58,7 @@ class FullDuplexInterruptionEffects:
         self._get_state_label = get_state_label
         self._get_interruption_orchestrator = get_interruption_orchestrator
         self._publish_playback_stop = publish_playback_stop
-        self._snapshot_interrupted_context = snapshot_interrupted_context
+        self._snapshot_context = snapshot_interrupted_context
         self._commit_post_speech_interruption_candidate = (
             commit_post_speech_interruption_candidate
         )
@@ -190,7 +190,7 @@ class FullDuplexInterruptionEffects:
             stats.buffered_sec,
         )
         self.cancel_stable_signal_timer()
-        self._snapshot_interrupted_context()
+        self._snapshot_context()
         self._publish_playback_stop("interrupt_cancel")
         self._ducking.cancel_output()
         orchestrator.resolve(action="cancel", reason="eot_cancel")

@@ -75,7 +75,6 @@ from eidolon.livekit.common.config import (
     VoiceprintConfig,
 )
 
-from ..context import InterruptedContextManager
 from ..integration import framework_patches
 from ..integration.client_audio_state import ClientAudioState
 from ..runtime.interaction_mode import resolve_idle_policy
@@ -99,6 +98,7 @@ from .client_preempt import (
     ExplicitClientPreemptHandler,
     ExplicitClientPreemptLedger,
 )
+from .context_ledger import FullDuplexContextLedger
 from .interruption_effects import FullDuplexInterruptionEffects
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
@@ -374,10 +374,7 @@ class StreamingPipeline(BasePipeline):
                 phrases=list(eot_cfg.filler_phrases),
             )
 
-        # Interrupted content tracking — snapshot of agent text at
-        # the moment of confirmed interrupt, injected as context into
-        # the next LLM turn so the model can optionally reference it.
-        self._interrupted_context = InterruptedContextManager()
+        self._context_ledger = self._build_context_ledger()
 
         # Eagerly trigger EOT model loading so the ONNX session is ready before
         # the first user audio frame arrives. This avoids cold-start delay after
@@ -401,6 +398,24 @@ class StreamingPipeline(BasePipeline):
         self._skip_commit_after_interrupt_cancel = active
         self._suppress_commit_after_interrupt_until = until
 
+    def _build_context_ledger(self) -> FullDuplexContextLedger:
+        return FullDuplexContextLedger(
+            get_session=lambda: getattr(self, "_session", None),
+            get_factory=lambda: getattr(self, "_factory", None),
+            get_duck_mixer=lambda: getattr(
+                getattr(self, "_ducking", None),
+                "mixer",
+                None,
+            ),
+            get_config=lambda: self._get_eot_model()._config,
+            get_timeline=lambda: getattr(self, "_timeline", None),
+        )
+
+    def _ensure_context_ledger(self) -> FullDuplexContextLedger:
+        if not hasattr(self, "_context_ledger"):
+            self._context_ledger = self._build_context_ledger()
+        return self._context_ledger
+
     def _build_interruption_effects(self) -> FullDuplexInterruptionEffects:
         return FullDuplexInterruptionEffects(
             ducking=self._ducking,
@@ -416,7 +431,7 @@ class StreamingPipeline(BasePipeline):
                 CONTROL_OP_PLAYBACK_STOP,
                 reason=reason,
             ),
-            snapshot_interrupted_context=self._snapshot_interrupted_context,
+            snapshot_interrupted_context=lambda: self._ensure_context_ledger().snapshot(),
             commit_post_speech_interruption_candidate=(
                 lambda reason, transcript: self._commit_post_speech_interruption_candidate(
                     reason,
@@ -1037,7 +1052,7 @@ class StreamingPipeline(BasePipeline):
             transcript=transcript,
             transcript_timeout=self._stt_commit_transcript_timeout,
             timeline=timeline,
-            inject_interrupted_context=self._inject_interrupted_context,
+            inject_interrupted_context=lambda: self._ensure_context_ledger().inject(),
             filler=self._filler,
         )
         if not committed:
@@ -2934,62 +2949,6 @@ class StreamingPipeline(BasePipeline):
         self._timeline_debug_flushed = True
         if clear:
             self._timeline = None
-
-    # ------------------------------------------------------------------
-    # Interrupted content tracking (Phase 3)
-    # ------------------------------------------------------------------
-
-    def _snapshot_interrupted_context(self) -> None:
-        """Capture the agent's last response text at the point of interruption.
-
-        G6 (2026-05-17): augmented with ``played_seconds`` from
-        :class:`DuckingMixer` so the LLM context conveys "you only got the
-        first 1.2s out" instead of just "you said X".
-
-        G21 (2026-05-18): primary source is the TTS plugin's in-flight
-        ``current_pushed_text`` — captures exactly what the agent was
-        synthesizing at the cancel moment. ``session.history`` is the
-        fallback for the (rare) case where TTS doesn't expose the
-        property: history is only updated AFTER speech_handle winds down,
-        which is AFTER our cancel snapshot runs, so we'd otherwise capture
-        the PREVIOUS turn's assistant text rather than the in-flight one.
-        """
-        self._ensure_interrupted_context_manager()
-        self._ensure_ducking_controller()
-        self._interrupted_context.snapshot(
-            session=getattr(self, "_session", None),
-            factory=getattr(self, "_factory", None),
-            duck_mixer=self._ducking.mixer,
-            config=self._get_eot_model()._config,
-        )
-        context = self._interrupted_context.last_context
-        timeline = getattr(self, "_timeline", None)
-        if timeline is not None and context is not None:
-            timeline.set_attr(
-                "interrupted_context",
-                {
-                    "source": context.get("source"),
-                    "played_seconds": context.get("played_seconds"),
-                    "text_preview": str(context.get("text") or "")[:120],
-                },
-            )
-
-    def _inject_interrupted_context(self) -> None:
-        """Inject interrupted context into the conversation history.
-
-        Called before ``commit_user_turn()`` so the LLM sees the context
-        when generating its next response.
-        """
-        self._ensure_interrupted_context_manager()
-        self._interrupted_context.inject(
-            session=getattr(self, "_session", None),
-            config=self._get_eot_model()._config,
-        )
-
-    def _ensure_interrupted_context_manager(self) -> None:
-        if not hasattr(self, "_interrupted_context"):
-            self._interrupted_context = InterruptedContextManager()
-
 
 def _count_cjk_chars(text: str) -> int:
     return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")

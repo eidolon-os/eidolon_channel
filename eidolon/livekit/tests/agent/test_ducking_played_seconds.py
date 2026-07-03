@@ -1,7 +1,6 @@
 """G6 + G22: ``DuckingMixer.played_seconds`` tracks audio actually
-forwarded to the inner sink, used by ``_snapshot_interrupted_context``
-to enrich the LLM context with "how much the user heard before the
-cancel".
+forwarded to the inner sink, used by full-duplex context ledger snapshots
+to enrich the LLM context with "how much the user heard before the cancel".
 
 G22 (2026-05-18) — counter reset moved from ``duck()`` to the new
 ``on_agent_started_speaking()`` hook. Reason: ``duck()`` fires multiple

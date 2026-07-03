@@ -62,8 +62,8 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     eot._current_eot_score = 0.0
     pipeline._get_eot_model = MagicMock(return_value=eot)
 
-    # Stub interrupt-context capture path.
-    pipeline._inject_interrupted_context = MagicMock()
+    # Stub interrupted context ledger path.
+    pipeline._context_ledger = MagicMock()
     effects = MagicMock()
     effects._ducking = pipeline._ducking
     effects.soft_interrupt_active.return_value = False

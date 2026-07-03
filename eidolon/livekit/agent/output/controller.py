@@ -217,10 +217,10 @@ class OutputController(lk_io.AudioOutput):
         self._duck_start_time: float = 0.0
         self._total_suspend_ms: float = 0.0
         # G6 (2026-05-17): track audio actually forwarded to the inner sink
-        # during the current agent turn. Used by ``_snapshot_interrupted_context``
-        # to compute how much of the agent's reply the user actually heard
-        # before a cancel. Reset on each ``duck()`` (which fires at the start
-        # of each user-speech window, marking a potential turn boundary).
+        # during the current agent turn. Full-duplex context ledger snapshots
+        # use this to compute how much of the agent's reply the user actually
+        # heard before a cancel. Reset on each ``duck()`` (which fires at the
+        # start of each user-speech window, marking a potential turn boundary).
         self._played_samples_this_turn: int = 0
 
         logger.info(

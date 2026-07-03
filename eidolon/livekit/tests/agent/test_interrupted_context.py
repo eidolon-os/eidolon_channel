@@ -1,4 +1,4 @@
-"""Unit tests for G2: `_snapshot_interrupted_context` API correctness.
+"""Unit tests for interrupted context ledger snapshot correctness.
 
 The framework's `ChatContext.messages` is a METHOD, not a property. Pre-G2
 code accessed `.messages` without calling it, then tried to `reversed()` a
@@ -7,7 +7,7 @@ caller is the EOT-cancel path, which never fired in the prior 0.55 VAD-gate
 regime.
 
 Regression assertions:
-  * `_snapshot_interrupted_context` survives normal use (no TypeError).
+  * `FullDuplexContextLedger.snapshot()` survives normal use (no TypeError).
   * It picks the last assistant message with non-empty text.
   * It tolerates a session.history that contains only user messages.
 """
@@ -15,45 +15,36 @@ Regression assertions:
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
+from eidolon.livekit.agent.full_duplex.context_ledger import FullDuplexContextLedger
+from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 
-if TYPE_CHECKING:
-    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+def _interrupted_context(ledger: FullDuplexContextLedger) -> dict | None:
+    return ledger.last_context
 
 
-def _interrupted_context(pipeline: "StreamingPipeline") -> dict | None:
-    return pipeline._interrupted_context.last_context
+def _make_ledger_with_history(messages: list) -> SimpleNamespace:
+    """Build a ledger whose ``session.history.messages()`` returns messages."""
 
-
-def _make_pipeline_with_history(messages: list) -> "StreamingPipeline":
-    """Build a minimally-initialised StreamingPipeline whose
-    ``_session.history.messages()`` returns the supplied list."""
-    from eidolon.livekit.agent.full_duplex import StreamingPipeline
-
-    # Bypass full __init__ — _snapshot_interrupted_context only reads
-    # ``self._session`` and ``self._get_eot_model()._config``.
-    pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._session = MagicMock()
-    pipeline._session.history.messages = MagicMock(return_value=messages)
-    # G6 (2026-05-17): _snapshot_interrupted_context now consults the ducking
-    # mixer's played_seconds when available; set None for these legacy tests
-    # that pre-date G6.
-    pipeline._ducking = OutputDuckingController()
-    pipeline._ducking.mixer = None
-
-    # Stub _get_eot_model() → cfg with history fallback enabled for these
-    # legacy method-call regression tests.
+    session = MagicMock()
+    session.history.messages = MagicMock(return_value=messages)
+    ducking = OutputDuckingController()
+    ducking.mixer = None
     cfg = SimpleNamespace(
         interrupted_context_enabled=True,
         interrupted_context_history_fallback_enabled=True,
     )
-    eot = SimpleNamespace(_config=cfg)
-    pipeline._get_eot_model = MagicMock(return_value=eot)
-
-    return pipeline
+    ledger = FullDuplexContextLedger(
+        get_session=lambda: session,
+        get_factory=lambda: None,
+        get_duck_mixer=lambda: ducking.mixer,
+        get_config=lambda: cfg,
+        get_timeline=lambda: None,
+    )
+    return SimpleNamespace(ledger=ledger, session=session)
 
 
 def _msg(role: str, text: str) -> SimpleNamespace:
@@ -63,17 +54,19 @@ def _msg(role: str, text: str) -> SimpleNamespace:
 def test_picks_last_assistant_message() -> None:
     """G2 happy path: walking history in reverse finds the most-recent
     assistant turn with non-empty text."""
-    pipeline = _make_pipeline_with_history([
-        _msg("user", "hi"),
-        _msg("assistant", "old reply"),
-        _msg("user", "follow-up"),
-        _msg("assistant", "newer reply"),
-    ])
+    runtime = _make_ledger_with_history(
+        [
+            _msg("user", "hi"),
+            _msg("assistant", "old reply"),
+            _msg("user", "follow-up"),
+            _msg("assistant", "newer reply"),
+        ]
+    )
 
-    pipeline._snapshot_interrupted_context()
+    runtime.ledger.snapshot()
 
-    assert _interrupted_context(pipeline) is not None
-    assert _interrupted_context(pipeline)["text"] == "newer reply"
+    assert _interrupted_context(runtime.ledger) is not None
+    assert _interrupted_context(runtime.ledger)["text"] == "newer reply"
 
 
 def test_method_call_not_attribute_access() -> None:
@@ -82,55 +75,58 @@ def test_method_call_not_attribute_access() -> None:
     Asserts that .messages() is the call site (any future regression that
     reverts to attribute access will fail this — MagicMock's method tracker
     would not record a call)."""
-    pipeline = _make_pipeline_with_history([
+    runtime = _make_ledger_with_history([
         _msg("assistant", "hello"),
     ])
 
-    pipeline._snapshot_interrupted_context()
+    runtime.ledger.snapshot()
 
-    pipeline._session.history.messages.assert_called_once_with()
+    runtime.session.history.messages.assert_called_once_with()
 
 
 def test_skips_empty_text_messages() -> None:
     """Empty text_content should be skipped — we want the last assistant
     turn that actually said something."""
-    pipeline = _make_pipeline_with_history([
+    runtime = _make_ledger_with_history([
         _msg("assistant", "non-empty"),
         _msg("assistant", ""),
     ])
 
-    pipeline._snapshot_interrupted_context()
+    runtime.ledger.snapshot()
 
-    assert _interrupted_context(pipeline) is not None
-    assert _interrupted_context(pipeline)["text"] == "non-empty"
+    assert _interrupted_context(runtime.ledger) is not None
+    assert _interrupted_context(runtime.ledger)["text"] == "non-empty"
 
 
 def test_no_assistant_messages_leaves_context_none() -> None:
     """Pure-user history → nothing to snapshot, interrupted context stays None."""
-    pipeline = _make_pipeline_with_history([
+    runtime = _make_ledger_with_history([
         _msg("user", "first"),
         _msg("user", "second"),
     ])
 
-    pipeline._snapshot_interrupted_context()
+    runtime.ledger.snapshot()
 
-    assert _interrupted_context(pipeline) is None
+    assert _interrupted_context(runtime.ledger) is None
 
 
 def test_disabled_config_is_noop() -> None:
     """If ``interrupted_context_enabled=False`` the function returns
     immediately without touching session.history."""
-    from eidolon.livekit.agent.full_duplex import StreamingPipeline
-
-    pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._session = MagicMock()
+    session = MagicMock()
     cfg = SimpleNamespace(interrupted_context_enabled=False)
-    pipeline._get_eot_model = MagicMock(return_value=SimpleNamespace(_config=cfg))
+    ledger = FullDuplexContextLedger(
+        get_session=lambda: session,
+        get_factory=lambda: None,
+        get_duck_mixer=lambda: None,
+        get_config=lambda: cfg,
+        get_timeline=lambda: None,
+    )
 
-    pipeline._snapshot_interrupted_context()
+    ledger.snapshot()
 
-    pipeline._session.history.messages.assert_not_called()
-    assert _interrupted_context(pipeline) is None
+    session.history.messages.assert_not_called()
+    assert _interrupted_context(ledger) is None
 
 
 # ---------------------------------------------------------------------------
@@ -138,58 +134,58 @@ def test_disabled_config_is_noop() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_pipeline_with_duck_mixer(
-    *, played_seconds: float | None
-) -> "StreamingPipeline":
-    """Pipeline with a stub duck mixer reporting ``played_seconds``."""
-    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+def _make_ledger_with_duck_mixer(
+    *, played_seconds: float | None, timeline: TurnTimeline | None = None
+) -> SimpleNamespace:
+    """Ledger with a stub duck mixer reporting ``played_seconds``."""
 
-    pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._session = MagicMock()
-    pipeline._session.history.messages = MagicMock(
+    session = MagicMock()
+    session.history.messages = MagicMock(
         return_value=[_msg("assistant", "你好世界，今天天气不错")]
     )
-    pipeline._factory = SimpleNamespace(
+    factory = SimpleNamespace(
         tts=SimpleNamespace(
             tts=SimpleNamespace(current_pushed_text="你好世界，今天天气不错")
         )
     )
 
     cfg = SimpleNamespace(interrupted_context_enabled=True)
-    pipeline._get_eot_model = MagicMock(
-        return_value=SimpleNamespace(_config=cfg)
-    )
 
-    pipeline._ducking = OutputDuckingController()
+    ducking = OutputDuckingController()
     if played_seconds is None:
-        pipeline._ducking.mixer = None
+        ducking.mixer = None
     else:
         mixer = MagicMock()
         type(mixer).played_seconds = property(lambda self: played_seconds)
-        pipeline._ducking.mixer = mixer
+        ducking.mixer = mixer
 
-    return pipeline
+    ledger = FullDuplexContextLedger(
+        get_session=lambda: session,
+        get_factory=lambda: factory,
+        get_duck_mixer=lambda: ducking.mixer,
+        get_config=lambda: cfg,
+        get_timeline=lambda: timeline,
+    )
+    return SimpleNamespace(ledger=ledger, timeline=timeline)
 
 
 def test_snapshot_records_played_seconds_when_duck_mixer_present() -> None:
     """G6: when DuckingMixer is available, played_seconds gets captured."""
-    pipeline = _make_pipeline_with_duck_mixer(played_seconds=1.5)
-    pipeline._snapshot_interrupted_context()
-    ctx = _interrupted_context(pipeline)
+    runtime = _make_ledger_with_duck_mixer(played_seconds=1.5)
+    runtime.ledger.snapshot()
+    ctx = _interrupted_context(runtime.ledger)
     assert ctx is not None
     assert ctx["played_seconds"] == 1.5
     assert ctx["text"] == "你好世界，今天天气不错"
 
 
 def test_snapshot_records_context_preview_on_timeline() -> None:
-    from eidolon.livekit.agent.observability import TurnTimeline
+    timeline = TurnTimeline("turn-interrupted")
+    runtime = _make_ledger_with_duck_mixer(played_seconds=1.5, timeline=timeline)
 
-    pipeline = _make_pipeline_with_duck_mixer(played_seconds=1.5)
-    pipeline._timeline = TurnTimeline("turn-interrupted")
+    runtime.ledger.snapshot()
 
-    pipeline._snapshot_interrupted_context()
-
-    attr = pipeline._timeline.attrs["interrupted_context"]
+    attr = timeline.attrs["interrupted_context"]
     assert attr["source"] == "tts_in_flight"
     assert attr["played_seconds"] == 1.5
     assert attr["text_preview"] == "你好世界，今天天气不错"
@@ -198,9 +194,9 @@ def test_snapshot_records_context_preview_on_timeline() -> None:
 def test_snapshot_records_none_played_seconds_when_no_duck_mixer() -> None:
     """G6: without DuckingMixer (e.g. tests / non-streaming pipelines),
     played_seconds is None, not crash."""
-    pipeline = _make_pipeline_with_duck_mixer(played_seconds=None)
-    pipeline._snapshot_interrupted_context()
-    ctx = _interrupted_context(pipeline)
+    runtime = _make_ledger_with_duck_mixer(played_seconds=None)
+    runtime.ledger.snapshot()
+    ctx = _interrupted_context(runtime.ledger)
     assert ctx is not None
     assert ctx["played_seconds"] is None
     assert ctx["text"] == "你好世界，今天天气不错"
@@ -209,8 +205,8 @@ def test_snapshot_records_none_played_seconds_when_no_duck_mixer() -> None:
 def test_snapshot_played_seconds_zero_is_preserved() -> None:
     """G6: 0.0 played-seconds (cancel fired before any audio) is meaningful
     and must not be collapsed to None — the LLM hint differentiates."""
-    pipeline = _make_pipeline_with_duck_mixer(played_seconds=0.0)
-    pipeline._snapshot_interrupted_context()
-    ctx = _interrupted_context(pipeline)
+    runtime = _make_ledger_with_duck_mixer(played_seconds=0.0)
+    runtime.ledger.snapshot()
+    ctx = _interrupted_context(runtime.ledger)
     assert ctx is not None
     assert ctx["played_seconds"] == 0.0

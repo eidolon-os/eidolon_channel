@@ -68,7 +68,7 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
     pipeline._user_speaking_start_time = None
 
     pipeline._callbacks = MagicMock()
-    pipeline._snapshot_interrupted_context = MagicMock()
+    pipeline._context_ledger = MagicMock()
 
     return pipeline
 
@@ -94,7 +94,7 @@ def test_first_signal_holds_substantive_interim_without_semantic_score() -> None
 
     _run_semantic_check(pipeline, "我不相信你", is_final=False)
 
-    pipeline._snapshot_interrupted_context.assert_not_called()
+    pipeline._context_ledger.snapshot.assert_not_called()
     pipeline._ducking.mixer.cancel.assert_not_called()
 
 

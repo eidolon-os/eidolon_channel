@@ -175,6 +175,8 @@ eidolon/livekit/agent/
 
 `full_duplex/interruption_effects.py` 是 full-duplex interruption output side-effect adapter。它承接 cancel / rollback / hold / explicit preempt 后对 LiveKit `AgentSession.interrupt()`、ducking output、soft interrupt timer、stable-signal recheck、`playback.stop` control 和 interrupted-context snapshot 的副作用；它不做 turn policy、semantic classification、user-turn commit 或 context ledger 裁决。
 
+`full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/injection 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context snapshot/inject 细节。
+
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 
 #### 2.1.1 产品交互模式边界

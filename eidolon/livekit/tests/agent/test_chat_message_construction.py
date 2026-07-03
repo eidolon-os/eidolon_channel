@@ -2,9 +2,10 @@
 
 The framework's ChatMessage is a pydantic model (livekit-agents 1.5.x). It
 has no `.create()` classmethod; the older API was removed. Our
-`_inject_interrupted_context` previously called `ChatMessage.create(...)`
-and crashed with AttributeError at the worst possible moment (right after a
-real interrupt, when injecting the system hint to the LLM).
+`InterruptedContextManager.inject()` previously called
+`ChatMessage.create(...)` and crashed with AttributeError at the worst
+possible moment (right after a real interrupt, when injecting the system
+hint to the LLM).
 
 Regression: directly constructing ChatMessage works and the resulting object
 has the fields we care about.
@@ -34,14 +35,14 @@ def test_chat_message_no_legacy_create_classmethod() -> None:
 
     assert not hasattr(ChatMessage, "create"), (
         "ChatMessage gained a `.create` classmethod in livekit-agents; "
-        "revisit eidolon/livekit/agent/full_duplex/pipeline.py:_inject_interrupted_context "
+        "revisit eidolon/livekit/agent/context/interrupted.py "
         "and decide whether to migrate."
     )
 
 
 def test_chat_message_accepts_long_chinese_content() -> None:
     """G20: smoke test on the exact construction path used in
-    `_inject_interrupted_context` — long Chinese content with mixed
+    `InterruptedContextManager.inject()` — long Chinese content with mixed
     punctuation. Just exercising the constructor; no behavioural assertion
     beyond not raising."""
     from livekit.agents.llm import ChatMessage

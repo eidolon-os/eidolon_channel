@@ -21,6 +21,7 @@ from typing import AsyncIterator
 
 import grpc
 import grpc.aio
+from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.core.grpc import (
     DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS,
     GrpcTlsConfig,
@@ -80,7 +81,7 @@ class DeltaPayload:
     # "tool_preamble") are status lines the renderer routes to UI instead of
     # treating as answer text. "slow_tool_hint" is a delayed spoken wait hint.
     # Missing role on the wire defaults to "answer" for backward compatibility.
-    role: str = "answer"
+    role: str = DeltaRole.ANSWER.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,7 +464,7 @@ class EidolonAgentSession:
                 else ""
             )
             if text:
-                role = _s_field(data_fields, "role") or "answer"
+                role = _s_field(data_fields, "role") or DeltaRole.ANSWER.value
                 q.put_nowait(DeltaPayload(text=text, role=role))
         elif kind == pb.TurnEvent.DONE:
             done = _DonePayload(

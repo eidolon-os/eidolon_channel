@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         ProactiveSubscriber,
     )
 
+from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
@@ -463,7 +464,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     # them as provider events for UI/observability, but keep them
                     # out of TTS. A slow-tool hint is the one non-answer role that
                     # is intentionally spoken, and is still de-duped per turn.
-                    if payload.role != "answer":
+                    if payload.role != DeltaRole.ANSWER.value:
                         if payload.role in spoken_preamble_roles:
                             continue
                         spoken_preamble_roles.add(payload.role)
@@ -475,7 +476,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             attempt=attempt,
                             role=payload.role,
                         )
-                        if payload.role != "slow_tool_hint":
+                        if payload.role != DeltaRole.SLOW_TOOL_HINT.value:
                             continue
                     if not first_delta_seen:
                         first_delta_seen = True

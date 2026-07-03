@@ -15,9 +15,13 @@ service EidolonAgent {
   // of a session (multiple turns share the connection).
   rpc Chat(stream ChatRequest) returns (stream TurnEvent);
 
-  // Push realtime signals (emotion, prosody, vision tags) for the current
-  // session without driving a turn. The server fuses these and uses them in
-  // the next compile pass.
+  // Push realtime signals (emotion, prosody, vision tags) OUT OF BAND — i.e.
+  // when no Chat stream is open, or from a caller that isn't the one driving
+  // the turn. Requires session_id to route. Prefer the inline
+  // ChatRequest.signal frame whenever a Chat stream is already open for the
+  // session: it shares the connection, needs no session_id, and is fused into
+  // the very next compile pass. Use this unary RPC only for the out-of-band
+  // case; the two paths converge on the same SignalFuser.
   rpc PushSignal(SignalRequest) returns (Ack);
 
   // Server-stream of proactive utterances the agent decides to initiate.
@@ -33,6 +37,8 @@ message ChatRequest {
   oneof payload {
     StartTurn start = 1;
     CancelTurn cancel = 2;
+    // Inline realtime signal on the open Chat stream — the preferred path
+    // while a session is live (see PushSignal for the out-of-band variant).
     PushSignalInline signal = 3;
   }
 }
@@ -42,6 +48,12 @@ message StartTurn {
   string conversation_id = 2;
   string text = 3;
   google.protobuf.Struct realtime = 4; // optional pre-fused digest
+  // Open key/value bag. Identity (caller_kind, actor_id, runtime_caller_id,
+  // runtime_session_id, caller_display_name) is normally carried by the
+  // runtime JWT and derived server-side; when present here it overrides the
+  // derivation. Left as a Struct deliberately: these are optional overrides,
+  // not a required schema. See eidolon_sdk.biz.chat_stream for the well-known
+  // TurnEvent.data string enums (DeltaRole / TerminationCause / TurnDoneStatus).
   google.protobuf.Struct metadata = 5;
 }
 

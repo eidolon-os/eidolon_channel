@@ -122,10 +122,25 @@ class HandoffPayload:
 
 @dataclass(frozen=True, slots=True)
 class _DonePayload:
-    """Sentinel marking end-of-turn. Consumer returns when it sees this."""
+    """Sentinel marking end-of-turn. Consumer returns when it sees this.
+
+    Carries the brain's structured termination semantics (proto DONE keys):
+    ``termination_cause`` distinguishes WHY the turn ended ("user_stop" means
+    the brain classified the utterance itself as a stop command and skipped
+    the LLM — upstream should circuit-break TTS/rendering); ``control_intent``
+    is the shared ``eidolon_sdk.biz.dialogue_control.InterruptIntent`` value
+    the brain assigned to the user utterance.
+    """
+
+    status: str = ""
+    termination_cause: str = ""
+    control_intent: str = ""
 
 
 _DONE = _DonePayload()
+
+# Cap for the recent-turn DONE-info map (see take_done_info).
+_DONE_INFO_MAX = 8
 
 
 # Union of everything the inbox queue can carry to a turn consumer.
@@ -219,6 +234,12 @@ class EidolonAgentSession:
         # would otherwise be on the event loop's ready queue, which is not
         # guaranteed across all cancellation paths.
         self._background_tasks: set[asyncio.Task] = set()
+        # cancelled turn_id -> future resolved with already_done when the
+        # brain ACKs the CancelTurn frame.
+        self._cancel_acks: dict[str, asyncio.Future] = {}
+        # turn_id -> structured DONE payload (termination_cause etc.), kept
+        # for a few recent turns so turn policy can reconcile after consume.
+        self._done_info: dict[str, _DonePayload] = {}
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -268,16 +289,46 @@ class EidolonAgentSession:
 
         return turn_id, self._consume(turn_id, queue)
 
-    async def cancel_turn(self, turn_id: str) -> None:
+    async def cancel_turn(
+        self,
+        turn_id: str,
+        *,
+        played_chars: int | None = None,
+        played_ms: float | None = None,
+        await_ack_s: float | None = None,
+    ) -> bool | None:
         """Best-effort cancel — writes ``CancelTurn`` on the open call.
 
-        Safe to call after the turn has already finished; the write may fail
-        with an RPC error which we swallow at debug level.
+        ``played_chars``/``played_ms`` report how much of the reply the user
+        actually heard (character offset into answer-role DELTA text / TTS
+        playback ms); the brain truncates what it persists at that boundary.
+        Pass ``await_ack_s`` to wait for the brain's ACK — returns
+        ``already_done`` (False = cancel landed on a live turn), or ``None``
+        on timeout/no-ack. Safe to call after the turn has already finished;
+        write errors are swallowed at debug level.
         """
+        cancel = pb.CancelTurn(turn_id=turn_id)
+        if played_chars is not None:
+            cancel.played_chars = max(0, int(played_chars))
+        if played_ms is not None:
+            cancel.played_ms = max(0.0, float(played_ms))
+        fut: asyncio.Future | None = None
+        if await_ack_s is not None:
+            fut = asyncio.get_running_loop().create_future()
+            self._cancel_acks[turn_id] = fut
         try:
-            await self._write(pb.ChatRequest(cancel=pb.CancelTurn(turn_id=turn_id)))
+            await self._write(pb.ChatRequest(cancel=cancel))
         except Exception as exc:  # noqa: BLE001
+            self._cancel_acks.pop(turn_id, None)
             logger.debug("[EidolonAgentSession] cancel_turn(%s) ignored: %r", turn_id, exc)
+            return None
+        if fut is None:
+            return None
+        try:
+            return await asyncio.wait_for(fut, timeout=await_ack_s)
+        except (TimeoutError, asyncio.TimeoutError):
+            self._cancel_acks.pop(turn_id, None)
+            return None
 
     def spawn(self, coro, *, name: str | None = None) -> asyncio.Task:
         """Create a session-owned background task that won't be GC'd.
@@ -388,6 +439,11 @@ class EidolonAgentSession:
             self._broadcast_error(RuntimeError("stream ended"))
 
     def _dispatch(self, ev: "pb.TurnEvent") -> None:
+        if ev.kind == pb.TurnEvent.ACK:
+            # Cancel acknowledgements resolve out-of-band futures and must be
+            # handled even when the turn's inbox is already gone.
+            self._dispatch_ack(ev)
+            return
         q = self._inbox.get(ev.turn_id)
         if q is None:
             # Event for an unknown / already-finished turn — drop quietly.
@@ -410,7 +466,13 @@ class EidolonAgentSession:
                 role = _s_field(data_fields, "role") or "answer"
                 q.put_nowait(DeltaPayload(text=text, role=role))
         elif kind == pb.TurnEvent.DONE:
-            q.put_nowait(_DONE)
+            done = _DonePayload(
+                status=_s_field(data_fields, "status"),
+                termination_cause=_s_field(data_fields, "termination_cause"),
+                control_intent=_s_field(data_fields, "control_intent"),
+            )
+            self._record_done_info(ev.turn_id, done)
+            q.put_nowait(done)
         elif kind == pb.TurnEvent.ERROR:
             code = (
                 data_fields["code"].string_value
@@ -484,12 +546,34 @@ class EidolonAgentSession:
         elif kind == pb.TurnEvent.HANDOFF:
             q.put_nowait(HandoffPayload(raw=dict(ev.data) if ev.data is not None else {}))
         else:
-            # ACK / PROGRESS / KIND_UNSPECIFIED — not surfaced.
+            # ACK / PROGRESS / KIND_UNSPECIFIED — not queued to the consumer.
             logger.debug(
                 "[EidolonAgentSession] ignoring %s event (turn=%s)",
                 pb.TurnEvent.Kind.Name(kind),
                 ev.turn_id,
             )
+
+    def _dispatch_ack(self, ev: "pb.TurnEvent") -> None:
+        """Resolve a pending cancel-ack future (runs before inbox dispatch)."""
+        data_fields = ev.data.fields if ev.data is not None else None
+        cancelled_turn_id = _s_field(data_fields, "cancelled_turn_id") or ev.turn_id
+        already_done = (
+            data_fields["already_done"].bool_value
+            if data_fields is not None and "already_done" in data_fields
+            else False
+        )
+        fut = self._cancel_acks.pop(cancelled_turn_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(already_done)
+
+    def _record_done_info(self, turn_id: str, done: "_DonePayload") -> None:
+        self._done_info[turn_id] = done
+        while len(self._done_info) > _DONE_INFO_MAX:
+            self._done_info.pop(next(iter(self._done_info)))
+
+    def take_done_info(self, turn_id: str) -> "_DonePayload | None":
+        """Return (and forget) the structured DONE payload for a turn."""
+        return self._done_info.pop(turn_id, None)
 
     def _broadcast_error(self, exc: BaseException) -> None:
         for q in self._inbox.values():

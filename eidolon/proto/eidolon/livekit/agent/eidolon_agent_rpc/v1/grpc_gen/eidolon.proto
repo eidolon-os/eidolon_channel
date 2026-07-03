@@ -45,7 +45,19 @@ message StartTurn {
   google.protobuf.Struct metadata = 5;
 }
 
-message CancelTurn { string turn_id = 1; }
+// Cancel an in-flight turn. ``played_chars``/``played_ms`` report how much of
+// the assistant reply the user actually heard when the barge-in happened
+// (character offset into the concatenated answer-role DELTA text, and TTS
+// playback milliseconds). The server truncates what it persists to history,
+// eidolon_data messages, and the memory fanout at that boundary so the
+// model's memory matches the user's real auditory experience. 0 with
+// has_played_chars=false means "unknown — keep full text" for backward
+// compatibility; an explicit 0 means "nothing was heard".
+message CancelTurn {
+  string turn_id = 1;
+  optional uint32 played_chars = 2;
+  optional double played_ms = 3;
+}
 
 message PushSignalInline {
   string modality = 1;
@@ -74,8 +86,25 @@ message PushSignalInline {
 //   TOOL_RESULT  { name: string, ok: bool, content: any, error?: string }
 //   CITATION     { ... }
 //   USAGE        { tokens_in: number, tokens_out: number }
-//   DONE         { status: string, ... }
+//   DONE         { status: "ok" | "cancelled" | "errored" | "handed_off",
+//                  termination_cause?: "normal" | "user_stop" | "client_cancel"
+//                    | "rpc_cancel" | "guardrail" | "error",
+//                  control_intent?: "hard_stop" | "topic_switch" | ... }
+//                  - termination_cause distinguishes WHY the turn ended.
+//                    "user_stop" means the agent classified the utterance
+//                    itself as a stop command (no LLM was invoked; upstream
+//                    should circuit-break TTS/rendering for this turn).
+//                    "client_cancel" acknowledges a CancelTurn frame;
+//                    "rpc_cancel" means the transport went away.
+//                  - control_intent carries the agent-side classification of
+//                    the user utterance (shared taxonomy:
+//                    eidolon_sdk.biz.dialogue_control.InterruptIntent) so the
+//                    channel can reconcile its fast-path Tier0 decision.
 //   ERROR        { code: string, message: string, fatal?: bool }
+//   ACK          { cancelled_turn_id: string, already_done: bool }
+//                  - emitted in response to a CancelTurn frame so the client
+//                    can distinguish "cancel landed" from "turn had already
+//                    finished" without waiting for DONE.
 //   HANDOFF      { task_id: string, progress_subject: string }
 message TurnEvent {
   enum Kind {

@@ -294,9 +294,21 @@ class HalfDuplexPttPipeline(BasePipeline):
             return
         held = bool(state.ptt)
         was_held = self._last_ptt_held
-        self._last_ptt_held = held
         if held and not was_held:
             result = self._ptt_controller.press()
+            if result.action == "reject":
+                self._publish_ptt_turn_status(
+                    ptt_rejected_outcome(result.reason),
+                    result.reason,
+                )
+                logger.info(
+                    "[HalfDuplexPttPipeline] PTT press rejected reason=%s "
+                    "state=%s",
+                    result.reason,
+                    result.state,
+                )
+                return
+            self._last_ptt_held = True
             self._start_ptt_timeline(result)
             self._publish_ptt_turn_status(PTT_OUTCOME_RECORDING, result.reason)
             logger.info(
@@ -305,6 +317,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             )
             return
         if was_held and not held:
+            self._last_ptt_held = False
             self._mark_ptt_released()
             self._publish_ptt_turn_status(PTT_OUTCOME_FINALIZING, "released")
             task = asyncio.create_task(self._finalize_ptt_turn())

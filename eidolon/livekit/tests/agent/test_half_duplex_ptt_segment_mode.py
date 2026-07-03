@@ -40,6 +40,7 @@ class _FakeSttStage:
         offline_raises: bool = False,
         offline_error: Exception | None = None,
         streaming_error: Exception | None = None,
+        delay_sec: float = 0.0,
     ) -> None:
         self.stt = SimpleNamespace(
             capabilities=SimpleNamespace(offline_recognize=offline_supported)
@@ -49,11 +50,14 @@ class _FakeSttStage:
         self.offline_raises = offline_raises
         self.offline_error = offline_error
         self.streaming_error = streaming_error
+        self.delay_sec = delay_sec
         self.recognize_calls: list[bytes] = []
         self.recognize_streaming_calls: list[bytes] = []
 
     async def recognize(self, audio: bytes) -> str:
         self.recognize_calls.append(audio)
+        if self.delay_sec > 0:
+            await asyncio.sleep(self.delay_sec)
         if self.offline_error is not None:
             raise self.offline_error
         if self.offline_raises:
@@ -62,6 +66,8 @@ class _FakeSttStage:
 
     async def recognize_streaming(self, audio: bytes) -> str:
         self.recognize_streaming_calls.append(audio)
+        if self.delay_sec > 0:
+            await asyncio.sleep(self.delay_sec)
         if self.streaming_error is not None:
             raise self.streaming_error
         return self.streaming_text
@@ -311,6 +317,56 @@ async def test_press_during_agent_output_preempts_and_records_new_turn() -> None
     assert result.preempted_agent_output is True
     assert result.transcript == "不听笑话了，告诉我时间"
     assert len(stt.recognize_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_press_while_recording_is_idempotent() -> None:
+    preemptions: list[str] = []
+    stt = _FakeSttStage(offline_text="第一段和第二段都应该保留")
+    controller = _controller(
+        stt,
+        agent_output_active=True,
+        preemptions=preemptions,
+        tap_to_stop_max_audio_sec=0.05,
+        strategy="offline",
+    )
+
+    first_press = controller.press()
+    controller.push_frame(_Frame(_pcm(80, sample=900)))
+    duplicate_press = controller.press()
+    controller.push_frame(_Frame(_pcm(90, sample=1300)))
+    result = await controller.release()
+
+    assert first_press.preempted_agent_output is True
+    assert duplicate_press.reason == "already_recording"
+    assert duplicate_press.preempted_agent_output is True
+    assert preemptions == ["cancelled"]
+    assert result.action == "commit"
+    assert len(stt.recognize_calls) == 1
+    assert len(stt.recognize_calls[0]) == len(_pcm(170, sample=900))
+
+
+@pytest.mark.asyncio
+async def test_press_while_transcribing_rejects_busy_without_new_segment() -> None:
+    stt = _FakeSttStage(streaming_text="旧问题", delay_sec=0.01)
+    controller = _controller(stt, strategy="streaming")
+
+    controller.press()
+    controller.push_frame(_Frame(_pcm(120, sample=1200)))
+    release_task = asyncio.create_task(controller.release())
+    await asyncio.sleep(0)
+
+    busy = controller.press()
+
+    assert busy.action == "reject"
+    assert busy.reason == "busy_transcribing"
+    assert busy.state == "transcribing"
+    assert controller.push_frame(_Frame(_pcm(120, sample=1300))) is False
+
+    result = await release_task
+    assert result.action == "commit"
+    assert result.transcript == "旧问题"
+    assert len(stt.recognize_streaming_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -593,6 +649,46 @@ async def test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline(tmp_
     assert rows[0]["attrs"]["ptt_segment_terminal"]["reason"] == "tap_to_stop"
     second_events = rows[1]["attrs"]["client_control_events"]
     assert not any(event["op"] == "playback.stop" for event in second_events)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_busy_press_during_finalizing_does_not_fake_release(
+    tmp_path,
+) -> None:
+    timeline_path = tmp_path / "turns.jsonl"
+    stt = _FakeSttStage(streaming_text="旧问题", delay_sec=0.01)
+    pipeline = _segment_pipeline(
+        stt,
+        observability=ObservabilityConfig(timeline_debug_path=str(timeline_path)),
+    )
+
+    packet_down = _packet(ptt=True)
+    pipeline._room_data.handle_packet(packet_down)
+    pipeline._on_room_packet(packet_down)
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(120, sample=1200)))
+    packet_up = _packet(ptt=False)
+    pipeline._room_data.handle_packet(packet_up)
+    pipeline._on_room_packet(packet_up)
+    await asyncio.sleep(0)
+
+    busy_press = _packet(ptt=True)
+    pipeline._room_data.handle_packet(busy_press)
+    pipeline._on_room_packet(busy_press)
+    busy_release = _packet(ptt=False)
+    pipeline._room_data.handle_packet(busy_release)
+    pipeline._on_room_packet(busy_release)
+    await asyncio.gather(*pipeline._turn_tasks)
+
+    local = pipeline._room.local_participant
+    outcomes = [
+        payload["payload"]["outcome"]
+        for _, payload in local.published
+        if payload.get("op") == "ptt.turn_status"
+    ]
+    assert outcomes.count("finalizing") == 1
+    assert "rejected:busy_transcribing" in outcomes
+    assert outcomes[-1] == "committed"
+    assert len(stt.recognize_streaming_calls) == 1
 
 
 def test_pipeline_observes_existing_subscribed_audio_tracks() -> None:

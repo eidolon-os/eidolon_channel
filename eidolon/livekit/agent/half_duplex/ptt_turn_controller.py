@@ -61,6 +61,20 @@ class HalfDuplexPttTurnController:
         return self._state
 
     def press(self) -> PttSegmentTurnResult:
+        if self._state == "recording":
+            return PttSegmentTurnResult(
+                action="none",
+                reason="already_recording",
+                state=self._state,
+                preempted_agent_output=self._preempted_agent_output,
+            )
+        if self._state == "transcribing":
+            return PttSegmentTurnResult(
+                action="reject",
+                reason="busy_transcribing",
+                state=self._state,
+                preempted_agent_output=self._preempted_agent_output,
+            )
         preempted = False
         if self._agent_output_active():
             self._preempt_agent_output()

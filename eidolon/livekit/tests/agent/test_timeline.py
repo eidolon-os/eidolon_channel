@@ -561,7 +561,7 @@ def test_streaming_pipeline_observes_client_audio_state() -> None:
         participant=SimpleNamespace(identity="alice"),
     )
 
-    pipeline._on_room_data_received(packet)
+    pipeline._room_data.handle_packet(packet)
 
     state = pipeline._room_data.client_audio_states["alice"]
     assert state.mic_muted is True
@@ -599,7 +599,8 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
         participant=SimpleNamespace(identity="alice"),
     )
 
-    pipeline._on_room_data_received(packet)
+    pipeline._room_data.handle_packet(packet)
+    pipeline._on_client_room_packet(packet)
 
     pipeline._duck_cancel_and_interrupt.assert_called_once_with(force=True)
     assert pipeline._timeline.attrs["explicit_client_interrupt"][

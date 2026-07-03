@@ -194,10 +194,8 @@ class _FakeRoom:
 def test_room_data_registration_drives_explicit_preempt() -> None:
     # Regression for the wiring (not the logic): a client.audio_state packet
     # arriving on the registered ``data_received`` callback must reach
-    # ``_handle_explicit_client_preempt``. It used to be dead code — only
-    # ``_on_room_data_received`` called it and that was never registered — so the
-    # logic above was correct but never ran, and explicit client preempt never
-    # fired.
+    # ``_handle_explicit_client_preempt`` after ``RoomDataHandler`` stores the
+    # latest client state.
     from eidolon.livekit.agent.session.room_data import RoomDataHandler
 
     p = StreamingPipeline.__new__(StreamingPipeline)

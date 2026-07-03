@@ -2141,9 +2141,7 @@ class StreamingPipeline(BasePipeline):
 
         The explicit-preempt fast path is wired into the SAME registered
         ``data_received`` callback (via ``on_packet``) so a ``client.audio_state``
-        explicit-control edge during playback actually preempts the agent. (It
-        used to be reachable only from ``_on_room_data_received``, which was never
-        registered — dead code — so explicit client preempt never fired.)
+        explicit-control edge during playback actually preempts the agent.
         """
         self._ensure_room_data_handler()
         self._ensure_client_preempt_handler()
@@ -2153,14 +2151,6 @@ class StreamingPipeline(BasePipeline):
         # Runs after RoomDataHandler.handle_packet has stored the latest client
         # audio state (so do NOT handle_packet again here — that would double-count).
         self._handle_explicit_client_preempt(packet)
-
-    def _on_room_data_received(self, packet: Any) -> None:
-        # Full manual processing for direct callers/tests. The production path
-        # registers handle_packet via RoomDataHandler.install and chains
-        # _on_client_room_packet through its on_packet hook; this mirrors that.
-        self._ensure_room_data_handler()
-        self._room_data.handle_packet(packet)
-        self._on_client_room_packet(packet)
 
     def _record_explicit_client_preempt_decision(
         self,

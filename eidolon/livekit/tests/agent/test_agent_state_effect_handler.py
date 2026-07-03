@@ -6,7 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.session.agent_state import AgentStateEffectHandler
+from eidolon.livekit.agent.session.agent_state import (
+    AgentStateEffectHandler,
+    AgentStateTransition,
+)
 
 
 class _Ducking:
@@ -56,6 +59,44 @@ def test_thinking_marks_activity_cancels_filler_and_resets_ducking() -> None:
     filler.cancel.assert_called_once_with()
     cancel_soft_interrupt.assert_called_once_with()
     ducking.reset_if_cancelled.assert_called_once_with()
+
+
+def test_agent_state_transition_normalizes_livekit_event_shape() -> None:
+    transition = AgentStateTransition.from_event(
+        SimpleNamespace(old_state="thinking", new_state="speaking")
+    )
+
+    assert transition.old_state == "thinking"
+    assert transition.new_state == "speaking"
+    assert transition.starts_output_activity is True
+    assert transition.starts_playback is True
+    assert transition.starts_generation is False
+    assert transition.completes_playback is False
+
+
+def test_agent_state_transition_handles_playback_done() -> None:
+    transition = AgentStateTransition.from_event(
+        SimpleNamespace(old_state="speaking", new_state="listening")
+    )
+
+    assert transition.starts_output_activity is False
+    assert transition.starts_playback is False
+    assert transition.completes_playback is True
+
+
+def test_agent_state_transition_handles_missing_fields() -> None:
+    transition = AgentStateTransition.from_event(SimpleNamespace())
+
+    assert transition.old_state == ""
+    assert transition.new_state == ""
+    assert transition.starts_output_activity is False
+    assert transition.completes_playback is False
+
+
+def test_agent_state_transition_from_event_is_idempotent() -> None:
+    transition = AgentStateTransition(old_state="idle", new_state="thinking")
+
+    assert AgentStateTransition.from_event(transition) is transition
 
 
 def test_speaking_resets_played_counter() -> None:

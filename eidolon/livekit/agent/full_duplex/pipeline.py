@@ -104,6 +104,7 @@ from .client_preempt import (
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
 from .transcript_handler import FullDuplexTranscriptHandler
+from .speech_lifecycle import FullDuplexSpeechLifecycle
 from .user_state_handler import FullDuplexUserStateHandler
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
@@ -573,13 +574,22 @@ class StreamingPipeline(BasePipeline):
             self._transcript_handler = self._build_transcript_handler()
         return self._transcript_handler
 
+    def _build_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
+        return FullDuplexSpeechLifecycle(self)
+
+    def _ensure_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
+        if not hasattr(self, "_speech_lifecycle"):
+            self._speech_lifecycle = self._build_speech_lifecycle()
+        return self._speech_lifecycle
+
     def _build_user_state_handler(self) -> FullDuplexUserStateHandler:
+        speech_lifecycle = self._ensure_speech_lifecycle()
         return FullDuplexUserStateHandler(
             publish_companion_ui_state=self._publish_companion_ui_state,
             signal_stt_user_away=self._session_signals.signal_stt_user_away,
             signal_stt_user_present=self._session_signals.signal_stt_user_present,
-            handle_speaking_started=self._handle_user_speaking_started,
-            handle_speaking_stopped=self._handle_user_speaking_stopped,
+            handle_speaking_started=speech_lifecycle.handle_started,
+            handle_speaking_stopped=speech_lifecycle.handle_stopped,
         )
 
     def _ensure_user_state_handler(self) -> FullDuplexUserStateHandler:
@@ -2553,169 +2563,6 @@ class StreamingPipeline(BasePipeline):
                 self._agent_state_to_companion_ui_state(new),
                 f"agent_state:{new}",
             )
-
-    def _handle_user_speaking_started(self) -> None:
-        self._ensure_user_turn_coordinator()
-        merge_continuation = self._user_turns.can_merge_new_speech()
-        self._skip_commit_after_interrupt_cancel = False
-        self._suppress_transcripts_until_next_speech = False
-        self._cancel_deferred_low_eot_commit("new_speech_started")
-        if not merge_continuation:
-            self._cancel_pending_voiceprint_commits("new_speech_started")
-            self._completed_turn_voiceprint_task = None
-            self._completed_turn_voiceprint_result = None
-            self._completed_turn_voiceprint_timeline = None
-            self._reset_candidate_voiceprint_tasks()
-        self._callbacks.on_user_started_speaking()
-        self._user_speaking_start_time = time.monotonic()
-        if not merge_continuation or self._timeline is None:
-            self._timeline = TurnTimeline(generate_turn_id())
-            self._timeline_debug_flushed = False
-            if self._room is not None:
-                self._timeline.set_attr("room_name", self._room.name or "")
-        self._user_turns.start_speech(timeline=self._timeline)
-        self._timeline.mark("speech_started_at")
-        self._apply_pending_explicit_client_preempt(self._timeline)
-        self._apply_pending_client_control_events(self._timeline)
-        self._voiceprint_turns.start_turn(timeline=self._timeline)
-        self._apply_pending_stt_provider_events()
-        self._observe_stt_turn_audio()
-        # Immediately clear stale text so EOT only sees text from THIS speech turn.
-        self._latest_asr_text = ""
-
-        # Feed VAD signal into EOT model so VADState reflects user activity.
-        self._get_eot_model().update_vad(True)
-
-        if self._uses_livekit_native_adaptive_interruption():
-            if self._timeline is not None:
-                self._timeline.set_attr("interruption_owner", "livekit_native_adaptive")
-            return
-
-        # Immediately fade agent output to silence and arm the suspend-window
-        # fallback. EOT decisions in the semantic interrupt handler will resolve
-        # SUSPENDED output before the timeout fires in the typical case.
-        self._attention_effects.handle_speaking_started()
-
-        # If agent is speaking and interruptions are allowed, EOT check is
-        # triggered synchronously in _on_user_transcribed as soon as STT delivers
-        # the first transcript (INTERIM or FINAL) -- no polling needed.
-        if self._ducking.is_suspended:
-            self._interruption_orchestrator.start_candidate(
-                timeline=self._timeline,
-            )
-
-    def _resolve_interruption_candidate_on_speech_stop(self) -> bool:
-        if self._soft_interrupt_is_active():
-            logger.info(
-                "[StreamingPipeline] user fell silent during soft interrupt; "
-                "false interruption, cancelling"
-            )
-            self._cancel_soft_interrupt()
-
-        # VAD silence is not itself a false-interruption decision. If the agent
-        # is suspended and no transcript has arrived yet, let the interruption
-        # owner keep the candidate alive for delayed STT evidence before resume.
-        if self._ducking.is_suspended and not self._uses_livekit_native_adaptive_interruption():
-            should_defer = (
-                self._interruption_orchestrator.defer_false_resume_after_speech_end(
-                    transcript=self._latest_asr_text,
-                    duck_suspended=True,
-                )
-            )
-            if not should_defer:
-                decision = self._turn_runtime.user_silent_decision(self._latest_asr_text)
-                self._decision_effects.apply(
-                    decision,
-                    resolved_reason="user_silent",
-                    transcript=self._latest_asr_text,
-                    vad_active=False,
-                )
-            return should_defer
-        return False
-
-    def _handle_user_speaking_stopped(self) -> None:
-        self._user_speaking_start_time = None
-        if self._timeline is not None:
-            self._timeline.mark("speech_stopped_at")
-        voiceprint_task = self._voiceprint_turns.finish_turn()
-        self._completed_turn_voiceprint_task = voiceprint_task
-        self._completed_turn_voiceprint_result = None
-        self._completed_turn_voiceprint_timeline = self._timeline
-
-        eot_model = self._get_eot_model()
-        eot_model.update_vad(False)
-
-        defer_post_speech_evidence = self._resolve_interruption_candidate_on_speech_stop()
-        self._callbacks.on_user_ended_speaking()
-        self._skip_commit_after_interrupt_cancel = False
-        if defer_post_speech_evidence:
-            self._remember_candidate_voiceprint_task(voiceprint_task)
-            return
-        if self._session is None:
-            self._latest_asr_text = ""
-            return
-
-        transcript = self._user_turns.selected_text or self._latest_asr_text
-        if transcript:
-            self._remember_candidate_voiceprint_task(voiceprint_task)
-        if self._user_turns.active is None and transcript:
-            if self._timeline is None:
-                self._timeline = TurnTimeline(generate_turn_id())
-                self._timeline_debug_flushed = False
-            self._user_turns.start_speech(timeline=self._timeline)
-            self._apply_pending_explicit_client_preempt(self._timeline)
-            self._apply_pending_client_control_events(self._timeline)
-            self._user_turns.add_transcript(transcript, is_final=True)
-        low_evidence_reason = self._playback_low_evidence_reject_reason(
-            transcript=transcript,
-            eot_model=eot_model,
-        )
-        if low_evidence_reason:
-            logger.info(
-                "[StreamingPipeline] rejecting playback low-evidence turn reason=%s "
-                "transcript=%r",
-                low_evidence_reason,
-                transcript[:80],
-            )
-            self._user_turns.reject_active(low_evidence_reason)
-            eot_model.reset()
-            self._clear_session_user_turn(low_evidence_reason)
-            self._reset_candidate_voiceprint_tasks()
-            self._latest_asr_text = ""
-            return
-        should_defer = self._should_defer_low_eot_commit(
-            transcript=transcript,
-            eot_model=eot_model,
-        )
-        decision = self._user_turns.finish_speech(
-            eot_score=getattr(
-                eot_model,
-                "current_eot_score",
-                getattr(eot_model, "_current_eot_score", None),
-            ),
-            should_defer=should_defer,
-        )
-        if decision.action == "reject":
-            eot_model.reset()
-            self._clear_session_user_turn(decision.reason)
-            self._reset_candidate_voiceprint_tasks()
-            self._latest_asr_text = ""
-        elif decision.action == "defer":
-            self._schedule_deferred_low_eot_commit(
-                verify_task=None,
-                eot_model=eot_model,
-                transcript=decision.transcript,
-                timeline=self._timeline,
-                delay_sec=decision.delay_sec,
-            )
-        else:
-            self._schedule_voiceprint_gated_commit(
-                verify_task=self._candidate_voiceprint_gate_task(),
-                eot_model=eot_model,
-                transcript=decision.transcript or transcript,
-                timeline=self._timeline,
-            )
-            self._latest_asr_text = ""
 
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()

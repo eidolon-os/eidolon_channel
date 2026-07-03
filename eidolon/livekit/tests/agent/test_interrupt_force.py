@@ -14,7 +14,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 
 def _pipe(*, is_cancelled: bool, allow_interruptions: bool) -> StreamingPipeline:

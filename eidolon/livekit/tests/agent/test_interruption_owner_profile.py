@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 from eidolon.livekit.common.config import TurnPolicyConfig
 

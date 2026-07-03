@@ -8,7 +8,7 @@ keeps its welcome.
 
 from __future__ import annotations
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 
 def _pipeline(*, proactive: bool, welcome: str) -> StreamingPipeline:

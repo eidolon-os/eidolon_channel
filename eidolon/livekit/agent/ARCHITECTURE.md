@@ -1,6 +1,6 @@
 # LiveKit Agent Server 架构分析
 
-> 最近更新: 2026-07-02
+> 最近更新: 2026-07-03
 > 代码路径: `eidolon/livekit/agent/`
 
 ---
@@ -76,7 +76,6 @@ eidolon/livekit/agent/
 ├── README.md                 # 代码地图: entrypoints / integration / session / policy / output
 ├── server.py                 # 主入口: AgentServer 启动、配置加载、session 回调注册
 ├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
-├── streaming.py              # 兼容 shim: re-export full_duplex.StreamingPipeline
 ├── batch.py                  # BatchPipeline: 批量音频 blob 处理
 ├── integration/
 │   ├── __init__.py           # LiveKit/framework 外部契约边界
@@ -153,7 +152,7 @@ eidolon/livekit/agent/
 
 ### 2.1 边界原则
 
-`full_duplex/pipeline.py` 是 full-duplex 实时会话的主编排器，负责把 LiveKit `AgentSession`、Room、pipeline stage、打断决策、输出控制和观测串起来。根部 `streaming.py` 只是兼容导入，新代码不得把实现继续写回根部。full-duplex pipeline 可以持有流程状态，但不应承载可独立测试的副作用模块。
+`full_duplex/pipeline.py` 是 full-duplex 实时会话的主编排器，负责把 LiveKit `AgentSession`、Room、pipeline stage、打断决策、输出控制和观测串起来。根部 `streaming.py` 兼容入口已删除；新代码必须从 `eidolon.livekit.agent.full_duplex` 导入 full-duplex pipeline。full-duplex pipeline 可以持有流程状态，但不应承载可独立测试的副作用模块。
 
 `turn_policy/` 负责“是否打断、如何标注 tier、是否 rollback/observe”的决策。这里应尽量保持输入输出结构化，不直接操作 LiveKit Room、播放句柄或 chat context。
 
@@ -193,7 +192,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 ### 2.2 导入规则
 
-根目录只保留 entrypoints 和少量兼容 import。新代码必须从 `full_duplex.*`、`half_duplex.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
+根目录只保留 entrypoints 和共享公共入口；不再 re-export `StreamingPipeline` / `HalfDuplexPttPipeline` / `BatchPipeline`，也不再保留 `streaming.py` 兼容 shim。新代码必须从 `full_duplex.*`、`half_duplex.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
 
 ### 2.3 Plugin 目录结构
 
@@ -246,19 +245,19 @@ eidolon/livekit/plugins/
 
 ---
 
-## 3. 两种 Pipeline 模式对比
+## 3. Pipeline 运行路径对比
 
-| | StreamingPipeline | BatchPipeline |
-|---|---|---|
-| 触发条件 | `AGENT_MODE=streaming` (默认) | `AGENT_MODE=batch` |
-| 音频处理 | 实时流式音频 (VAD 驱动) | 客户端上传完整音频 blob |
-| 打断能力 | 支持 (用户可随时打断 Agent 回复) | 不支持 |
-| EOT 检测 | ChineseModel (EidolonEOTModel) | 无 |
-| 编排方式 | `AgentSession` 全权管理音频流 | 手动顺序: STT→LLM→TTS |
-| WebSocket | STT/TTS 各自保持长连接 | STT 每次新建连接 |
-| 适用场景 | 实时对话、语音助手 | 异步音频处理、消息回复 |
+| | Full-duplex `StreamingPipeline` | Half-duplex `HalfDuplexPttPipeline` | BatchPipeline |
+|---|---|---|---|
+| 触发条件 | `AGENT_MODE=streaming` 且 `interaction_mode=full_duplex` | `AGENT_MODE=streaming` 且 `interaction_mode=half_duplex` | `AGENT_MODE=batch` |
+| 音频处理 | Open-mic 实时流式音频，VAD/STT/EOT 持续运行 | PTT press/release 内服务端采集完整音频段，release 后一次性 STT | 客户端上传完整音频 blob |
+| turn owner | `TurnPolicyRuntime` + `InterruptionOrchestrator` + full-duplex session handlers | `HalfDuplexPttTurnController` | 无实时 turn owner |
+| 打断能力 | 支持 barge-in / backchannel / false resume | 支持 PTT/tap-to-stop 抢占播放；不消费 streaming transcript/EOT | 不支持 |
+| EOT 检测 | ChineseModel (EidolonEOTModel) | 不参与 PTT terminal decision | 无 |
+| 编排方式 | `AgentSession` 管理实时输入输出，Channel owner 裁决打断/上下文 | `AgentSession` 只承载回复播放；PTT 音频段由 half-duplex pipeline 独立采集/转写/提交 | 手动顺序: STT→LLM→TTS |
+| 适用场景 | 自然流式对话、barge-in、backchannel | 触屏 PTT、一问一答、可预期打断播放 | 异步音频处理、消息回复 |
 
-### Streaming 模式数据流
+### Full-duplex 数据流
 
 ```
 用户音频 → LiveKit Room → AgentSession
@@ -273,7 +272,7 @@ eidolon/livekit/plugins/
   → LLM 流式生成 → TTS 流式合成 → OutputController 发布音频到 Room
 ```
 
-### Streaming 打断分层
+### Full-duplex 打断分层
 
 当前实时打断是五层策略链，目标是在“足够快”和“不误杀自然陪伴感”之间折中：
 
@@ -547,7 +546,7 @@ no_punct            → 0.95 (无标点 = 还没结束)
 
 ---
 
-## 6. Streaming 模式完整音频流链路
+## 6. Full-duplex 模式完整音频流链路
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐

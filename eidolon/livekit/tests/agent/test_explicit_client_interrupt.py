@@ -23,7 +23,7 @@ from eidolon.livekit.agent.integration.client_audio_state import ClientAudioStat
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
 from eidolon.livekit.common.config import TurnPolicyConfig
 
@@ -39,7 +39,6 @@ def _pipeline(
     p._turn_policy = TurnPolicyConfig()
     p._state = pipeline_state
     p._timeline = timeline
-    p._pending_explicit_client_interrupt = None
     p._turn_runtime = TurnPolicyRuntime(p._turn_policy)
     p._ensure_decision_effect_applier = MagicMock()
     p._decision_effects = MagicMock()
@@ -119,7 +118,7 @@ def test_ptt_before_turn_timeline_is_attached_to_next_speech_timeline() -> None:
 
     p._duck_cancel_and_interrupt.assert_called_once_with(force=True)
     p._decision_effects.record_decision_attrs.assert_not_called()
-    pending = p._pending_explicit_client_interrupt
+    pending = p._explicit_interrupts.pending
     assert pending is not None
     assert pending["state_attr"]["ptt"] is True
     assert isinstance(pending["received_at"], float)
@@ -136,7 +135,7 @@ def test_ptt_before_turn_timeline_is_attached_to_next_speech_timeline() -> None:
     assert decision.action is Action.CANCEL
     assert decision.intent is InterruptIntent.HARD_STOP
     assert decision.intent_source == "client_ptt"
-    assert p._pending_explicit_client_interrupt is None
+    assert p._explicit_interrupts.pending is None
     assert timeline.attrs["explicit_client_interrupt"]["ptt"] is True
     assert timeline.attrs["turn_control"]["source"] == "client_ptt"
     assert timeline.attrs["turn_control"]["reason"] == "explicit_client_ptt"
@@ -204,7 +203,6 @@ def test_room_data_registration_drives_explicit_interrupt() -> None:
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._ensure_room_data_handler = MagicMock()
     p._room_data = RoomDataHandler(get_timeline=lambda: None)
-    p._sync_room_data_compat_attrs = MagicMock()
     p._handle_explicit_client_interrupt = MagicMock()
 
     room = _FakeRoom()

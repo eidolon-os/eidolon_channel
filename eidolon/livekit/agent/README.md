@@ -6,9 +6,11 @@ entrypoints; implementation code lives under named boundary packages.
 ## Entry Points
 
 - `server.py` starts the worker, resolves room/session metadata, and constructs
-  the pipeline.
-- `streaming.py` is a compatibility import for the full-duplex realtime
-  pipeline. New code should import from `full_duplex/`.
+  the mode-specific pipeline.
+- `full_duplex/` is the full-duplex realtime path. New code imports
+  `StreamingPipeline` from `eidolon.livekit.agent.full_duplex`.
+- `half_duplex/` is the push-to-talk path. New code imports
+  `HalfDuplexPttPipeline` from `eidolon.livekit.agent.half_duplex`.
 - `batch.py` is the non-realtime/manual audio path.
 - `factory.py` builds shared STT, TTS, VAD, LLM, voiceprint, and runtime services.
 
@@ -43,5 +45,5 @@ entrypoints; implementation code lives under named boundary packages.
   Model providers and model resources live under `eidolon.livekit.plugins`.
 
 New internal code should import concrete modules directly. The root
-`eidolon.livekit.agent` package remains only a small public compatibility
-surface for pipeline entrypoints.
+`eidolon.livekit.agent` package no longer re-exports mode pipelines and should
+not be used as a compatibility facade.

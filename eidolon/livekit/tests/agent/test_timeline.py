@@ -189,7 +189,7 @@ def test_timeline_mark_after_sets_synthetic_llm_first_delta() -> None:
 
 
 def test_streaming_pipeline_records_llm_metrics_into_timeline() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     class _FakeLlm:
         def __init__(self) -> None:
@@ -201,7 +201,6 @@ def test_streaming_pipeline_records_llm_metrics_into_timeline() -> None:
     fake_llm = _FakeLlm()
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._factory = SimpleNamespace(llm=SimpleNamespace(llm=fake_llm))
-    pipeline._llm_metrics_observer_installed = False
     pipeline._timeline = TurnTimeline("turn-llm")
     pipeline._timeline.mark("turn_committed_at")
     pipeline._timeline.mark("llm_started_at")
@@ -226,7 +225,7 @@ def test_streaming_pipeline_records_llm_metrics_into_timeline() -> None:
 
 
 def test_streaming_pipeline_records_brain_provider_events_into_timeline() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     class _FakeLlm:
         def __init__(self) -> None:
@@ -238,7 +237,6 @@ def test_streaming_pipeline_records_brain_provider_events_into_timeline() -> Non
     fake_llm = _FakeLlm()
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._factory = SimpleNamespace(llm=SimpleNamespace(llm=fake_llm))
-    pipeline._brain_provider_observer_installed = False
     pipeline._timeline = TurnTimeline("turn-brain")
     pipeline._timeline.mark("turn_committed_at")
 
@@ -282,7 +280,7 @@ def test_streaming_pipeline_records_brain_provider_events_into_timeline() -> Non
 
 
 def test_streaming_pipeline_records_stt_provider_events_into_timeline() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     class _FakeStt:
         def __init__(self) -> None:
@@ -294,7 +292,6 @@ def test_streaming_pipeline_records_stt_provider_events_into_timeline() -> None:
     fake_stt = _FakeStt()
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._factory = SimpleNamespace(stt=SimpleNamespace(stt=fake_stt))
-    pipeline._stt_provider_observer_installed = False
     pipeline._timeline = TurnTimeline("turn-stt")
     pipeline._timeline.mark_at("speech_started_at", 10.0)
 
@@ -344,7 +341,7 @@ def test_streaming_pipeline_records_stt_provider_events_into_timeline() -> None:
 
 
 def test_streaming_pipeline_replays_pending_stt_provider_events() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     class _FakeStt:
         def __init__(self) -> None:
@@ -356,7 +353,6 @@ def test_streaming_pipeline_replays_pending_stt_provider_events() -> None:
     fake_stt = _FakeStt()
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._factory = SimpleNamespace(stt=SimpleNamespace(stt=fake_stt))
-    pipeline._stt_provider_observer_installed = False
     pipeline._timeline = None
 
     pipeline._install_stt_provider_event_observer()
@@ -379,11 +375,11 @@ def test_streaming_pipeline_replays_pending_stt_provider_events() -> None:
     snap = pipeline._timeline.snapshot()
     assert snap["timestamps"]["stt_first_audio_sent_at"] == 10.05
     assert snap["attrs"]["stt_stream"]["stream_id"] == "pending-stream"
-    assert pipeline._pending_stt_provider_events == []
+    assert pipeline._provider_events.pending_stt_provider_events == []
 
 
 def test_streaming_pipeline_observes_next_stt_audio_for_turn() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     class _FakeStt:
         def __init__(self) -> None:
@@ -429,15 +425,13 @@ def test_streaming_pipeline_observes_next_stt_audio_for_turn() -> None:
 
 
 def test_streaming_pipeline_flushes_timeline_on_agent_playback_done(tmp_path) -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     debug_path = tmp_path / "timeline.jsonl"
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._state = PipelineState.SPEAKING
     pipeline._callbacks = MagicMock()
     pipeline._duck_mixer = None
-    pipeline._soft_interrupt_active = False
-    pipeline._soft_interrupt_timer = None
     pipeline._filler = None
     pipeline._timeline = TurnTimeline("turn-normal")
     pipeline._timeline_debug_flushed = False
@@ -455,7 +449,7 @@ def test_streaming_pipeline_flushes_timeline_on_agent_playback_done(tmp_path) ->
 
 
 def test_streaming_pipeline_snapshot_does_not_clear_timeline(tmp_path) -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     debug_path = tmp_path / "timeline.jsonl"
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
@@ -487,7 +481,7 @@ def test_streaming_pipeline_snapshot_does_not_clear_timeline(tmp_path) -> None:
 def test_streaming_pipeline_flushes_unfinished_timeline_on_session_close(
     tmp_path,
 ) -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     debug_path = tmp_path / "timeline.jsonl"
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
@@ -511,7 +505,7 @@ def test_streaming_pipeline_flushes_unfinished_timeline_on_session_close(
 def test_streaming_pipeline_does_not_flush_cancelled_timeline_on_session_close(
     tmp_path,
 ) -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     debug_path = tmp_path / "timeline.jsonl"
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
@@ -551,11 +545,12 @@ def test_parse_client_audio_state_sanitizes_payload() -> None:
 
 
 def test_streaming_pipeline_observes_client_audio_state() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+    from eidolon.livekit.agent.session.room_data import RoomDataHandler
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._client_audio_states = {}
     pipeline._timeline = TurnTimeline("turn-1")
+    pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
 
     packet = SimpleNamespace(
         topic=CLIENT_AUDIO_STATE_TOPIC,
@@ -568,7 +563,7 @@ def test_streaming_pipeline_observes_client_audio_state() -> None:
 
     pipeline._on_room_data_received(packet)
 
-    state = pipeline._client_audio_states["alice"]
+    state = pipeline._room_data.client_audio_states["alice"]
     assert state.mic_muted is True
     assert pipeline._timeline.attrs["client_audio_state"][
         "participant_identity"
@@ -584,11 +579,12 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
     # PTT (deliberate button press / tap-to-stop) is the only explicit client
     # interrupt — hard-cut immediately with force=True so it cuts through
     # half_duplex's allow_interruptions=False.
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+    from eidolon.livekit.agent.session.room_data import RoomDataHandler
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._client_audio_states = {}
     pipeline._timeline = TurnTimeline("turn-1")
+    pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
     pipeline._state = PipelineState.SPEAKING
     pipeline._ducking = SimpleNamespace(is_cancelled=False)
     pipeline._duck_cancel_and_interrupt = MagicMock()
@@ -613,7 +609,7 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
 
 @pytest.mark.asyncio
 async def test_streaming_pipeline_publishes_client_playback_stop_control() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._timeline = TurnTimeline("turn-playback-stop")
@@ -646,7 +642,7 @@ async def test_streaming_pipeline_publishes_client_playback_stop_control() -> No
 
 @pytest.mark.asyncio
 async def test_client_playback_stop_before_timeline_attaches_to_next_turn() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._timeline = None
@@ -686,7 +682,7 @@ async def test_client_playback_stop_before_timeline_attaches_to_next_turn() -> N
 
 @pytest.mark.asyncio
 async def test_duck_cancel_publishes_playback_stop_control() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     class FakeDucking:
         is_cancelled = False
@@ -734,7 +730,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
 
 
 def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._duck_mixer = SimpleNamespace(state="CANCELLED")

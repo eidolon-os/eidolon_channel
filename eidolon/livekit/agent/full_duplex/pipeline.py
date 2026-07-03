@@ -185,7 +185,6 @@ class StreamingPipeline(BasePipeline):
         self._ducking = OutputDuckingController()
         self._decision_effects = self._build_decision_effect_applier()
         self._explicit_interrupts = self._build_explicit_client_interrupt_ledger()
-        self._pending_explicit_client_interrupt = self._explicit_interrupts.pending
         self._interruption_orchestrator = self._build_interruption_orchestrator()
         self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
@@ -278,7 +277,6 @@ class StreamingPipeline(BasePipeline):
         # mode (no eidolon_agent gRPC backend) simply skips it.
         self._proactive_task: asyncio.Task | None = None
         self._proactive_subscriber: Any | None = None
-        self._client_audio_states: dict[str, ClientAudioState] = {}
         self._room_data = RoomDataHandler(
             get_timeline=lambda: getattr(self, "_timeline", None),
         )
@@ -291,7 +289,7 @@ class StreamingPipeline(BasePipeline):
         # keeps STT streaming (and billing) for the whole connection even while
         # silent. The watchdog closes the session after
         # ``idle.disconnect_after_idle_ms`` of no recognized speech and no agent
-        # activity. ``_last_activity_monotonic`` is refreshed by
+        # activity. ``IdleWatchdog.last_activity_monotonic`` is refreshed by
         # ``_mark_activity()`` on real ASR text and on agent thinking/speaking;
         # raw VAD/noise (which yields empty ASR) deliberately does NOT count, so
         # a silent-but-noisy room still disconnects. <=0 disables the watchdog.
@@ -304,8 +302,6 @@ class StreamingPipeline(BasePipeline):
         )
         self._idle_timeout_sec: float = idle_policy.timeout_sec
         self._idle_end_reason = idle_policy.end_reason
-        self._idle_watchdog_task: asyncio.Task | None = None
-        self._last_activity_monotonic: float = 0.0
         # Called when the idle timeout fires — deletes the room so the
         # still-connected client is actively disconnected (see server.py).
         self._on_idle_disconnect = on_idle_disconnect
@@ -354,9 +350,6 @@ class StreamingPipeline(BasePipeline):
         # The soft-interrupt path here is kept as a fallback for the rare
         # cases where EOT signals a cut but the mixer isn't installed
         # (e.g. duck_enabled=False, or audio output sink not yet attached).
-        self._soft_interrupt_active: bool = False
-        self._soft_interrupt_timer: asyncio.Task | None = None
-
         # Read timeout from EOT model config (can be overridden per-pipeline via arg).
         self._soft_interrupt_timeout: float = self._turn_runtime.decision_timeout_sec
         self._soft_interrupt = SoftInterruptController(
@@ -382,7 +375,6 @@ class StreamingPipeline(BasePipeline):
         # Interrupted content tracking — snapshot of agent text at
         # the moment of confirmed interrupt, injected as context into
         # the next LLM turn so the model can optionally reference it.
-        self._last_interrupted_context: dict[str, Any] | None = None
         self._interrupted_context = InterruptedContextManager()
 
         # Eagerly trigger EOT model loading so the ONNX session is ready before
@@ -521,19 +513,6 @@ class StreamingPipeline(BasePipeline):
     def _ensure_explicit_client_interrupt_ledger(self) -> None:
         if not hasattr(self, "_explicit_interrupts"):
             self._explicit_interrupts = self._build_explicit_client_interrupt_ledger()
-        if hasattr(self, "_pending_explicit_client_interrupt"):
-            pending = self._pending_explicit_client_interrupt
-        else:
-            pending = self._explicit_interrupts.pending
-        if pending is not self._explicit_interrupts.pending:
-            self._explicit_interrupts.pending = pending
-        self._sync_explicit_client_interrupt_compat_attrs()
-
-    def _sync_explicit_client_interrupt_compat_attrs(self) -> None:
-        ledger = getattr(self, "_explicit_interrupts", None)
-        if ledger is None:
-            return
-        self._pending_explicit_client_interrupt = ledger.pending
 
     def _build_client_interaction_handler(self) -> ClientInteractionHandler:
         return ClientInteractionHandler(
@@ -1577,7 +1556,7 @@ class StreamingPipeline(BasePipeline):
             get_timeline=lambda: self._timeline,
             mark_activity=lambda: self._mark_activity(),
             cancel_soft_interrupt=lambda: self._cancel_soft_interrupt(),
-            soft_interrupt_active=lambda: self._soft_interrupt_active,
+            soft_interrupt_active=lambda: self._soft_interrupt_is_active(),
             ducking=self._ducking,
             get_filler=lambda: self._filler,
             flush_timeline_debug=lambda reason, clear: self._append_timeline_debug(
@@ -1611,7 +1590,7 @@ class StreamingPipeline(BasePipeline):
             get_vad_active=lambda: (
                 self._session is not None and self._session.user_state == "speaking"
             ),
-            soft_interrupt_active=lambda: self._soft_interrupt_active,
+            soft_interrupt_active=lambda: self._soft_interrupt_is_active(),
             soft_interrupt_timeout=lambda: self._soft_interrupt_timeout,
             apply_decision=self._decision_effects.apply,
             record_decision_attrs=self._decision_effects.record_decision_attrs,
@@ -1674,37 +1653,30 @@ class StreamingPipeline(BasePipeline):
     def _install_provider_observers(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
-        self._sync_provider_event_compat_attrs()
 
     def _install_llm_metrics_observer(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_llm_metrics_observer()
-        self._sync_provider_event_compat_attrs()
 
     def _install_brain_provider_event_observer(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_brain_provider_event_observer()
-        self._sync_provider_event_compat_attrs()
 
     def _install_tts_provider_event_observer(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_tts_provider_event_observer()
-        self._sync_provider_event_compat_attrs()
 
     def _install_stt_provider_event_observer(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.install_stt_provider_event_observer()
-        self._sync_provider_event_compat_attrs()
 
     def _remember_pending_stt_provider_event(self, event: dict[str, Any]) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.remember_pending_stt_provider_event(event)
-        self._sync_provider_event_compat_attrs()
 
     def _apply_pending_stt_provider_events(self) -> None:
         self._ensure_provider_event_observer()
         self._provider_events.apply_pending_stt_provider_events()
-        self._sync_provider_event_compat_attrs()
 
     def _record_stt_provider_event(self, event: dict[str, Any]) -> None:
         self._ensure_provider_event_observer()
@@ -1732,17 +1704,6 @@ class StreamingPipeline(BasePipeline):
                 ),
                 first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
             )
-        self._sync_provider_event_compat_attrs()
-
-    def _sync_provider_event_compat_attrs(self) -> None:
-        provider_events = getattr(self, "_provider_events", None)
-        if provider_events is None:
-            return
-        self._llm_metrics_observer_installed = provider_events.llm_metrics_observer_installed
-        self._brain_provider_observer_installed = provider_events.brain_provider_observer_installed
-        self._stt_provider_observer_installed = provider_events.stt_provider_observer_installed
-        self._tts_provider_observer_installed = provider_events.tts_provider_observer_installed
-        self._pending_stt_provider_events = provider_events.pending_stt_provider_events
 
     def _ensure_runtime_defaults(self) -> None:
         """Ensure new runtime helpers exist on test-built pipeline objects.
@@ -1765,8 +1726,6 @@ class StreamingPipeline(BasePipeline):
             self._timeline_debug_flushed = False
         if not hasattr(self, "_pending_client_control_events"):
             self._pending_client_control_events = []
-        if not hasattr(self, "_pending_explicit_client_interrupt"):
-            self._pending_explicit_client_interrupt = None
         if not hasattr(self, "_skip_commit_after_interrupt_cancel"):
             self._skip_commit_after_interrupt_cancel = False
         if not hasattr(self, "_suppress_commit_after_interrupt_until"):
@@ -1792,16 +1751,6 @@ class StreamingPipeline(BasePipeline):
             self._completed_turn_voiceprint_result = None
         if not hasattr(self, "_completed_turn_voiceprint_timeline"):
             self._completed_turn_voiceprint_timeline = None
-        if not hasattr(self, "_llm_metrics_observer_installed"):
-            self._llm_metrics_observer_installed = False
-        if not hasattr(self, "_brain_provider_observer_installed"):
-            self._brain_provider_observer_installed = False
-        if not hasattr(self, "_stt_provider_observer_installed"):
-            self._stt_provider_observer_installed = False
-        if not hasattr(self, "_pending_stt_provider_events"):
-            self._pending_stt_provider_events = []
-        if not hasattr(self, "_client_audio_states"):
-            self._client_audio_states = {}
         if not hasattr(self, "_voiceprint_turns"):
             factory = getattr(self, "_factory", None)
             self._voiceprint_turns = VoiceprintTurnObserver(
@@ -2175,12 +2124,10 @@ class StreamingPipeline(BasePipeline):
         self._ensure_room_data_handler()
         self._ensure_client_interaction_handler()
         self._room_data.install(room, on_packet=self._on_client_room_packet)
-        self._sync_room_data_compat_attrs()
 
     def _on_client_room_packet(self, packet: Any) -> None:
         # Runs after RoomDataHandler.handle_packet has stored the latest client
         # audio state (so do NOT handle_packet again here — that would double-count).
-        self._sync_room_data_compat_attrs()
         self._handle_explicit_client_interrupt(packet)
 
     def _on_room_data_received(self, packet: Any) -> None:
@@ -2206,7 +2153,6 @@ class StreamingPipeline(BasePipeline):
             resolved_at=resolved_at,
             timeline=timeline,
         )
-        self._sync_explicit_client_interrupt_compat_attrs()
 
     def _apply_pending_explicit_client_interrupt(
         self,
@@ -2214,7 +2160,6 @@ class StreamingPipeline(BasePipeline):
     ) -> None:
         self._ensure_explicit_client_interrupt_ledger()
         self._explicit_interrupts.apply_pending(timeline)
-        self._sync_explicit_client_interrupt_compat_attrs()
 
     def _apply_pending_client_control_events(
         self,
@@ -2243,7 +2188,6 @@ class StreamingPipeline(BasePipeline):
     ) -> None:
         self._ensure_explicit_client_interrupt_ledger()
         self._explicit_interrupts.mark_resolved(received_at, resolved_at)
-        self._sync_explicit_client_interrupt_compat_attrs()
 
     def _handle_explicit_client_interrupt(self, packet: Any) -> None:
         self._ensure_client_interaction_handler()
@@ -2378,27 +2322,22 @@ class StreamingPipeline(BasePipeline):
         """
         self._ensure_idle_watchdog_controller()
         self._idle_watchdog_controller.mark_activity()
-        self._sync_idle_watchdog_compat_attrs()
 
     def _start_idle_watchdog(self) -> None:
         self._ensure_idle_watchdog_controller()
         self._idle_watchdog_controller.start()
-        self._sync_idle_watchdog_compat_attrs()
 
     def _stop_idle_watchdog(self) -> None:
         self._ensure_idle_watchdog_controller()
         self._idle_watchdog_controller.stop()
-        self._sync_idle_watchdog_compat_attrs()
 
     async def _idle_watchdog(self) -> None:
         self._ensure_idle_watchdog_controller()
         await self._idle_watchdog_controller.run()
-        self._sync_idle_watchdog_compat_attrs()
 
     async def _disconnect_idle(self) -> None:
         self._ensure_idle_watchdog_controller()
         await self._idle_watchdog_controller.disconnect_idle()
-        self._sync_idle_watchdog_compat_attrs()
 
     async def _notify_client_idle_timeout(self) -> None:
         self._ensure_idle_watchdog_controller()
@@ -2432,48 +2371,14 @@ class StreamingPipeline(BasePipeline):
                 disconnect_grace_sec=self._idle_disconnect_grace_sec,
                 idle_end_reason=self._idle_end_reason,
             )
-            self._idle_watchdog_controller.last_activity_monotonic = getattr(
-                self,
-                "_last_activity_monotonic",
-                0.0,
-            )
         self._idle_watchdog_controller.timeout_sec = self._idle_timeout_sec
         self._idle_watchdog_controller.disconnect_grace_sec = self._idle_disconnect_grace_sec
-        self._sync_idle_watchdog_compat_attrs()
-
-    def _sync_idle_watchdog_compat_attrs(self) -> None:
-        controller = getattr(self, "_idle_watchdog_controller", None)
-        if controller is None:
-            return
-        self._idle_watchdog_task = controller.task
-        self._last_activity_monotonic = controller.last_activity_monotonic
 
     def _ensure_room_data_handler(self) -> None:
         if not hasattr(self, "_room_data"):
             self._room_data = RoomDataHandler(
                 get_timeline=lambda: getattr(self, "_timeline", None),
             )
-            if hasattr(self, "_client_audio_states"):
-                self._room_data.client_audio_states = self._client_audio_states
-            self._room_data.room_data_packet_count = getattr(
-                self,
-                "_room_data_packet_count",
-                0,
-            )
-            self._room_data.client_audio_state_packet_count = getattr(
-                self,
-                "_client_audio_state_packet_count",
-                0,
-            )
-        self._sync_room_data_compat_attrs()
-
-    def _sync_room_data_compat_attrs(self) -> None:
-        room_data = getattr(self, "_room_data", None)
-        if room_data is None:
-            return
-        self._client_audio_states = room_data.client_audio_states
-        self._room_data_packet_count = room_data.room_data_packet_count
-        self._client_audio_state_packet_count = room_data.client_audio_state_packet_count
 
     def _publish_companion_ui_state(self, state: str, reason: str) -> None:
         """Best-effort state bridge for thin clients such as ESP32 displays."""
@@ -2709,7 +2614,7 @@ class StreamingPipeline(BasePipeline):
         eot_model = self._get_eot_model()
         eot_model.update_vad(False)
 
-        if self._soft_interrupt_active:
+        if self._soft_interrupt_is_active():
             logger.info(
                 "[StreamingPipeline] user fell silent during soft interrupt; "
                 "false interruption, cancelling"
@@ -2928,7 +2833,7 @@ class StreamingPipeline(BasePipeline):
 
     def _interrupt_window_active(self) -> bool:
         """Return true while an actual interrupt decision window is open."""
-        return self._ducking.is_suspended or bool(getattr(self, "_soft_interrupt_active", False))
+        return self._ducking.is_suspended or self._soft_interrupt_is_active()
 
     def _agent_output_active_for_interrupts(
         self,
@@ -2950,7 +2855,8 @@ class StreamingPipeline(BasePipeline):
             or self._ducking.is_suspended
         ):
             return True
-        states = getattr(self, "_client_audio_states", {})
+        self._ensure_room_data_handler()
+        states = self._room_data.client_audio_states
         if not states:
             return False
         max_age_sec = (
@@ -3044,8 +2950,6 @@ class StreamingPipeline(BasePipeline):
         self._ensure_runtime_defaults()
         max_age_sec = self._turn_policy.attention.client_state_max_age_ms / 1000.0
         self._ensure_room_data_handler()
-        if self._client_audio_states is not self._room_data.client_audio_states:
-            self._room_data.client_audio_states = self._client_audio_states
         return self._room_data.latest_client_audio_state(
             participant_identity=participant_identity,
             max_age_sec=max_age_sec,
@@ -3091,19 +2995,16 @@ class StreamingPipeline(BasePipeline):
         """
         self._ensure_soft_interrupt_controller()
         self._soft_interrupt.enter()
-        self._sync_soft_interrupt_compat_attrs()
 
     async def _soft_interrupt_timeout_task(self) -> None:
         """Timer task: fires after _soft_interrupt_timeout → upgrade to hard interrupt."""
         self._ensure_soft_interrupt_controller()
         await self._soft_interrupt.run_timeout_task()
-        self._sync_soft_interrupt_compat_attrs()
 
     def _cancel_soft_interrupt(self) -> None:
         """Cancel soft interrupt (detected as a false interruption)."""
         self._ensure_soft_interrupt_controller()
         self._soft_interrupt.cancel()
-        self._sync_soft_interrupt_compat_attrs()
 
     def _handle_hold_decision(
         self,
@@ -3174,25 +3075,11 @@ class StreamingPipeline(BasePipeline):
                 timeout_sec=self._soft_interrupt_timeout,
                 on_timeout=lambda: self._interrupt_current_turn(),
             )
-            self._soft_interrupt.active = getattr(
-                self,
-                "_soft_interrupt_active",
-                False,
-            )
-            self._soft_interrupt.task = getattr(
-                self,
-                "_soft_interrupt_timer",
-                None,
-            )
         self._soft_interrupt.timeout_sec = self._soft_interrupt_timeout
-        self._sync_soft_interrupt_compat_attrs()
 
-    def _sync_soft_interrupt_compat_attrs(self) -> None:
-        controller = getattr(self, "_soft_interrupt", None)
-        if controller is None:
-            return
-        self._soft_interrupt_active = controller.active
-        self._soft_interrupt_timer = controller.task
+    def _soft_interrupt_is_active(self) -> bool:
+        self._ensure_soft_interrupt_controller()
+        return self._soft_interrupt.active
 
     # ------------------------------------------------------------------
     # DuckingMixer integration
@@ -3480,8 +3367,7 @@ class StreamingPipeline(BasePipeline):
             duck_mixer=getattr(self, "_duck_mixer", None),
             config=self._get_eot_model()._config,
         )
-        self._sync_interrupted_context_compat_attrs()
-        context = getattr(self, "_last_interrupted_context", None)
+        context = self._interrupted_context.last_context
         timeline = getattr(self, "_timeline", None)
         if timeline is not None and context is not None:
             timeline.set_attr(
@@ -3500,27 +3386,14 @@ class StreamingPipeline(BasePipeline):
         when generating its next response.
         """
         self._ensure_interrupted_context_manager()
-        self._interrupted_context.last_context = self._last_interrupted_context
         self._interrupted_context.inject(
             session=getattr(self, "_session", None),
             config=self._get_eot_model()._config,
         )
-        self._sync_interrupted_context_compat_attrs()
 
     def _ensure_interrupted_context_manager(self) -> None:
         if not hasattr(self, "_interrupted_context"):
             self._interrupted_context = InterruptedContextManager()
-            self._interrupted_context.last_context = getattr(
-                self,
-                "_last_interrupted_context",
-                None,
-            )
-
-    def _sync_interrupted_context_compat_attrs(self) -> None:
-        manager = getattr(self, "_interrupted_context", None)
-        if manager is None:
-            return
-        self._last_interrupted_context = manager.last_context
 
 
 def _count_cjk_chars(text: str) -> int:

@@ -60,15 +60,12 @@ import json
 import os
 import time
 from abc import ABC
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from ..config import EidolonEOTConfig
 from ..impl.eot_manager import EotManager
 from ..impl.context_enhanced_eot import ContextEnhancedEot
-from ..impl.conversation_phase import (
-    ConversationPhase,
-    ConversationPhaseDetector,
-)
+from ..impl.conversation_phase import ConversationPhaseDetector
 from ..impl.turn_end_policy import TurnEndPolicy
 from ..impl.state import TurnDetectionStateManager
 from ..impl.eot_policy import PolicyChain
@@ -470,7 +467,7 @@ class EidolonEOTModel(ABC):
 
         Strong interrupt intent ("停", "闭嘴", etc.) is handled by
         ``InterruptIntentPolicy`` in the chain. A separate fast-path check
-        in ``streaming.py`` covers the immediate hard-interrupt case
+        in the full-duplex pipeline covers the immediate hard-interrupt case
         (bypasses the two-stage soft-interrupt flow entirely).
 
         Args:
@@ -483,7 +480,7 @@ class EidolonEOTModel(ABC):
             True if playback should be interrupted.
         """
         # Update ASR state so all policies have consistent, up-to-date data.
-        # VAD state is already updated by the caller (streaming.py
+        # VAD state is already updated by the caller (full-duplex pipeline
         # _on_user_state_changed) via update_vad() — do NOT call update_vad
         # again here to avoid inflating transition counts in VADStabilityPolicy.
         self._state.update_asr(text, is_final=is_final)
@@ -589,7 +586,7 @@ class EidolonEOTModel(ABC):
         :class:`MinSpeakingDurationPolicy` to read ``Speech too short
         0.000s`` for every interim cut on that next utterance,
         suppressing all early interrupts. VAD state is managed
-        end-to-end by ``streaming.py``'s ``update_vad(True/False)`` calls
+        end-to-end by the full-duplex pipeline's ``update_vad(True/False)`` calls
         on framework user_state transitions.
         """
         self._context_eot.reset_turn()

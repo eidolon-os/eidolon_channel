@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.turn_policy import Action, Decision
 from eidolon.livekit.common.config import TurnPolicyConfig
 

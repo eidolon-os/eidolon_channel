@@ -20,19 +20,17 @@ from eidolon_sdk.biz.contracts import WIRE_SCHEMA_VERSION
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 if TYPE_CHECKING:
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 
 def _make_pipeline(
     *, timeout_sec: float, on_idle_disconnect=None
 ) -> "StreamingPipeline":
     """Minimally-initialised pipeline exercising only the watchdog slice."""
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._idle_timeout_sec = timeout_sec
-    pipeline._idle_watchdog_task = None
-    pipeline._last_activity_monotonic = 0.0
     pipeline._timeline = None
     pipeline._session_closed_event = asyncio.Event()
     pipeline._on_idle_disconnect = on_idle_disconnect
@@ -53,7 +51,7 @@ def _make_pipeline(
 
 
 def test_idle_watchdog_grace_uses_turn_policy_config():
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = replace(
@@ -73,7 +71,7 @@ async def test_idle_watchdog_deletes_room_and_notifies_client():
     pipeline = _make_pipeline(timeout_sec=0.05, on_idle_disconnect=on_idle)
     pipeline._start_idle_watchdog()
 
-    await asyncio.wait_for(pipeline._idle_watchdog_task, timeout=2.0)
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
 
     # Room deleted via the wired callback (not a bare session.aclose).
     on_idle.assert_awaited_once()
@@ -99,7 +97,7 @@ async def test_idle_watchdog_fallback_closes_session_without_callback():
     pipeline = _make_pipeline(timeout_sec=0.05, on_idle_disconnect=None)
     pipeline._start_idle_watchdog()
 
-    await asyncio.wait_for(pipeline._idle_watchdog_task, timeout=2.0)
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
     pipeline._session.aclose.assert_awaited_once()
     assert pipeline._session_closed_event.is_set()
 
@@ -113,11 +111,11 @@ async def test_activity_postpones_disconnect():
     for _ in range(5):
         await asyncio.sleep(0.1)
         pipeline._mark_activity()
-    assert not pipeline._idle_watchdog_task.done()
+    assert not pipeline._idle_watchdog_controller.task.done()
     pipeline._session.aclose.assert_not_awaited()
 
     # Stop refreshing — now it should disconnect.
-    await asyncio.wait_for(pipeline._idle_watchdog_task, timeout=2.0)
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
     pipeline._session.aclose.assert_awaited_once()
 
 
@@ -126,7 +124,7 @@ async def test_zero_timeout_disables_watchdog():
     pipeline = _make_pipeline(timeout_sec=0.0)
     pipeline._start_idle_watchdog()
 
-    assert pipeline._idle_watchdog_task is None
+    assert pipeline._idle_watchdog_controller.task is None
     await asyncio.sleep(0.1)
     pipeline._session.aclose.assert_not_awaited()
 
@@ -140,12 +138,12 @@ async def test_live_agent_turn_is_not_cut():
 
     # Watchdog wakes past the deadline but sees the agent still speaking → re-arms.
     await asyncio.sleep(0.3)
-    assert not pipeline._idle_watchdog_task.done()
+    assert not pipeline._idle_watchdog_controller.task.done()
     pipeline._session.aclose.assert_not_awaited()
 
     # Reply finishes → next wake cuts it.
     pipeline._session.agent_state = "idle"
-    await asyncio.wait_for(pipeline._idle_watchdog_task, timeout=2.0)
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
     pipeline._session.aclose.assert_awaited_once()
 
 
@@ -158,14 +156,15 @@ async def test_recognized_speech_marks_activity_empty_does_not():
     pipeline._allow_interruptions = False
     pipeline._state = None
     pipeline._get_eot_model = MagicMock(return_value=MagicMock())
-    pipeline._last_activity_monotonic = 0.0
+    pipeline._ensure_idle_watchdog_controller()
+    pipeline._idle_watchdog_controller.last_activity_monotonic = 0.0
 
     # Empty transcript → no activity bump.
     pipeline._on_user_transcribed(SimpleNamespace(transcript="", is_final=False))
-    assert pipeline._last_activity_monotonic == 0.0
+    assert pipeline._idle_watchdog_controller.last_activity_monotonic == 0.0
 
     # Real recognized text → activity bumped.
     pipeline._on_user_transcribed(
         SimpleNamespace(transcript="你好", is_final=True)
     )
-    assert pipeline._last_activity_monotonic > 0.0
+    assert pipeline._idle_watchdog_controller.last_activity_monotonic > 0.0

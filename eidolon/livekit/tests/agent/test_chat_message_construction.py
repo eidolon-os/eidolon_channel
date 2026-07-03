@@ -34,7 +34,7 @@ def test_chat_message_no_legacy_create_classmethod() -> None:
 
     assert not hasattr(ChatMessage, "create"), (
         "ChatMessage gained a `.create` classmethod in livekit-agents; "
-        "revisit eidolon/livekit/agent/streaming.py:_inject_interrupted_context "
+        "revisit eidolon/livekit/agent/full_duplex/pipeline.py:_inject_interrupted_context "
         "and decide whether to migrate."
     )
 

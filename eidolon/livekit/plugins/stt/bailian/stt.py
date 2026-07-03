@@ -121,7 +121,7 @@ class BailianFunASRSTT(stt.STT):
 
         self._conn_options = conn_options or livekit.agents.types.DEFAULT_API_CONNECT_OPTIONS
         # G16 (2026-05-17): track the most-recently-created stream so the
-        # caller (streaming.py's VAD inference callback) can route per-frame
+        # caller (full_duplex/pipeline.py's VAD inference callback) can route per-frame
         # VAD signal into the gate inside the active stream. weakref-style
         # — only one stream is "current" at a time per session.
         self._current_stream: "BailianFunASRSpeechStream | None" = None
@@ -250,7 +250,7 @@ class BailianFunASRSTT(stt.STT):
         self._current_stream = s
         return s
 
-    # G16 (2026-05-17): VAD signal bridge. streaming.py invokes this once
+    # G16 (2026-05-17): VAD signal bridge. The full-duplex pipeline invokes this once
     # per VAD inference frame; we delegate to the active stream's gate.
     def notify_vad_state(self, probability: float, rms: float) -> None:
         """Forward per-frame VAD probability + RMS energy to the current

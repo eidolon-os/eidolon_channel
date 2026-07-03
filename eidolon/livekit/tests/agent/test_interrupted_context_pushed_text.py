@@ -32,6 +32,10 @@ def _msg(role: str, text: str) -> SimpleNamespace:
     return SimpleNamespace(role=role, text_content=text)
 
 
+def _interrupted_context(pipeline) -> dict | None:
+    return pipeline._interrupted_context.last_context
+
+
 def _make_pipeline(
     *,
     history_messages: list,
@@ -46,7 +50,7 @@ def _make_pipeline(
         tts_pushed_text: what tts_plugin.current_pushed_text returns
             (None → property absent → fallback path triggered)
     """
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
 
@@ -80,8 +84,6 @@ def _make_pipeline(
         type(mixer).played_seconds = property(lambda self: played_sec)
         pipeline._duck_mixer = mixer
 
-    pipeline._last_interrupted_context = None
-
     return pipeline
 
 
@@ -103,7 +105,7 @@ def test_prefers_tts_in_flight_over_history() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    ctx = pipeline._last_interrupted_context
+    ctx = _interrupted_context(pipeline)
     assert ctx is not None
     assert ctx["text"] == "正在合成中的当前回复"
     assert ctx["source"] == "tts_in_flight"
@@ -121,7 +123,7 @@ def test_tts_in_flight_captures_chinese_correctly() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    assert pipeline._last_interrupted_context["text"] == long_text
+    assert _interrupted_context(pipeline)["text"] == long_text
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +143,7 @@ def test_skips_history_fallback_by_default_when_tts_empty() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    assert pipeline._last_interrupted_context is None
+    assert _interrupted_context(pipeline) is None
     pipeline._session.history.messages.assert_not_called()
 
 
@@ -158,7 +160,7 @@ def test_falls_back_to_history_when_tts_empty_and_enabled() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    ctx = pipeline._last_interrupted_context
+    ctx = _interrupted_context(pipeline)
     assert ctx is not None
     assert ctx["text"] == "history fallback reply"
     assert ctx["source"] == "session_history_fallback"
@@ -176,8 +178,8 @@ def test_falls_back_to_history_when_tts_whitespace_only() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    assert pipeline._last_interrupted_context["text"] == "history reply"
-    assert pipeline._last_interrupted_context["source"] == "session_history_fallback"
+    assert _interrupted_context(pipeline)["text"] == "history reply"
+    assert _interrupted_context(pipeline)["source"] == "session_history_fallback"
 
 
 def test_falls_back_when_tts_plugin_lacks_property() -> None:
@@ -192,8 +194,8 @@ def test_falls_back_when_tts_plugin_lacks_property() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    assert pipeline._last_interrupted_context["text"] == "from history"
-    assert pipeline._last_interrupted_context["source"] == "session_history_fallback"
+    assert _interrupted_context(pipeline)["text"] == "from history"
+    assert _interrupted_context(pipeline)["source"] == "session_history_fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +214,7 @@ def test_no_snapshot_when_both_sources_empty() -> None:
 
     pipeline._snapshot_interrupted_context()
 
-    assert pipeline._last_interrupted_context is None
+    assert _interrupted_context(pipeline) is None
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +229,7 @@ def test_played_seconds_recorded_on_primary_path() -> None:
         played_sec=2.5,
     )
     pipeline._snapshot_interrupted_context()
-    assert pipeline._last_interrupted_context["played_seconds"] == 2.5
+    assert _interrupted_context(pipeline)["played_seconds"] == 2.5
 
 
 def test_played_seconds_recorded_on_fallback_path() -> None:
@@ -238,7 +240,7 @@ def test_played_seconds_recorded_on_fallback_path() -> None:
         history_fallback_enabled=True,
     )
     pipeline._snapshot_interrupted_context()
-    assert pipeline._last_interrupted_context["played_seconds"] == 0.7
+    assert _interrupted_context(pipeline)["played_seconds"] == 0.7
 
 
 # ---------------------------------------------------------------------------

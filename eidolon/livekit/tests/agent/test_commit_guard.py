@@ -33,7 +33,7 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     We bypass full __init__ because ``_on_user_state_changed`` only consults
     the small slice of state set up below.
     """
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._session = MagicMock()
@@ -48,8 +48,6 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     pipeline._duck_mixer = None
     pipeline._duck_timeout_task = None
     pipeline._duck_suspend_start = 0.0
-    pipeline._soft_interrupt_active = False
-    pipeline._soft_interrupt_timer = None
     pipeline._user_speaking_start_time = None
     pipeline._last_unduck_time = 0.0
     pipeline._skip_commit_after_interrupt_cancel = False

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 from eidolon_sdk.biz.contracts import SESSION_END_ERROR, SESSION_END_USER_LEFT
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 
 @pytest.mark.asyncio

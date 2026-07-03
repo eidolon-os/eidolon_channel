@@ -22,7 +22,6 @@ from websockets.exceptions import WebSocketException
 from .models import (
     FunASREventType,
     FunASRTaskFailed,
-    FunASRTaskFinished,
     FunASRTaskStarted,
     parse_funasr_message,
 )

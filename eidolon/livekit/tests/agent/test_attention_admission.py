@@ -10,7 +10,8 @@ from unittest.mock import MagicMock
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.pipeline.types import PipelineState
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
+from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.agent.turn_policy import (
     AdmissionAction,
     AttentionAdmission,
@@ -256,9 +257,9 @@ def _pipeline_with_client_state(
     pipeline._state = pipeline_state
     pipeline._duck_mixer = None
     pipeline._timeline = TurnTimeline("turn-1")
-    pipeline._client_audio_states = (
-        {state.participant_identity: state} if state is not None else {}
-    )
+    pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
+    if state is not None:
+        pipeline._room_data.client_audio_states[state.participant_identity] = state
     pipeline._duck_and_arm_timeout = MagicMock()
     pipeline._callbacks = MagicMock()
     return pipeline
@@ -585,7 +586,7 @@ def test_pipeline_attention_prefers_speaker_client_state() -> None:
         received_at=now - 0.2,
     )
     pipeline = _pipeline_with_client_state(alice)
-    pipeline._client_audio_states[bob.participant_identity] = bob
+    pipeline._room_data.client_audio_states[bob.participant_identity] = bob
 
     allowed = _allows_eot(
         pipeline,

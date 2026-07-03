@@ -59,8 +59,8 @@ class BatchPipeline(BasePipeline):
         super().__init__(factory=factory, callbacks=callbacks)
         self._processing: bool = False
         # Round 8 R8.6 — replace ``while room.isconnected: sleep(1.0)``
-        # polling with an event-driven shutdown signal (mirrors what
-        # streaming.py did for ``session.on("close")``). Avoids the
+        # polling with an event-driven shutdown signal (mirrors what the
+        # full-duplex pipeline does for ``session.on("close")``). Avoids the
         # silent-stall failure mode where ``room.isconnected`` doesn't
         # flip in time.
         self._room_disconnected_event: asyncio.Event = asyncio.Event()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from eidolon_sdk.biz.contracts import INTERACTION_MODE_HALF_DUPLEX
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.factory import SharedStageFactory
 from eidolon.livekit.common.config import TurnPolicyConfig
 

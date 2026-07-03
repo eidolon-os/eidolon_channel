@@ -100,7 +100,7 @@ async def test_reset_recovers_from_cancelled() -> None:
 
 def _make_pipeline_with_mixer(initial_state: str = "NORMAL"):
     """Stub pipeline with a real OutputController in a known state."""
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
 
@@ -109,9 +109,6 @@ def _make_pipeline_with_mixer(initial_state: str = "NORMAL"):
     if initial_state == "CANCELLED":
         mixer.cancel()
     pipeline._duck_mixer = mixer
-
-    pipeline._soft_interrupt_active = False
-    pipeline._soft_interrupt_timer = None
     pipeline._filler = None
 
     # super()._on_agent_state_changed needs ``_state`` attr (PipelineState mirror)
@@ -188,14 +185,12 @@ async def test_full_interrupt_then_new_turn_unblocks_audio() -> None:
 
 def test_thinking_transition_safe_without_mixer() -> None:
     """No-op when there is no mixer (headless tests, duck_enabled=False)."""
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
     from eidolon.livekit.agent.pipeline.types import PipelineState
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._duck_mixer = None
     pipeline._state = PipelineState.IDLE
-    pipeline._soft_interrupt_active = False
-    pipeline._soft_interrupt_timer = None
     pipeline._filler = None
 
     event = SimpleNamespace(old_state="listening", new_state="thinking")

@@ -15,7 +15,7 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from eidolon.livekit.agent.streaming import StreamingPipeline
+from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 _CONTEXT_REASON = "voiceprint_blocked:context_error:AdminResolveNotFound"
 _ROUTINE_REASON = "interrupt_cancel"

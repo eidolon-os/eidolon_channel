@@ -34,7 +34,7 @@ import pytest
 
 def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0):
     """Build a stub pipeline with a SUSPENDED duck_mixer."""
-    from eidolon.livekit.agent.streaming import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
@@ -61,8 +61,6 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
     pipeline._session.user_state = vad_user_state
     pipeline._duck_suspend_start = time.monotonic() - 0.1
     pipeline._duck_timeout_task = None
-    pipeline._soft_interrupt_active = False
-    pipeline._soft_interrupt_timer = None
     pipeline._last_unduck_time = 0.0
     pipeline._user_speaking_start_time = None
 

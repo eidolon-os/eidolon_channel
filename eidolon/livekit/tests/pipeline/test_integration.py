@@ -285,7 +285,7 @@ class TestStreamingPipelineIntegration:
 
     def test_streaming_pipeline_initializes(self, shared_stage_factory):
         """StreamingPipeline should initialize with the real SharedStageFactory."""
-        from eidolon.livekit.agent import StreamingPipeline
+        from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
         pipeline = StreamingPipeline(
             shared_stage_factory,
@@ -300,7 +300,7 @@ class TestStreamingPipelineIntegration:
 
     def test_streaming_pipeline_builds_agent(self, shared_stage_factory):
         """_build_agent() should create a VoiceAgent with real stt/llm/tts/vad."""
-        from eidolon.livekit.agent import StreamingPipeline
+        from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
         pipeline = StreamingPipeline(shared_stage_factory, instructions="Test")
         agent = pipeline._build_agent()
@@ -319,7 +319,7 @@ class TestStreamingPipelineIntegration:
 
     def test_eot_model_loads(self, shared_stage_factory):
         """ChineseModel EOT should load from the bundled ONNX model."""
-        from eidolon.livekit.agent import StreamingPipeline
+        from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
         pipeline = StreamingPipeline(shared_stage_factory, instructions="Test")
         eot_model = pipeline._get_eot_model()
@@ -332,7 +332,7 @@ class TestStreamingPipelineIntegration:
     @pytest.mark.asyncio
     async def test_eot_model_predict_end_of_turn(self, shared_stage_factory):
         """EOT model should return a score for Chinese text."""
-        from eidolon.livekit.agent import StreamingPipeline
+        from eidolon.livekit.agent.full_duplex import StreamingPipeline
         from livekit.agents.llm import ChatContext
 
         pipeline = StreamingPipeline(shared_stage_factory, instructions="Test")
@@ -349,7 +349,7 @@ class TestStreamingPipelineIntegration:
 
     def test_streaming_pipeline_event_handlers(self, shared_stage_factory):
         """Test _on_user_state_changed and _on_agent_state_changed fire callbacks."""
-        from eidolon.livekit.agent import StreamingPipeline
+        from eidolon.livekit.agent.full_duplex import StreamingPipeline
         from eidolon.livekit.agent.pipeline import PipelineCallbacks
 
         callbacks_fired: dict[str, bool] = {}

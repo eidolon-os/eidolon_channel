@@ -492,7 +492,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
     # G16: VAD signal bridge ------------------------------------------
     def notify_vad_state(self, probability: float, rms: float) -> None:
         """Push VAD inference output to the gate (called per-frame from the
-        STT instance, which is called from streaming.py's VAD callback).
+        STT instance, which is called from the full-duplex VAD callback).
         No-op if the gate is disabled or not yet started."""
         if self._gate is not None:
             self._gate.notify_vad_state(probability, rms)

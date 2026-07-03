@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
@@ -255,7 +256,8 @@ def _pipeline_with_client_state(
     )
     pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
     pipeline._state = pipeline_state
-    pipeline._duck_mixer = None
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
     pipeline._timeline = TurnTimeline("turn-1")
     pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
     if state is not None:

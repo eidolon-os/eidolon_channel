@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
 from eidolon.livekit.common.speaker_verification import SpeakerSignal
 from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
@@ -45,11 +46,12 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     pipeline._stt_commit_transcript_timeout = 5.0
     pipeline._latest_asr_text = latest_asr_text
     pipeline._filler = None
-    pipeline._duck_mixer = None
-    pipeline._duck_timeout_task = None
-    pipeline._duck_suspend_start = 0.0
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
+    pipeline._ducking.timeout_task = None
+    pipeline._ducking.suspend_start = 0.0
     pipeline._user_speaking_start_time = None
-    pipeline._last_unduck_time = 0.0
+    pipeline._ducking.last_unduck_time = 0.0
     pipeline._skip_commit_after_interrupt_cancel = False
     pipeline._suppress_commit_after_interrupt_until = 0.0
 

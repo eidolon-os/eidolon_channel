@@ -18,6 +18,8 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
+
 if TYPE_CHECKING:
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
@@ -36,10 +38,11 @@ def _make_pipeline_with_history(messages: list) -> "StreamingPipeline":
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._session = MagicMock()
     pipeline._session.history.messages = MagicMock(return_value=messages)
-    # G6 (2026-05-17): _snapshot_interrupted_context now consults
-    # self._duck_mixer.played_seconds when available; set None for these
-    # legacy tests that pre-date G6.
-    pipeline._duck_mixer = None
+    # G6 (2026-05-17): _snapshot_interrupted_context now consults the ducking
+    # mixer's played_seconds when available; set None for these legacy tests
+    # that pre-date G6.
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
 
     # Stub _get_eot_model() → cfg with history fallback enabled for these
     # legacy method-call regression tests.
@@ -157,12 +160,13 @@ def _make_pipeline_with_duck_mixer(
         return_value=SimpleNamespace(_config=cfg)
     )
 
+    pipeline._ducking = OutputDuckingController()
     if played_seconds is None:
-        pipeline._duck_mixer = None
+        pipeline._ducking.mixer = None
     else:
         mixer = MagicMock()
         type(mixer).played_seconds = property(lambda self: played_seconds)
-        pipeline._duck_mixer = mixer
+        pipeline._ducking.mixer = mixer
 
     return pipeline
 

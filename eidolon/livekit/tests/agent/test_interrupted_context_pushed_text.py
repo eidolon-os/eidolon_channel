@@ -27,6 +27,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
+
 
 def _msg(role: str, text: str) -> SimpleNamespace:
     return SimpleNamespace(role=role, text_content=text)
@@ -77,12 +79,13 @@ def _make_pipeline(
     pipeline._get_eot_model = MagicMock(return_value=eot)
 
     # duck mixer played_seconds
+    pipeline._ducking = OutputDuckingController()
     if played_sec is None:
-        pipeline._duck_mixer = None
+        pipeline._ducking.mixer = None
     else:
         mixer = MagicMock()
         type(mixer).played_seconds = property(lambda self: played_sec)
-        pipeline._duck_mixer = mixer
+        pipeline._ducking.mixer = mixer
 
     return pipeline
 

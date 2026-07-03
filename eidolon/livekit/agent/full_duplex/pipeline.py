@@ -87,7 +87,7 @@ from ..turn_policy import (
 from ..turn_policy.constants import STABLE_SIGNAL_WAIT_REASON_PREFIX
 from ..observability import TurnTimeline
 from ..factory import SharedStageFactory
-from ..output import FillerManager, OutputController, OutputDuckingController
+from ..output import FillerManager, OutputDuckingController
 from ..pipeline.base import BasePipeline
 from ..pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from ..session.agent_state import AgentStateEffectHandler
@@ -391,46 +391,6 @@ class StreamingPipeline(BasePipeline):
     def _get_eot_model(self) -> Any:
         """Return the shared EOT model instance."""
         return get_shared_eot_model(self._turn_policy)
-
-    @property
-    def _duck_mixer(self) -> OutputController | None:
-        self._ensure_ducking_controller()
-        return self._ducking.mixer
-
-    @_duck_mixer.setter
-    def _duck_mixer(self, value: OutputController | None) -> None:
-        self._ensure_ducking_controller()
-        self._ducking.mixer = value
-
-    @property
-    def _duck_timeout_task(self) -> asyncio.Task | None:
-        self._ensure_ducking_controller()
-        return self._ducking.timeout_task
-
-    @_duck_timeout_task.setter
-    def _duck_timeout_task(self, value: asyncio.Task | None) -> None:
-        self._ensure_ducking_controller()
-        self._ducking.timeout_task = value
-
-    @property
-    def _last_unduck_time(self) -> float:
-        self._ensure_ducking_controller()
-        return self._ducking.last_unduck_time
-
-    @_last_unduck_time.setter
-    def _last_unduck_time(self, value: float) -> None:
-        self._ensure_ducking_controller()
-        self._ducking.last_unduck_time = value
-
-    @property
-    def _duck_suspend_start(self) -> float:
-        self._ensure_ducking_controller()
-        return self._ducking.suspend_start
-
-    @_duck_suspend_start.setter
-    def _duck_suspend_start(self, value: float) -> None:
-        self._ensure_ducking_controller()
-        self._ducking.suspend_start = value
 
     def _ensure_ducking_controller(self) -> None:
         if not hasattr(self, "_ducking"):
@@ -3114,7 +3074,7 @@ class StreamingPipeline(BasePipeline):
     #   user_state listening → speaking
     #     → _duck_and_arm_timeout()
     #         mixer.duck()  (50 ms fade-out to silence)
-    #         start _duck_timeout_task (default 0.5 s fallback)
+    #         start _ducking.timeout_task (default 0.5 s fallback)
     #
     #   SemanticInterruptHandler.run (per STT interim/final):
     #     strong_interrupt_intent OR score >= duck_early_cancel_score_threshold
@@ -3123,7 +3083,7 @@ class StreamingPipeline(BasePipeline):
     #       → _duck_unduck()  (false interrupt, smooth fade-in)
     #     mid-band → leave SUSPENDED, let timeout decide
     #
-    #   _duck_timeout_task fires (no decision in window):
+    #   _ducking.timeout_task fires (no decision in window):
     #     → mixer.unduck()  (default to false-interrupt, conservative)
     #
     #   user_state speaking → listening (user actually finished):
@@ -3385,10 +3345,11 @@ class StreamingPipeline(BasePipeline):
         the PREVIOUS turn's assistant text rather than the in-flight one.
         """
         self._ensure_interrupted_context_manager()
+        self._ensure_ducking_controller()
         self._interrupted_context.snapshot(
             session=getattr(self, "_session", None),
             factory=getattr(self, "_factory", None),
-            duck_mixer=getattr(self, "_duck_mixer", None),
+            duck_mixer=self._ducking.mixer,
             config=self._get_eot_model()._config,
         )
         context = self._interrupted_context.last_context

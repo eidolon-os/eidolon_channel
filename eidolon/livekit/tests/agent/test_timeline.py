@@ -12,6 +12,7 @@ import pytest
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
 from eidolon.livekit.agent.integration.client_audio_state import parse_client_audio_state
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.config import ObservabilityConfig
@@ -431,7 +432,8 @@ def test_streaming_pipeline_flushes_timeline_on_agent_playback_done(tmp_path) ->
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._state = PipelineState.SPEAKING
     pipeline._callbacks = MagicMock()
-    pipeline._duck_mixer = None
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
     pipeline._filler = None
     pipeline._timeline = TurnTimeline("turn-normal")
     pipeline._timeline_debug_flushed = False
@@ -487,7 +489,8 @@ def test_streaming_pipeline_flushes_unfinished_timeline_on_session_close(
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._state = PipelineState.SPEAKING
     pipeline._callbacks = MagicMock()
-    pipeline._duck_mixer = None
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
     pipeline._timeline = TurnTimeline("turn-close")
     pipeline._timeline_debug_flushed = False
     pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
@@ -734,7 +737,8 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._duck_mixer = SimpleNamespace(state="CANCELLED")
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = SimpleNamespace(state="CANCELLED")
     pipeline._callbacks = MagicMock()
     pipeline._session = MagicMock()
     pipeline._timeline = TurnTimeline("turn-duplicate-cancel")

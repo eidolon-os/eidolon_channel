@@ -31,6 +31,7 @@ from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
 from eidolon.livekit.agent.output.controller import OutputController
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
 
 
 SAMPLE_RATE = 16000
@@ -108,7 +109,8 @@ def _make_pipeline_with_mixer(initial_state: str = "NORMAL"):
     mixer = OutputController(inner, sample_rate=SAMPLE_RATE)
     if initial_state == "CANCELLED":
         mixer.cancel()
-    pipeline._duck_mixer = mixer
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = mixer
     pipeline._filler = None
 
     # super()._on_agent_state_changed needs ``_state`` attr (PipelineState mirror)
@@ -189,7 +191,8 @@ def test_thinking_transition_safe_without_mixer() -> None:
     from eidolon.livekit.agent.pipeline.types import PipelineState
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._duck_mixer = None
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
     pipeline._state = PipelineState.IDLE
     pipeline._filler = None
 

@@ -24,6 +24,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from eidolon.livekit.agent.output.ducking import OutputDuckingController
+
 
 # ---------------------------------------------------------------------------
 # Helpers — build a barely-initialised StreamingPipeline for the unit paths
@@ -55,13 +57,14 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
     mixer.state = "SUSPENDED"
     mixer.buffered_frames = 5
     mixer.buffered_sec = 0.05
-    pipeline._duck_mixer = mixer
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = mixer
 
     pipeline._session = MagicMock()
     pipeline._session.user_state = vad_user_state
-    pipeline._duck_suspend_start = time.monotonic() - 0.1
-    pipeline._duck_timeout_task = None
-    pipeline._last_unduck_time = 0.0
+    pipeline._ducking.suspend_start = time.monotonic() - 0.1
+    pipeline._ducking.timeout_task = None
+    pipeline._ducking.last_unduck_time = 0.0
     pipeline._user_speaking_start_time = None
 
     pipeline._callbacks = MagicMock()
@@ -93,7 +96,7 @@ def test_first_signal_holds_substantive_interim_without_semantic_score() -> None
     _run_semantic_check(pipeline, "我不相信你", is_final=False)
 
     pipeline._snapshot_interrupted_context.assert_not_called()
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
 
 
@@ -103,7 +106,7 @@ def test_first_signal_cancel_on_high_semantic_score() -> None:
 
     _run_semantic_check(pipeline, "我不相信你", is_final=False)
 
-    pipeline._duck_mixer.cancel.assert_called_once()
+    pipeline._ducking.mixer.cancel.assert_called_once()
     pipeline._interrupt_current_turn.assert_called_once()
 
 
@@ -113,7 +116,7 @@ def test_first_signal_holds_short_latin_artifact() -> None:
 
     _run_semantic_check(pipeline, "If", is_final=False)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
 
 
@@ -124,7 +127,7 @@ def test_first_signal_skips_backchannel() -> None:
 
     _run_semantic_check(pipeline, "嗯", is_final=False)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
 
 
@@ -134,7 +137,7 @@ def test_first_signal_skips_compound_backchannel() -> None:
 
     _run_semantic_check(pipeline, "嗯嗯", is_final=False)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
 
 
 def test_first_signal_skips_single_char() -> None:
@@ -144,7 +147,7 @@ def test_first_signal_skips_single_char() -> None:
 
     _run_semantic_check(pipeline, "你", is_final=False)  # 1 char < min 2
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
 
 
 def test_first_signal_respects_turn_policy_min_chars() -> None:
@@ -164,7 +167,7 @@ def test_first_signal_respects_turn_policy_min_chars() -> None:
 
     _run_semantic_check(pipeline, "你好世", is_final=False)  # 3 chars < new 5
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
 
 
 def test_first_signal_strips_punctuation() -> None:
@@ -174,17 +177,17 @@ def test_first_signal_strips_punctuation() -> None:
 
     _run_semantic_check(pipeline, "嗯。", is_final=False)  # stripped → "嗯"
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
 
 
 def test_fallback_semantic_correction_waits_without_semantic_score() -> None:
     """Late correction text after VAD-end waits for semantic confidence."""
     pipeline = _make_pipeline(vad_user_state="listening")
-    pipeline._duck_mixer.state = "NORMAL"
+    pipeline._ducking.mixer.state = "NORMAL"
 
     _run_semantic_check(pipeline, "我刚才说错了", is_final=False)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
 
 
@@ -201,8 +204,8 @@ async def test_timeout_with_vad_still_active_without_transcript_holds() -> None:
     with patch("eidolon.livekit.agent.full_duplex.pipeline.asyncio.create_task") as create_task:
         await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
-    pipeline._duck_mixer.unduck.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.unduck.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
     create_task.assert_called_once()
     create_task.call_args.args[0].close()
@@ -216,8 +219,8 @@ async def test_timeout_with_vad_still_active_and_transcript_cancels() -> None:
 
     await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._duck_mixer.cancel.assert_called_once()
-    pipeline._duck_mixer.unduck.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_called_once()
+    pipeline._ducking.mixer.unduck.assert_not_called()
     pipeline._interrupt_current_turn.assert_called_once()
 
 
@@ -230,8 +233,8 @@ async def test_timeout_with_low_score_transcript_holds() -> None:
     with patch("eidolon.livekit.agent.full_duplex.pipeline.asyncio.create_task") as create_task:
         await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
-    pipeline._duck_mixer.unduck.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.unduck.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
     create_task.assert_called_once()
     create_task.call_args.args[0].close()
@@ -242,7 +245,7 @@ async def test_timeout_hold_rolls_back_after_max_suspend_budget() -> None:
     """A HOLD deadline must not leave the duck mixer suspended forever."""
     pipeline = _make_pipeline(vad_user_state="speaking", eot_score=0.0)
     pipeline._latest_asr_text = "啊那你"
-    pipeline._duck_suspend_start = (
+    pipeline._ducking.suspend_start = (
         time.monotonic()
         - pipeline._get_eot_model()._config.duck_buffer_max_sec
         - 0.1
@@ -250,8 +253,8 @@ async def test_timeout_hold_rolls_back_after_max_suspend_budget() -> None:
 
     await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._duck_mixer.unduck.assert_called_once_with(drop_buffered=True)
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=True)
+    pipeline._ducking.mixer.cancel.assert_not_called()
     pipeline._interrupt_current_turn.assert_not_called()
 
 
@@ -263,8 +266,8 @@ async def test_timeout_with_vad_idle_unducks_drop_buffered() -> None:
 
     await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._duck_mixer.unduck.assert_called_once_with(drop_buffered=True)
-    pipeline._duck_mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=True)
+    pipeline._ducking.mixer.cancel.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -272,12 +275,12 @@ async def test_timeout_noop_if_already_resolved() -> None:
     """If the duck was already resolved (state != SUSPENDED) before the
     timeout fires, the fallback should be a no-op."""
     pipeline = _make_pipeline(vad_user_state="speaking")
-    pipeline._duck_mixer.state = "NORMAL"  # already resolved
+    pipeline._ducking.mixer.state = "NORMAL"  # already resolved
 
     await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._duck_mixer.cancel.assert_not_called()
-    pipeline._duck_mixer.unduck.assert_not_called()
+    pipeline._ducking.mixer.cancel.assert_not_called()
+    pipeline._ducking.mixer.unduck.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

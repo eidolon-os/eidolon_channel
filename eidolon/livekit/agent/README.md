@@ -11,7 +11,6 @@ entrypoints; implementation code lives under named boundary packages.
   `StreamingPipeline` from `eidolon.livekit.agent.full_duplex`.
 - `half_duplex/` is the push-to-talk path. New code imports
   `HalfDuplexPttPipeline` from `eidolon.livekit.agent.half_duplex`.
-- `batch.py` is the non-realtime/manual audio path.
 - `factory.py` builds shared STT, TTS, VAD, LLM, voiceprint, and runtime services.
 
 ## Boundary Packages

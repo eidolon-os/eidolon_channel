@@ -32,7 +32,6 @@ class CoreConfig:
 
 @dataclass(frozen=True)
 class AgentBehaviorConfig:
-    pipeline_mode: str = "streaming"
     instructions: str = "You are a helpful, friendly voice assistant. Keep responses concise."
     welcome_message: str = "你好！我是你的 AI 助手，请问有什么可以帮你的？"
     audio_sample_rate: int = 16000

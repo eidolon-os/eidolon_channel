@@ -1,9 +1,9 @@
 """Voice agent server — LiveKit agent worker.
 
 This server runs as a LiveKit agent worker, connecting to LiveKit rooms as an
-agent participant. When a user joins a room, this worker dispatches a job that
-runs either StreamingPipeline (streaming mode, default) or BatchPipeline (manual
-mode, configured via AGENT_MODE env var).
+agent participant. When a user joins a room, this worker dispatches a job and
+selects the mode-specific pipeline from the session metadata stamped into the
+LiveKit participant token.
 
 Recommended local startup: ``eidolon_admin`` supervisord / ``./deploy/dev/run_all.sh``
 (loads ``config/.env`` via ``with-env.sh``).
@@ -211,16 +211,14 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str]:
 
 async def run_agent(ctx, cfg: AgentConfig) -> None:
     """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
-    from eidolon.livekit.agent.batch import BatchPipeline
     from eidolon.livekit.agent.factory import SharedStageFactory
     from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
     from eidolon.livekit.agent.runtime import apply_interaction_mode
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     logger.info(
-        "[Agent] starting room=%s mode=%s stt=%s tts=%s vad=%s",
+        "[Agent] starting room=%s stt=%s tts=%s vad=%s",
         ctx.room.name,
-        cfg.behavior.pipeline_mode,
         cfg.providers.stt_provider,
         cfg.providers.tts_provider,
         cfg.providers.vad_provider,
@@ -325,78 +323,76 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         except Exception:
             logger.exception("[Agent] failed to delete room=%s (%s)", room.name, context)
 
-    if cfg.behavior.pipeline_mode == "batch":
-        pipeline = BatchPipeline(factory)
+    # Resolve the session-metadata bus (interaction_mode + session_intent) from
+    # the device-declared token metadata in one read, then derive a per-session
+    # turn policy. The old process-wide "batch/streaming" pipeline mode was
+    # retired; the Channel worker now always chooses half/full duplex at the
+    # session boundary.
+    interaction_mode, session_intent = await _resolve_session_metadata(ctx)
+    session_turn_policy, allow_interruptions = apply_interaction_mode(
+        turn_policy=cfg.turn_policy,
+        allow_interruptions=True,
+        interaction_mode=interaction_mode,
+    )
+    logger.info(
+        "[Agent] interaction_mode=%s session_intent=%s allow_interruptions=%s "
+        "attention_enabled=%s",
+        interaction_mode,
+        session_intent,
+        allow_interruptions,
+        session_turn_policy.attention.enabled,
+    )
+    if _use_half_duplex_ptt_pipeline(interaction_mode):
+        pipeline = HalfDuplexPttPipeline(
+            factory,
+            instructions=cfg.behavior.instructions,
+            welcome_message=cfg.behavior.welcome_message,
+            audio_sample_rate=cfg.behavior.audio_sample_rate,
+            turn_policy=session_turn_policy,
+            observability=cfg.observability,
+            on_session_closed=lambda: _delete_room("session closed (device left)"),
+        )
     else:
-        # Phase 5 / Phase 2: resolve the session-metadata bus (interaction_mode +
-        # session_intent) from the device-declared token metadata in one read,
-        # then derive a per-session turn policy (half_duplex → no barge-in).
-        # Never mutates the shared global cfg.
-        interaction_mode, session_intent = await _resolve_session_metadata(ctx)
-        session_turn_policy, allow_interruptions = apply_interaction_mode(
-            turn_policy=cfg.turn_policy,
-            allow_interruptions=True,
+        pipeline = StreamingPipeline(
+            factory,
+            instructions=cfg.behavior.instructions,
+            allow_interruptions=allow_interruptions,
+            welcome_message=cfg.behavior.welcome_message,
+            audio_sample_rate=cfg.behavior.audio_sample_rate,
+            false_interruption_timeout=(
+                session_turn_policy.interrupt.framework_false_interruption_timeout_ms
+                / 1000.0
+            ),
+            stt_commit_transcript_timeout=(
+                session_turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
+            ),
+            aec_warmup_duration=(
+                None
+                if session_turn_policy.interrupt.aec_warmup_ms is None
+                else session_turn_policy.interrupt.aec_warmup_ms / 1000.0
+            ),
+            turn_policy=session_turn_policy,
             interaction_mode=interaction_mode,
+            session_intent=session_intent,
+            observability=cfg.observability,
+            voiceprint_config=cfg.voiceprint,
+            # Idle watchdog disconnect: delete the room so the still-connected
+            # client is actively kicked (ROOM_DELETED) and the job's
+            # shutdown_fut resolves — session.aclose() alone leaves the client
+            # in a dead room and the job hanging on shutdown_fut.
+            on_idle_disconnect=lambda: _delete_room("idle timeout"),
+            # The idle watchdog routes its client notice through this as
+            # reason=idle_normal_end (sent before the grace + delete above).
+            on_session_end=_publish_session_end,
+            # On session close (device left / error), delete the room PROMPTLY —
+            # before the slow STT/TTS shutdown drain — so this fixed-name room
+            # (device-<id>) is gone before a rapid re-JOIN. Otherwise the old
+            # agent + its audio track linger here for the whole drain; an
+            # auto_subscribe=false client re-joining subscribes to that stale
+            # track and gets "in room + agent_speaking state but NO audio"
+            # (real-device confirmed: JOIN→X→quick JOIN → silent).
+            on_session_closed=lambda: _delete_room("session closed (device left)"),
         )
-        logger.info(
-            "[Agent] interaction_mode=%s session_intent=%s allow_interruptions=%s "
-            "attention_enabled=%s",
-            interaction_mode,
-            session_intent,
-            allow_interruptions,
-            session_turn_policy.attention.enabled,
-        )
-        if _use_half_duplex_ptt_pipeline(interaction_mode):
-            pipeline = HalfDuplexPttPipeline(
-                factory,
-                instructions=cfg.behavior.instructions,
-                welcome_message=cfg.behavior.welcome_message,
-                audio_sample_rate=cfg.behavior.audio_sample_rate,
-                turn_policy=session_turn_policy,
-                observability=cfg.observability,
-                on_session_closed=lambda: _delete_room("session closed (device left)"),
-            )
-        else:
-            pipeline = StreamingPipeline(
-                factory,
-                instructions=cfg.behavior.instructions,
-                allow_interruptions=allow_interruptions,
-                welcome_message=cfg.behavior.welcome_message,
-                audio_sample_rate=cfg.behavior.audio_sample_rate,
-                false_interruption_timeout=(
-                    session_turn_policy.interrupt.framework_false_interruption_timeout_ms
-                    / 1000.0
-                ),
-                stt_commit_transcript_timeout=(
-                    session_turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
-                ),
-                aec_warmup_duration=(
-                    None
-                    if session_turn_policy.interrupt.aec_warmup_ms is None
-                    else session_turn_policy.interrupt.aec_warmup_ms / 1000.0
-                ),
-                turn_policy=session_turn_policy,
-                interaction_mode=interaction_mode,
-                session_intent=session_intent,
-                observability=cfg.observability,
-                voiceprint_config=cfg.voiceprint,
-                # Idle watchdog disconnect: delete the room so the still-connected
-                # client is actively kicked (ROOM_DELETED) and the job's
-                # shutdown_fut resolves — session.aclose() alone leaves the client
-                # in a dead room and the job hanging on shutdown_fut.
-                on_idle_disconnect=lambda: _delete_room("idle timeout"),
-                # The idle watchdog routes its client notice through this as
-                # reason=idle_normal_end (sent before the grace + delete above).
-                on_session_end=_publish_session_end,
-                # On session close (device left / error), delete the room PROMPTLY —
-                # before the slow STT/TTS shutdown drain — so this fixed-name room
-                # (device-<id>) is gone before a rapid re-JOIN. Otherwise the old
-                # agent + its audio track linger here for the whole drain; an
-                # auto_subscribe=false client re-joining subscribes to that stale
-                # track and gets "in room + agent_speaking state but NO audio"
-                # (real-device confirmed: JOIN→X→quick JOIN → silent).
-                on_session_closed=lambda: _delete_room("session closed (device left)"),
-            )
 
     async def _delete_room_cb(reason: str) -> None:
         # The job is shutting down (user left, or an error tore the session down).
@@ -556,10 +552,9 @@ async def _serve() -> None:
     _agent_config = cfg
 
     logger.info(
-        "[Server] starting env=%s url=%s mode=%s llm=%s idle_procs=%s",
+        "[Server] starting env=%s url=%s llm=%s idle_procs=%s",
         os.getenv("EIDOLON_ENV", "prod"),
         cfg.core.livekit_url,
-        cfg.behavior.pipeline_mode,
         cfg.llm.model,
         _resolve_num_idle_processes(cfg),
     )

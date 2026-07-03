@@ -1,7 +1,7 @@
 """Voice stage factory — constructs and owns the STT/LLM/TTS/VAD stage stack.
 
-Both :class:`StreamingPipeline` and :class:`BatchPipeline` receive the same
-factory instance, so they share the underlying model connections and stages.
+Both half-duplex and full-duplex pipelines receive the same factory instance,
+so they share the underlying model connections and stages.
 
 Two construction paths:
 

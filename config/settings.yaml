@@ -13,9 +13,6 @@ worker:
   num_idle_processes: 1
 
 behavior:
-  # Channel worker pipeline mode (streaming|batch). This is not Hub's
-  # LiveKit dispatch agent_mode (streaming|ptt), and not duplex/barge-in capability.
-  pipeline_mode: streaming
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.
   welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
   audio_sample_rate: 16000

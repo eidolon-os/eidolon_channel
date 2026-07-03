@@ -48,21 +48,13 @@
 │  │        │        ├── tts_stage (SenseTimeTTS)                                 │   │
 │  │        │        └── vad (FireredPvadVAD)                                     │   │
 │  │        │                                                                    │   │
-│  │        ├── AgentSession(                                                    │   │
-│  │        │        stt=stt, llm=llm, tts=tts,                                  │   │
-│  │        │        vad=vad,                                                    │   │
-│  │        │        turn_detection=ChineseModel()                                │   │
-│  │        │   )                                                               │   │
-│  │        │        │                                                           │   │
-│  │        │        ├── RoomIO(session, room)                                    │   │
-│  │        │        │        │                                                  │   │
-│  │        │        │        └───> room.local_publish_audio()  发布音频到房间     │   │
-│  │        │        │                                                           │   │
-│  │        │        └── session.start(agent, room, ...)  开始会话                 │   │
+│  │        ├── resolve session metadata: interaction_mode / session_intent       │   │
 │  │        │                                                                    │   │
-│  │        ├── StreamingPipeline (AGENT_MODE=streaming, 默认)                     │   │
-│  │        │    或                                                               │   │
-│  │        └── BatchPipeline   (AGENT_MODE=batch)                                │   │
+│  │        ├── interaction_mode=half_duplex                                      │   │
+│  │        │    └── HalfDuplexPttPipeline: PTT segment owner + AgentSession TTS  │   │
+│  │        │                                                                    │   │
+│  │        └── interaction_mode=full_duplex                                      │   │
+│  │             └── StreamingPipeline: realtime AgentSession + turn owner        │   │
 │  └──────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -76,7 +68,6 @@ eidolon/livekit/agent/
 ├── README.md                 # 代码地图: entrypoints / integration / session / policy / output
 ├── server.py                 # 主入口: AgentServer 启动、配置加载、session 回调注册
 ├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
-├── batch.py                  # BatchPipeline: 批量音频 blob 处理
 ├── integration/
 │   ├── __init__.py           # LiveKit/framework 外部契约边界
 │   ├── framework_patches.py  # LiveKit internal API patch，升级时唯一审计点
@@ -87,7 +78,7 @@ eidolon/livekit/agent/
 │   ├── tts.py                # TtsStage: 封装 TTS provider
 │   ├── vad.py                # VadStage: 封装 VAD provider
 │   ├── llm.py                # LLM stage / remote-agent bridge
-│   └── types.py              # PipelineMode, PipelineState, callbacks 等类型
+│   └── types.py              # PipelineState, callbacks 等类型
 ├── turn_policy/
 │   ├── attention.py          # client audio_state 与注意力判定
 │   ├── constants.py          # 打断词表与 intent pattern 的代码默认值
@@ -204,7 +195,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 ### 2.2 导入规则
 
-根目录只保留 entrypoints 和共享公共入口；不再 re-export `StreamingPipeline` / `HalfDuplexPttPipeline` / `BatchPipeline`，也不再保留 `streaming.py` 兼容 shim。新代码必须从 `full_duplex.*`、`half_duplex.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
+根目录只保留 entrypoints 和共享公共入口；不再 re-export `StreamingPipeline` / `HalfDuplexPttPipeline`，也不再保留 `streaming.py` 兼容 shim。新代码必须从 `full_duplex.*`、`half_duplex.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
 
 ### 2.3 Plugin 目录结构
 
@@ -259,15 +250,15 @@ eidolon/livekit/plugins/
 
 ## 3. Pipeline 运行路径对比
 
-| | Full-duplex `StreamingPipeline` | Half-duplex `HalfDuplexPttPipeline` | BatchPipeline |
-|---|---|---|---|
-| 触发条件 | `AGENT_MODE=streaming` 且 `interaction_mode=full_duplex` | `AGENT_MODE=streaming` 且 `interaction_mode=half_duplex` | `AGENT_MODE=batch` |
-| 音频处理 | Open-mic 实时流式音频，VAD/STT/EOT 持续运行 | PTT press/release 内服务端采集完整音频段，release 后一次性 STT | 客户端上传完整音频 blob |
-| turn owner | `TurnPolicyRuntime` + `InterruptionOrchestrator` + full-duplex session handlers | `HalfDuplexPttTurnController` | 无实时 turn owner |
-| 打断能力 | 支持 barge-in / backchannel / false resume | 支持 PTT/tap-to-stop 抢占播放；不消费 streaming transcript/EOT | 不支持 |
-| EOT 检测 | ChineseModel (EidolonEOTModel) | 不参与 PTT terminal decision | 无 |
-| 编排方式 | `AgentSession` 管理实时输入输出，Channel owner 裁决打断/上下文 | `AgentSession` 只承载回复播放；PTT 音频段由 half-duplex pipeline 独立采集/转写/提交 | 手动顺序: STT→LLM→TTS |
-| 适用场景 | 自然流式对话、barge-in、backchannel | 触屏 PTT、一问一答、可预期打断播放 | 异步音频处理、消息回复 |
+| | Full-duplex `StreamingPipeline` | Half-duplex `HalfDuplexPttPipeline` |
+|---|---|---|
+| 触发条件 | participant metadata `interaction_mode=full_duplex` | participant metadata `interaction_mode=half_duplex` |
+| 音频处理 | Open-mic 实时流式音频，VAD/STT/EOT 持续运行 | PTT press/release 内服务端采集完整音频段，release 后一次性 STT |
+| turn owner | `TurnPolicyRuntime` + `InterruptionOrchestrator` + full-duplex session handlers | `HalfDuplexPttTurnController` |
+| 打断能力 | 支持 barge-in / backchannel / false resume | 支持 PTT/tap-to-stop 抢占播放；不消费 streaming transcript/EOT |
+| EOT 检测 | ChineseModel (EidolonEOTModel) | 不参与 PTT terminal decision |
+| 编排方式 | `AgentSession` 管理实时输入输出，Channel owner 裁决打断/上下文 | `AgentSession` 只承载回复播放；PTT 音频段由 half-duplex pipeline 独立采集/转写/提交 |
+| 适用场景 | 自然流式对话、barge-in、backchannel | 触屏 PTT、一问一答、可预期打断播放 |
 
 ### Full-duplex 数据流
 
@@ -298,14 +289,15 @@ eidolon/livekit/plugins/
 
 `integration/client_audio_state.py` 提供来自 Web/硬件客户端的播放态信号。`attention.enforce=true` 时，如果客户端明确处于 Agent speaking，普通环境人声默认不会直接进入 EOT cancel；只有 Tier 0、Tier 1、PTT/manual interrupt 或足够强的语义 evidence 才会更快取消。
 
-### Batch 模式数据流
+### Half-duplex PTT segment 数据流
 
 ```
-用户上传音频 blob → track_subscribed → 等待 track_ended
-  → STT.recognize() (一次性 WebSocket)
-  → LLM.chat() (OpenAI API)
-  → TTS.synthesize() (流式 WebSocket)
-  → room.local_publish_audio() → 发布到 Room
+client ptt_pressed → HalfDuplexPttTurnController 打开 hold 窗口
+  → PttSegmentRecorder 收集 press/release 内音频
+  → client ptt_released → 关闭 segment，按时长/RMS 判定 turn 或 tap-to-stop
+  → PttSegmentTranscriber 对闭合音频段一次性转写
+  → AgentSession.generate_reply() → TTS 播放
+  → PTT/tap-to-stop 可在播放中抢占输出
 ```
 
 ---
@@ -331,7 +323,7 @@ BailianFunASRSTT (stt.py) ──实现 livekit.agents.stt.STT 接口
      │                └── FINAL_TRANSCRIPT  → 最终识别文字
      │
      └── _recognize_impl() ──> BailianConnectionManager (一次性 WebSocket)
-                                  用于 BatchPipeline 的整段音频识别
+                                  用于组件级 one-shot 识别能力
 ```
 
 **关键配置:**
@@ -498,8 +490,8 @@ no_punct            → 0.95 (无标点 = 还没结束)
        │                         │  10. SharedStageFactory      │                          │
        │                         │      (创建 stt/llm/tts/vad) │                          │
        │                         │                             │                          │
-       │                         │  11. StreamingPipeline /     │                          │
-       │                         │      BatchPipeline          │                          │
+       │                         │  11. resolve metadata then   │                          │
+       │                         │      choose half/full pipe   │                          │
        │                         │                             │                          │
        │                         │  12. AgentSession(stt,llm,  │                          │
        │                         │      tts,vad,              │                          │
@@ -643,72 +635,6 @@ no_punct            → 0.95 (无标点 = 还没结束)
 
 ---
 
-## 7. BatchPipeline 音频处理流程
-
-```
-用户 (上传音频 blob)
-    │
-    ▼
-LiveKit Room ──track_subscribed 事件──> BatchPipeline
-    │
-    ▼
-等待 track_ended (最多 30s 超时)
-    │
-    ▼
-收集所有 audio_frames → _frames_to_pcm_blob() → PCM bytes
-    │
-    ▼
-Step 1: STT
-    BailianFunASRSTT._recognize_impl()
-        │
-        ├── BailianConnectionManager.connect()
-        │       │
-        │       └───> WebSocket: wss://dashscope.aliyuncs.com/api-ws/v1/inference
-        │
-        ├── conn.send_audio(audio_bytes)
-        ├── conn.finish()
-        └── 等待 server 返回 RESULT_GENERATED
-                    │
-                    ▼
-            all_sentences[] → text = "".join(s.text)
-                    │
-                    ▼
-            FINAL_TRANSCRIPT → transcript
-    │
-    ▼
-Step 2: LLM
-    LivekitLlmStage.chat(LlmInput(text=transcript))
-        │
-        ├── _chat_ctx.add_message(user)
-        ├── llm.chat(chat_ctx=_chat_ctx, tools=fnc_ctx)
-        │       │
-        │       └───> OpenAI-compatible API (cfg.llm_base_url)
-        │
-        └── stream → full_text → LlmOutput(text=full_text)
-    │
-    ▼
-Step 3: TTS
-    TtsStage.synthesize(response_text)
-        │
-        ├── _tts.synthesize(text) → SenseTimeSynthesizeStream
-        │       │
-        │       ├── client.connect()
-        │       │       │
-        │       │       └───> WebSocket: wss://api.senseaudio.cn/ws/v1/t2a_v2
-        │       │
-        │       ├── send_task_continue(tokens)
-        │       └── recv_loop: task_continue → hex PCM → AudioFrame
-        │
-        └── async for frame in synthesize():
-                │
-                └── room.local_publish_audio(frame)
-                    │
-                    ▼
-            发布到 LiveKit Room
-```
-
----
-
 ## 8. 关键设计决策
 
 ### 8.1 macOS multiprocessing spawn 兼容性
@@ -768,7 +694,7 @@ except ImportError:
 | 分组 | 关键变量 | 说明 |
 |---|---|---|
 | LiveKit 连接 | `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | 连接 LiveKit Server 的鉴权三元组 |
-| Agent 监听 | `AGENT_HOST` / `AGENT_PORT` / `AGENT_MODE` | Agent server 绑定地址与流水线模式（`streaming` \| `batch`） |
+| Agent 监听 | `AGENT_HOST` / `AGENT_PORT` | Agent server 绑定地址 |
 | Agent 行为 | `AGENT_INSTRUCTIONS` / `AGENT_WELCOME_MESSAGE` / `AGENT_FALSE_INTERRUPTION_TIMEOUT` / `AGENT_AUDIO_SAMPLE_RATE` | 系统提示、欢迎语、误打断恢复阈值、链路采样率 |
 | Provider 选择 | `STT_PROVIDER` / `TTS_PROVIDER` / `VAD_PROVIDER` | 选择哪一家插件——`bailian` \| `sensetime` / `firered_pvad` \| `firered` \| `silero` \| `none` |
 | LLM (OpenAI 兼容) | `OPENAI_LLM_BASE_URL` / `OPENAI_LLM_MODEL` / `OPENAI_LLM_API_KEY` | LLM provider 的 endpoint、模型名与密钥 |

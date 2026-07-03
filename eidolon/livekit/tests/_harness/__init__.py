@@ -20,7 +20,7 @@ This package provides:
 Layered design (see plan):
   L0 (existing) : per-plugin unit tests in tests/{stt,tts,vad,eot}
   L1 (new)      : stage wrapper + mock backend
-  L2 (new)      : full StreamingPipeline / BatchPipeline + all-mock
+  L2 (new)      : full-duplex / half-duplex pipelines + all-mock
   L3 (existing) : real-API smoke (gated by @pytest.mark.live)
 
 This module is `tests/_harness/`. All exports are reusable across the

@@ -133,10 +133,6 @@ def _reject_unknown_fields(
         raise ValueError(f"unknown config field {section_name}.{key}")
 
 
-def _behavior_pipeline_mode(raw: dict[str, Any]) -> str:
-    return str(raw.get("pipeline_mode") or "streaming").lower()
-
-
 def _secret(section: dict[str, Any], field: str, env_var: str) -> str:
     val = str(section.get(field) or "").strip()
     if val and val != env_var:
@@ -228,7 +224,6 @@ def load_effective_config() -> EffectiveAgentConfig:
         "behavior",
         behavior_y,
         allowed={
-            "pipeline_mode",
             "instructions",
             "welcome_message",
             "audio_sample_rate",
@@ -284,7 +279,6 @@ def load_effective_config() -> EffectiveAgentConfig:
             port=int(core_y.get("port") or 8766),
         ),
         behavior=AgentBehaviorConfig(
-            pipeline_mode=_behavior_pipeline_mode(behavior_y),
             instructions=str(behavior_y.get("instructions") or AgentBehaviorConfig().instructions),
             welcome_message=str(
                 behavior_y.get("welcome_message")

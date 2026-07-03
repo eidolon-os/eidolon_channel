@@ -54,7 +54,7 @@ providers:
   vad_provider: firered
   brain_provider: direct_llm
 behavior:
-  pipeline_mode: batch
+  instructions: test instructions
 worker:
   num_idle_processes: 1
 runtime_admin:
@@ -147,12 +147,13 @@ voiceprint:
     assert cfg.voiceprint.accept_cache_short_audio_max_ms == 2400
     assert cfg.voiceprint.owner_commit_threshold == 0.64
     assert cfg.voiceprint.owner_short_audio_bypass_ms == 1200
-    assert cfg.behavior.pipeline_mode == "batch"
+    assert cfg.behavior.instructions == "test instructions"
     assert cfg.worker.num_idle_processes == 1
     assert cfg.runtime_admin.data_resolve_enabled is False
     assert cfg.runtime_admin.admin_fallback_enabled is True
     assert cfg.runtime_admin.http_timeout_sec == 8.5
     assert cfg.runtime_admin.http_connect_timeout_sec == 1.5
+
 
 def test_load_effective_config_applies_settings_overlay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -169,8 +170,6 @@ providers:
   tts_provider: sensetime
   vad_provider: firered
   brain_provider: eidolon_agent
-behavior:
-  pipeline_mode: streaming
 runtime_admin:
   data_resolve_enabled: false
 llm:
@@ -383,7 +382,6 @@ core:
   api_key: LIVEKIT_API_KEY
   api_secret: LIVEKIT_API_SECRET
 behavior:
-  pipeline_mode: streaming
   typo_mode: streaming
 providers:
   stt_provider: sensetime
@@ -402,6 +400,37 @@ llm:
     monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
 
     with pytest.raises(ValueError, match="unknown config field behavior.typo_mode"):
+        load_effective_config()
+
+
+def test_behavior_pipeline_mode_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+behavior:
+  pipeline_mode: batch
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: direct_llm
+llm:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: OPENAI_LLM_API_KEY
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    with pytest.raises(ValueError, match="unknown config field behavior.pipeline_mode"):
         load_effective_config()
 
 

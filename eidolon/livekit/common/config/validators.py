@@ -8,8 +8,6 @@ from .schema import EffectiveAgentConfig
 def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     errors: list[str] = []
 
-    if cfg.behavior.pipeline_mode not in ("streaming", "batch"):
-        errors.append("behavior.pipeline_mode must be 'streaming' or 'batch'")
     if cfg.providers.stt_provider not in ("bailian", "sensetime"):
         errors.append("providers.stt_provider must be 'bailian' or 'sensetime'")
     if cfg.providers.tts_provider not in ("bailian", "sensetime"):

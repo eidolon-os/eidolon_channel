@@ -164,18 +164,14 @@ class TestSharedStageFactoryInit:
 
 
 # ---------------------------------------------------------------------------
-# Test: BatchPipeline with real STT -> LLM -> TTS
+# Test: provider stage chain with real STT -> LLM -> TTS
 # ---------------------------------------------------------------------------
 
-class TestBatchPipelineIntegration:
-    """Integration tests for BatchPipeline using real stt/llm/tts components.
-
-    The LiveKit Room connection is mocked (local_publish_audio and track events)
-    but all stt/llm/tts calls use the real .env-configured services.
-    """
+class TestProviderStageIntegration:
+    """Integration tests for real stt/llm/tts components from active config."""
 
     @pytest.mark.asyncio
-    async def test_batch_pipeline_stt_recognize_real(self, shared_stage_factory):
+    async def test_stt_recognize_real(self, shared_stage_factory):
         """Test real STT recognize() call with a sine-wave audio blob.
 
         Note: synthetic sine wave is not real speech, so STT will return empty.
@@ -192,7 +188,7 @@ class TestBatchPipelineIntegration:
         logger.info("[PASS] stt.recognize() completed (empty=%s)", not transcript.strip())
 
     @pytest.mark.asyncio
-    async def test_batch_pipeline_llm_chat_real(self, shared_stage_factory):
+    async def test_llm_chat_real(self, shared_stage_factory):
         """Test real LLM chat() call with a Chinese question."""
         test_text = "你好，今天天气怎么样？"
         logger.info("[test] calling llm.chat() with text=%r", test_text)
@@ -204,7 +200,7 @@ class TestBatchPipelineIntegration:
         logger.info("[PASS] llm.chat() completed — length=%d", len(llm_output.text))
 
     @pytest.mark.asyncio
-    async def test_batch_pipeline_tts_synthesize_real(self, shared_stage_factory):
+    async def test_tts_synthesize_real(self, shared_stage_factory):
         """Test real TTS synthesize() call."""
         test_text = "好的，今天天气晴朗，适合外出散步。"
         logger.info("[test] calling tts.synthesize() with text=%r", test_text)
@@ -225,27 +221,12 @@ class TestBatchPipelineIntegration:
         logger.info("[PASS] tts.synthesize() completed")
 
     @pytest.mark.asyncio
-    async def test_batch_pipeline_full_stt_llm_tts_flow(self, shared_stage_factory):
+    async def test_stt_llm_tts_stage_chain(self, shared_stage_factory):
         """Test the complete STT -> LLM -> TTS flow with real services.
 
         Since synthetic audio produces empty STT transcript, we use a
         hardcoded transcript for the LLM step to exercise the full chain.
         """
-        from eidolon.livekit.agent.batch import BatchPipeline
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks
-
-        pipeline = BatchPipeline(
-            shared_stage_factory,
-            callbacks=PipelineCallbacks(
-                on_user_message=lambda t: logger.info("[callback] user_message: %r", t),
-                on_agent_started_speaking=lambda: logger.info("[callback] agent_started_speaking"),
-                on_agent_message=lambda t: logger.info("[callback] agent_message: %r", t),
-                on_agent_ended_speaking=lambda: logger.info("[callback] agent_ended_speaking"),
-                on_agent_response_done=lambda: logger.info("[callback] agent_response_done"),
-            ),
-        )
-        assert pipeline is not None
-
         # Step 1: STT with synthetic audio (empty transcript expected)
         audio_blob = _make_sine_wave_blob(duration_ms=500)
         transcript = await shared_stage_factory.stt.recognize(audio_blob)

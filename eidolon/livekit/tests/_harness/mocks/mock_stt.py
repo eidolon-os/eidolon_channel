@@ -39,7 +39,6 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
-from livekit import rtc
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -171,8 +170,8 @@ class MockSTT(STT):
         """Batch recognize — return the first scripted entry's text
         (or empty), wrapped as FINAL_TRANSCRIPT.
 
-        Sufficient for BatchPipeline tests; not intended to model
-        real-world batch latency.
+        Sufficient for component tests that need one-shot recognition; not
+        intended to model real-world batch latency.
         """
         if self._always_raises is not None:
             raise self._always_raises

@@ -295,6 +295,33 @@ def test_turn_policy_decision_ms_maps_to_eot_timeout() -> None:
     ] == pytest.approx(0.75)
 
 
+def test_turn_policy_filler_maps_to_eot_config() -> None:
+    """Latency-mask filler envelope is runtime config, not output constants."""
+    from dataclasses import replace
+
+    from eidolon.livekit.agent.turn_policy import eot_kwargs_from_turn_policy
+    from eidolon.livekit.common.config import FillerPolicyConfig, TurnPolicyConfig
+
+    policy = replace(
+        TurnPolicyConfig(),
+        filler=FillerPolicyConfig(
+            enabled=True,
+            phrases=("嗯...", "收到..."),
+            fade_in_ms=45,
+            fade_out_ms=95,
+            silence_lead_in_ms=180,
+        ),
+    )
+
+    kwargs = eot_kwargs_from_turn_policy(policy)
+
+    assert kwargs["filler_enabled"] is True
+    assert kwargs["filler_phrases"] == ("嗯...", "收到...")
+    assert kwargs["filler_fade_in_ms"] == 45
+    assert kwargs["filler_fade_out_ms"] == 95
+    assert kwargs["filler_silence_lead_in_ms"] == 180
+
+
 def test_fast_profile_has_shorter_decision_budget() -> None:
     """The e2e-like profile is more eager than the balanced default."""
     from eidolon.livekit.common.config.profiles import profile_defaults

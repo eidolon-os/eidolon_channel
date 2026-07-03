@@ -239,6 +239,15 @@ class EidolonEOTConfig:
     filler_phrases: tuple[str, ...] = ("嗯...", "好的...", "让我想想...")
     """Phrases to pre-synthesize at pipeline warmup."""
 
+    filler_fade_in_ms: int = 30
+    """Fade-in duration for cached filler audio."""
+
+    filler_fade_out_ms: int = 80
+    """Fade-out duration for cached filler audio."""
+
+    filler_silence_lead_in_ms: int = 120
+    """Silence inserted before filler so it does not step on user speech."""
+
     # ──────────────────────────────────────────────────────────────────
     # Interrupted content tracking
     # ──────────────────────────────────────────────────────────────────

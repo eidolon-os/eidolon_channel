@@ -379,6 +379,9 @@ class StreamingPipeline(BasePipeline):
             self._filler = FillerManager(
                 self._factory.tts,
                 phrases=list(eot_cfg.filler_phrases),
+                fade_in_ms=eot_cfg.filler_fade_in_ms,
+                fade_out_ms=eot_cfg.filler_fade_out_ms,
+                silence_lead_in_ms=eot_cfg.filler_silence_lead_in_ms,
             )
 
         self._context_ledger = self._build_context_ledger()

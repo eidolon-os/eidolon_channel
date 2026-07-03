@@ -33,4 +33,9 @@ def eot_kwargs_from_turn_policy(
             turn_policy.interrupt.early_resume_score_threshold
         ),
         "duck_cooldown_sec": turn_policy.ducking.cooldown_ms / 1000.0,
+        "filler_enabled": turn_policy.filler.enabled,
+        "filler_phrases": turn_policy.filler.phrases,
+        "filler_fade_in_ms": turn_policy.filler.fade_in_ms,
+        "filler_fade_out_ms": turn_policy.filler.fade_out_ms,
+        "filler_silence_lead_in_ms": turn_policy.filler.silence_lead_in_ms,
     }

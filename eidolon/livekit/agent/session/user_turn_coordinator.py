@@ -15,6 +15,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.session.voiceprint_reasons import (
+    VOICEPRINT_INCONCLUSIVE_PREFIX,
+    voiceprint_allowed_reason,
+    voiceprint_blocked_reason,
+)
 
 CandidateState = Literal[
     "idle",
@@ -26,6 +31,15 @@ CandidateState = Literal[
     "rejected",
 ]
 DecisionAction = Literal["none", "defer", "commit", "reject"]
+
+DEFAULT_MERGE_GRACE_SEC = 0.8
+DEFAULT_STATEMENT_DEFERRED_MERGE_GRACE_SEC = 3.5
+DEFAULT_VOICEPRINT_DEFERRED_MERGE_GRACE_SEC = 4.0
+DEFAULT_LOW_EOT_DELAY_SEC = 0.8
+DEFAULT_STATEMENT_SEQUENCE_MERGE_MAX_CJK_CHARS = 28
+DEFAULT_STATEMENT_SEQUENCE_FRAGMENT_MAX_CJK_CHARS = 14
+DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS = 4
+TIMELINE_TEXT_PREVIEW_MAX_CHARS = 120
 
 
 @dataclass(frozen=True)
@@ -108,13 +122,23 @@ class UserTurnCoordinator:
     def __init__(
         self,
         *,
-        merge_grace_sec: float = 0.8,
-        statement_deferred_merge_grace_sec: float = 3.5,
-        voiceprint_deferred_merge_grace_sec: float = 4.0,
-        low_eot_delay_sec: float = 0.8,
-        statement_sequence_merge_max_cjk_chars: int = 28,
-        statement_sequence_fragment_max_cjk_chars: int = 14,
-        transcript_revision_min_normalized_chars: int = 4,
+        merge_grace_sec: float = DEFAULT_MERGE_GRACE_SEC,
+        statement_deferred_merge_grace_sec: float = (
+            DEFAULT_STATEMENT_DEFERRED_MERGE_GRACE_SEC
+        ),
+        voiceprint_deferred_merge_grace_sec: float = (
+            DEFAULT_VOICEPRINT_DEFERRED_MERGE_GRACE_SEC
+        ),
+        low_eot_delay_sec: float = DEFAULT_LOW_EOT_DELAY_SEC,
+        statement_sequence_merge_max_cjk_chars: int = (
+            DEFAULT_STATEMENT_SEQUENCE_MERGE_MAX_CJK_CHARS
+        ),
+        statement_sequence_fragment_max_cjk_chars: int = (
+            DEFAULT_STATEMENT_SEQUENCE_FRAGMENT_MAX_CJK_CHARS
+        ),
+        transcript_revision_min_normalized_chars: int = (
+            DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS
+        ),
         clock: Any | None = None,
     ) -> None:
         self._merge_grace_sec = max(0.0, float(merge_grace_sec))
@@ -181,7 +205,9 @@ class UserTurnCoordinator:
         candidate = self._active
         if candidate is None:
             return False
-        if not candidate.voiceprint_reason.startswith("voiceprint_inconclusive:"):
+        if not candidate.voiceprint_reason.startswith(
+            f"{VOICEPRINT_INCONCLUSIVE_PREFIX}:"
+        ):
             return False
         return self.merge_remaining_sec(now=now) > 0.0
 
@@ -348,7 +374,7 @@ class UserTurnCoordinator:
         candidate.updated_at = self._now(now)
         if not allowed:
             candidate.state = "rejected"
-            candidate.reject_reason = f"voiceprint_blocked:{reason}"
+            candidate.reject_reason = voiceprint_blocked_reason(reason)
             self._record_attrs(candidate, event="voiceprint_rejected")
             return UserTurnDecision(
                 action="reject",
@@ -357,7 +383,7 @@ class UserTurnCoordinator:
                 reason=candidate.reject_reason,
             )
         candidate.state = "ready_to_commit"
-        candidate.commit_reason = f"voiceprint_allowed:{reason}"
+        candidate.commit_reason = voiceprint_allowed_reason(reason)
         self._record_attrs(candidate, event="voiceprint_allowed")
         return UserTurnDecision(
             action="commit",
@@ -459,7 +485,7 @@ class UserTurnCoordinator:
         if not candidate.merge_reason:
             candidate.merge_reason = reason
         if voiceprint_reason and not candidate.voiceprint_reason.startswith(
-            "voiceprint_inconclusive:"
+            f"{VOICEPRINT_INCONCLUSIVE_PREFIX}:"
         ):
             candidate.voiceprint_reason = voiceprint_reason
         candidate.updated_at = current_time
@@ -697,7 +723,9 @@ class UserTurnCoordinator:
         payload = self._snapshot(candidate)
         payload["event"] = event
         if transcript is not None:
-            payload["committed_transcript_preview"] = transcript[:120]
+            payload["committed_transcript_preview"] = transcript[
+                :TIMELINE_TEXT_PREVIEW_MAX_CHARS
+            ]
         timeline.set_attr("user_turn_coordinator", payload)
 
     def _snapshot(self, candidate: UserTurnCandidate) -> dict[str, Any]:
@@ -706,7 +734,9 @@ class UserTurnCoordinator:
             "state": candidate.state,
             "segments": len(candidate.segments),
             "revisions": len(candidate.revisions),
-            "selected_text_preview": candidate.selected_text[:120],
+            "selected_text_preview": candidate.selected_text[
+                :TIMELINE_TEXT_PREVIEW_MAX_CHARS
+            ],
             "eot_score": candidate.eot_score,
             "merge_reason": candidate.merge_reason,
             "voiceprint_reason": candidate.voiceprint_reason,
@@ -746,7 +776,11 @@ def _count_cjk_chars(text: str) -> int:
     return sum(1 for char in text if _looks_cjk(char))
 
 
-def _looks_like_statement_fragment(text: str, *, max_cjk_chars: int = 14) -> bool:
+def _looks_like_statement_fragment(
+    text: str,
+    *,
+    max_cjk_chars: int = DEFAULT_STATEMENT_SEQUENCE_FRAGMENT_MAX_CJK_CHARS,
+) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
@@ -763,7 +797,7 @@ def _text_matches_revision(
     existing: str,
     revision: str,
     *,
-    min_normalized_chars: int = 4,
+    min_normalized_chars: int = DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS,
 ) -> bool:
     existing_norm = _normalize_revision_text(existing)
     revision_norm = _normalize_revision_text(revision)

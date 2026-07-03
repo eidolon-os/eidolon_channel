@@ -155,6 +155,16 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 0.0 <= duck.suspend_volume <= 1.0:
         errors.append("turn_policy.ducking.suspend_volume must be in [0, 1]")
 
+    filler = cfg.turn_policy.filler
+    if not 0 <= filler.fade_in_ms <= 500:
+        errors.append("turn_policy.filler.fade_in_ms must be in [0, 500]")
+    if not 0 <= filler.fade_out_ms <= 500:
+        errors.append("turn_policy.filler.fade_out_ms must be in [0, 500]")
+    if not 0 <= filler.silence_lead_in_ms <= 1_000:
+        errors.append("turn_policy.filler.silence_lead_in_ms must be in [0, 1000]")
+    if filler.enabled and not filler.phrases:
+        errors.append("turn_policy.filler.phrases must not be empty when enabled")
+
     idle = cfg.turn_policy.idle
     if not 0 <= idle.disconnect_after_idle_ms <= 3_600_000:
         errors.append("turn_policy.idle.disconnect_after_idle_ms must be in [0, 3600000]")

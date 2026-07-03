@@ -40,10 +40,9 @@ logger = logging.getLogger("agent.output.filler")
 
 DEFAULT_PHRASES = ["嗯...", "好的...", "让我想想..."]
 
-# Envelope durations (milliseconds).
-_FADE_IN_MS = 30
-_FADE_OUT_MS = 80
-_SILENCE_LEAD_IN_MS = 120
+DEFAULT_FADE_IN_MS = 30
+DEFAULT_FADE_OUT_MS = 80
+DEFAULT_SILENCE_LEAD_IN_MS = 120
 
 
 def _resample_pcm(
@@ -77,8 +76,8 @@ def _resample_pcm(
 def _apply_fade_envelope(
     samples: np.ndarray,
     sample_rate: int,
-    fade_in_ms: int = _FADE_IN_MS,
-    fade_out_ms: int = _FADE_OUT_MS,
+    fade_in_ms: int = DEFAULT_FADE_IN_MS,
+    fade_out_ms: int = DEFAULT_FADE_OUT_MS,
 ) -> np.ndarray:
     """Apply a linear fade-in and fade-out to *samples* (int16 mono).
 
@@ -153,9 +152,15 @@ class FillerManager:
         tts_stage: TtsStage,
         *,
         phrases: list[str] | None = None,
+        fade_in_ms: int = DEFAULT_FADE_IN_MS,
+        fade_out_ms: int = DEFAULT_FADE_OUT_MS,
+        silence_lead_in_ms: int = DEFAULT_SILENCE_LEAD_IN_MS,
     ) -> None:
         self._tts = tts_stage
         self._phrases = phrases or DEFAULT_PHRASES
+        self._fade_in_ms = max(0, int(fade_in_ms))
+        self._fade_out_ms = max(0, int(fade_out_ms))
+        self._silence_lead_in_ms = max(0, int(silence_lead_in_ms))
         # Raw clips as synthesized by TTS (original sample rate).
         self._raw_clips: list[list[rtc.AudioFrame]] = []
         # Clips after resample + envelope (target sample rate).
@@ -215,10 +220,15 @@ class FillerManager:
                 )
 
             # 2. Apply fade envelope for smooth onset/offset.
-            samples = _apply_fade_envelope(samples, target_sample_rate)
+            samples = _apply_fade_envelope(
+                samples,
+                target_sample_rate,
+                fade_in_ms=self._fade_in_ms,
+                fade_out_ms=self._fade_out_ms,
+            )
 
             # 3. Prepend silence lead-in (natural micro-pause).
-            silence_n = int(target_sample_rate * _SILENCE_LEAD_IN_MS / 1000) * nc
+            silence_n = int(target_sample_rate * self._silence_lead_in_ms / 1000) * nc
             silence = np.zeros(silence_n, dtype=np.int16)
             samples = np.concatenate([silence, samples])
 
@@ -229,7 +239,7 @@ class FillerManager:
                 "[FillerManager] prepared clip → %d frames @ %d Hz "
                 "(lead-in=%dms, fade_in=%dms, fade_out=%dms)",
                 len(frames), target_sample_rate,
-                _SILENCE_LEAD_IN_MS, _FADE_IN_MS, _FADE_OUT_MS,
+                self._silence_lead_in_ms, self._fade_in_ms, self._fade_out_ms,
             )
 
         self._clips = processed or self._raw_clips

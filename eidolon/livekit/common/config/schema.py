@@ -171,6 +171,15 @@ class DuckingPolicyConfig:
 
 
 @dataclass(frozen=True)
+class FillerPolicyConfig:
+    enabled: bool = False
+    phrases: tuple[str, ...] = ("嗯...", "好的...", "让我想想...")
+    fade_in_ms: int = 30
+    fade_out_ms: int = 80
+    silence_lead_in_ms: int = 120
+
+
+@dataclass(frozen=True)
 class IdlePolicyConfig:
     followup_timeout_ms: int = 15_000
     # Hard-disconnect a session that has gone idle (no recognized speech and
@@ -229,6 +238,7 @@ class TurnPolicyConfig:
     interrupt: InterruptPolicyConfig = field(default_factory=InterruptPolicyConfig)
     ptt: PttPolicyConfig = field(default_factory=PttPolicyConfig)
     ducking: DuckingPolicyConfig = field(default_factory=DuckingPolicyConfig)
+    filler: FillerPolicyConfig = field(default_factory=FillerPolicyConfig)
     idle: IdlePolicyConfig = field(default_factory=IdlePolicyConfig)
     preemptive: PreemptivePolicyConfig = field(default_factory=PreemptivePolicyConfig)
     attention: AttentionPolicyConfig = field(default_factory=AttentionPolicyConfig)

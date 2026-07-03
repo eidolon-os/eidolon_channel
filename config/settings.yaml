@@ -137,6 +137,15 @@ turn_policy:
     suspend_volume: 0.0
     buffer_max_ms: 2000
     cooldown_ms: 800
+  filler:
+    enabled: false
+    phrases:
+      - 嗯...
+      - 好的...
+      - 让我想想...
+    fade_in_ms: 30
+    fade_out_ms: 80
+    silence_lead_in_ms: 120
   idle:
     followup_timeout_ms: 15000
     # Disconnect a session idle (no recognized speech / no agent activity)

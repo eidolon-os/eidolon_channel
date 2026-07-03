@@ -91,6 +91,14 @@ turn_policy:
     segment_max_audio_ms: 18000
     segment_min_rms_ppm: 25
     segment_tap_to_stop_max_audio_ms: 420
+  filler:
+    enabled: true
+    phrases:
+      - 嗯...
+      - 收到...
+    fade_in_ms: 40
+    fade_out_ms: 90
+    silence_lead_in_ms: 160
   idle:
     disconnect_after_idle_ms: 45000
     proactive_disconnect_after_idle_ms: 9000
@@ -125,6 +133,11 @@ voiceprint:
     assert cfg.turn_policy.ptt.segment_max_audio_ms == 18000
     assert cfg.turn_policy.ptt.segment_min_rms_ppm == 25
     assert cfg.turn_policy.ptt.segment_tap_to_stop_max_audio_ms == 420
+    assert cfg.turn_policy.filler.enabled is True
+    assert cfg.turn_policy.filler.phrases == ("嗯...", "收到...")
+    assert cfg.turn_policy.filler.fade_in_ms == 40
+    assert cfg.turn_policy.filler.fade_out_ms == 90
+    assert cfg.turn_policy.filler.silence_lead_in_ms == 160
     assert cfg.turn_policy.idle.disconnect_after_idle_ms == 45000
     assert cfg.turn_policy.idle.proactive_disconnect_after_idle_ms == 9000
     assert cfg.turn_policy.idle.disconnect_grace_ms == 450

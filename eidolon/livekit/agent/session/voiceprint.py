@@ -17,6 +17,17 @@ from eidolon.livekit.agent.runtime.resolver import (
     _participant_identity_and_metadata,
     _resolve_context,
 )
+from eidolon.livekit.agent.session.voiceprint_reasons import (
+    VOICEPRINT_CONTEXT_ERROR_PREFIX,
+    VOICEPRINT_REASON_CACHED_OWNER_CONTEXT,
+    VOICEPRINT_REASON_OWNER_HIGH_CONFIDENCE,
+    VOICEPRINT_REASON_OWNER_KNOWN_SHORT_AUDIO,
+    VOICEPRINT_REASON_SCORE_MISSING,
+    VOICEPRINT_REASON_SPEAKER_NOT_OWNER,
+    VOICEPRINT_REASON_TRUSTED_PAIRED_DEVICE,
+    voiceprint_failopen_reason,
+    voiceprint_owner_above_provider_threshold_reason,
+)
 from eidolon.livekit.agent.speaker_verification import SpeakerVerificationService
 from eidolon.livekit.common.speaker_verification import SpeakerSignal
 from eidolon.livekit.common.config import RuntimeAdminConfig, VoiceprintConfig
@@ -435,7 +446,7 @@ class VoiceprintTurnObserver:
         trusted_paired_device: bool = False,
     ) -> tuple[bool, str]:
         if trusted_paired_device:
-            return True, "trusted_paired_device"
+            return True, VOICEPRINT_REASON_TRUSTED_PAIRED_DEVICE
         if signal.error:
             # ``context_error`` means we couldn't resolve the agent context — the
             # turn literally cannot run, so it must still block (task #9 surfaces
@@ -443,21 +454,24 @@ class VoiceprintTurnObserver:
             # provider/timeout, …) is an OUR-SIDE failure to verify the speaker,
             # NOT evidence of a wrong speaker — fail OPEN (allow + warn) instead
             # of silently dropping the user's turn.
-            if signal.error.startswith("context_error"):
+            if signal.error.startswith(VOICEPRINT_CONTEXT_ERROR_PREFIX):
                 return False, signal.error
-            return True, f"verify_error_failopen:{signal.error}"
+            return True, voiceprint_failopen_reason(signal.error)
         if not signal.known:
-            return False, "speaker_not_owner"
+            return False, VOICEPRINT_REASON_SPEAKER_NOT_OWNER
         score = signal.score if signal.score is not None else signal.owner_confidence
         if score is None:
-            return False, "score_missing"
+            return False, VOICEPRINT_REASON_SCORE_MISSING
         if cached:
-            return True, "cached_owner_context"
+            return True, VOICEPRINT_REASON_CACHED_OWNER_CONTEXT
         if signal.audio_ms is not None and signal.audio_ms < self._owner_short_audio_bypass_ms:
-            return True, "owner_known_short_audio"
+            return True, VOICEPRINT_REASON_OWNER_KNOWN_SHORT_AUDIO
         if score < self._commit_threshold:
-            return True, f"owner_above_provider_threshold:{score:.3f}<{self._commit_threshold:.3f}"
-        return True, "owner_high_confidence"
+            return True, voiceprint_owner_above_provider_threshold_reason(
+                score=score,
+                threshold=self._commit_threshold,
+            )
+        return True, VOICEPRINT_REASON_OWNER_HIGH_CONFIDENCE
 
     def _is_trusted_paired_device(self, ctx: ResolvedContext) -> bool:
         if not self._trust_paired_devices:

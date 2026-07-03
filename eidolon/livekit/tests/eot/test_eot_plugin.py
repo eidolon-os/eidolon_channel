@@ -62,6 +62,9 @@ class TestEidolonEOTConfig:
         assert config.asr_stability_short_sec == 0.10
         assert config.asr_stability_long_sec == 0.40
         assert config.asr_stability_long_char_threshold == 10
+        assert config.filler_fade_in_ms == 30
+        assert config.filler_fade_out_ms == 80
+        assert config.filler_silence_lead_in_ms == 120
         # Dead fields removed
         assert not hasattr(config, "playing_eot_threshold")
         assert not hasattr(config, "playing_min_chars")
@@ -564,20 +567,14 @@ class TestPolicyChain:
         assert len(chain._policies) > 0
 
     def test_semantic_chain_has_eot_score_semantic_policy(self):
-        from eidolon.livekit.plugins.eot import (
-            PolicyChain,
-            EOTScoreSemanticPolicy,
-        )
+        from eidolon.livekit.plugins.eot import PolicyChain
 
         chain = PolicyChain.for_semantic_interruption()
         policy_types = [type(p).__name__ for p in chain._policies]
         assert "EOTScoreSemanticPolicy" in policy_types
 
     def test_normal_chain_has_eot_score_policy(self):
-        from eidolon.livekit.plugins.eot import (
-            PolicyChain,
-            EOTScorePolicy,
-        )
+        from eidolon.livekit.plugins.eot import PolicyChain
 
         chain = PolicyChain.for_normal_turn_end()
         policy_types = [type(p).__name__ for p in chain._policies]
@@ -1171,14 +1168,11 @@ class TestG0aDualPathArchitecture:
         """Round 7 G0b — dialogue history maxlen must equal the config
         utterance_end_max_history (NOT the previously hard-coded 10)."""
         from eidolon.livekit.plugins.eot import ChineseModel
-        from eidolon.livekit.plugins.eot import EidolonEOTConfig
 
         # Default config (utterance_end_max_history = 3)
         m = ChineseModel()
         assert m._context_eot._dialogue_history.maxlen == m._config.utterance_end_max_history
 
-        # Custom config
-        cfg = EidolonEOTConfig(utterance_end_max_history=7)
         from eidolon.livekit.plugins.eot.impl.context_enhanced_eot import ContextEnhancedEot
         ctx = ContextEnhancedEot(max_history=7)
         assert ctx._dialogue_history.maxlen == 7
@@ -2009,7 +2003,6 @@ class TestContextEnhancedEotPaths:
         )
 
         ctx = ContextEnhancedEot()
-        score = ctx.compute_score("你好，请问")
         base_score = ctx._base_eot.p_complete_score("你好，请问")
         # Greeting adjustment should boost score
         assert ctx.compute_score("你好，请问") >= base_score

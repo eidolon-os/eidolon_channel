@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING, Any
 from ..observability import TurnTimeline
 from ..pipeline.types import generate_turn_id
 from ..session.messages import message_text
+from ..session.voiceprint_reasons import (
+    is_voiceprint_inconclusive_reason,
+    voiceprint_blocked_reason,
+    voiceprint_error_reason,
+    voiceprint_inconclusive_reason,
+)
 from ..turn_policy import TranscriptEvidenceGate
 
 if TYPE_CHECKING:
@@ -286,7 +292,7 @@ class FullDuplexTurnCompletion:
             self._record_voiceprint_commit_gate(
                 timeline,
                 allowed=False,
-                reason=f"voiceprint_error:{type(exc).__name__}",
+                reason=voiceprint_error_reason(type(exc).__name__),
             )
             owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
             logger.exception("[StreamingPipeline] voiceprint gate failed")
@@ -319,7 +325,7 @@ class FullDuplexTurnCompletion:
         if not allowed:
             eot_model.reset()
             owner._suppress_transcripts_until_next_speech = True
-            self.clear_session_user_turn(f"voiceprint_blocked:{reason}")
+            self.clear_session_user_turn(voiceprint_blocked_reason(reason))
             owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
             logger.info(
                 "[StreamingPipeline] voiceprint gate blocked commit reason=%s transcript=%r",
@@ -531,9 +537,9 @@ class FullDuplexTurnCompletion:
                 self._record_voiceprint_commit_gate(
                     timeline,
                     allowed=False,
-                    reason=f"voiceprint_error:{type(exc).__name__}",
+                    reason=voiceprint_error_reason(type(exc).__name__),
                 )
-                self.clear_session_user_turn(f"voiceprint_error:{type(exc).__name__}")
+                self.clear_session_user_turn(voiceprint_error_reason(type(exc).__name__))
                 owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
                 logger.exception("[StreamingPipeline] voiceprint gate failed in turn hook")
                 return False
@@ -579,7 +585,7 @@ class FullDuplexTurnCompletion:
             return False
 
         owner._suppress_transcripts_until_next_speech = True
-        self.clear_session_user_turn(f"voiceprint_blocked:{reason}")
+        self.clear_session_user_turn(voiceprint_blocked_reason(reason))
         owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
         logger.info(
             "[StreamingPipeline] voiceprint gate stopped completed turn reason=%s transcript=%r",
@@ -695,7 +701,7 @@ class FullDuplexTurnCompletion:
         reason: str,
     ) -> None:
         owner = self._pipeline
-        defer_reason = f"voiceprint_inconclusive:{reason}"
+        defer_reason = voiceprint_inconclusive_reason(reason)
         self.clear_session_user_turn(defer_reason)
         owner._ensure_user_turn_coordinator()
         decision = owner._user_turns.defer_voiceprint_inconclusive(
@@ -950,5 +956,5 @@ def _count_cjk_chars(text: str) -> int:
 
 
 def _voiceprint_result_is_inconclusive(result: Any) -> bool:
-    reason = str(getattr(result, "commit_reason", "") or "").lower()
-    return reason in {"audio_too_short", "insufficient_audio", "too_short"}
+    reason = str(getattr(result, "commit_reason", "") or "")
+    return is_voiceprint_inconclusive_reason(reason)

@@ -24,7 +24,7 @@ from eidolon.livekit.tests._harness.mocks import (
 )
 
 from .audio_assets import load_clip_pcm
-from .dogfood import dogfood_metrics, render_dogfood_mic_pcm
+from .device_envelope import device_envelope_metrics, render_device_envelope_mic_pcm
 from .schema import BenchmarkCase, BenchmarkSuite, CaseResult, RunResult
 
 
@@ -104,7 +104,7 @@ async def _run_case(case: BenchmarkCase, root: Path) -> CaseResult:
                 if not rel:
                     raise ValueError(f"{case.case_id}: missing audio clip id {step.audio!r}")
                 pcm, _sample_rate = load_clip_pcm(root / rel)
-                pcm = render_dogfood_mic_pcm(
+                pcm = render_device_envelope_mic_pcm(
                     case,
                     step,
                     pcm,
@@ -157,7 +157,7 @@ async def _run_case(case: BenchmarkCase, root: Path) -> CaseResult:
                 "audio_bytes": h.audio_out.captured_bytes,
                 "cleared_segments": cleared_segments,
                 "llm_call_count": llm.call_count,
-                **dogfood_metrics(case),
+                **device_envelope_metrics(case),
             }
     except Exception as exc:
         metrics = {"elapsed_ms": round((time.monotonic() - started) * 1000)}
@@ -233,7 +233,7 @@ async def _run_case_with_llm(
                 if not rel:
                     raise ValueError(f"{case.case_id}: missing audio clip id {step.audio!r}")
                 pcm, _sample_rate = load_clip_pcm(root / rel)
-                pcm = render_dogfood_mic_pcm(
+                pcm = render_device_envelope_mic_pcm(
                     case,
                     step,
                     pcm,
@@ -283,7 +283,7 @@ async def _run_case_with_llm(
                 "audio_bytes": h.audio_out.captured_bytes,
                 "cleared_segments": cleared_segments,
                 "llm_call_count": None,
-                **dogfood_metrics(case),
+                **device_envelope_metrics(case),
             }
     except Exception as exc:
         metrics = {"elapsed_ms": round((time.monotonic() - started) * 1000)}

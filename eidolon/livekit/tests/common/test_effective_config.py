@@ -97,6 +97,9 @@ turn_policy:
     disconnect_grace_ms: 450
 observability:
   llm_first_delta_timeout_ms: 2500
+  stt_pending_provider_event_window_ms: 1600
+  stt_pending_provider_event_preroll_ms: 350
+  stt_pending_provider_event_max_count: 48
 voiceprint:
   enabled: true
   threshold: 0.42
@@ -138,6 +141,9 @@ voiceprint:
     assert cfg.turn_policy.eot.statement_sequence_fragment_max_cjk_chars == 11
     assert cfg.turn_policy.eot.transcript_revision_min_normalized_chars == 5
     assert cfg.observability.llm_first_delta_timeout_ms == 2500
+    assert cfg.observability.stt_pending_provider_event_window_ms == 1600
+    assert cfg.observability.stt_pending_provider_event_preroll_ms == 350
+    assert cfg.observability.stt_pending_provider_event_max_count == 48
     assert cfg.llm.api_key == "test"
     assert cfg.voiceprint.enabled is True
     assert cfg.voiceprint.threshold == 0.42

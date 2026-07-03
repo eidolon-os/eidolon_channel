@@ -22,9 +22,6 @@ def _speech_start_pipeline(owner: str) -> StreamingPipeline:
     pipeline._ensure_runtime_defaults = MagicMock()
     pipeline._publish_companion_ui_state = MagicMock()
     pipeline._ensure_user_turn_coordinator = MagicMock()
-    pipeline._cancel_deferred_low_eot_commit = MagicMock()
-    pipeline._cancel_pending_voiceprint_commits = MagicMock()
-    pipeline._reset_candidate_voiceprint_tasks = MagicMock()
     pipeline._callbacks = MagicMock()
     pipeline._room = None
     pipeline._timeline = None
@@ -61,7 +58,12 @@ def _transcript_pipeline(owner: str) -> StreamingPipeline:
     pipeline._latest_asr_text = ""
     pipeline._timeline = TurnTimeline("test-turn")
     pipeline._mark_activity = MagicMock()
-    pipeline._agent_output_active_for_interrupts = MagicMock(return_value=True)
+    pipeline._client_audio_state = SimpleNamespace(
+        agent_output_active_for_interrupts=MagicMock(return_value=True),
+    )
+    pipeline._ensure_client_audio_state_view = MagicMock(
+        return_value=pipeline._client_audio_state,
+    )
     pipeline._transcript_echo_gate = MagicMock()
     pipeline._transcript_echo_gate.is_echo.return_value = False
     pipeline._interrupt_window_active = MagicMock(return_value=False)

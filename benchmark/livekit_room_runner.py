@@ -33,10 +33,10 @@ from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
 from .audio_assets import load_clip_pcm
-from .dogfood import (
+from .device_envelope import (
     audio_state_interval_sec,
-    dogfood_metrics,
-    render_dogfood_mic_pcm,
+    device_envelope_metrics,
+    render_device_envelope_mic_pcm,
 )
 from .realcall import provider_config_from_cfg
 from .schema import (
@@ -351,7 +351,7 @@ async def _run_room_case(
 
     metrics.setdefault("elapsed_ms", _elapsed_ms(started))
     metrics["room_name"] = room_name
-    metrics.update(dogfood_metrics(case))
+    metrics.update(device_envelope_metrics(case))
     return CaseResult(
         case_id=case.case_id,
         suite=case.suite,
@@ -431,7 +431,7 @@ async def _feed_case_audio(
         if rel is None:
             raise ValueError(f"{case.case_id}: missing audio clip id {step.audio!r}")
         pcm, sample_rate = load_clip_pcm(root / rel)
-        pcm = render_dogfood_mic_pcm(
+        pcm = render_device_envelope_mic_pcm(
             case,
             step,
             pcm,
@@ -503,7 +503,7 @@ def _step_playback_state(step: Any, *, default: str) -> str:
 
 
 def _case_input_mode(case: BenchmarkCase) -> str:
-    if case.dogfood.enabled and case.dogfood.device.mode == "half_duplex":
+    if case.device_envelope.enabled and case.device_envelope.device.mode == "half_duplex":
         return INPUT_MODE_PTT
     return INPUT_MODE_AUTO
 

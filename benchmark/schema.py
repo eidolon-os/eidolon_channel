@@ -49,8 +49,8 @@ class AgentReply:
 
 
 @dataclass(frozen=True)
-class DogfoodDevice:
-    """Device-side behavior for human+device dogfood scenarios.
+class DeviceEnvelopeDevice:
+    """Device-side behavior for benchmark device-envelope scenarios.
 
     This is benchmark DSL only. Runtime code should continue to consume the
     actual wire packets, not import benchmark types.
@@ -64,8 +64,8 @@ class DogfoodDevice:
 
 
 @dataclass(frozen=True)
-class DogfoodAgentPlayback:
-    """Synthetic agent playback used to model mic echo in dogfood cases."""
+class DeviceEnvelopeAgentPlayback:
+    """Synthetic agent playback used to model mic echo in benchmark cases."""
 
     speaking_text: str = ""
     tts_duration_ms: int = 0
@@ -73,14 +73,14 @@ class DogfoodAgentPlayback:
 
 
 @dataclass(frozen=True)
-class DogfoodEcho:
+class DeviceEnvelopeEcho:
     enabled: bool = False
     delay_ms: int = 80
     attenuation_db: float = -18.0
 
 
 @dataclass(frozen=True)
-class DogfoodNoise:
+class DeviceEnvelopeNoise:
     enabled: bool = False
     type: str = "room"
     snr_db: float | None = None
@@ -88,25 +88,25 @@ class DogfoodNoise:
 
 
 @dataclass(frozen=True)
-class DogfoodAcoustics:
-    """Acoustic conditions for synthetic dogfood mic rendering."""
+class DeviceEnvelopeAcoustics:
+    """Acoustic conditions for synthetic device-envelope mic rendering."""
 
-    echo: DogfoodEcho = field(default_factory=DogfoodEcho)
-    noise: DogfoodNoise = field(default_factory=DogfoodNoise)
+    echo: DeviceEnvelopeEcho = field(default_factory=DeviceEnvelopeEcho)
+    noise: DeviceEnvelopeNoise = field(default_factory=DeviceEnvelopeNoise)
 
 
 @dataclass(frozen=True)
-class DogfoodSpec:
-    """Human + device dogfood extension for a benchmark case.
+class DeviceEnvelopeSpec:
+    """Human + device envelope extension for a benchmark case.
 
     Existing policy/headless/component runners can ignore it safely. Room and
     future HIL runners use it to emulate device state cadence and acoustic mess.
     """
 
     enabled: bool = False
-    device: DogfoodDevice = field(default_factory=DogfoodDevice)
-    agent: DogfoodAgentPlayback = field(default_factory=DogfoodAgentPlayback)
-    acoustics: DogfoodAcoustics = field(default_factory=DogfoodAcoustics)
+    device: DeviceEnvelopeDevice = field(default_factory=DeviceEnvelopeDevice)
+    agent: DeviceEnvelopeAgentPlayback = field(default_factory=DeviceEnvelopeAgentPlayback)
+    acoustics: DeviceEnvelopeAcoustics = field(default_factory=DeviceEnvelopeAcoustics)
 
 
 @dataclass(frozen=True)
@@ -141,9 +141,9 @@ class Expectations:
     # Room-participant bound on user-audio-done -> next agent audio. Doubles as
     # the resume-latency bound for false-interruption recovery cases.
     max_user_done_to_agent_audio_ms: float | None = None
-    # Dogfood / timeline-level assertions. They may be enforced by room timeline
-    # expectations or future HIL runners; deterministic runners simply carry
-    # them through reports.
+    # Device-envelope / timeline-level assertions. They may be enforced by room
+    # timeline expectations or future HIL runners; deterministic runners simply
+    # carry them through reports.
     max_speech_start_to_suspend_ms: float | None = None
     max_speech_start_to_cancel_ms: float | None = None
     max_speech_start_to_resume_ms: float | None = None
@@ -161,7 +161,7 @@ class BenchmarkCase:
     audio_clips: tuple[AudioClip, ...]
     user_steps: tuple[UserStep, ...]
     agent_replies: tuple[AgentReply, ...] = ()
-    dogfood: DogfoodSpec = field(default_factory=DogfoodSpec)
+    device_envelope: DeviceEnvelopeSpec = field(default_factory=DeviceEnvelopeSpec)
     expectations: Expectations = field(default_factory=Expectations)
     tags: tuple[str, ...] = ()
     timeout_sec: float = 15.0
@@ -212,20 +212,20 @@ def _tuple_of(cls, raw: Any) -> tuple:
     return tuple(cls(**item) for item in raw)
 
 
-def _dogfood_spec(raw: Any) -> DogfoodSpec:
+def _device_envelope_spec(raw: Any) -> DeviceEnvelopeSpec:
     if raw is None:
-        return DogfoodSpec()
+        return DeviceEnvelopeSpec()
     if not isinstance(raw, dict):
-        raise ValueError(f"expected mapping for DogfoodSpec, got {type(raw).__name__}")
-    device = DogfoodDevice(**dict(raw.get("device") or {}))
-    agent = DogfoodAgentPlayback(**dict(raw.get("agent") or {}))
+        raise ValueError(f"expected mapping for DeviceEnvelopeSpec, got {type(raw).__name__}")
+    device = DeviceEnvelopeDevice(**dict(raw.get("device") or {}))
+    agent = DeviceEnvelopeAgentPlayback(**dict(raw.get("agent") or {}))
     acoustics_raw = dict(raw.get("acoustics") or {})
-    acoustics = DogfoodAcoustics(
-        echo=DogfoodEcho(**dict(acoustics_raw.get("echo") or {})),
-        noise=DogfoodNoise(**dict(acoustics_raw.get("noise") or {})),
+    acoustics = DeviceEnvelopeAcoustics(
+        echo=DeviceEnvelopeEcho(**dict(acoustics_raw.get("echo") or {})),
+        noise=DeviceEnvelopeNoise(**dict(acoustics_raw.get("noise") or {})),
     )
     enabled = bool(raw.get("enabled", True))
-    return DogfoodSpec(
+    return DeviceEnvelopeSpec(
         enabled=enabled,
         device=device,
         agent=agent,
@@ -250,7 +250,7 @@ def load_suite(path: str | Path) -> BenchmarkSuite:
                 audio_clips=_tuple_of(AudioClip, case_raw.get("audio_clips")),
                 user_steps=_tuple_of(UserStep, case_raw.get("user_steps")),
                 agent_replies=_tuple_of(AgentReply, case_raw.get("agent_replies")),
-                dogfood=_dogfood_spec(case_raw.get("dogfood")),
+                device_envelope=_device_envelope_spec(case_raw.get("device_envelope")),
                 expectations=expectations,
                 tags=tuple(case_raw.get("tags") or ()),
                 timeout_sec=float(case_raw.get("timeout_sec") or 15.0),

@@ -186,8 +186,8 @@ class BasePipeline(ABC):
                 # G1 fix (2026-05-16): the framework's quiet state is reported
                 # as "listening", not "idle" — so self._state was permanently
                 # stuck at SPEAKING after the first turn, defeating F3.2's
-                # state-guard in _duck_and_arm_timeout. Accept both names for
-                # forward-compat in case the framework ever sends "idle".
+                # output-flow duck guard. Accept both names for forward-compat
+                # in case the framework ever sends "idle".
                 self._state = PipelineState.IDLE
                 self._callbacks.on_agent_ended_speaking()
                 self._callbacks.on_agent_response_done()

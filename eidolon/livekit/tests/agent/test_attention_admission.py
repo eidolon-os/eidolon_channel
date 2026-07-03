@@ -262,7 +262,7 @@ def _pipeline_with_client_state(
     pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
     if state is not None:
         pipeline._room_data.client_audio_states[state.participant_identity] = state
-    pipeline._duck_and_arm_timeout = MagicMock()
+    pipeline._output_flow = SimpleNamespace(duck_and_arm_timeout=MagicMock())
     pipeline._callbacks = MagicMock()
     return pipeline
 
@@ -286,7 +286,7 @@ def test_pipeline_attention_observes_substantive_playback_speech_without_eot() -
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
     assert allowed is False
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
 
@@ -299,7 +299,7 @@ def test_pipeline_attention_soft_ducks_on_playback_speech_start() -> None:
     pipeline._ensure_runtime_defaults()
     pipeline._attention_effects.handle_speaking_started()
 
-    pipeline._duck_and_arm_timeout.assert_called_once()
+    pipeline._output_flow.duck_and_arm_timeout.assert_called_once()
     assert (
         pipeline._timeline.attrs["attention_admission"]["action"]
         == "duck_and_decide"
@@ -319,11 +319,11 @@ def test_pipeline_attention_routes_low_evidence_transcript_after_soft_duck() -> 
     pipeline._ensure_runtime_defaults()
     pipeline._attention_effects.handle_speaking_started()
     pipeline._ducking.mixer = SimpleNamespace(state="SUSPENDED")
-    pipeline._duck_and_arm_timeout.reset_mock()
+    pipeline._output_flow.duck_and_arm_timeout.reset_mock()
     allowed = _allows_eot(pipeline, "嗯嗯")
 
     assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
 
@@ -336,7 +336,7 @@ def test_pipeline_attention_allows_high_eot_playback_speech() -> None:
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
     assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_called_once()
+    pipeline._output_flow.duck_and_arm_timeout.assert_called_once()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
@@ -350,7 +350,7 @@ def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
     allowed = _allows_eot(pipeline, "别说了")
 
     assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
 
 
@@ -363,7 +363,7 @@ def test_pipeline_attention_uses_client_playback_when_internal_state_idle() -> N
     allowed = _allows_eot(pipeline, "停一下")
 
     assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
 
 
@@ -494,7 +494,7 @@ def test_pipeline_attention_observes_short_prefix_during_playback() -> None:
     allowed = _allows_eot(pipeline, "换个")
 
     assert allowed is False
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
@@ -508,7 +508,7 @@ def test_pipeline_attention_observes_single_char_prefix_during_playback() -> Non
     allowed = _allows_eot(pipeline, "换")
 
     assert allowed is False
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
@@ -522,7 +522,7 @@ def test_pipeline_attention_preserves_old_path_without_client_state() -> None:
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
     assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_called_once()
+    pipeline._output_flow.duck_and_arm_timeout.assert_called_once()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
 
 
@@ -532,7 +532,7 @@ def test_pipeline_attention_defaults_to_observe_only_rollout() -> None:
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
     assert allowed is True
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert pipeline._timeline.attrs["attention_admission"]["enforced"] is False
 
@@ -565,7 +565,7 @@ def test_pipeline_rejects_playback_low_evidence_artifact_before_commit() -> None
     eot = MagicMock()
     eot.current_eot_score = 0.0
 
-    reason = pipeline._playback_low_evidence_reject_reason(
+    reason = pipeline._ensure_turn_completion().playback_low_evidence_reject_reason(
         transcript="所",
         eot_model=eot,
     )
@@ -597,7 +597,7 @@ def test_pipeline_attention_prefers_speaker_client_state() -> None:
     )
 
     assert allowed is False
-    pipeline._duck_and_arm_timeout.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
         == "playback_low_evidence_transcript:substantive_cjk_transcript"

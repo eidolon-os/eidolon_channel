@@ -1,8 +1,8 @@
-"""Human+device dogfood helpers for voice benchmarks.
+"""Device-envelope helpers for voice benchmarks.
 
-This module belongs to the benchmark layer. It translates declarative dogfood
-case metadata into runner behavior: device audio-state cadence and synthetic
-mic rendering. Runtime channel code must not depend on it.
+This module belongs to the benchmark layer. It translates declarative device
+envelope metadata into runner behavior: device audio-state cadence and
+synthetic mic rendering. Runtime channel code must not depend on it.
 """
 
 from __future__ import annotations
@@ -27,50 +27,50 @@ from .schema import BenchmarkCase, UserStep
 def audio_state_interval_sec(case: BenchmarkCase, *, default_sec: float = 0.5) -> float:
     """Return the device audio_state refresh interval for a benchmark case."""
 
-    if not case.dogfood.enabled:
+    if not case.device_envelope.enabled:
         return default_sec
-    hz = float(case.dogfood.device.audio_state_hz or 0.0)
+    hz = float(case.device_envelope.device.audio_state_hz or 0.0)
     if hz <= 0:
         return default_sec
     return max(0.05, 1.0 / hz)
 
 
-def dogfood_metrics(case: BenchmarkCase) -> dict[str, object]:
+def device_envelope_metrics(case: BenchmarkCase) -> dict[str, object]:
     """Stable metrics/report fields describing the simulated device envelope."""
 
-    if not case.dogfood.enabled:
-        return {"dogfood_enabled": False}
+    if not case.device_envelope.enabled:
+        return {"device_envelope_enabled": False}
     return {
-        "dogfood_enabled": True,
-        "dogfood_device_model": case.dogfood.device.model,
-        "dogfood_device_mode": case.dogfood.device.mode,
-        "dogfood_audio_state_hz": case.dogfood.device.audio_state_hz,
-        "dogfood_playback_ack": case.dogfood.device.playback_ack,
-        "dogfood_echo_enabled": case.dogfood.acoustics.echo.enabled,
-        "dogfood_noise_enabled": case.dogfood.acoustics.noise.enabled,
+        "device_envelope_enabled": True,
+        "device_envelope_model": case.device_envelope.device.model,
+        "device_envelope_mode": case.device_envelope.device.mode,
+        "device_envelope_audio_state_hz": case.device_envelope.device.audio_state_hz,
+        "device_envelope_playback_ack": case.device_envelope.device.playback_ack,
+        "device_envelope_echo_enabled": case.device_envelope.acoustics.echo.enabled,
+        "device_envelope_noise_enabled": case.device_envelope.acoustics.noise.enabled,
     }
 
 
-def render_dogfood_mic_pcm(
+def render_device_envelope_mic_pcm(
     case: BenchmarkCase,
     step: UserStep,
     near_end_pcm: bytes,
     *,
     sample_rate: int,
 ) -> bytes:
-    """Render mic input for a human+device dogfood case.
+    """Render mic input for a benchmark device envelope.
 
-    The default is a no-op. When dogfood acoustics are enabled, the rendered mic
-    contains deterministic near-end user audio plus synthetic agent echo/noise.
-    This is intentionally lightweight; real HIL tests should replace the
-    synthetic echo with captured playback reference audio.
+    The default is a no-op. When device-envelope acoustics are enabled, the
+    rendered mic contains deterministic near-end user audio plus synthetic agent
+    echo/noise. This is intentionally lightweight; real HIL tests should
+    replace the synthetic echo with captured playback reference audio.
     """
 
-    if not case.dogfood.enabled:
+    if not case.device_envelope.enabled:
         return near_end_pcm
 
     rendered = near_end_pcm
-    echo = case.dogfood.acoustics.echo
+    echo = case.device_envelope.acoustics.echo
     if echo.enabled:
         rendered = mix_pcm(
             rendered,
@@ -85,7 +85,7 @@ def render_dogfood_mic_pcm(
             sample_rate=sample_rate,
         )
 
-    noise = case.dogfood.acoustics.noise
+    noise = case.device_envelope.acoustics.noise
     if noise.enabled:
         rendered = mix_pcm(
             rendered,
@@ -144,7 +144,7 @@ def _synthetic_agent_echo(
 ) -> bytes:
     duration_sec = max(
         base_duration_sec,
-        float(case.dogfood.agent.tts_duration_ms or 0) / 1000.0,
+        float(case.device_envelope.agent.tts_duration_ms or 0) / 1000.0,
         float(step.duration_ms or 0) / 1000.0,
     )
     # Low-pitched voice-shaped signal: deterministic and VAD-plausible, but
@@ -201,7 +201,7 @@ def _clip_i16(value: int) -> int:
     return max(-32768, min(32767, int(value)))
 
 
-def dogfood_silence(duration_sec: float, *, sample_rate: int) -> bytes:
-    """Named wrapper used by tests and future runners for dogfood timelines."""
+def device_envelope_silence(duration_sec: float, *, sample_rate: int) -> bytes:
+    """Named wrapper used by tests and future runners for envelope timelines."""
 
     return synth_silence(duration_sec, sample_rate=sample_rate)

@@ -31,9 +31,9 @@ from benchmark.livekit_room_runner import (
     _agent_audio_wait_mode,
     _agent_audio_wait_timeout_sec,
 )
-from benchmark.dogfood import (
+from benchmark.device_envelope import (
     audio_state_interval_sec,
-    render_dogfood_mic_pcm,
+    render_device_envelope_mic_pcm,
 )
 from benchmark.hil_barge_in import analyze_hil_barge_in
 from eidolon.livekit.tests._harness.audio import pcm_rms
@@ -147,11 +147,11 @@ def test_load_dogfood_box3_audio_first_suite() -> None:
         for case in suite.cases
         if case.case_id == "dogfood_box3_owner_followup_during_playback_001"
     )
-    assert followup.dogfood.enabled is True
-    assert followup.dogfood.device.model == "esp32_box_3"
-    assert followup.dogfood.device.mode == "full_duplex"
-    assert followup.dogfood.device.audio_state_hz == 10
-    assert followup.dogfood.acoustics.echo.enabled is True
+    assert followup.device_envelope.enabled is True
+    assert followup.device_envelope.device.model == "esp32_box_3"
+    assert followup.device_envelope.device.mode == "full_duplex"
+    assert followup.device_envelope.device.audio_state_hz == 10
+    assert followup.device_envelope.acoustics.echo.enabled is True
     assert followup.expectations.max_speech_start_to_suspend_ms == 120
     assert followup.expectations.playback_stop_sent is True
 
@@ -175,18 +175,18 @@ def test_load_offline_policy_regression_suite() -> None:
     }
 
     idle_tap = cases["opr_waveshare_ptt_idle_tap_no_policy_decision_001"]
-    assert idle_tap.dogfood.device.mode == "half_duplex"
+    assert idle_tap.device_envelope.device.mode == "half_duplex"
     assert idle_tap.user_steps[0].client_ptt is True
     assert idle_tap.user_steps[0].agent_speaking is False
     assert idle_tap.expectations.decision_action == "none"
 
     playback_tap = cases["opr_waveshare_ptt_playback_tap_cancels_001"]
-    assert playback_tap.dogfood.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
+    assert playback_tap.device_envelope.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
     assert playback_tap.expectations.decision_action == "cancel"
     assert playback_tap.expectations.decision_intent == "hard_stop"
 
     compound_backchannel = cases["opr_fullduplex_compound_backchannel_holds_001"]
-    assert compound_backchannel.dogfood.device.mode == "full_duplex"
+    assert compound_backchannel.device_envelope.device.mode == "full_duplex"
     assert compound_backchannel.expectations.decision_action == "hold"
     assert "cancel" in compound_backchannel.expectations.forbid_actions
     assert compound_backchannel.expectations.no_full_assistant_context_commit is True
@@ -235,26 +235,26 @@ def test_barge_in_ab_default_cases_include_offline_policy_regression_suite() -> 
     )
 
 
-def test_dogfood_audio_state_interval_uses_device_cadence() -> None:
+def test_device_envelope_audio_state_interval_uses_device_cadence() -> None:
     suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case = suite.cases[0]
 
     assert audio_state_interval_sec(case) == pytest.approx(0.1)
 
 
-def test_dogfood_mic_render_adds_echo_and_noise() -> None:
+def test_device_envelope_mic_render_adds_echo_and_noise() -> None:
     suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
     case = suite.cases[0]
     step = case.user_steps[1]
     pcm = b"\x00\x00" * 1600
 
-    rendered = render_dogfood_mic_pcm(case, step, pcm, sample_rate=16000)
+    rendered = render_device_envelope_mic_pcm(case, step, pcm, sample_rate=16000)
 
     assert len(rendered) == len(pcm)
     assert pcm_rms(rendered) > pcm_rms(pcm)
 
 
-def test_livekit_room_dogfood_input_mode_tracks_device_mode() -> None:
+def test_livekit_room_device_envelope_input_mode_tracks_device_mode() -> None:
     from benchmark.livekit_room_runner import _case_input_mode, _step_input_mode
 
     suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
@@ -273,13 +273,13 @@ def test_half_duplex_ptt_phase_a_suite_is_mode_specific() -> None:
     cases = {case.case_id: case for case in suite.cases}
 
     normal = cases["phase_a_ptt_normal_release_commits_001"]
-    assert normal.dogfood.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
-    assert normal.dogfood.device.mode == "half_duplex"
+    assert normal.device_envelope.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
+    assert normal.device_envelope.device.mode == "half_duplex"
     assert normal.user_steps[0].client_ptt is True
     assert normal.expectations.agent_audio_response == "after_user_done"
 
     tap_to_stop = cases["phase_a_ptt_tap_to_stop_cancels_001"]
-    assert tap_to_stop.dogfood.device.mode == "half_duplex"
+    assert tap_to_stop.device_envelope.device.mode == "half_duplex"
     assert tap_to_stop.expectations.decision_action == "cancel"
     assert tap_to_stop.expectations.playback_stop_sent is True
     assert tap_to_stop.expectations.agent_audio_response == "none"
@@ -306,7 +306,7 @@ async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.
     monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
     monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
     monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
-    monkeypatch.setattr(runner, "render_dogfood_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
 
     await runner._feed_case_audio(
         object(),

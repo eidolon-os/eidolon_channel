@@ -32,8 +32,14 @@ entrypoints; implementation code lives under named boundary packages.
   user-state/transcript entry routing, VAD speech segment lifecycle, transcript
   admission/echo gating before turn evidence, accepted transcript evidence
   recording, semantic interrupt trigger gating, interruption output side effects,
-  interrupted context ledger wiring, and explicit client preempt handling for
-  deliberate full-duplex controls.
+  voiceprint-gated user-turn completion, framework completed-turn alignment,
+  interrupted context ledger wiring, AgentSession run/start/shutdown lifecycle,
+  output ducking install/arming, `client.audio_state` freshness/playback views,
+  and explicit client preempt handling for deliberate full-duplex controls.
+  `StreamingPipeline.run()` and `StreamingPipeline.shutdown()` are the public
+  entry points; lifecycle steps such as room teardown and proactive background
+  consumer management live in `full_duplex/lifecycle.py`, while user-turn
+  completion and voiceprint commit gates live in `full_duplex/turn_completion.py`.
 - `half_duplex/` contains the half-duplex PTT pipeline: hold-scoped audio
   recording, one-shot STT, PTT control status helpers, and the PTT controller
   that does not consume streaming transcript events or EOT.

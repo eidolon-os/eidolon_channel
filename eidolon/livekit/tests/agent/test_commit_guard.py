@@ -191,7 +191,7 @@ async def test_completed_turn_hook_blocks_while_interruption_owner_waits() -> No
     pipeline._user_turns.add_transcript("我想问一下", is_final=True)
     pipeline._interruption_orchestrator.start_candidate(timeline=pipeline._timeline)
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="我想问一下")
     )
 
@@ -213,23 +213,23 @@ def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:
     pipeline = _make_pipeline_with_session(latest_asr_text="")
     pipeline._get_eot_model.return_value.current_eot_score = 0.99
 
-    assert pipeline._should_defer_low_eot_commit(
+    assert pipeline._ensure_turn_completion().should_defer_low_eot_commit(
         transcript="给医生做的系统。",
         eot_model=pipeline._get_eot_model.return_value,
     )
-    assert not pipeline._should_defer_low_eot_commit(
+    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
         transcript="你觉得这个系统怎么定价？",
         eot_model=pipeline._get_eot_model.return_value,
     )
-    assert not pipeline._should_defer_low_eot_commit(
+    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
         transcript="今天我想聊一下一个新的医疗项目。",
         eot_model=pipeline._get_eot_model.return_value,
     )
-    assert not pipeline._should_defer_low_eot_commit(
+    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
         transcript="帮我详细介绍一下这个方案。",
         eot_model=pipeline._get_eot_model.return_value,
     )
-    assert not pipeline._should_defer_low_eot_commit(
+    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
         transcript="换个话题，我们聊一下定价。",
         eot_model=pipeline._get_eot_model.return_value,
     )
@@ -433,7 +433,7 @@ async def test_short_voiceprint_result_waits_for_continuation_before_reject() ->
         commit_reason="audio_too_short",
     )
     verify_task = asyncio.create_task(asyncio.sleep(0, result=short))
-    pipeline._schedule_voiceprint_gated_commit(
+    pipeline._ensure_turn_completion().schedule_voiceprint_gated_commit(
         verify_task=verify_task,
         eot_model=pipeline._get_eot_model.return_value,
         transcript="私立医院的。",
@@ -473,7 +473,7 @@ async def test_completed_turn_hook_allows_owner_voiceprint() -> None:
     )
     pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="主人正常说话")
     )
 
@@ -498,7 +498,7 @@ async def test_completed_turn_hook_stops_hard_stop_without_voiceprint_task() -> 
         vad_active=True,
     )
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="别说了。")
     )
 
@@ -545,7 +545,7 @@ async def test_completed_turn_hook_aligns_waiting_candidate_and_cancels_deferred
     )
     pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="我们聊一下定价。")
     )
     await asyncio.sleep(0)
@@ -593,7 +593,7 @@ async def test_completed_turn_hook_keeps_waiting_merge_on_short_voiceprint() -> 
     )
     pipeline._completed_turn_voiceprint_timeline = timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="私立医院的。")
     )
 
@@ -642,7 +642,7 @@ async def test_completed_turn_hook_defers_short_statement_for_continuation() -> 
     pipeline._candidate_voiceprint_tasks = [voiceprint_task]
     pipeline._completed_turn_voiceprint_timeline = timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="私立医院的。 给医生做的系统。")
     )
     await asyncio.sleep(0)
@@ -701,7 +701,7 @@ async def test_completed_turn_hook_does_not_defer_when_eot_confident() -> None:
     pipeline._candidate_voiceprint_tasks = [voiceprint_task]
     pipeline._completed_turn_voiceprint_timeline = timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="私立医院的。")
     )
 
@@ -755,7 +755,7 @@ async def test_completed_turn_hook_respects_voiceprint_deferred_merge_window() -
     )
     pipeline._completed_turn_voiceprint_timeline = timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(
             text_content="私立医院的。主要给医生做的系统。"
         )
@@ -823,7 +823,7 @@ async def test_completed_turn_hook_respects_statement_sequence_merge_window() ->
     )
     pipeline._completed_turn_voiceprint_timeline = timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(
             text_content="私立医院的。主要给医生做的系统。"
         )
@@ -882,7 +882,7 @@ async def test_deferred_framework_completed_commits_after_grace() -> None:
     pipeline._candidate_voiceprint_tasks = [voiceprint_task]
     pipeline._completed_turn_voiceprint_timeline = timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="私立医院的。 给医生做的系统。")
     )
     assert allowed is False
@@ -932,7 +932,7 @@ async def test_completed_turn_hook_blocks_backchannel_response_even_when_voicepr
     )
     pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="对呀。")
     )
     await asyncio.sleep(0)
@@ -970,7 +970,7 @@ async def test_completed_turn_hook_blocks_late_noise_final() -> None:
     )
     pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
 
-    allowed = await pipeline._voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
         new_message=SimpleNamespace(text_content="迟到的噪音字幕")
     )
 

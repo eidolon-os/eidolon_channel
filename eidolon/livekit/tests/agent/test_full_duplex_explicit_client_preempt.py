@@ -1,6 +1,6 @@
 """Full-duplex fast-path explicit client preempt tests.
 
-``_handle_explicit_client_preempt`` is the low-latency barge-in path: it fires
+``ExplicitClientPreemptHandler`` is the low-latency barge-in path: it fires
 on the raw client.audio_state data packet, BEFORE STT produces a transcript, and
 hard-cancels the agent's TTS.
 
@@ -47,9 +47,21 @@ def _pipeline(
         p._ducking = MagicMock(is_cancelled=True)
     else:
         p._ducking = OutputDuckingController()
+    def _agent_output_active_for_interrupts(*, participant_identity=None) -> bool:
+        del participant_identity
+        return pipeline_state == PipelineState.SPEAKING or (
+            state is not None and state.playback_state == "agent_speaking"
+        )
+
     # The state lookup itself is not under test (the packet was received per
     # production logs); the gate logic after it is.
-    p._latest_client_audio_state = MagicMock(return_value=state)
+    p._client_audio_state = SimpleNamespace(
+        latest_state=MagicMock(return_value=state),
+        agent_output_active_for_interrupts=MagicMock(
+            side_effect=_agent_output_active_for_interrupts,
+        ),
+    )
+    p._ensure_client_audio_state_view = MagicMock(return_value=p._client_audio_state)
     effects = SimpleNamespace(
         cancel_and_interrupt=MagicMock(),
         cancel_silent_generation_for_explicit_preempt=MagicMock(),
@@ -58,6 +70,7 @@ def _pipeline(
     )
     p._interruption_effects = effects
     p._ensure_interruption_effects = MagicMock(return_value=effects)
+    p._client_preempts = p._build_client_preempt_handler()
     return p
 
 
@@ -81,7 +94,7 @@ def test_ptt_while_speaking_force_cancels() -> None:
     # PTT is a deliberate button press → immediate hard cut, force=True so it
     # cuts through an uninterruptible framework speech handle.
     p = _pipeline(state=_state(ptt=True))
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
     p._interruption_effects.cancel_and_interrupt.assert_called_once_with(force=True)
 
 
@@ -94,7 +107,7 @@ def test_ptt_while_generating_preempts_silent_reply() -> None:
         state=_state(ptt=True, playback_state="idle"),
         pipeline_state=PipelineState.GENERATING,
     )
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
 
     p._interruption_effects.cancel_silent_generation_for_explicit_preempt.assert_called_once_with()
     p._interruption_effects.cancel_and_interrupt.assert_not_called()
@@ -104,7 +117,7 @@ def test_ptt_fast_path_records_owner_decision() -> None:
     timeline = TurnTimeline("turn-ptt")
     p = _pipeline(state=_state(ptt=True), timeline=timeline)
 
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
 
     p._decision_effects.record_decision_attrs.assert_called_once()
     decision = p._decision_effects.record_decision_attrs.call_args.args[0]
@@ -119,7 +132,7 @@ def test_ptt_fast_path_records_owner_decision() -> None:
 def test_ptt_before_turn_timeline_is_attached_to_next_speech_timeline() -> None:
     p = _pipeline(state=_state(ptt=True), timeline=None)
 
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
 
     p._interruption_effects.cancel_and_interrupt.assert_called_once_with(force=True)
     p._decision_effects.record_decision_attrs.assert_not_called()
@@ -152,14 +165,14 @@ def test_ptt_before_turn_timeline_is_attached_to_next_speech_timeline() -> None:
 def test_no_signal_does_not_cancel() -> None:
     # Plain audio_state (no ptt) must do nothing.
     p = _pipeline(state=_state())
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
     p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 def test_manual_interrupt_alone_does_nothing() -> None:
     # The removed energy-gate signal is no longer an interrupt trigger.
     p = _pipeline(state=_state(manual_interrupt=True))
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
     p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
@@ -169,14 +182,14 @@ def test_wrong_topic_ignored() -> None:
         topic="eidolon.something_else",
         participant=SimpleNamespace(identity="dev1"),
     )
-    p._handle_explicit_client_preempt(pkt)
+    p._client_preempts.handle_explicit_client_preempt(pkt)
     p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
 def test_no_action_when_output_already_cancelled() -> None:
     # Idempotent: if the agent output is already CANCELLED, the fast path bails.
     p = _pipeline(state=_state(ptt=True), output_cancelled=True)
-    p._handle_explicit_client_preempt(_packet())
+    p._client_preempts.handle_explicit_client_preempt(_packet())
     p._interruption_effects.cancel_and_interrupt.assert_not_called()
 
 
@@ -199,19 +212,20 @@ class _FakeRoom:
 def test_room_data_registration_drives_explicit_preempt() -> None:
     # Regression for the wiring (not the logic): a client.audio_state packet
     # arriving on the registered ``data_received`` callback must reach
-    # ``_handle_explicit_client_preempt`` after ``RoomDataHandler`` stores the
+    # ``ExplicitClientPreemptHandler`` after ``RoomDataHandler`` stores the
     # latest client state.
     from eidolon.livekit.agent.session.room_data import RoomDataHandler
 
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._ensure_room_data_handler = MagicMock()
     p._room_data = RoomDataHandler(get_timeline=lambda: None)
-    p._handle_explicit_client_preempt = MagicMock()
+    p._ensure_client_preempt_handler = MagicMock()
+    p._client_preempts = SimpleNamespace(on_client_room_packet=MagicMock())
 
     room = _FakeRoom()
-    p._install_room_data_observer(room)
+    p._ensure_room_data_bridge().install(room)
 
     pkt = _packet()
     room.emit("data_received", pkt)
 
-    p._handle_explicit_client_preempt.assert_called_once_with(pkt)
+    p._client_preempts.on_client_room_packet.assert_called_once_with(pkt)

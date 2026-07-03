@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 from eidolon_sdk.biz.contracts import SESSION_END_ERROR, SESSION_END_USER_LEFT
 
+from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 
@@ -23,7 +24,7 @@ from eidolon.livekit.agent.full_duplex import StreamingPipeline
 async def test_session_close_deletes_room_promptly():
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._on_session_closed = AsyncMock()
-    await p._delete_room_on_close()
+    await FullDuplexSessionLifecycle(p)._delete_room_on_close()
     p._on_session_closed.assert_awaited_once()
 
 
@@ -31,7 +32,7 @@ async def test_session_close_deletes_room_promptly():
 async def test_session_close_is_noop_without_callback():
     """Direct-construction / tests with no callback wired must not blow up."""
     p = StreamingPipeline.__new__(StreamingPipeline)
-    await p._delete_room_on_close()  # no _on_session_closed attr → no-op
+    await FullDuplexSessionLifecycle(p)._delete_room_on_close()
 
 
 @pytest.mark.asyncio
@@ -39,7 +40,7 @@ async def test_session_close_delete_swallows_errors():
     """A failing room-delete must not break the run()/shutdown path."""
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._on_session_closed = AsyncMock(side_effect=RuntimeError("boom"))
-    await p._delete_room_on_close()  # must not raise
+    await FullDuplexSessionLifecycle(p)._delete_room_on_close()
     p._on_session_closed.assert_awaited_once()
 
 
@@ -61,7 +62,7 @@ async def test_session_close_publishes_user_left_before_delete():
     p._on_session_end = _end
     p._on_session_closed = _closed
     p._close_error = None
-    await p._delete_room_on_close()
+    await FullDuplexSessionLifecycle(p)._delete_room_on_close()
     assert calls == [("end", SESSION_END_USER_LEFT), ("delete", None)]
 
 
@@ -80,6 +81,6 @@ async def test_session_close_publishes_error_on_error_close():
     p._on_session_end = _end
     p._on_session_closed = _closed
     p._close_error = RuntimeError("boom")
-    await p._delete_room_on_close()
+    await FullDuplexSessionLifecycle(p)._delete_room_on_close()
     assert calls[0] == ("end", SESSION_END_ERROR)
     assert ("delete", None) in calls

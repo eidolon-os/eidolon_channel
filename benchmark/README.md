@@ -266,10 +266,11 @@ After a real device dogfood attempt, inspect the worker timeline evidence:
   --require-cancel
 ```
 
-The YAML extension is intentionally benchmark-owned:
+The device-envelope YAML extension is intentionally benchmark-owned. It can be
+used by both real dogfood suites and deterministic policy regression suites:
 
 ```yaml
-dogfood:
+device_envelope:
   enabled: true
   device:
     model: esp32_box_3
@@ -290,8 +291,8 @@ dogfood:
 
 Runner responsibilities stay separated:
 
-- schema parses dogfood intent and expectations.
-- `benchmark.dogfood` renders synthetic mic audio and device cadence.
+- schema parses device-envelope metadata and expectations.
+- `benchmark.device_envelope` renders synthetic mic audio and device cadence.
 - `headless` replays the rendered mic audio in memory.
 - `component` applies the same mic rendering to VAD/STT inputs.
 - `livekit_room` publishes `client.audio_state` at the configured device cadence.

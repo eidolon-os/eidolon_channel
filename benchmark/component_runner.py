@@ -25,7 +25,7 @@ from eidolon.livekit.plugins.eot import ChineseModel
 from eidolon.livekit.tests._harness.audio import frames_from_pcm
 
 from .audio_assets import load_clip_pcm
-from .dogfood import render_dogfood_mic_pcm
+from .device_envelope import render_device_envelope_mic_pcm
 from .realcall import provider_config_from_cfg
 from .schema import AudioClip, BenchmarkCase, BenchmarkSuite, CaseResult, RunResult, UserStep
 
@@ -96,7 +96,7 @@ async def _run_vad_clip(
     task = asyncio.create_task(consume())
     try:
         pcm, sample_rate = load_clip_pcm(root / clip.path)
-        pcm = render_dogfood_mic_pcm(
+        pcm = render_device_envelope_mic_pcm(
             case,
             _step_for_clip(case, clip),
             pcm,
@@ -230,7 +230,7 @@ async def _run_stt_clip(
     errors: list[str] = []
     try:
         pcm, _sample_rate = load_clip_pcm(root / clip.path)
-        pcm = render_dogfood_mic_pcm(
+        pcm = render_device_envelope_mic_pcm(
             case,
             _step_for_clip(case, clip),
             pcm,

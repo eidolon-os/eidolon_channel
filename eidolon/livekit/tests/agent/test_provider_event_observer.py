@@ -470,3 +470,64 @@ def test_provider_event_observer_replays_pending_stt_events() -> None:
     assert observer.pending_stt_provider_events == []
     assert snap["timestamps"]["stt_first_audio_sent_at"] == 30.05
     assert snap["attrs"]["stt_stream"]["stream_id"] == "stream-1"
+
+
+def test_provider_event_observer_trims_pending_stt_events_by_configured_window() -> None:
+    observer = ProviderEventObserver(
+        factory=SimpleNamespace(),
+        get_timeline=lambda: None,
+        stt_pending_event_window_sec=1.0,
+    )
+
+    observer.remember_pending_stt_provider_event({"event": "stt_stream_started", "timestamp": 10.0})
+    observer.remember_pending_stt_provider_event({"event": "stt_ws_connected", "timestamp": 10.5})
+    observer.remember_pending_stt_provider_event(
+        {"event": "stt_turn_first_audio_sent", "timestamp": 11.2}
+    )
+
+    assert [item["timestamp"] for item in observer.pending_stt_provider_events] == [10.5, 11.2]
+
+
+def test_provider_event_observer_caps_pending_stt_events_by_configured_count() -> None:
+    observer = ProviderEventObserver(
+        factory=SimpleNamespace(),
+        get_timeline=lambda: None,
+        stt_pending_event_window_sec=10.0,
+        stt_pending_event_max_count=2,
+    )
+
+    for timestamp in [10.0, 10.5, 11.0]:
+        observer.remember_pending_stt_provider_event(
+            {"event": "stt_stream_started", "timestamp": timestamp}
+        )
+
+    assert [item["timestamp"] for item in observer.pending_stt_provider_events] == [10.5, 11.0]
+
+
+def test_provider_event_observer_uses_configured_stt_preroll() -> None:
+    timeline: TurnTimeline | None = TurnTimeline("turn-preroll")
+    timeline.mark_at("speech_started_at", 30.1)
+    observer = ProviderEventObserver(
+        factory=SimpleNamespace(),
+        get_timeline=lambda: timeline,
+        stt_pending_event_preroll_sec=0.1,
+    )
+    observer.pending_stt_provider_events = [
+        {
+            "provider": "bailian",
+            "event": "stt_turn_first_audio_sent",
+            "timestamp": 29.8,
+            "turn_id": "turn-preroll",
+        },
+        {
+            "provider": "bailian",
+            "event": "stt_turn_first_audio_sent",
+            "timestamp": 30.05,
+            "turn_id": "turn-preroll",
+        },
+    ]
+
+    observer.apply_pending_stt_provider_events()
+
+    snap = timeline.snapshot()
+    assert snap["timestamps"]["stt_first_audio_sent_at"] == 30.05

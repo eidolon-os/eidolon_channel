@@ -11,7 +11,7 @@ cases:
     description: 半双工 PTT 空闲轻触：没有 agent playback 时，空按不应被 full-duplex policy 当成打断；真实 half-duplex pipeline 应在 release 后 reject empty_hold。
     timeout_sec: 30
     tags: ["offline_policy", "half_duplex", "ptt", "empty_hold", "waveshare_2_06"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: waveshare_esp32_s3_touch_amoled_2_06
@@ -45,7 +45,7 @@ cases:
     description: 半双工 PTT 播放中轻触：PTT 是显式用户手势，播放态中即使没有 transcript 也必须进入 hard cancel / playback stop 路径。
     timeout_sec: 30
     tags: ["offline_policy", "half_duplex", "ptt", "tap_to_stop", "waveshare_2_06"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: waveshare_esp32_s3_touch_amoled_2_06
@@ -85,7 +85,7 @@ cases:
     description: 全双工播放中短反馈“嗯嗯好”：可以短暂 duck/hold，但不能取消 agent、不能当成新用户请求。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "backchannel", "false_interruption"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -124,7 +124,7 @@ cases:
     description: 全双工播放中用户只起了个低证据头“我觉得”：应等待更多证据，不应第一信号取消。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "false_start", "evidence_gate"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -157,7 +157,7 @@ cases:
     description: 全双工播放中出现像 agent 正在说的话的 transcript：低 EOT/低证据时保持 hold，避免把回声污染成用户 turn。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "echo_safety", "context_ledger"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -198,7 +198,7 @@ cases:
     description: 全双工播放中真实追问先出现短前缀，证据不足时 hold，完整文本和高 EOT 到达后应 cancel。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "normal_interrupt", "evidence_gate"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -231,7 +231,7 @@ cases:
     description: 全双工播放中先短反馈“嗯嗯好”不取消，随后真实追问到达时必须从 hold 状态推进到 cancel。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "backchannel", "followup", "state_continuity"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -279,7 +279,7 @@ cases:
     description: 全双工播放中低证据 false-start 不取消，随后完整追问应取消，避免 first hold 后卡住。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "false_start", "followup", "state_continuity"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -326,7 +326,7 @@ cases:
     description: 回声样 transcript 先 hold，不应污染上下文；随后真实追问要能继续推进到 cancel。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "echo_safety", "followup", "state_continuity"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -381,7 +381,7 @@ cases:
     description: 回声样 transcript 先 hold 后，明确硬停应立即 cancel，证明 echo hold 不会吞掉后续强证据。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "echo_safety", "hard_stop", "state_continuity"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3

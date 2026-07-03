@@ -105,10 +105,14 @@ eidolon/livekit/agent/
 │   ├── ptt_transcriber.py    # release 后一次性 STT
 │   └── ptt_turn_controller.py # segment PTT 状态机
 ├── full_duplex/
+│   ├── client_audio.py      # FullDuplexClientAudioStateView / RoomDataBridge
 │   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
 │   ├── context_ledger.py     # FullDuplexContextLedger: interrupted context runtime wiring
 │   ├── interruption_effects.py # FullDuplexInterruptionEffects: output/framework effects
+│   ├── lifecycle.py          # FullDuplexSessionLifecycle: AgentSession run/start/shutdown
+│   ├── output_flow.py        # FullDuplexOutputFlow: duck mixer install + VAD duck arming
 │   ├── semantic_interrupt_gate.py # SemanticInterruptGate: transcript-triggered semantic interrupt gate
+│   ├── turn_completion.py    # FullDuplexTurnCompletion: user-turn completion + voiceprint commit gate
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
 │   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
 │   ├── transcript_handler.py # FullDuplexTranscriptHandler: STT transcript entry routing
@@ -160,7 +164,7 @@ eidolon/livekit/agent/
 
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
-`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`ProviderEventObserver` 是 LLM/brain/STT/TTS provider event 的观测 owner，负责 observer install、pending STT replay、STT turn-audio observe 与 timeline recording；`StreamingPipeline` 不再保留 provider event 代理方法。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；它们都不直接调用 LiveKit API，副作用仍由 `StreamingPipeline` 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`ProviderEventObserver` 是 LLM/brain/STT/TTS provider event 的观测 owner，负责 observer install、pending STT replay、STT turn-audio observe 与 timeline recording；pending STT provider event 的保留窗口、speech-start 前置归因窗口和最大缓存条数由 `observability.stt_pending_provider_event_window_ms` / `observability.stt_pending_provider_event_preroll_ms` / `observability.stt_pending_provider_event_max_count` 配置，不再硬编码在 observer 内。`StreamingPipeline` 不再保留 provider event 代理方法。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；它们都不直接调用 LiveKit API，副作用由 full-duplex runtime owners 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
 
 `full_duplex/transcript_admission.py` 是 full-duplex STT transcript 进入 turn/evidence 逻辑前的入口门禁。当前只拥有两类无副作用裁决：voiceprint ownership 后的 post-turn residual transcript 抑制，以及播放中 agent 自身 TTS echo transcript 抑制。它不负责 EOT、commit、cancel/resume，也不处理 half-duplex PTT。
 
@@ -176,7 +180,13 @@ eidolon/livekit/agent/
 
 `full_duplex/interruption_effects.py` 是 full-duplex interruption output side-effect adapter。它承接 cancel / rollback / hold / explicit preempt 后对 LiveKit `AgentSession.interrupt()`、ducking output、soft interrupt timer、stable-signal recheck、`playback.stop` control 和 interrupted-context snapshot 的副作用；它不做 turn policy、semantic classification、user-turn commit 或 context ledger 裁决。
 
+`full_duplex/output_flow.py` 是 full-duplex output ducking flow owner。它只负责在 `AgentSession.start()` 后安装 `OutputDuckingController`，以及在 attention/VAD speech-start 触发时执行 `duck -> mark interrupt_started -> arm duck deadline`。cancel、rollback、hold、explicit preempt 的 terminal output effect 仍由 `FullDuplexInterruptionEffects` 执行。
+
+`full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、LiveKit framework `on_user_turn_completed` 对齐、canonical user text 发布/清理、session user turn 清理、context-error 一次性告警，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume 或 interrupted context capture 算法。
+
 `full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/injection 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context snapshot/inject 细节。
+
+`full_duplex/lifecycle.py` 是 full-duplex AgentSession 生命周期 owner。它负责 `AgentSession` 创建、event handler 绑定、stage warmup、RoomData/Voiceprint bridge 安装、`session.start()`、framework auto-interrupt patch、duck mixer/filler 输出准备、EOT session start、idle watchdog/proactive consumer 启停、session close prompt room teardown，以及 shutdown 顺序。`StreamingPipeline` 保留 `run()` / `shutdown()` 公共入口，但不再承载这些生命周期私有步骤。
 
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 
@@ -194,6 +204,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - 空按 / 无有效语音是显式协议结果：Channel 发布 session-local `eidolon.control` / `op=ptt.turn_status`，ESP32 只清理 UI 状态并 ACK，不参与 turn 裁决。
    - `session/client_control.py` 是 full-duplex streaming path 与 half-duplex segment path 共享的 `eidolon.control` envelope 与 timeline event helper；PTT 专用 `ptt.turn_status` payload / no-turn terminal 规则位于 `half_duplex/control.py`。
    - `full_duplex/client_preempt.py` 只处理 full-duplex explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 half-duplex PTT turn lifecycle。
+   - `full_duplex/client_audio.py` 拥有 full-duplex `client.audio_state` 的新鲜度视图、播放态判断，以及 room data -> explicit preempt handler 的桥接；pipeline 不再重复实现这些判断。
    - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时由 half-duplex owner 抢占输出并发送 `playback.stop`；发生在空闲时则按音频段长度/能量裁决为空按或真实 turn。
 
 2. **流式自然语言 / full-duplex**

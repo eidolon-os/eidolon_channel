@@ -172,6 +172,18 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     obs = cfg.observability
     if not 0 <= obs.llm_first_delta_timeout_ms <= 60_000:
         errors.append("observability.llm_first_delta_timeout_ms must be in [0, 60000]")
+    if not 0 <= obs.stt_pending_provider_event_window_ms <= 10_000:
+        errors.append(
+            "observability.stt_pending_provider_event_window_ms must be in [0, 10000]"
+        )
+    if not 0 <= obs.stt_pending_provider_event_preroll_ms <= 5_000:
+        errors.append(
+            "observability.stt_pending_provider_event_preroll_ms must be in [0, 5000]"
+        )
+    if not 1 <= obs.stt_pending_provider_event_max_count <= 512:
+        errors.append(
+            "observability.stt_pending_provider_event_max_count must be in [1, 512]"
+        )
 
     vp = cfg.voiceprint
     if vp.enabled:

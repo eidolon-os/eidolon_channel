@@ -15,7 +15,7 @@ from eidolon.livekit.agent.turn_policy import (
 )
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
 
-from .dogfood import dogfood_metrics
+from .device_envelope import device_envelope_metrics
 from .schema import BenchmarkSuite, CaseResult, RunResult, UserStep
 
 
@@ -291,7 +291,7 @@ def run_policy_suite(
                 "actual_decision_intent": decision_intent,
                 "topic_switch_hint": topic_switch_hint,
                 "correction_hint": correction_hint,
-                **dogfood_metrics(case),
+                **device_envelope_metrics(case),
             }
             results.append(
                 CaseResult(

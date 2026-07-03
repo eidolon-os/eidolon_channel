@@ -30,7 +30,7 @@ def _pipeline_with_session() -> StreamingPipeline:
 def test_context_error_clear_announces_once(caplog):
     p = _pipeline_with_session()
     with caplog.at_level(logging.ERROR, logger="agent"):
-        p._clear_session_user_turn(_CONTEXT_REASON)
+        p._ensure_turn_completion().clear_session_user_turn(_CONTEXT_REASON)
     assert p._session.say.call_count == 1
     assert p._context_error_notified is True
     assert any("context unresolved" in r.message for r in caplog.records)
@@ -38,14 +38,14 @@ def test_context_error_clear_announces_once(caplog):
 
 def test_context_error_announcement_is_once_only():
     p = _pipeline_with_session()
-    p._clear_session_user_turn(_CONTEXT_REASON)
-    p._clear_session_user_turn(_CONTEXT_REASON)  # second drop, same session
+    p._ensure_turn_completion().clear_session_user_turn(_CONTEXT_REASON)
+    p._ensure_turn_completion().clear_session_user_turn(_CONTEXT_REASON)  # second drop, same session
     assert p._session.say.call_count == 1
 
 
 def test_routine_clear_does_not_announce():
     p = _pipeline_with_session()
-    p._clear_session_user_turn(_ROUTINE_REASON)
+    p._ensure_turn_completion().clear_session_user_turn(_ROUTINE_REASON)
     p._session.say.assert_not_called()
     assert getattr(p, "_context_error_notified", False) is False
 
@@ -53,7 +53,7 @@ def test_routine_clear_does_not_announce():
 def test_context_error_without_session_does_not_crash():
     p = StreamingPipeline.__new__(StreamingPipeline)
     p._session = None
-    p._clear_session_user_turn(_CONTEXT_REASON)  # must not raise
+    p._ensure_turn_completion().clear_session_user_turn(_CONTEXT_REASON)  # must not raise
 
 
 def test_say_failure_is_swallowed():
@@ -61,5 +61,5 @@ def test_say_failure_is_swallowed():
     p._session = SimpleNamespace(
         clear_user_turn=Mock(), say=Mock(side_effect=RuntimeError("boom"))
     )
-    p._clear_session_user_turn(_CONTEXT_REASON)  # must not raise
+    p._ensure_turn_completion().clear_session_user_turn(_CONTEXT_REASON)  # must not raise
     assert p._context_error_notified is True

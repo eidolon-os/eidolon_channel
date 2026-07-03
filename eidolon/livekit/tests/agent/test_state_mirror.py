@@ -3,7 +3,7 @@
 The framework emits `agent_state_changed` events with `new_state` values of
 "speaking" / "thinking" / "listening" / occasionally "idle". The pipeline
 must keep `self._state` in sync, because downstream code (e.g. F3's
-`_duck_and_arm_timeout` guard) reads it as the source of truth.
+output-flow duck guard) reads it as the source of truth.
 
 Pre-G1 bug: only "idle" branch reset `self._state` to IDLE — but framework
 never sends "idle", it sends "listening". So `self._state` got stuck at

@@ -46,7 +46,7 @@ class HalfDuplexPttTurnController:
         transcriber: PttSegmentTranscriber,
         agent_output_active: Callable[[], bool] | None = None,
         preempt_agent_output: Callable[[], None] | None = None,
-        tap_to_stop_max_audio_sec: float = 0.35,
+        tap_to_stop_max_audio_sec: float = 0.9,
     ) -> None:
         self._recorder = recorder
         self._transcriber = transcriber

@@ -142,6 +142,8 @@ turn_policy:
     # Disconnect a session idle (no recognized speech / no agent activity)
     # for this long, so a forgotten-open client stops streaming STT. 0 disables.
     disconnect_after_idle_ms: 60000
+    # Proactive sessions are reclaimed faster when nobody answers.
+    proactive_disconnect_after_idle_ms: 12000
     # Delay room deletion briefly after session_end so the client receives it.
     disconnect_grace_ms: 300
   preemptive:
@@ -163,6 +165,9 @@ observability:
   metrics_enabled: true
   timeline_debug_path: "benchmark/runs/channel-worker-turn-timeline.jsonl"
   llm_first_delta_timeout_ms: 3000
+  stt_pending_provider_event_window_ms: 2000
+  stt_pending_provider_event_preroll_ms: 500
+  stt_pending_provider_event_max_count: 32
 
 # Bailian STT/TTS provider config (non-secret). API keys stay in .env
 # (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).

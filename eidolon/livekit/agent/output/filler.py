@@ -195,7 +195,7 @@ class FillerManager:
         fade envelope + silence lead-in.
 
         Call once after the audio output chain's sample rate is known
-        (typically right after ``_install_duck_mixer``).
+        (typically right after ``FullDuplexOutputFlow.install_duck_mixer``).
         """
         if not self._raw_clips:
             return

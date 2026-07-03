@@ -17,8 +17,9 @@ from eidolon.livekit.agent.full_duplex.interruption_effects import (
 )
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.common.config import ObservabilityConfig
+from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
 
 
 def test_timeline_marks_and_durations() -> None:
@@ -595,16 +596,32 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._timeline = TurnTimeline("turn-1")
+    pipeline._turn_policy = TurnPolicyConfig()
+    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
     pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
     pipeline._state = PipelineState.SPEAKING
     pipeline._ducking = SimpleNamespace(is_cancelled=False)
+    pipeline._decision_effects = MagicMock()
+    pipeline._ensure_decision_effect_applier = MagicMock()
     effects = SimpleNamespace(
         cancel_and_interrupt=MagicMock(),
         cancel_silent_generation_for_explicit_preempt=MagicMock(),
         rollback_if_suspended=MagicMock(),
         handle_hold_decision=MagicMock(),
     )
+    pipeline._client_audio_state = SimpleNamespace(
+        latest_state=lambda participant_identity=None: (
+            pipeline._room_data.latest_client_audio_state(
+                participant_identity=participant_identity,
+            )
+        ),
+        agent_output_active_for_interrupts=lambda participant_identity=None: True,
+    )
+    pipeline._ensure_client_audio_state_view = MagicMock(
+        return_value=pipeline._client_audio_state,
+    )
     pipeline._ensure_interruption_effects = MagicMock(return_value=effects)
+    pipeline._client_preempts = pipeline._build_client_preempt_handler()
 
     packet = SimpleNamespace(
         topic=CLIENT_AUDIO_STATE_TOPIC,
@@ -617,7 +634,7 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
     )
 
     pipeline._room_data.handle_packet(packet)
-    pipeline._on_client_room_packet(packet)
+    pipeline._client_preempts.on_client_room_packet(packet)
 
     effects.cancel_and_interrupt.assert_called_once_with(force=True)
     assert pipeline._timeline.attrs["explicit_client_interrupt"][

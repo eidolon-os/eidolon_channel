@@ -8,7 +8,7 @@ cases:
     description: box-3 全双工 dogfood：agent 播放中主人提出完整追问；应先让出声道，并在证据充分后取消当前回答。
     timeout_sec: 60
     tags: ["dogfood", "box3", "full_duplex", "owner_directed", "audio_first"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3
@@ -76,7 +76,7 @@ cases:
     description: box-3 全双工 dogfood：agent 播放中主人短附和“嗯嗯”；允许短暂让出声道，但不可取消当前回答。
     timeout_sec: 45
     tags: ["dogfood", "box3", "full_duplex", "backchannel", "false_interruption"]
-    dogfood:
+    device_envelope:
       enabled: true
       device:
         model: esp32_box_3

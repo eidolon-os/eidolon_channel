@@ -25,17 +25,18 @@ class FullDuplexSpeechLifecycle:
 
     def handle_started(self) -> None:
         owner = self._owner
+        turn_completion = owner._ensure_turn_completion()
         owner._ensure_user_turn_coordinator()
         merge_continuation = owner._user_turns.can_merge_new_speech()
         owner._skip_commit_after_interrupt_cancel = False
         owner._suppress_transcripts_until_next_speech = False
-        owner._cancel_deferred_low_eot_commit("new_speech_started")
+        turn_completion.cancel_deferred_low_eot_commit("new_speech_started")
         if not merge_continuation:
-            owner._cancel_pending_voiceprint_commits("new_speech_started")
+            turn_completion.cancel_pending_voiceprint_commits("new_speech_started")
             owner._completed_turn_voiceprint_task = None
             owner._completed_turn_voiceprint_result = None
             owner._completed_turn_voiceprint_timeline = None
-            owner._reset_candidate_voiceprint_tasks()
+            turn_completion.reset_candidate_voiceprint_tasks()
 
         owner._callbacks.on_user_started_speaking()
         owner._user_speaking_start_time = time.monotonic()
@@ -68,6 +69,7 @@ class FullDuplexSpeechLifecycle:
 
     def handle_stopped(self) -> None:
         owner = self._owner
+        turn_completion = owner._ensure_turn_completion()
         owner._user_speaking_start_time = None
         if owner._timeline is not None:
             owner._timeline.mark("speech_stopped_at")
@@ -83,7 +85,7 @@ class FullDuplexSpeechLifecycle:
         owner._callbacks.on_user_ended_speaking()
         owner._skip_commit_after_interrupt_cancel = False
         if defer_post_speech_evidence:
-            owner._remember_candidate_voiceprint_task(voiceprint_task)
+            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
             return
         if owner._session is None:
             owner._latest_asr_text = ""
@@ -91,7 +93,7 @@ class FullDuplexSpeechLifecycle:
 
         transcript = owner._user_turns.selected_text or owner._latest_asr_text
         if transcript:
-            owner._remember_candidate_voiceprint_task(voiceprint_task)
+            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
         if owner._user_turns.active is None and transcript:
             if owner._timeline is None:
                 owner._timeline = TurnTimeline(generate_turn_id())
@@ -101,7 +103,7 @@ class FullDuplexSpeechLifecycle:
             owner._apply_pending_client_control_events(owner._timeline)
             owner._user_turns.add_transcript(transcript, is_final=True)
 
-        low_evidence_reason = owner._playback_low_evidence_reject_reason(
+        low_evidence_reason = turn_completion.playback_low_evidence_reject_reason(
             transcript=transcript,
             eot_model=eot_model,
         )
@@ -114,12 +116,12 @@ class FullDuplexSpeechLifecycle:
             )
             owner._user_turns.reject_active(low_evidence_reason)
             eot_model.reset()
-            owner._clear_session_user_turn(low_evidence_reason)
-            owner._reset_candidate_voiceprint_tasks()
+            turn_completion.clear_session_user_turn(low_evidence_reason)
+            turn_completion.reset_candidate_voiceprint_tasks()
             owner._latest_asr_text = ""
             return
 
-        should_defer = owner._should_defer_low_eot_commit(
+        should_defer = turn_completion.should_defer_low_eot_commit(
             transcript=transcript,
             eot_model=eot_model,
         )
@@ -133,11 +135,11 @@ class FullDuplexSpeechLifecycle:
         )
         if decision.action == "reject":
             eot_model.reset()
-            owner._clear_session_user_turn(decision.reason)
-            owner._reset_candidate_voiceprint_tasks()
+            turn_completion.clear_session_user_turn(decision.reason)
+            turn_completion.reset_candidate_voiceprint_tasks()
             owner._latest_asr_text = ""
         elif decision.action == "defer":
-            owner._schedule_deferred_low_eot_commit(
+            turn_completion.schedule_deferred_low_eot_commit(
                 verify_task=None,
                 eot_model=eot_model,
                 transcript=decision.transcript,
@@ -145,8 +147,8 @@ class FullDuplexSpeechLifecycle:
                 delay_sec=decision.delay_sec,
             )
         else:
-            owner._schedule_voiceprint_gated_commit(
-                verify_task=owner._candidate_voiceprint_gate_task(),
+            turn_completion.schedule_voiceprint_gated_commit(
+                verify_task=turn_completion.candidate_voiceprint_gate_task(),
                 eot_model=eot_model,
                 transcript=decision.transcript or transcript,
                 timeline=owner._timeline,

@@ -25,14 +25,33 @@ class ProviderEventObserver:
         flush_timeline: Callable[[TurnTimeline, str], None] | None = None,
         append_timeline_snapshot: Callable[[TurnTimeline, str], None] | None = None,
         first_delta_timeout_sec: float | None = None,
+        stt_pending_event_window_sec: float | None = None,
+        stt_pending_event_preroll_sec: float | None = None,
+        stt_pending_event_max_count: int | None = None,
     ) -> None:
         self._factory = factory
         self._get_timeline = get_timeline
         self._flush_timeline = flush_timeline
         self._append_timeline_snapshot = append_timeline_snapshot
+        observability_defaults = ObservabilityConfig()
         if first_delta_timeout_sec is None:
-            first_delta_timeout_sec = ObservabilityConfig().llm_first_delta_timeout_ms / 1000.0
+            first_delta_timeout_sec = observability_defaults.llm_first_delta_timeout_ms / 1000.0
         self._first_delta_timeout_sec = first_delta_timeout_sec
+        if stt_pending_event_window_sec is None:
+            stt_pending_event_window_sec = (
+                observability_defaults.stt_pending_provider_event_window_ms / 1000.0
+            )
+        if stt_pending_event_preroll_sec is None:
+            stt_pending_event_preroll_sec = (
+                observability_defaults.stt_pending_provider_event_preroll_ms / 1000.0
+            )
+        if stt_pending_event_max_count is None:
+            stt_pending_event_max_count = (
+                observability_defaults.stt_pending_provider_event_max_count
+            )
+        self._stt_pending_event_window_sec = max(0.0, float(stt_pending_event_window_sec))
+        self._stt_pending_event_preroll_sec = max(0.0, float(stt_pending_event_preroll_sec))
+        self._stt_pending_event_max_count = max(1, int(stt_pending_event_max_count))
         self._first_delta_watchdog: asyncio.Task | None = None
         self.llm_metrics_observer_installed = False
         self.brain_provider_observer_installed = False
@@ -475,10 +494,10 @@ class ProviderEventObserver:
             return
         pending = self.pending_stt_provider_events
         pending.append(dict(event))
-        cutoff = float(timestamp) - 2.0
+        cutoff = float(timestamp) - self._stt_pending_event_window_sec
         self.pending_stt_provider_events = [
             item
-            for item in pending[-32:]
+            for item in pending[-self._stt_pending_event_max_count:]
             if isinstance(item.get("timestamp"), (int, float))
             and float(item["timestamp"]) >= cutoff
         ]
@@ -496,7 +515,7 @@ class ProviderEventObserver:
             timestamp = event.get("timestamp")
             if not isinstance(timestamp, (int, float)):
                 continue
-            if float(timestamp) < speech_started_at - 0.5:
+            if float(timestamp) < speech_started_at - self._stt_pending_event_preroll_sec:
                 continue
             self.record_stt_provider_event(event)
 

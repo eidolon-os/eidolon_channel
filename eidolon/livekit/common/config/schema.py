@@ -240,6 +240,9 @@ class ObservabilityConfig:
     metrics_enabled: bool = True
     timeline_debug_path: str = ""
     llm_first_delta_timeout_ms: int = 3_000
+    stt_pending_provider_event_window_ms: int = 2_000
+    stt_pending_provider_event_preroll_ms: int = 500
+    stt_pending_provider_event_max_count: int = 32
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ..observability import TurnTimeline
-from ..pipeline.types import generate_turn_id
 from ..session.messages import message_text
 from ..session.voiceprint_reasons import (
     is_voiceprint_inconclusive_reason,
@@ -16,6 +15,8 @@ from ..session.voiceprint_reasons import (
     voiceprint_inconclusive_reason,
 )
 from ..turn_policy import TranscriptEvidenceGate
+from .post_speech_interruption import FullDuplexPostSpeechInterruptionCommitter
+from .session_turn_boundary import FullDuplexSessionTurnBoundary
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -28,6 +29,15 @@ class FullDuplexTurnCompletion:
 
     def __init__(self, pipeline: StreamingPipeline) -> None:
         self._pipeline = pipeline
+        self._session_turns = FullDuplexSessionTurnBoundary(pipeline)
+        self._post_speech_interruption = FullDuplexPostSpeechInterruptionCommitter(
+            pipeline,
+            cancel_deferred_low_eot_commit=self.cancel_deferred_low_eot_commit,
+            clear_session_user_turn=self.clear_session_user_turn,
+            candidate_voiceprint_gate_task=self.candidate_voiceprint_gate_task,
+            schedule_voiceprint_gated_commit=self.schedule_voiceprint_gated_commit,
+            reset_candidate_voiceprint_tasks=self.reset_candidate_voiceprint_tasks,
+        )
 
     def cancel_pending_voiceprint_commits(self, reason: str) -> None:
         owner = self._pipeline
@@ -359,7 +369,7 @@ class FullDuplexTurnCompletion:
                     "transcript_length": len(transcript),
                 },
             )
-        self._publish_canonical_user_text(
+        self._session_turns.publish_canonical_user_text(
             transcript,
             source="user_turn_coordinator",
             timeline=timeline,
@@ -386,106 +396,8 @@ class FullDuplexTurnCompletion:
             )
         return committed
 
-    def _publish_canonical_user_text(
-        self,
-        transcript: str,
-        *,
-        source: str,
-        timeline: TurnTimeline | None,
-    ) -> None:
-        owner = self._pipeline
-        stripped = transcript.strip()
-        if not stripped:
-            return
-        try:
-            llm_plugin = getattr(getattr(owner._factory, "llm", None), "llm", None)
-            setter = getattr(llm_plugin, "set_next_user_text", None)
-            if setter is None:
-                return
-            setter(stripped, source=source)
-            if timeline is not None:
-                timeline.set_attr(
-                    "canonical_user_text",
-                    {
-                        "source": source,
-                        "text_preview": stripped[:120],
-                        "text_length": len(stripped),
-                    },
-                )
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] failed to publish canonical user text",
-                exc_info=True,
-            )
-
-    def _clear_pending_canonical_user_text(self, reason: str) -> None:
-        owner = self._pipeline
-        try:
-            factory = getattr(owner, "_factory", None)
-            llm_plugin = getattr(getattr(factory, "llm", None), "llm", None)
-            clearer = getattr(llm_plugin, "clear_next_user_text", None)
-            if clearer is not None:
-                clearer(reason=reason)
-                return
-            setter = getattr(llm_plugin, "set_next_user_text", None)
-            if setter is not None:
-                setter("", source=f"clear:{reason}")
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] failed to clear canonical user text",
-                exc_info=True,
-            )
-
     def clear_session_user_turn(self, reason: str) -> None:
-        owner = self._pipeline
-        self._clear_pending_canonical_user_text(reason)
-        session = getattr(owner, "_session", None)
-        if session is None:
-            return
-        clear_user_turn = getattr(session, "clear_user_turn", None)
-        if clear_user_turn is None:
-            return
-        try:
-            clear_user_turn()
-            logger.info("[StreamingPipeline] cleared user turn reason=%s", reason)
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to clear user turn reason=%s",
-                reason,
-            )
-        if "context_error" in (reason or ""):
-            self._notify_context_error_once(reason)
-
-    def _notify_context_error_once(self, reason: str) -> None:
-        owner = self._pipeline
-        if getattr(owner, "_context_error_notified", False):
-            return
-        owner._context_error_notified = True
-        logger.error(
-            "[StreamingPipeline] conversation blocked: session context unresolved "
-            "(reason=%s). The user/device likely references a missing agent "
-            "binding; turns are dropped until it is rebound in admin.",
-            reason,
-        )
-        session = getattr(owner, "_session", None)
-        say = getattr(session, "say", None) if session is not None else None
-        if not callable(say):
-            return
-        try:
-            say(
-                "抱歉，我暂时无法连接到你的助手，请检查账号绑定或联系管理员。",
-                allow_interruptions=True,
-            )
-        except Exception:
-            logger.exception("[StreamingPipeline] context-error fallback announcement failed")
-            return
-        try:
-            owner._mark_activity()
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] mark_activity after context-error say failed",
-                exc_info=True,
-            )
+        self._session_turns.clear_session_user_turn(reason)
 
     async def voiceprint_allows_completed_turn(self, *, new_message: Any) -> bool:
         owner = self._pipeline
@@ -743,7 +655,7 @@ class FullDuplexTurnCompletion:
             voiceprint_reason=voiceprint_reason,
         )
         canonical = decision.transcript or completed_transcript
-        self._publish_canonical_user_text(
+        self._session_turns.publish_canonical_user_text(
             canonical,
             source="framework_completed_turn",
             timeline=timeline,
@@ -830,108 +742,13 @@ class FullDuplexTurnCompletion:
         *,
         transcript_override: str = "",
     ) -> bool:
-        owner = self._pipeline
-        interruption_owner = getattr(owner, "_interruption_orchestrator", None)
-        owner._ensure_user_turn_coordinator()
-        owner_transcript = (
-            interruption_owner.current_transcript if interruption_owner is not None else ""
-        )
-        transcript = (
-            transcript_override
-            or owner_transcript
-            or owner._user_turns.selected_text
-            or owner._latest_asr_text
-        ).strip()
-        if not transcript:
-            return False
-        timeline = getattr(owner, "_timeline", None)
-        self.cancel_deferred_low_eot_commit(reason)
-        if owner._user_turns.active is None:
-            if owner._timeline is None:
-                owner._timeline = TurnTimeline(generate_turn_id())
-                owner._timeline_debug_flushed = False
-                timeline = owner._timeline
-            owner._user_turns.start_speech(timeline=owner._timeline)
-            owner._apply_pending_explicit_client_preempt(owner._timeline)
-            owner._apply_pending_client_control_events(owner._timeline)
-        owner._user_turns.add_transcript(transcript, is_final=True)
-        eot_model = owner._get_eot_model()
-        decision = owner._user_turns.finish_speech(
-            eot_score=getattr(
-                eot_model,
-                "current_eot_score",
-                getattr(eot_model, "_current_eot_score", None),
-            ),
-            should_defer=False,
-        )
-        if decision.action == "reject":
-            self.clear_session_user_turn(decision.reason)
-            return False
-        committed_text = decision.transcript or transcript
-        if timeline is not None:
-            timeline.set_attr(
-                "post_speech_interruption_candidate_committed",
-                {
-                    "reason": reason,
-                    "transcript_preview": committed_text[:120],
-                    "text_length": len(committed_text),
-                },
-            )
-        self.schedule_voiceprint_gated_commit(
-            verify_task=self.candidate_voiceprint_gate_task(),
-            eot_model=eot_model,
-            transcript=committed_text,
-            timeline=timeline,
-        )
-        owner._latest_asr_text = ""
-        logger.info(
-            "[StreamingPipeline] committed post-speech interruption candidate "
-            "reason=%s transcript=%r",
+        return self._post_speech_interruption.commit_candidate(
             reason,
-            committed_text[:80],
+            transcript_override=transcript_override,
         )
-        return True
 
     def reject_post_speech_interruption_candidate(self, reason: str) -> None:
-        owner = self._pipeline
-        timeline = getattr(owner, "_timeline", None)
-        self.cancel_deferred_low_eot_commit(reason)
-        owner._ensure_user_turn_coordinator()
-        decision = owner._user_turns.reject_active(reason)
-        eot_model = owner._get_eot_model()
-        try:
-            eot_model.reset()
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] EOT reset failed while rejecting "
-                "post-speech interruption candidate",
-                exc_info=True,
-            )
-        task = getattr(owner, "_completed_turn_voiceprint_task", None)
-        if task is not None and not task.done():
-            task.cancel()
-        owner._completed_turn_voiceprint_task = None
-        owner._completed_turn_voiceprint_result = None
-        owner._completed_turn_voiceprint_timeline = None
-        self.reset_candidate_voiceprint_tasks()
-        self.clear_session_user_turn(reason)
-        owner._latest_asr_text = ""
-        if timeline is not None:
-            timeline.set_attr(
-                "post_speech_interruption_candidate_rejected",
-                {
-                    "reason": reason,
-                    "transcript_preview": decision.transcript[:120],
-                    "text_length": len(decision.transcript),
-                },
-            )
-            owner._flush_turn_timeline(timeline, reason)
-        logger.info(
-            "[StreamingPipeline] rejected post-speech interruption candidate "
-            "reason=%s transcript=%r",
-            reason,
-            decision.transcript[:80],
-        )
+        self._post_speech_interruption.reject_candidate(reason)
 
     def _record_voiceprint_commit_gate(
         self,

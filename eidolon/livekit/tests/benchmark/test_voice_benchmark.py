@@ -156,54 +156,54 @@ def test_load_dogfood_box3_audio_first_suite() -> None:
     assert followup.expectations.playback_stop_sent is True
 
 
-def test_load_no_lan_dogfood_regression_suite() -> None:
-    suite = load_suite("benchmark/cases/no_lan_dogfood_regression_enforced.yaml")
+def test_load_offline_policy_regression_suite() -> None:
+    suite = load_suite("benchmark/cases/offline_policy_regression_enforced.yaml")
     cases = {case.case_id: case for case in suite.cases}
 
-    assert suite.suite_id == "no_lan_dogfood_regression_enforced"
+    assert suite.suite_id == "offline_policy_regression_enforced"
     assert set(cases) == {
-        "nol_waveshare_ptt_idle_tap_no_policy_decision_001",
-        "nol_waveshare_ptt_playback_tap_cancels_001",
-        "nol_fullduplex_compound_backchannel_holds_001",
-        "nol_fullduplex_false_start_holds_001",
-        "nol_fullduplex_echo_like_agent_words_holds_001",
-        "nol_fullduplex_followup_after_low_prefix_cancels_001",
-        "nol_fullduplex_backchannel_then_followup_cancels_001",
-        "nol_fullduplex_false_start_then_followup_cancels_001",
-        "nol_fullduplex_echo_then_followup_cancels_001",
-        "nol_fullduplex_echo_then_hard_stop_cancels_001",
+        "opr_waveshare_ptt_idle_tap_no_policy_decision_001",
+        "opr_waveshare_ptt_playback_tap_cancels_001",
+        "opr_fullduplex_compound_backchannel_holds_001",
+        "opr_fullduplex_false_start_holds_001",
+        "opr_fullduplex_echo_like_agent_words_holds_001",
+        "opr_fullduplex_followup_after_low_prefix_cancels_001",
+        "opr_fullduplex_backchannel_then_followup_cancels_001",
+        "opr_fullduplex_false_start_then_followup_cancels_001",
+        "opr_fullduplex_echo_then_followup_cancels_001",
+        "opr_fullduplex_echo_then_hard_stop_cancels_001",
     }
 
-    idle_tap = cases["nol_waveshare_ptt_idle_tap_no_policy_decision_001"]
+    idle_tap = cases["opr_waveshare_ptt_idle_tap_no_policy_decision_001"]
     assert idle_tap.dogfood.device.mode == "half_duplex"
     assert idle_tap.user_steps[0].client_ptt is True
     assert idle_tap.user_steps[0].agent_speaking is False
     assert idle_tap.expectations.decision_action == "none"
 
-    playback_tap = cases["nol_waveshare_ptt_playback_tap_cancels_001"]
+    playback_tap = cases["opr_waveshare_ptt_playback_tap_cancels_001"]
     assert playback_tap.dogfood.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
     assert playback_tap.expectations.decision_action == "cancel"
     assert playback_tap.expectations.decision_intent == "hard_stop"
 
-    compound_backchannel = cases["nol_fullduplex_compound_backchannel_holds_001"]
+    compound_backchannel = cases["opr_fullduplex_compound_backchannel_holds_001"]
     assert compound_backchannel.dogfood.device.mode == "full_duplex"
     assert compound_backchannel.expectations.decision_action == "hold"
     assert "cancel" in compound_backchannel.expectations.forbid_actions
     assert compound_backchannel.expectations.no_full_assistant_context_commit is True
 
-    followup = cases["nol_fullduplex_followup_after_low_prefix_cancels_001"]
+    followup = cases["opr_fullduplex_followup_after_low_prefix_cancels_001"]
     assert followup.expectations.decision_action == "cancel"
     assert followup.expectations.decision_intent == "normal_interrupt"
 
-    continuity = cases["nol_fullduplex_echo_then_followup_cancels_001"]
+    continuity = cases["opr_fullduplex_echo_then_followup_cancels_001"]
     assert len(continuity.user_steps) == 2
     assert continuity.user_steps[0].text == "我会先讲系统结构"
     assert continuity.user_steps[1].text == "那你现在能帮我做什么"
     assert continuity.expectations.decision_action == "cancel"
 
 
-def test_policy_runner_no_lan_continuity_cases_continue_after_hold() -> None:
-    suite = load_suite("benchmark/cases/no_lan_dogfood_regression_enforced.yaml")
+def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> None:
+    suite = load_suite("benchmark/cases/offline_policy_regression_enforced.yaml")
     run = run_policy_suite(
         [suite],
         turn_policy=TurnPolicyConfig(
@@ -215,9 +215,9 @@ def test_policy_runner_no_lan_continuity_cases_continue_after_hold() -> None:
 
     assert all(case.passed for case in run.cases)
     for case_id in (
-        "nol_fullduplex_backchannel_then_followup_cancels_001",
-        "nol_fullduplex_false_start_then_followup_cancels_001",
-        "nol_fullduplex_echo_then_followup_cancels_001",
+        "opr_fullduplex_backchannel_then_followup_cancels_001",
+        "opr_fullduplex_false_start_then_followup_cancels_001",
+        "opr_fullduplex_echo_then_followup_cancels_001",
     ):
         result = cases[case_id]
         assert result.metrics["actual_action"] == "cancel"
@@ -228,9 +228,9 @@ def test_policy_runner_no_lan_continuity_cases_continue_after_hold() -> None:
         )
 
 
-def test_barge_in_ab_default_cases_include_no_lan_regression_suite() -> None:
+def test_barge_in_ab_default_cases_include_offline_policy_regression_suite() -> None:
     assert (
-        "benchmark/cases/no_lan_dogfood_regression_enforced.yaml"
+        "benchmark/cases/offline_policy_regression_enforced.yaml"
         in DEFAULT_BARGE_IN_AB_CASES
     )
 

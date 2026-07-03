@@ -237,16 +237,17 @@ input can include deterministic echo/noise. The first suite is explicit-only:
   --run-id dogfood-room
 ```
 
-When no LAN or physical device is available, run the no-LAN regression suite.
-It models the dogfood interaction scripts at policy level: Waveshare PTT idle
-tap, PTT tap-to-stop during playback, compound backchannel, false-start, echo
-safety, and a real follow-up after low-evidence prefixes.
+For deterministic local policy regression, run the offline policy regression
+suite. It models interaction semantics at policy level: Waveshare PTT idle tap,
+PTT tap-to-stop during playback, compound backchannel, false-start, echo safety,
+and a real follow-up after low-evidence prefixes. It does not replace real-room
+or device dogfood.
 
 ```bash
 ./.venv/bin/python scripts/bench_barge_in_ab.py \
-  --cases benchmark/cases/no_lan_dogfood_regression_enforced.yaml \
+  --cases benchmark/cases/offline_policy_regression_enforced.yaml \
   --repeat 1 \
-  --run-id no-lan-dogfood-regression
+  --run-id offline-policy-regression
 ```
 
 For local ESP32 box-3 full-duplex runtime validation, keep the runtime switch

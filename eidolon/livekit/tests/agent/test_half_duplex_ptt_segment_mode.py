@@ -382,6 +382,51 @@ async def test_preempted_buffered_backchannel_rejects_as_tap_to_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tap_to_stop_then_next_ptt_commit_uses_clean_segment() -> None:
+    preemptions: list[str] = []
+    agent_output_active = True
+    stt = _FakeSttStage(streaming_text="告诉我时间")
+    controller = HalfDuplexPttTurnController(
+        recorder=PttAudioSegmentRecorder(
+            config=PttAudioSegmentConfig(max_duration_sec=2.0)
+        ),
+        transcriber=PttSegmentTranscriber(
+            stt,
+            config=PttSegmentTranscriberConfig(
+                strategy="streaming",
+                min_audio_duration_sec=0.01,
+            ),
+        ),
+        agent_output_active=lambda: agent_output_active,
+        preempt_agent_output=lambda: preemptions.append("cancelled"),
+        tap_to_stop_max_audio_sec=0.35,
+    )
+
+    first_press = controller.press()
+    controller.push_frame(_Frame(_pcm(160, sample=1200)))
+    first = await controller.release()
+
+    assert first_press.preempted_agent_output is True
+    assert first.action == "reject"
+    assert first.reason == "tap_to_stop"
+    assert controller.state == "idle"
+    assert preemptions == ["cancelled"]
+    assert stt.recognize_streaming_calls == []
+
+    agent_output_active = False
+    second_press = controller.press()
+    controller.push_frame(_Frame(_pcm(120, sample=1100)))
+    second = await controller.release()
+
+    assert second_press.preempted_agent_output is False
+    assert second.action == "commit"
+    assert second.transcript == "告诉我时间"
+    assert second.preempted_agent_output is False
+    assert controller.state == "idle"
+    assert len(stt.recognize_streaming_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_pipeline_release_commits_segment_text_to_agent_session() -> None:
     stt = _FakeSttStage(streaming_text="告诉我时间")
     pipeline = _segment_pipeline(stt)
@@ -498,6 +543,56 @@ async def test_pipeline_records_playback_stop_in_segment_timeline(tmp_path) -> N
     assert attrs["ptt_segment_terminal"]["reason"] == "tap_to_stop"
     events = attrs["client_control_events"]
     assert any(event["op"] == "playback.stop" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline(tmp_path) -> None:
+    timeline_path = tmp_path / "turns.jsonl"
+    stt = _FakeSttStage(streaming_text="告诉我时间")
+    pipeline = _segment_pipeline(
+        stt,
+        observability=ObservabilityConfig(timeline_debug_path=str(timeline_path)),
+    )
+
+    pipeline._state = PipelineState.SPEAKING
+    packet_down = _packet(ptt=True)
+    pipeline._room_data.handle_packet(packet_down)
+    pipeline._on_room_packet(packet_down)
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(120, sample=1200)))
+    packet_up = _packet(ptt=False)
+    pipeline._room_data.handle_packet(packet_up)
+    pipeline._on_room_packet(packet_up)
+    await asyncio.gather(*pipeline._turn_tasks)
+
+    session = pipeline._session
+    assert isinstance(session, _FakeSession)
+    assert session.generate_reply_calls == []
+    assert stt.recognize_streaming_calls == []
+
+    pipeline._state = PipelineState.IDLE
+    packet_down = _packet(ptt=True)
+    pipeline._room_data.handle_packet(packet_down)
+    pipeline._on_room_packet(packet_down)
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(140, sample=1100)))
+    packet_up = _packet(ptt=False)
+    pipeline._room_data.handle_packet(packet_up)
+    pipeline._on_room_packet(packet_up)
+    await asyncio.gather(*pipeline._turn_tasks)
+
+    assert session.generate_reply_calls == [
+        {"user_input": "告诉我时间", "input_modality": "audio"}
+    ]
+    rows = [
+        json.loads(line)
+        for line in timeline_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["attrs"]["ptt_segment_terminal"]["action"] for row in rows] == [
+        "reject",
+        "commit",
+    ]
+    assert rows[0]["attrs"]["ptt_segment_terminal"]["reason"] == "tap_to_stop"
+    second_events = rows[1]["attrs"]["client_control_events"]
+    assert not any(event["op"] == "playback.stop" for event in second_events)
 
 
 def test_pipeline_observes_existing_subscribed_audio_tracks() -> None:

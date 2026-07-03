@@ -205,7 +205,11 @@ def run_policy_suite(
                     if action is Action.NONE:
                         action = Action.HOLD
                         intent = decision_intent
-                if action is not Action.NONE:
+                # HOLD/ROLLBACK are non-terminal for a scripted multi-step
+                # policy case: they model false-resume / wait-for-evidence
+                # before a later user utterance. CANCEL is terminal because it
+                # stops the active assistant turn.
+                if action is Action.CANCEL:
                     break
 
             if action.value in case.expectations.forbid_actions:

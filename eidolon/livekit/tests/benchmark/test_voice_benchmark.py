@@ -168,6 +168,10 @@ def test_load_no_lan_dogfood_regression_suite() -> None:
         "nol_fullduplex_false_start_holds_001",
         "nol_fullduplex_echo_like_agent_words_holds_001",
         "nol_fullduplex_followup_after_low_prefix_cancels_001",
+        "nol_fullduplex_backchannel_then_followup_cancels_001",
+        "nol_fullduplex_false_start_then_followup_cancels_001",
+        "nol_fullduplex_echo_then_followup_cancels_001",
+        "nol_fullduplex_echo_then_hard_stop_cancels_001",
     }
 
     idle_tap = cases["nol_waveshare_ptt_idle_tap_no_policy_decision_001"]
@@ -190,6 +194,38 @@ def test_load_no_lan_dogfood_regression_suite() -> None:
     followup = cases["nol_fullduplex_followup_after_low_prefix_cancels_001"]
     assert followup.expectations.decision_action == "cancel"
     assert followup.expectations.decision_intent == "normal_interrupt"
+
+    continuity = cases["nol_fullduplex_echo_then_followup_cancels_001"]
+    assert len(continuity.user_steps) == 2
+    assert continuity.user_steps[0].text == "我会先讲系统结构"
+    assert continuity.user_steps[1].text == "那你现在能帮我做什么"
+    assert continuity.expectations.decision_action == "cancel"
+
+
+def test_policy_runner_no_lan_continuity_cases_continue_after_hold() -> None:
+    suite = load_suite("benchmark/cases/no_lan_dogfood_regression_enforced.yaml")
+    run = run_policy_suite(
+        [suite],
+        turn_policy=TurnPolicyConfig(
+            attention=replace(AttentionPolicyConfig(), enforce=True),
+        ),
+        run_id="test",
+    )
+    cases = {case.case_id: case for case in run.cases}
+
+    assert all(case.passed for case in run.cases)
+    for case_id in (
+        "nol_fullduplex_backchannel_then_followup_cancels_001",
+        "nol_fullduplex_false_start_then_followup_cancels_001",
+        "nol_fullduplex_echo_then_followup_cancels_001",
+    ):
+        result = cases[case_id]
+        assert result.metrics["actual_action"] == "cancel"
+        assert result.metrics["actual_decision_action"] == "cancel"
+        assert any(
+            (decision.get("decision") or {}).get("action") == "hold"
+            for decision in result.decisions
+        )
 
 
 def test_barge_in_ab_default_cases_include_no_lan_regression_suite() -> None:

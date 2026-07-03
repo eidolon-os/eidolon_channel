@@ -225,3 +225,209 @@ cases:
       decision_action: cancel
       decision_intent: normal_interrupt
       max_interrupt_decision_ms: 500
+
+  - case_id: nol_fullduplex_backchannel_then_followup_cancels_001
+    suite: no_lan_dogfood_regression
+    description: 全双工播放中先短反馈“嗯嗯好”不取消，随后真实追问到达时必须从 hold 状态推进到 cancel。
+    timeout_sec: 30
+    tags: ["no_lan", "full_duplex", "backchannel", "followup", "state_continuity"]
+    dogfood:
+      enabled: true
+      device:
+        model: esp32_box_3
+        mode: full_duplex
+        audio_state_hz: 10
+        playback_ack: simulated
+    audio_clips:
+      - id: compound_backchannel
+        text: 嗯嗯好。
+        path: benchmark/audio/generated/backchannel_mm.wav
+        intent: backchannel
+      - id: owner_followup_capability
+        text: 那你现在能帮我做什么？
+        path: benchmark/audio/generated/owner_followup_capability.wav
+        intent: normal
+    user_steps:
+      - text: 嗯嗯好
+        audio: compound_backchannel
+        start_ms: 260
+        duration_ms: 520
+        interims: ["嗯嗯好"]
+        eot_scores: [0.0]
+        vad_probability: 0.85
+        agent_speaking: true
+        client_playback_state: agent_speaking
+      - text: 那你现在能帮我做什么
+        audio: owner_followup_capability
+        start_ms: 1280
+        duration_ms: 1250
+        interims: ["那你", "那你现在能帮我做什么"]
+        eot_scores: [0.0, 0.74]
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      decision_action: cancel
+      decision_intent: normal_interrupt
+      forbid_actions: ["rollback"]
+      max_interrupt_decision_ms: 500
+      no_full_assistant_context_commit: true
+
+  - case_id: nol_fullduplex_false_start_then_followup_cancels_001
+    suite: no_lan_dogfood_regression
+    description: 全双工播放中低证据 false-start 不取消，随后完整追问应取消，避免 first hold 后卡住。
+    timeout_sec: 30
+    tags: ["no_lan", "full_duplex", "false_start", "followup", "state_continuity"]
+    dogfood:
+      enabled: true
+      device:
+        model: esp32_box_3
+        mode: full_duplex
+        audio_state_hz: 10
+        playback_ack: simulated
+    audio_clips:
+      - id: false_start_wojuede
+        text: 我觉得。
+        path: benchmark/audio/generated/normal_followup.wav
+        intent: normal
+      - id: owner_followup_capability
+        text: 那你现在能帮我做什么？
+        path: benchmark/audio/generated/owner_followup_capability.wav
+        intent: normal
+    user_steps:
+      - text: 我觉得
+        audio: false_start_wojuede
+        start_ms: 260
+        duration_ms: 620
+        interims: ["我", "我觉得"]
+        eot_scores: [0.0, 0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+      - text: 那你现在能帮我做什么
+        audio: owner_followup_capability
+        start_ms: 1320
+        duration_ms: 1250
+        interims: ["那你", "那你现在能帮我做什么"]
+        eot_scores: [0.0, 0.74]
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      decision_action: cancel
+      decision_intent: normal_interrupt
+      max_interrupt_decision_ms: 500
+      no_full_assistant_context_commit: true
+
+  - case_id: nol_fullduplex_echo_then_followup_cancels_001
+    suite: no_lan_dogfood_regression
+    description: 回声样 transcript 先 hold，不应污染上下文；随后真实追问要能继续推进到 cancel。
+    timeout_sec: 30
+    tags: ["no_lan", "full_duplex", "echo_safety", "followup", "state_continuity"]
+    dogfood:
+      enabled: true
+      device:
+        model: esp32_box_3
+        mode: full_duplex
+        audio_state_hz: 10
+        playback_ack: simulated
+      agent:
+        speaking_text: 我会先讲系统结构，然后讲交互体验。
+        tts_duration_ms: 5000
+      acoustics:
+        echo:
+          enabled: true
+          delay_ms: 80
+          attenuation_db: -14
+    audio_clips:
+      - id: echo_like_agent_words
+        text: 我会先讲系统结构。
+        path: benchmark/audio/generated/normal_followup.wav
+        intent: echo
+      - id: owner_followup_capability
+        text: 那你现在能帮我做什么？
+        path: benchmark/audio/generated/owner_followup_capability.wav
+        intent: normal
+    user_steps:
+      - text: 我会先讲系统结构
+        audio: echo_like_agent_words
+        start_ms: 260
+        duration_ms: 900
+        interims: ["我会先讲", "我会先讲系统结构"]
+        eot_scores: [0.0, 0.0]
+        vad_probability: 0.8
+        agent_speaking: true
+        client_playback_state: agent_speaking
+      - text: 那你现在能帮我做什么
+        audio: owner_followup_capability
+        start_ms: 1500
+        duration_ms: 1250
+        interims: ["那你", "那你现在能帮我做什么"]
+        eot_scores: [0.0, 0.74]
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      decision_action: cancel
+      decision_intent: normal_interrupt
+      max_interrupt_decision_ms: 500
+      no_full_assistant_context_commit: true
+
+  - case_id: nol_fullduplex_echo_then_hard_stop_cancels_001
+    suite: no_lan_dogfood_regression
+    description: 回声样 transcript 先 hold 后，明确硬停应立即 cancel，证明 echo hold 不会吞掉后续强证据。
+    timeout_sec: 30
+    tags: ["no_lan", "full_duplex", "echo_safety", "hard_stop", "state_continuity"]
+    dogfood:
+      enabled: true
+      device:
+        model: esp32_box_3
+        mode: full_duplex
+        audio_state_hz: 10
+        playback_ack: simulated
+      agent:
+        speaking_text: 我会先讲系统结构，然后讲交互体验。
+        tts_duration_ms: 5000
+      acoustics:
+        echo:
+          enabled: true
+          delay_ms: 80
+          attenuation_db: -14
+    audio_clips:
+      - id: echo_like_agent_words
+        text: 我会先讲系统结构。
+        path: benchmark/audio/generated/normal_followup.wav
+        intent: echo
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmark/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 我会先讲系统结构
+        audio: echo_like_agent_words
+        start_ms: 260
+        duration_ms: 900
+        interims: ["我会先讲", "我会先讲系统结构"]
+        eot_scores: [0.0, 0.0]
+        vad_probability: 0.8
+        agent_speaking: true
+        client_playback_state: agent_speaking
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 1500
+        duration_ms: 520
+        interims: ["停一下"]
+        eot_scores: [0.0]
+        vad_probability: 0.95
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: cancel
+      intent: hard_stop
+      decision_action: cancel
+      decision_intent: hard_stop
+      max_interrupt_decision_ms: 500
+      no_full_assistant_context_commit: true

@@ -101,9 +101,9 @@ from .client_preempt import (
     ExplicitClientPreemptHandler,
     ExplicitClientPreemptLedger,
 )
-from .semantic_interrupt_gate import evaluate_semantic_interrupt_gate
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
+from .transcript_handler import FullDuplexTranscriptHandler
 from .user_state_event import FullDuplexUserStateEvent
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
@@ -542,6 +542,36 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_transcript_admission"):
             self._transcript_admission = self._build_transcript_admission_gate()
         return self._transcript_admission
+
+    def _build_transcript_handler(self) -> FullDuplexTranscriptHandler:
+        return FullDuplexTranscriptHandler(
+            admission_gate=self._ensure_transcript_admission_gate,
+            record_accepted_event=self._record_accepted_transcript_event,
+            allow_interruptions=lambda: self._allow_interruptions,
+            native_adaptive_owner=self._uses_livekit_native_adaptive_interruption,
+            agent_output_active=lambda speaker_id: (
+                self._agent_output_active_for_interrupts(
+                    participant_identity=speaker_id,
+                )
+            ),
+            interrupt_window_active=self._interrupt_window_active,
+            decision_suppressed=self._interrupt_decision_suppressed,
+            attention_allows_eot_check=lambda transcript, speaker_id: (
+                self._attention_effects.allows_eot_check(
+                    transcript,
+                    speaker_id=speaker_id,
+                )
+            ),
+            run_semantic_interrupt=lambda transcript, is_final: (
+                self._semantic_interrupts.run(transcript, is_final=is_final)
+            ),
+            forward_to_base=lambda event: BasePipeline._on_user_transcribed(self, event),
+        )
+
+    def _ensure_transcript_handler(self) -> FullDuplexTranscriptHandler:
+        if not hasattr(self, "_transcript_handler"):
+            self._transcript_handler = self._build_transcript_handler()
+        return self._transcript_handler
 
     def _low_eot_commit_grace_max_sec(self) -> float:
         return max(self._turn_policy.eot.low_eot_commit_grace_max_ms, 0) / 1000.0
@@ -2746,73 +2776,11 @@ class StreamingPipeline(BasePipeline):
     def _on_user_transcribed(self, event: Any) -> None:
         """Handle user transcription events.
 
-        Two responsibilities:
-          1. Refresh EOT state (ASR text + conversation phase) on every
-             transcript event — this is what activates Round 7 G5
-             phase-aware threshold scaling. ``update_asr`` is wired
-             here (Round 8 R8.5.c); without this call the phase detector
-             never runs in production.
-          2. While the agent is speaking, trigger the semantic EOT
-             check synchronously (event-driven, replacing the old
-             polling approach).
+        Full-duplex transcript routing lives in ``FullDuplexTranscriptHandler``.
+        The pipeline keeps this method as the LiveKit event boundary.
         """
         self._ensure_runtime_defaults()
-        transcript_event = FullDuplexTranscriptEvent.from_event(event)
-        admission = self._ensure_transcript_admission_gate().evaluate(transcript_event)
-        if not admission.accepted:
-            if admission.reason == "suppressed_until_next_speech":
-                logger.info(
-                    "[StreamingPipeline] dropping post-turn transcript after "
-                    "voiceprint ownership gate transcript=%r final=%s",
-                    admission.transcript[:80],
-                    admission.is_final,
-                )
-            elif admission.reason == "agent_echo":
-                logger.info(
-                    "[StreamingPipeline] dropping agent-echo transcript during playback "
-                    "transcript=%r",
-                    admission.transcript[:80],
-                )
-            return
-        self._record_accepted_transcript_event(transcript_event)
-
-        # Event-driven EOT check: react immediately when STT delivers text,
-        # instead of polling for it. This ensures we analyze the CURRENT
-        # speech turn's text, not a stale one from a previous turn.
-        agent_is_speaking = self._agent_output_active_for_interrupts(
-            participant_identity=transcript_event.speaker_id,
-        )
-        interrupt_window_active = self._interrupt_window_active()
-        semantic_gate = evaluate_semantic_interrupt_gate(
-            allow_interruptions=self._allow_interruptions,
-            native_adaptive=self._uses_livekit_native_adaptive_interruption(),
-            transcript=transcript_event.transcript,
-            agent_output_active=agent_is_speaking,
-            interrupt_window_active=interrupt_window_active,
-            decision_suppressed=self._interrupt_decision_suppressed(),
-        )
-        if semantic_gate.should_forward_and_stop:
-            if semantic_gate.reason == "decision_suppressed":
-                logger.debug("[StreamingPipeline] interrupt decision suppressed after cancel")
-            super()._on_user_transcribed(event)
-            return
-        if semantic_gate.needs_attention:
-            semantic_gate = semantic_gate.with_attention_result(
-                self._attention_effects.allows_eot_check(
-                    transcript_event.transcript,
-                    speaker_id=transcript_event.speaker_id,
-                )
-            )
-            if semantic_gate.should_forward_and_stop:
-                super()._on_user_transcribed(event)
-                return
-        if semantic_gate.should_run:
-            self._semantic_interrupts.run(
-                transcript_event.transcript,
-                is_final=transcript_event.is_final,
-            )
-
-        super()._on_user_transcribed(event)
+        self._ensure_transcript_handler().handle(event)
 
     def _interrupt_decision_suppressed(self) -> bool:
         """Ignore residual ASR after a confirmed interrupt cancel."""

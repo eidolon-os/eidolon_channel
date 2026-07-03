@@ -104,7 +104,7 @@ from .client_preempt import (
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
 from .transcript_handler import FullDuplexTranscriptHandler
-from .user_state_event import FullDuplexUserStateEvent
+from .user_state_handler import FullDuplexUserStateHandler
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
@@ -572,6 +572,20 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_transcript_handler"):
             self._transcript_handler = self._build_transcript_handler()
         return self._transcript_handler
+
+    def _build_user_state_handler(self) -> FullDuplexUserStateHandler:
+        return FullDuplexUserStateHandler(
+            publish_companion_ui_state=self._publish_companion_ui_state,
+            signal_stt_user_away=self._session_signals.signal_stt_user_away,
+            signal_stt_user_present=self._session_signals.signal_stt_user_present,
+            handle_speaking_started=self._handle_user_speaking_started,
+            handle_speaking_stopped=self._handle_user_speaking_stopped,
+        )
+
+    def _ensure_user_state_handler(self) -> FullDuplexUserStateHandler:
+        if not hasattr(self, "_user_state_handler"):
+            self._user_state_handler = self._build_user_state_handler()
+        return self._user_state_handler
 
     def _low_eot_commit_grace_max_sec(self) -> float:
         return max(self._turn_policy.eot.low_eot_commit_grace_max_ms, 0) / 1000.0
@@ -2540,22 +2554,6 @@ class StreamingPipeline(BasePipeline):
                 f"agent_state:{new}",
             )
 
-    def _publish_user_state_companion_ui(self, *, old: str, new: str) -> None:
-        if new == "speaking":
-            self._publish_companion_ui_state("listening", "user_state:speaking")
-        elif old == "speaking" and new == "listening":
-            self._publish_companion_ui_state("listening", "user_state:listening")
-        elif new == "away":
-            self._publish_companion_ui_state("idle", "user_state:away")
-
-    def _sync_stt_presence_from_user_state(self, *, old: str, new: str) -> None:
-        """Translate framework user_state into plugin-level STT presence."""
-
-        if new == "away":
-            self._session_signals.signal_stt_user_away()
-        elif old == "away" and new in ("listening", "speaking"):
-            self._session_signals.signal_stt_user_present()
-
     def _handle_user_speaking_started(self) -> None:
         self._ensure_user_turn_coordinator()
         merge_continuation = self._user_turns.can_merge_new_speech()
@@ -2722,16 +2720,7 @@ class StreamingPipeline(BasePipeline):
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()
         try:
-            state_event = FullDuplexUserStateEvent.from_event(event)
-            old = state_event.old_state
-            new = state_event.new_state
-            logger.info("[StreamingPipeline] user_state: %s -> %s", old, new)
-            self._publish_user_state_companion_ui(old=old, new=new)
-            self._sync_stt_presence_from_user_state(old=old, new=new)
-            if state_event.started_speaking:
-                self._handle_user_speaking_started()
-            elif state_event.stopped_speaking:
-                self._handle_user_speaking_stopped()
+            self._ensure_user_state_handler().handle(event)
         except Exception:
             logger.exception("[StreamingPipeline] error in _on_user_state_changed")
 

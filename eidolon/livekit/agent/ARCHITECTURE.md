@@ -111,6 +111,7 @@ eidolon/livekit/agent/
 │   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
 │   ├── transcript_handler.py # FullDuplexTranscriptHandler: STT transcript entry routing
 │   ├── user_state_event.py   # FullDuplexUserStateEvent: LiveKit user_state event normalization
+│   ├── user_state_handler.py # FullDuplexUserStateHandler: user_state entry routing
 │   └── pipeline.py           # StreamingPipeline: full-duplex realtime AgentSession pipeline
 ├── session/
 │   ├── __init__.py           # package marker only; no broad component re-export facade
@@ -165,6 +166,8 @@ eidolon/livekit/agent/
 `full_duplex/transcript_handler.py` 是 full-duplex STT transcript 的入口路由。它按顺序执行 admission、accepted transcript recording、semantic interrupt gate、attention admission 和 base transcript forward；它不拥有 EOT、commit、cancel/resume 的 terminal decision。
 
 `full_duplex/user_state_event.py` 是 LiveKit `user_state_changed` 事件的归一化边界。`StreamingPipeline` 只消费 `FullDuplexUserStateEvent.old_state/new_state` 与 `started_speaking/stopped_speaking` 判断；VAD start/end 后续的 EOT、duck、turn commit 副作用仍留在 full-duplex owner 流程中。
+
+`full_duplex/user_state_handler.py` 是 full-duplex `user_state_changed` 的入口路由。它负责 companion UI 状态映射、STT presence 信号和 speaking start/stop 分发；它不拥有 VAD start/end 后续的 turn commit、voiceprint、EOT 或 interruption terminal decision。
 
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 

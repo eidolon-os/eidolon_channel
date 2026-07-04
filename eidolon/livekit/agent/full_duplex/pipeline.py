@@ -95,6 +95,7 @@ from .context_ledger import FullDuplexContextLedger
 from .interruption_effects import FullDuplexInterruptionEffects
 from .lifecycle import FullDuplexSessionLifecycle
 from .output_flow import FullDuplexOutputFlow
+from .runtime_defaults import ensure_full_duplex_runtime_defaults
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
 from .transcript_handler import FullDuplexTranscriptHandler
@@ -205,27 +206,7 @@ class StreamingPipeline(BasePipeline):
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
         self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
-        self._provider_events = ProviderEventObserver(
-            factory=self._factory,
-            get_timeline=lambda: self._timeline,
-            flush_timeline=lambda timeline, reason: self._flush_turn_timeline(
-                timeline,
-                reason,
-            ),
-            append_timeline_snapshot=lambda timeline, reason: self._append_turn_timeline_snapshot(
-                timeline, reason
-            ),
-            first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
-            stt_pending_event_window_sec=(
-                self._observability.stt_pending_provider_event_window_ms / 1000.0
-            ),
-            stt_pending_event_preroll_sec=(
-                self._observability.stt_pending_provider_event_preroll_ms / 1000.0
-            ),
-            stt_pending_event_max_count=(
-                self._observability.stt_pending_provider_event_max_count
-            ),
-        )
+        self._provider_events = self._build_provider_event_observer()
         self._voiceprint_turns = VoiceprintTurnObserver(
             service=getattr(self._factory, "voiceprint_service", None),
             runtime_admin=getattr(self._factory, "runtime_admin", None),
@@ -906,121 +887,39 @@ class StreamingPipeline(BasePipeline):
         self._ensure_provider_event_observer()
         self._provider_events.install_all()
 
+    def _build_provider_event_observer(self) -> ProviderEventObserver:
+        return ProviderEventObserver(
+            factory=self._factory,
+            get_timeline=lambda: self._timeline,
+            flush_timeline=lambda timeline, reason: self._flush_turn_timeline(
+                timeline,
+                reason,
+            ),
+            append_timeline_snapshot=lambda timeline, reason: self._append_turn_timeline_snapshot(
+                timeline, reason
+            ),
+            first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
+            stt_pending_event_window_sec=(
+                self._observability.stt_pending_provider_event_window_ms / 1000.0
+            ),
+            stt_pending_event_preroll_sec=(
+                self._observability.stt_pending_provider_event_preroll_ms / 1000.0
+            ),
+            stt_pending_event_max_count=(
+                self._observability.stt_pending_provider_event_max_count
+            ),
+        )
+
     def _ensure_provider_event_observer(self) -> None:
         if not hasattr(self, "_provider_events"):
             if not hasattr(self, "_observability"):
                 self._observability = ObservabilityConfig()
             if not hasattr(self, "_timeline"):
                 self._timeline = None
-            self._provider_events = ProviderEventObserver(
-                factory=self._factory,
-                get_timeline=lambda: self._timeline,
-                flush_timeline=lambda timeline, reason: self._flush_turn_timeline(
-                    timeline,
-                    reason,
-                ),
-                append_timeline_snapshot=lambda timeline, reason: (
-                    self._append_turn_timeline_snapshot(timeline, reason)
-                ),
-                first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
-                stt_pending_event_window_sec=(
-                    self._observability.stt_pending_provider_event_window_ms / 1000.0
-                ),
-                stt_pending_event_preroll_sec=(
-                    self._observability.stt_pending_provider_event_preroll_ms / 1000.0
-                ),
-                stt_pending_event_max_count=(
-                    self._observability.stt_pending_provider_event_max_count
-                ),
-            )
+            self._provider_events = self._build_provider_event_observer()
 
     def _ensure_runtime_defaults(self) -> None:
-        """Ensure new runtime helpers exist on test-built pipeline objects.
-
-        Some focused unit tests instantiate ``StreamingPipeline`` via
-        ``__new__`` to avoid LiveKit setup. Keep that fast path working while
-        the production constructor remains the single source of defaults.
-        """
-        if not hasattr(self, "_turn_policy"):
-            self._turn_policy = TurnPolicyConfig()
-        if not hasattr(self, "_turn_runtime"):
-            self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
-        if not hasattr(self, "_callbacks"):
-            self._callbacks = PipelineCallbacks()
-        if not hasattr(self, "_allow_interruptions"):
-            self._allow_interruptions = True
-        if not hasattr(self, "_state"):
-            self._state = PipelineState.IDLE
-        if not hasattr(self, "_observability"):
-            self._observability = ObservabilityConfig()
-        if not hasattr(self, "_voiceprint_config"):
-            self._voiceprint_config = VoiceprintConfig()
-        if not hasattr(self, "_timeline"):
-            self._timeline = None
-        if not hasattr(self, "_timeline_debug_flushed"):
-            self._timeline_debug_flushed = False
-        if not hasattr(self, "_pending_client_control_events"):
-            self._pending_client_control_events = []
-        if not hasattr(self, "_skip_commit_after_interrupt_cancel"):
-            self._skip_commit_after_interrupt_cancel = False
-        if not hasattr(self, "_suppress_commit_after_interrupt_until"):
-            self._suppress_commit_after_interrupt_until = 0.0
-        if not hasattr(self, "_latest_asr_text"):
-            self._latest_asr_text = ""
-        if not hasattr(self, "_pending_voiceprint_commit_tasks"):
-            self._pending_voiceprint_commit_tasks = set()
-        if not hasattr(self, "_candidate_voiceprint_tasks"):
-            self._candidate_voiceprint_tasks = []
-        if not hasattr(self, "_deferred_low_eot_commit_task"):
-            self._deferred_low_eot_commit_task = None
-        self._ensure_user_turn_coordinator()
-        self._ensure_turn_completion()
-        if not hasattr(self, "_interaction_mode"):
-            self._interaction_mode = INTERACTION_MODE_FULL_DUPLEX
-        if not hasattr(self, "_suppress_transcripts_until_next_speech"):
-            self._suppress_transcripts_until_next_speech = False
-        self._ensure_transcript_admission_gate()
-        if not hasattr(self, "_completed_turn_voiceprint_task"):
-            self._completed_turn_voiceprint_task = None
-        if not hasattr(self, "_completed_turn_voiceprint_result"):
-            self._completed_turn_voiceprint_result = None
-        if not hasattr(self, "_completed_turn_voiceprint_timeline"):
-            self._completed_turn_voiceprint_timeline = None
-        if not hasattr(self, "_voiceprint_turns"):
-            factory = getattr(self, "_factory", None)
-            self._voiceprint_turns = VoiceprintTurnObserver(
-                service=getattr(factory, "voiceprint_service", None),
-                runtime_admin=getattr(factory, "runtime_admin", None),
-                sample_rate=getattr(self, "_audio_sample_rate", 16000),
-                max_audio_ms=self._voiceprint_config.turn_max_audio_ms,
-                accept_cache_ttl_sec=(self._voiceprint_config.accept_cache_ttl_ms / 1000.0),
-                accept_cache_short_audio_max_ms=(
-                    self._voiceprint_config.accept_cache_short_audio_max_ms
-                ),
-                commit_threshold=self._voiceprint_config.owner_commit_threshold,
-                owner_short_audio_bypass_ms=(self._voiceprint_config.owner_short_audio_bypass_ms),
-                trust_paired_devices=getattr(
-                    factory,
-                    "voiceprint_trust_paired_devices",
-                    True,
-                ),
-            )
-        self._ensure_ducking_controller()
-        self._ensure_output_flow()
-        self._ensure_interruption_effects()
-        self._ensure_decision_effect_applier()
-        self._ensure_explicit_client_preempt_ledger()
-        self._ensure_interruption_orchestrator()
-        self._ensure_attention_effect_handler()
-        self._ensure_session_signal_bridge()
-        self._ensure_client_audio_state_view()
-        self._ensure_client_preempt_handler()
-        self._ensure_room_data_bridge()
-        self._ensure_turn_committer()
-        self._ensure_agent_state_effect_handler()
-        self._ensure_semantic_interrupt_handler()
-        self._ensure_duck_suspend_timeout_handler()
-        self._ensure_room_data_handler()
+        ensure_full_duplex_runtime_defaults(self)
 
     def _record_client_control_event(
         self,

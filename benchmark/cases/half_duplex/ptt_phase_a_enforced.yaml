@@ -1,4 +1,5 @@
 suite_id: half_duplex_ptt_phase_a_enforced
+suite_mode: half_duplex
 # Phase A dogfood gate for Waveshare 2.06 / ESP32 half-duplex PTT.
 # This suite is intentionally small and mode-specific: it should be run with
 # participant metadata interaction_mode=half_duplex, not mixed into the default

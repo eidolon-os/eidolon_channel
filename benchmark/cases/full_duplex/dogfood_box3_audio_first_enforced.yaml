@@ -1,4 +1,5 @@
 suite_id: dogfood_box3_audio_first_enforced
+suite_mode: full_duplex
 # Human+device dogfood scenarios for ESP32 box-3 style full-duplex sessions.
 # This suite is explicit-only (`*_enforced.yaml`) so default benchmark runs do
 # not unexpectedly add acoustic mixing or LiveKit-room device cadence checks.

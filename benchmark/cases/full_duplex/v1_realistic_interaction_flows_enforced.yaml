@@ -1,4 +1,5 @@
 suite_id: v1_realistic_interaction_flows_enforced
+suite_mode: full_duplex
 cases:
   - case_id: flow_normal_question_then_agent_reply_001
     suite: v1_realistic_flows

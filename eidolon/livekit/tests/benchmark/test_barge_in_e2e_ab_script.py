@@ -7,13 +7,19 @@ from pathlib import Path
 import pytest
 
 from scripts.bench_barge_in_e2e_ab import (
+    DEFAULT_CASES,
+    DEFAULT_SUITE_SET,
     _fmt_ms,
+    _case_paths_for_args,
     _overlay_payload,
     _participant_metadata,
     _profile_brief,
     _recommendation,
+    _suites_for_livekit_mode,
     _summary_stat,
+    _validate_room_case_expectations,
 )
+from benchmark.schema import BenchmarkCase, BenchmarkSuite, Expectations
 
 
 def test_overlay_payload_isolates_owner_port_and_timeline() -> None:
@@ -77,6 +83,70 @@ def test_participant_metadata_allows_half_duplex_override() -> None:
         livekit_session_intent = ""
 
     assert _participant_metadata(Args()) == {"interaction_mode": "half_duplex"}
+
+
+def test_default_suite_set_is_full_duplex_gate_without_legacy() -> None:
+    assert DEFAULT_SUITE_SET == "full_duplex_gate"
+    assert list(DEFAULT_CASES) == [
+        "benchmark/cases/full_duplex/gate_enforced.yaml",
+        "benchmark/cases/full_duplex/explicit_control_enforced.yaml",
+    ]
+    assert all("/legacy/" not in path for path in DEFAULT_CASES)
+
+
+def test_case_paths_use_suite_set_when_cases_omitted() -> None:
+    class Args:
+        cases = None
+        suite_set = "half_duplex_ptt_phase_a"
+
+    assert _case_paths_for_args(Args()) == [
+        "benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml"
+    ]
+
+
+def test_livekit_mode_rejects_half_full_mixed_explicit_cases() -> None:
+    suites = [
+        BenchmarkSuite("full", "full_duplex", ()),
+        BenchmarkSuite("half", "half_duplex", ()),
+    ]
+
+    with pytest.raises(SystemExit, match="suite_mode does not match"):
+        _suites_for_livekit_mode(
+            suites,
+            interaction_mode="full_duplex",
+            allow_suite_set_filter=False,
+        )
+
+
+def test_all_suite_set_can_filter_to_requested_mode() -> None:
+    suites = [
+        BenchmarkSuite("full", "full_duplex", ()),
+        BenchmarkSuite("half", "half_duplex", ()),
+        BenchmarkSuite("shared", "shared", ()),
+    ]
+
+    selected = _suites_for_livekit_mode(
+        suites,
+        interaction_mode="half_duplex",
+        allow_suite_set_filter=True,
+    )
+
+    assert [suite.suite_id for suite in selected] == ["half", "shared"]
+
+
+def test_room_case_expectations_require_explicit_agent_audio_response() -> None:
+    case = BenchmarkCase(
+        case_id="implicit",
+        suite="test",
+        description="",
+        audio_clips=(),
+        user_steps=(),
+        expectations=Expectations(agent_audio_response="auto"),
+    )
+    suite = BenchmarkSuite("suite", "full_duplex", (case,))
+
+    with pytest.raises(SystemExit, match="agent_audio_response"):
+        _validate_room_case_expectations([suite])
 
 
 @pytest.mark.parametrize(

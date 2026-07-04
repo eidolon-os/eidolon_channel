@@ -219,6 +219,55 @@ benchmark/runs/<run-id>/livekit_room/turn_timeline.jsonl
 The current baseline is intentionally small and should grow with real failure
 cases from production sessions.
 
+## Half / Full Duplex Suite Layout
+
+Benchmark cases are mode-scoped under:
+
+- `benchmark/cases/full_duplex/`: open-mic natural conversation, barge-in,
+  backchannel, false-start, ambient/echo guard, and explicit full-duplex client
+  controls.
+- `benchmark/cases/half_duplex/`: PTT segment owner cases. These must run with
+  `--livekit-interaction-mode half_duplex`.
+- `benchmark/cases/shared/`: deterministic policy or reusable cases that are
+  not tied to one room interaction mode.
+- `benchmark/cases/legacy/`: historical compatibility suites. Default E2E
+  gates do not run these.
+
+`scripts/bench_barge_in_e2e_ab.py` now runs mode-specific suite sets. Its
+default is `--suite-set full_duplex_gate`, which currently expands to:
+
+```text
+benchmark/cases/full_duplex/gate_enforced.yaml
+benchmark/cases/full_duplex/explicit_control_enforced.yaml
+```
+
+Useful E2E invocations:
+
+```bash
+./.venv/bin/python scripts/bench_barge_in_e2e_ab.py \
+  --suite-set full_duplex_gate \
+  --livekit-interaction-mode full_duplex
+
+./.venv/bin/python scripts/bench_barge_in_e2e_ab.py \
+  --suite-set half_duplex_ptt_phase_a \
+  --livekit-interaction-mode half_duplex
+```
+
+Room cases in these gate suites must declare `agent_audio_response` explicitly:
+`none`, `first`, or `after_user_done`. The E2E A/B script rejects implicit
+`auto` room expectations so a no-decision/no-audio case cannot look green by
+accident.
+
+Reports now expose two layers of failure attribution:
+
+- `functional_outcome_passed`: terminal action, decision, context ledger, and
+  required control packets are correct.
+- `experience_slo_passed`: the functional behavior happened inside the
+  configured latency bound.
+
+This keeps "correct cancel but too slow" visible as an experience failure
+instead of mixing it with owner logic failures.
+
 ## Human + Device Dogfood Suites
 
 Dogfood cases model the whole product envelope: a human speaks while a device is
@@ -227,12 +276,12 @@ input can include deterministic echo/noise. The first suite is explicit-only:
 
 ```bash
 ./.venv/bin/python scripts/bench_voice.py \
-  --cases benchmark/cases/dogfood_box3_audio_first_enforced.yaml \
+  --cases benchmark/cases/full_duplex/dogfood_box3_audio_first_enforced.yaml \
   --runner headless \
   --run-id dogfood-headless
 
 ./.venv/bin/python scripts/bench_voice.py \
-  --cases benchmark/cases/dogfood_box3_audio_first_enforced.yaml \
+  --cases benchmark/cases/full_duplex/dogfood_box3_audio_first_enforced.yaml \
   --runner livekit_room \
   --run-id dogfood-room
 ```
@@ -245,7 +294,7 @@ or device dogfood.
 
 ```bash
 ./.venv/bin/python scripts/bench_barge_in_ab.py \
-  --cases benchmark/cases/offline_policy_regression_enforced.yaml \
+  --cases benchmark/cases/shared/offline_policy_regression_enforced.yaml \
   --repeat 1 \
   --run-id offline-policy-regression
 ```

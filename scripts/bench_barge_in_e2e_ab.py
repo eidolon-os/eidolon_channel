@@ -47,12 +47,27 @@ from eidolon.livekit.common.config import load_effective_config
 
 
 OWNER_PROFILES = ("channel", "livekit_native_adaptive")
-DEFAULT_CASES = (
-    "benchmark/cases/barge_in_ab_matrix_enforced.yaml",
-    "benchmark/cases/v1_interrupt_tiers_enforced.yaml",
-    "benchmark/cases/v1_realistic_interaction_flows_enforced.yaml",
-    "benchmark/cases/dogfood_box3_audio_first_enforced.yaml",
-)
+SUITE_SET_CASES = {
+    "full_duplex_gate": (
+        "benchmark/cases/full_duplex/gate_enforced.yaml",
+        "benchmark/cases/full_duplex/explicit_control_enforced.yaml",
+    ),
+    "full_duplex_probe": (
+        "benchmark/cases/full_duplex/barge_in_probe_enforced.yaml",
+    ),
+    "half_duplex_ptt_phase_a": (
+        "benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml",
+    ),
+    "all": (
+        "benchmark/cases/full_duplex/gate_enforced.yaml",
+        "benchmark/cases/full_duplex/explicit_control_enforced.yaml",
+        "benchmark/cases/full_duplex/barge_in_probe_enforced.yaml",
+        "benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml",
+    ),
+}
+DEFAULT_SUITE_SET = "full_duplex_gate"
+DEFAULT_CASES = SUITE_SET_CASES[DEFAULT_SUITE_SET]
+ROOM_AGENT_AUDIO_RESPONSE_VALUES = {"none", "first", "after_user_done"}
 KEY_LATENCY_METRICS = (
     "timeline_interrupt_speech_to_started_ms",
     "timeline_interrupt_speech_to_first_transcript_ms",
@@ -279,6 +294,62 @@ def _suite_requires_runtime_identity(suites: list[BenchmarkSuite]) -> bool:
         for suite in suites
         for case in suite.cases
     )
+
+
+def _case_paths_for_args(args: argparse.Namespace) -> list[str]:
+    if args.cases:
+        return list(args.cases)
+    return list(SUITE_SET_CASES[args.suite_set])
+
+
+def _suites_for_livekit_mode(
+    suites: list[BenchmarkSuite],
+    *,
+    interaction_mode: str,
+    allow_suite_set_filter: bool,
+) -> list[BenchmarkSuite]:
+    compatible_modes = {interaction_mode, "shared"}
+    selected = [
+        suite
+        for suite in suites
+        if suite.suite_mode in compatible_modes
+    ]
+    incompatible = [
+        suite
+        for suite in suites
+        if suite.suite_mode not in compatible_modes
+    ]
+    if incompatible and not allow_suite_set_filter:
+        detail = ", ".join(
+            f"{suite.suite_id}:{suite.suite_mode}" for suite in incompatible
+        )
+        raise SystemExit(
+            "suite_mode does not match --livekit-interaction-mode="
+            f"{interaction_mode}: {detail}"
+        )
+    if not selected:
+        raise SystemExit(
+            "no benchmark suites match --livekit-interaction-mode="
+            f"{interaction_mode}"
+        )
+    return selected
+
+
+def _validate_room_case_expectations(suites: list[BenchmarkSuite]) -> None:
+    missing: list[str] = []
+    for suite in suites:
+        for case in suite.cases:
+            value = str(case.expectations.agent_audio_response or "")
+            if value not in ROOM_AGENT_AUDIO_RESPONSE_VALUES:
+                missing.append(
+                    f"{suite.suite_id}/{case.case_id}:agent_audio_response={value!r}"
+                )
+    if missing:
+        raise SystemExit(
+            "livekit_room cases must explicitly declare agent_audio_response "
+            f"as one of {sorted(ROOM_AGENT_AUDIO_RESPONSE_VALUES)}; "
+            + "; ".join(missing)
+        )
 
 
 def _participant_metadata(args: argparse.Namespace) -> dict[str, Any]:
@@ -675,8 +746,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cases",
         nargs="+",
-        default=list(DEFAULT_CASES),
-        help="Benchmark case YAML files. Defaults to enforced real-audio barge-in suites.",
+        default=None,
+        help=(
+            "Benchmark case YAML files. Overrides --suite-set and must match "
+            "--livekit-interaction-mode."
+        ),
+    )
+    parser.add_argument(
+        "--suite-set",
+        choices=sorted(SUITE_SET_CASES),
+        default=DEFAULT_SUITE_SET,
+        help="Mode-specific benchmark suite set to run when --cases is omitted.",
     )
     parser.add_argument("--output-dir", default="benchmark/runs")
     parser.add_argument(
@@ -759,7 +839,14 @@ async def _main() -> int:
     if args.ptt_segment_stt_strategy and not args.manage_worker:
         raise SystemExit("--ptt-segment-stt-strategy requires --manage-worker")
     root = Path.cwd()
-    suites = load_suites(args.cases)
+    case_paths = _case_paths_for_args(args)
+    suites = load_suites(case_paths)
+    suites = _suites_for_livekit_mode(
+        suites,
+        interaction_mode=args.livekit_interaction_mode,
+        allow_suite_set_filter=(args.cases is None and args.suite_set == "all"),
+    )
+    _validate_room_case_expectations(suites)
     run_root = Path(args.output_dir) / args.run_id / "barge_in_e2e_ab"
 
     if args.manage_worker:
@@ -788,7 +875,7 @@ async def _main() -> int:
 
     payload = _write_ab_artifacts(
         run_root=run_root,
-        cases=args.cases,
+        cases=[str(path) for path in case_paths],
         repeat=args.repeat,
         managed_worker=args.manage_worker,
         results=results,

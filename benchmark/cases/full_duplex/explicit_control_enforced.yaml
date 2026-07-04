@@ -1,0 +1,38 @@
+suite_id: full_duplex_explicit_control_enforced
+suite_mode: full_duplex
+# Full-duplex explicit controls are deliberate client-side gestures, but Channel
+# still owns the terminal decision and context ledger. This suite is separate
+# from natural open-mic barge-in so PTT/manual semantics do not pollute the
+# speech-evidence matrix.
+cases:
+  - case_id: fd_explicit_ptt_preempts_without_speech_001
+    suite: full_duplex_explicit_control
+    description: 全双工显式控制：agent 播放中 PTT=true 即使没有语音/STT，也应立即停止播放并记录 control-only timeline。
+    timeout_sec: 45
+    tags: ["full_duplex", "explicit_control", "ptt", "no_speech"]
+    audio_clips:
+      - id: ptt_signal
+        text: ""
+        path: benchmark/audio/generated/backchannel_mm.wav
+        intent: manual_interrupt
+    user_steps:
+      - text: ""
+        audio: ptt_signal
+        start_ms: 240
+        duration_ms: 200
+        eot_scores: [0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_ptt: true
+    expect:
+      action: cancel
+      intent: hard_stop
+      decision_action: cancel
+      decision_intent: hard_stop
+      agent_audio_response: none
+      min_user_finals: 0
+      min_agent_messages: 0
+      max_interrupt_resolution_after_started_ms: 500
+      playback_stop_sent: true
+      no_full_assistant_context_commit: true

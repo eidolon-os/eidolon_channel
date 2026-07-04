@@ -1,4 +1,5 @@
 suite_id: fullduplex_barge_in_probe
+suite_mode: full_duplex
 # Probe suite for the full-duplex barge-in work (2026-06-14).
 # Goal: empirically establish what the CURRENT turn policy does when the user
 # vocalizes while the agent is speaking, so we can tell real bugs (red) from

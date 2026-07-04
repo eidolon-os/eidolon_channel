@@ -74,7 +74,7 @@ from ..observability import TurnTimeline
 from ..factory import SharedStageFactory
 from ..output import FillerManager, OutputDuckingController
 from ..pipeline.base import BasePipeline
-from ..pipeline.types import PipelineCallbacks, PipelineState
+from ..pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from ..session.agent_state import AgentStateEffectHandler
 from ..session.attention_effects import AttentionEffectHandler
 from .client_preempt import (
@@ -174,6 +174,7 @@ class StreamingPipeline(BasePipeline):
         self._voiceprint_config = voiceprint_config or VoiceprintConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
+        self._explicit_preempt_control_timeline: TurnTimeline | None = None
         self._pending_client_control_events: list[dict[str, Any]] = []
         self._skip_commit_after_interrupt_cancel = False
         self._suppress_commit_after_interrupt_until = 0.0
@@ -984,6 +985,9 @@ class StreamingPipeline(BasePipeline):
         timeline: TurnTimeline | None = None,
     ) -> None:
         self._ensure_explicit_client_preempt_ledger()
+        timeline = timeline or getattr(self, "_timeline", None)
+        if timeline is None:
+            timeline = self._create_explicit_preempt_control_timeline(received_at)
         self._explicit_preempts.record(
             state_attr=state_attr,
             received_at=received_at,
@@ -1011,6 +1015,32 @@ class StreamingPipeline(BasePipeline):
     ) -> None:
         self._ensure_explicit_client_preempt_ledger()
         self._explicit_preempts.mark_resolved(received_at, resolved_at)
+        timeline = getattr(self, "_explicit_preempt_control_timeline", None)
+        if timeline is None:
+            return
+        timeline.mark_at("interrupt_resolved_at", resolved_at)
+        timeline.set_attr("cancel_reason", "explicit_client_ptt")
+        self._flush_turn_timeline(
+            timeline,
+            "explicit_client_preempt_control_only",
+        )
+        self._explicit_preempt_control_timeline = None
+
+    def _create_explicit_preempt_control_timeline(
+        self,
+        received_at: float,
+    ) -> TurnTimeline:
+        timeline = TurnTimeline(generate_turn_id())
+        timeline.mark_at("interrupt_started_at", received_at)
+        timeline.set_attr("control_only", True)
+        timeline.set_attr("control_only_reason", "explicit_client_ptt")
+        room = getattr(self, "_room", None)
+        if room is not None:
+            timeline.set_attr("room_name", getattr(room, "name", "") or "")
+        self._timeline = timeline
+        self._timeline_debug_flushed = False
+        self._explicit_preempt_control_timeline = timeline
+        return timeline
 
     def _turn_detection(self) -> Any:
         """The full-duplex Agent ``turn_detection`` model."""

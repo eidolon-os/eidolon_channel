@@ -47,9 +47,40 @@ def apply_timeline_expectations(
         if expected is None:
             continue
 
+        prior_errors = list(result.errors)
         errors = _expectation_errors(result.case_id, expected, case_records)
+        functional_errors, experience_errors = _split_expectation_errors(errors)
+        all_functional_errors = [*prior_errors, *functional_errors]
+        result.metrics["functional_outcome_passed"] = not all_functional_errors
+        result.metrics["experience_slo_passed"] = not experience_errors
+        result.metrics["functional_outcome_errors"] = "\n".join(all_functional_errors)
+        result.metrics["experience_slo_errors"] = "\n".join(experience_errors)
         result.errors.extend(errors)
         result.passed = result.passed and not errors
+
+
+def _split_expectation_errors(errors: list[str]) -> tuple[list[str], list[str]]:
+    functional: list[str] = []
+    experience: list[str] = []
+    for error in errors:
+        if _is_experience_slo_error(error):
+            experience.append(error)
+        else:
+            functional.append(error)
+    return functional, experience
+
+
+def _is_experience_slo_error(error: str) -> bool:
+    if " exceeded " in error or "too slow" in error:
+        return True
+    return error in {
+        "timeline missing speech-stop-to-commit duration",
+        "timeline missing interrupt decision duration",
+        "timeline missing interrupt started-to-resolved duration",
+        "timeline missing speech-start-to-suspend duration",
+        "timeline missing speech-start-to-cancel duration",
+        "timeline missing speech-start-to-resume duration",
+    }
 
 
 def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any]]) -> list[str]:

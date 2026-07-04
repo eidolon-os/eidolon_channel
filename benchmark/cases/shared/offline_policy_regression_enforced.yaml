@@ -1,4 +1,5 @@
 suite_id: offline_policy_regression_enforced
+suite_mode: shared
 # Offline policy regression suite.
 #
 # These cases model interaction semantics that should remain executable in

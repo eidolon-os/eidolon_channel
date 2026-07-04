@@ -8,6 +8,7 @@
 #
 # 音频素材由 scripts/generate_voice_benchmark_audio.py 生成（含 composite 停顿 clip）。
 suite_id: conversation_turn_taking
+suite_mode: shared
 cases:
   - case_id: pause_mid_utterance_single_turn_001
     suite: turn_boundary

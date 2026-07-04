@@ -230,7 +230,7 @@ def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> 
 
 def test_barge_in_ab_default_cases_include_offline_policy_regression_suite() -> None:
     assert (
-        "benchmark/cases/offline_policy_regression_enforced.yaml"
+        "benchmark/cases/shared/offline_policy_regression_enforced.yaml"
         in DEFAULT_BARGE_IN_AB_CASES
     )
 
@@ -260,11 +260,11 @@ def test_livekit_room_device_envelope_input_mode_tracks_device_mode() -> None:
     suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
 
     assert _case_input_mode(suite.cases[0]) == "auto"
-    ptt_suite = load_suite("benchmark/cases/barge_in_ab_matrix_enforced.yaml")
+    ptt_suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
     ptt_case = {
         case.case_id: case
         for case in ptt_suite.cases
-    }["ab_ptt_explicit_hard_interrupt_cancels_001"]
+    }["fd_explicit_ptt_preempts_without_speech_001"]
     assert _step_input_mode(ptt_case, ptt_case.user_steps[0]) == "ptt"
 
 
@@ -289,11 +289,11 @@ def test_half_duplex_ptt_phase_a_suite_is_mode_specific() -> None:
 async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.MonkeyPatch) -> None:
     from benchmark import livekit_room_runner as runner
 
-    suite = load_suite("benchmark/cases/barge_in_ab_matrix_enforced.yaml")
+    suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
     case = {
         item.case_id: item
         for item in suite.cases
-    }["ab_ptt_explicit_hard_interrupt_cancels_001"]
+    }["fd_explicit_ptt_preempts_without_speech_001"]
     local_participant = AsyncMock()
     events: list[dict] = []
 
@@ -671,7 +671,6 @@ def test_load_barge_in_ab_matrix_suite() -> None:
         "ab_low_evidence_playback_transcript_observes_001",
         "ab_echo_like_agent_words_observes_001",
         "ab_mic_muted_hard_stop_is_ignored_001",
-        "ab_ptt_explicit_hard_interrupt_cancels_001",
     }
     backchannel = next(
         case

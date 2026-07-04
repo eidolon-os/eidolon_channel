@@ -11,10 +11,19 @@ import yaml
 
 
 RunnerName = Literal["policy", "headless", "component", "livekit_room"]
+SuiteMode = Literal["half_duplex", "full_duplex", "shared", "legacy"]
 
 # Room names are "{prefix}-{case_id}-{8-hex}". The livekit_room runner builds
 # them and timeline_expectations parses them back, so both sides share this.
 ROOM_NAME_PREFIX = "voice-bench"
+SUITE_PATH_ALIASES = {
+    "benchmark/cases/fullduplex_barge_in_probe_enforced.yaml": (
+        "benchmark/cases/full_duplex/barge_in_probe_enforced.yaml"
+    ),
+    "benchmark/cases/half_duplex_ptt_phase_a_enforced.yaml": (
+        "benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -170,6 +179,7 @@ class BenchmarkCase:
 @dataclass(frozen=True)
 class BenchmarkSuite:
     suite_id: str
+    suite_mode: SuiteMode
     cases: tuple[BenchmarkCase, ...]
 
 
@@ -233,8 +243,31 @@ def _device_envelope_spec(raw: Any) -> DeviceEnvelopeSpec:
     )
 
 
-def load_suite(path: str | Path) -> BenchmarkSuite:
+def _resolve_suite_path(path: str | Path) -> Path:
     p = Path(path)
+    if p.exists():
+        return p
+    alias = SUITE_PATH_ALIASES.get(str(p))
+    if alias:
+        return Path(alias)
+    if p.parent != Path("benchmark/cases") or p.suffix != ".yaml":
+        return p
+    matches = sorted(Path("benchmark/cases").glob(f"*/{p.name}"))
+    return matches[0] if matches else p
+
+
+def _suite_mode(raw: dict[str, Any]) -> SuiteMode:
+    value = str(raw.get("suite_mode") or "shared")
+    allowed = {"half_duplex", "full_duplex", "shared", "legacy"}
+    if value not in allowed:
+        raise ValueError(
+            f"suite_mode must be one of {sorted(allowed)}, got {value!r}"
+        )
+    return value  # type: ignore[return-value]
+
+
+def load_suite(path: str | Path) -> BenchmarkSuite:
+    p = _resolve_suite_path(path)
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     cases: list[BenchmarkCase] = []
     for case_raw in raw.get("cases", []):
@@ -258,6 +291,7 @@ def load_suite(path: str | Path) -> BenchmarkSuite:
         )
     return BenchmarkSuite(
         suite_id=raw.get("suite_id") or p.stem,
+        suite_mode=_suite_mode(raw),
         cases=tuple(cases),
     )
 

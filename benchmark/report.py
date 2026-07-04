@@ -151,6 +151,14 @@ def aggregate(cases: list[CaseResult]) -> dict[str, Any]:
         "passed": passed,
         "failed": total - passed,
         "pass_rate": passed / total if total else 0.0,
+        "functional_outcome_failed": _false_metric_count(
+            cases,
+            "functional_outcome_passed",
+        ),
+        "experience_slo_failed": _false_metric_count(
+            cases,
+            "experience_slo_passed",
+        ),
         "metrics": _metric_distribution(cases),
     }
 
@@ -198,9 +206,21 @@ def aggregate_runs(runs: list[RunResult]) -> dict[str, Any]:
         "failed": total_cases - passed_cases,
         "flaky": flaky_cases,
         "pass_rate": passed_cases / total_cases if total_cases else 0.0,
+        "functional_outcome_failed": _false_metric_count(
+            all_cases,
+            "functional_outcome_passed",
+        ),
+        "experience_slo_failed": _false_metric_count(
+            all_cases,
+            "experience_slo_passed",
+        ),
         "metrics": _metric_distribution(all_cases),
         "per_case": per_case,
     }
+
+
+def _false_metric_count(cases: list[CaseResult], key: str) -> int:
+    return sum(1 for case in cases if case.metrics.get(key) is False)
 
 
 def write_metrics(run: RunResult, output_dir: Path) -> dict[str, Any]:
@@ -239,6 +259,12 @@ def render_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- 重复次数：`{repeats}`")
         if summary.get("flaky"):
             lines.append(f"- 不稳定用例数：`{summary['flaky']}`")
+    if summary.get("functional_outcome_failed") is not None:
+        lines.append(
+            f"- 功能 outcome 失败样本：`{summary['functional_outcome_failed']}`"
+        )
+    if summary.get("experience_slo_failed") is not None:
+        lines.append(f"- 体验 SLO 失败样本：`{summary['experience_slo_failed']}`")
     lines.extend(
         [
             "",

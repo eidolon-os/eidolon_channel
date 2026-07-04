@@ -1,4 +1,5 @@
 suite_id: attention_admission_enforced
+suite_mode: legacy
 cases:
   - case_id: enforced_ambient_playback_speech_does_not_cancel_001
     suite: attention_admission_enforced

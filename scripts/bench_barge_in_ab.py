@@ -37,13 +37,13 @@ from eidolon.livekit.plugins.stt.bailian import BailianFunASRSTT
 
 
 DEFAULT_CASES = (
-    "benchmark/cases/barge_in_ab_matrix_enforced.yaml",
-    "benchmark/cases/fullduplex_barge_in_probe_enforced.yaml",
-    "benchmark/cases/v1_interrupt_tiers_enforced.yaml",
-    "benchmark/cases/v1_realistic_interaction_flows_enforced.yaml",
-    "benchmark/cases/v1_realistic_extended.yaml",
-    "benchmark/cases/dogfood_box3_audio_first_enforced.yaml",
-    "benchmark/cases/offline_policy_regression_enforced.yaml",
+    "benchmark/cases/full_duplex/barge_in_ab_matrix_enforced.yaml",
+    "benchmark/cases/full_duplex/barge_in_probe_enforced.yaml",
+    "benchmark/cases/full_duplex/v1_interrupt_tiers_enforced.yaml",
+    "benchmark/cases/full_duplex/v1_realistic_interaction_flows_enforced.yaml",
+    "benchmark/cases/full_duplex/explicit_control_enforced.yaml",
+    "benchmark/cases/full_duplex/dogfood_box3_audio_first_enforced.yaml",
+    "benchmark/cases/shared/offline_policy_regression_enforced.yaml",
 )
 
 

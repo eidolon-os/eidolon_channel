@@ -1,4 +1,5 @@
 suite_id: v1_realistic_extended
+suite_mode: legacy
 cases:
   - case_id: extended_normal_question_brain_proof_001
     suite: v1_realistic_extended

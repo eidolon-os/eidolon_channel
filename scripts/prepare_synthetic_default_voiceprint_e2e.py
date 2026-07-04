@@ -484,7 +484,7 @@ async def _main() -> int:
     parser.add_argument("--out-dir", default="benchmark/audio/synthetic_default")
     parser.add_argument(
         "--cases-out",
-        default="benchmark/cases/synthetic_default_voiceprint_e2e.yaml",
+        default="benchmark/cases/shared/synthetic_default_voiceprint_e2e.yaml",
     )
     parser.add_argument(
         "--manifest-out",

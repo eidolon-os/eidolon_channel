@@ -207,7 +207,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - PTT 专用阈值使用 `turn_policy.ptt`：`segment_stt_strategy`、`segment_min_audio_ms`、`segment_max_audio_ms`、`segment_min_rms_ppm`、`segment_tap_to_stop_max_audio_ms`。
    - 空按 / 无有效语音是显式协议结果：Channel 发布 session-local `eidolon.control` / `op=ptt.turn_status`，ESP32 只清理 UI 状态并 ACK，不参与 turn 裁决。
    - `session/client_control.py` 是 full-duplex streaming path 与 half-duplex segment path 共享的 `eidolon.control` envelope 与 timeline event helper；PTT 专用 `ptt.turn_status` payload / no-turn terminal 规则位于 `half_duplex/control.py`。
-   - `full_duplex/client_preempt.py` 只处理 full-duplex explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 half-duplex PTT turn lifecycle。
+   - `full_duplex/client_preempt.py` 只处理 full-duplex explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 half-duplex PTT turn lifecycle。无 speech/VAD timeline 的 explicit PTT 会由 `StreamingPipeline` 创建 control-only timeline，记录 `cancel/hard_stop/client_ptt`、`playback.stop` 与 interrupted-context evidence，不等待 STT，也不提交用户 turn。
    - `full_duplex/client_audio.py` 拥有 full-duplex `client.audio_state` 的新鲜度视图、播放态判断，以及 room data -> explicit preempt handler 的桥接；pipeline 不再重复实现这些判断。
    - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时由 half-duplex owner 抢占输出并发送 `playback.stop`；发生在空闲时则按音频段长度/能量裁决为空按或真实 turn。
 
@@ -330,6 +330,17 @@ client ptt_pressed → HalfDuplexPttTurnController 打开 hold 窗口
   → AgentSession.generate_reply() → TTS 播放
   → PTT/tap-to-stop 可在播放中抢占输出
 ```
+
+### Benchmark 模式边界
+
+`benchmark/cases/` 也按产品模式拆分：
+
+- `full_duplex/`：open-mic natural conversation、barge-in/backchannel/false-start/ambient guard，以及 full-duplex explicit client control。
+- `half_duplex/`：PTT segment owner；必须用 `interaction_mode=half_duplex` 跑。
+- `shared/`：不绑定单一 room mode 的 deterministic/shared regression。
+- `legacy/`：历史 suite；默认 E2E gate 不运行。
+
+E2E A/B runner 通过 `suite_mode` 校验 `--livekit-interaction-mode`，并要求 room gate case 显式声明 `agent_audio_response`。报告按 `functional_outcome_passed` 与 `experience_slo_passed` 分层，避免把“动作正确但慢”和“terminal decision 断路”混为一类。
 
 ---
 

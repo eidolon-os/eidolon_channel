@@ -72,6 +72,7 @@ class LiveKitRoomOptions:
     # prefix would break that mapping; keep the shared constant.
     room_prefix: str = ROOM_NAME_PREFIX
     agent_missing_retry_count: int = 1
+    case_hard_timeout_grace_sec: float = 8.0
 
 
 _AGENT_MISSING_ERROR = "timed out waiting for agent participant before user audio"
@@ -144,7 +145,7 @@ async def _run_room_case_with_retries(
     api_key: str,
     api_secret: str,
 ) -> CaseResult:
-    result = await _run_room_case(
+    result = await _run_room_case_with_hard_timeout(
         case,
         root=root,
         options=options,
@@ -163,7 +164,7 @@ async def _run_room_case_with_retries(
             "previous_room_name": result.metrics.get("room_name"),
             "previous_errors": list(result.errors),
         }
-        result = await _run_room_case(
+        result = await _run_room_case_with_hard_timeout(
             case,
             root=root,
             options=options,
@@ -195,6 +196,62 @@ def _is_room_connect_transient_failure(result: CaseResult) -> bool:
         return False
     error_text = "\n".join(str(error).lower() for error in result.errors)
     return any(marker in error_text for marker in _ROOM_CONNECT_TRANSIENT_ERRORS)
+
+
+async def _run_room_case_with_hard_timeout(
+    case: BenchmarkCase,
+    *,
+    root: Path,
+    options: LiveKitRoomOptions,
+    livekit_url: str,
+    api_key: str,
+    api_secret: str,
+) -> CaseResult:
+    timeout_sec = _case_hard_timeout_sec(case, options)
+    started = time.monotonic()
+    try:
+        return await asyncio.wait_for(
+            _run_room_case(
+                case,
+                root=root,
+                options=options,
+                livekit_url=livekit_url,
+                api_key=api_key,
+                api_secret=api_secret,
+            ),
+            timeout=timeout_sec,
+        )
+    except asyncio.TimeoutError:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        return CaseResult(
+            case_id=case.case_id,
+            suite=case.suite,
+            runner="livekit_room",
+            passed=False,
+            metrics={
+                "elapsed_ms": elapsed_ms,
+                "case_hard_timeout_sec": timeout_sec,
+            },
+            events=[
+                {
+                    "type": "case_hard_timeout",
+                    "timestamp_ms": elapsed_ms,
+                    "timeout_sec": timeout_sec,
+                }
+            ],
+            errors=[f"case hard timeout after {timeout_sec:.1f}s"],
+        )
+
+
+def _case_hard_timeout_sec(
+    case: BenchmarkCase,
+    options: LiveKitRoomOptions,
+) -> float:
+    return (
+        max(float(options.timeout_sec), float(case.timeout_sec))
+        + float(options.settle_after_first_audio_sec)
+        + float(options.case_hard_timeout_grace_sec)
+    )
 
 
 async def _run_room_case(

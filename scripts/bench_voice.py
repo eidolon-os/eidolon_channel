@@ -50,7 +50,7 @@ from eidolon.livekit.common.config import load_effective_config
 def _default_cases() -> list[str]:
     return [
         str(p)
-        for p in sorted(Path("benchmark/cases").glob("*.yaml"))
+        for p in sorted(Path("benchmark/cases").glob("*/*.yaml"))
         if not p.name.endswith("_enforced.yaml")
     ]
 

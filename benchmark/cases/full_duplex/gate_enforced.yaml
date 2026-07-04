@@ -1,0 +1,298 @@
+suite_id: full_duplex_gate_enforced
+suite_mode: full_duplex
+# Functional gate for open-mic full-duplex owner behavior. Keep this suite small
+# and product-semantic: one mode, explicit room-audio expectations, and separate
+# functional outcome from experience SLO in reports.
+cases:
+  - case_id: fd_gate_normal_turn_replies_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：agent idle 时正常用户 turn 应提交并得到回复。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "normal_turn"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmark/audio/generated/normal_ask_intro.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+    agent_replies:
+      - when: 帮我详细介绍
+        reply: 好的，我会先概括整体方案，再说明关键风险和下一步建议。
+    expect:
+      action: none
+      decision_action: none
+      min_user_finals: 1
+      min_agent_messages: 1
+      agent_audio_response: after_user_done
+
+  - case_id: fd_gate_hard_stop_cancels_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：agent 回答中明确硬停，应取消当前播放，不要求形成新用户 turn。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "hard_stop"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmark/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmark/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["停一下"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意较长，用来制造可打断窗口。
+    expect:
+      action: cancel
+      intent: hard_stop
+      decision_action: cancel
+      decision_intent: hard_stop
+      min_user_finals: 2
+      min_agent_messages: 1
+      agent_audio_response: none
+      max_interrupt_decision_ms: 500
+      playback_stop_sent: true
+      no_full_assistant_context_commit: true
+
+  - case_id: fd_gate_topic_switch_cancels_and_replies_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：播放中完整换话题应形成 cancel + normal_interrupt，并进入新 turn。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "topic_switch"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmark/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: topic_switch
+        text: 换个话题，我们聊点别的。
+        path: benchmark/audio/generated/topic_switch.wav
+        intent: topic_switch
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 换个话题
+        audio: topic_switch
+        start_ms: 1700
+        duration_ms: 900
+        interims: ["换个", "换个话题", "换个话题", "换个话题"]
+        eot_scores: [0.0, 0.0, 0.0, 0.72]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我先从架构说起，然后补充交互体验、延迟、可靠性和测试方法。
+    expect:
+      action: cancel
+      intent: normal_interrupt
+      decision_action: cancel
+      decision_intent: normal_interrupt
+      min_user_finals: 2
+      min_agent_messages: 1
+      agent_audio_response: after_user_done
+      max_interrupt_decision_ms: 500
+      no_full_assistant_context_commit: true
+
+  - case_id: fd_gate_correction_cancels_and_replies_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：播放中纠正自己的前话，应形成 cancel + normal_interrupt，并进入新 turn。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "correction"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmark/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: correction
+        text: 不是，我刚才说错了。
+        path: benchmark/audio/generated/correction.wav
+        intent: correction
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 不是，我刚才说错了
+        audio: correction
+        start_ms: 1700
+        duration_ms: 900
+        interims: ["不是", "不是，我刚才", "不是，我刚才说错了"]
+        eot_scores: [0.0, 0.0, 0.75]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 我会沿着你刚才的问题继续展开，包括系统边界、风险和体验目标。
+    expect:
+      action: cancel
+      intent: normal_interrupt
+      decision_action: cancel
+      decision_intent: normal_interrupt
+      min_user_finals: 2
+      min_agent_messages: 1
+      agent_audio_response: after_user_done
+      max_interrupt_decision_ms: 500
+      no_full_assistant_context_commit: true
+
+  - case_id: fd_gate_backchannel_resumes_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：播放中短附和属于 backchannel，应 rollback/resume，不触发 cancel 或新 brain turn。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "backchannel", "false_interruption"]
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmark/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: backchannel_ok
+        text: 好。
+        path: benchmark/audio/generated/backchannel_ok.wav
+        intent: backchannel
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 1100
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+      - text: 好的
+        audio: backchannel_ok
+        start_ms: 1600
+        duration_ms: 520
+        interims: ["好的"]
+        final_delay_ms: 80
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    agent_replies:
+      - when: 详细介绍
+        reply: 好的，我会分成几个部分说明，这段回答会持续一会儿，方便检测短反馈是否误打断。
+    expect:
+      action: any
+      decision_action: rollback
+      decision_intent: backchannel
+      forbid_actions: ["cancel"]
+      min_user_finals: 2
+      min_agent_messages: 1
+      agent_audio_response: first
+      rejected_turn_brain: forbidden
+      max_speech_start_to_resume_ms: 500
+
+  - case_id: fd_gate_false_start_holds_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：播放中低证据开头“我觉得”应 hold/observe，不应立即 cancel 或提交用户 turn。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "false_start"]
+    audio_clips:
+      - id: reaction_start
+        text: 我觉得
+        path: benchmark/audio/generated/normal_followup.wav
+        intent: normal
+    user_steps:
+      - text: 我觉得
+        audio: reaction_start
+        start_ms: 240
+        duration_ms: 500
+        interims: ["我觉得"]
+        eot_scores: [0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      decision_action: hold
+      forbid_actions: ["cancel"]
+      min_user_finals: 1
+      min_agent_messages: 1
+      agent_audio_response: first
+      rejected_turn_brain: forbidden
+
+  - case_id: fd_gate_echo_like_agent_words_holds_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：像 agent 自己播放内容的低证据文本应 hold/observe，避免环境声或回声误杀。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "echo_guard", "ambient_guard"]
+    audio_clips:
+      - id: echo_like_agent_words
+        text: 我会先讲系统结构
+        path: benchmark/audio/generated/normal_followup.wav
+        intent: echo
+    user_steps:
+      - text: 我会先讲系统结构
+        audio: echo_like_agent_words
+        start_ms: 240
+        duration_ms: 900
+        interims: ["我会先讲", "我会先讲系统结构"]
+        eot_scores: [0.0, 0.0]
+        vad_probability: 0.9
+        agent_speaking: true
+        client_playback_state: agent_speaking
+    expect:
+      action: any
+      decision_action: hold
+      forbid_actions: ["cancel"]
+      min_user_finals: 1
+      min_agent_messages: 1
+      agent_audio_response: first
+      rejected_turn_brain: forbidden
+
+  - case_id: fd_gate_mic_muted_hard_stop_ignored_001
+    suite: full_duplex_gate
+    description: 全双工 open-mic：client 明确 mic_muted 时，即使出现硬停文本也不得取消播放。
+    timeout_sec: 60
+    tags: ["full_duplex", "gate", "client_state", "mic_muted"]
+    audio_clips:
+      - id: hard_stop_stop
+        text: 停一下。
+        path: benchmark/audio/generated/hard_stop_stop.wav
+        intent: hard_stop
+    user_steps:
+      - text: 停一下
+        audio: hard_stop_stop
+        start_ms: 240
+        duration_ms: 520
+        interims: ["停一下"]
+        eot_scores: [0.0]
+        agent_speaking: true
+        client_playback_state: agent_speaking
+        client_mic_muted: true
+    expect:
+      action: none
+      decision_action: none
+      forbid_actions: ["cancel"]
+      min_user_finals: 0
+      min_agent_messages: 1
+      agent_audio_response: first

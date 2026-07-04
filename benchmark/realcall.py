@@ -124,6 +124,9 @@ def _verify_room_timeline(
         failures.append("no worker timeline records (cannot prove real call)")
         return failures
 
+    if any(_is_control_only_explicit_client_preempt(record) for record in case_records):
+        return failures
+
     stt_provider = (provider_config or {}).get("stt", "")
     if stt_provider:
         stt_ok = any(
@@ -137,6 +140,13 @@ def _verify_room_timeline(
             failures.append(f"no STT stream evidence for provider {stt_provider!r}")
 
     return failures
+
+
+def _is_control_only_explicit_client_preempt(record: dict[str, Any]) -> bool:
+    attrs = _mapping(record.get("attrs"))
+    return bool(attrs.get("control_only")) and bool(
+        _mapping(attrs.get("explicit_client_interrupt")).get("ptt")
+    )
 
 
 def _has_transcript_timeline_evidence(record: dict[str, Any]) -> bool:

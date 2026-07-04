@@ -1,4 +1,5 @@
 suite_id: core_voice_baseline
+suite_mode: legacy
 cases:
   - case_id: normal_single_turn_001
     suite: core_latency

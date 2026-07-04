@@ -1,4 +1,5 @@
 suite_id: v1_interrupt_tiers_enforced
+suite_mode: full_duplex
 cases:
   - case_id: tier0_hard_stop_enforced_cancels_001
     suite: v1_interrupt_tiers

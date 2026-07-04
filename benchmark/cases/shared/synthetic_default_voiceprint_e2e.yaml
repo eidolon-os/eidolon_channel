@@ -1,4 +1,5 @@
 suite_id: synthetic_default_voiceprint_e2e
+suite_mode: shared
 cases:
 - case_id: synthetic_default_owner_normal_001
   suite: synthetic_default_voiceprint_e2e

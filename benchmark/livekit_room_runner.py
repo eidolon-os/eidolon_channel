@@ -63,6 +63,7 @@ class LiveKitRoomOptions:
     # Real-brain answers regularly exceed 8s; expiring early injects an
     # unintended interrupt, so this is deliberately generous.
     agent_quiet_wait_sec: float = 30.0
+    agent_speaking_recent_window_ms: int = 250
     agent_name: str = "eidolon"
     participant_prefix: str = ROOM_NAME_PREFIX
     participant_identity: str | None = None
@@ -432,6 +433,7 @@ async def _feed_case_audio(
     local_participant: Any | None = None,
 ) -> None:
     cursor_ms = 0
+    last_user_step_finished_ms: int | None = None
     clip_paths = {clip.id: clip.path for clip in case.audio_clips}
     for step in sorted(case.user_steps, key=lambda s: s.start_ms):
         if step.start_ms > cursor_ms:
@@ -441,10 +443,25 @@ async def _feed_case_audio(
             )
         publish_client_state = step.client_playback_state != "none"
         if step.agent_speaking:
-            await _wait_for_agent_speaking(
+            agent_speaking = await _wait_for_agent_speaking(
                 state,
                 timeout_sec=options.agent_speaking_wait_sec,
+                after_elapsed_ms=last_user_step_finished_ms,
+                recent_window_ms=options.agent_speaking_recent_window_ms,
             )
+            if not agent_speaking:
+                events.append(
+                    {
+                        "type": "agent_speaking_wait_timeout",
+                        "timestamp_ms": _elapsed_ms(started),
+                        "step_text": step.text,
+                        "timeout_sec": options.agent_speaking_wait_sec,
+                    }
+                )
+                raise RuntimeError(
+                    "timed out waiting for active agent audio before "
+                    f"user step {step.text!r}"
+                )
             playback_state = _step_playback_state(step, default="agent_speaking")
             if publish_client_state:
                 await _publish_client_audio_state(
@@ -549,6 +566,7 @@ async def _feed_case_audio(
                 "clip": step.audio,
             }
         )
+        last_user_step_finished_ms = _elapsed_ms(started)
         cursor_ms = max(cursor_ms, step.start_ms) + clip_ms
     await _capture_pcm(source, synth_silence(0.8))
 
@@ -683,13 +701,19 @@ async def _wait_for_agent_speaking(
     state: "_RoomCaseState",
     *,
     timeout_sec: float,
-) -> None:
+    after_elapsed_ms: int | None = None,
+    recent_window_ms: int = 250,
+) -> bool:
     """Wait for currently flowing agent audio before injecting an interrupt."""
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
-        if state.agent_audio_recent(window_ms=250):
-            return
+        if state.agent_audio_recent(
+            window_ms=recent_window_ms,
+            after_elapsed_ms=after_elapsed_ms,
+        ):
+            return True
         await asyncio.sleep(0.02)
+    return False
 
 
 async def _capture_pcm(
@@ -833,9 +857,19 @@ class _RoomCaseState:
         if key == "participant_connected_at" and not self.agent_connected.is_set():
             self.agent_connected.set()
 
-    def agent_audio_recent(self, *, window_ms: int) -> bool:
+    def agent_audio_recent(
+        self,
+        *,
+        window_ms: int,
+        after_elapsed_ms: int | None = None,
+    ) -> bool:
         last_audio = self.last_agent_audio_monotonic
         if last_audio is None:
+            return False
+        if after_elapsed_ms is not None and not any(
+            timestamp >= after_elapsed_ms
+            for timestamp in self.agent_audio_frame_timestamps
+        ):
             return False
         return time.monotonic() - last_audio <= window_ms / 1000
 

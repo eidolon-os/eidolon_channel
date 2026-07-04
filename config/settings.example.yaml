@@ -113,6 +113,7 @@ turn_policy:
     min_normal_interim_cjk_chars: 3
     latin_artifact_hold_max_chars: 4
     hard_stop_prefix_min_cjk_chars: 2
+    redirect_prefix_min_cjk_chars: 3
     repeated_noise_min_chars: 2
     repeated_noise_max_chars: 6
     weak_signal_followup_hold_ms: 1500

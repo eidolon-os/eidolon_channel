@@ -19,7 +19,11 @@ from eidolon.livekit.agent.turn_policy import (
     AttentionInput,
     TurnPolicyRuntime,
 )
-from eidolon.livekit.common.config import AttentionPolicyConfig, TurnPolicyConfig
+from eidolon.livekit.common.config import (
+    AttentionPolicyConfig,
+    InterruptPolicyConfig,
+    TurnPolicyConfig,
+)
 
 
 def _client_state(**kwargs) -> ClientAudioState:
@@ -164,6 +168,46 @@ def test_attention_hard_stop_homophone_upgrades_during_playback() -> None:
 
     assert decision.action is AdmissionAction.HARD_INTERRUPT
     assert decision.reason == "transcript_hard_stop"
+
+
+def test_attention_allows_topic_switch_intent_during_playback() -> None:
+    admission = AttentionAdmission(
+        replace(
+            TurnPolicyConfig(),
+            interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+        )
+    )
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="我们聊点别的。",
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "transcript_intent:topic_switch"
+
+
+def test_attention_allows_correction_intent_during_playback() -> None:
+    admission = AttentionAdmission(
+        replace(
+            TurnPolicyConfig(),
+            interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+        )
+    )
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="不是。",
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "transcript_intent:correction"
 
 
 def test_attention_observes_short_prefix_during_playback() -> None:
@@ -352,6 +396,28 @@ def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
     assert allowed is True
     pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+
+
+def test_pipeline_attention_allows_topic_switch_intent_during_playback() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+    pipeline._turn_policy = replace(
+        pipeline._turn_policy,
+        interrupt=replace(
+            pipeline._turn_policy.interrupt,
+            fast_lexical_intents=True,
+        ),
+    )
+    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
+
+    allowed = _allows_eot(pipeline, "我们聊点别的。")
+
+    assert allowed is True
+    pipeline._output_flow.duck_and_arm_timeout.assert_called_once()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "transcript_intent:topic_switch"
+    )
 
 
 def test_pipeline_attention_uses_client_playback_when_internal_state_idle() -> None:

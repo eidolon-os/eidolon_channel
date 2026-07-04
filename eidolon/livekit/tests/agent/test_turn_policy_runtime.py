@@ -250,6 +250,81 @@ def test_runtime_deadline_recheck_normalizes_fast_lexical_topic_switch() -> None
     assert decision.tier == "tier1_redirect"
 
 
+def test_runtime_deadline_stable_backchannel_rolls_back_before_final() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    first = runtime.decide_from_transcript(
+        "好",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.deadline_decision(
+        True,
+        has_transcript=True,
+        transcript="好",
+        eot_score=0.0,
+    )
+
+    assert first.action is Action.HOLD
+    assert first.intent.value == "backchannel"
+    assert decision.action is Action.ROLLBACK
+    assert decision.intent.value == "backchannel"
+    assert decision.rollback_drop_buffered is False
+
+
+def test_runtime_deadline_ambiguous_single_char_ack_waits_for_more_speech() -> None:
+    runtime = TurnPolicyRuntime(TurnPolicyConfig())
+
+    first = runtime.decide_from_transcript(
+        "是",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.deadline_decision(
+        True,
+        has_transcript=True,
+        transcript="是",
+        eot_score=0.0,
+    )
+
+    assert first.action is Action.HOLD
+    assert first.intent.value == "backchannel"
+    assert decision.action is Action.HOLD
+    assert decision.reason.startswith("deadline_wait_for_more_transcript")
+
+
+def test_runtime_deadline_stable_topic_prefix_cancels_as_redirect() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    first = runtime.decide_from_transcript(
+        "换个话",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.deadline_decision(
+        True,
+        has_transcript=True,
+        transcript="换个话",
+        eot_score=0.0,
+    )
+
+    assert first.action is Action.HOLD
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.topic_switch_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
 def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 

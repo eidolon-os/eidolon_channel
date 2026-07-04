@@ -134,6 +134,7 @@ class InterruptPolicyConfig:
     min_normal_interim_cjk_chars: int = 3
     latin_artifact_hold_max_chars: int = 4
     hard_stop_prefix_min_cjk_chars: int = 2
+    redirect_prefix_min_cjk_chars: int = 3
     repeated_noise_min_chars: int = 2
     repeated_noise_max_chars: int = 6
     weak_signal_followup_hold_ms: int = 1500

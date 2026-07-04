@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import statistics
+import time
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -313,8 +314,8 @@ async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.
     local_participant = AsyncMock()
     events: list[dict] = []
 
-    async def fake_wait_for_agent_speaking(*_args, **_kwargs) -> None:
-        return None
+    async def fake_wait_for_agent_speaking(*_args, **_kwargs) -> bool:
+        return True
 
     async def fake_capture_pcm(*_args, **_kwargs) -> int:
         return 200
@@ -344,6 +345,48 @@ async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.
     assert payloads[-1]["input_mode"] == "ptt"
     assert payloads[-1]["ptt"] is False
     assert payloads[-1]["mic_muted"] is True
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_agent_speaking_step_fails_fast_when_no_agent_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmark import livekit_room_runner as runner
+
+    suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
+    case = {
+        item.case_id: item
+        for item in suite.cases
+    }["fd_explicit_ptt_preempts_without_speech_001"]
+    local_participant = AsyncMock()
+    events: list[dict] = []
+
+    async def fake_wait_for_agent_speaking(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_capture_pcm(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
+    monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
+    monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
+    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+
+    with pytest.raises(RuntimeError, match="active agent audio"):
+        await runner._feed_case_audio(
+            object(),
+            case=case,
+            root=Path("."),
+            events=events,
+            started=0.0,
+            state=object(),
+            options=LiveKitRoomOptions(agent_speaking_wait_sec=0.01),
+            local_participant=local_participant,
+        )
+
+    assert any(event["type"] == "agent_speaking_wait_timeout" for event in events)
+    assert all(event["type"] != "user_audio_started" for event in events)
+    local_participant.publish_data.assert_not_awaited()
 
 
 def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> None:
@@ -1205,6 +1248,30 @@ def test_livekit_room_state_marks_agent_connected() -> None:
     state.mark("participant_connected_at")
 
     assert state.agent_connected.is_set()
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_wait_for_agent_speaking_requires_audio_after_previous_user_step() -> None:
+    from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_speaking
+
+    state = _RoomCaseState(started=0.0, events=[])
+    state.last_agent_audio_monotonic = time.monotonic()
+    state.agent_audio_frame_timestamps.append(100)
+
+    assert await _wait_for_agent_speaking(
+        state,
+        timeout_sec=0.01,
+        after_elapsed_ms=200,
+    ) is False
+
+    state.agent_audio_frame_timestamps.append(240)
+    state.last_agent_audio_monotonic = time.monotonic()
+
+    assert await _wait_for_agent_speaking(
+        state,
+        timeout_sec=0.01,
+        after_elapsed_ms=200,
+    ) is True
 
 
 def test_livekit_room_retries_only_pre_audio_infrastructure_failures() -> None:

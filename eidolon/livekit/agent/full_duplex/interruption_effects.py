@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.output import OutputDuckingController
+from eidolon.livekit.agent.output import DuckingStats, OutputDuckingController
 from eidolon.livekit.agent.shared.types import PipelineCallbacks
 from eidolon.livekit.agent.session.interruption import SoftInterruptController
 from eidolon.livekit.agent.turn_policy import Decision
@@ -47,6 +47,7 @@ class FullDuplexInterruptionEffects:
         correction_topic_stability_window_ms: Callable[[], int],
         set_interrupt_cancel_suppression: Callable[[bool, float], None],
         soft_interrupt_timeout_sec: Callable[[], float],
+        playback_evidence_active: Callable[[], bool] | None = None,
     ) -> None:
         self._ducking = ducking
         self._callbacks = callbacks
@@ -72,6 +73,7 @@ class FullDuplexInterruptionEffects:
         )
         self._set_interrupt_cancel_suppression = set_interrupt_cancel_suppression
         self._soft_interrupt_timeout_sec = soft_interrupt_timeout_sec
+        self._playback_evidence_active = playback_evidence_active or (lambda: False)
         self._soft_interrupt = SoftInterruptController(
             timeout_sec=self._soft_interrupt_timeout_sec(),
             on_timeout=lambda: self.interrupt_current_turn(),
@@ -122,7 +124,7 @@ class FullDuplexInterruptionEffects:
             STABLE_SIGNAL_WAIT_REASON_PREFIX
         ):
             return
-        if not self._ducking.is_suspended:
+        if not self._interrupt_evidence_active():
             return
         if not transcript.strip():
             return
@@ -148,7 +150,7 @@ class FullDuplexInterruptionEffects:
         current_task = asyncio.current_task()
         try:
             await asyncio.sleep(timeout_sec)
-            if not self._ducking.is_suspended:
+            if not self._interrupt_evidence_active():
                 return
             latest = (self._get_latest_asr_text() or transcript).strip()
             if not latest:
@@ -170,10 +172,13 @@ class FullDuplexInterruptionEffects:
             task.cancel()
         self._stable_signal_timer = None
 
+    def _interrupt_evidence_active(self) -> bool:
+        return bool(self._ducking.is_suspended) or bool(self._playback_evidence_active())
+
     def cancel_and_interrupt(self, *, force: bool = False) -> None:
         """Confirm an interruption by dropping buffered output and cancelling TTS."""
 
-        if self._ducking.is_cancelled:
+        if self._ducking.is_cancelled and not self._playback_evidence_active():
             logger.debug(
                 "[FullDuplexInterruptionEffects] duplicate duck cancel ignored; "
                 "output already CANCELLED"
@@ -191,7 +196,11 @@ class FullDuplexInterruptionEffects:
         post_speech_transcript = (
             orchestrator.current_transcript if commit_post_speech_candidate else ""
         )
-        stats = self._ducking.stats()
+        stats = (
+            self._ducking.stats()
+            if bool(getattr(self._ducking, "is_suspended", True))
+            else DuckingStats()
+        )
         logger.info(
             "[FullDuplexInterruptionEffects] duck resolved reason=eot_cancel "
             "action=cancel suspend_ms=%.0f discarded=%d frames (%.3fs)",
@@ -219,7 +228,7 @@ class FullDuplexInterruptionEffects:
                 buffered_sec=stats.buffered_sec,
                 drop_buffered=True,
             )
-            timeline.mark("interrupt_resolved_at")
+            timeline.mark_interrupt_resolved("cancel")
             timeline.set_attr("cancel_reason", "eot_cancel")
 
         self._set_interrupt_cancel_suppression(
@@ -279,7 +288,7 @@ class FullDuplexInterruptionEffects:
                 buffered_sec=stats.buffered_sec,
                 drop_buffered=drop_buffered,
             )
-            timeline.mark("interrupt_resolved_at")
+            timeline.mark_interrupt_resolved("rollback")
             timeline.set_attr("interrupt_action", "rollback")
             timeline.set_attr("rollback_drop_buffered", drop_buffered)
             timeline.set_attr("rollback_reason", reason)

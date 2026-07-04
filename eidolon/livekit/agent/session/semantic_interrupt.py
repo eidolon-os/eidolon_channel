@@ -184,7 +184,7 @@ class SemanticInterruptHandler:
             )
             timeline.set_attr("turn_control", metadata)
         if timeline is not None:
-            timeline.mark("interrupt_resolved_at")
+            timeline.mark_interrupt_resolved("cancel")
             timeline.set_attr("cancel_reason", "strong_intent_cancel")
         self._interrupt_current_turn()
 
@@ -293,6 +293,8 @@ class SemanticInterruptHandler:
                     transcript_preview=text[:120],
                     vad_active=vad_active,
                 )
+                timeline.mark_interrupt_resolved("cancel")
+                timeline.set_attr("cancel_reason", "fallback_eot_hard_score")
             self._interrupt_current_turn()
             return
 

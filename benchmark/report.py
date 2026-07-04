@@ -38,12 +38,20 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "首次转写 -> cancel/rollback 完成",
     ),
     (
+        "timeline_interrupt_first_transcript_to_cancel_resolved_ms",
+        "首次转写 -> cancel 完成",
+    ),
+    (
         "timeline_decision_hold_recheck_ms",
         "策略 HOLD -> 下次 recheck 预算",
     ),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
         "直接意图通过 -> cancel 完成",
+    ),
+    (
+        "timeline_interrupt_intent_admitted_to_cancel_resolved_ms",
+        "直接意图通过 -> cancel 完成(精确)",
     ),
     (
         "timeline_interrupt_started_to_resolved_ms",
@@ -53,12 +61,28 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_interrupt_speech_to_resolved_ms",
         "VAD 起声 -> 完成",
     ),
+    (
+        "timeline_interrupt_speech_to_cancel_resolved_ms",
+        "VAD 起声 -> cancel 完成",
+    ),
+    (
+        "timeline_interrupt_speech_to_rollback_resolved_ms",
+        "VAD 起声 -> rollback 完成",
+    ),
 )
 
 CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ("elapsed_ms", "用例总耗时"),
     ("interrupt_decision_ms", "策略决策耗时"),
     ("timeline_vad_start_to_interrupt_resolved", "VAD 起声 -> 打断完成"),
+    (
+        "timeline_vad_start_to_interrupt_cancel_resolved",
+        "VAD 起声 -> cancel 完成",
+    ),
+    (
+        "timeline_vad_start_to_interrupt_rollback_resolved",
+        "VAD 起声 -> rollback 完成",
+    ),
     ("timeline_interrupt_speech_to_started_ms", "VAD 起声 -> duck/手动打断开始"),
     ("timeline_interrupt_speech_to_first_transcript_ms", "VAD 起声 -> 首次转写"),
     ("timeline_stt_speech_to_actionable_transcript_ms", "VAD 起声 -> 首个可行动转写"),
@@ -75,12 +99,20 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "首次转写 -> cancel/rollback 完成",
     ),
     (
+        "timeline_interrupt_first_transcript_to_cancel_resolved_ms",
+        "首次转写 -> cancel 完成",
+    ),
+    (
         "timeline_decision_hold_recheck_ms",
         "策略 HOLD -> 下次 recheck 预算",
     ),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
         "直接意图通过 -> cancel 完成",
+    ),
+    (
+        "timeline_interrupt_intent_admitted_to_cancel_resolved_ms",
+        "直接意图通过 -> cancel 完成(精确)",
     ),
     ("timeline_transcript_admission_event_count", "transcript admission 事件数"),
     ("timeline_transcript_admission_last_reason", "transcript admission 最后原因"),
@@ -97,6 +129,11 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ("timeline_semantic_gate_last_preview", "semantic gate 最后文本"),
     ("timeline_semantic_gate_blocked_chain", "semantic gate 阻断链"),
     ("timeline_interrupt_speech_to_resolved_ms", "VAD 起声 -> 完成"),
+    ("timeline_interrupt_speech_to_cancel_resolved_ms", "VAD 起声 -> cancel 完成"),
+    (
+        "timeline_interrupt_speech_to_rollback_resolved_ms",
+        "VAD 起声 -> rollback 完成",
+    ),
     ("timeline_record_count", "timeline 记录数"),
     ("real_call_verified", "真实调用校验"),
     ("user_done_to_agent_audio_after_user_done_ms", "用户音频结束 -> 下一段 agent 音频"),
@@ -534,9 +571,16 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
     intent = str(metrics.get("timeline_intents") or metrics.get("actual_intent") or "")
     if "cancel" in action:
         total = _fmt_metric_value(
-            metrics.get("timeline_vad_start_to_interrupt_resolved")
-            or metrics.get("timeline_interrupt_speech_to_resolved_ms")
-            or metrics.get("interrupt_decision_ms")
+            _first_metric(
+                metrics,
+                (
+                    "timeline_vad_start_to_interrupt_cancel_resolved",
+                    "timeline_interrupt_speech_to_cancel_resolved_ms",
+                    "timeline_vad_start_to_interrupt_resolved",
+                    "timeline_interrupt_speech_to_resolved_ms",
+                    "interrupt_decision_ms",
+                ),
+            )
         )
         first_transcript = metrics.get("timeline_interrupt_speech_to_first_transcript_ms")
         actionable_transcript = metrics.get(
@@ -546,8 +590,12 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
             "timeline_stt_first_transcript_to_actionable_transcript_ms"
         )
         hold_recheck = metrics.get("timeline_decision_hold_recheck_ms")
-        after_transcript = metrics.get(
-            "timeline_interrupt_first_transcript_to_resolved_ms"
+        after_transcript = _first_metric(
+            metrics,
+            (
+                "timeline_interrupt_first_transcript_to_cancel_resolved_ms",
+                "timeline_interrupt_first_transcript_to_resolved_ms",
+            ),
         )
         if (
             first_transcript is not None
@@ -580,13 +628,28 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
         return f"该用例完成 `{intent or 'unknown'}` 打断，总耗时约 {total}。"
     if "rollback" in action:
         total = _fmt_metric_value(
-            metrics.get("timeline_vad_start_to_interrupt_resolved")
-            or metrics.get("timeline_interrupt_speech_to_resolved_ms")
+            _first_metric(
+                metrics,
+                (
+                    "timeline_vad_start_to_interrupt_rollback_resolved",
+                    "timeline_interrupt_speech_to_rollback_resolved_ms",
+                    "timeline_vad_start_to_interrupt_resolved",
+                    "timeline_interrupt_speech_to_resolved_ms",
+                ),
+            )
         )
         return f"该用例被识别为短反馈/噪声路径，执行 rollback，完成耗时约 {total}。"
     if metrics.get("real_call_verified") is True:
         return "该用例通过真实调用校验，且未触发取消路径。"
     return ""
+
+
+def _first_metric(metrics: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = metrics.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _mapping(value: Any) -> dict[str, Any]:

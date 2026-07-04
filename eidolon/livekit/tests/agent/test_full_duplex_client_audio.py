@@ -69,6 +69,22 @@ def test_fresh_client_playback_counts_as_active_output() -> None:
     ]
 
 
+def test_fresh_client_playback_counts_even_after_duck_cancelled() -> None:
+    room_data = RoomDataHandler(get_timeline=lambda: None)
+    room_data.client_audio_states["dev1"] = ClientAudioState(
+        participant_identity="dev1",
+        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
+        received_at=time.monotonic(),
+    )
+    view = _view(
+        room_data=room_data,
+        pipeline_state=PipelineState.IDLE,
+        ducking=SimpleNamespace(is_cancelled=True, is_suspended=False),
+    )
+
+    assert view.agent_output_active_for_interrupts(participant_identity="dev1") is True
+
+
 class _FakeRoom:
     def __init__(self) -> None:
         self._handlers: dict[str, list] = {}

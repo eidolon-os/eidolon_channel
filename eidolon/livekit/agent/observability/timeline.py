@@ -45,6 +45,8 @@ TIMELINE_FIELDS = (
     "interrupt_started_at",
     "interrupt_intent_admitted_at",
     "interrupt_resolved_at",
+    "interrupt_cancel_resolved_at",
+    "interrupt_rollback_resolved_at",
     "idle_timeout_triggered_at",
 )
 
@@ -208,6 +210,20 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         start="speech_started_at",
         end="interrupt_resolved_at",
     ),
+    ProviderLatencySegment(
+        name="interrupt_cancel_resolution",
+        label="Interrupt: VAD start -> cancel resolved",
+        stage="interrupt",
+        start="speech_started_at",
+        end="interrupt_cancel_resolved_at",
+    ),
+    ProviderLatencySegment(
+        name="interrupt_rollback_resolution",
+        label="Interrupt: VAD start -> rollback resolved",
+        stage="interrupt",
+        start="speech_started_at",
+        end="interrupt_rollback_resolved_at",
+    ),
 )
 
 
@@ -229,6 +245,21 @@ class TurnTimeline:
         if name not in TIMELINE_FIELDS:
             raise ValueError(f"unknown timeline mark {name!r}")
         self.timestamps.setdefault(name, timestamp)
+
+    def mark_interrupt_resolved(
+        self,
+        action: str,
+        *,
+        timestamp: float | None = None,
+    ) -> None:
+        """Mark generic and action-specific interruption resolution times."""
+
+        marker = self.mark if timestamp is None else lambda name: self.mark_at(name, timestamp)
+        marker("interrupt_resolved_at")
+        if action == "cancel":
+            marker("interrupt_cancel_resolved_at")
+        elif action in {"rollback", "resume", "unduck"}:
+            marker("interrupt_rollback_resolved_at")
 
     def mark_after(self, name: str, anchor: str, offset_sec: float) -> None:
         if anchor not in self.timestamps:
@@ -447,17 +478,41 @@ class TurnTimeline:
                 ("transcript_interim_first_at", "transcript_final_at"),
                 "interrupt_resolved_at",
             ),
+            "interrupt_first_transcript_to_cancel_resolved_ms": (
+                self.duration_from_first_ms(
+                    ("transcript_interim_first_at", "transcript_final_at"),
+                    "interrupt_cancel_resolved_at",
+                )
+            ),
             "interrupt_actionable_transcript_to_resolved_ms": self.duration_ms(
                 "transcript_actionable_first_at", "interrupt_resolved_at"
+            ),
+            "interrupt_actionable_transcript_to_cancel_resolved_ms": self.duration_ms(
+                "transcript_actionable_first_at", "interrupt_cancel_resolved_at"
             ),
             "interrupt_intent_admitted_to_resolved_ms": self.duration_ms(
                 "interrupt_intent_admitted_at", "interrupt_resolved_at"
             ),
+            "interrupt_intent_admitted_to_cancel_resolved_ms": self.duration_ms(
+                "interrupt_intent_admitted_at", "interrupt_cancel_resolved_at"
+            ),
             "interrupt_started_to_resolved_ms": self.duration_ms(
                 "interrupt_started_at", "interrupt_resolved_at"
             ),
+            "interrupt_started_to_cancel_resolved_ms": self.duration_ms(
+                "interrupt_started_at", "interrupt_cancel_resolved_at"
+            ),
+            "interrupt_started_to_rollback_resolved_ms": self.duration_ms(
+                "interrupt_started_at", "interrupt_rollback_resolved_at"
+            ),
             "interrupt_speech_to_resolved_ms": self.duration_ms(
                 "speech_started_at", "interrupt_resolved_at"
+            ),
+            "interrupt_speech_to_cancel_resolved_ms": self.duration_ms(
+                "speech_started_at", "interrupt_cancel_resolved_at"
+            ),
+            "interrupt_speech_to_rollback_resolved_ms": self.duration_ms(
+                "speech_started_at", "interrupt_rollback_resolved_at"
             ),
         }
 
@@ -532,11 +587,29 @@ class TurnTimeline:
                     ("transcript_interim_first_at", "transcript_final_at"),
                     "interrupt_resolved_at",
                 ),
+                "interrupt_first_transcript_to_cancel_resolved": (
+                    self.duration_from_first_ms(
+                        ("transcript_interim_first_at", "transcript_final_at"),
+                        "interrupt_cancel_resolved_at",
+                    )
+                ),
                 "interrupt_actionable_transcript_to_resolved": self.duration_ms(
                     "transcript_actionable_first_at", "interrupt_resolved_at"
                 ),
+                "interrupt_actionable_transcript_to_cancel_resolved": self.duration_ms(
+                    "transcript_actionable_first_at", "interrupt_cancel_resolved_at"
+                ),
                 "interrupt_intent_admitted_to_resolved": self.duration_ms(
                     "interrupt_intent_admitted_at", "interrupt_resolved_at"
+                ),
+                "interrupt_intent_admitted_to_cancel_resolved": self.duration_ms(
+                    "interrupt_intent_admitted_at", "interrupt_cancel_resolved_at"
+                ),
+                "vad_start_to_interrupt_cancel_resolved": self.duration_ms(
+                    "speech_started_at", "interrupt_cancel_resolved_at"
+                ),
+                "vad_start_to_interrupt_rollback_resolved": self.duration_ms(
+                    "speech_started_at", "interrupt_rollback_resolved_at"
                 ),
             },
         }

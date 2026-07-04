@@ -78,7 +78,7 @@ class ExplicitClientPreemptLedger:
         timeline.set_attr("explicit_client_interrupt", dict(state_attr))
         timeline.mark_at("interrupt_started_at", received_at)
         if resolved_at is not None:
-            timeline.mark_at("interrupt_resolved_at", resolved_at)
+            timeline.mark_interrupt_resolved("cancel", timestamp=resolved_at)
             timeline.set_attr("cancel_reason", "explicit_client_ptt")
         decision = self.explicit_preempt_decision()
         self._get_decision_effects().record_decision_attrs(

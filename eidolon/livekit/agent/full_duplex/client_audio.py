@@ -61,12 +61,18 @@ class FullDuplexClientAudioStateView:
         self._ensure_ducking()
         ducking = self._get_ducking()
         if bool(getattr(ducking, "is_cancelled", False)):
-            return False
+            return self._fresh_client_playback_active(participant_identity)
         if self._get_pipeline_state() == PipelineState.SPEAKING or bool(
             getattr(ducking, "is_suspended", False)
         ):
             return True
 
+        return self._fresh_client_playback_active(participant_identity)
+
+    def _fresh_client_playback_active(
+        self,
+        participant_identity: str | None,
+    ) -> bool:
         self._ensure_room_data()
         room_data = self._get_room_data()
         states = room_data.client_audio_states

@@ -123,6 +123,31 @@ def test_timeline_interrupt_latency_breakdown() -> None:
     assert round(durations["interrupt_first_transcript_to_resolved"]) == 110
 
 
+def test_timeline_keeps_cancel_resolution_distinct_from_rollback() -> None:
+    timeline = TurnTimeline("turn-rollback-then-cancel")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("interrupt_started_at", 10.02)
+    timeline.mark_interrupt_resolved("rollback", timestamp=10.45)
+    timeline.mark_at("transcript_actionable_first_at", 11.2)
+    timeline.mark_interrupt_resolved("cancel", timestamp=11.5)
+
+    snap = timeline.snapshot()
+    provider_latency = snap["attrs"]["provider_latency_ms"]
+    durations = snap["durations_ms"]
+
+    assert snap["timestamps"]["interrupt_resolved_at"] == 10.45
+    assert snap["timestamps"]["interrupt_rollback_resolved_at"] == 10.45
+    assert snap["timestamps"]["interrupt_cancel_resolved_at"] == 11.5
+    assert round(provider_latency["interrupt_speech_to_resolved_ms"]) == 450
+    assert round(provider_latency["interrupt_speech_to_rollback_resolved_ms"]) == 450
+    assert round(provider_latency["interrupt_speech_to_cancel_resolved_ms"]) == 1500
+    assert round(
+        provider_latency["interrupt_actionable_transcript_to_cancel_resolved_ms"]
+    ) == 300
+    assert round(durations["vad_start_to_interrupt_rollback_resolved"]) == 450
+    assert round(durations["vad_start_to_interrupt_cancel_resolved"]) == 1500
+
+
 def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
     timeline = TurnTimeline("turn-noise")
     timeline.mark_at("speech_started_at", 10.0)
@@ -869,6 +894,61 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
 
     callbacks.on_duck_resolved.assert_not_called()
     session.interrupt.assert_not_called()
+
+
+def test_streaming_pipeline_cancels_when_playback_evidence_outlives_duck_state() -> None:
+    class CancelledDucking:
+        is_cancelled = True
+        is_suspended = False
+
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def cancel_output(self) -> None:
+            self.cancelled = True
+
+    callbacks = MagicMock()
+    session = MagicMock()
+    ducking = CancelledDucking()
+    timeline = TurnTimeline("turn-playback-evidence-cancel")
+    orchestrator = SimpleNamespace(
+        should_collect_after_confirmed_cancel=MagicMock(return_value=False),
+        should_commit_after_confirmed_cancel=MagicMock(return_value=False),
+        current_transcript="换个话题",
+        resolve=MagicMock(),
+    )
+    publish_playback_stop = MagicMock()
+    effects = FullDuplexInterruptionEffects(
+        ducking=ducking,
+        callbacks=callbacks,
+        get_session=lambda: session,
+        allow_interruptions=lambda: True,
+        get_eot_model=lambda: MagicMock(),
+        get_timeline=lambda: timeline,
+        get_latest_asr_text=lambda: "换个话题",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=lambda: orchestrator,
+        publish_playback_stop=publish_playback_stop,
+        snapshot_interrupted_context=MagicMock(),
+        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
+        reject_post_speech_interruption_candidate=MagicMock(),
+        cancel_residual_commit_suppress_sec=lambda: 0.0,
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=MagicMock(),
+        soft_interrupt_timeout_sec=lambda: 0.5,
+        playback_evidence_active=lambda: True,
+    )
+
+    effects.cancel_and_interrupt()
+
+    publish_playback_stop.assert_called_once_with("interrupt_cancel")
+    assert ducking.cancelled is True
+    callbacks.on_duck_resolved.assert_called_once_with("cancel")
+    orchestrator.resolve.assert_called_once_with(action="cancel", reason="eot_cancel")
+    session.interrupt.assert_called_once_with(force=False)
+    assert "interrupt_cancel_resolved_at" in timeline.timestamps
+    assert timeline.attrs["duck_events"][-1]["event"] == "duck_cancelled"
 
 
 def test_cancel_collects_confirmed_semantic_turn_without_resolving_candidate() -> None:

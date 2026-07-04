@@ -442,6 +442,9 @@ class StreamingPipeline(BasePipeline):
             ),
             set_interrupt_cancel_suppression=self._set_interrupt_cancel_suppression,
             soft_interrupt_timeout_sec=lambda: self._soft_interrupt_timeout,
+            playback_evidence_active=lambda: (
+                self._ensure_client_audio_state_view().agent_output_active_for_interrupts()
+            ),
         )
 
     def _ensure_interruption_effects(self) -> FullDuplexInterruptionEffects:
@@ -1078,7 +1081,7 @@ class StreamingPipeline(BasePipeline):
         timeline = getattr(self, "_explicit_preempt_control_timeline", None)
         if timeline is None:
             return
-        timeline.mark_at("interrupt_resolved_at", resolved_at)
+        timeline.mark_interrupt_resolved("cancel", timestamp=resolved_at)
         timeline.set_attr("cancel_reason", "explicit_client_ptt")
         self._flush_turn_timeline(
             timeline,

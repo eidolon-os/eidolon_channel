@@ -2570,6 +2570,49 @@ def test_livekit_room_timeline_expectations_fail_slow_tier1_after_start(
     )
 
 
+def test_livekit_room_timeline_expectations_use_cancel_specific_resolution(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/core.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="topic_switch_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-topic_switch_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"intent":"topic_switch","topic_switch_hint":true}},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.0,'
+            '"interrupt_resolved_at":10.1,'
+            '"interrupt_rollback_resolved_at":10.1,'
+            '"interrupt_cancel_resolved_at":10.4}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any(
+        "resolution-after-start exceeded 250" in error
+        for error in run.cases[0].errors
+    )
+
+
 def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
     tmp_path,
 ) -> None:

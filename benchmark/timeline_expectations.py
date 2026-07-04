@@ -228,7 +228,7 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         errors.append("timeline expected correction_hint=True")
 
     if expected.max_interrupt_decision_ms is not None:
-        durations = _interrupt_decision_durations_ms(records)
+        durations = _interrupt_decision_durations_ms(records, expected.action)
         if durations:
             slow = [
                 round(duration, 1)
@@ -244,7 +244,7 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
             errors.append("timeline missing interrupt decision duration")
 
     if expected.max_interrupt_resolution_after_started_ms is not None:
-        durations = _interrupt_resolution_after_started_ms(records)
+        durations = _interrupt_resolution_after_started_ms(records, expected.action)
         if durations:
             slow = [
                 round(duration, 1)
@@ -541,25 +541,37 @@ def _canonical_contains(records: list[dict[str, Any]], needle: str) -> bool:
 
 def _is_resolved_interrupt(record: dict[str, Any]) -> bool:
     timestamps = record.get("timestamps")
-    if isinstance(timestamps, dict) and isinstance(
-        timestamps.get("interrupt_resolved_at"),
-        (int, float),
-    ):
-        return True
+    if isinstance(timestamps, dict):
+        for key in (
+            "interrupt_resolved_at",
+            "interrupt_cancel_resolved_at",
+            "interrupt_rollback_resolved_at",
+        ):
+            if isinstance(timestamps.get(key), (int, float)):
+                return True
     durations = record.get("durations_ms")
-    if isinstance(durations, dict) and isinstance(
-        durations.get("vad_start_to_interrupt_resolved"),
-        (int, float),
-    ):
-        return True
+    if isinstance(durations, dict):
+        for key in (
+            "vad_start_to_interrupt_resolved",
+            "vad_start_to_interrupt_cancel_resolved",
+            "vad_start_to_interrupt_rollback_resolved",
+        ):
+            if isinstance(durations.get(key), (int, float)):
+                return True
     attrs = record.get("attrs")
     if not isinstance(attrs, dict):
         return False
     provider_latency = attrs.get("provider_latency_ms")
-    return isinstance(provider_latency, dict) and isinstance(
-        provider_latency.get("interrupt_speech_to_resolved_ms"),
-        (int, float),
-    )
+    if not isinstance(provider_latency, dict):
+        return False
+    for key in (
+        "interrupt_speech_to_resolved_ms",
+        "interrupt_speech_to_cancel_resolved_ms",
+        "interrupt_speech_to_rollback_resolved_ms",
+    ):
+        if isinstance(provider_latency.get(key), (int, float)):
+            return True
+    return False
 
 
 def _attention_actions(records: list[dict[str, Any]]) -> list[str]:
@@ -591,16 +603,13 @@ def _any_decision_flag(records: list[dict[str, Any]], key: str) -> bool:
     return False
 
 
-def _interrupt_decision_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+def _interrupt_decision_durations_ms(
+    records: list[dict[str, Any]],
+    expected_action: str = "",
+) -> list[float]:
     durations: list[float] = []
     for record in records:
-        duration = _number(
-            (
-                record.get("durations_ms")
-                if isinstance(record.get("durations_ms"), dict)
-                else {}
-            ).get("vad_start_to_interrupt_resolved")
-        )
+        duration = _speech_start_to_action_resolved_ms(record, expected_action)
         if duration is None:
             timestamps = (
                 record.get("timestamps")
@@ -608,7 +617,10 @@ def _interrupt_decision_durations_ms(records: list[dict[str, Any]]) -> list[floa
                 else {}
             )
             start = _number(timestamps.get("speech_started_at"))
-            end = _number(timestamps.get("interrupt_resolved_at"))
+            end = _first_number(
+                timestamps.get(key)
+                for key in _resolved_timestamp_keys(expected_action)
+            )
             if end is None:
                 end = _number(timestamps.get("turn_committed_at"))
             if start is not None and end is not None:
@@ -638,7 +650,10 @@ def _speech_stop_to_commit_durations_ms(records: list[dict[str, Any]]) -> list[f
     return durations
 
 
-def _interrupt_resolution_after_started_ms(records: list[dict[str, Any]]) -> list[float]:
+def _interrupt_resolution_after_started_ms(
+    records: list[dict[str, Any]],
+    expected_action: str = "",
+) -> list[float]:
     durations: list[float] = []
     for record in records:
         timestamps = (
@@ -649,7 +664,10 @@ def _interrupt_resolution_after_started_ms(records: list[dict[str, Any]]) -> lis
         start = _number(timestamps.get("interrupt_intent_admitted_at"))
         if start is None:
             start = _number(timestamps.get("interrupt_started_at"))
-        end = _number(timestamps.get("interrupt_resolved_at"))
+        end = _first_number(
+            timestamps.get(key)
+            for key in _resolved_timestamp_keys(expected_action)
+        )
         if start is not None and end is not None:
             durations.append(max(0.0, (end - start) * 1000.0))
     return durations
@@ -675,7 +693,7 @@ def _speech_start_to_cancel_durations_ms(records: list[dict[str, Any]]) -> list[
     for record in records:
         if not _record_is_cancel(record):
             continue
-        duration = _speech_start_to_resolved_ms(record)
+        duration = _speech_start_to_action_resolved_ms(record, "cancel")
         if duration is not None:
             durations.append(duration)
     return durations
@@ -686,17 +704,67 @@ def _speech_start_to_resume_durations_ms(records: list[dict[str, Any]]) -> list[
     for record in records:
         if not _record_is_resume(record):
             continue
-        duration = _speech_start_to_resolved_ms(record)
+        duration = _speech_start_to_action_resolved_ms(record, "rollback")
         if duration is not None:
             durations.append(duration)
     return durations
 
 
-def _speech_start_to_resolved_ms(record: dict[str, Any]) -> float | None:
-    duration = _number(_mapping(record.get("durations_ms")).get("vad_start_to_interrupt_resolved"))
-    if duration is not None:
-        return max(0.0, duration)
-    return _timestamp_delta_ms(record, "speech_started_at", "interrupt_resolved_at")
+def _speech_start_to_action_resolved_ms(
+    record: dict[str, Any],
+    action: str = "",
+) -> float | None:
+    provider_latency = _mapping(_mapping(record.get("attrs")).get("provider_latency_ms"))
+    for provider_key in _resolved_provider_latency_keys(action):
+        duration = _number(provider_latency.get(provider_key))
+        if duration is not None:
+            return max(0.0, duration)
+    durations = _mapping(record.get("durations_ms"))
+    for duration_key in _resolved_duration_keys(action):
+        duration = _number(durations.get(duration_key))
+        if duration is not None:
+            return max(0.0, duration)
+    for timestamp_key in _resolved_timestamp_keys(action):
+        duration = _timestamp_delta_ms(record, "speech_started_at", timestamp_key)
+        if duration is not None:
+            return duration
+    return None
+
+
+def _resolved_provider_latency_keys(action: str) -> tuple[str, ...]:
+    if action == "cancel":
+        return (
+            "interrupt_speech_to_cancel_resolved_ms",
+            "interrupt_speech_to_resolved_ms",
+        )
+    if action in {"rollback", "resume"}:
+        return (
+            "interrupt_speech_to_rollback_resolved_ms",
+            "interrupt_speech_to_resolved_ms",
+        )
+    return ("interrupt_speech_to_resolved_ms",)
+
+
+def _resolved_duration_keys(action: str) -> tuple[str, ...]:
+    if action == "cancel":
+        return (
+            "vad_start_to_interrupt_cancel_resolved",
+            "vad_start_to_interrupt_resolved",
+        )
+    if action in {"rollback", "resume"}:
+        return (
+            "vad_start_to_interrupt_rollback_resolved",
+            "vad_start_to_interrupt_resolved",
+        )
+    return ("vad_start_to_interrupt_resolved",)
+
+
+def _resolved_timestamp_keys(action: str) -> tuple[str, ...]:
+    if action == "cancel":
+        return ("interrupt_cancel_resolved_at", "interrupt_resolved_at")
+    if action in {"rollback", "resume"}:
+        return ("interrupt_rollback_resolved_at", "interrupt_resolved_at")
+    return ("interrupt_resolved_at",)
 
 
 def _timestamp_delta_ms(
@@ -834,6 +902,22 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
                 "timeline_vad_start_to_interrupt_resolved",
                 [],
             ).append(total_interrupt)
+        cancel_interrupt = _number(
+            durations.get("vad_start_to_interrupt_cancel_resolved")
+        )
+        if cancel_interrupt is not None:
+            samples.setdefault(
+                "timeline_vad_start_to_interrupt_cancel_resolved",
+                [],
+            ).append(cancel_interrupt)
+        rollback_interrupt = _number(
+            durations.get("vad_start_to_interrupt_rollback_resolved")
+        )
+        if rollback_interrupt is not None:
+            samples.setdefault(
+                "timeline_vad_start_to_interrupt_rollback_resolved",
+                [],
+            ).append(rollback_interrupt)
     return {
         key: max(values)
         for key, values in sorted(samples.items())
@@ -979,4 +1063,12 @@ def _number(value: Any) -> float | None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
+    return None
+
+
+def _first_number(values: Any) -> float | None:
+    for value in values:
+        number = _number(value)
+        if number is not None:
+            return number
     return None

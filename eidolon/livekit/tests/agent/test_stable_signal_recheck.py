@@ -20,14 +20,21 @@ class _SuspendedDucking:
     is_cancelled = False
 
 
+class _CancelledDucking:
+    is_suspended = False
+    is_cancelled = True
+
+
 def _effects(
     *,
     latest_asr_text: str,
     semantic_interrupts: SimpleNamespace,
+    ducking: object | None = None,
+    playback_evidence_active: bool = False,
 ) -> FullDuplexInterruptionEffects:
     policy = TurnPolicyConfig()
     return FullDuplexInterruptionEffects(
-        ducking=_SuspendedDucking(),
+        ducking=ducking or _SuspendedDucking(),
         callbacks=MagicMock(),
         get_session=lambda: None,
         allow_interruptions=lambda: True,
@@ -50,6 +57,7 @@ def _effects(
         ),
         set_interrupt_cancel_suppression=MagicMock(),
         soft_interrupt_timeout_sec=lambda: 0.5,
+        playback_evidence_active=lambda: playback_evidence_active,
     )
 
 
@@ -121,6 +129,34 @@ async def test_stable_signal_hold_uses_remaining_recheck_ms() -> None:
     await asyncio.sleep(0.06)
 
     semantic_interrupts.run.assert_called_once_with("换个话", is_final=False)
+    assert effects._stable_signal_timer is None
+
+
+@pytest.mark.asyncio
+async def test_stable_signal_hold_rechecks_with_fresh_playback_evidence() -> None:
+    semantic_interrupts = SimpleNamespace(run=MagicMock())
+    effects = _effects(
+        latest_asr_text="换个话题",
+        semantic_interrupts=semantic_interrupts,
+        ducking=_CancelledDucking(),
+        playback_evidence_active=True,
+    )
+    decision = Decision(
+        action=Action.HOLD,
+        reason="stable_signal_wait intent=topic_switch age_ms=80 window_ms=120",
+        hold_recheck_ms=40,
+    )
+
+    effects.handle_hold_decision(
+        decision,
+        "换个话",
+        eot_score=0.0,
+        vad_active=True,
+    )
+
+    await asyncio.sleep(0.06)
+
+    semantic_interrupts.run.assert_called_once_with("换个话题", is_final=False)
     assert effects._stable_signal_timer is None
 
 

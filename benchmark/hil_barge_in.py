@@ -167,11 +167,11 @@ def _collect_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
         if suspend_ms is not None:
             suspend_samples.append(suspend_ms)
         if _is_cancel(record):
-            cancel_ms = _speech_start_to_resolved_ms(record)
+            cancel_ms = _speech_start_to_resolved_ms(record, action="cancel")
             if cancel_ms is not None:
                 cancel_samples.append(cancel_ms)
         if _is_resume(record):
-            resume_ms = _speech_start_to_resolved_ms(record)
+            resume_ms = _speech_start_to_resolved_ms(record, action="rollback")
             if resume_ms is not None:
                 resume_samples.append(resume_ms)
 
@@ -243,11 +243,43 @@ def _speech_start_to_suspend_ms(record: dict[str, Any]) -> float | None:
     return None
 
 
-def _speech_start_to_resolved_ms(record: dict[str, Any]) -> float | None:
-    duration = _number(_mapping(record.get("durations_ms")).get("vad_start_to_interrupt_resolved"))
-    if duration is not None:
-        return max(0.0, duration)
-    return _timestamp_delta_ms(record, "speech_started_at", "interrupt_resolved_at")
+def _speech_start_to_resolved_ms(
+    record: dict[str, Any],
+    *,
+    action: str = "",
+) -> float | None:
+    durations = _mapping(record.get("durations_ms"))
+    for key in _resolved_duration_keys(action):
+        duration = _number(durations.get(key))
+        if duration is not None:
+            return max(0.0, duration)
+    for key in _resolved_timestamp_keys(action):
+        duration = _timestamp_delta_ms(record, "speech_started_at", key)
+        if duration is not None:
+            return duration
+    return None
+
+
+def _resolved_duration_keys(action: str) -> tuple[str, ...]:
+    if action == "cancel":
+        return (
+            "vad_start_to_interrupt_cancel_resolved",
+            "vad_start_to_interrupt_resolved",
+        )
+    if action in {"rollback", "resume"}:
+        return (
+            "vad_start_to_interrupt_rollback_resolved",
+            "vad_start_to_interrupt_resolved",
+        )
+    return ("vad_start_to_interrupt_resolved",)
+
+
+def _resolved_timestamp_keys(action: str) -> tuple[str, ...]:
+    if action == "cancel":
+        return ("interrupt_cancel_resolved_at", "interrupt_resolved_at")
+    if action in {"rollback", "resume"}:
+        return ("interrupt_rollback_resolved_at", "interrupt_resolved_at")
+    return ("interrupt_resolved_at",)
 
 
 def _timestamp_delta_ms(

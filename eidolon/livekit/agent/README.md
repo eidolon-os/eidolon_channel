@@ -30,16 +30,20 @@ entrypoints; implementation code lives under named boundary packages.
   open-mic VAD/STT/EOT, natural interruption ownership, backchannel/false
   interruption handling, user-state/transcript event normalization,
   user-state/transcript entry routing, VAD speech segment lifecycle, transcript
-  admission/echo gating before turn evidence, accepted transcript evidence
-  recording, semantic interrupt trigger gating, interruption output side effects,
-  voiceprint-gated user-turn completion, framework completed-turn alignment,
-  interrupted context ledger wiring, AgentSession run/start/shutdown lifecycle,
-  output ducking install/arming, `client.audio_state` freshness/playback views,
-  and explicit client preempt handling for deliberate full-duplex controls.
+  admission/echo gating before turn evidence, accepted transcript recording,
+  semantic interrupt trigger gating, interruption output side effects,
+  voiceprint-gated user-turn completion, framework completed-turn gating,
+  interrupted context ledger wiring, AgentSession run/start/shutdown/close
+  lifecycle, output ducking install/arming, `client.audio_state`
+  freshness/playback views, and explicit client preempt handling for deliberate
+  full-duplex controls.
   `StreamingPipeline.run()` and `StreamingPipeline.shutdown()` are the public
   entry points; lifecycle steps such as room teardown and proactive background
-  consumer management live in `full_duplex/lifecycle.py`, while user-turn
-  completion and voiceprint commit gates live in `full_duplex/turn_completion.py`.
+  consumer management live in `full_duplex/lifecycle.py`, accepted transcript
+  side effects live in `full_duplex/transcript_recorder.py`, user-turn
+  completion and voiceprint commit gates live in `full_duplex/turn_completion.py`,
+  and LiveKit completed-turn hook gating lives in
+  `full_duplex/framework_completed_turn.py`.
 - `half_duplex/` contains the half-duplex PTT pipeline: hold-scoped audio
   recording, one-shot STT, PTT control status helpers, and the PTT controller
   that does not consume streaming transcript events or EOT.

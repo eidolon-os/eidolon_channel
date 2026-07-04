@@ -168,9 +168,11 @@ eidolon/livekit/agent/
 
 `full_duplex/transcript_admission.py` 是 full-duplex STT transcript 进入 turn/evidence 逻辑前的入口门禁。当前只拥有两类无副作用裁决：voiceprint ownership 后的 post-turn residual transcript 抑制，以及播放中 agent 自身 TTS echo transcript 抑制。它不负责 EOT、commit、cancel/resume，也不处理 half-duplex PTT。
 
-`full_duplex/transcript_event.py` 是 LiveKit `user_input_transcribed` 事件的归一化边界。`StreamingPipeline` 只在入口把框架事件转成 `FullDuplexTranscriptEvent`，后续 admission、recording、semantic gate 都消费稳定字段，避免 `event.transcript` / `getattr(event, ...)` 散落。
+`full_duplex/transcript_event.py` 是 LiveKit `user_input_transcribed` 事件的归一化边界。`FullDuplexTranscriptHandler` 在入口把框架事件转成 `FullDuplexTranscriptEvent`，后续 admission、recording、semantic gate 都消费稳定字段，避免 `event.transcript` / `getattr(event, ...)` 散落。
 
 `full_duplex/transcript_handler.py` 是 full-duplex STT transcript 的入口路由。它按顺序执行 admission、accepted transcript recording、semantic interrupt gate、attention admission 和 base transcript forward；它不拥有 EOT、commit、cancel/resume 的 terminal decision。
+
+`full_duplex/transcript_recorder.py` 是 accepted STT transcript 副作用 owner。它负责把已接收 transcript 写入 latest ASR、interruption owner、`UserTurnCoordinator`、timeline mark 和 EOT ASR update；它不做 transcript admission、semantic interrupt gate 或 final commit 裁决。
 
 `full_duplex/user_state_event.py` 是 LiveKit `user_state_changed` 事件的归一化边界。`StreamingPipeline` 只消费 `FullDuplexUserStateEvent.old_state/new_state` 与 `started_speaking/stopped_speaking` 判断；VAD start/end 后续的 speech segment lifecycle 交给 `FullDuplexSpeechLifecycle`。
 
@@ -182,7 +184,9 @@ eidolon/livekit/agent/
 
 `full_duplex/output_flow.py` 是 full-duplex output ducking flow owner。它只负责在 `AgentSession.start()` 后安装 `OutputDuckingController`，以及在 attention/VAD speech-start 触发时执行 `duck -> mark interrupt_started -> arm duck deadline`。cancel、rollback、hold、explicit preempt 的 terminal output effect 仍由 `FullDuplexInterruptionEffects` 执行。
 
-`full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、LiveKit framework `on_user_turn_completed` 对齐、canonical user text 发布/清理、session user turn 清理、context-error 一次性告警，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume 或 interrupted context capture 算法。
+`full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、session user turn boundary 调度，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume、LiveKit framework completed-turn hook 细节或 interrupted context capture 算法。
+
+`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的门禁 owner。它负责裁决 framework completed-turn 是否允许进入 LLM、是否等待短句/声纹合并、是否因 active interruption owner 或非语义 backchannel/noise/hard-stop 阻断，并把允许通过的 framework transcript 对齐到 canonical user text。
 
 `full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/injection 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context snapshot/inject 细节。
 

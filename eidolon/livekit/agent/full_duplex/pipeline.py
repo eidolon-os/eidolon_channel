@@ -93,8 +93,8 @@ from .lifecycle import FullDuplexSessionLifecycle
 from .output_flow import FullDuplexOutputFlow
 from .runtime_defaults import ensure_full_duplex_runtime_defaults
 from .transcript_admission import TranscriptAdmissionGate
-from .transcript_event import FullDuplexTranscriptEvent
 from .transcript_handler import FullDuplexTranscriptHandler
+from .transcript_recorder import FullDuplexTranscriptRecorder
 from .turn_handling import (
     build_full_duplex_turn_handling,
     uses_livekit_native_adaptive_interruption,
@@ -649,7 +649,7 @@ class StreamingPipeline(BasePipeline):
     def _build_transcript_handler(self) -> FullDuplexTranscriptHandler:
         return FullDuplexTranscriptHandler(
             admission_gate=self._ensure_transcript_admission_gate,
-            record_accepted_event=self._record_accepted_transcript_event,
+            record_accepted_event=self._ensure_transcript_recorder().record,
             allow_interruptions=lambda: self._allow_interruptions,
             native_adaptive_owner=self._uses_livekit_native_adaptive_interruption,
             agent_output_active=lambda speaker_id: (
@@ -675,6 +675,11 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_transcript_handler"):
             self._transcript_handler = self._build_transcript_handler()
         return self._transcript_handler
+
+    def _ensure_transcript_recorder(self) -> FullDuplexTranscriptRecorder:
+        if not hasattr(self, "_transcript_recorder"):
+            self._transcript_recorder = FullDuplexTranscriptRecorder(self)
+        return self._transcript_recorder
 
     def _build_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
         return FullDuplexSpeechLifecycle(self)
@@ -1029,43 +1034,6 @@ class StreamingPipeline(BasePipeline):
         """Build the LiveKit Agent."""
         return build_full_duplex_agent(self)
 
-    def _on_session_close(self, event: Any) -> None:
-        """Wake run() so shutdown fires immediately on session close.
-
-        The AgentSession emits this event from its ``_aclose_impl`` finalizer
-        (e.g. when ``close_on_disconnect`` triggers after a participant leaves).
-        We capture it here and signal ``_session_closed_event``; ``run()`` is
-        awaiting that event and will proceed to ``shutdown()``.
-
-        Round 8 P2.L8: also clean up the EOT model's per-session
-        UserProfile so long-running daemons don't accumulate state
-        across rooms. Defensive: catch and log — must not block the
-        close path.
-        """
-        reason = getattr(event, "reason", None)
-        error = getattr(event, "error", None)
-        # Captured for _delete_room_on_close → session_end reason (B2): error
-        # close → "error", clean close → "user_left".
-        self._close_reason = reason
-        self._close_error = error
-        logger.info(
-            "[StreamingPipeline] session close event received reason=%s error=%s",
-            reason,
-            error,
-        )
-        try:
-            self._get_eot_model().end_session()
-        except Exception:
-            logger.exception("[StreamingPipeline] eot_model.end_session failed (non-fatal)")
-        duck_metrics = self._ducking.get_metrics()
-        if duck_metrics is not None:
-            logger.info(
-                "[StreamingPipeline] session duck metrics: %s",
-                duck_metrics,
-            )
-        self._append_timeline_debug("session_closed")
-        self._session_closed_event.set()
-
     # ------------------------------------------------------------------
     # Idle-disconnect watchdog
     # ------------------------------------------------------------------
@@ -1128,13 +1096,6 @@ class StreamingPipeline(BasePipeline):
             payload=payload,
         )
 
-    def _agent_state_to_companion_ui_state(self, state: str) -> str:
-        if state == "thinking":
-            return "thinking"
-        if state == "speaking":
-            return "speaking"
-        return "listening"
-
     def _on_agent_state_changed(self, event: Any) -> None:
         """Forward agent state changes through BasePipeline and session effects."""
         self._ensure_runtime_defaults()
@@ -1143,9 +1104,8 @@ class StreamingPipeline(BasePipeline):
         self._agent_state_effects.handle(event)
         new = getattr(event, "new_state", "")
         if new:
-            self._publish_companion_ui_state(
-                self._agent_state_to_companion_ui_state(new),
-                f"agent_state:{new}",
+            self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(
+                new
             )
 
     def _on_user_state_changed(self, event: Any) -> None:
@@ -1154,44 +1114,6 @@ class StreamingPipeline(BasePipeline):
             self._ensure_user_state_handler().handle(event)
         except Exception:
             logger.exception("[StreamingPipeline] error in _on_user_state_changed")
-
-    def _record_accepted_transcript_event(
-        self,
-        transcript_event: FullDuplexTranscriptEvent,
-    ) -> None:
-        if not transcript_event.has_transcript:
-            return
-
-        # Real recognized speech (interim or final) — keeps the session
-        # alive. Empty/noise transcripts deliberately don't, so a silent
-        # room still trips the idle watchdog.
-        self._mark_activity()
-        self._latest_asr_text = transcript_event.transcript
-        orchestrator = getattr(self, "_interruption_orchestrator", None)
-        if orchestrator is not None and not self._uses_livekit_native_adaptive_interruption():
-            orchestrator.note_transcript(
-                transcript_event.transcript,
-                is_final=transcript_event.is_final,
-            )
-        self._ensure_user_turn_coordinator()
-        self._user_turns.add_transcript(
-            transcript_event.transcript,
-            is_final=transcript_event.is_final,
-        )
-        if self._timeline is not None:
-            self._timeline.mark(transcript_event.timeline_mark)
-        # Round 8 R8.5.c: drive phase tracking + ONNX-debounced
-        # scoring on every ASR event (interim + final). The 200ms
-        # debounce inside update_asr coexists with EotManager's 50ms
-        # cache — both contribute to keeping CPU bounded under the
-        # ~100ms FunASR interim cadence.
-        try:
-            self._get_eot_model().update_asr(
-                transcript_event.transcript,
-                is_final=transcript_event.is_final,
-            )
-        except Exception:
-            logger.exception("[StreamingPipeline] eot_model.update_asr failed")
 
     def _on_user_transcribed(self, event: Any) -> None:
         """Handle user transcription events.

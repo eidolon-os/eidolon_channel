@@ -115,6 +115,15 @@ class FullDuplexClientControlPublisher:
 
         task.add_done_callback(_log_failure)
 
+    def publish_companion_ui_state_for_agent_state(self, state: str) -> None:
+        if state == "thinking":
+            companion_state = "thinking"
+        elif state == "speaking":
+            companion_state = "speaking"
+        else:
+            companion_state = "listening"
+        self.publish_companion_ui_state(companion_state, f"agent_state:{state}")
+
     def publish_client_control(
         self,
         op: str,

@@ -50,7 +50,7 @@ class FullDuplexSessionLifecycle:
         session.on("agent_state_changed", pipeline._on_agent_state_changed)
         session.on("user_input_transcribed", pipeline._on_user_transcribed)
         session.on("error", pipeline._on_session_error)
-        session.on("close", pipeline._on_session_close)
+        session.on("close", self._on_session_close)
 
         pipeline._session_signals.register_vad_inference_callback()
 
@@ -103,6 +103,43 @@ class FullDuplexSessionLifecycle:
             raise
         finally:
             await self.shutdown()
+
+    def _on_session_close(self, event: Any) -> None:
+        """Wake run() so shutdown fires immediately on session close.
+
+        The AgentSession emits this event from its ``_aclose_impl`` finalizer
+        (e.g. when ``close_on_disconnect`` triggers after a participant leaves).
+        We capture it here and signal ``_session_closed_event``; ``run()`` is
+        awaiting that event and will proceed to ``shutdown()``.
+
+        Also clean up the EOT model's per-session UserProfile so long-running
+        daemons don't accumulate state across rooms. Defensive: catch and log;
+        this must not block the close path.
+        """
+        pipeline = self._pipeline
+        reason = getattr(event, "reason", None)
+        error = getattr(event, "error", None)
+        # Captured for _delete_room_on_close -> session_end reason: error
+        # close -> "error", clean close -> "user_left".
+        pipeline._close_reason = reason
+        pipeline._close_error = error
+        logger.info(
+            "[StreamingPipeline] session close event received reason=%s error=%s",
+            reason,
+            error,
+        )
+        try:
+            pipeline._get_eot_model().end_session()
+        except Exception:
+            logger.exception("[StreamingPipeline] eot_model.end_session failed (non-fatal)")
+        duck_metrics = pipeline._ducking.get_metrics()
+        if duck_metrics is not None:
+            logger.info(
+                "[StreamingPipeline] session duck metrics: %s",
+                duck_metrics,
+            )
+        pipeline._append_timeline_debug("session_closed")
+        pipeline._session_closed_event.set()
 
     async def _delete_room_on_close(self) -> None:
         """Prompt room teardown on session close before provider shutdown drain."""

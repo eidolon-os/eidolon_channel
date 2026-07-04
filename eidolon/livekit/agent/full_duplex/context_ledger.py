@@ -25,6 +25,7 @@ class FullDuplexContextLedger:
         get_duck_mixer: Callable[[], Any | None],
         get_config: Callable[[], Any],
         get_timeline: Callable[[], TurnTimeline | None],
+        get_assistant_text: Callable[[], str] | None = None,
         manager: InterruptedContextManager | None = None,
     ) -> None:
         self._get_session = get_session
@@ -32,6 +33,7 @@ class FullDuplexContextLedger:
         self._get_duck_mixer = get_duck_mixer
         self._get_config = get_config
         self._get_timeline = get_timeline
+        self._get_assistant_text = get_assistant_text or (lambda: "")
         self._manager = manager or InterruptedContextManager()
 
     @property
@@ -46,6 +48,7 @@ class FullDuplexContextLedger:
             factory=self._get_factory(),
             duck_mixer=self._get_duck_mixer(),
             config=self._get_config(),
+            assistant_text=self._get_assistant_text(),
         )
         context = self._manager.last_context
         timeline = self._get_timeline()

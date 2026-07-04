@@ -58,6 +58,31 @@ def test_interrupted_context_manager_skips_history_fallback_by_default() -> None
     session.history.messages.assert_not_called()
 
 
+def test_interrupted_context_manager_uses_assistant_speech_ledger_text() -> None:
+    manager = InterruptedContextManager()
+    session = MagicMock()
+    session.history.messages = MagicMock(
+        return_value=[_msg("assistant", "stale history reply")]
+    )
+    factory = SimpleNamespace(tts=SimpleNamespace(tts=SimpleNamespace(current_pushed_text="")))
+    duck_mixer = SimpleNamespace(played_seconds=0.0)
+    cfg = SimpleNamespace(interrupted_context_enabled=True)
+
+    manager.snapshot(
+        session=session,
+        factory=factory,
+        duck_mixer=duck_mixer,
+        config=cfg,
+        assistant_text="你好！我是你的 AI 助手，请问有什么可以帮你的？",
+    )
+
+    assert manager.last_context is not None
+    assert manager.last_context["text"] == "你好！我是你的 AI 助手，请问有什么可以帮你的？"
+    assert manager.last_context["source"] == "assistant_speech_ledger"
+    assert manager.last_context["played_seconds"] == 0.0
+    session.history.messages.assert_not_called()
+
+
 def test_interrupted_context_manager_injects_and_clears_hint() -> None:
     manager = InterruptedContextManager()
     manager.last_context = {

@@ -47,8 +47,10 @@ def _owner() -> SimpleNamespace:
     owner._get_eot_model = MagicMock(return_value=MagicMock())
     owner._uses_livekit_native_adaptive_interruption = MagicMock(return_value=False)
     owner._attention_effects = MagicMock()
+    owner._attention_effects.handle_speaking_started.return_value = True
     owner._ducking = SimpleNamespace(is_suspended=True)
     owner._interruption_orchestrator = MagicMock()
+    owner._set_interrupt_cancel_suppression = MagicMock()
     return owner
 
 
@@ -75,6 +77,16 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     )
 
 
+def test_speech_lifecycle_start_does_not_open_candidate_without_interrupt_window() -> None:
+    owner = _owner()
+    owner._attention_effects.handle_speaking_started.return_value = False
+
+    FullDuplexSpeechLifecycle(owner).handle_started()
+
+    owner._attention_effects.handle_speaking_started.assert_called_once_with()
+    owner._interruption_orchestrator.start_candidate.assert_not_called()
+
+
 def test_speech_lifecycle_stop_defers_when_interruption_owner_waits_for_stt() -> None:
     owner = _owner()
     owner._timeline = TurnTimeline("turn-wait")
@@ -94,6 +106,45 @@ def test_speech_lifecycle_stop_defers_when_interruption_owner_waits_for_stt() ->
     )
     owner._user_turns.finish_speech.assert_not_called()
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(False)
+
+
+def test_speech_lifecycle_stop_commits_confirmed_cancel_candidate() -> None:
+    owner = _owner()
+    owner._timeline = TurnTimeline("turn-confirmed-cancel")
+    voiceprint_task = object()
+    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
+    owner._interruption_orchestrator.finish_confirmed_cancel_speech.return_value = True
+    owner._interruption_orchestrator.resolve = MagicMock()
+    owner._turn_completion.commit_post_speech_interruption_candidate = MagicMock(
+        return_value=True
+    )
+    owner._user_turns.selected_text = "不是，我刚才说错了"
+    owner._session = MagicMock()
+
+    FullDuplexSpeechLifecycle(owner).handle_stopped()
+
+    owner._interruption_orchestrator.finish_confirmed_cancel_speech.assert_called_once_with(
+        "不是，我刚才说错了"
+    )
+    owner._turn_completion.remember_candidate_voiceprint_task.assert_called_once_with(
+        voiceprint_task,
+    )
+    owner._turn_completion.commit_post_speech_interruption_candidate.assert_called_once_with(
+        "confirmed_cancel_speech_end",
+        transcript_override="不是，我刚才说错了",
+    )
+    owner._interruption_orchestrator.resolve.assert_called_once_with(
+        action="cancel",
+        reason="confirmed_cancel_turn_committed",
+    )
+    owner._set_interrupt_cancel_suppression.assert_called_once_with(False, 0.0)
+    owner._callbacks.on_user_ended_speaking.assert_called_once_with()
+    owner._user_turns.finish_speech.assert_not_called()
+    assert owner._skip_commit_after_interrupt_cancel is False
+    assert owner._latest_asr_text == ""
 
 
 def test_speech_lifecycle_stop_schedules_voiceprint_gated_commit() -> None:

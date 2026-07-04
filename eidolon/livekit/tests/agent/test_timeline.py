@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -747,6 +747,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
     pipeline._allow_interruptions = False
     pipeline._get_eot_model = MagicMock(return_value=MagicMock())
     pipeline._interruption_orchestrator = SimpleNamespace(
+        should_collect_after_confirmed_cancel=lambda: False,
         should_commit_after_confirmed_cancel=lambda: False,
         current_transcript="",
         resolve=MagicMock(),
@@ -823,3 +824,127 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
 
     callbacks.on_duck_resolved.assert_not_called()
     session.interrupt.assert_not_called()
+
+
+def test_cancel_collects_confirmed_semantic_turn_without_resolving_candidate() -> None:
+    class FakeDucking:
+        is_cancelled = False
+
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def stats(self) -> SimpleNamespace:
+            return SimpleNamespace(suspend_ms=123.0, buffered_frames=3, buffered_sec=0.6)
+
+        def cancel_output(self) -> None:
+            self.cancelled = True
+            self.is_cancelled = True
+
+    timeline = TurnTimeline("turn-confirmed-semantic")
+    callbacks = MagicMock()
+    session = MagicMock()
+    eot_model = MagicMock()
+    ducking = FakeDucking()
+    orchestrator = SimpleNamespace(
+        should_collect_after_confirmed_cancel=MagicMock(return_value=True),
+        should_commit_after_confirmed_cancel=MagicMock(return_value=False),
+        mark_confirmed_cancel_collecting_turn=MagicMock(),
+        resolve=MagicMock(),
+        current_transcript="不是",
+    )
+    publish_playback_stop = MagicMock()
+    snapshot_context = MagicMock()
+    commit_candidate = MagicMock(return_value=True)
+    set_suppression = MagicMock()
+    effects = FullDuplexInterruptionEffects(
+        ducking=ducking,
+        callbacks=callbacks,
+        get_session=lambda: session,
+        allow_interruptions=lambda: True,
+        get_eot_model=lambda: eot_model,
+        get_timeline=lambda: timeline,
+        get_latest_asr_text=lambda: "不是",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=lambda: orchestrator,
+        publish_playback_stop=publish_playback_stop,
+        snapshot_interrupted_context=snapshot_context,
+        commit_post_speech_interruption_candidate=commit_candidate,
+        reject_post_speech_interruption_candidate=MagicMock(),
+        cancel_residual_commit_suppress_sec=lambda: 2.0,
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=set_suppression,
+        soft_interrupt_timeout_sec=lambda: 0.5,
+    )
+
+    effects.cancel_and_interrupt()
+
+    snapshot_context.assert_called_once_with()
+    publish_playback_stop.assert_called_once_with("interrupt_cancel")
+    assert ducking.cancelled is True
+    orchestrator.mark_confirmed_cancel_collecting_turn.assert_called_once_with()
+    orchestrator.resolve.assert_not_called()
+    orchestrator.should_commit_after_confirmed_cancel.assert_not_called()
+    commit_candidate.assert_not_called()
+    callbacks.on_duck_resolved.assert_called_once_with("cancel")
+    session.interrupt.assert_called_once_with(force=False)
+    eot_model.update_vad.assert_called_once_with(False)
+    set_suppression.assert_called_once_with(True, ANY)
+    assert timeline.attrs["cancel_reason"] == "eot_cancel"
+    assert timeline.attrs["duck_events"][-1]["event"] == "duck_cancelled"
+
+
+def test_rollback_if_suspended_records_timeline_action() -> None:
+    class FakeDucking:
+        installed = True
+        is_suspended = True
+
+        def __init__(self) -> None:
+            self.unducked = False
+
+        def stats(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                suspend_ms=123.0,
+                buffered_frames=2,
+                buffered_sec=0.4,
+            )
+
+        def unduck_if_suspended(self, *, drop_buffered: bool) -> None:
+            self.unducked = True
+            self.drop_buffered = drop_buffered
+
+    timeline = TurnTimeline("turn-rollback")
+    callbacks = MagicMock()
+    ducking = FakeDucking()
+    orchestrator = SimpleNamespace(
+        awaiting_post_speech_evidence=False,
+        resolve=MagicMock(),
+    )
+    effects = FullDuplexInterruptionEffects(
+        ducking=ducking,
+        callbacks=callbacks,
+        get_session=lambda: MagicMock(),
+        allow_interruptions=lambda: True,
+        get_eot_model=lambda: MagicMock(),
+        get_timeline=lambda: timeline,
+        get_latest_asr_text=lambda: "",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=lambda: orchestrator,
+        publish_playback_stop=MagicMock(),
+        snapshot_interrupted_context=MagicMock(),
+        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
+        reject_post_speech_interruption_candidate=MagicMock(),
+        cancel_residual_commit_suppress_sec=lambda: 0.0,
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=MagicMock(),
+        soft_interrupt_timeout_sec=lambda: 0.5,
+    )
+
+    effects.rollback_if_suspended(reason="agent_echo", drop_buffered=False)
+
+    assert ducking.unducked is True
+    assert timeline.attrs["interrupt_action"] == "rollback"
+    assert timeline.attrs["rollback_reason"] == "agent_echo"
+    assert timeline.attrs["rollback_drop_buffered"] is False
+    orchestrator.resolve.assert_called_once_with(action="rollback", reason="agent_echo")

@@ -27,6 +27,7 @@ class InterruptionState(str, Enum):
     SUSPENDED_WAITING_EVIDENCE = "suspended_waiting_evidence"
     SUSPENDED_POST_SPEECH_WAIT = "suspended_post_speech_wait"
     CONFIRMED_CANCELLED = "confirmed_cancelled"
+    CONFIRMED_CANCEL_COLLECTING_TURN = "confirmed_cancel_collecting_turn"
     CONFIRMED_FALSE_RESUME = "confirmed_false_resume"
     REJECTED_NOISE_OR_ECHO = "rejected_noise_or_echo"
 
@@ -367,6 +368,21 @@ class InterruptionOrchestrator:
             candidate.transcript = text
         if text and candidate.last_policy_action is Action.ROLLBACK:
             return False
+        if text and candidate.last_intent in (
+            InterruptIntent.BACKCHANNEL,
+            InterruptIntent.NOISE,
+        ):
+            self._record_event(
+                "short_false_interruption_fast_resume",
+                transcript_preview=text[:80],
+                last_policy_action=(
+                    candidate.last_policy_action.value
+                    if candidate.last_policy_action is not None
+                    else None
+                ),
+                last_policy_reason=candidate.last_policy_reason,
+            )
+            return False
         if text and candidate.last_policy_action is Action.CANCEL:
             return False
         should_wait_for_evidence = (
@@ -431,6 +447,8 @@ class InterruptionOrchestrator:
             return False
         if candidate.awaiting_post_speech_evidence:
             return True
+        if candidate.state is InterruptionState.CONFIRMED_CANCEL_COLLECTING_TURN:
+            return True
         return (
             candidate.state
             in {
@@ -449,19 +467,57 @@ class InterruptionOrchestrator:
         """
 
         candidate = self._candidate
-        if candidate is None or candidate.resolved:
+        if not self._is_committable_cancel_candidate(candidate):
             return False
-        if not candidate.awaiting_post_speech_evidence:
-            return False
-        if candidate.last_policy_action is not Action.CANCEL:
-            return False
-        if candidate.last_intent in (
-            InterruptIntent.HARD_STOP,
-            InterruptIntent.BACKCHANNEL,
-            InterruptIntent.NOISE,
+        if (
+            not candidate.awaiting_post_speech_evidence
+            and candidate.stopped_at is None
+            and candidate.last_vad_active is True
         ):
             return False
         return bool((candidate.final_transcript or candidate.transcript).strip())
+
+    def should_collect_after_confirmed_cancel(self) -> bool:
+        """True when output is cancelled but the user speech segment is ongoing."""
+
+        candidate = self._candidate
+        if not self._is_committable_cancel_candidate(candidate):
+            return False
+        return (
+            not candidate.awaiting_post_speech_evidence
+            and candidate.stopped_at is None
+            and candidate.last_vad_active is True
+        )
+
+    def mark_confirmed_cancel_collecting_turn(self) -> None:
+        candidate = self._candidate
+        if candidate is None or candidate.resolved:
+            return
+        candidate.state = InterruptionState.CONFIRMED_CANCEL_COLLECTING_TURN
+        self._record_event(
+            "confirmed_cancel_collecting_turn",
+            transcript_preview=self.current_transcript[:80],
+            last_policy_reason=candidate.last_policy_reason,
+        )
+
+    def finish_confirmed_cancel_speech(self, transcript: str) -> bool:
+        """Mark VAD-end for a semantic cancel that kept collecting speech."""
+
+        candidate = self._candidate
+        if not self._is_committable_cancel_candidate(candidate):
+            return False
+        candidate.stopped_at = self._now()
+        text = transcript.strip()
+        if text:
+            candidate.transcript = text
+            candidate.final_transcript = text
+        candidate.awaiting_post_speech_evidence = True
+        candidate.state = InterruptionState.SUSPENDED_POST_SPEECH_WAIT
+        self._record_event(
+            "confirmed_cancel_speech_stopped",
+            transcript_preview=self.current_transcript[:80],
+        )
+        return bool(self.current_transcript.strip())
 
     def resolve(self, *, action: str, reason: str) -> None:
         candidate = self._candidate
@@ -475,6 +531,20 @@ class InterruptionOrchestrator:
             reason,
         )
         self._candidate = None
+
+    @staticmethod
+    def _is_committable_cancel_candidate(
+        candidate: InterruptionCandidate | None,
+    ) -> bool:
+        if candidate is None or candidate.resolved:
+            return False
+        if candidate.last_policy_action is not Action.CANCEL:
+            return False
+        return candidate.last_intent not in (
+            InterruptIntent.HARD_STOP,
+            InterruptIntent.BACKCHANNEL,
+            InterruptIntent.NOISE,
+        )
 
     def _decision(
         self,

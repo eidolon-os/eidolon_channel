@@ -219,7 +219,7 @@ cases:
     audio_clips:
       - id: reaction_start
         text: 我觉得
-        path: benchmark/audio/generated/normal_followup.wav
+        path: benchmark/audio/generated/reaction_start.wav
         intent: normal
     user_steps:
       - text: 我觉得
@@ -242,29 +242,29 @@ cases:
 
   - case_id: fd_gate_echo_like_agent_words_holds_001
     suite: full_duplex_gate
-    description: 全双工 open-mic：像 agent 自己播放内容的低证据文本应 hold/observe，避免环境声或回声误杀。
+    description: 全双工 open-mic：像欢迎语播放内容的低证据文本应作为 echo 丢弃，避免环境声或回声误杀。
     timeout_sec: 60
     tags: ["full_duplex", "gate", "echo_guard", "ambient_guard"]
     audio_clips:
-      - id: echo_like_agent_words
-        text: 我会先讲系统结构
-        path: benchmark/audio/generated/normal_followup.wav
+      - id: welcome_echo_words
+        text: 我是你的 AI 助手
+        path: benchmark/audio/generated/welcome_echo_words.wav
         intent: echo
     user_steps:
-      - text: 我会先讲系统结构
-        audio: echo_like_agent_words
+      - text: 我是你的 AI 助手
+        audio: welcome_echo_words
         start_ms: 240
         duration_ms: 900
-        interims: ["我会先讲", "我会先讲系统结构"]
+        interims: ["我是你的", "我是你的 AI 助手"]
         eot_scores: [0.0, 0.0]
         vad_probability: 0.9
         agent_speaking: true
         client_playback_state: agent_speaking
     expect:
       action: any
-      decision_action: hold
+      decision_action: rollback
       forbid_actions: ["cancel"]
-      min_user_finals: 1
+      min_user_finals: 0
       min_agent_messages: 1
       agent_audio_response: first
       rejected_turn_brain: forbidden

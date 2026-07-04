@@ -227,6 +227,8 @@ class AttentionPolicyConfig:
     require_direct_signal_during_playback: bool = True
     soft_duck_on_playback_speech_start: bool = True
     ignore_when_mic_muted: bool = True
+    echo_min_normalized_chars: int = 2
+    assistant_speech_recent_max_age_ms: int = 3_000
 
 
 @dataclass(frozen=True)

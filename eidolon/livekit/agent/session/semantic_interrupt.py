@@ -235,13 +235,7 @@ class SemanticInterruptHandler:
             agent_speaking=True,
             is_final=is_final,
         )
-        if semantic_decision.intent not in (
-            InterruptIntent.HARD_STOP,
-            InterruptIntent.TOPIC_SWITCH,
-            InterruptIntent.CORRECTION,
-            InterruptIntent.BACKCHANNEL,
-            InterruptIntent.NOISE,
-        ):
+        if not self._is_fallback_semantic_decision(semantic_decision):
             return False
 
         logger.info(
@@ -259,6 +253,18 @@ class SemanticInterruptHandler:
             vad_active=vad_active,
         )
         return True
+
+    @staticmethod
+    def _is_fallback_semantic_decision(decision: Decision) -> bool:
+        if decision.topic_switch_hint or decision.correction_hint:
+            return True
+        return decision.intent in (
+            InterruptIntent.HARD_STOP,
+            InterruptIntent.TOPIC_SWITCH,
+            InterruptIntent.CORRECTION,
+            InterruptIntent.BACKCHANNEL,
+            InterruptIntent.NOISE,
+        )
 
     def _handle_fallback_eot_score(
         self,

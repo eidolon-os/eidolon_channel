@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any
 
+from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
 logger = logging.getLogger("agent.context.interrupted")
 
 _CONTEXT_EXCERPT_MIN_PLAYED_SEC = 0.8
@@ -25,6 +27,7 @@ class InterruptedContextManager:
         factory: Any | None,
         duck_mixer: Any | None,
         config: Any,
+        assistant_text: str = "",
     ) -> None:
         """Capture the agent's response text at the point of interruption."""
         if not getattr(config, "interrupted_context_enabled", False):
@@ -50,6 +53,22 @@ class InterruptedContextManager:
                     "[InterruptedContextManager] captured "
                     "(source=tts_in_flight): text=%r played=%.2fs",
                     in_flight_text[:80],
+                    played_sec or 0.0,
+                )
+                return
+
+            recent_assistant_text = assistant_text.strip()
+            if recent_assistant_text:
+                self.last_context = {
+                    "text": recent_assistant_text,
+                    "timestamp": time.monotonic(),
+                    "played_seconds": played_sec,
+                    "source": "assistant_speech_ledger",
+                }
+                logger.info(
+                    "[InterruptedContextManager] captured "
+                    "(source=assistant_speech_ledger): text=%r played=%.2fs",
+                    recent_assistant_text[:80],
                     played_sec or 0.0,
                 )
                 return
@@ -163,13 +182,4 @@ class InterruptedContextManager:
 
     @staticmethod
     def _current_tts_text(factory: Any | None) -> str:
-        try:
-            if factory is not None and factory.tts is not None:
-                tts_plugin = factory.tts.tts
-                return getattr(tts_plugin, "current_pushed_text", "") or ""
-        except Exception:
-            logger.debug(
-                "[InterruptedContextManager] could not read TTS current_pushed_text",
-                exc_info=True,
-            )
-        return ""
+        return AssistantSpeechLedger.current_tts_text(factory)

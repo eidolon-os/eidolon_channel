@@ -162,6 +162,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._session_lock = asyncio.Lock()
         self._pending_turn_control_metadata: dict[str, Any] | None = None
         self._pending_user_text_override: dict[str, Any] | None = None
+        self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
 
     def emit_provider_event(self, name: str, **payload: Any) -> None:
         """Emit provider-level timing events for Channel observability."""
@@ -331,7 +332,36 @@ class EidolonAgentGrpcLlm(llm.LLM):
             instance_id=instance_id,
         )
 
+    async def warm(self, text: str) -> None:
+        """Preemptively warm the brain on a partial transcript (best effort).
+
+        Called from the turn-detection layer while the user is still speaking;
+        fires one ephemeral speculative turn so the real turn's first response
+        lands sooner. Superseded (discarded) when the real turn starts.
+        """
+        try:
+            session = await self._get_session()
+        except Exception:  # noqa: BLE001 — warming must never break the turn
+            return
+        if self._warmer is None:
+            from eidolon.livekit.agent.eidolon_agent_rpc.preemptive import (
+                PreemptiveWarmer,
+            )
+
+            self._warmer = PreemptiveWarmer(session, spawn=session.spawn)
+        await self._warmer.warm(
+            text, conversation_id=self._resolve_conversation_id_for_chat()
+        )
+
+    async def discard_warm(self) -> None:
+        """Cancel any in-flight speculative warm-up (real turn supersedes it)."""
+        if self._warmer is not None:
+            await self._warmer.discard()
+
     async def aclose(self) -> None:
+        if self._warmer is not None:
+            await self._warmer.discard()
+            self._warmer = None
         if self._session is not None:
             await self._session.aclose()
             self._session = None
@@ -391,6 +421,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 retryable=True,
             ) from exc
         conversation_id = self._conversation_id
+        # The real turn supersedes any preemptive warm-up for this session.
+        await llm_v.discard_warm()
         try:
             turn_id, payloads = await asyncio.wait_for(
                 session.start_turn(

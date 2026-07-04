@@ -45,21 +45,21 @@ class FullDuplexOutputFlow:
             cfg.duck_cooldown_sec,
         )
 
-    def duck_and_arm_timeout(self) -> None:
+    def duck_and_arm_timeout(self) -> bool:
         """Fade output to silence and arm the suspend-window fallback."""
         pipeline = self._pipeline
         if not pipeline._ducking.installed:
-            return
+            return False
         if pipeline._state != PipelineState.SPEAKING:
             logger.debug(
                 "[StreamingPipeline] duck skipped - agent not speaking (state=%s)",
                 pipeline._state.name if hasattr(pipeline._state, "name") else pipeline._state,
             )
-            return
+            return False
         cfg = pipeline._get_eot_model()._config
         if pipeline._filler is not None and pipeline._filler.is_playing:
             logger.info("[StreamingPipeline] duck skipped - filler playing")
-            return
+            return False
         now = time.monotonic()
         if now - pipeline._ducking.last_unduck_time < cfg.duck_cooldown_sec:
             logger.info(
@@ -67,9 +67,27 @@ class FullDuplexOutputFlow:
                 "(%.2fs since last unduck)",
                 now - pipeline._ducking.last_unduck_time,
             )
-            return
+            return False
         pipeline._ducking.cancel_timeout()
-        pipeline._ducking.duck(now=now)
+        if not pipeline._ducking.duck(now=now):
+            self.record_duck_event(
+                "duck_skipped",
+                reason="output_not_suspendable",
+                output_state=(
+                    pipeline._ducking.mixer.state
+                    if pipeline._ducking.mixer is not None
+                    else "not_installed"
+                ),
+            )
+            logger.info(
+                "[StreamingPipeline] duck skipped - output not suspendable state=%s",
+                (
+                    pipeline._ducking.mixer.state
+                    if pipeline._ducking.mixer is not None
+                    else "not_installed"
+                ),
+            )
+            return False
         if pipeline._timeline is not None:
             pipeline._timeline.mark("interrupt_started_at")
             self.record_duck_event(
@@ -95,6 +113,7 @@ class FullDuplexOutputFlow:
         pipeline._ducking.timeout_task = asyncio.create_task(
             pipeline._duck_deadline.run(cfg.duck_suspend_timeout_sec)
         )
+        return True
 
     def record_duck_event(self, event: str, **fields: object) -> None:
         timeline = self._pipeline._timeline

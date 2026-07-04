@@ -99,8 +99,18 @@ def test_unduck_only_when_suspended() -> None:
 
     assert controller.unduck_if_suspended() is False
 
-    controller.duck(now=123.0)
+    assert controller.duck(now=123.0) is True
     assert controller.is_suspended is True
     assert controller.unduck_if_suspended(drop_buffered=True) is True
     assert controller.is_suspended is False
     assert controller.last_unduck_time > 0
+
+
+def test_duck_returns_false_when_cancelled_output_cannot_suspend() -> None:
+    controller = OutputDuckingController()
+    controller.install(_session(_FakeInnerOutput()), _cfg())
+
+    controller.cancel_output()
+
+    assert controller.duck(now=123.0) is False
+    assert controller.is_cancelled is True

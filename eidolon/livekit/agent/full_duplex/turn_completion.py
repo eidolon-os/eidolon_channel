@@ -136,6 +136,8 @@ class FullDuplexTurnCompletion:
         timeline = getattr(owner, "_timeline", None)
         if timeline is None:
             return ""
+        if self._has_confirmed_redirect_decision(timeline):
+            return ""
         events = timeline.attrs.get("attention_admission_events") or ()
         playback_observed = any(
             isinstance(event, dict)
@@ -164,6 +166,20 @@ class FullDuplexTurnCompletion:
         if evidence.allow_decision:
             return ""
         return f"playback_low_evidence_artifact:{evidence.reason}"
+
+    @staticmethod
+    def _has_confirmed_redirect_decision(timeline: TurnTimeline) -> bool:
+        decision = timeline.attrs.get("decision")
+        if not isinstance(decision, dict):
+            return False
+        if decision.get("action") != "cancel":
+            return False
+        if bool(decision.get("topic_switch_hint")) or bool(
+            decision.get("correction_hint")
+        ):
+            return True
+        reason = str(decision.get("reason") or "")
+        return reason.startswith(("intent:topic_switch", "intent:correction"))
 
     def _looks_like_short_statement_continuation(self, transcript: str) -> bool:
         owner = self._pipeline

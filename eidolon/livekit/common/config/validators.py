@@ -178,6 +178,12 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     attention = cfg.turn_policy.attention
     if not 100 <= attention.client_state_max_age_ms <= 10_000:
         errors.append("turn_policy.attention.client_state_max_age_ms must be in [100, 10000]")
+    if not 1 <= attention.echo_min_normalized_chars <= 32:
+        errors.append("turn_policy.attention.echo_min_normalized_chars must be in [1, 32]")
+    if not 0 <= attention.assistant_speech_recent_max_age_ms <= 30_000:
+        errors.append(
+            "turn_policy.attention.assistant_speech_recent_max_age_ms must be in [0, 30000]"
+        )
 
     obs = cfg.observability
     if not 0 <= obs.llm_first_delta_timeout_ms <= 60_000:

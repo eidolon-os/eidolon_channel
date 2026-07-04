@@ -202,6 +202,22 @@ def test_load_offline_policy_regression_suite() -> None:
     assert continuity.expectations.decision_action == "cancel"
 
 
+def test_full_duplex_gate_guard_cases_use_matching_audio_assets() -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    cases = {case.case_id: case for case in suite.cases}
+
+    false_start = cases["fd_gate_false_start_holds_001"]
+    assert false_start.audio_clips[0].id == "reaction_start"
+    assert false_start.audio_clips[0].text == "我觉得"
+    assert false_start.audio_clips[0].path.endswith("/reaction_start.wav")
+
+    echo_guard = cases["fd_gate_echo_like_agent_words_holds_001"]
+    assert echo_guard.audio_clips[0].id == "welcome_echo_words"
+    assert echo_guard.audio_clips[0].text == "我是你的 AI 助手"
+    assert echo_guard.audio_clips[0].path.endswith("/welcome_echo_words.wav")
+    assert echo_guard.user_steps[0].text == "我是你的 AI 助手"
+
+
 def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> None:
     suite = load_suite("benchmark/cases/offline_policy_regression_enforced.yaml")
     run = run_policy_suite(

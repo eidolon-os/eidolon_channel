@@ -12,6 +12,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from .assistant_speech import AssistantSpeechLedger
+
 logger = logging.getLogger("agent.session.transcript_echo")
 
 
@@ -23,13 +25,15 @@ class TranscriptEchoGate:
         *,
         factory: Any | None = None,
         get_agent_text: Callable[[], str] | None = None,
+        min_normalized_chars: int = 2,
     ) -> None:
         self._factory = factory
         self._get_agent_text = get_agent_text
+        self._min_normalized_chars = max(1, int(min_normalized_chars))
 
     def is_echo(self, transcript: str) -> bool:
         normalized_transcript = normalize_for_echo(transcript)
-        if not normalized_transcript:
+        if len(normalized_transcript) < self._min_normalized_chars:
             return False
         normalized_agent_text = normalize_for_echo(self.agent_text())
         if not normalized_agent_text:
@@ -39,16 +43,7 @@ class TranscriptEchoGate:
     def agent_text(self) -> str:
         if self._get_agent_text is not None:
             return self._get_agent_text() or ""
-        factory = self._factory
-        try:
-            if factory is not None and getattr(factory, "tts", None) is not None:
-                return getattr(factory.tts.tts, "current_pushed_text", "") or ""
-        except Exception:
-            logger.debug(
-                "[transcript-echo] could not read TTS current_pushed_text",
-                exc_info=True,
-            )
-        return ""
+        return AssistantSpeechLedger.current_tts_text(self._factory)
 
 
 def normalize_for_echo(text: str) -> str:

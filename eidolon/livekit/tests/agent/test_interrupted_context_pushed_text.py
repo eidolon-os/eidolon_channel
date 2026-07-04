@@ -45,6 +45,7 @@ def _make_ledger(
     tts_pushed_text: str | None,
     played_sec: float | None = 1.0,
     history_fallback_enabled: bool = False,
+    assistant_text: str = "",
 ):
     """Build a full-duplex context ledger configured for snapshot tests.
 
@@ -85,6 +86,7 @@ def _make_ledger(
         get_duck_mixer=lambda: ducking.mixer,
         get_config=lambda: cfg,
         get_timeline=lambda: None,
+        get_assistant_text=lambda: assistant_text,
     )
     return SimpleNamespace(ledger=ledger, session=session)
 
@@ -146,6 +148,22 @@ def test_skips_history_fallback_by_default_when_tts_empty() -> None:
     runtime.ledger.snapshot()
 
     assert _interrupted_context(runtime.ledger) is None
+    runtime.session.history.messages.assert_not_called()
+
+
+def test_context_ledger_uses_assistant_speech_ledger_before_history() -> None:
+    runtime = _make_ledger(
+        history_messages=[_msg("assistant", "stale history reply")],
+        tts_pushed_text="",
+        assistant_text="你好！我是你的 AI 助手，请问有什么可以帮你的？",
+    )
+
+    runtime.ledger.snapshot()
+
+    ctx = _interrupted_context(runtime.ledger)
+    assert ctx is not None
+    assert ctx["text"] == "你好！我是你的 AI 助手，请问有什么可以帮你的？"
+    assert ctx["source"] == "assistant_speech_ledger"
     runtime.session.history.messages.assert_not_called()
 
 

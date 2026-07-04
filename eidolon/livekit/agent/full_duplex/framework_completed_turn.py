@@ -12,6 +12,7 @@ from ..session.voiceprint_reasons import (
     voiceprint_blocked_reason,
     voiceprint_error_reason,
 )
+from ..turn_policy import Action, InterruptIntent
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -306,6 +307,23 @@ class FullDuplexFrameworkCompletedTurnGate:
             or not interruption_owner.blocks_framework_completed_turn()
         ):
             return False
+        decision = self._decide_from_completed_turn_evidence(
+            completed_transcript,
+            timeline=timeline,
+        )
+        if decision is not None and self._completed_turn_can_resolve(decision):
+            owner._ensure_decision_effect_applier()
+            owner._decision_effects.apply(
+                decision,
+                resolved_reason="framework_completed_interruption_evidence",
+                eot_score=self._current_eot_score(),
+                transcript=completed_transcript,
+                vad_active=False,
+            )
+            completion.clear_session_user_turn(
+                f"interruption_owner_resolved:{decision.action.value}"
+            )
+            return True
         reason = "interruption_owner_waiting_for_evidence"
         completion.cancel_deferred_low_eot_commit(reason)
         completion.clear_session_user_turn(reason)
@@ -328,3 +346,61 @@ class FullDuplexFrameworkCompletedTurnGate:
             completed_transcript[:80],
         )
         return True
+
+    @staticmethod
+    def _completed_turn_can_resolve(decision: Any) -> bool:
+        if decision.action is Action.ROLLBACK:
+            return True
+        if decision.action is not Action.CANCEL:
+            return False
+        if decision.intent is InterruptIntent.HARD_STOP:
+            return True
+        return bool(decision.topic_switch_hint or decision.correction_hint)
+
+    def _decide_from_completed_turn_evidence(
+        self,
+        completed_transcript: str,
+        *,
+        timeline: TurnTimeline | None,
+    ):
+        text = completed_transcript.strip()
+        if not text:
+            return None
+        owner = self._pipeline
+        interruption_owner = getattr(owner, "_interruption_orchestrator", None)
+        if interruption_owner is None:
+            return None
+        decision = interruption_owner.decide_from_transcript(
+            owner._turn_runtime,
+            text,
+            self._current_eot_score(),
+            vad_active=False,
+            agent_speaking=True,
+            is_final=True,
+        )
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_interruption_evidence",
+                {
+                    "action": decision.action.value,
+                    "reason": decision.reason,
+                    "intent": (
+                        decision.intent.value if decision.intent is not None else None
+                    ),
+                    "text_preview": text[:120],
+                    "text_length": len(text),
+                },
+            )
+        return decision
+
+    def _current_eot_score(self) -> float:
+        owner = self._pipeline
+        eot_model = owner._get_eot_model()
+        return float(
+            getattr(
+                eot_model,
+                "current_eot_score",
+                getattr(eot_model, "_current_eot_score", 0.0),
+            )
+            or 0.0
+        )

@@ -63,8 +63,8 @@ class FullDuplexSpeechLifecycle:
                 owner._timeline.set_attr("interruption_owner", "livekit_native_adaptive")
             return
 
-        owner._attention_effects.handle_speaking_started()
-        if owner._ducking.is_suspended:
+        interrupt_window_started = owner._attention_effects.handle_speaking_started()
+        if interrupt_window_started:
             owner._interruption_orchestrator.start_candidate(timeline=owner._timeline)
 
     def handle_stopped(self) -> None:
@@ -81,9 +81,19 @@ class FullDuplexSpeechLifecycle:
         eot_model = owner._get_eot_model()
         eot_model.update_vad(False)
 
-        defer_post_speech_evidence = self._resolve_interruption_candidate_on_stop()
+        committed_confirmed_cancel = self._commit_confirmed_cancel_on_stop(
+            voiceprint_task
+        )
+        defer_post_speech_evidence = (
+            False
+            if committed_confirmed_cancel
+            else self._resolve_interruption_candidate_on_stop()
+        )
         owner._callbacks.on_user_ended_speaking()
         owner._skip_commit_after_interrupt_cancel = False
+        if committed_confirmed_cancel:
+            owner._latest_asr_text = ""
+            return
         if defer_post_speech_evidence:
             turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
             return
@@ -154,6 +164,28 @@ class FullDuplexSpeechLifecycle:
                 timeline=owner._timeline,
             )
             owner._latest_asr_text = ""
+
+    def _commit_confirmed_cancel_on_stop(self, voiceprint_task: Any) -> bool:
+        owner = self._owner
+        interruption_owner = getattr(owner, "_interruption_orchestrator", None)
+        if interruption_owner is None:
+            return False
+        transcript = owner._user_turns.selected_text or owner._latest_asr_text
+        if interruption_owner.finish_confirmed_cancel_speech(transcript) is not True:
+            return False
+        turn_completion = owner._ensure_turn_completion()
+        turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
+        committed = turn_completion.commit_post_speech_interruption_candidate(
+            "confirmed_cancel_speech_end",
+            transcript_override=transcript,
+        )
+        if committed:
+            interruption_owner.resolve(
+                action="cancel",
+                reason="confirmed_cancel_turn_committed",
+            )
+            owner._set_interrupt_cancel_suppression(False, 0.0)
+        return committed
 
     def _resolve_interruption_candidate_on_stop(self) -> bool:
         owner = self._owner

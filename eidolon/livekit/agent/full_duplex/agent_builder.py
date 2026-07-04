@@ -52,6 +52,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
                 room_name,
                 welcome[:30],
             )
+            pipeline._record_assistant_speech_text(welcome, source="welcome")
             # Round 8 R8.9: use ``session.say(welcome)`` instead of
             # ``session.generate_reply()`` for the initial greeting.
             # generate_reply with no user message hands an empty context to the

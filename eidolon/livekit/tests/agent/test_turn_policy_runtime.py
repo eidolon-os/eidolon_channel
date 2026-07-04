@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from eidolon.livekit.agent.turn_policy import Action, TurnPolicyRuntime
-from eidolon.livekit.common.config import TurnPolicyConfig
+from eidolon.livekit.common.config import InterruptPolicyConfig, TurnPolicyConfig
 
 
 def test_runtime_exposes_decision_timeout_from_config() -> None:
@@ -74,6 +76,178 @@ def test_runtime_annotates_non_hard_redirect_text_as_tier2() -> None:
 
     assert decision.tier == "tier2_interruption"
     assert decision.topic_switch_hint is False
+
+
+def test_runtime_fast_lexical_topic_switch_enters_tier1_as_normal_interrupt() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    decision = runtime.decide_from_transcript(
+        "换个话题",
+        0.0,
+        vad_active=False,
+        agent_speaking=True,
+        is_final=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.topic_switch_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_fast_lexical_correction_enters_tier1_as_normal_interrupt() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    decision = runtime.decide_from_transcript(
+        "不是，我刚才说错了",
+        0.0,
+        vad_active=False,
+        agent_speaking=True,
+        is_final=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.correction_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_fast_lexical_topic_switch_bypasses_weak_followup_hold() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    runtime.decide_from_transcript(
+        "换个",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    runtime.decide_from_transcript(
+        "换个话题",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=180.0,
+    )
+    decision = runtime.decide_from_transcript(
+        "换个话题",
+        0.72,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=340.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.topic_switch_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_fast_lexical_correction_bypasses_weak_followup_hold() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    runtime.decide_from_transcript(
+        "不是",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    runtime.decide_from_transcript(
+        "不是，我刚才",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=180.0,
+    )
+    decision = runtime.decide_from_transcript(
+        "不是，我刚才说错了",
+        0.75,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=260.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.correction_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_deadline_recheck_normalizes_fast_lexical_correction() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    first = runtime.decide_from_transcript(
+        "不是",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.deadline_decision(
+        True,
+        has_transcript=True,
+        transcript="不是",
+        eot_score=0.0,
+    )
+
+    assert first.action is Action.HOLD
+    assert first.reason.startswith("stable_signal_wait")
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.correction_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_deadline_recheck_normalizes_fast_lexical_topic_switch() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    first = runtime.decide_from_transcript(
+        "换个话题",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    decision = runtime.deadline_decision(
+        True,
+        has_transcript=True,
+        transcript="换个话题",
+        eot_score=0.0,
+    )
+
+    assert first.action is Action.HOLD
+    assert first.reason.startswith("stable_signal_wait")
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.topic_switch_hint is True
+    assert decision.tier == "tier1_redirect"
 
 
 def test_runtime_annotates_normal_interrupt_as_tier2() -> None:

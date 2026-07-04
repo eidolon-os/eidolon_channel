@@ -76,6 +76,7 @@ from ..output import FillerManager, OutputDuckingController
 from ..pipeline.base import BasePipeline
 from ..pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
 from ..session.agent_state import AgentStateEffectHandler
+from ..session.assistant_speech import AssistantSpeechLedger
 from ..session.attention_effects import AttentionEffectHandler
 from .client_preempt import (
     ExplicitClientPreemptHandler,
@@ -175,6 +176,7 @@ class StreamingPipeline(BasePipeline):
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
         self._explicit_preempt_control_timeline: TurnTimeline | None = None
+        self._assistant_speech = AssistantSpeechLedger()
         self._pending_client_control_events: list[dict[str, Any]] = []
         self._skip_commit_after_interrupt_cancel = False
         self._suppress_commit_after_interrupt_until = 0.0
@@ -395,6 +397,7 @@ class StreamingPipeline(BasePipeline):
             ),
             get_config=lambda: self._get_eot_model()._config,
             get_timeline=lambda: getattr(self, "_timeline", None),
+            get_assistant_text=self._current_assistant_speech_text,
         )
 
     def _ensure_context_ledger(self) -> FullDuplexContextLedger:
@@ -622,7 +625,10 @@ class StreamingPipeline(BasePipeline):
             self._turn_committer = UserTurnCommitter()
 
     def _build_transcript_echo_gate(self) -> TranscriptEchoGate:
-        return TranscriptEchoGate(factory=getattr(self, "_factory", None))
+        return TranscriptEchoGate(
+            get_agent_text=self._current_assistant_speech_text,
+            min_normalized_chars=self._turn_policy.attention.echo_min_normalized_chars,
+        )
 
     def _ensure_transcript_echo_gate(self) -> TranscriptEchoGate:
         if not hasattr(self, "_transcript_echo_gate"):
@@ -647,6 +653,21 @@ class StreamingPipeline(BasePipeline):
             self._transcript_admission = self._build_transcript_admission_gate()
         return self._transcript_admission
 
+    def _reject_agent_echo_transcript(self, transcript: str) -> None:
+        self._suppress_transcripts_until_next_speech = True
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "agent_echo_suppressed",
+                {
+                    "text_preview": transcript[:120],
+                    "text_length": len(transcript),
+                },
+            )
+        self._ensure_interruption_effects().rollback_if_suspended(
+            reason="agent_echo",
+            drop_buffered=False,
+        )
+
     def _build_transcript_handler(self) -> FullDuplexTranscriptHandler:
         return FullDuplexTranscriptHandler(
             admission_gate=self._ensure_transcript_admission_gate,
@@ -669,8 +690,29 @@ class StreamingPipeline(BasePipeline):
             run_semantic_interrupt=lambda transcript, is_final: (
                 self._semantic_interrupts.run(transcript, is_final=is_final)
             ),
+            reject_agent_echo=self._reject_agent_echo_transcript,
             forward_to_base=lambda event: BasePipeline._on_user_transcribed(self, event),
+            warm_preemptive=self._warm_preemptive_from_partial,
         )
+
+    def _warm_preemptive_from_partial(self, transcript: str) -> None:
+        """Fire-and-forget: warm the brain on a stabilizing partial transcript.
+
+        Reaches the eidolon brain LLM adapter (when that's the configured LLM)
+        and schedules a *speculative* warm-up turn so the real turn's first
+        response lands sooner; a no-op for any other LLM. The real turn
+        supersedes it (grpc_llm discards the warm-up at real-turn start). The
+        trigger fires per accepted non-final transcript; the warmer bounds cost
+        (min length, dedup, single in-flight). Can later be tightened to EOT
+        confidence — the warm() API is already the right seam for that.
+        """
+        warm = getattr(getattr(getattr(self._factory, "llm", None), "llm", None), "warm", None)
+        if warm is None:
+            return
+        try:
+            asyncio.ensure_future(warm(transcript))
+        except Exception:  # noqa: BLE001 — warming must never disturb the turn
+            logger.debug("[StreamingPipeline] preemptive warm scheduling failed", exc_info=True)
 
     def _ensure_transcript_handler(self) -> FullDuplexTranscriptHandler:
         if not hasattr(self, "_transcript_handler"):
@@ -1059,6 +1101,19 @@ class StreamingPipeline(BasePipeline):
             is_proactive=self._is_proactive,
             welcome_message=self._welcome_message,
         )
+
+    def _current_assistant_speech_text(self) -> str:
+        if not hasattr(self, "_assistant_speech"):
+            self._assistant_speech = AssistantSpeechLedger()
+        return self._assistant_speech.current_or_recent_text(
+            factory=getattr(self, "_factory", None),
+            max_age_ms=self._turn_policy.attention.assistant_speech_recent_max_age_ms,
+        )
+
+    def _record_assistant_speech_text(self, text: str, *, source: str) -> None:
+        if not hasattr(self, "_assistant_speech"):
+            self._assistant_speech = AssistantSpeechLedger()
+        self._assistant_speech.record(text, source=source)
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""

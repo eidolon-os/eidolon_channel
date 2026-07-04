@@ -180,6 +180,32 @@ def test_duck_active_delegates_decision_to_effect_applier() -> None:
     calls.cancel_duck_and_interrupt.assert_not_called()
 
 
+def test_fallback_semantic_runs_for_normalized_redirect_hint() -> None:
+    runtime = MagicMock()
+    decision = Decision(
+        action=Action.CANCEL,
+        reason="intent:correction",
+        intent=InterruptIntent.NORMAL_INTERRUPT,
+        correction_hint=True,
+    )
+    runtime.decide_from_transcript.return_value = decision
+    handler, calls = _handler(
+        eot_model=_eot_model(score=0.1),
+        turn_runtime=runtime,
+        duck_active=False,
+    )
+
+    handler.run("不是，我刚才说错了", is_final=True)
+
+    calls.apply_decision.assert_called_once_with(
+        decision,
+        eot_score=0.1,
+        transcript="不是，我刚才说错了",
+        vad_active=True,
+    )
+    calls.interrupt_current_turn.assert_not_called()
+
+
 def test_fallback_eot_hard_score_uses_direct_interrupt_path() -> None:
     runtime = MagicMock()
     runtime.decide_from_transcript.return_value = Decision(

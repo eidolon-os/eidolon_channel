@@ -104,14 +104,23 @@ class TurnPolicyRuntime:
         transcript: str = "",
         eot_score: float = 0.0,
     ) -> Decision:
-        return self.tiers.annotate_decision(
-            self.decider.on_decision_deadline(
-                vad_still_active,
-                has_transcript=has_transcript,
-                transcript=transcript,
-                eot_score=eot_score,
-            )
+        decision = self.decider.on_decision_deadline(
+            vad_still_active,
+            has_transcript=has_transcript,
+            transcript=transcript,
+            eot_score=eot_score,
         )
+        now_ms = time.monotonic() * 1000
+        decision = self._stable_signal.apply(
+            decision,
+            text=transcript,
+            score=eot_score,
+            vad_active=vad_still_active,
+            is_final=False,
+            now_ms=now_ms,
+        )
+        decision = self._stabilizer.apply(decision, now_ms=now_ms)
+        return self.tiers.annotate_decision(decision)
 
     def user_silent_decision(self, transcript: str = "") -> Decision:
         return self.tiers.annotate_decision(self.decider.on_user_silent(transcript))
@@ -166,14 +175,13 @@ class _StableSignalStabilizer:
     ) -> Decision:
         if not vad_active:
             self._clear()
+            if self._is_explicit_redirect_cancel(decision):
+                return self._redirect_as_normal_interrupt(decision)
             return decision
         if decision.intent is InterruptIntent.HARD_STOP:
             self._clear()
             return decision
-        if decision.action is Action.CANCEL and decision.intent in (
-            InterruptIntent.CORRECTION,
-            InterruptIntent.TOPIC_SWITCH,
-        ):
+        if self._is_explicit_redirect_cancel(decision):
             return self._stabilize_explicit_redirect(
                 decision,
                 text=text,
@@ -207,7 +215,7 @@ class _StableSignalStabilizer:
         window_ms = self._config.interrupt.correction_topic_stability_window_ms
         if window_ms <= 0 or is_final:
             self._intent_candidate = None
-            return decision
+            return self._redirect_as_normal_interrupt(decision)
         candidate = self._update_candidate(
             self._intent_candidate,
             intent=decision.intent or InterruptIntent.UNCERTAIN,
@@ -218,7 +226,7 @@ class _StableSignalStabilizer:
         age_ms = now_ms - candidate.first_seen_ms
         if candidate.event_count >= 2 and age_ms >= window_ms:
             self._intent_candidate = None
-            return decision
+            return self._redirect_as_normal_interrupt(decision)
         return Decision(
             action=Action.HOLD,
             reason=(
@@ -325,6 +333,22 @@ class _StableSignalStabilizer:
             and decision.reason.startswith(SEMANTIC_SCORE_WAIT_REASON_PREFIX)
         )
 
+    @staticmethod
+    def _is_explicit_redirect_cancel(decision: Decision) -> bool:
+        return (
+            decision.action is Action.CANCEL
+            and decision.intent
+            in (InterruptIntent.CORRECTION, InterruptIntent.TOPIC_SWITCH)
+        )
+
+    @staticmethod
+    def _redirect_as_normal_interrupt(decision: Decision) -> Decision:
+        return replace(
+            decision,
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+            intent_confidence=max(0.70, decision.intent_confidence),
+        )
+
     def _is_substantive_text(self, text: str) -> bool:
         normalized = canonicalize_interrupt_text(text)
         cjk = sum(1 for ch in normalized if "\u4e00" <= ch <= "\u9fff")
@@ -384,6 +408,8 @@ class _WeakSignalFollowupStabilizer:
             and decision.intent_confidence
             >= self._config.interrupt.early_cancel_score_threshold
         ):
+            return False
+        if decision.topic_switch_hint or decision.correction_hint:
             return False
         return (
             decision.action is Action.CANCEL

@@ -23,6 +23,9 @@ DEFAULT_CLIPS: dict[str, str] = {
     "normal_ask_intro": "帮我详细介绍一下这个方案。",
     "normal_followup": "那它的主要风险是什么？",
     "normal_followup_deadline": "那大概多久能做完？",
+    "reaction_start": "我觉得。",
+    "echo_like_agent_words": "我会先讲系统结构。",
+    "welcome_echo_words": "我是你的 AI 助手。",
     "statement_plan_intro": "我在做一个新项目。",
     "statement_followup_risk": "想先把风险理清楚。",
     "hard_stop_stop": "停一下。",
@@ -57,6 +60,12 @@ async def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default="benchmark/audio/generated")
     parser.add_argument("--manifest", default="benchmark/audio/generated/manifest.yaml")
+    parser.add_argument(
+        "--only",
+        nargs="*",
+        default=None,
+        help="Generate only the listed clip ids and preserve existing manifest entries.",
+    )
     args = parser.parse_args()
 
     cfg = load_effective_config()
@@ -64,15 +73,37 @@ async def _main() -> int:
     await stages.tts.warmup()
 
     out_dir = Path(args.out_dir)
+    selected = set(args.only or [])
+    known = set(DEFAULT_CLIPS) | set(COMPOSITE_CLIPS)
+    unknown = selected - known
+    if unknown:
+        raise ValueError(f"unknown clip ids for --only: {', '.join(sorted(unknown))}")
+
+    manifest_path = Path(args.manifest)
     manifest: dict[str, dict[str, str]] = {}
+    if selected and manifest_path.exists():
+        loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        loaded_clips = loaded.get("clips") if isinstance(loaded, dict) else {}
+        if isinstance(loaded_clips, dict):
+            manifest.update(
+                {
+                    str(clip_id): dict(value)
+                    for clip_id, value in loaded_clips.items()
+                    if isinstance(value, dict)
+                }
+            )
     try:
         for clip_id, text in DEFAULT_CLIPS.items():
+            if selected and clip_id not in selected:
+                continue
             pcm, sample_rate = await synthesize_pcm(stages.tts.synthesize, text)
             path = out_dir / f"{clip_id}.wav"
             write_wav(path, pcm, sample_rate=sample_rate)
             manifest[clip_id] = {"text": text, "path": str(path)}
             print(f"generated {clip_id}: {path}")
         for clip_id, parts in COMPOSITE_CLIPS.items():
+            if selected and clip_id not in selected:
+                continue
             pcm, sample_rate = await synthesize_composite_pcm(
                 stages.tts.synthesize, parts
             )
@@ -86,7 +117,6 @@ async def _main() -> int:
     finally:
         await stages.tts.shutdown()
 
-    manifest_path = Path(args.manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         yaml.safe_dump({"clips": manifest}, allow_unicode=True, sort_keys=True),

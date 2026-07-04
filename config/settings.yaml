@@ -18,7 +18,7 @@ behavior:
   audio_sample_rate: 16000
 
 llm:
-  base_url: http://mopai.geni.dyxnet.com.cn/v1
+  base_url: https://api.deepseek.com
   model: deepseek-v4-flash
   api_key: OPENAI_LLM_API_KEY
   temperature: 0.7
@@ -120,6 +120,7 @@ turn_policy:
     repeated_noise_min_chars: 2
     repeated_noise_max_chars: 6
     weak_signal_followup_hold_ms: 1500
+    fast_lexical_intents: true
   ptt:
     # Half-duplex always uses the segment PTT owner: press/release captures one
     # complete audio segment, then STT runs once on that closed segment.
@@ -168,6 +169,8 @@ turn_policy:
     require_direct_signal_during_playback: true
     soft_duck_on_playback_speech_start: true
     ignore_when_mic_muted: true
+    echo_min_normalized_chars: 2
+    assistant_speech_recent_max_age_ms: 3000
 
 observability:
   structured_logs: true

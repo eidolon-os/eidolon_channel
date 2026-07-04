@@ -575,6 +575,41 @@ def test_pipeline_rejects_playback_low_evidence_artifact_before_commit() -> None
     )
 
 
+def test_confirmed_redirect_bypasses_playback_low_evidence_reject() -> None:
+    pipeline = _pipeline_with_client_state(_client_state())
+    pipeline._timeline.set_attr(
+        "decision",
+        {
+            "action": "cancel",
+            "reason": "intent:correction",
+            "intent": "normal_interrupt",
+            "correction_hint": True,
+            "topic_switch_hint": False,
+        },
+    )
+    pipeline._timeline.set_attr(
+        "attention_admission_events",
+        [
+            {
+                "action": "observe",
+                "reason": (
+                    "playback_low_evidence_transcript:"
+                    "insufficient_transcript_evidence"
+                ),
+            }
+        ],
+    )
+    eot = MagicMock()
+    eot.current_eot_score = 0.0
+
+    reason = pipeline._ensure_turn_completion().playback_low_evidence_reject_reason(
+        transcript="不是",
+        eot_model=eot,
+    )
+
+    assert reason == ""
+
+
 def test_pipeline_attention_prefers_speaker_client_state() -> None:
     now = time.monotonic()
     alice = _client_state(

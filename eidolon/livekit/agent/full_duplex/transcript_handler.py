@@ -33,7 +33,9 @@ class FullDuplexTranscriptHandler:
         decision_suppressed: Callable[[], bool],
         attention_allows_eot_check: Callable[[str, str | None], bool],
         run_semantic_interrupt: Callable[[str, bool], None],
+        reject_agent_echo: Callable[[str], None],
         forward_to_base: Callable[[Any], None],
+        warm_preemptive: Callable[[str], None] | None = None,
     ) -> None:
         self._admission_gate = admission_gate
         self._record_accepted_event = record_accepted_event
@@ -44,7 +46,11 @@ class FullDuplexTranscriptHandler:
         self._decision_suppressed = decision_suppressed
         self._attention_allows_eot_check = attention_allows_eot_check
         self._run_semantic_interrupt = run_semantic_interrupt
+        self._reject_agent_echo = reject_agent_echo
         self._forward_to_base = forward_to_base
+        # Optional: preemptively warm the brain on a stabilizing partial
+        # transcript (fired for accepted non-final events). No-op when unset.
+        self._warm_preemptive = warm_preemptive
 
     def handle(self, event: Any) -> None:
         transcript_event = FullDuplexTranscriptEvent.from_event(event)
@@ -63,9 +69,20 @@ class FullDuplexTranscriptHandler:
                     "transcript=%r",
                     admission.transcript[:80],
                 )
+                self._reject_agent_echo(admission.transcript)
             return
 
         self._record_accepted_event(transcript_event)
+
+        # Preemptive warm-up: on a stabilizing partial (non-final) transcript,
+        # speculatively warm the brain so the real turn's first response lands
+        # sooner. Ephemeral server-side; superseded by the real turn. Best
+        # effort — never let it disturb transcript routing.
+        if self._warm_preemptive is not None and not transcript_event.is_final:
+            try:
+                self._warm_preemptive(transcript_event.transcript)
+            except Exception:  # noqa: BLE001
+                logger.debug("[StreamingPipeline] preemptive warm hook failed", exc_info=True)
 
         semantic_gate = evaluate_semantic_interrupt_gate(
             allow_interruptions=self._allow_interruptions(),

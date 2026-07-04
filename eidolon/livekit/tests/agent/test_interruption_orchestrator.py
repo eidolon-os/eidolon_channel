@@ -168,6 +168,44 @@ def test_turn_policy_rollback_allows_fast_false_resume_after_speech_end() -> Non
     assert owner.should_hold_deadline() is False
 
 
+def test_single_char_backchannel_fast_resumes_on_speech_end() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    timeline = TurnTimeline("turn-short-backchannel")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=timeline)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.HOLD,
+            reason="intent:backchannel_await_more_speech",
+            rollback_drop_buffered=False,
+            intent=InterruptIntent.BACKCHANNEL,
+        ),
+        transcript="好",
+        vad_active=True,
+    )
+
+    now = 10.55
+    deferred = owner.defer_false_resume_after_speech_end(
+        transcript="好",
+        duck_suspended=True,
+    )
+
+    assert deferred is False
+    assert owner.should_hold_deadline() is False
+    assert (
+        timeline.attrs["interruption_orchestrator_last_event"]["event"]
+        == "short_false_interruption_fast_resume"
+    )
+
+
 def test_turn_policy_cancel_emits_confirm_cancel_decision() -> None:
     owner = InterruptionOrchestrator(
         evidence_timeout_sec=6.0,
@@ -301,3 +339,66 @@ def test_owner_only_commits_semantic_post_speech_cancel() -> None:
     )
 
     assert hard_stop_owner.should_commit_after_confirmed_cancel() is False
+
+
+def test_semantic_cancel_collects_until_speech_end_before_commit() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    timeline = TurnTimeline("turn-active-correction")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=timeline)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            reason="intent:correction",
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+        ),
+        transcript="不是",
+        vad_active=True,
+        eot_score=0.0,
+    )
+
+    assert owner.should_collect_after_confirmed_cancel() is True
+    assert owner.should_commit_after_confirmed_cancel() is False
+    owner.mark_confirmed_cancel_collecting_turn()
+    assert owner.blocks_framework_completed_turn() is True
+    assert owner.state is InterruptionState.CONFIRMED_CANCEL_COLLECTING_TURN
+
+    now = 10.9
+    assert owner.finish_confirmed_cancel_speech("不是，我刚才说错了") is True
+
+    assert owner.should_commit_after_confirmed_cancel() is True
+    assert owner.current_transcript == "不是，我刚才说错了"
+    assert owner.state is InterruptionState.SUSPENDED_POST_SPEECH_WAIT
+    assert (
+        timeline.attrs["interruption_orchestrator_last_event"]["event"]
+        == "confirmed_cancel_speech_stopped"
+    )
+
+
+def test_hard_stop_cancel_does_not_collect_user_turn() -> None:
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=TurnTimeline("turn-active-hard-stop"))
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            reason="intent:hard_stop",
+            intent=InterruptIntent.HARD_STOP,
+        ),
+        transcript="停一下",
+        vad_active=True,
+        eot_score=0.0,
+    )
+
+    assert owner.should_collect_after_confirmed_cancel() is False
+    assert owner.finish_confirmed_cancel_speech("停一下") is False

@@ -55,8 +55,9 @@ def test_output_flow_does_not_arm_when_agent_is_idle() -> None:
         _filler=None,
     )
 
-    FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
+    armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
 
+    assert armed is False
     ducking.duck.assert_not_called()
     ducking.cancel_timeout.assert_not_called()
 
@@ -72,7 +73,7 @@ async def test_output_flow_arms_duck_deadline_and_records_timeline() -> None:
         last_unduck_time=0.0,
         timeout_task=None,
         cancel_timeout=MagicMock(),
-        duck=MagicMock(),
+        duck=MagicMock(return_value=True),
     )
     deadline = SimpleNamespace(run=_deadline_run)
     timeline = TurnTimeline("turn-duck")
@@ -87,9 +88,10 @@ async def test_output_flow_arms_duck_deadline_and_records_timeline() -> None:
         _duck_deadline=deadline,
     )
 
-    FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
+    armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
     await asyncio.sleep(0)
 
+    assert armed is True
     ducking.cancel_timeout.assert_called_once_with()
     ducking.duck.assert_called_once()
     pipeline._callbacks.on_duck_started.assert_called_once_with()
@@ -97,3 +99,37 @@ async def test_output_flow_arms_duck_deadline_and_records_timeline() -> None:
     assert deadline.timeout_sec == cfg.duck_suspend_timeout_sec
     assert "interrupt_started_at" in timeline.timestamps
     assert timeline.attrs["duck_last_event"]["event"] == "duck_started"
+
+
+def test_output_flow_does_not_record_started_when_output_cannot_suspend() -> None:
+    cfg = _duck_cfg()
+    ducking = SimpleNamespace(
+        installed=True,
+        last_unduck_time=0.0,
+        timeout_task=None,
+        mixer=SimpleNamespace(state="CANCELLED"),
+        cancel_timeout=MagicMock(),
+        duck=MagicMock(return_value=False),
+    )
+    timeline = TurnTimeline("turn-duck-skipped")
+    pipeline = SimpleNamespace(
+        _ducking=ducking,
+        _state=PipelineState.SPEAKING,
+        _get_eot_model=lambda: SimpleNamespace(_config=cfg),
+        _filler=None,
+        _timeline=timeline,
+        _user_speaking_start_time=time.monotonic() - 0.1,
+        _callbacks=SimpleNamespace(on_duck_started=MagicMock()),
+        _duck_deadline=SimpleNamespace(run=MagicMock()),
+    )
+
+    armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
+
+    assert armed is False
+    pipeline._callbacks.on_duck_started.assert_not_called()
+    assert "interrupt_started_at" not in timeline.timestamps
+    assert timeline.attrs["duck_last_event"] == {
+        "event": "duck_skipped",
+        "reason": "output_not_suspendable",
+        "output_state": "CANCELLED",
+    }

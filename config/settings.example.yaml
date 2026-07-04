@@ -116,6 +116,7 @@ turn_policy:
     repeated_noise_min_chars: 2
     repeated_noise_max_chars: 6
     weak_signal_followup_hold_ms: 1500
+    fast_lexical_intents: true
     correction_topic_stability_window_ms: 120
     normal_interrupt_stability_window_ms: 350
     cancel_residual_commit_suppress_ms: 2000
@@ -170,6 +171,11 @@ turn_policy:
     # transcript/EOT/intent evidence decide cancel vs resume/ignore.
     soft_duck_on_playback_speech_start: true
     ignore_when_mic_muted: true
+    # Avoid classifying one-character backchannels such as "好" as playback echo.
+    echo_min_normalized_chars: 2
+    # Short fallback window for fixed assistant speech when TTS in-flight text
+    # is not yet readable; prevents stale assistant text from entering echo/context.
+    assistant_speech_recent_max_age_ms: 3000
 
 observability:
   structured_logs: true

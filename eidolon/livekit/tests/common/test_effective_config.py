@@ -233,6 +233,8 @@ voiceprint:
     assert cfg.turn_policy.attention.soft_duck_on_playback_speech_start is True
     assert cfg.voiceprint.enabled is False
     assert cfg.turn_policy.attention.require_direct_signal_during_playback is True
+    assert cfg.turn_policy.attention.echo_min_normalized_chars == 2
+    assert cfg.turn_policy.attention.assistant_speech_recent_max_age_ms == 3000
 
 
 def test_invalid_voiceprint_threshold_fails_validation(
@@ -358,6 +360,7 @@ def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPa
 
     assert cfg.providers.brain_provider == "eidolon_agent"
     assert cfg.turn_policy.profile == "balanced_semantic"
+    assert cfg.turn_policy.interrupt.fast_lexical_intents is True
 
 
 def test_remote_agent_rejects_legacy_device_token_field(

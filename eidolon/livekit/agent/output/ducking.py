@@ -92,11 +92,12 @@ class OutputDuckingController:
             buffered_sec=self.mixer.buffered_sec,
         )
 
-    def duck(self, *, now: float | None = None) -> None:
+    def duck(self, *, now: float | None = None) -> bool:
         if self.mixer is None:
-            return
+            return False
         self.suspend_start = time.monotonic() if now is None else now
         self.mixer.duck()
+        return self.mixer.state == "SUSPENDED"
 
     def cancel_output(self) -> None:
         self.cancel_timeout()

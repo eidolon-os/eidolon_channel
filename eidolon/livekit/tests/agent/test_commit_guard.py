@@ -59,7 +59,8 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     eot = MagicMock()
     eot.reset = MagicMock()
     eot.record_turn = MagicMock()
-    eot._current_eot_score = 0.0
+    eot._current_eot_score = 1.0
+    eot.current_eot_score = 1.0
     pipeline._get_eot_model = MagicMock(return_value=eot)
 
     # Stub interrupted context ledger path.
@@ -172,6 +173,27 @@ def test_new_speech_reopens_transcript_admission() -> None:
     assert pipeline._suppress_transcripts_until_next_speech is False
 
 
+def test_agent_echo_rejection_suppresses_remaining_segment_transcripts() -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._suppress_transcripts_until_next_speech = False
+    pipeline._timeline = TurnTimeline("echo-turn")
+    effects = MagicMock()
+    pipeline._ensure_interruption_effects = MagicMock(return_value=effects)
+
+    pipeline._reject_agent_echo_transcript("我是你的 AI 助手")
+
+    assert pipeline._suppress_transcripts_until_next_speech is True
+    assert pipeline._timeline.attrs["agent_echo_suppressed"]["text_preview"] == (
+        "我是你的 AI 助手"
+    )
+    effects.rollback_if_suspended.assert_called_once_with(
+        reason="agent_echo",
+        drop_buffered=False,
+    )
+
+
 @pytest.mark.asyncio
 async def test_completed_turn_hook_blocks_while_interruption_owner_waits() -> None:
     pipeline = _make_pipeline_with_session(latest_asr_text="我想问一下")
@@ -207,6 +229,39 @@ async def test_completed_turn_hook_blocks_while_interruption_owner_waits() -> No
         ]["reason"]
         == "interruption_owner_waiting_for_evidence"
     )
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_resolves_backchannel_interruption_candidate() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("backchannel-completed-owner")
+    clear_next = MagicMock()
+    pipeline._factory = SimpleNamespace(
+        llm=SimpleNamespace(llm=SimpleNamespace(clear_next_user_text=clear_next))
+    )
+    pipeline._ensure_runtime_defaults()
+    pipeline._interruption_orchestrator.start_candidate(timeline=pipeline._timeline)
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="好。")
+    )
+
+    assert allowed is False
+    pipeline._interruption_effects.rollback_if_suspended.assert_called_once()
+    rollback_call = pipeline._interruption_effects.rollback_if_suspended.call_args
+    assert rollback_call.kwargs["reason"] == (
+        "framework_completed_interruption_evidence"
+    )
+    assert pipeline._timeline.attrs["decision"]["action"] == "rollback"
+    assert pipeline._timeline.attrs["decision"]["intent"] == "backchannel"
+    assert (
+        pipeline._timeline.attrs["framework_completed_interruption_evidence"][
+            "intent"
+        ]
+        == "backchannel"
+    )
+    pipeline._session.clear_user_turn.assert_called_once()
+    clear_next.assert_called_once_with(reason="interruption_owner_resolved:rollback")
 
 
 def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:

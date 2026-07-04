@@ -78,12 +78,17 @@ class FullDuplexInterruptionEffects:
         )
         self._stable_signal_timer: asyncio.Task | None = None
 
-    def interrupt_current_turn(self, *, force: bool = False) -> None:
+    def interrupt_current_turn(
+        self,
+        *,
+        force: bool = False,
+        allow_cancelled_output: bool = False,
+    ) -> None:
         """Interrupt the current AgentSession turn."""
 
         if not force and not self._allow_interruptions():
             return
-        if not force and self._ducking.is_cancelled:
+        if not force and self._ducking.is_cancelled and not allow_cancelled_output:
             logger.debug(
                 "[FullDuplexInterruptionEffects] interrupt skipped; output already CANCELLED"
             )
@@ -175,8 +180,13 @@ class FullDuplexInterruptionEffects:
             )
             return
         orchestrator = self._get_interruption_orchestrator()
+        collect_confirmed_cancel_turn = (
+            orchestrator.should_collect_after_confirmed_cancel()
+        )
         commit_post_speech_candidate = (
-            orchestrator.should_commit_after_confirmed_cancel()
+            False
+            if collect_confirmed_cancel_turn
+            else orchestrator.should_commit_after_confirmed_cancel()
         )
         post_speech_transcript = (
             orchestrator.current_transcript if commit_post_speech_candidate else ""
@@ -193,7 +203,10 @@ class FullDuplexInterruptionEffects:
         self._snapshot_context()
         self._publish_playback_stop("interrupt_cancel")
         self._ducking.cancel_output()
-        orchestrator.resolve(action="cancel", reason="eot_cancel")
+        if collect_confirmed_cancel_turn:
+            orchestrator.mark_confirmed_cancel_collecting_turn()
+        else:
+            orchestrator.resolve(action="cancel", reason="eot_cancel")
         self._callbacks.on_duck_resolved("cancel")
         timeline = self._get_timeline()
         if timeline is not None:
@@ -213,7 +226,10 @@ class FullDuplexInterruptionEffects:
             True,
             time.monotonic() + self._cancel_residual_commit_suppress_sec(),
         )
-        self.interrupt_current_turn(force=force)
+        self.interrupt_current_turn(
+            force=force,
+            allow_cancelled_output=True,
+        )
         if commit_post_speech_candidate:
             committed = self._commit_post_speech_interruption_candidate(
                 "post_speech_confirmed_cancel",
@@ -264,6 +280,8 @@ class FullDuplexInterruptionEffects:
                 drop_buffered=drop_buffered,
             )
             timeline.mark("interrupt_resolved_at")
+            timeline.set_attr("interrupt_action", "rollback")
+            timeline.set_attr("rollback_drop_buffered", drop_buffered)
             timeline.set_attr("rollback_reason", reason)
         if waiting_post_speech_evidence:
             reject_reason = (

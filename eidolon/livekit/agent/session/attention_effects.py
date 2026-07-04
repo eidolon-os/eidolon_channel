@@ -30,7 +30,7 @@ class AttentionEffectHandler:
         get_duck_active: Callable[[], bool],
         latest_client_audio_state: Callable[[str | None], ClientAudioState | None],
         get_timeline: Callable[[], TurnTimeline | None],
-        on_duck: Callable[[], None],
+        on_duck: Callable[[], bool | None],
         on_interrupt: Callable[[], None],
         get_eot_score: Callable[[], float] | None = None,
     ) -> None:
@@ -44,26 +44,25 @@ class AttentionEffectHandler:
         self._on_duck = on_duck
         self._on_interrupt = on_interrupt
 
-    def handle_speaking_started(self) -> None:
+    def handle_speaking_started(self) -> bool:
         decision = self.decide("", speech_started=True)
         self.record_admission(decision)
         if not self._turn_policy.attention.enforce:
-            self._on_duck()
-            return
+            return bool(self._on_duck())
         if decision.action is AdmissionAction.HARD_INTERRUPT:
             timeline = self._get_timeline()
             if timeline is not None:
                 timeline.mark("interrupt_started_at")
             self._on_interrupt()
-            return
+            return False
         if decision.action is AdmissionAction.DUCK_AND_DECIDE:
-            self._on_duck()
-            return
+            return bool(self._on_duck())
         logger.info(
             "[AttentionEffectHandler] attention admission: %s reason=%s; no duck",
             decision.action.value,
             decision.reason,
         )
+        return False
 
     def allows_eot_check(
         self,

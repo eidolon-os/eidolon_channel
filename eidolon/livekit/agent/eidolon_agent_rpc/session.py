@@ -254,6 +254,7 @@ class EidolonAgentSession:
         conversation_id: str,
         metadata: dict | None = None,
         trace_id: str | None = None,
+        speculative: bool = False,
     ) -> tuple[str, AsyncIterator[TurnPayload]]:
         """Begin a new turn. Returns ``(turn_id, payload_iterator)``.
 
@@ -265,6 +266,10 @@ class EidolonAgentSession:
 
         ``trace_id`` is the cross-hop correlation id (channel->agent->memory).
         Minted here per turn when the caller doesn't supply one.
+
+        ``speculative`` marks a preemptive warm-up turn on a partial transcript:
+        the brain streams a reply but keeps it ephemeral (no persist/fanout)
+        until confirmed, so an unused guess is harmless. See PreemptiveWarmer.
         """
         if self._closed:
             raise RuntimeError("EidolonAgentSession is closed")
@@ -292,6 +297,7 @@ class EidolonAgentSession:
                         conversation_id=conversation_id,
                         text=text,
                         trace_id=trace_id,
+                        speculative=speculative,
                         metadata=md,
                     )
                 )

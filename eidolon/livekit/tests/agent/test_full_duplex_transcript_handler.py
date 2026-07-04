@@ -48,6 +48,7 @@ def _handler(
         "forwarded": [],
         "attention": [],
         "speaker_checks": [],
+        "echo_rejected": [],
     }
 
     return FullDuplexTranscriptHandler(
@@ -66,6 +67,7 @@ def _handler(
         run_semantic_interrupt=lambda transcript, is_final: calls["semantic"].append(
             (transcript, is_final)
         ),
+        reject_agent_echo=lambda transcript: calls["echo_rejected"].append(transcript),
         forward_to_base=lambda event: calls["forwarded"].append(event),
     ), calls, gate
 
@@ -145,3 +147,23 @@ def test_transcript_handler_drops_rejected_admission() -> None:
     assert calls["attention"] == []
     assert calls["semantic"] == []
     assert calls["forwarded"] == []
+    assert calls["echo_rejected"] == ["你好"]
+
+
+def test_transcript_handler_does_not_echo_rollback_for_other_rejections() -> None:
+    gate = _AdmissionGate(
+        TranscriptAdmissionDecision(
+            accepted=False,
+            reason="suppressed_until_next_speech",
+            transcript="迟到字幕",
+            speaker_id="user",
+            is_final=True,
+        )
+    )
+    handler, calls, _ = _handler(admission_gate=gate)
+
+    handler.handle(_event("迟到字幕", final=True))
+
+    assert calls["recorded"] == []
+    assert calls["forwarded"] == []
+    assert calls["echo_rejected"] == []

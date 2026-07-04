@@ -46,6 +46,19 @@ def test_real_user_turn_not_flagged_as_echo() -> None:
     assert gate.is_echo("帮我换个话题") is False
 
 
+def test_one_character_backchannel_is_not_echo() -> None:
+    gate = _gate("你好！我是你的 AI 助手，请问有什么可以帮你的？")
+    assert gate.is_echo("好") is False
+
+
+def test_echo_min_chars_is_configurable() -> None:
+    gate = TranscriptEchoGate(
+        get_agent_text=lambda: "你好！我是你的 AI 助手，请问有什么可以帮你的？",
+        min_normalized_chars=1,
+    )
+    assert gate.is_echo("好") is True
+
+
 def test_no_agent_text_means_not_echo() -> None:
     # Agent not speaking (no in-flight TTS text) → nothing to echo.
     gate = _gate("")
@@ -56,3 +69,29 @@ def test_empty_transcript_is_not_echo() -> None:
     gate = _gate(AGENT)
     assert gate.is_echo("") is False
     assert gate.is_echo("   ") is False
+
+
+def test_echo_gate_can_use_welcome_text_from_assistant_ledger() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    ledger = AssistantSpeechLedger()
+    ledger.record("你好！我是你的 AI 助手，请问有什么可以帮你的？", source="welcome")
+    gate = TranscriptEchoGate(
+        get_agent_text=lambda: ledger.current_or_recent_text(max_age_ms=3000)
+    )
+
+    assert gate.is_echo("我是你的 AI 助手") is True
+
+
+def test_assistant_ledger_does_not_return_stale_text() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    now = 100.0
+    ledger = AssistantSpeechLedger(clock=lambda: now)
+    ledger.record("你好！我是你的 AI 助手，请问有什么可以帮你的？", source="welcome")
+    now = 104.0
+    gate = TranscriptEchoGate(
+        get_agent_text=lambda: ledger.current_or_recent_text(max_age_ms=3000)
+    )
+
+    assert gate.is_echo("我是你的 AI 助手") is False

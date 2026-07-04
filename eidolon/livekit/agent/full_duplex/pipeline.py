@@ -45,7 +45,6 @@ AgentSession config rather than override.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -57,13 +56,10 @@ if TYPE_CHECKING:
     from livekit.rtc import Room
 
 from eidolon_sdk.biz.contracts import (
-    COMPANION_UI_STATE_TOPIC,
     CONTROL_OP_PLAYBACK_STOP,
-    CONTROL_TOPIC,
     INTERACTION_MODE_FULL_DUPLEX,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
-    WIRE_SCHEMA_VERSION,
 )
 from eidolon.livekit.common.config import (
     ObservabilityConfig,
@@ -80,15 +76,11 @@ from ..pipeline.base import BasePipeline
 from ..pipeline.types import PipelineCallbacks, PipelineState
 from ..session.agent_state import AgentStateEffectHandler
 from ..session.attention_effects import AttentionEffectHandler
-from ..session.client_control import (
-    append_client_control_event,
-    build_client_control_event,
-    build_session_client_control_envelope,
-)
 from .client_preempt import (
     ExplicitClientPreemptHandler,
     ExplicitClientPreemptLedger,
 )
+from .client_control_publisher import FullDuplexClientControlPublisher
 from .client_audio import FullDuplexClientAudioStateView, FullDuplexRoomDataBridge
 from .context_ledger import FullDuplexContextLedger
 from .idle_watchdog import (
@@ -925,18 +917,11 @@ class StreamingPipeline(BasePipeline):
         reason: str,
         turn_id: str,
     ) -> None:
-        event = build_client_control_event(op=op, reason=reason, turn_id=turn_id)
-        if timeline is None:
-            pending = list(getattr(self, "_pending_client_control_events", []) or [])
-            self._pending_client_control_events = append_client_control_event(
-                pending,
-                event,
-            )
-            return
-        events = list(timeline.attrs.get("client_control_events") or ())
-        timeline.set_attr(
-            "client_control_events",
-            append_client_control_event(events, event),
+        self._ensure_client_control_publisher().record_event(
+            timeline=timeline,
+            op=op,
+            reason=reason,
+            turn_id=turn_id,
         )
 
     def _build_turn_handling(self) -> dict:
@@ -979,6 +964,11 @@ class StreamingPipeline(BasePipeline):
             self._lifecycle = FullDuplexSessionLifecycle(self)
         return self._lifecycle
 
+    def _ensure_client_control_publisher(self) -> FullDuplexClientControlPublisher:
+        if not hasattr(self, "_client_control_publisher"):
+            self._client_control_publisher = FullDuplexClientControlPublisher(self)
+        return self._client_control_publisher
+
     def _record_explicit_client_preempt_decision(
         self,
         *,
@@ -1006,21 +996,7 @@ class StreamingPipeline(BasePipeline):
         self,
         timeline: TurnTimeline | None = None,
     ) -> None:
-        pending = list(getattr(self, "_pending_client_control_events", []) or [])
-        if not pending:
-            return
-        timeline = timeline or getattr(self, "_timeline", None)
-        if timeline is None:
-            return
-        turn_id = getattr(timeline, "turn_id", "")
-        events = list(timeline.attrs.get("client_control_events") or ())
-        for event in pending:
-            attached = dict(event)
-            if not attached.get("turn_id"):
-                attached["turn_id"] = turn_id
-            events = append_client_control_event(events, attached)
-        timeline.set_attr("client_control_events", events)
-        self._pending_client_control_events = []
+        self._ensure_client_control_publisher().apply_pending(timeline)
 
     def _mark_explicit_client_preempt_resolved(
         self,
@@ -1194,43 +1170,10 @@ class StreamingPipeline(BasePipeline):
             )
 
     def _publish_companion_ui_state(self, state: str, reason: str) -> None:
-        """Best-effort state bridge for thin clients such as ESP32 displays."""
-        room = getattr(self, "_room", None)
-        local = getattr(room, "local_participant", None) if room else None
-        if local is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-
-        payload = {
-            "schema_v": WIRE_SCHEMA_VERSION,
-            "type": COMPANION_UI_STATE_TOPIC,
-            "state": state,
-            "reason": reason,
-            "ts_ms": int(time.time() * 1000),
-        }
-
-        async def _send() -> None:
-            await local.publish_data(
-                json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-                reliable=True,
-                topic=COMPANION_UI_STATE_TOPIC,
-            )
-
-        task = loop.create_task(_send())
-
-        def _log_failure(done: asyncio.Task[None]) -> None:
-            try:
-                done.result()
-            except Exception:
-                logger.debug(
-                    "[StreamingPipeline] failed to publish companion UI state",
-                    exc_info=True,
-                )
-
-        task.add_done_callback(_log_failure)
+        self._ensure_client_control_publisher().publish_companion_ui_state(
+            state,
+            reason,
+        )
 
     def _publish_client_control(
         self,
@@ -1239,95 +1182,11 @@ class StreamingPipeline(BasePipeline):
         reason: str,
         payload: dict[str, object] | None = None,
     ) -> None:
-        """Best-effort session-local command for thin clients.
-
-        Uses the shared ``eidolon.control`` topic with ``src.type=channel`` so
-        clients can distinguish it from Hub's audited cross-session commands.
-        """
-        room = getattr(self, "_room", None)
-        local = getattr(room, "local_participant", None) if room else None
-        if local is None:
-            logger.warning(
-                "[StreamingPipeline] skipped client control op=%s reason=%s "
-                "turn_id=%s because local participant is unavailable",
-                op,
-                reason,
-                getattr(getattr(self, "_timeline", None), "turn_id", ""),
-            )
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning(
-                "[StreamingPipeline] skipped client control op=%s reason=%s "
-                "because no running event loop is available",
-                op,
-                reason,
-            )
-            return
-
-        timeline = getattr(self, "_timeline", None)
-        turn_id = getattr(timeline, "turn_id", "") if timeline is not None else ""
-        envelope = build_session_client_control_envelope(
+        self._ensure_client_control_publisher().publish_client_control(
             op=op,
             reason=reason,
             payload=payload,
-            turn_id=turn_id,
         )
-        control_payload = envelope["payload"]
-        self._record_client_control_event(
-            timeline=timeline,
-            op=op,
-            reason=reason,
-            turn_id=turn_id,
-        )
-
-        outcome = control_payload.get("outcome")
-        logger.info(
-            "[StreamingPipeline] queued client control op=%s reason=%s outcome=%s "
-            "turn_id=%s topic=%s",
-            op,
-            reason,
-            outcome,
-            turn_id,
-            CONTROL_TOPIC,
-        )
-
-        async def _send() -> None:
-            await local.publish_data(
-                json.dumps(envelope, separators=(",", ":")).encode("utf-8"),
-                reliable=True,
-                topic=CONTROL_TOPIC,
-            )
-
-        task = loop.create_task(_send())
-
-        def _log_failure(done: asyncio.Task[None]) -> None:
-            try:
-                done.result()
-            except Exception:
-                logger.warning(
-                    "[StreamingPipeline] failed to publish client control op=%s "
-                    "reason=%s outcome=%s turn_id=%s topic=%s",
-                    op,
-                    reason,
-                    outcome,
-                    turn_id,
-                    CONTROL_TOPIC,
-                    exc_info=True,
-                )
-                return
-            logger.info(
-                "[StreamingPipeline] published client control op=%s reason=%s "
-                "outcome=%s turn_id=%s topic=%s",
-                op,
-                reason,
-                outcome,
-                turn_id,
-                CONTROL_TOPIC,
-            )
-
-        task.add_done_callback(_log_failure)
 
     def _agent_state_to_companion_ui_state(self, state: str) -> str:
         if state == "thinking":

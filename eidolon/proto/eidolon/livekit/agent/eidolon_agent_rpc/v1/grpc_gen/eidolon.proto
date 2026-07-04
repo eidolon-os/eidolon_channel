@@ -55,6 +55,16 @@ message StartTurn {
   // not a required schema. See eidolon_sdk.biz.chat_stream for the well-known
   // TurnEvent.data string enums (DeltaRole / TerminationCause / TurnDoneStatus).
   google.protobuf.Struct metadata = 5;
+  // Correlation id for this turn, minted by the caller (channel), propagated
+  // channel -> agent -> memory so one exchange can be traced across hops.
+  // Empty = the server derives one (call metadata x-trace-id, else a uuid).
+  string trace_id = 6;
+  // Speculative (preemptive) turn: the caller started this on a partial ASR
+  // transcript to warm the LLM. The server streams a reply but MUST NOT
+  // persist or fan out to memory until the turn is confirmed (a subsequent
+  // non-speculative StartTurn for the same conversation promotes it; a cancel
+  // or a superseding turn discards it with no persistence).
+  bool speculative = 7;
 }
 
 // Cancel an in-flight turn. ``played_chars``/``played_ms`` report how much of

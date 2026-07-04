@@ -71,9 +71,13 @@ class EidolonAgentServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def PushSignal(self, request, context):
-        """Push realtime signals (emotion, prosody, vision tags) for the current
-        session without driving a turn. The server fuses these and uses them in
-        the next compile pass.
+        """Push realtime signals (emotion, prosody, vision tags) OUT OF BAND — i.e.
+        when no Chat stream is open, or from a caller that isn't the one driving
+        the turn. Requires session_id to route. Prefer the inline
+        ChatRequest.signal frame whenever a Chat stream is already open for the
+        session: it shares the connection, needs no session_id, and is fused into
+        the very next compile pass. Use this unary RPC only for the out-of-band
+        case; the two paths converge on the same SignalFuser.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

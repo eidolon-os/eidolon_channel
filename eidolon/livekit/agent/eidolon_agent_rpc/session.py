@@ -253,6 +253,7 @@ class EidolonAgentSession:
         text: str,
         conversation_id: str,
         metadata: dict | None = None,
+        trace_id: str | None = None,
     ) -> tuple[str, AsyncIterator[TurnPayload]]:
         """Begin a new turn. Returns ``(turn_id, payload_iterator)``.
 
@@ -261,11 +262,15 @@ class EidolonAgentSession:
         emits ``DONE``. On ``ERROR`` events it raises :class:`TurnError`.
         Callers (typically :class:`EidolonAgentGrpcLlmStream`) dispatch on
         payload type.
+
+        ``trace_id`` is the cross-hop correlation id (channel->agent->memory).
+        Minted here per turn when the caller doesn't supply one.
         """
         if self._closed:
             raise RuntimeError("EidolonAgentSession is closed")
 
         turn_id = uuid.uuid4().hex
+        trace_id = trace_id or uuid.uuid4().hex
         queue: asyncio.Queue = asyncio.Queue()
         self._inbox[turn_id] = queue
 
@@ -274,12 +279,19 @@ class EidolonAgentSession:
             md = struct_pb2.Struct()
             if metadata:
                 md.update(metadata)
+            logger.debug(
+                "[EidolonAgentSession] start_turn turn_id=%s trace_id=%s conv=%s",
+                turn_id,
+                trace_id,
+                conversation_id,
+            )
             await self._write(
                 pb.ChatRequest(
                     start=pb.StartTurn(
                         turn_id=turn_id,
                         conversation_id=conversation_id,
                         text=text,
+                        trace_id=trace_id,
                         metadata=md,
                     )
                 )

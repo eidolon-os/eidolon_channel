@@ -981,6 +981,74 @@ def test_verify_real_call_room_per_case_checks_stt_and_audio() -> None:
     )
 
 
+def test_verify_real_call_room_accepts_half_duplex_ptt_segment_evidence() -> None:
+    cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
+    committed = CaseResult(
+        "phase_a_ptt_normal_release_commits_001",
+        "half_duplex_ptt_phase_a",
+        "livekit_room",
+        True,
+        metrics={"agent_audio_bytes": 40_000},
+    )
+    commit_record = {
+        "attrs": {
+            "room_name": "voice-bench-phase_a_ptt_normal_release_commits_001-12345678",
+            "pipeline": "half_duplex_ptt_segment",
+            "ptt_segment": {
+                "terminal": {"action": "commit", "reason": "segment_transcribed"},
+                "stt_mode": "streaming",
+                "transcript_preview": "帮我详细介绍一下这个方案。",
+            },
+        },
+        "timestamps": {},
+    }
+
+    assert (
+        verify_real_call(
+            committed,
+            runner="livekit_room",
+            provider_config=cfg,
+            case_records=[commit_record],
+        )
+        == []
+    )
+
+
+def test_verify_real_call_room_accepts_half_duplex_ptt_reject_without_stt() -> None:
+    cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
+    rejected = CaseResult(
+        "phase_a_ptt_tap_to_stop_cancels_001",
+        "half_duplex_ptt_phase_a",
+        "livekit_room",
+        True,
+        metrics={
+            "agent_audio_bytes": 0,
+            "expected_agent_audio_response": "none",
+        },
+    )
+    reject_record = {
+        "attrs": {
+            "room_name": "voice-bench-phase_a_ptt_tap_to_stop_cancels_001-12345678",
+            "pipeline": "half_duplex_ptt_segment",
+            "ptt_segment": {
+                "terminal": {"action": "reject", "reason": "tap_to_stop"},
+                "stt_mode": "none",
+            },
+        },
+        "timestamps": {},
+    }
+
+    assert (
+        verify_real_call(
+            rejected,
+            runner="livekit_room",
+            provider_config=cfg,
+            case_records=[reject_record],
+        )
+        == []
+    )
+
+
 def test_apply_real_call_verification_run_level_brain(tmp_path) -> None:
     cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
 

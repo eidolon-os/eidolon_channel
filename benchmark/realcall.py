@@ -126,6 +126,8 @@ def _verify_room_timeline(
 
     if any(_is_control_only_explicit_client_preempt(record) for record in case_records):
         return failures
+    if any(_has_half_duplex_ptt_segment_evidence(record) for record in case_records):
+        return failures
 
     stt_provider = (provider_config or {}).get("stt", "")
     if stt_provider:
@@ -147,6 +149,30 @@ def _is_control_only_explicit_client_preempt(record: dict[str, Any]) -> bool:
     return bool(attrs.get("control_only")) and bool(
         _mapping(attrs.get("explicit_client_interrupt")).get("ptt")
     )
+
+
+def _has_half_duplex_ptt_segment_evidence(record: dict[str, Any]) -> bool:
+    attrs = _mapping(record.get("attrs"))
+    if attrs.get("pipeline") != "half_duplex_ptt_segment":
+        return False
+    segment = _mapping(attrs.get("ptt_segment"))
+    terminal = _mapping(segment.get("terminal"))
+    action = str(terminal.get("action") or "")
+    if action == "commit":
+        return (
+            str(segment.get("stt_mode") or "") not in {"", "none"}
+            and bool(str(segment.get("transcript_preview") or "").strip())
+        )
+    if action == "reject":
+        # tap-to-stop / empty-hold paths deliberately do not call STT; the real
+        # evidence is the room data/control timeline, not a provider transcript.
+        return str(terminal.get("reason") or "") in {
+            "tap_to_stop",
+            "empty_hold",
+            "short_press",
+            "stt_empty",
+        }
+    return False
 
 
 def _has_transcript_timeline_evidence(record: dict[str, Any]) -> bool:

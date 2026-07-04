@@ -11,7 +11,7 @@ import pytest
 
 from eidolon.livekit.agent.full_duplex.output_flow import FullDuplexOutputFlow
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 
 
 def _duck_cfg() -> SimpleNamespace:
@@ -41,9 +41,9 @@ def test_output_flow_installs_duck_mixer_via_ducking_controller() -> None:
     ducking.install.assert_called_once_with(session, cfg)
 
 
-def test_output_flow_does_not_arm_when_agent_is_idle() -> None:
+def test_output_flow_does_not_arm_when_ducking_not_installed() -> None:
     ducking = SimpleNamespace(
-        installed=True,
+        installed=False,
         last_unduck_time=0.0,
         cancel_timeout=MagicMock(),
         duck=MagicMock(),
@@ -60,6 +60,41 @@ def test_output_flow_does_not_arm_when_agent_is_idle() -> None:
     assert armed is False
     ducking.duck.assert_not_called()
     ducking.cancel_timeout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_output_flow_arms_after_attention_admits_playback_even_if_state_idle() -> None:
+    async def _deadline_run(timeout_sec: float) -> None:
+        deadline.timeout_sec = timeout_sec
+
+    cfg = _duck_cfg()
+    ducking = SimpleNamespace(
+        installed=True,
+        last_unduck_time=0.0,
+        timeout_task=None,
+        cancel_timeout=MagicMock(),
+        duck=MagicMock(return_value=True),
+    )
+    deadline = SimpleNamespace(run=_deadline_run)
+    timeline = TurnTimeline("turn-client-playback")
+    pipeline = SimpleNamespace(
+        _ducking=ducking,
+        _state=PipelineState.IDLE,
+        _get_eot_model=lambda: SimpleNamespace(_config=cfg),
+        _filler=None,
+        _timeline=timeline,
+        _user_speaking_start_time=time.monotonic() - 0.1,
+        _callbacks=SimpleNamespace(on_duck_started=MagicMock()),
+        _duck_deadline=deadline,
+    )
+
+    armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
+    await asyncio.sleep(0)
+
+    assert armed is True
+    ducking.cancel_timeout.assert_called_once_with()
+    ducking.duck.assert_called_once()
+    assert "interrupt_started_at" in timeline.timestamps
 
 
 @pytest.mark.asyncio

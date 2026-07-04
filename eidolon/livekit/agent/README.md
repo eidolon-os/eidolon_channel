@@ -51,8 +51,11 @@ entrypoints; implementation code lives under named boundary packages.
   attention admission, tier policy chain, and runtime state.
 - `output/` contains output-side components: playback controller, ducking state,
   and filler playback.
-- `pipeline/` contains provider-neutral stage wrappers for STT, TTS, VAD, and
-  LLM.
+- `providers/` contains provider-neutral stage wrappers for STT, TTS, VAD, and
+  LLM. Concrete model integrations and model resources still live under
+  `eidolon.livekit.plugins`.
+- `shared/` contains runtime primitives used by both mode pipelines, such as
+  `BasePipeline`, `PipelineState`, callbacks, and turn-id generation.
 - `runtime/` contains worker runtime resolution: metadata parsing and admin
   resolve helpers.
 - `context/` contains conversation-context ledger helpers.
@@ -61,6 +64,8 @@ entrypoints; implementation code lives under named boundary packages.
 - `speaker_verification/` contains voiceprint service/store orchestration.
   Model providers and model resources live under `eidolon.livekit.plugins`.
 
-New internal code should import concrete modules directly. The root
+New internal code should import concrete modules directly. Use
+`eidolon.livekit.agent.providers` for STT/TTS/VAD/LLM stage wrappers and
+`eidolon.livekit.agent.shared` for pipeline primitives. The root
 `eidolon.livekit.agent` package no longer re-exports mode pipelines and should
 not be used as a compatibility facade.

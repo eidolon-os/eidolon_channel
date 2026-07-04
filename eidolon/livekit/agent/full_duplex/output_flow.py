@@ -7,8 +7,6 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from ..pipeline.types import PipelineState
-
 if TYPE_CHECKING:
     from livekit.agents.voice import AgentSession
 
@@ -49,12 +47,6 @@ class FullDuplexOutputFlow:
         """Fade output to silence and arm the suspend-window fallback."""
         pipeline = self._pipeline
         if not pipeline._ducking.installed:
-            return False
-        if pipeline._state != PipelineState.SPEAKING:
-            logger.debug(
-                "[StreamingPipeline] duck skipped - agent not speaking (state=%s)",
-                pipeline._state.name if hasattr(pipeline._state, "name") else pipeline._state,
-            )
             return False
         cfg = pipeline._get_eot_model()._config
         if pipeline._filler is not None and pipeline._filler.is_playing:

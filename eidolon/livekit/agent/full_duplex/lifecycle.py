@@ -12,8 +12,8 @@ from eidolon_sdk.biz.contracts import (
 )
 
 from ..integration import framework_patches
-from ..pipeline.base import BasePipeline
-from ..pipeline.types import generate_turn_id
+from ..shared.pipeline import BasePipeline
+from ..shared.types import generate_turn_id
 
 if TYPE_CHECKING:
     from livekit.rtc import Room

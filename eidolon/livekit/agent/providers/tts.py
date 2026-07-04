@@ -1,4 +1,4 @@
-"""Text-to-Speech (TTS) stage for the voice pipeline.
+"""Text-to-Speech (TTS) provider stage for voice pipelines.
 
 Provider-agnostic wrapper around any LiveKit-compatible ``tts.TTS`` instance.
 The concrete plugin is built by the caller (typically in ``server.py`` based
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from livekit.agents import tts as lk_tts
     from livekit.rtc import AudioFrame
 
-logger = logging.getLogger("pipeline.tts")
+logger = logging.getLogger("providers.tts")
 
 
 @dataclass

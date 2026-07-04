@@ -1,4 +1,4 @@
-"""Shared types for the voice agent pipeline."""
+"""Shared runtime types for half/full duplex pipelines."""
 
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.pipeline.types import generate_turn_id
+from eidolon.livekit.agent.shared.types import generate_turn_id
 
 logger = logging.getLogger("agent")
 

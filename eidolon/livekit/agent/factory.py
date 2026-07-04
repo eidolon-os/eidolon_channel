@@ -30,10 +30,10 @@ if TYPE_CHECKING:
 
     from eidolon.livekit.common.config import AgentConfig
 
-from .pipeline.llm import LlmParams, LivekitLlmStage
-from .pipeline.stt import SttParams, SttStage
-from .pipeline.tts import TtsParams, TtsStage
-from .pipeline.vad import VadStage
+from .providers.llm import LlmParams, LivekitLlmStage
+from .providers.stt import SttParams, SttStage
+from .providers.tts import TtsParams, TtsStage
+from .providers.vad import VadStage
 
 logger = logging.getLogger("agent")
 

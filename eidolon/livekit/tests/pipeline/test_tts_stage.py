@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from eidolon.livekit.agent.pipeline.tts import TtsStage
+from eidolon.livekit.agent.providers.tts import TtsStage
 
 
 class _FakeStream:

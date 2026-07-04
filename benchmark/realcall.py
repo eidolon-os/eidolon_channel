@@ -329,7 +329,7 @@ async def preflight_real_stack(
     from livekit.agents.types import APIConnectOptions
 
     from eidolon.livekit.agent.factory import SharedStageFactory
-    from eidolon.livekit.agent.pipeline.llm import LlmInput
+    from eidolon.livekit.agent.providers.llm import LlmInput
     from eidolon.livekit.common.config import load_effective_config
 
     def _pcm_sine(duration_ms: int = 300, sample_rate: int = 16_000) -> bytes:

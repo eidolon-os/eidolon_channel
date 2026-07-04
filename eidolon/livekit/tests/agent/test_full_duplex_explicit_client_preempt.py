@@ -22,7 +22,7 @@ from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig

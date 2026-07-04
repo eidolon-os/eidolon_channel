@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.agent.turn_policy import (
@@ -92,6 +92,22 @@ def test_attention_soft_ducks_playback_speech_start_by_default() -> None:
     decision = admission.decide(
         AttentionInput(
             agent_speaking=True,
+            client_state=_client_state(),
+            transcript="",
+            speech_started=True,
+        )
+    )
+
+    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
+    assert decision.reason == "playback_speech_start_soft_duck"
+
+
+def test_attention_trusts_client_playback_when_internal_state_idle() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=False,
             client_state=_client_state(),
             transcript="",
             speech_started=True,
@@ -352,6 +368,21 @@ def test_pipeline_attention_soft_ducks_on_playback_speech_start() -> None:
         pipeline._timeline.attrs["attention_admission"]["reason"]
         == "playback_speech_start_soft_duck"
     )
+
+
+def test_pipeline_attention_does_not_duck_idle_speech_start() -> None:
+    pipeline = _pipeline_with_client_state(
+        None,
+        pipeline_state=PipelineState.IDLE,
+        soft_duck_on_playback_speech_start=True,
+    )
+
+    pipeline._ensure_runtime_defaults()
+    started = pipeline._attention_effects.handle_speaking_started()
+
+    assert started is False
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["reason"] == "agent_not_speaking"
 
 
 def test_pipeline_attention_routes_low_evidence_transcript_after_soft_duck() -> None:

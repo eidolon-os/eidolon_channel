@@ -12,7 +12,7 @@ from eidolon.livekit.common.config import (
     VoiceprintConfig,
 )
 
-from ..pipeline.types import PipelineCallbacks, PipelineState
+from ..shared.types import PipelineCallbacks, PipelineState
 from ..session.voiceprint import VoiceprintTurnObserver
 from ..turn_policy import TurnPolicyRuntime
 

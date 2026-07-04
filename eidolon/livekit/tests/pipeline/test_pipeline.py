@@ -13,7 +13,7 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.pipeline.base import BasePipeline
+from eidolon.livekit.agent.shared.pipeline import BasePipeline
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ class _TestPipeline(BasePipeline):
 class TestSttStage:
     @pytest.mark.asyncio
     async def test_recognize_streaming_returns_on_end_of_speech(self):
-        from eidolon.livekit.agent.pipeline.stt import SttStage
+        from eidolon.livekit.agent.providers.stt import SttStage
         from eidolon.livekit.tests._harness.mocks import (
             MockSTT,
             ScriptedTranscript,
@@ -62,7 +62,7 @@ class TestSttStage:
 
 class TestBasePipeline:
     def test_initial_state(self):
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks, PipelineState
+        from eidolon.livekit.agent.shared import PipelineCallbacks, PipelineState
 
         mock_factory = MagicMock()
         pipeline = _TestPipeline(mock_factory, callbacks=PipelineCallbacks())
@@ -73,7 +73,7 @@ class TestBasePipeline:
 
     @pytest.mark.asyncio
     async def test_shutdown_resets_state(self):
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks, PipelineState
+        from eidolon.livekit.agent.shared import PipelineCallbacks, PipelineState
 
         mock_factory = MagicMock()
         pipeline = _TestPipeline(mock_factory, callbacks=PipelineCallbacks())
@@ -88,7 +88,7 @@ class TestBasePipeline:
 
     def test_on_agent_state_changed_callbacks(self):
         """Test that _on_agent_state_changed fires correct callbacks."""
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks, PipelineState
+        from eidolon.livekit.agent.shared import PipelineCallbacks, PipelineState
 
         callbacks_fired: list[str] = []
 
@@ -126,7 +126,7 @@ class TestBasePipeline:
 
     def test_on_user_transcribed_callbacks(self):
         """Test that _on_user_transcribed fires correct callbacks."""
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks
+        from eidolon.livekit.agent.shared import PipelineCallbacks
 
         callbacks_fired: list[str] = []
 
@@ -157,7 +157,7 @@ class TestBasePipeline:
 
     def test_on_session_error_callback(self):
         """Test that _on_session_error fires the error callback."""
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks
+        from eidolon.livekit.agent.shared import PipelineCallbacks
 
         errors: list = []
 
@@ -180,7 +180,7 @@ class TestBasePipeline:
 
 class TestTypes:
     def test_generate_turn_id(self):
-        from eidolon.livekit.agent.pipeline import generate_turn_id
+        from eidolon.livekit.agent.shared import generate_turn_id
 
         id1 = generate_turn_id()
         id2 = generate_turn_id()

@@ -10,7 +10,7 @@ from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output import OutputDuckingController
-from eidolon.livekit.agent.pipeline.types import PipelineCallbacks
+from eidolon.livekit.agent.shared.types import PipelineCallbacks
 from eidolon.livekit.agent.session.interruption import SoftInterruptController
 from eidolon.livekit.agent.turn_policy import Decision
 from eidolon.livekit.agent.turn_policy.constants import STABLE_SIGNAL_WAIT_REASON_PREFIX

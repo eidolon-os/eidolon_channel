@@ -1,12 +1,12 @@
-"""Base pipeline — shared state and logic for all pipeline implementations.
+"""Base pipeline — shared state and logic for all duplex implementations.
 
 ============================================================================
 ARCHITECTURE DECISION (ADR — why Stage wrappers exist)
 ============================================================================
 
-The ``pipeline/`` subpackage wraps each plugin (STT, TTS, VAD, LLM) in
+The ``providers/`` subpackage wraps each plugin (STT, TTS, VAD, LLM) in
 a Stage class with ``warmup()`` / ``shutdown()`` methods. This may look
-like boilerplate, but framework doesn't manage warmup itself:
+like boilerplate, but the framework doesn't manage warmup itself:
 
   * Framework's ``AgentSession.start(agent, room, ...)`` accepts raw
     plugin instances and connects them to the room I/O. It does NOT

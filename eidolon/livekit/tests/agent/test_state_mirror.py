@@ -16,8 +16,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from eidolon.livekit.agent.pipeline.base import BasePipeline
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.pipeline import BasePipeline
+from eidolon.livekit.agent.shared.types import PipelineState
 
 
 class _StubPipeline(BasePipeline):

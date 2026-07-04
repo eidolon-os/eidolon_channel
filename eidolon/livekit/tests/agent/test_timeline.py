@@ -16,7 +16,7 @@ from eidolon.livekit.agent.full_duplex.interruption_effects import (
     FullDuplexInterruptionEffects,
 )
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig

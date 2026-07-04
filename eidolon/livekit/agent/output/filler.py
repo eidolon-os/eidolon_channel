@@ -34,7 +34,7 @@ from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
 if TYPE_CHECKING:
-    from ..pipeline.tts import TtsStage
+    from ..providers.tts import TtsStage
 
 logger = logging.getLogger("agent.output.filler")
 

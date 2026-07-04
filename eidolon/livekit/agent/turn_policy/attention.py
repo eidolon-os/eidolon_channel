@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
+
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.common.config import TurnPolicyConfig
 
@@ -69,7 +71,12 @@ class AttentionAdmission:
                 transcript_preview=preview,
                 client_state_used=signal.client_state is not None,
             )
-        if not signal.agent_speaking:
+        client = signal.client_state
+        client_playback_active = (
+            client is not None
+            and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
+        )
+        if not (signal.agent_speaking or client_playback_active):
             return AttentionDecision(
                 AdmissionAction.DUCK_AND_DECIDE,
                 "agent_not_speaking",
@@ -77,7 +84,6 @@ class AttentionAdmission:
                 client_state_used=signal.client_state is not None,
             )
 
-        client = signal.client_state
         if client is None:
             return AttentionDecision(
                 AdmissionAction.DUCK_AND_DECIDE,

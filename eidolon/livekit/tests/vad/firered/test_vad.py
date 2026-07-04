@@ -856,7 +856,7 @@ class TestVadStageWrapper:
     @pytest.mark.asyncio
     async def test_vadstage_holds_vad_instance(self):
         """VadStage.vad property returns the wrapped instance unchanged."""
-        from eidolon.livekit.agent.pipeline.vad import VadStage
+        from eidolon.livekit.agent.providers.vad import VadStage
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
 
         underlying = FireredPvadVAD.load()
@@ -869,7 +869,7 @@ class TestVadStageWrapper:
     async def test_vadstage_warmup_shutdown_no_op_when_plugin_lacks_methods(self):
         """warmup/shutdown are safe no-ops when the underlying plugin
         has no warmup() / shutdown() (the FireRed case today)."""
-        from eidolon.livekit.agent.pipeline.vad import VadStage
+        from eidolon.livekit.agent.providers.vad import VadStage
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
 
         stage = VadStage(FireredPvadVAD.load())

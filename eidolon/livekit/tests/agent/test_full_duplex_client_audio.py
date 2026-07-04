@@ -13,7 +13,7 @@ from eidolon.livekit.agent.full_duplex.client_audio import (
     FullDuplexRoomDataBridge,
 )
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import TurnPolicyConfig
 

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit.agents import vad as lk_vad
 
-logger = logging.getLogger("pipeline.vad")
+logger = logging.getLogger("providers.vad")
 
 
 class VadStage:

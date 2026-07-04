@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from eidolon.livekit.agent.pipeline.llm import LlmInput
+from eidolon.livekit.agent.providers.llm import LlmInput
 
 pytestmark = pytest.mark.integration
 
@@ -331,7 +331,7 @@ class TestStreamingPipelineIntegration:
     def test_streaming_pipeline_event_handlers(self, shared_stage_factory):
         """Test _on_user_state_changed and _on_agent_state_changed fire callbacks."""
         from eidolon.livekit.agent.full_duplex import StreamingPipeline
-        from eidolon.livekit.agent.pipeline import PipelineCallbacks
+        from eidolon.livekit.agent.shared import PipelineCallbacks
 
         callbacks_fired: dict[str, bool] = {}
 

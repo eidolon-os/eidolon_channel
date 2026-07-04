@@ -27,8 +27,8 @@ from eidolon_sdk.biz.contracts import (
 )
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.pipeline.base import BasePipeline
-from eidolon.livekit.agent.pipeline.types import (
+from eidolon.livekit.agent.shared.pipeline import BasePipeline
+from eidolon.livekit.agent.shared.types import (
     PipelineCallbacks,
     PipelineState,
     generate_turn_id,

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ..observability import TurnTimeline
-from ..pipeline.types import generate_turn_id
+from ..shared.types import generate_turn_id
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline

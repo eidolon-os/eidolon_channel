@@ -47,6 +47,13 @@ class AttentionEffectHandler:
     def handle_speaking_started(self) -> bool:
         decision = self.decide("", speech_started=True)
         self.record_admission(decision)
+        if decision.reason == "agent_not_speaking":
+            logger.info(
+                "[AttentionEffectHandler] attention admission: %s reason=%s; no duck",
+                decision.action.value,
+                decision.reason,
+            )
+            return False
         if not self._turn_policy.attention.enforce:
             return bool(self._on_duck())
         if decision.action is AdmissionAction.HARD_INTERRUPT:

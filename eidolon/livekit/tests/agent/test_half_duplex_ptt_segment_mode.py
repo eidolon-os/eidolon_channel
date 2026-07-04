@@ -21,7 +21,7 @@ from eidolon.livekit.agent.half_duplex import (
     PttSegmentTranscriberConfig,
 )
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
 
 

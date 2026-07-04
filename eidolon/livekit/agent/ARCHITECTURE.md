@@ -72,13 +72,14 @@ eidolon/livekit/agent/
 │   ├── __init__.py           # LiveKit/framework 外部契约边界
 │   ├── framework_patches.py  # LiveKit internal API patch，升级时唯一审计点
 │   └── client_audio_state.py # client.audio_state data-channel payload parser/model
-├── pipeline/
-│   ├── base.py               # VoicePipeline 抽象基类
+├── shared/
+│   ├── pipeline.py           # BasePipeline: half/full duplex pipeline 共享基类
+│   └── types.py              # PipelineState, callbacks, turn id 等共享类型
+├── providers/
 │   ├── stt.py                # SttStage: 封装 STT provider
 │   ├── tts.py                # TtsStage: 封装 TTS provider
 │   ├── vad.py                # VadStage: 封装 VAD provider
-│   ├── llm.py                # LLM stage / remote-agent bridge
-│   └── types.py              # PipelineState, callbacks 等类型
+│   └── llm.py                # LLM stage / remote-agent bridge
 ├── turn_policy/
 │   ├── attention.py          # client audio_state 与注意力判定
 │   ├── constants.py          # 打断词表与 intent pattern 的代码默认值
@@ -222,11 +223,13 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 `context/` 负责对 conversation/chat context 的局部改写。当前只放被打断回复注入，后续如果扩展 memory recall/write 的会话内上下文拼装，也应先判断是否属于 agent 项目还是上游 brain 项目。
 
-`pipeline/` 只封装 STT/TTS/VAD/LLM stage 的 provider-neutral 接口，避免把实时会话策略写进 provider stage。
+`providers/` 只封装 STT/TTS/VAD/LLM stage 的 provider-neutral 接口，避免把实时会话策略写进 provider stage。具体模型集成与模型资源继续放在 `eidolon.livekit.plugins`。
+
+`shared/` 只放 half/full duplex 都会消费的运行时基础类型，例如 `BasePipeline`、`PipelineState`、callbacks 和 turn-id helper。
 
 ### 2.2 导入规则
 
-根目录只保留 entrypoints 和共享公共入口；不再 re-export `StreamingPipeline` / `HalfDuplexPttPipeline`，也不再保留 `streaming.py` 兼容 shim。新代码必须从 `full_duplex.*`、`half_duplex.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
+根目录只保留 entrypoints 和共享公共入口；不再 re-export `StreamingPipeline` / `HalfDuplexPttPipeline`，也不再保留 `streaming.py` 兼容 shim。新代码必须从 `full_duplex.*`、`half_duplex.*`、`providers.*`、`shared.*`、`integration.*`、`output.*`、`turn_policy.*`、`session.*`、`context.*` 等边界包直接导入。`session/__init__.py` 只作为 package marker，不聚合导出组件；session helper 必须从具体模块导入，例如 `session.room_data`、`session.client_control`、`session.interruption_orchestrator`。
 
 ### 2.3 Plugin 目录结构
 

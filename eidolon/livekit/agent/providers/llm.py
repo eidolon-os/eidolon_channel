@@ -1,4 +1,4 @@
-"""Language Model (LLM) stage for the voice pipeline.
+"""Language Model (LLM) provider stage for voice pipelines.
 
 Wraps :class:`livekit.agents.llm.LLM` to provide both
 non-streaming (manual mode) and streaming (streaming mode) generation.
@@ -16,7 +16,7 @@ from livekit.agents.types import APIConnectOptions
 if TYPE_CHECKING:
     from livekit.agents import llm as lk_llm
 
-logger = logging.getLogger("pipeline.llm")
+logger = logging.getLogger("providers.llm")
 
 
 @dataclass

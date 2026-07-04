@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from . import pipeline
+from . import providers, shared
 from .factory import SharedStageFactory
 
 __all__ = [
-    "pipeline",
+    "providers",
+    "shared",
     "SharedStageFactory",
 ]

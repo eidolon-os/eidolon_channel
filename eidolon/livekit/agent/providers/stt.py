@@ -1,4 +1,4 @@
-"""Speech-to-Text (STT) stage for the voice pipeline.
+"""Speech-to-Text (STT) provider stage for voice pipelines.
 
 Provider-agnostic wrapper around any LiveKit-compatible ``stt.STT`` instance.
 The concrete plugin is built by the caller (typically in ``server.py`` based
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit.agents import stt as lk_stt
 
-logger = logging.getLogger("pipeline.stt")
+logger = logging.getLogger("providers.stt")
 
 
 @dataclass

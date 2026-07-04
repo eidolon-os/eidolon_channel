@@ -20,7 +20,7 @@ from typing import Awaitable, Callable
 from livekit.agents.types import APIConnectOptions
 
 from eidolon.livekit.agent.factory import SharedStageFactory
-from eidolon.livekit.agent.pipeline.llm import LlmInput
+from eidolon.livekit.agent.providers.llm import LlmInput
 from eidolon.livekit.common.config import EffectiveAgentConfig, load_effective_config
 
 

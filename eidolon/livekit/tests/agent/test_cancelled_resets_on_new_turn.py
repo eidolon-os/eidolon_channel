@@ -114,7 +114,7 @@ def _make_pipeline_with_mixer(initial_state: str = "NORMAL"):
     pipeline._filler = None
 
     # super()._on_agent_state_changed needs ``_state`` attr (PipelineState mirror)
-    from eidolon.livekit.agent.pipeline.types import PipelineState
+    from eidolon.livekit.agent.shared.types import PipelineState
     pipeline._state = PipelineState.IDLE
 
     return pipeline, mixer
@@ -188,7 +188,7 @@ async def test_full_interrupt_then_new_turn_unblocks_audio() -> None:
 def test_thinking_transition_safe_without_mixer() -> None:
     """No-op when there is no mixer (headless tests, duck_enabled=False)."""
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
-    from eidolon.livekit.agent.pipeline.types import PipelineState
+    from eidolon.livekit.agent.shared.types import PipelineState
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._ducking = OutputDuckingController()

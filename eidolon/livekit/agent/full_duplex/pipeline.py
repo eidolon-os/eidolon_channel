@@ -14,7 +14,7 @@ IS NOT a replacement for AgentSession — it's a thin wrapper that:
      AgentSession constructor, not Agent constructor).
 
   2. **Manages plugin warmup/shutdown** that AgentSession doesn't
-     own (see ``agent/pipeline/base.py`` ADR).
+     own (see ``agent/shared/pipeline.py`` ADR).
 
   3. **Bridges framework events to our extensions** —
      ``user_state_changed`` → STT user_away signal,
@@ -73,8 +73,8 @@ from ..turn_policy import TurnPolicyRuntime
 from ..observability import TurnTimeline
 from ..factory import SharedStageFactory
 from ..output import FillerManager, OutputDuckingController
-from ..pipeline.base import BasePipeline
-from ..pipeline.types import PipelineCallbacks, PipelineState, generate_turn_id
+from ..shared.pipeline import BasePipeline
+from ..shared.types import PipelineCallbacks, PipelineState, generate_turn_id
 from ..session.agent_state import AgentStateEffectHandler
 from ..session.assistant_speech import AssistantSpeechLedger
 from ..session.attention_effects import AttentionEffectHandler

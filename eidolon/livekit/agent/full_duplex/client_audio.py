@@ -9,7 +9,7 @@ from typing import Any
 from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
 
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
-from eidolon.livekit.agent.pipeline.types import PipelineState
+from eidolon.livekit.agent.shared.types import PipelineState
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from ..session.room_data import RoomDataHandler

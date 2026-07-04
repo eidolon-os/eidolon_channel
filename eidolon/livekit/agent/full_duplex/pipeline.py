@@ -67,6 +67,7 @@ from eidolon.livekit.common.config import (
     VoiceprintConfig,
 )
 
+from .agent_builder import build_full_duplex_agent, welcome_on_enter_text
 from ..runtime.interaction_mode import resolve_idle_policy
 from ..turn_policy import TurnPolicyRuntime
 from ..observability import TurnTimeline
@@ -1019,75 +1020,14 @@ class StreamingPipeline(BasePipeline):
         and then the report). A user_initiated session keeps its welcome (None
         when unconfigured → wait for the user to speak first).
         """
-        if self._is_proactive:
-            return None
-        return self._welcome_message or None
+        return welcome_on_enter_text(
+            is_proactive=self._is_proactive,
+            welcome_message=self._welcome_message,
+        )
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""
-        from livekit.agents.voice import Agent
-        from livekit.agents import StopResponse
-
-        pipeline = self
-
-        class VoiceAgent(Agent):
-            async def on_enter(self) -> None:
-                # [lifecycle] welcome timestamp — anchors "welcome played" so Phase
-                # 0 can measure the gap to a later idle room-delete and confirm
-                # whether "回 JOIN after welcome" is the idle watchdog firing.
-                room_name = getattr(getattr(pipeline, "_room", None), "name", None)
-                welcome = pipeline._welcome_on_enter_text()
-                if welcome is None:
-                    # Suppressed: proactive session (report is the opening, §4.3.1)
-                    # or no configured welcome (wait for the user to speak first).
-                    logger.info(
-                        "[lifecycle] welcome on_enter room=%s suppressed (proactive=%s)",
-                        room_name,
-                        pipeline._is_proactive,
-                    )
-                    return
-                logger.info(
-                    "[lifecycle] welcome on_enter room=%s welcome=%r",
-                    room_name,
-                    welcome[:30],
-                )
-                # Round 8 R8.9: use ``session.say(welcome)`` instead of
-                # ``session.generate_reply()`` for the initial greeting.
-                # generate_reply with no user message hands an empty
-                # context to the LLM, which then frequently echoes the
-                # system prompt template back as the "welcome". Fixed text
-                # is faster (no LLM call), more deterministic, and avoids
-                # leaking instruction text to users.
-                self.session.say(welcome, allow_interruptions=True)
-
-            async def on_user_turn_completed(
-                self,
-                turn_ctx: Any,
-                new_message: Any,
-            ) -> None:
-                del turn_ctx
-                allowed = (
-                    await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-                        new_message=new_message
-                    )
-                )
-                if not allowed:
-                    raise StopResponse()
-
-        # Round 8 R8.9 (re-fix): turn_handling config (including
-        # false_interruption_timeout, preemptive_generation) lives on
-        # AGENTSESSION, not Agent. Putting it here was silently ignored.
-        # Agent only carries per-agent override of ``turn_detection`` (the
-        # EOT model instance, which is per-agent semantic).
-        turn_detection = self._turn_detection()
-        return VoiceAgent(
-            instructions=self._instructions,
-            stt=self._factory.stt.stt,
-            llm=self._factory.llm.llm,
-            tts=self._factory.tts.tts,
-            vad=self._factory.vad.vad if self._factory.vad else None,
-            turn_detection=turn_detection,
-        )
+        return build_full_duplex_agent(self)
 
     def _on_session_close(self, event: Any) -> None:
         """Wake run() so shutdown fires immediately on session close.

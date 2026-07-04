@@ -61,7 +61,6 @@ from eidolon_sdk.biz.contracts import (
     CONTROL_OP_PLAYBACK_STOP,
     CONTROL_TOPIC,
     INTERACTION_MODE_FULL_DUPLEX,
-    SESSION_END_IDLE_NORMAL,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
@@ -92,6 +91,10 @@ from .client_preempt import (
 )
 from .client_audio import FullDuplexClientAudioStateView, FullDuplexRoomDataBridge
 from .context_ledger import FullDuplexContextLedger
+from .idle_watchdog import (
+    build_full_duplex_idle_watchdog,
+    ensure_full_duplex_idle_watchdog,
+)
 from .interruption_effects import FullDuplexInterruptionEffects
 from .lifecycle import FullDuplexSessionLifecycle
 from .output_flow import FullDuplexOutputFlow
@@ -99,13 +102,16 @@ from .runtime_defaults import ensure_full_duplex_runtime_defaults
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_event import FullDuplexTranscriptEvent
 from .transcript_handler import FullDuplexTranscriptHandler
+from .turn_handling import (
+    build_full_duplex_turn_handling,
+    uses_livekit_native_adaptive_interruption,
+)
 from .turn_completion import FullDuplexTurnCompletion
 from .speech_lifecycle import FullDuplexSpeechLifecycle
 from .user_state_handler import FullDuplexUserStateHandler
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
-from ..session.idle import IdleWatchdog
 from ..session.interruption_orchestrator import InterruptionOrchestrator
 from ..session.provider_events import ProviderEventObserver
 from ..session.room_data import RoomDataHandler
@@ -311,17 +317,7 @@ class StreamingPipeline(BasePipeline):
         self._idle_disconnect_grace_sec: float = (
             self._turn_policy.idle.disconnect_grace_ms / 1000.0
         )
-        self._idle_watchdog_controller = IdleWatchdog(
-            timeout_sec=self._idle_timeout_sec,
-            get_session=lambda: getattr(self, "_session", None),
-            get_room=lambda: getattr(self, "_room", None),
-            get_timeline=lambda: getattr(self, "_timeline", None),
-            session_closed_event=self._session_closed_event,
-            on_idle_disconnect=self._on_idle_disconnect,
-            on_session_end=self._on_session_end,
-            disconnect_grace_sec=self._idle_disconnect_grace_sec,
-            idle_end_reason=self._idle_end_reason,
-        )
+        self._idle_watchdog_controller = build_full_duplex_idle_watchdog(self)
 
         # EOT semantic interruption check state
         self._user_speaking_start_time: float | None = None
@@ -958,28 +954,16 @@ class StreamingPipeline(BasePipeline):
         the final matches, else cancels via gRPC CancelTurn. ``preemptive_tts``
         stays gated by our commit so no partial audio leaks.
         """
-        interruption: dict[str, Any] = {
-            "enabled": self._allow_interruptions,
-            "discard_audio_if_uninterruptible": True,
-            "false_interruption_timeout": self._false_interruption_timeout,
-        }
-        if self._uses_livekit_native_adaptive_interruption():
-            interruption["mode"] = "adaptive"
-            interruption["resume_false_interruption"] = True
-
-        return {
-            "interruption": interruption,
-            "preemptive_generation": {
-                "enabled": self._turn_policy.preemptive.enabled,
-                "preemptive_tts": self._turn_policy.preemptive.preemptive_tts,
-            },
-        }
+        return build_full_duplex_turn_handling(
+            turn_policy=self._turn_policy,
+            allow_interruptions=self._allow_interruptions,
+            false_interruption_timeout=self._false_interruption_timeout,
+        )
 
     def _uses_livekit_native_adaptive_interruption(self) -> bool:
-        return (
-            getattr(getattr(self, "_turn_policy", None), "interruption_owner", "channel")
-            == "livekit_native_adaptive"
-            and bool(getattr(self, "_allow_interruptions", False))
+        return uses_livekit_native_adaptive_interruption(
+            turn_policy=getattr(self, "_turn_policy", None),
+            allow_interruptions=bool(getattr(self, "_allow_interruptions", False)),
         )
 
     async def run(self, room: Room) -> None:
@@ -1201,35 +1185,7 @@ class StreamingPipeline(BasePipeline):
         await self._idle_watchdog_controller.notify_client_idle_timeout()
 
     def _ensure_idle_watchdog_controller(self) -> None:
-        if not hasattr(self, "_session_closed_event"):
-            self._session_closed_event = asyncio.Event()
-        if not hasattr(self, "_idle_timeout_sec"):
-            self._idle_timeout_sec = 0.0
-        if not hasattr(self, "_on_idle_disconnect"):
-            self._on_idle_disconnect = None
-        if not hasattr(self, "_on_session_end"):
-            self._on_session_end = None
-        if not hasattr(self, "_idle_disconnect_grace_sec"):
-            turn_policy = getattr(self, "_turn_policy", TurnPolicyConfig())
-            self._idle_disconnect_grace_sec = (
-                turn_policy.idle.disconnect_grace_ms / 1000.0
-            )
-        if not hasattr(self, "_idle_end_reason"):
-            self._idle_end_reason = SESSION_END_IDLE_NORMAL
-        if not hasattr(self, "_idle_watchdog_controller"):
-            self._idle_watchdog_controller = IdleWatchdog(
-                timeout_sec=self._idle_timeout_sec,
-                get_session=lambda: getattr(self, "_session", None),
-                get_room=lambda: getattr(self, "_room", None),
-                get_timeline=lambda: getattr(self, "_timeline", None),
-                session_closed_event=self._session_closed_event,
-                on_idle_disconnect=self._on_idle_disconnect,
-                on_session_end=self._on_session_end,
-                disconnect_grace_sec=self._idle_disconnect_grace_sec,
-                idle_end_reason=self._idle_end_reason,
-            )
-        self._idle_watchdog_controller.timeout_sec = self._idle_timeout_sec
-        self._idle_watchdog_controller.disconnect_grace_sec = self._idle_disconnect_grace_sec
+        ensure_full_duplex_idle_watchdog(self)
 
     def _ensure_room_data_handler(self) -> None:
         if not hasattr(self, "_room_data"):

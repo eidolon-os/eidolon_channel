@@ -42,6 +42,8 @@ def apply_timeline_expectations(
         )
         result.metrics.update(_latency_metrics(case_records))
         result.metrics.update(_interrupted_context_metrics(case_records))
+        result.metrics.update(_transcript_admission_metrics(case_records))
+        result.metrics.update(_semantic_gate_metrics(case_records))
 
         expected = expectations.get(result.case_id)
         if expected is None:
@@ -865,6 +867,107 @@ def _interrupted_context_metrics(records: list[dict[str, Any]]) -> dict[str, Any
     if isinstance(preview, str) and preview:
         metrics["timeline_interrupted_context_preview"] = preview
     return metrics
+
+
+def _semantic_gate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose transcript hot-path gate events for early-interim diagnosis."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("semantic_interrupt_gate_events")
+        if not isinstance(raw_events, list):
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_semantic_gate_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("stage", "timeline_semantic_gate_last_stage"),
+        ("action", "timeline_semantic_gate_last_action"),
+        ("reason", "timeline_semantic_gate_last_reason"),
+        ("transcript_preview", "timeline_semantic_gate_last_preview"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+
+    chain = _semantic_gate_chain(events[-8:])
+    if chain:
+        metrics["timeline_semantic_gate_chain"] = chain
+    blocked = _semantic_gate_chain(
+        [
+            event
+            for event in events
+            if event.get("action") in {"inactive", "forward_and_stop"}
+        ][-8:]
+    )
+    if blocked:
+        metrics["timeline_semantic_gate_blocked_chain"] = blocked
+    return metrics
+
+
+def _transcript_admission_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose transcript admission events before semantic hot-path routing."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("transcript_admission_events")
+        if not isinstance(raw_events, list):
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_transcript_admission_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("reason", "timeline_transcript_admission_last_reason"),
+        ("transcript_preview", "timeline_transcript_admission_last_preview"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+    accepted = latest.get("accepted")
+    if isinstance(accepted, bool):
+        metrics["timeline_transcript_admission_last_accepted"] = accepted
+
+    rejected = [
+        event
+        for event in events
+        if event.get("accepted") is False
+    ][-8:]
+    rejected_chain = _transcript_admission_chain(rejected)
+    if rejected_chain:
+        metrics["timeline_transcript_admission_rejected_chain"] = rejected_chain
+    return metrics
+
+
+def _transcript_admission_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        reason = str(event.get("reason") or "?")
+        preview = str(event.get("transcript_preview") or "")[:40]
+        parts.append(f"{reason}:{preview}")
+    return " ; ".join(parts)
+
+
+def _semantic_gate_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        stage = str(event.get("stage") or "?")
+        action = str(event.get("action") or "?")
+        reason = str(event.get("reason") or "?")
+        preview = str(event.get("transcript_preview") or "")[:40]
+        parts.append(f"{stage}:{action}:{reason}:{preview}")
+    return " ; ".join(parts)
 
 
 def _mapping(value: Any) -> dict[str, Any]:

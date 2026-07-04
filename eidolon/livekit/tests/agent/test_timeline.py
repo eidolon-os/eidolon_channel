@@ -182,6 +182,51 @@ def test_timeline_records_hold_recheck_ms() -> None:
     assert timeline.snapshot()["attrs"]["decision"]["hold_recheck_ms"] == 40
 
 
+def test_pipeline_records_semantic_interrupt_gate_events() -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = TurnTimeline("turn-semantic-gate")
+
+    for index in range(18):
+        pipeline._record_transcript_admission_event(
+            {
+                "accepted": False,
+                "reason": "agent_echo",
+                "transcript_preview": f"echo-{index}",
+            }
+        )
+
+    for index in range(18):
+        pipeline._record_semantic_gate_event(
+            {
+                "stage": "initial",
+                "action": "inactive",
+                "reason": "no_interrupt_window",
+                "transcript_preview": f"early-{index}",
+            }
+        )
+
+    admissions = pipeline._timeline.attrs["transcript_admission_events"]
+    assert len(admissions) == 16
+    assert admissions[0]["transcript_preview"] == "echo-2"
+    assert pipeline._timeline.attrs["transcript_admission_last_event"] == {
+        "accepted": False,
+        "reason": "agent_echo",
+        "transcript_preview": "echo-17",
+    }
+
+    events = pipeline._timeline.attrs["semantic_interrupt_gate_events"]
+    assert len(events) == 16
+    assert events[0]["transcript_preview"] == "early-2"
+    assert pipeline._timeline.attrs["semantic_interrupt_gate_last_event"] == {
+        "stage": "initial",
+        "action": "inactive",
+        "reason": "no_interrupt_window",
+        "transcript_preview": "early-17",
+    }
+
+
 def test_timeline_mark_after_sets_synthetic_llm_first_delta() -> None:
     timeline = TurnTimeline("turn-4")
     timeline.mark("turn_committed_at")

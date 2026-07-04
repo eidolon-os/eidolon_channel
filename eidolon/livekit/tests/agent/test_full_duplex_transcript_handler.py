@@ -49,6 +49,8 @@ def _handler(
         "attention": [],
         "speaker_checks": [],
         "echo_rejected": [],
+        "admission_events": [],
+        "semantic_gate_events": [],
     }
 
     return FullDuplexTranscriptHandler(
@@ -69,6 +71,12 @@ def _handler(
         ),
         reject_agent_echo=lambda transcript: calls["echo_rejected"].append(transcript),
         forward_to_base=lambda event: calls["forwarded"].append(event),
+        record_transcript_admission_event=lambda payload: calls[
+            "admission_events"
+        ].append(payload),
+        record_semantic_gate_event=lambda payload: calls["semantic_gate_events"].append(
+            payload
+        ),
     ), calls, gate
 
 
@@ -82,6 +90,32 @@ def test_transcript_handler_records_and_forwards_non_interrupt_transcript() -> N
     assert calls["recorded"][0].transcript == "你好"
     assert calls["semantic"] == []
     assert calls["forwarded"] == [event]
+    assert calls["admission_events"] == [
+        {
+            "accepted": True,
+            "reason": "accepted",
+            "transcript_preview": "你好",
+            "text_length": 2,
+            "is_final": True,
+            "speaker_id": "user",
+        }
+    ]
+    assert calls["semantic_gate_events"] == [
+        {
+            "stage": "initial",
+            "action": "inactive",
+            "reason": "no_interrupt_window",
+            "transcript_preview": "你好",
+            "text_length": 2,
+            "is_final": True,
+            "speaker_id": "user",
+            "allow_interruptions": True,
+            "native_adaptive_owner": False,
+            "agent_output_active": False,
+            "interrupt_window_active": False,
+            "decision_suppressed": False,
+        }
+    ]
 
 
 def test_transcript_handler_runs_semantic_interrupt_when_attention_allows() -> None:
@@ -97,6 +131,37 @@ def test_transcript_handler_runs_semantic_interrupt_when_attention_allows() -> N
     assert calls["attention"] == [("停一下", "owner")]
     assert calls["semantic"] == [("停一下", False)]
     assert calls["forwarded"] == [event]
+    assert calls["semantic_gate_events"] == [
+        {
+            "stage": "initial",
+            "action": "needs_attention",
+            "reason": "needs_attention",
+            "transcript_preview": "停一下",
+            "text_length": 3,
+            "is_final": False,
+            "speaker_id": "owner",
+            "allow_interruptions": True,
+            "native_adaptive_owner": False,
+            "agent_output_active": True,
+            "interrupt_window_active": False,
+            "decision_suppressed": False,
+        },
+        {
+            "stage": "attention",
+            "action": "run",
+            "reason": "eligible",
+            "transcript_preview": "停一下",
+            "text_length": 3,
+            "is_final": False,
+            "speaker_id": "owner",
+            "allow_interruptions": True,
+            "native_adaptive_owner": False,
+            "agent_output_active": True,
+            "interrupt_window_active": False,
+            "decision_suppressed": False,
+            "attention_allowed": True,
+        },
+    ]
 
 
 def test_transcript_handler_forwards_without_semantic_run_when_attention_blocks() -> None:
@@ -112,6 +177,21 @@ def test_transcript_handler_forwards_without_semantic_run_when_attention_blocks(
     assert calls["attention"] == [("背景声音", "user")]
     assert calls["semantic"] == []
     assert calls["forwarded"] == [event]
+    assert calls["semantic_gate_events"][-1] == {
+        "stage": "attention",
+        "action": "forward_and_stop",
+        "reason": "attention_blocked",
+        "transcript_preview": "背景声音",
+        "text_length": 4,
+        "is_final": False,
+        "speaker_id": "user",
+        "allow_interruptions": True,
+        "native_adaptive_owner": False,
+        "agent_output_active": True,
+        "interrupt_window_active": False,
+        "decision_suppressed": False,
+        "attention_allowed": False,
+    }
 
 
 def test_transcript_handler_forwards_and_stops_when_decision_suppressed() -> None:
@@ -127,6 +207,7 @@ def test_transcript_handler_forwards_and_stops_when_decision_suppressed() -> Non
     assert calls["attention"] == []
     assert calls["semantic"] == []
     assert calls["forwarded"] == [event]
+    assert calls["semantic_gate_events"][-1]["reason"] == "decision_suppressed"
 
 
 def test_transcript_handler_drops_rejected_admission() -> None:
@@ -148,6 +229,17 @@ def test_transcript_handler_drops_rejected_admission() -> None:
     assert calls["semantic"] == []
     assert calls["forwarded"] == []
     assert calls["echo_rejected"] == ["你好"]
+    assert calls["admission_events"] == [
+        {
+            "accepted": False,
+            "reason": "agent_echo",
+            "transcript_preview": "你好",
+            "text_length": 2,
+            "is_final": False,
+            "speaker_id": "agent",
+        }
+    ]
+    assert calls["semantic_gate_events"] == []
 
 
 def test_transcript_handler_does_not_echo_rollback_for_other_rejections() -> None:
@@ -167,3 +259,5 @@ def test_transcript_handler_does_not_echo_rollback_for_other_rejections() -> Non
     assert calls["recorded"] == []
     assert calls["forwarded"] == []
     assert calls["echo_rejected"] == []
+    assert calls["admission_events"][0]["reason"] == "suppressed_until_next_speech"
+    assert calls["semantic_gate_events"] == []

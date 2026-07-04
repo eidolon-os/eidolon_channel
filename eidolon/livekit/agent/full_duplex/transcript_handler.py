@@ -35,6 +35,9 @@ class FullDuplexTranscriptHandler:
         run_semantic_interrupt: Callable[[str, bool], None],
         reject_agent_echo: Callable[[str], None],
         forward_to_base: Callable[[Any], None],
+        record_transcript_admission_event: Callable[[dict[str, Any]], None]
+        | None = None,
+        record_semantic_gate_event: Callable[[dict[str, Any]], None] | None = None,
         warm_preemptive: Callable[[str], None] | None = None,
     ) -> None:
         self._admission_gate = admission_gate
@@ -48,6 +51,8 @@ class FullDuplexTranscriptHandler:
         self._run_semantic_interrupt = run_semantic_interrupt
         self._reject_agent_echo = reject_agent_echo
         self._forward_to_base = forward_to_base
+        self._record_transcript_admission_event = record_transcript_admission_event
+        self._record_semantic_gate_event = record_semantic_gate_event
         # Optional: preemptively warm the brain on a stabilizing partial
         # transcript (fired for accepted non-final events). No-op when unset.
         self._warm_preemptive = warm_preemptive
@@ -55,6 +60,7 @@ class FullDuplexTranscriptHandler:
     def handle(self, event: Any) -> None:
         transcript_event = FullDuplexTranscriptEvent.from_event(event)
         admission = self._admission_gate().evaluate(transcript_event)
+        self._record_admission_event(admission)
         if not admission.accepted:
             if admission.reason == "suppressed_until_next_speech":
                 logger.info(
@@ -84,13 +90,29 @@ class FullDuplexTranscriptHandler:
             except Exception:  # noqa: BLE001
                 logger.debug("[StreamingPipeline] preemptive warm hook failed", exc_info=True)
 
+        agent_output_active = self._agent_output_active(transcript_event.speaker_id)
+        interrupt_window_active = self._interrupt_window_active()
+        decision_suppressed = self._decision_suppressed()
+        allow_interruptions = self._allow_interruptions()
+        native_adaptive_owner = self._native_adaptive_owner()
+
         semantic_gate = evaluate_semantic_interrupt_gate(
-            allow_interruptions=self._allow_interruptions(),
-            native_adaptive=self._native_adaptive_owner(),
+            allow_interruptions=allow_interruptions,
+            native_adaptive=native_adaptive_owner,
             transcript=transcript_event.transcript,
-            agent_output_active=self._agent_output_active(transcript_event.speaker_id),
-            interrupt_window_active=self._interrupt_window_active(),
-            decision_suppressed=self._decision_suppressed(),
+            agent_output_active=agent_output_active,
+            interrupt_window_active=interrupt_window_active,
+            decision_suppressed=decision_suppressed,
+        )
+        self._record_gate_event(
+            transcript_event,
+            semantic_gate,
+            stage="initial",
+            allow_interruptions=allow_interruptions,
+            native_adaptive_owner=native_adaptive_owner,
+            agent_output_active=agent_output_active,
+            interrupt_window_active=interrupt_window_active,
+            decision_suppressed=decision_suppressed,
         )
         if semantic_gate.should_forward_and_stop:
             if semantic_gate.reason == "decision_suppressed":
@@ -99,11 +121,23 @@ class FullDuplexTranscriptHandler:
             return
 
         if semantic_gate.needs_attention:
+            attention_allowed = self._attention_allows_eot_check(
+                transcript_event.transcript,
+                transcript_event.speaker_id,
+            )
             semantic_gate = semantic_gate.with_attention_result(
-                self._attention_allows_eot_check(
-                    transcript_event.transcript,
-                    transcript_event.speaker_id,
-                )
+                attention_allowed,
+            )
+            self._record_gate_event(
+                transcript_event,
+                semantic_gate,
+                stage="attention",
+                allow_interruptions=allow_interruptions,
+                native_adaptive_owner=native_adaptive_owner,
+                agent_output_active=agent_output_active,
+                interrupt_window_active=interrupt_window_active,
+                decision_suppressed=decision_suppressed,
+                attention_allowed=attention_allowed,
             )
             if semantic_gate.should_forward_and_stop:
                 self._forward_to_base(event)
@@ -116,3 +150,50 @@ class FullDuplexTranscriptHandler:
             )
 
         self._forward_to_base(event)
+
+    def _record_admission_event(self, admission: Any) -> None:
+        if self._record_transcript_admission_event is None:
+            return
+        self._record_transcript_admission_event(
+            {
+                "accepted": bool(admission.accepted),
+                "reason": admission.reason,
+                "transcript_preview": admission.transcript[:120],
+                "text_length": len(admission.transcript),
+                "is_final": admission.is_final,
+                "speaker_id": admission.speaker_id,
+            }
+        )
+
+    def _record_gate_event(
+        self,
+        transcript_event: FullDuplexTranscriptEvent,
+        semantic_gate: Any,
+        *,
+        stage: str,
+        allow_interruptions: bool,
+        native_adaptive_owner: bool,
+        agent_output_active: bool,
+        interrupt_window_active: bool,
+        decision_suppressed: bool,
+        attention_allowed: bool | None = None,
+    ) -> None:
+        if self._record_semantic_gate_event is None:
+            return
+        payload: dict[str, Any] = {
+            "stage": stage,
+            "action": semantic_gate.action,
+            "reason": semantic_gate.reason,
+            "transcript_preview": transcript_event.transcript[:120],
+            "text_length": len(transcript_event.transcript),
+            "is_final": transcript_event.is_final,
+            "speaker_id": transcript_event.speaker_id,
+            "allow_interruptions": allow_interruptions,
+            "native_adaptive_owner": native_adaptive_owner,
+            "agent_output_active": agent_output_active,
+            "interrupt_window_active": interrupt_window_active,
+            "decision_suppressed": decision_suppressed,
+        }
+        if attention_allowed is not None:
+            payload["attention_allowed"] = attention_allowed
+        self._record_semantic_gate_event(payload)

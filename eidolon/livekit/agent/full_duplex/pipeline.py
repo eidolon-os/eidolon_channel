@@ -692,8 +692,26 @@ class StreamingPipeline(BasePipeline):
             ),
             reject_agent_echo=self._reject_agent_echo_transcript,
             forward_to_base=lambda event: BasePipeline._on_user_transcribed(self, event),
+            record_transcript_admission_event=self._record_transcript_admission_event,
+            record_semantic_gate_event=self._record_semantic_gate_event,
             warm_preemptive=self._warm_preemptive_from_partial,
         )
+
+    def _record_transcript_admission_event(self, payload: dict[str, object]) -> None:
+        if self._timeline is None:
+            return
+        events = list(self._timeline.attrs.get("transcript_admission_events") or ())
+        events.append(dict(payload))
+        self._timeline.set_attr("transcript_admission_events", events[-16:])
+        self._timeline.set_attr("transcript_admission_last_event", dict(payload))
+
+    def _record_semantic_gate_event(self, payload: dict[str, object]) -> None:
+        if self._timeline is None:
+            return
+        events = list(self._timeline.attrs.get("semantic_interrupt_gate_events") or ())
+        events.append(dict(payload))
+        self._timeline.set_attr("semantic_interrupt_gate_events", events[-16:])
+        self._timeline.set_attr("semantic_interrupt_gate_last_event", dict(payload))
 
     def _warm_preemptive_from_partial(self, transcript: str) -> None:
         """Fire-and-forget: warm the brain on a stabilizing partial transcript.

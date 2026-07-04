@@ -2303,6 +2303,23 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"source":"tts_in_flight",'
             '"played_seconds":1.2,'
             '"text_preview":"上一轮被打断的回答"},'
+            '"transcript_admission_events":['
+            '{"accepted":false,"reason":"agent_echo",'
+            '"transcript_preview":"助手自己的回声"},'
+            '{"accepted":true,"reason":"accepted",'
+            '"transcript_preview":"换个话题"},'
+            '{"accepted":true,"reason":"accepted",'
+            '"transcript_preview":"我们聊点别的"}],'
+            '"semantic_interrupt_gate_events":['
+            '{"stage":"initial","action":"inactive",'
+            '"reason":"no_interrupt_window",'
+            '"transcript_preview":"换个话题"},'
+            '{"stage":"initial","action":"needs_attention",'
+            '"reason":"needs_attention",'
+            '"transcript_preview":"我们聊点别的"},'
+            '{"stage":"attention","action":"run",'
+            '"reason":"eligible",'
+            '"transcript_preview":"我们聊点别的"}],'
             '"provider_latency_ms":{'
             '"interrupt_speech_to_first_transcript_ms":310,'
             '"stt_speech_to_actionable_transcript_ms":360,'
@@ -2335,6 +2352,21 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_interrupted_context_source"] == "tts_in_flight"
     assert metrics["timeline_interrupted_context_played_seconds"] == 1.2
     assert metrics["timeline_interrupted_context_preview"] == "上一轮被打断的回答"
+    assert metrics["timeline_transcript_admission_event_count"] == 3
+    assert metrics["timeline_transcript_admission_last_reason"] == "accepted"
+    assert metrics["timeline_transcript_admission_last_preview"] == "我们聊点别的"
+    assert metrics["timeline_transcript_admission_last_accepted"] is True
+    assert metrics["timeline_transcript_admission_rejected_chain"] == (
+        "agent_echo:助手自己的回声"
+    )
+    assert metrics["timeline_semantic_gate_event_count"] == 3
+    assert metrics["timeline_semantic_gate_last_stage"] == "attention"
+    assert metrics["timeline_semantic_gate_last_action"] == "run"
+    assert metrics["timeline_semantic_gate_last_reason"] == "eligible"
+    assert metrics["timeline_semantic_gate_last_preview"] == "我们聊点别的"
+    assert metrics["timeline_semantic_gate_blocked_chain"] == (
+        "initial:inactive:no_interrupt_window:换个话题"
+    )
 
 
 def test_livekit_room_timeline_expectations_ignore_stale_retry_room(

@@ -167,6 +167,22 @@ class FullDuplexTurnCompletion:
             return ""
         return f"playback_low_evidence_artifact:{evidence.reason}"
 
+    def attention_admission_reject_reason(self, *, transcript: str) -> str:
+        if not transcript.strip():
+            return ""
+        owner = self._pipeline
+        timeline = getattr(owner, "_timeline", None)
+        if timeline is None:
+            return ""
+        admission = timeline.attrs.get("attention_admission")
+        if not isinstance(admission, dict):
+            events = timeline.attrs.get("attention_admission_events") or ()
+            admission = events[-1] if events and isinstance(events[-1], dict) else {}
+        if admission.get("action") != "ignore":
+            return ""
+        reason = str(admission.get("reason") or "attention_ignore")
+        return f"attention_ignored:{reason}"
+
     @staticmethod
     def _has_confirmed_redirect_decision(timeline: TurnTimeline) -> bool:
         decision = timeline.attrs.get("decision")
@@ -260,6 +276,15 @@ class FullDuplexTurnCompletion:
             final_transcript = (
                 decision.transcript.strip() or owner._latest_asr_text.strip() or transcript
             )
+            playback_resolution = (
+                self._framework_completed_turn.resolve_deferred_playback_commit_evidence(
+                    final_transcript,
+                    timeline=timeline,
+                )
+            )
+            if playback_resolution is False:
+                owner._latest_asr_text = ""
+                return
             self.schedule_voiceprint_gated_commit(
                 verify_task=self.candidate_voiceprint_gate_task() or verify_task,
                 eot_model=eot_model,

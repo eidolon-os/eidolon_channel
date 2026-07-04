@@ -329,16 +329,16 @@ def test_fast_profile_has_shorter_decision_budget() -> None:
     balanced = profile_defaults("balanced_semantic")
     fast = profile_defaults("fast_e2e_like")
 
-    assert balanced.interrupt.decision_timeout_ms == 500
+    assert balanced.interrupt.decision_timeout_ms == 450
     assert fast.interrupt.decision_timeout_ms < balanced.interrupt.decision_timeout_ms
 
 
-def test_default_decision_budget_is_500ms() -> None:
-    """Sanity: plugin default still lands at the 0.5s G18a target."""
+def test_default_decision_budget_keeps_margin_under_500ms_sla() -> None:
+    """Sanity: plugin default keeps scheduler margin under the 0.5s G18a target."""
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
 
     cfg = EidolonEOTConfig()
-    assert cfg.duck_suspend_timeout_sec == pytest.approx(0.5)
+    assert cfg.duck_suspend_timeout_sec == pytest.approx(0.45)
 
 
 def test_default_min_chars_is_2() -> None:

@@ -64,6 +64,10 @@ class LiveKitRoomOptions:
     # unintended interrupt, so this is deliberately generous.
     agent_quiet_wait_sec: float = 30.0
     agent_speaking_recent_window_ms: int = 250
+    # Real clients publish playback_state continuously while TTS is audible.
+    # Prime the room data channel before injecting interruption audio so Channel
+    # sees the same state before the first fast STT interim arrives.
+    agent_speaking_client_state_lead_ms: int = 650
     agent_name: str = "eidolon"
     participant_prefix: str = ROOM_NAME_PREFIX
     participant_identity: str | None = None
@@ -461,10 +465,11 @@ async def _feed_case_audio(
                 raise RuntimeError(
                     "timed out waiting for active agent audio before "
                     f"user step {step.text!r}"
-                )
+            )
             playback_state = _step_playback_state(step, default="agent_speaking")
             if publish_client_state:
-                await _publish_client_audio_state(
+                cursor_ms += await _prime_agent_speaking_client_state(
+                    source,
                     local_participant,
                     events=events,
                     started=started,
@@ -473,6 +478,8 @@ async def _feed_case_audio(
                     ptt=step.client_ptt,
                     manual_interrupt=step.client_manual_interrupt,
                     mic_muted=step.client_mic_muted,
+                    lead_ms=options.agent_speaking_client_state_lead_ms,
+                    refresh_interval_sec=audio_state_interval_sec(case),
                 )
         else:
             quiet = await _wait_for_agent_quiet(
@@ -571,6 +578,62 @@ async def _feed_case_audio(
     await _capture_pcm(source, synth_silence(0.8))
 
 
+async def _prime_agent_speaking_client_state(
+    source: rtc.AudioSource,
+    local_participant: Any | None,
+    *,
+    events: list[dict[str, Any]],
+    started: float,
+    playback_state: str,
+    input_mode: str,
+    ptt: bool,
+    manual_interrupt: bool,
+    mic_muted: bool,
+    lead_ms: int,
+    refresh_interval_sec: float,
+) -> int:
+    await _publish_client_audio_state(
+        local_participant,
+        events=events,
+        started=started,
+        playback_state=playback_state,
+        input_mode=input_mode,
+        ptt=ptt,
+        manual_interrupt=manual_interrupt,
+        mic_muted=mic_muted,
+    )
+    if lead_ms <= 0:
+        return 0
+
+    events.append(
+        {
+            "type": "client_audio_state_lead_wait",
+            "timestamp_ms": _elapsed_ms(started),
+            "duration_ms": lead_ms,
+            "playback_state": playback_state,
+        }
+    )
+    refresh_task = asyncio.create_task(
+        _refresh_client_audio_state(
+            local_participant,
+            events=events,
+            started=started,
+            playback_state=playback_state,
+            input_mode=input_mode,
+            ptt=ptt,
+            manual_interrupt=manual_interrupt,
+            mic_muted=mic_muted,
+            interval_sec=refresh_interval_sec,
+        )
+    )
+    try:
+        return await _capture_pcm(source, synth_silence(lead_ms / 1000))
+    finally:
+        refresh_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await refresh_task
+
+
 def _step_playback_state(step: Any, *, default: str) -> str:
     if step.client_playback_state in ("idle", "agent_speaking"):
         return step.client_playback_state
@@ -601,6 +664,7 @@ async def _publish_client_audio_state(
     mic_muted: bool = False,
     rms: float | None = None,
     snr_hint: float | None = None,
+    reliable: bool = True,
 ) -> None:
     """Publish benchmark client audio hints through the real data channel."""
     if local_participant is None:
@@ -621,7 +685,7 @@ async def _publish_client_audio_state(
         payload["snr_hint"] = snr_hint
     await local_participant.publish_data(
         json.dumps(payload).encode("utf-8"),
-        reliable=False,
+        reliable=reliable,
         topic=CLIENT_AUDIO_STATE_TOPIC,
     )
     events.append(
@@ -633,6 +697,7 @@ async def _publish_client_audio_state(
             "manual_interrupt": manual_interrupt,
             "mic_muted": mic_muted,
             "input_mode": input_mode,
+            "reliable": reliable,
             "schema_v": WIRE_SCHEMA_VERSION,
             "topic": CLIENT_AUDIO_STATE_TOPIC,
         }
@@ -662,6 +727,7 @@ async def _refresh_client_audio_state(
             ptt=ptt,
             manual_interrupt=manual_interrupt,
             mic_muted=mic_muted,
+            reliable=False,
         )
 
 

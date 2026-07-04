@@ -16,6 +16,7 @@ def _owner() -> SimpleNamespace:
         cancel_pending_voiceprint_commits=MagicMock(),
         reset_candidate_voiceprint_tasks=MagicMock(),
         remember_candidate_voiceprint_task=MagicMock(),
+        attention_admission_reject_reason=MagicMock(return_value=""),
         playback_low_evidence_reject_reason=MagicMock(return_value=""),
         should_defer_low_eot_commit=MagicMock(return_value=False),
         candidate_voiceprint_gate_task=MagicMock(return_value=None),
@@ -179,4 +180,35 @@ def test_speech_lifecycle_stop_schedules_voiceprint_gated_commit() -> None:
         transcript="你好",
         timeline=owner._timeline,
     )
+    assert owner._latest_asr_text == ""
+
+
+def test_speech_lifecycle_stop_rejects_attention_ignored_transcript() -> None:
+    owner = _owner()
+    owner._timeline = TurnTimeline("turn-muted")
+    voiceprint_task = object()
+    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
+    owner._ducking = SimpleNamespace(is_suspended=False)
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
+    owner._session = MagicMock()
+    owner._user_turns.selected_text = "停一下"
+    owner._user_turns.active = object()
+    owner._turn_completion.attention_admission_reject_reason.return_value = (
+        "attention_ignored:client_mic_muted"
+    )
+
+    FullDuplexSpeechLifecycle(owner).handle_stopped()
+
+    owner._user_turns.reject_active.assert_called_once_with(
+        "attention_ignored:client_mic_muted"
+    )
+    owner._turn_completion.clear_session_user_turn.assert_called_once_with(
+        "attention_ignored:client_mic_muted"
+    )
+    owner._turn_completion.remember_candidate_voiceprint_task.assert_not_called()
+    owner._turn_completion.schedule_voiceprint_gated_commit.assert_not_called()
+    owner._turn_completion.schedule_deferred_low_eot_commit.assert_not_called()
+    owner._get_eot_model.return_value.reset.assert_called_once_with()
     assert owner._latest_asr_text == ""

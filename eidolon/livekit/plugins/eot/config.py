@@ -160,16 +160,15 @@ class EidolonEOTConfig:
     bound memory. In normal operation the suspend window (0.8 s) is well
     below this limit. If exceeded, excess frames are dropped."""
 
-    duck_suspend_timeout_sec: float = 0.5
+    duck_suspend_timeout_sec: float = 0.45
     """Hard decision budget — the maximum time the mixer stays SUSPENDED
     before forcing a verdict (cancel-on-still-active-VAD or rollback-on-no-INTERIM).
 
-    Lowered from 0.8s → 0.5s in G18a to align with the industry-standard
-    interrupt latency target. Bailian INTERIM P50 is ~300ms, P95 ~450ms,
-    so a 500ms budget lets the first INTERIM trigger an early decision in
-    >95% of cases. The remaining 5% (slow STT, very short utterance) hit
-    the timeout — at which point VAD-still-active is treated as a real
-    interrupt rather than passively unducking and praying."""
+    Lowered from 0.8s → 0.5s in G18a, then to 0.45s so the internal owner
+    deadline leaves scheduler margin under the external 500ms gate. Bailian
+    INTERIM P50 is ~300ms, P95 ~450ms, so this still lets the first INTERIM
+    trigger an early decision in most cases. Slow STT or very short utterances
+    hit the timeout, where VAD-still-active is treated as a real interrupt."""
 
     interrupt_min_interim_chars: int = 2
     """G18a (2026-05-18): minimum character count in the first STT INTERIM

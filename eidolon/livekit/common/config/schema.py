@@ -121,7 +121,7 @@ class EotPolicyConfig:
 
 @dataclass(frozen=True)
 class InterruptPolicyConfig:
-    decision_timeout_ms: int = 500
+    decision_timeout_ms: int = 450
     post_speech_evidence_timeout_ms: int = 6_000
     post_speech_evidence_min_speech_ms: int = 250
     framework_false_interruption_timeout_ms: int = 6_000

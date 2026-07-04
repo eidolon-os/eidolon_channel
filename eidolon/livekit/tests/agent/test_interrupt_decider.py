@@ -252,6 +252,22 @@ def test_first_signal_holds_single_char_backchannel() -> None:
     assert decision.action is Action.HOLD
 
 
+def test_final_single_char_backchannel_rolls_back() -> None:
+    """A final single-char backchannel is enough evidence to resume playback."""
+    d = InterruptDecider(min_interim_chars=2)
+    decision = d.on_stt_interim("好", score=0.0, is_final=True)
+    assert decision.action is Action.ROLLBACK
+    assert decision.intent is not None
+    assert decision.intent.value == "backchannel"
+
+
+def test_final_single_char_ambient_sound_still_holds() -> None:
+    """Final ambient particles are not enough to resume playback as ACKs."""
+    d = InterruptDecider(min_interim_chars=2)
+    decision = d.on_stt_interim("啊", score=0.0, is_final=True)
+    assert decision.action is Action.HOLD
+
+
 def test_first_signal_skips_compound_backchannel() -> None:
     """Compound backchannel like '嗯嗯' is in the set → ROLLBACK."""
     d = InterruptDecider(min_interim_chars=2)

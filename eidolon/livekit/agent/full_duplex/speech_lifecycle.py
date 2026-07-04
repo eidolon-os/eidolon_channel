@@ -102,6 +102,23 @@ class FullDuplexSpeechLifecycle:
             return
 
         transcript = owner._user_turns.selected_text or owner._latest_asr_text
+        attention_reject_reason = turn_completion.attention_admission_reject_reason(
+            transcript=transcript
+        )
+        if attention_reject_reason:
+            logger.info(
+                "[StreamingPipeline] rejecting attention-ignored turn reason=%s "
+                "transcript=%r",
+                attention_reject_reason,
+                transcript[:80],
+            )
+            if owner._user_turns.active is not None:
+                owner._user_turns.reject_active(attention_reject_reason)
+            eot_model.reset()
+            turn_completion.clear_session_user_turn(attention_reject_reason)
+            turn_completion.reset_candidate_voiceprint_tasks()
+            owner._latest_asr_text = ""
+            return
         if transcript:
             turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
         if owner._user_turns.active is None and transcript:

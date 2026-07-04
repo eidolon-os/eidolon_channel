@@ -348,6 +348,55 @@ async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+async def test_livekit_room_agent_speaking_primes_client_state_before_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmark import livekit_room_runner as runner
+
+    suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
+    case = {
+        item.case_id: item
+        for item in suite.cases
+    }["fd_explicit_ptt_preempts_without_speech_001"]
+    local_participant = AsyncMock()
+    events: list[dict] = []
+
+    async def fake_wait_for_agent_speaking(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_capture_pcm(*_args, **_kwargs) -> int:
+        return 120
+
+    monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
+    monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
+    monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
+    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+
+    await runner._feed_case_audio(
+        object(),
+        case=case,
+        root=Path("."),
+        events=events,
+        started=0.0,
+        state=object(),
+        options=LiveKitRoomOptions(agent_speaking_client_state_lead_ms=120),
+        local_participant=local_participant,
+    )
+
+    event_types = [event["type"] for event in events]
+    published_index = event_types.index("client_audio_state_published")
+    lead_index = event_types.index("client_audio_state_lead_wait")
+    audio_started_index = event_types.index("user_audio_started")
+    assert published_index < lead_index < audio_started_index
+    assert events[lead_index]["duration_ms"] == 120
+
+    first_payload = json.loads(local_participant.publish_data.await_args_list[0].args[0])
+    assert first_payload["playback_state"] == "agent_speaking"
+    assert first_payload["input_mode"] == "ptt"
+    assert local_participant.publish_data.await_args_list[0].kwargs["reliable"] is True
+
+
+@pytest.mark.asyncio
 async def test_livekit_room_agent_speaking_step_fails_fast_when_no_agent_audio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1455,12 +1504,13 @@ async def test_livekit_room_publishes_client_audio_state() -> None:
     assert payload["manual_interrupt"] is True
     assert payload["mic_muted"] is True
     assert local_participant.publish_data.await_args.kwargs == {
-        "reliable": False,
+        "reliable": True,
         "topic": CLIENT_AUDIO_STATE_TOPIC,
     }
     assert events[-1]["type"] == "client_audio_state_published"
     assert events[-1]["schema_v"] == WIRE_SCHEMA_VERSION
     assert events[-1]["input_mode"] == "auto"
+    assert events[-1]["reliable"] is True
     assert events[-1]["ptt"] is True
     assert events[-1]["manual_interrupt"] is True
     assert events[-1]["mic_muted"] is True

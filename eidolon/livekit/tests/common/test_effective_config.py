@@ -22,7 +22,7 @@ def test_balanced_profile_defaults() -> None:
     assert cfg.vad.activation_threshold == 0.50
     assert cfg.vad.prefix_padding_ms == 300
     assert cfg.vad.min_silence_duration_ms == 500
-    assert cfg.interrupt.decision_timeout_ms == 500
+    assert cfg.interrupt.decision_timeout_ms == 450
     assert cfg.interrupt.early_cancel_score_threshold == 0.70
     assert cfg.ducking.fade_out_ms == 30
 

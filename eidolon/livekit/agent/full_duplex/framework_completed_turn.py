@@ -59,6 +59,13 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
         ):
             return False
+        playback_redirect_allowed = self._resolve_playback_completed_turn_evidence(
+            completed_transcript,
+            timeline=timeline,
+            voiceprint_reason="",
+        )
+        if playback_redirect_allowed is not None:
+            return playback_redirect_allowed
         if task is None and result is None:
             if self._stop_non_semantic_framework_completed_turn(
                 completed_transcript,
@@ -110,6 +117,13 @@ class FullDuplexFrameworkCompletedTurnGate:
                 timeline=timeline,
             ):
                 return False
+            playback_redirect_allowed = self._resolve_playback_completed_turn_evidence(
+                completed_transcript,
+                timeline=timeline,
+                voiceprint_reason=reason,
+            )
+            if playback_redirect_allowed is not None:
+                return playback_redirect_allowed
             if self._stop_non_semantic_framework_completed_turn(
                 completed_transcript,
                 timeline=timeline,
@@ -149,6 +163,205 @@ class FullDuplexFrameworkCompletedTurnGate:
             completed_transcript[:80],
         )
         return False
+
+    def _resolve_playback_completed_turn_evidence(
+        self,
+        completed_transcript: str,
+        *,
+        timeline: TurnTimeline | None,
+        voiceprint_reason: str,
+    ) -> bool | None:
+        """Resolve late playback-overlap evidence from LiveKit completed-turn.
+
+        Some real-room paths produce only an early interim transcript before
+        client playback state reaches Channel. When the final framework turn
+        arrives, the user may still be interrupting audible assistant playback.
+        In that case the completed turn itself is valid evidence: redirect
+        intents should cancel current playback and continue to the LLM, while
+        non-semantic intents should stop before they become a user turn.
+        """
+
+        continue_to_llm = self._apply_playback_turn_evidence(
+            completed_transcript,
+            timeline=timeline,
+            resolved_reason="framework_completed_playback_evidence",
+            timeline_attr="framework_completed_playback_evidence",
+            cancel_deferred=True,
+        )
+        if continue_to_llm is None:
+            return None
+
+        if continue_to_llm:
+            self._align_framework_completed_turn(
+                completed_transcript,
+                timeline=timeline,
+                voiceprint_reason=voiceprint_reason,
+            )
+            return True
+
+        return False
+
+    def resolve_deferred_playback_commit_evidence(
+        self,
+        transcript: str,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> bool | None:
+        """Resolve playback-overlap evidence before a low-EOT deferred commit.
+
+        Real room timing can deliver client playback state after LiveKit's
+        completed-turn hook has already deferred a low-EOT fragment. This gate
+        keeps the delayed commit path under the same interruption owner.
+        """
+
+        return self._apply_playback_turn_evidence(
+            transcript,
+            timeline=timeline,
+            resolved_reason="deferred_low_eot_playback_evidence",
+            timeline_attr="deferred_low_eot_playback_evidence",
+            cancel_deferred=False,
+        )
+
+    def _apply_playback_turn_evidence(
+        self,
+        transcript: str,
+        *,
+        timeline: TurnTimeline | None,
+        resolved_reason: str,
+        timeline_attr: str,
+        cancel_deferred: bool,
+    ) -> bool | None:
+        if not self._playback_active_for_completed_turn(timeline=timeline):
+            return None
+        if self._client_state_blocks_playback_evidence(timeline=timeline):
+            if timeline is not None:
+                timeline.set_attr(
+                    timeline_attr,
+                    {
+                        "action": "ignore",
+                        "continue_to_llm": False,
+                        "intent": None,
+                        "reason": "client_mic_muted",
+                        "text_preview": transcript[:120],
+                        "text_length": len(transcript),
+                    },
+                )
+            owner = self._pipeline
+            owner._ensure_user_turn_coordinator()
+            owner._user_turns.reject_active("client_mic_muted")
+            self._completion.clear_session_user_turn("client_mic_muted")
+            return False
+        decision = self._decide_from_completed_turn_evidence(
+            transcript,
+            timeline=timeline,
+        )
+        if decision is None or not self._completed_turn_can_resolve(decision):
+            return None
+
+        owner = self._pipeline
+        completion = self._completion
+        continue_to_llm = self._completed_turn_decision_continues_to_llm(decision)
+        if timeline is not None:
+            timeline.set_attr(
+                timeline_attr,
+                {
+                    "action": decision.action.value,
+                    "continue_to_llm": continue_to_llm,
+                    "intent": (
+                        decision.intent.value if decision.intent is not None else None
+                    ),
+                    "reason": decision.reason,
+                    "text_preview": transcript[:120],
+                    "text_length": len(transcript),
+                },
+            )
+        owner._ensure_decision_effect_applier()
+        owner._decision_effects.apply(
+            decision,
+            resolved_reason=resolved_reason,
+            eot_score=self._current_eot_score(),
+            transcript=transcript,
+            vad_active=False,
+        )
+        if cancel_deferred:
+            completion.cancel_deferred_low_eot_commit(resolved_reason)
+        if continue_to_llm:
+            return True
+
+        owner._ensure_user_turn_coordinator()
+        owner._user_turns.reject_active(
+            f"interruption_owner_resolved:{decision.action.value}"
+        )
+        completion.clear_session_user_turn(
+            f"interruption_owner_resolved:{decision.action.value}"
+        )
+        return False
+
+    def _client_state_blocks_playback_evidence(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> bool:
+        owner = self._pipeline
+        try:
+            client = owner._ensure_client_audio_state_view().latest_state()
+        except Exception:  # noqa: BLE001 - completed-turn gate must fail closed
+            logger.debug(
+                "[StreamingPipeline] completed-turn client-state check failed",
+                exc_info=True,
+            )
+            return False
+        timeline_client = _timeline_client_audio_state(timeline)
+        mic_muted = bool(getattr(client, "mic_muted", False)) or bool(
+            timeline_client.get("mic_muted")
+        )
+        if not owner._turn_policy.attention.ignore_when_mic_muted or not mic_muted:
+            return False
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_playback_evidence_ignored",
+                {
+                    "reason": "client_mic_muted",
+                    "participant_identity": (
+                        getattr(client, "participant_identity", "")
+                        or str(timeline_client.get("participant_identity") or "")
+                    ),
+                    "playback_state": (
+                        getattr(client, "playback_state", "")
+                        or str(timeline_client.get("playback_state") or "")
+                    ),
+                },
+            )
+        return True
+
+    def _playback_active_for_completed_turn(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> bool:
+        owner = self._pipeline
+        try:
+            active = bool(
+                owner._ensure_client_audio_state_view().agent_output_active_for_interrupts()
+            )
+        except Exception:  # noqa: BLE001 - completed-turn gate must fail closed
+            logger.debug(
+                "[StreamingPipeline] completed-turn playback activity check failed",
+                exc_info=True,
+            )
+            active = False
+        if active:
+            return True
+        timeline_client = _timeline_client_audio_state(timeline)
+        return timeline_client.get("playback_state") == "agent_speaking"
+
+    @staticmethod
+    def _completed_turn_decision_continues_to_llm(decision: Any) -> bool:
+        return (
+            decision.action is Action.CANCEL
+            and decision.intent is InterruptIntent.NORMAL_INTERRUPT
+            and bool(decision.topic_switch_hint or decision.correction_hint)
+        )
 
     def _eot_thinks_turn_complete(self) -> bool:
         owner = self._pipeline
@@ -404,3 +617,10 @@ class FullDuplexFrameworkCompletedTurnGate:
             )
             or 0.0
         )
+
+
+def _timeline_client_audio_state(timeline: TurnTimeline | None) -> dict[str, Any]:
+    if timeline is None:
+        return {}
+    value = timeline.attrs.get("client_audio_state")
+    return value if isinstance(value, dict) else {}

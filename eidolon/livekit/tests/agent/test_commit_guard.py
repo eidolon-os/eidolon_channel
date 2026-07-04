@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
 
+from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
@@ -262,6 +265,97 @@ async def test_completed_turn_hook_resolves_backchannel_interruption_candidate()
     )
     pipeline._session.clear_user_turn.assert_called_once()
     clear_next.assert_called_once_with(reason="interruption_owner_resolved:rollback")
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_preempts_playback_topic_switch_without_active_owner() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("late-topic-completed-turn")
+    set_next = MagicMock()
+    clear_next = MagicMock()
+    pipeline._factory = SimpleNamespace(
+        llm=SimpleNamespace(
+            llm=SimpleNamespace(
+                clear_next_user_text=clear_next,
+                set_next_user_text=set_next,
+                set_turn_control_metadata=MagicMock(),
+            )
+        )
+    )
+    pipeline._turn_policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(
+            TurnPolicyConfig().interrupt,
+            fast_lexical_intents=True,
+        ),
+    )
+    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
+    pipeline._ensure_runtime_defaults()
+    pipeline._room_data.client_audio_states["bench-user"] = ClientAudioState(
+        participant_identity="bench-user",
+        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
+        received_at=time.monotonic(),
+    )
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="换个话题，我们聊点别的。")
+    )
+
+    assert allowed is True
+    pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
+    pipeline._session.clear_user_turn.assert_not_called()
+    clear_next.assert_not_called()
+    set_next.assert_called_once()
+    assert pipeline._timeline.attrs["decision"]["action"] == "cancel"
+    assert pipeline._timeline.attrs["decision"]["intent"] == "normal_interrupt"
+    assert pipeline._timeline.attrs["framework_completed_playback_evidence"] == {
+        "action": "cancel",
+        "continue_to_llm": True,
+        "intent": "normal_interrupt",
+        "reason": "intent:topic_switch",
+        "text_length": 12,
+        "text_preview": "换个话题，我们聊点别的。",
+    }
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_respects_mic_muted_playback_state() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("late-muted-hard-stop")
+    pipeline._ensure_runtime_defaults()
+    pipeline._room_data.client_audio_states["bench-user"] = ClientAudioState(
+        participant_identity="bench-user",
+        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
+        mic_muted=True,
+        received_at=time.monotonic(),
+    )
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._user_turns.add_transcript("停一下。", is_final=True)
+    pipeline._user_turns.finish_speech(eot_score=0.0, should_defer=True)
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="停一下。")
+    )
+
+    assert allowed is False
+    pipeline._interruption_effects.cancel_and_interrupt.assert_not_called()
+    pipeline._session.commit_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
+    assert "decision" not in pipeline._timeline.attrs
+    assert pipeline._timeline.attrs["framework_completed_playback_evidence"] == {
+        "action": "ignore",
+        "continue_to_llm": False,
+        "intent": None,
+        "reason": "client_mic_muted",
+        "text_length": 4,
+        "text_preview": "停一下。",
+    }
+    assert (
+        pipeline._timeline.attrs["framework_completed_playback_evidence_ignored"][
+            "reason"
+        ]
+        == "client_mic_muted"
+    )
 
 
 def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:
@@ -947,6 +1041,101 @@ async def test_deferred_framework_completed_commits_after_grace() -> None:
     pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
     eot = pipeline._get_eot_model.return_value
     assert eot.record_turn.call_args.args[0] == "私立医院的。 给医生做的系统。"
+
+
+@pytest.mark.asyncio
+async def test_deferred_framework_completed_rechecks_playback_redirect_before_commit() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("deferred-topic-playback")
+    policy = replace(
+        TurnPolicyConfig(
+            eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=10)
+        ),
+        interrupt=replace(
+            TurnPolicyConfig().interrupt,
+            fast_lexical_intents=True,
+        ),
+    )
+    pipeline._turn_policy = policy
+    pipeline._turn_runtime = TurnPolicyRuntime(policy)
+    timeline = pipeline._timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._get_eot_model.return_value.current_eot_score = 0.01
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("我们聊点别的", is_final=True)
+    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="换个话 换个话题。")
+    )
+    assert allowed is False
+    pipeline._room_data.client_audio_states["bench-user"] = ClientAudioState(
+        participant_identity="bench-user",
+        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
+        received_at=time.monotonic(),
+    )
+
+    await asyncio.sleep(0.05)
+
+    pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
+    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
+    assert timeline.attrs["decision"]["action"] == "cancel"
+    assert timeline.attrs["decision"]["intent"] == "normal_interrupt"
+    assert timeline.attrs["deferred_low_eot_playback_evidence"] == {
+        "action": "cancel",
+        "continue_to_llm": True,
+        "intent": "normal_interrupt",
+        "reason": "intent:topic_switch",
+        "text_length": 15,
+        "text_preview": "我们聊点别的换个话 换个话题。",
+    }
+    eot = pipeline._get_eot_model.return_value
+    assert eot.record_turn.call_args.args[0] == "我们聊点别的换个话 换个话题。"
+
+
+def test_deferred_playback_evidence_uses_turn_scoped_client_state() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    timeline = TurnTimeline("deferred-topic-turn-scoped-playback")
+    timeline.set_attr(
+        "client_audio_state",
+        {
+            "participant_identity": "bench-user",
+            "playback_state": PLAYBACK_STATE_AGENT_SPEAKING,
+            "mic_muted": False,
+        },
+    )
+    pipeline._timeline = timeline
+    pipeline._turn_policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(
+            TurnPolicyConfig().interrupt,
+            fast_lexical_intents=True,
+        ),
+    )
+    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
+    pipeline._ensure_runtime_defaults()
+    pipeline._room_data.client_audio_states.clear()
+
+    resolved = (
+        pipeline._ensure_turn_completion()
+        ._framework_completed_turn.resolve_deferred_playback_commit_evidence(
+            "我们聊点别的换个话 换个话题。",
+            timeline=timeline,
+        )
+    )
+
+    assert resolved is True
+    pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
+    assert timeline.attrs["decision"]["action"] == "cancel"
+    assert timeline.attrs["decision"]["intent"] == "normal_interrupt"
+    assert timeline.attrs["deferred_low_eot_playback_evidence"] == {
+        "action": "cancel",
+        "continue_to_llm": True,
+        "intent": "normal_interrupt",
+        "reason": "intent:topic_switch",
+        "text_length": 15,
+        "text_preview": "我们聊点别的换个话 换个话题。",
+    }
 
 
 @pytest.mark.asyncio

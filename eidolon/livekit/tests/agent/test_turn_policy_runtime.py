@@ -11,7 +11,7 @@ from eidolon.livekit.common.config import InterruptPolicyConfig, TurnPolicyConfi
 def test_runtime_exposes_decision_timeout_from_config() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
-    assert runtime.decision_timeout_sec == 0.5
+    assert runtime.decision_timeout_sec == 0.45
 
 
 def test_runtime_decision_becomes_turn_control_metadata() -> None:

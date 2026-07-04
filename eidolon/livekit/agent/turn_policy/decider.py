@@ -122,6 +122,7 @@ class InterruptDecider:
             intent,
             normalized_text=stripped,
             vad_active=vad_active,
+            is_final=is_final,
         )
         if forced is not None:
             return forced
@@ -313,6 +314,7 @@ class InterruptDecider:
                 intent,
                 normalized_text=text,
                 vad_active=True,
+                is_final=False,
             )
             if forced is not None:
                 return forced
@@ -422,6 +424,7 @@ class InterruptDecider:
         *,
         normalized_text: str,
         vad_active: bool,
+        is_final: bool,
     ) -> Decision | None:
         if intent.intent == InterruptIntent.HARD_STOP:
             return Decision(
@@ -450,7 +453,14 @@ class InterruptDecider:
                 correction_hint=True,
             )
         if intent.intent in (InterruptIntent.BACKCHANNEL, InterruptIntent.NOISE):
-            if vad_active and len(normalized_text) <= 1:
+            if (
+                vad_active
+                and len(normalized_text) <= 1
+                and (
+                    not is_final
+                    or normalized_text not in _FAST_DEADLINE_SINGLE_CHAR_ACKS
+                )
+            ):
                 return Decision(
                     action=Action.HOLD,
                     reason=f"intent:{intent.reason}_await_more_speech",

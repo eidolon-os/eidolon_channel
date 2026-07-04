@@ -101,7 +101,7 @@ turn_policy:
     statement_sequence_fragment_max_cjk_chars: 14
     transcript_revision_min_normalized_chars: 4
   interrupt:
-    decision_timeout_ms: 500
+    decision_timeout_ms: 450
     post_speech_evidence_timeout_ms: 6000
     post_speech_evidence_min_speech_ms: 250
     framework_false_interruption_timeout_ms: 6000

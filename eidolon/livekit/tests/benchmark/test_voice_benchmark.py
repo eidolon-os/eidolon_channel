@@ -2330,10 +2330,26 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"reason":"playback_low_evidence_transcript:substantive_cjk_transcript",'
             '"transcript_preview":"换个话",'
             '"tier":"tier4_attention",'
-            '"tier_reason":"playback_low_evidence_transcript:substantive_cjk_transcript"},'
+            '"tier_reason":"playback_low_evidence_transcript:substantive_cjk_transcript",'
+            '"state":{"agent_speaking":true,'
+            '"duck_active":true,'
+            '"speech_started":false,'
+            '"client_state_present":true,'
+            '"client_state_fresh":true,'
+            '"client_playback_state":"agent_speaking",'
+            '"client_state_age_ms":120,'
+            '"eot_score":0.0}},'
             '{"action":"duck_and_decide",'
             '"reason":"transcript_intent:topic_switch",'
-            '"transcript_preview":"换个话题"}],'
+            '"transcript_preview":"换个话题",'
+            '"state":{"agent_speaking":true,'
+            '"duck_active":true,'
+            '"speech_started":false,'
+            '"client_state_present":true,'
+            '"client_state_fresh":true,'
+            '"client_playback_state":"agent_speaking",'
+            '"client_state_age_ms":42,'
+            '"eot_score":0.72}}],'
             '"semantic_interrupt_gate_events":['
             '{"stage":"initial","action":"inactive",'
             '"reason":"no_interrupt_window",'
@@ -2412,8 +2428,20 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
         "transcript_intent:topic_switch"
     )
     assert metrics["timeline_attention_admission_last_preview"] == "换个话题"
+    assert metrics["timeline_attention_admission_last_agent_speaking"] is True
+    assert metrics["timeline_attention_admission_last_duck_active"] is True
+    assert metrics["timeline_attention_admission_last_playback_state"] == (
+        "agent_speaking"
+    )
+    assert metrics["timeline_attention_admission_last_client_state_age_ms"] == 42
+    assert metrics["timeline_attention_admission_last_client_state_fresh"] is True
+    assert metrics["timeline_attention_admission_last_eot_score"] == 0.72
     assert metrics["timeline_attention_admission_blocked_chain"] == (
         "observe:playback_low_evidence_transcript:substantive_cjk_transcript:换个话"
+    )
+    assert metrics["timeline_attention_admission_blocked_state_chain"] == (
+        "observe:playback_low_evidence_transcript:substantive_cjk_transcript:"
+        "agent=true:duck=true:playback=agent_speaking:age=120ms:eot=0.00:换个话"
     )
     assert metrics["timeline_semantic_gate_event_count"] == 3
     assert metrics["timeline_semantic_gate_last_stage"] == "attention"

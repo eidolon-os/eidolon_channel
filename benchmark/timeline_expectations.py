@@ -1078,10 +1078,60 @@ def _attention_admission_metrics(records: list[dict[str, Any]]) -> dict[str, Any
         value = latest.get(source_key)
         if isinstance(value, str) and value:
             metrics[metric_key] = value
+    state = _mapping(latest.get("state"))
+    for source_key, metric_key in (
+        ("agent_speaking", "timeline_attention_admission_last_agent_speaking"),
+        ("duck_active", "timeline_attention_admission_last_duck_active"),
+        ("speech_started", "timeline_attention_admission_last_speech_started"),
+        (
+            "client_state_present",
+            "timeline_attention_admission_last_client_state_present",
+        ),
+        (
+            "client_state_fresh",
+            "timeline_attention_admission_last_client_state_fresh",
+        ),
+        ("client_ptt", "timeline_attention_admission_last_client_ptt"),
+        (
+            "client_manual_interrupt",
+            "timeline_attention_admission_last_client_manual_interrupt",
+        ),
+        ("client_mic_muted", "timeline_attention_admission_last_client_mic_muted"),
+    ):
+        value = state.get(source_key)
+        if isinstance(value, bool):
+            metrics[metric_key] = value
+    for source_key, metric_key in (
+        ("client_playback_state", "timeline_attention_admission_last_playback_state"),
+        ("client_input_mode", "timeline_attention_admission_last_input_mode"),
+        ("participant_identity", "timeline_attention_admission_last_participant"),
+    ):
+        value = state.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+    for source_key, metric_key in (
+        ("eot_score", "timeline_attention_admission_last_eot_score"),
+        (
+            "client_state_age_ms",
+            "timeline_attention_admission_last_client_state_age_ms",
+        ),
+        (
+            "client_state_max_age_ms",
+            "timeline_attention_admission_last_client_state_max_age_ms",
+        ),
+        ("client_rms", "timeline_attention_admission_last_client_rms"),
+        ("client_snr_hint", "timeline_attention_admission_last_client_snr_hint"),
+    ):
+        value = _number(state.get(source_key))
+        if value is not None:
+            metrics[metric_key] = value
 
     chain = _attention_admission_chain(events[-8:])
     if chain:
         metrics["timeline_attention_admission_chain"] = chain
+    state_chain = _attention_admission_state_chain(events[-8:])
+    if state_chain:
+        metrics["timeline_attention_admission_state_chain"] = state_chain
     blocked = _attention_admission_chain(
         [
             event
@@ -1091,6 +1141,15 @@ def _attention_admission_metrics(records: list[dict[str, Any]]) -> dict[str, Any
     )
     if blocked:
         metrics["timeline_attention_admission_blocked_chain"] = blocked
+    blocked_state = _attention_admission_state_chain(
+        [
+            event
+            for event in events
+            if event.get("action") in {"observe", "ignore"}
+        ][-8:]
+    )
+    if blocked_state:
+        metrics["timeline_attention_admission_blocked_state_chain"] = blocked_state
     return metrics
 
 
@@ -1274,6 +1333,29 @@ def _attention_admission_chain(events: list[dict[str, Any]]) -> str:
     return " ; ".join(parts)
 
 
+def _attention_admission_state_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        state = _mapping(event.get("state"))
+        if not state:
+            continue
+        action = str(event.get("action") or "?")
+        reason = str(event.get("reason") or "?")
+        preview = str(event.get("transcript_preview") or "")[:40]
+        agent = _bool_label(state.get("agent_speaking"))
+        duck = _bool_label(state.get("duck_active"))
+        playback = str(state.get("client_playback_state") or "none")
+        age = _number(state.get("client_state_age_ms"))
+        age_text = "n/a" if age is None else f"{age:.0f}ms"
+        eot = _number(state.get("eot_score"))
+        eot_text = "n/a" if eot is None else f"{eot:.2f}"
+        parts.append(
+            f"{action}:{reason}:agent={agent}:duck={duck}:"
+            f"playback={playback}:age={age_text}:eot={eot_text}:{preview}"
+        )
+    return " ; ".join(parts)
+
+
 def _semantic_gate_chain(events: list[dict[str, Any]]) -> str:
     return _gate_event_chain(events)
 
@@ -1336,6 +1418,12 @@ def _number(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _bool_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "n/a"
 
 
 def _first_number(values: Any) -> float | None:

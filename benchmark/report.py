@@ -145,6 +145,35 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_attention_admission_blocked_chain",
         "attention admission observe/ignore 链路",
     ),
+    (
+        "timeline_attention_admission_last_agent_speaking",
+        "attention 最后 agent_speaking",
+    ),
+    (
+        "timeline_attention_admission_last_duck_active",
+        "attention 最后 duck_active",
+    ),
+    (
+        "timeline_attention_admission_last_playback_state",
+        "attention 最后 client playback",
+    ),
+    (
+        "timeline_attention_admission_last_client_state_age_ms",
+        "attention 最后 client state age",
+    ),
+    (
+        "timeline_attention_admission_last_client_state_fresh",
+        "attention 最后 client state fresh",
+    ),
+    (
+        "timeline_attention_admission_last_eot_score",
+        "attention 最后 EOT score",
+    ),
+    ("timeline_attention_admission_state_chain", "attention admission 状态链路"),
+    (
+        "timeline_attention_admission_blocked_state_chain",
+        "attention admission observe/ignore 状态链路",
+    ),
     ("timeline_semantic_gate_event_count", "semantic gate 事件数"),
     ("timeline_semantic_gate_last_reason", "semantic gate 最后原因"),
     ("timeline_semantic_gate_last_preview", "semantic gate 最后文本"),

@@ -125,6 +125,32 @@ def test_duck_active_routes_low_evidence_transcript_as_evidence() -> None:
     assert timeline.attrs["attention_admission"]["action"] == "observe"
 
 
+def test_attention_admission_records_state_snapshot() -> None:
+    received_at = time.monotonic() - 0.321
+    handler, timeline, _, _ = _handler(
+        client_state=_client_state(
+            received_at=received_at,
+            rms=42.0,
+            snr_hint=18.5,
+        ),
+        duck_active=True,
+        eot_score=0.42,
+    )
+
+    handler.allows_eot_check("换个话")
+
+    state = timeline.attrs["attention_admission"]["state"]
+    assert state["agent_speaking"] is True
+    assert state["duck_active"] is True
+    assert state["eot_score"] == 0.42
+    assert state["client_state_present"] is True
+    assert state["client_state_fresh"] is True
+    assert state["client_playback_state"] == "agent_speaking"
+    assert 250 <= state["client_state_age_ms"] <= 500
+    assert state["client_rms"] == 42.0
+    assert state["client_snr_hint"] == 18.5
+
+
 def test_allows_eot_ducks_for_short_high_eot_playback_speech() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(
         client_state=_client_state(),

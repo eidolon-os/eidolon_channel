@@ -72,8 +72,29 @@ def _handler(
     return handler, timeline, on_duck, on_interrupt
 
 
-def test_allows_eot_observes_substantive_playback_speech_without_eot() -> None:
+def test_allows_eot_routes_substantive_fresh_playback_without_ducking() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
+
+    allowed = handler.allows_eot_check("那它有什么风险")
+
+    assert allowed is True
+    on_duck.assert_not_called()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "observe"
+    assert timeline.attrs["attention_admission"]["reason"] == (
+        "playback_low_evidence_transcript:substantive_cjk_transcript"
+    )
+
+
+def test_allows_eot_blocks_substantive_stale_playback_evidence() -> None:
+    received_at = (
+        time.monotonic()
+        - TurnPolicyConfig().attention.client_state_max_age_ms / 1000.0
+        - 1.0
+    )
+    handler, timeline, on_duck, on_interrupt = _handler(
+        client_state=_client_state(received_at=received_at),
+    )
 
     allowed = handler.allows_eot_check("那它有什么风险")
 
@@ -81,6 +102,7 @@ def test_allows_eot_observes_substantive_playback_speech_without_eot() -> None:
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["action"] == "observe"
+    assert timeline.attrs["attention_admission"]["state"]["client_state_fresh"] is False
 
 
 def test_allows_eot_ducks_for_high_eot_playback_speech() -> None:

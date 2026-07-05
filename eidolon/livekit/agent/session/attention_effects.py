@@ -7,6 +7,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
+
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.turn_policy import (
@@ -97,6 +99,14 @@ class AttentionEffectHandler:
             logger.info(
                 "[AttentionEffectHandler] attention admission: %s reason=%s; "
                 "duck active, route transcript as interruption evidence",
+                decision.action.value,
+                decision.reason,
+            )
+            return True
+        if self._routes_observed_playback_evidence(decision, state):
+            logger.info(
+                "[AttentionEffectHandler] attention admission: %s reason=%s; "
+                "fresh playback evidence, route transcript to semantic owner",
                 decision.action.value,
                 decision.reason,
             )
@@ -219,6 +229,21 @@ class AttentionEffectHandler:
             }
         )
         return state
+
+    @staticmethod
+    def _routes_observed_playback_evidence(
+        decision: AttentionDecision,
+        state: dict[str, object],
+    ) -> bool:
+        if decision.action is not AdmissionAction.OBSERVE:
+            return False
+        if not decision.reason.startswith(
+            "playback_low_evidence_transcript:substantive_"
+        ):
+            return False
+        if state.get("client_state_fresh") is not True:
+            return False
+        return state.get("client_playback_state") == PLAYBACK_STATE_AGENT_SPEAKING
 
 
 def _is_direct_intent_admission(decision: AttentionDecision) -> bool:

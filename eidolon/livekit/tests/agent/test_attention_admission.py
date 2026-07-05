@@ -320,10 +320,15 @@ def _pipeline_with_client_state(
     pipeline._ducking.mixer = None
     pipeline._timeline = TurnTimeline("turn-1")
     pipeline._room_data = RoomDataHandler(get_timeline=lambda: pipeline._timeline)
-    if state is not None:
-        pipeline._room_data.client_audio_states[state.participant_identity] = state
     pipeline._output_flow = SimpleNamespace(duck_and_arm_timeout=MagicMock())
     pipeline._callbacks = MagicMock()
+    eot = MagicMock()
+    eot.current_eot_score = 0.0
+    eot.update_asr = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+    pipeline._ensure_runtime_defaults()
+    if state is not None:
+        pipeline._room_data.client_audio_states[state.participant_identity] = state
     return pipeline
 
 
@@ -333,19 +338,19 @@ def _allows_eot(
     *,
     speaker_id: str | None = None,
 ) -> bool:
-    pipeline._ensure_runtime_defaults()
+    pipeline._ensure_attention_effect_handler()
     return pipeline._attention_effects.allows_eot_check(
         transcript,
         speaker_id=speaker_id,
     )
 
 
-def test_pipeline_attention_observes_substantive_playback_speech_without_eot() -> None:
+def test_pipeline_attention_routes_substantive_playback_speech_without_ducking() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
 
     allowed = _allows_eot(pipeline, "那它的主要风险是什么")
 
-    assert allowed is False
+    assert allowed is True
     pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
@@ -490,6 +495,45 @@ def test_user_transcript_runs_semantic_when_client_playback_active_but_state_idl
     pipeline._semantic_interrupts.run.assert_called_once_with(
         "停一下",
         is_final=False,
+    )
+
+
+def test_user_transcript_routes_observed_substantive_playback_to_semantic_owner() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(participant_identity="manson"),
+        pipeline_state=PipelineState.SPEAKING,
+    )
+    eot = MagicMock()
+    eot.current_eot_score = 0.0
+    eot.update_asr = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+    pipeline._semantic_interrupts = SimpleNamespace(
+        run=MagicMock(),
+        _turn_runtime=pipeline._turn_runtime,
+    )
+    pipeline._allow_interruptions = True
+    pipeline._mark_activity = MagicMock()
+
+    pipeline._on_user_transcribed(
+        SimpleNamespace(
+            transcript="换个话",
+            is_final=False,
+            speaker_id="manson",
+        )
+    )
+
+    pipeline._semantic_interrupts.run.assert_called_once_with(
+        "换个话",
+        is_final=False,
+    )
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "playback_low_evidence_transcript:substantive_cjk_transcript"
+    )
+    assert (
+        pipeline._timeline.attrs["semantic_interrupt_gate_last_event"]["reason"]
+        == "eligible"
     )
 
 

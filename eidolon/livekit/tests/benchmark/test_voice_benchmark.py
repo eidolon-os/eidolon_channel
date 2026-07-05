@@ -2304,6 +2304,7 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"reason":"stable_signal_wait intent=topic_switch age_ms=0 window_ms=120",'
             '"intent":"topic_switch",'
             '"source":"turn_policy",'
+            '"hold_recheck_ms":120,'
             '"transcript_preview":"换个话"},'
             '{"action":"cancel",'
             '"reason":"intent:topic_switch",'
@@ -2405,6 +2406,15 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_decision_event_hold_chain"] == (
         "hold:stable_signal_wait intent=topic_switch age_ms=0 window_ms=120:"
         "topic_switch:turn_policy:换个话"
+    )
+    assert metrics["timeline_decision_stable_signal_wait_count"] == 1
+    assert metrics["timeline_decision_stable_signal_last_intent"] == "topic_switch"
+    assert metrics["timeline_decision_stable_signal_last_age_ms"] == 0
+    assert metrics["timeline_decision_stable_signal_last_window_ms"] == 120
+    assert metrics["timeline_decision_stable_signal_last_recheck_ms"] == 120
+    assert metrics["timeline_decision_stable_signal_last_preview"] == "换个话"
+    assert metrics["timeline_decision_stable_signal_chain"] == (
+        "topic_switch:age=0:window=120:recheck=120:换个话"
     )
     assert metrics["timeline_decision_event_terminal_chain"] == (
         "cancel:intent:topic_switch:normal_interrupt:"

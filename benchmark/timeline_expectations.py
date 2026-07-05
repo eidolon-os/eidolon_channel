@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from .schema import ROOM_NAME_PREFIX, BenchmarkSuite, RunResult
 from .timeline import load_timeline_records
+
+_STABLE_SIGNAL_WAIT_RE = re.compile(
+    r"\bstable_signal_wait\s+"
+    r"intent=(?P<intent>\S+)\s+"
+    r"age_ms=(?P<age_ms>-?\d+(?:\.\d+)?)\s+"
+    r"window_ms=(?P<window_ms>-?\d+(?:\.\d+)?)"
+)
 
 
 def apply_timeline_expectations(
@@ -1006,7 +1014,61 @@ def _decision_event_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     )
     if terminal_chain:
         metrics["timeline_decision_event_terminal_chain"] = terminal_chain
+    metrics.update(_stable_signal_wait_metrics(events))
     return metrics
+
+
+def _stable_signal_wait_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
+    stable_events = [
+        event
+        for event in events
+        if str(event.get("reason") or "").startswith("stable_signal_wait")
+    ]
+    if not stable_events:
+        return {}
+
+    latest = stable_events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_decision_stable_signal_wait_count": len(stable_events),
+    }
+    reason = latest.get("reason")
+    if isinstance(reason, str) and reason:
+        metrics["timeline_decision_stable_signal_last_reason"] = reason
+        parsed = _parse_stable_signal_wait_reason(reason)
+        intent = parsed.get("intent")
+        if isinstance(intent, str) and intent:
+            metrics["timeline_decision_stable_signal_last_intent"] = intent
+        age_ms = _number(parsed.get("age_ms"))
+        if age_ms is not None:
+            metrics["timeline_decision_stable_signal_last_age_ms"] = age_ms
+        window_ms = _number(parsed.get("window_ms"))
+        if window_ms is not None:
+            metrics["timeline_decision_stable_signal_last_window_ms"] = window_ms
+    if "timeline_decision_stable_signal_last_intent" not in metrics:
+        intent = latest.get("intent")
+        if isinstance(intent, str) and intent:
+            metrics["timeline_decision_stable_signal_last_intent"] = intent
+    preview = latest.get("transcript_preview")
+    if isinstance(preview, str) and preview:
+        metrics["timeline_decision_stable_signal_last_preview"] = preview
+    recheck_ms = _number(latest.get("hold_recheck_ms"))
+    if recheck_ms is not None:
+        metrics["timeline_decision_stable_signal_last_recheck_ms"] = recheck_ms
+    chain = _stable_signal_wait_chain(stable_events[-8:])
+    if chain:
+        metrics["timeline_decision_stable_signal_chain"] = chain
+    return metrics
+
+
+def _parse_stable_signal_wait_reason(reason: str) -> dict[str, Any]:
+    match = _STABLE_SIGNAL_WAIT_RE.search(reason)
+    if match is None:
+        return {}
+    return {
+        "intent": match.group("intent"),
+        "age_ms": float(match.group("age_ms")),
+        "window_ms": float(match.group("window_ms")),
+    }
 
 
 def _semantic_gate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1320,6 +1382,26 @@ def _decision_event_chain(events: list[dict[str, Any]]) -> str:
         source = str(event.get("source") or "")
         preview = str(event.get("transcript_preview") or "")[:40]
         parts.append(f"{action}:{reason}:{intent}:{source}:{preview}")
+    return " ; ".join(parts)
+
+
+def _stable_signal_wait_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        reason = str(event.get("reason") or "")
+        parsed = _parse_stable_signal_wait_reason(reason)
+        intent = str(parsed.get("intent") or event.get("intent") or "")
+        age = parsed.get("age_ms")
+        window = parsed.get("window_ms")
+        recheck = _number(event.get("hold_recheck_ms"))
+        preview = str(event.get("transcript_preview") or "")[:40]
+        age_text = f"{age:.0f}" if isinstance(age, float) else "?"
+        window_text = f"{window:.0f}" if isinstance(window, float) else "?"
+        recheck_text = f"{recheck:.0f}" if recheck is not None else "?"
+        parts.append(
+            f"{intent}:age={age_text}:window={window_text}:"
+            f"recheck={recheck_text}:{preview}"
+        )
     return " ; ".join(parts)
 
 

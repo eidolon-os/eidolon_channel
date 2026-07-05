@@ -45,6 +45,18 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_decision_hold_recheck_ms",
         "策略 HOLD -> 下次 recheck 预算",
     ),
+    (
+        "timeline_decision_stable_signal_last_window_ms",
+        "stable-signal 窗口",
+    ),
+    (
+        "timeline_decision_stable_signal_last_recheck_ms",
+        "stable-signal recheck 预算",
+    ),
+    (
+        "timeline_decision_stable_signal_chain",
+        "stable-signal wait 链路",
+    ),
     ("timeline_decision_event_count", "decision 事件数"),
     ("timeline_decision_event_last_reason", "decision 最后原因"),
     ("timeline_decision_event_last_preview", "decision 最后文本"),
@@ -115,6 +127,30 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_decision_hold_recheck_ms",
         "策略 HOLD -> 下次 recheck 预算",
+    ),
+    (
+        "timeline_decision_stable_signal_wait_count",
+        "stable-signal wait 次数",
+    ),
+    (
+        "timeline_decision_stable_signal_last_age_ms",
+        "stable-signal 最后 age",
+    ),
+    (
+        "timeline_decision_stable_signal_last_window_ms",
+        "stable-signal 最后 window",
+    ),
+    (
+        "timeline_decision_stable_signal_last_recheck_ms",
+        "stable-signal 最后 recheck",
+    ),
+    (
+        "timeline_decision_stable_signal_last_preview",
+        "stable-signal 最后文本",
+    ),
+    (
+        "timeline_decision_stable_signal_chain",
+        "stable-signal wait 链路",
     ),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",

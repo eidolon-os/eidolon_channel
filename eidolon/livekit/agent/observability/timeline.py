@@ -284,12 +284,17 @@ class TurnTimeline:
     ) -> None:
         """Mark generic and action-specific interruption resolution times."""
 
-        marker = self.mark if timestamp is None else lambda name: self.mark_at(name, timestamp)
-        marker("interrupt_resolved_at")
+        resolved_at = time.monotonic() if timestamp is None else timestamp
+        events = list(self.attrs.get("interrupt_resolution_events") or ())
+        events.append({"action": action, "timestamp": resolved_at})
+        self.attrs["interrupt_resolution_events"] = events[-16:]
+        self.attrs["interrupt_resolution_last_event"] = events[-1]
+
+        self.mark_at("interrupt_resolved_at", resolved_at)
         if action == "cancel":
-            marker("interrupt_cancel_resolved_at")
+            self.mark_at("interrupt_cancel_resolved_at", resolved_at)
         elif action in {"rollback", "resume", "unduck"}:
-            marker("interrupt_rollback_resolved_at")
+            self.mark_at("interrupt_rollback_resolved_at", resolved_at)
 
     def mark_after(self, name: str, anchor: str, offset_sec: float) -> None:
         if anchor not in self.timestamps:
@@ -344,6 +349,11 @@ class TurnTimeline:
             "vad_active": vad_active,
             "hold_recheck_ms": hold_recheck_ms,
         }
+        events = list(self.attrs.get("decision_events") or ())
+        events.append(dict(payload))
+        self.attrs["decision_events"] = events[-16:]
+        self.attrs["decision_first_event"] = events[0]
+        self.attrs["decision_last_event"] = events[-1]
         self.attrs["decision"] = payload
         self.attrs["decision_reason"] = reason
         self.attrs["interrupt_action"] = action

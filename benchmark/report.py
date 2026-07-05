@@ -45,6 +45,12 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_decision_hold_recheck_ms",
         "策略 HOLD -> 下次 recheck 预算",
     ),
+    ("timeline_decision_event_count", "decision 事件数"),
+    ("timeline_decision_event_last_reason", "decision 最后原因"),
+    ("timeline_decision_event_last_preview", "decision 最后文本"),
+    ("timeline_decision_event_chain", "decision 链路"),
+    ("timeline_decision_event_hold_chain", "decision HOLD 链路"),
+    ("timeline_decision_event_terminal_chain", "decision terminal 链路"),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
         "直接意图通过 -> cancel 完成",
@@ -127,6 +133,17 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_transcript_admission_rejected_chain",
         "transcript admission 拒绝链",
+    ),
+    ("timeline_attention_admission_event_count", "attention admission 事件数"),
+    ("timeline_attention_admission_last_reason", "attention admission 最后原因"),
+    (
+        "timeline_attention_admission_last_preview",
+        "attention admission 最后文本",
+    ),
+    ("timeline_attention_admission_chain", "attention admission 链路"),
+    (
+        "timeline_attention_admission_blocked_chain",
+        "attention admission observe/ignore 链路",
     ),
     ("timeline_semantic_gate_event_count", "semantic gate 事件数"),
     ("timeline_semantic_gate_last_reason", "semantic gate 最后原因"),

@@ -246,6 +246,59 @@ def test_timeline_records_hold_recheck_ms() -> None:
     assert timeline.snapshot()["attrs"]["decision"]["hold_recheck_ms"] == 40
 
 
+def test_timeline_keeps_decision_history_when_latest_decision_overwrites() -> None:
+    timeline = TurnTimeline("turn-decision-history")
+
+    timeline.record_decision(
+        action="hold",
+        reason="stable_signal_wait intent=topic_switch age_ms=0 window_ms=120",
+        rollback_drop_buffered=False,
+        intent="topic_switch",
+        source="turn_policy",
+        transcript_preview="换个话",
+        hold_recheck_ms=120,
+    )
+    timeline.record_decision(
+        action="cancel",
+        reason="intent:topic_switch",
+        rollback_drop_buffered=False,
+        intent="normal_interrupt",
+        source="framework_completed_playback_evidence",
+        resolved_reason="framework_completed_playback_evidence",
+        transcript_preview="换个话 换个话题",
+    )
+
+    attrs = timeline.snapshot()["attrs"]
+
+    assert attrs["decision"]["transcript_preview"] == "换个话 换个话题"
+    assert [event["action"] for event in attrs["decision_events"]] == [
+        "hold",
+        "cancel",
+    ]
+    assert attrs["decision_first_event"]["reason"].startswith("stable_signal_wait")
+    assert attrs["decision_last_event"]["resolved_reason"] == (
+        "framework_completed_playback_evidence"
+    )
+
+
+def test_timeline_keeps_interrupt_resolution_history() -> None:
+    timeline = TurnTimeline("turn-resolution-history")
+    timeline.mark_at("speech_started_at", 10.0)
+
+    timeline.mark_interrupt_resolved("cancel", timestamp=10.14)
+    timeline.mark_interrupt_resolved("rollback", timestamp=10.5)
+
+    snap = timeline.snapshot()
+
+    assert snap["timestamps"]["interrupt_resolved_at"] == 10.14
+    assert snap["timestamps"]["interrupt_cancel_resolved_at"] == 10.14
+    assert snap["timestamps"]["interrupt_rollback_resolved_at"] == 10.5
+    assert [event["action"] for event in snap["attrs"]["interrupt_resolution_events"]] == [
+        "cancel",
+        "rollback",
+    ]
+
+
 def test_pipeline_records_semantic_interrupt_gate_events() -> None:
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 

@@ -2299,6 +2299,18 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"voice-bench-hard_interrupt_001-1234abcd",'
             '"interrupt_action":"cancel",'
             '"decision":{"intent":"hard_stop","hold_recheck_ms":40},'
+            '"decision_events":['
+            '{"action":"hold",'
+            '"reason":"stable_signal_wait intent=topic_switch age_ms=0 window_ms=120",'
+            '"intent":"topic_switch",'
+            '"source":"turn_policy",'
+            '"transcript_preview":"换个话"},'
+            '{"action":"cancel",'
+            '"reason":"intent:topic_switch",'
+            '"intent":"normal_interrupt",'
+            '"source":"framework_completed_playback_evidence",'
+            '"resolved_reason":"framework_completed_playback_evidence",'
+            '"transcript_preview":"换个话 换个话题"}],'
             '"interrupted_context":{'
             '"source":"tts_in_flight",'
             '"played_seconds":1.2,'
@@ -2310,6 +2322,18 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"transcript_preview":"换个话题"},'
             '{"accepted":true,"reason":"accepted",'
             '"transcript_preview":"我们聊点别的"}],'
+            '"attention_admission_events":['
+            '{"action":"duck_and_decide",'
+            '"reason":"playback_speech_start_soft_duck",'
+            '"transcript_preview":""},'
+            '{"action":"observe",'
+            '"reason":"playback_low_evidence_transcript:substantive_cjk_transcript",'
+            '"transcript_preview":"换个话",'
+            '"tier":"tier4_attention",'
+            '"tier_reason":"playback_low_evidence_transcript:substantive_cjk_transcript"},'
+            '{"action":"duck_and_decide",'
+            '"reason":"transcript_intent:topic_switch",'
+            '"transcript_preview":"换个话题"}],'
             '"semantic_interrupt_gate_events":['
             '{"stage":"initial","action":"inactive",'
             '"reason":"no_interrupt_window",'
@@ -2359,6 +2383,17 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_interrupt_actionable_transcript_to_resolved_ms"] == 20
     assert metrics["timeline_interrupt_intent_admitted_to_resolved_ms"] == 35
     assert metrics["timeline_decision_hold_recheck_ms"] == 40
+    assert metrics["timeline_decision_event_count"] == 2
+    assert metrics["timeline_decision_event_last_reason"] == "intent:topic_switch"
+    assert metrics["timeline_decision_event_last_preview"] == "换个话 换个话题"
+    assert metrics["timeline_decision_event_hold_chain"] == (
+        "hold:stable_signal_wait intent=topic_switch age_ms=0 window_ms=120:"
+        "topic_switch:turn_policy:换个话"
+    )
+    assert metrics["timeline_decision_event_terminal_chain"] == (
+        "cancel:intent:topic_switch:normal_interrupt:"
+        "framework_completed_playback_evidence:换个话 换个话题"
+    )
     assert metrics["timeline_stt_provider_partial_to_livekit_interim_ms"] == 22
     assert metrics["timeline_vad_start_to_interrupt_resolved"] == 380
     assert metrics["timeline_interrupted_context_count"] == 1
@@ -2371,6 +2406,14 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_transcript_admission_last_accepted"] is True
     assert metrics["timeline_transcript_admission_rejected_chain"] == (
         "agent_echo:助手自己的回声"
+    )
+    assert metrics["timeline_attention_admission_event_count"] == 3
+    assert metrics["timeline_attention_admission_last_reason"] == (
+        "transcript_intent:topic_switch"
+    )
+    assert metrics["timeline_attention_admission_last_preview"] == "换个话题"
+    assert metrics["timeline_attention_admission_blocked_chain"] == (
+        "observe:playback_low_evidence_transcript:substantive_cjk_transcript:换个话"
     )
     assert metrics["timeline_semantic_gate_event_count"] == 3
     assert metrics["timeline_semantic_gate_last_stage"] == "attention"

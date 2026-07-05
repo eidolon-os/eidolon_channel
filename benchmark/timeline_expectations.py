@@ -40,9 +40,11 @@ def apply_timeline_expectations(
         result.metrics["timeline_decision_intents"] = ",".join(
             _decision_intents(case_records)
         )
+        result.metrics.update(_decision_event_metrics(case_records))
         result.metrics.update(_latency_metrics(case_records))
         result.metrics.update(_interrupted_context_metrics(case_records))
         result.metrics.update(_transcript_admission_metrics(case_records))
+        result.metrics.update(_attention_admission_metrics(case_records))
         result.metrics.update(_semantic_gate_metrics(case_records))
         result.metrics.update(_framework_completed_gate_metrics(case_records))
         result.metrics.update(_interruption_owner_metrics(case_records))
@@ -955,6 +957,58 @@ def _interrupted_context_metrics(records: list[dict[str, Any]]) -> dict[str, Any
     return metrics
 
 
+def _decision_event_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose decision history before later fallback/framework decisions overwrite it."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("decision_events")
+        if not isinstance(raw_events, list):
+            decision = _mapping(attrs.get("decision"))
+            if decision:
+                events.append(decision)
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_decision_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("action", "timeline_decision_event_last_action"),
+        ("reason", "timeline_decision_event_last_reason"),
+        ("intent", "timeline_decision_event_last_intent"),
+        ("source", "timeline_decision_event_last_source"),
+        ("resolved_reason", "timeline_decision_event_last_resolved_reason"),
+        ("transcript_preview", "timeline_decision_event_last_preview"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+
+    chain = _decision_event_chain(events[-8:])
+    if chain:
+        metrics["timeline_decision_event_chain"] = chain
+    hold_chain = _decision_event_chain(
+        [event for event in events if event.get("action") == "hold"][-8:]
+    )
+    if hold_chain:
+        metrics["timeline_decision_event_hold_chain"] = hold_chain
+    terminal_chain = _decision_event_chain(
+        [
+            event
+            for event in events
+            if event.get("action") in {"cancel", "rollback"}
+        ][-8:]
+    )
+    if terminal_chain:
+        metrics["timeline_decision_event_terminal_chain"] = terminal_chain
+    return metrics
+
+
 def _semantic_gate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Expose transcript hot-path gate events for early-interim diagnosis."""
 
@@ -994,6 +1048,49 @@ def _semantic_gate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     )
     if blocked:
         metrics["timeline_semantic_gate_blocked_chain"] = blocked
+    return metrics
+
+
+def _attention_admission_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose attention admission reasons that block or allow hot-path EOT."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("attention_admission_events")
+        if not isinstance(raw_events, list):
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_attention_admission_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("action", "timeline_attention_admission_last_action"),
+        ("reason", "timeline_attention_admission_last_reason"),
+        ("transcript_preview", "timeline_attention_admission_last_preview"),
+        ("tier", "timeline_attention_admission_last_tier"),
+        ("tier_reason", "timeline_attention_admission_last_tier_reason"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+
+    chain = _attention_admission_chain(events[-8:])
+    if chain:
+        metrics["timeline_attention_admission_chain"] = chain
+    blocked = _attention_admission_chain(
+        [
+            event
+            for event in events
+            if event.get("action") in {"observe", "ignore"}
+        ][-8:]
+    )
+    if blocked:
+        metrics["timeline_attention_admission_blocked_chain"] = blocked
     return metrics
 
 
@@ -1152,6 +1249,28 @@ def _transcript_admission_chain(events: list[dict[str, Any]]) -> str:
         reason = str(event.get("reason") or "?")
         preview = str(event.get("transcript_preview") or "")[:40]
         parts.append(f"{reason}:{preview}")
+    return " ; ".join(parts)
+
+
+def _decision_event_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        action = str(event.get("action") or "?")
+        reason = str(event.get("reason") or "?")
+        intent = str(event.get("intent") or "")
+        source = str(event.get("source") or "")
+        preview = str(event.get("transcript_preview") or "")[:40]
+        parts.append(f"{action}:{reason}:{intent}:{source}:{preview}")
+    return " ; ".join(parts)
+
+
+def _attention_admission_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        action = str(event.get("action") or "?")
+        reason = str(event.get("reason") or "?")
+        preview = str(event.get("transcript_preview") or "")[:40]
+        parts.append(f"{action}:{reason}:{preview}")
     return " ; ".join(parts)
 
 

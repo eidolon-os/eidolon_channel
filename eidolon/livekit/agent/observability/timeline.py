@@ -247,6 +247,13 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         start="speech_started_at",
         end="interrupt_rollback_resolved_at",
     ),
+    ProviderLatencySegment(
+        name="speech_stop_to_rollback_resolved",
+        label="Interrupt: speech stop -> rollback resolved",
+        stage="interrupt",
+        start="speech_stopped_at",
+        end="interrupt_rollback_resolved_at",
+    ),
 )
 
 
@@ -547,6 +554,9 @@ class TurnTimeline:
             "interrupt_speech_to_rollback_resolved_ms": self.duration_ms(
                 "speech_started_at", "interrupt_rollback_resolved_at"
             ),
+            "speech_stop_to_rollback_resolved_ms": self.duration_ms(
+                "speech_stopped_at", "interrupt_rollback_resolved_at"
+            ),
         }
 
     def provider_segments(self) -> list[dict[str, Any]]:
@@ -653,6 +663,9 @@ class TurnTimeline:
                 ),
                 "vad_start_to_interrupt_rollback_resolved": self.duration_ms(
                     "speech_started_at", "interrupt_rollback_resolved_at"
+                ),
+                "speech_stop_to_interrupt_rollback_resolved": self.duration_ms(
+                    "speech_stopped_at", "interrupt_rollback_resolved_at"
                 ),
             },
         }

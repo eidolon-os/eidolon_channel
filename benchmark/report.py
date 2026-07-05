@@ -69,6 +69,10 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_interrupt_speech_to_rollback_resolved_ms",
         "VAD 起声 -> rollback 完成",
     ),
+    (
+        "timeline_speech_stop_to_rollback_resolved_ms",
+        "VAD 结束 -> rollback 完成",
+    ),
 )
 
 CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
@@ -165,6 +169,38 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_interrupt_speech_to_rollback_resolved_ms",
         "VAD 起声 -> rollback 完成",
+    ),
+    (
+        "timeline_speech_stop_to_rollback_resolved_ms",
+        "VAD 结束 -> rollback 完成",
+    ),
+    (
+        "timeline_interruption_owner_event_count",
+        "interruption owner 事件数",
+    ),
+    (
+        "timeline_interruption_owner_last_event",
+        "interruption owner 最后事件",
+    ),
+    (
+        "timeline_interruption_owner_last_reason",
+        "interruption owner 最后原因",
+    ),
+    (
+        "timeline_interruption_owner_last_elapsed_ms",
+        "interruption owner 最后事件 elapsed",
+    ),
+    (
+        "timeline_interruption_owner_fast_resume_elapsed_ms",
+        "interruption owner fast-resume elapsed",
+    ),
+    (
+        "timeline_interruption_owner_resolved_elapsed_ms",
+        "interruption owner resolved elapsed",
+    ),
+    (
+        "timeline_interruption_owner_wait_chain",
+        "interruption owner 等待链路",
     ),
     ("timeline_record_count", "timeline 记录数"),
     ("real_call_verified", "真实调用校验"),
@@ -670,6 +706,13 @@ def _case_diagnosis(case: dict[str, Any], metrics: dict[str, Any]) -> str:
                 ),
             )
         )
+        stop_to_rollback = metrics.get("timeline_speech_stop_to_rollback_resolved_ms")
+        if stop_to_rollback is not None:
+            return (
+                "该用例被识别为短反馈/噪声路径，执行 rollback，"
+                f"总耗时约 {total}；VAD 结束到 rollback 约 "
+                f"{_fmt_metric_value(stop_to_rollback)}。"
+            )
         return f"该用例被识别为短反馈/噪声路径，执行 rollback，完成耗时约 {total}。"
     if metrics.get("real_call_verified") is True:
         return "该用例通过真实调用校验，且未触发取消路径。"

@@ -45,6 +45,7 @@ def apply_timeline_expectations(
         result.metrics.update(_transcript_admission_metrics(case_records))
         result.metrics.update(_semantic_gate_metrics(case_records))
         result.metrics.update(_framework_completed_gate_metrics(case_records))
+        result.metrics.update(_interruption_owner_metrics(case_records))
 
         expected = expectations.get(result.case_id)
         if expected is None:
@@ -1038,6 +1039,74 @@ def _framework_completed_gate_metrics(records: list[dict[str, Any]]) -> dict[str
     return metrics
 
 
+def _interruption_owner_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose interruption owner events for backchannel/resume diagnosis."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("interruption_orchestrator_events")
+        if not isinstance(raw_events, list):
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_interruption_owner_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("event", "timeline_interruption_owner_last_event"),
+        ("state", "timeline_interruption_owner_last_state"),
+        ("action", "timeline_interruption_owner_last_action"),
+        ("reason", "timeline_interruption_owner_last_reason"),
+        ("transcript_preview", "timeline_interruption_owner_last_preview"),
+        ("text_preview", "timeline_interruption_owner_last_preview"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+
+    elapsed = _number(latest.get("elapsed_ms"))
+    if elapsed is not None:
+        metrics["timeline_interruption_owner_last_elapsed_ms"] = elapsed
+    since_last = _number(latest.get("since_last_event_ms"))
+    if since_last is not None:
+        metrics["timeline_interruption_owner_last_since_previous_ms"] = since_last
+
+    for event_name, metric_key in (
+        (
+            "short_false_interruption_fast_resume",
+            "timeline_interruption_owner_fast_resume_elapsed_ms",
+        ),
+        ("post_speech_evidence_wait", "timeline_interruption_owner_wait_elapsed_ms"),
+        ("candidate_resolved", "timeline_interruption_owner_resolved_elapsed_ms"),
+    ):
+        value = _latest_event_number(events, event_name, "elapsed_ms")
+        if value is not None:
+            metrics[metric_key] = value
+
+    chain = _interruption_owner_chain(events[-8:])
+    if chain:
+        metrics["timeline_interruption_owner_chain"] = chain
+    wait_chain = _interruption_owner_chain(
+        [
+            event
+            for event in events
+            if event.get("event")
+            in {
+                "turn_policy_decision",
+                "post_speech_evidence_wait",
+                "short_false_interruption_fast_resume",
+            }
+        ][-8:]
+    )
+    if wait_chain:
+        metrics["timeline_interruption_owner_wait_chain"] = wait_chain
+    return metrics
+
+
 def _transcript_admission_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Expose transcript admission events before semantic hot-path routing."""
 
@@ -1088,6 +1157,43 @@ def _transcript_admission_chain(events: list[dict[str, Any]]) -> str:
 
 def _semantic_gate_chain(events: list[dict[str, Any]]) -> str:
     return _gate_event_chain(events)
+
+
+def _latest_event_number(
+    events: list[dict[str, Any]],
+    event_name: str,
+    field: str,
+) -> float | None:
+    for event in reversed(events):
+        if event.get("event") != event_name:
+            continue
+        value = _number(event.get(field))
+        if value is not None:
+            return value
+    return None
+
+
+def _interruption_owner_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        name = str(event.get("event") or "?")
+        elapsed = _number(event.get("elapsed_ms"))
+        if elapsed is not None:
+            name = f"{name}@{elapsed:.0f}ms"
+        action = str(
+            event.get("action")
+            or event.get("last_policy_action")
+            or event.get("turn_policy_action")
+            or "?"
+        )
+        reason = str(event.get("reason") or event.get("last_policy_reason") or "?")
+        preview = str(
+            event.get("transcript_preview")
+            or event.get("text_preview")
+            or ""
+        )[:40]
+        parts.append(f"{name}:{action}:{reason}:{preview}")
+    return " ; ".join(parts)
 
 
 def _gate_event_chain(events: list[dict[str, Any]]) -> str:

@@ -204,6 +204,55 @@ def test_single_char_backchannel_fast_resumes_on_speech_end() -> None:
         timeline.attrs["interruption_orchestrator_last_event"]["event"]
         == "short_false_interruption_fast_resume"
     )
+    last = timeline.attrs["interruption_orchestrator_last_event"]
+    assert round(last["elapsed_ms"]) == 550
+
+
+def test_interruption_owner_events_record_elapsed_and_delta_ms() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    timeline = TurnTimeline("turn-event-timing")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        clock=clock,
+    )
+
+    owner.start_candidate(timeline=timeline)
+    now = 10.12
+    owner.note_transcript("好", is_final=False)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.HOLD,
+            reason="intent:backchannel_await_more_speech",
+            rollback_drop_buffered=False,
+            intent=InterruptIntent.BACKCHANNEL,
+        ),
+        transcript="好",
+        vad_active=True,
+    )
+    now = 10.55
+    owner.defer_false_resume_after_speech_end(
+        transcript="好",
+        duck_suspended=True,
+    )
+
+    events = timeline.attrs["interruption_orchestrator_events"]
+    assert events[0]["event"] == "candidate_started"
+    assert round(events[0]["elapsed_ms"]) == 0
+    assert "since_last_event_ms" not in events[0]
+    assert events[1]["event"] == "transcript_evidence"
+    assert round(events[1]["elapsed_ms"]) == 120
+    assert round(events[1]["since_last_event_ms"]) == 120
+    assert events[2]["event"] == "turn_policy_decision"
+    assert round(events[2]["elapsed_ms"]) == 120
+    assert round(events[2]["since_last_event_ms"]) == 0
+    assert events[-1]["event"] == "short_false_interruption_fast_resume"
+    assert round(events[-1]["elapsed_ms"]) == 550
+    assert round(events[-1]["since_last_event_ms"]) == 430
 
 
 def test_turn_policy_cancel_emits_confirm_cancel_decision() -> None:

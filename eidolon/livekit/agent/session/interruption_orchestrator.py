@@ -76,6 +76,7 @@ class InterruptionCandidate:
     last_eot_score: float | None = None
     last_vad_active: bool | None = None
     last_decision_signature: tuple[object, ...] | None = None
+    last_event_at: float | None = None
 
     @property
     def speech_duration_sec(self) -> float:
@@ -574,11 +575,23 @@ class InterruptionOrchestrator:
         if timeline is None:
             return
         candidate = self._candidate
+        now = self._now()
+        elapsed_ms: float | None = None
+        since_last_event_ms: float | None = None
+        if candidate is not None:
+            elapsed_ms = max(0.0, (now - candidate.started_at) * 1000.0)
+            if candidate.last_event_at is not None:
+                since_last_event_ms = max(0.0, (now - candidate.last_event_at) * 1000.0)
+            candidate.last_event_at = now
         payload = {
             "event": event,
             "state": candidate.state.value if candidate is not None else "idle",
             **fields,
         }
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = elapsed_ms
+        if since_last_event_ms is not None:
+            payload["since_last_event_ms"] = since_last_event_ms
         events = list(timeline.attrs.get("interruption_orchestrator_events") or ())
         events.append(payload)
         timeline.set_attr("interruption_orchestrator_events", events)

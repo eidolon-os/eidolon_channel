@@ -148,6 +148,23 @@ def test_timeline_keeps_cancel_resolution_distinct_from_rollback() -> None:
     assert round(durations["vad_start_to_interrupt_cancel_resolved"]) == 1500
 
 
+def test_timeline_records_speech_stop_to_rollback_latency() -> None:
+    timeline = TurnTimeline("turn-backchannel-stop-resume")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("interrupt_started_at", 10.001)
+    timeline.mark_at("speech_stopped_at", 10.645)
+    timeline.mark_interrupt_resolved("rollback", timestamp=10.646)
+
+    snap = timeline.snapshot()
+    provider_latency = snap["attrs"]["provider_latency_ms"]
+    durations = snap["durations_ms"]
+
+    assert round(provider_latency["interrupt_speech_to_rollback_resolved_ms"]) == 646
+    assert round(provider_latency["speech_stop_to_rollback_resolved_ms"]) == 1
+    assert round(durations["vad_start_to_interrupt_rollback_resolved"]) == 646
+    assert round(durations["speech_stop_to_interrupt_rollback_resolved"]) == 1
+
+
 def test_timeline_framework_completed_latency_breakdown() -> None:
     timeline = TurnTimeline("turn-framework-completed")
     timeline.mark_at("speech_started_at", 10.0)

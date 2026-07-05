@@ -74,6 +74,7 @@ KEY_LATENCY_METRICS = (
     "timeline_stt_speech_to_actionable_transcript_ms",
     "timeline_interrupt_first_transcript_to_resolved_ms",
     "timeline_interrupt_speech_to_resolved_ms",
+    "timeline_speech_stop_to_rollback_resolved_ms",
     "timeline_vad_start_to_interrupt_resolved",
     "user_done_to_agent_audio_after_user_done_ms",
 )
@@ -333,6 +334,48 @@ def _suites_for_livekit_mode(
             f"{interaction_mode}"
         )
     return selected
+
+
+def _filter_suites_by_case_ids(
+    suites: list[BenchmarkSuite],
+    case_ids: tuple[str, ...],
+) -> list[BenchmarkSuite]:
+    if not case_ids:
+        return suites
+    wanted = set(case_ids)
+    selected: list[BenchmarkSuite] = []
+    seen: set[str] = set()
+    for suite in suites:
+        cases = tuple(case for case in suite.cases if case.case_id in wanted)
+        if not cases:
+            continue
+        seen.update(case.case_id for case in cases)
+        selected.append(
+            BenchmarkSuite(
+                suite_id=suite.suite_id,
+                suite_mode=suite.suite_mode,
+                cases=cases,
+            )
+        )
+    missing = sorted(wanted - seen)
+    if missing:
+        available = sorted(case.case_id for suite in suites for case in suite.cases)
+        raise SystemExit(
+            "unknown --case-id value(s): "
+            f"{', '.join(missing)}; available: {', '.join(available)}"
+        )
+    return selected
+
+
+def _artifact_case_labels(
+    *,
+    suites: list[BenchmarkSuite],
+    case_paths: list[str],
+    filtered: bool,
+) -> list[str]:
+    if not filtered:
+        return [str(path) for path in case_paths]
+    return [case.case_id for suite in suites for case in suite.cases]
 
 
 def _validate_room_case_expectations(suites: list[BenchmarkSuite]) -> None:
@@ -758,6 +801,15 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_SUITE_SET,
         help="Mode-specific benchmark suite set to run when --cases is omitted.",
     )
+    parser.add_argument(
+        "--case-id",
+        nargs="+",
+        default=None,
+        help=(
+            "Run only the listed case_id values from the selected suites. "
+            "Use for focused room smoke after a targeted change."
+        ),
+    )
     parser.add_argument("--output-dir", default="benchmark/runs")
     parser.add_argument(
         "--run-id",
@@ -846,6 +898,7 @@ async def _main() -> int:
         interaction_mode=args.livekit_interaction_mode,
         allow_suite_set_filter=(args.cases is None and args.suite_set == "all"),
     )
+    suites = _filter_suites_by_case_ids(suites, tuple(args.case_id or ()))
     _validate_room_case_expectations(suites)
     run_root = Path(args.output_dir) / args.run_id / "barge_in_e2e_ab"
 
@@ -875,7 +928,11 @@ async def _main() -> int:
 
     payload = _write_ab_artifacts(
         run_root=run_root,
-        cases=[str(path) for path in case_paths],
+        cases=_artifact_case_labels(
+            suites=suites,
+            case_paths=case_paths,
+            filtered=bool(args.case_id),
+        ),
         repeat=args.repeat,
         managed_worker=args.manage_worker,
         results=results,

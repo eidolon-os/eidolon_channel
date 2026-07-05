@@ -9,8 +9,10 @@ import pytest
 from scripts.bench_barge_in_e2e_ab import (
     DEFAULT_CASES,
     DEFAULT_SUITE_SET,
+    _artifact_case_labels,
     _fmt_ms,
     _case_paths_for_args,
+    _filter_suites_by_case_ids,
     _overlay_payload,
     _participant_metadata,
     _profile_brief,
@@ -132,6 +134,70 @@ def test_all_suite_set_can_filter_to_requested_mode() -> None:
     )
 
     assert [suite.suite_id for suite in selected] == ["half", "shared"]
+
+
+def test_case_id_filter_selects_cases_without_copying_yaml() -> None:
+    keep = BenchmarkCase(
+        case_id="keep",
+        suite="test",
+        description="",
+        audio_clips=(),
+        user_steps=(),
+        expectations=Expectations(agent_audio_response="first"),
+    )
+    skip = BenchmarkCase(
+        case_id="skip",
+        suite="test",
+        description="",
+        audio_clips=(),
+        user_steps=(),
+        expectations=Expectations(agent_audio_response="first"),
+    )
+    suites = [BenchmarkSuite("suite", "full_duplex", (keep, skip))]
+
+    selected = _filter_suites_by_case_ids(suites, ("keep",))
+
+    assert len(selected) == 1
+    assert [case.case_id for case in selected[0].cases] == ["keep"]
+
+
+def test_case_id_filter_reports_unknown_ids() -> None:
+    case = BenchmarkCase(
+        case_id="known",
+        suite="test",
+        description="",
+        audio_clips=(),
+        user_steps=(),
+        expectations=Expectations(agent_audio_response="first"),
+    )
+
+    with pytest.raises(SystemExit, match="unknown --case-id"):
+        _filter_suites_by_case_ids(
+            [BenchmarkSuite("suite", "full_duplex", (case,))],
+            ("missing",),
+        )
+
+
+def test_artifact_case_labels_use_case_ids_after_filter() -> None:
+    case = BenchmarkCase(
+        case_id="fd_gate_backchannel_resumes_001",
+        suite="test",
+        description="",
+        audio_clips=(),
+        user_steps=(),
+        expectations=Expectations(agent_audio_response="first"),
+    )
+
+    assert _artifact_case_labels(
+        suites=[BenchmarkSuite("suite", "full_duplex", (case,))],
+        case_paths=["benchmark/cases/full_duplex/gate_enforced.yaml"],
+        filtered=True,
+    ) == ["fd_gate_backchannel_resumes_001"]
+    assert _artifact_case_labels(
+        suites=[BenchmarkSuite("suite", "full_duplex", (case,))],
+        case_paths=["benchmark/cases/full_duplex/gate_enforced.yaml"],
+        filtered=False,
+    ) == ["benchmark/cases/full_duplex/gate_enforced.yaml"]
 
 
 def test_room_case_expectations_require_explicit_agent_audio_response() -> None:

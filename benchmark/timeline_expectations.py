@@ -44,6 +44,7 @@ def apply_timeline_expectations(
         result.metrics.update(_interrupted_context_metrics(case_records))
         result.metrics.update(_transcript_admission_metrics(case_records))
         result.metrics.update(_semantic_gate_metrics(case_records))
+        result.metrics.update(_framework_completed_gate_metrics(case_records))
 
         expected = expectations.get(result.case_id)
         if expected is None:
@@ -995,6 +996,48 @@ def _semantic_gate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     return metrics
 
 
+def _framework_completed_gate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose LiveKit completed-turn gate events for fallback-path diagnosis."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("framework_completed_gate_events")
+        if not isinstance(raw_events, list):
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_framework_completed_gate_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("stage", "timeline_framework_completed_gate_last_stage"),
+        ("action", "timeline_framework_completed_gate_last_action"),
+        ("reason", "timeline_framework_completed_gate_last_reason"),
+        ("transcript_preview", "timeline_framework_completed_gate_last_preview"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+
+    chain = _gate_event_chain(events[-8:])
+    if chain:
+        metrics["timeline_framework_completed_gate_chain"] = chain
+    skipped = _gate_event_chain(
+        [
+            event
+            for event in events
+            if event.get("action") in {"ignore", "skip"}
+        ][-8:]
+    )
+    if skipped:
+        metrics["timeline_framework_completed_gate_skip_chain"] = skipped
+    return metrics
+
+
 def _transcript_admission_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Expose transcript admission events before semantic hot-path routing."""
 
@@ -1044,6 +1087,10 @@ def _transcript_admission_chain(events: list[dict[str, Any]]) -> str:
 
 
 def _semantic_gate_chain(events: list[dict[str, Any]]) -> str:
+    return _gate_event_chain(events)
+
+
+def _gate_event_chain(events: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for event in events:
         stage = str(event.get("stage") or "?")

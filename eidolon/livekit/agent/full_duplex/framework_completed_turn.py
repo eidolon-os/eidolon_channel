@@ -47,12 +47,20 @@ class FullDuplexFrameworkCompletedTurnGate:
         )
         completed_transcript = message_text(new_message)
         if timeline is not None:
+            timeline.mark("framework_completed_turn_at")
             timeline.set_attr(
                 "framework_completed_turn",
                 {
                     "text_preview": completed_transcript[:120],
                     "text_length": len(completed_transcript),
                 },
+            )
+            self._record_completed_gate_event(
+                timeline,
+                stage="received",
+                action="observe",
+                reason="framework_completed_turn",
+                transcript=completed_transcript,
             )
         if self._stop_active_interruption_framework_completed_turn(
             completed_transcript,
@@ -231,7 +239,17 @@ class FullDuplexFrameworkCompletedTurnGate:
         timeline_attr: str,
         cancel_deferred: bool,
     ) -> bool | None:
-        if not self._playback_active_for_completed_turn(timeline=timeline):
+        playback_active = self._playback_active_for_completed_turn(timeline=timeline)
+        if timeline is not None:
+            self._record_completed_gate_event(
+                timeline,
+                stage="playback_check",
+                action="continue" if playback_active else "skip",
+                reason="playback_active" if playback_active else "no_playback_evidence",
+                transcript=transcript,
+                playback_active=playback_active,
+            )
+        if not playback_active:
             return None
         if self._client_state_blocks_playback_evidence(timeline=timeline):
             if timeline is not None:
@@ -246,6 +264,15 @@ class FullDuplexFrameworkCompletedTurnGate:
                         "text_length": len(transcript),
                     },
                 )
+                self._record_completed_gate_event(
+                    timeline,
+                    stage=timeline_attr,
+                    action="ignore",
+                    reason="client_mic_muted",
+                    transcript=transcript,
+                    playback_active=True,
+                    continue_to_llm=False,
+                )
             owner = self._pipeline
             owner._ensure_user_turn_coordinator()
             owner._user_turns.reject_active("client_mic_muted")
@@ -256,12 +283,32 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
         )
         if decision is None or not self._completed_turn_can_resolve(decision):
+            if timeline is not None:
+                self._record_completed_gate_event(
+                    timeline,
+                    stage=timeline_attr,
+                    action="skip",
+                    reason=(
+                        "no_decision"
+                        if decision is None
+                        else f"decision_not_resolvable:{decision.action.value}"
+                    ),
+                    transcript=transcript,
+                    playback_active=True,
+                    intent=(
+                        decision.intent.value
+                        if decision is not None and decision.intent is not None
+                        else None
+                    ),
+                    decision_reason=decision.reason if decision is not None else None,
+                )
             return None
 
         owner = self._pipeline
         completion = self._completion
         continue_to_llm = self._completed_turn_decision_continues_to_llm(decision)
         if timeline is not None:
+            timeline.mark("framework_completed_playback_evidence_at")
             timeline.set_attr(
                 timeline_attr,
                 {
@@ -274,6 +321,18 @@ class FullDuplexFrameworkCompletedTurnGate:
                     "text_preview": transcript[:120],
                     "text_length": len(transcript),
                 },
+            )
+            self._record_completed_gate_event(
+                timeline,
+                stage=timeline_attr,
+                action=decision.action.value,
+                reason=decision.reason,
+                transcript=transcript,
+                playback_active=True,
+                continue_to_llm=continue_to_llm,
+                intent=decision.intent.value if decision.intent is not None else None,
+                topic_switch_hint=decision.topic_switch_hint,
+                correction_hint=decision.correction_hint,
             )
         owner._ensure_decision_effect_applier()
         owner._decision_effects.apply(
@@ -617,6 +676,30 @@ class FullDuplexFrameworkCompletedTurnGate:
             )
             or 0.0
         )
+
+    @staticmethod
+    def _record_completed_gate_event(
+        timeline: TurnTimeline,
+        *,
+        stage: str,
+        action: str,
+        reason: str,
+        transcript: str,
+        **fields: Any,
+    ) -> None:
+        payload = {
+            "stage": stage,
+            "action": action,
+            "reason": reason,
+            "transcript_preview": transcript[:120],
+            "text_length": len(transcript),
+            **fields,
+        }
+        events = list(timeline.attrs.get("framework_completed_gate_events") or ())
+        events.append(payload)
+        events = events[-16:]
+        timeline.set_attr("framework_completed_gate_events", events)
+        timeline.set_attr("framework_completed_gate_last_event", payload)
 
 
 def _timeline_client_audio_state(timeline: TurnTimeline | None) -> dict[str, Any]:

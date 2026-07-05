@@ -316,6 +316,18 @@ async def test_completed_turn_hook_preempts_playback_topic_switch_without_active
         "text_length": 12,
         "text_preview": "换个话题，我们聊点别的。",
     }
+    timestamps = pipeline._timeline.timestamps
+    assert "framework_completed_turn_at" in timestamps
+    assert "framework_completed_playback_evidence_at" in timestamps
+    events = pipeline._timeline.attrs["framework_completed_gate_events"]
+    assert events[0]["stage"] == "received"
+    assert events[0]["action"] == "observe"
+    assert events[1]["stage"] == "playback_check"
+    assert events[1]["reason"] == "playback_active"
+    assert events[-1]["stage"] == "framework_completed_playback_evidence"
+    assert events[-1]["action"] == "cancel"
+    assert events[-1]["reason"] == "intent:topic_switch"
+    assert events[-1]["continue_to_llm"] is True
 
 
 @pytest.mark.asyncio
@@ -356,6 +368,11 @@ async def test_completed_turn_hook_respects_mic_muted_playback_state() -> None:
         ]
         == "client_mic_muted"
     )
+    events = pipeline._timeline.attrs["framework_completed_gate_events"]
+    assert events[-1]["stage"] == "framework_completed_playback_evidence"
+    assert events[-1]["action"] == "ignore"
+    assert events[-1]["reason"] == "client_mic_muted"
+    assert events[-1]["continue_to_llm"] is False
 
 
 def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:
@@ -1089,6 +1106,14 @@ async def test_deferred_framework_completed_rechecks_playback_redirect_before_co
         "text_length": 15,
         "text_preview": "我们聊点别的换个话 换个话题。",
     }
+    events = timeline.attrs["framework_completed_gate_events"]
+    assert any(
+        event["stage"] == "playback_check" and event["reason"] == "playback_active"
+        for event in events
+    )
+    assert events[-1]["stage"] == "deferred_low_eot_playback_evidence"
+    assert events[-1]["action"] == "cancel"
+    assert events[-1]["reason"] == "intent:topic_switch"
     eot = pipeline._get_eot_model.return_value
     assert eot.record_turn.call_args.args[0] == "我们聊点别的换个话 换个话题。"
 

@@ -148,6 +148,28 @@ def test_timeline_keeps_cancel_resolution_distinct_from_rollback() -> None:
     assert round(durations["vad_start_to_interrupt_cancel_resolved"]) == 1500
 
 
+def test_timeline_framework_completed_latency_breakdown() -> None:
+    timeline = TurnTimeline("turn-framework-completed")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("framework_completed_turn_at", 11.2)
+    timeline.mark_at("framework_completed_playback_evidence_at", 11.24)
+    timeline.mark_interrupt_resolved("cancel", timestamp=11.29)
+
+    snap = timeline.snapshot()
+    provider_latency = snap["attrs"]["provider_latency_ms"]
+    durations = snap["durations_ms"]
+
+    assert round(provider_latency["framework_completed_after_speech_ms"]) == 1200
+    assert round(provider_latency["framework_completed_to_cancel_resolved_ms"]) == 90
+    assert (
+        round(provider_latency["framework_playback_evidence_to_cancel_resolved_ms"])
+        == 50
+    )
+    assert round(durations["framework_completed_after_speech"]) == 1200
+    assert round(durations["framework_completed_to_cancel_resolved"]) == 90
+    assert round(durations["framework_playback_evidence_to_cancel_resolved"]) == 50
+
+
 def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
     timeline = TurnTimeline("turn-noise")
     timeline.mark_at("speech_started_at", 10.0)

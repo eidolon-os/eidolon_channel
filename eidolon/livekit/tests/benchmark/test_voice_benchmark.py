@@ -2320,6 +2320,16 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '{"stage":"attention","action":"run",'
             '"reason":"eligible",'
             '"transcript_preview":"我们聊点别的"}],'
+            '"framework_completed_gate_events":['
+            '{"stage":"received","action":"observe",'
+            '"reason":"framework_completed_turn",'
+            '"transcript_preview":"换个话题"},'
+            '{"stage":"playback_check","action":"continue",'
+            '"reason":"playback_active",'
+            '"transcript_preview":"换个话题"},'
+            '{"stage":"framework_completed_playback_evidence",'
+            '"action":"cancel","reason":"intent:topic_switch",'
+            '"transcript_preview":"换个话题"}],'
             '"provider_latency_ms":{'
             '"interrupt_speech_to_first_transcript_ms":310,'
             '"stt_speech_to_actionable_transcript_ms":360,'
@@ -2327,7 +2337,10 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"interrupt_first_transcript_to_resolved_ms":70,'
             '"interrupt_actionable_transcript_to_resolved_ms":20,'
             '"interrupt_intent_admitted_to_resolved_ms":35,'
-            '"stt_provider_partial_to_livekit_interim_ms":22}},'
+            '"stt_provider_partial_to_livekit_interim_ms":22,'
+            '"framework_completed_after_speech_ms":1200,'
+            '"framework_completed_to_cancel_resolved_ms":80,'
+            '"framework_playback_evidence_to_cancel_resolved_ms":25}},'
             '"durations_ms":{"vad_start_to_interrupt_resolved":380,'
             '"interrupt_intent_admitted_to_resolved":35}}\n'
         ),
@@ -2366,6 +2379,23 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_semantic_gate_last_preview"] == "我们聊点别的"
     assert metrics["timeline_semantic_gate_blocked_chain"] == (
         "initial:inactive:no_interrupt_window:换个话题"
+    )
+    assert metrics["timeline_framework_completed_after_speech_ms"] == 1200
+    assert metrics["timeline_framework_completed_to_cancel_resolved_ms"] == 80
+    assert metrics["timeline_framework_playback_evidence_to_cancel_resolved_ms"] == 25
+    assert metrics["timeline_framework_completed_gate_event_count"] == 3
+    assert metrics["timeline_framework_completed_gate_last_stage"] == (
+        "framework_completed_playback_evidence"
+    )
+    assert metrics["timeline_framework_completed_gate_last_action"] == "cancel"
+    assert metrics["timeline_framework_completed_gate_last_reason"] == (
+        "intent:topic_switch"
+    )
+    assert metrics["timeline_framework_completed_gate_last_preview"] == "换个话题"
+    assert metrics["timeline_framework_completed_gate_chain"] == (
+        "received:observe:framework_completed_turn:换个话题 ; "
+        "playback_check:continue:playback_active:换个话题 ; "
+        "framework_completed_playback_evidence:cancel:intent:topic_switch:换个话题"
     )
 
 

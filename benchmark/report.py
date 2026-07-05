@@ -128,6 +128,38 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ("timeline_semantic_gate_last_reason", "semantic gate 最后原因"),
     ("timeline_semantic_gate_last_preview", "semantic gate 最后文本"),
     ("timeline_semantic_gate_blocked_chain", "semantic gate 阻断链"),
+    (
+        "timeline_framework_completed_after_speech_ms",
+        "VAD 起声 -> framework completed-turn",
+    ),
+    (
+        "timeline_framework_completed_to_cancel_resolved_ms",
+        "framework completed-turn -> cancel 完成",
+    ),
+    (
+        "timeline_framework_playback_evidence_to_cancel_resolved_ms",
+        "framework playback evidence -> cancel 完成",
+    ),
+    (
+        "timeline_framework_completed_gate_event_count",
+        "framework completed gate 事件数",
+    ),
+    (
+        "timeline_framework_completed_gate_last_reason",
+        "framework completed gate 最后原因",
+    ),
+    (
+        "timeline_framework_completed_gate_last_preview",
+        "framework completed gate 最后文本",
+    ),
+    (
+        "timeline_framework_completed_gate_chain",
+        "framework completed gate 链路",
+    ),
+    (
+        "timeline_framework_completed_gate_skip_chain",
+        "framework completed gate skip/ignore 链路",
+    ),
     ("timeline_interrupt_speech_to_resolved_ms", "VAD 起声 -> 完成"),
     ("timeline_interrupt_speech_to_cancel_resolved_ms", "VAD 起声 -> cancel 完成"),
     (

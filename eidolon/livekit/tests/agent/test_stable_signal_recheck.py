@@ -20,6 +20,15 @@ class _SuspendedDucking:
     is_cancelled = False
 
 
+class _PassthroughDucking(_SuspendedDucking):
+    def __init__(self) -> None:
+        self.passthrough_volumes: list[float] = []
+
+    def enable_suspended_passthrough(self, *, volume: float) -> bool:
+        self.passthrough_volumes.append(volume)
+        return True
+
+
 class _CancelledDucking:
     is_suspended = False
     is_cancelled = True
@@ -31,6 +40,7 @@ def _effects(
     semantic_interrupts: SimpleNamespace,
     ducking: object | None = None,
     playback_evidence_active: bool = False,
+    eot_config: object | None = None,
 ) -> FullDuplexInterruptionEffects:
     policy = TurnPolicyConfig()
     return FullDuplexInterruptionEffects(
@@ -38,7 +48,10 @@ def _effects(
         callbacks=MagicMock(),
         get_session=lambda: None,
         allow_interruptions=lambda: True,
-        get_eot_model=lambda: MagicMock(),
+        get_eot_model=lambda: SimpleNamespace(
+            _config=eot_config
+            or SimpleNamespace(duck_suspended_passthrough_enabled=False)
+        ),
         get_timeline=lambda: None,
         get_latest_asr_text=lambda: latest_asr_text,
         get_state_label=lambda: "SPEAKING",
@@ -104,6 +117,73 @@ async def test_stable_signal_timer_is_cancelled_before_recheck() -> None:
 
     semantic_interrupts.run.assert_not_called()
     assert effects._stable_signal_timer is None
+
+
+def test_backchannel_hold_does_not_enable_passthrough_by_default() -> None:
+    semantic_interrupts = SimpleNamespace(run=MagicMock())
+    ducking = _PassthroughDucking()
+    effects = _effects(
+        latest_asr_text="好",
+        semantic_interrupts=semantic_interrupts,
+        ducking=ducking,
+    )
+    decision = Decision(
+        action=Action.HOLD,
+        reason="intent:backchannel_await_more_speech text=好",
+    )
+
+    effects.handle_hold_decision(decision, "好", eot_score=0.0, vad_active=True)
+
+    assert ducking.passthrough_volumes == []
+
+
+def test_backchannel_hold_can_enable_configured_passthrough() -> None:
+    semantic_interrupts = SimpleNamespace(run=MagicMock())
+    ducking = _PassthroughDucking()
+    effects = _effects(
+        latest_asr_text="好",
+        semantic_interrupts=semantic_interrupts,
+        ducking=ducking,
+        eot_config=SimpleNamespace(
+            duck_suspended_passthrough_enabled=True,
+            duck_suspended_passthrough_volume=0.2,
+        ),
+    )
+    decision = Decision(
+        action=Action.HOLD,
+        reason="intent:backchannel_await_more_speech text=好",
+    )
+
+    effects.handle_hold_decision(decision, "好", eot_score=0.0, vad_active=True)
+
+    assert ducking.passthrough_volumes == [0.2]
+
+
+def test_non_backchannel_hold_does_not_enable_configured_passthrough() -> None:
+    semantic_interrupts = SimpleNamespace(run=MagicMock())
+    ducking = _PassthroughDucking()
+    effects = _effects(
+        latest_asr_text="那它的主要风险是什么",
+        semantic_interrupts=semantic_interrupts,
+        ducking=ducking,
+        eot_config=SimpleNamespace(
+            duck_suspended_passthrough_enabled=True,
+            duck_suspended_passthrough_volume=0.2,
+        ),
+    )
+    decision = Decision(
+        action=Action.HOLD,
+        reason="semantic_score_wait score=0.00 evidence=interim_substantive",
+    )
+
+    effects.handle_hold_decision(
+        decision,
+        "那它的主要风险是什么",
+        eot_score=0.0,
+        vad_active=True,
+    )
+
+    assert ducking.passthrough_volumes == []
 
 
 @pytest.mark.asyncio

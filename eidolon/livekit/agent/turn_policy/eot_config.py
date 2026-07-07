@@ -22,6 +22,12 @@ def eot_kwargs_from_turn_policy(
         "duck_fade_ms": turn_policy.ducking.fade_out_ms,
         "duck_fade_in_ms": turn_policy.ducking.fade_in_ms,
         "duck_suspend_volume": turn_policy.ducking.suspend_volume,
+        "duck_suspended_passthrough_enabled": (
+            turn_policy.ducking.suspended_passthrough_enabled
+        ),
+        "duck_suspended_passthrough_volume": (
+            turn_policy.ducking.suspended_passthrough_volume
+        ),
         "duck_buffer_max_sec": turn_policy.ducking.buffer_max_ms / 1000.0,
         "duck_suspend_timeout_sec": turn_policy.interrupt.decision_timeout_ms
         / 1000.0,

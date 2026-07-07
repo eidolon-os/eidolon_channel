@@ -120,6 +120,7 @@ class FullDuplexInterruptionEffects:
         eot_score: float | None,
         vad_active: bool | None,
     ) -> None:
+        self._maybe_enable_suspended_passthrough_for_hold(decision)
         if decision.hold_recheck_ms is None and not decision.reason.startswith(
             STABLE_SIGNAL_WAIT_REASON_PREFIX
         ):
@@ -145,6 +146,38 @@ class FullDuplexInterruptionEffects:
         self._stable_signal_timer = asyncio.create_task(
             self._stable_signal_recheck(timeout_sec, transcript)
         )
+
+    def _maybe_enable_suspended_passthrough_for_hold(
+        self,
+        decision: Decision,
+    ) -> None:
+        reason_text = f"{decision.reason} {decision.tier_reason or ''}"
+        if "backchannel_await_more_speech" not in reason_text:
+            return
+        if not self._ducking.is_suspended:
+            return
+        eot_model = self._get_eot_model()
+        cfg = getattr(eot_model, "_config", None)
+        if getattr(cfg, "duck_suspended_passthrough_enabled", False) is not True:
+            return
+        volume = float(getattr(cfg, "duck_suspended_passthrough_volume", 0.25))
+        enabled = self._ducking.enable_suspended_passthrough(volume=volume)
+        if not enabled:
+            return
+        logger.info(
+            "[FullDuplexInterruptionEffects] suspended passthrough enabled "
+            "for hold reason=%s volume=%.2f",
+            decision.reason,
+            volume,
+        )
+        timeline = self._get_timeline()
+        if timeline is not None:
+            self._record_duck_event(
+                timeline,
+                "duck_suspended_passthrough_enabled",
+                reason=decision.reason,
+                volume=volume,
+            )
 
     async def _stable_signal_recheck(self, timeout_sec: float, transcript: str) -> None:
         current_task = asyncio.current_task()

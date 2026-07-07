@@ -155,6 +155,14 @@ class EidolonEOTConfig:
     After fade-out completes, frames are buffered (not forwarded)
     regardless of this value."""
 
+    duck_suspended_passthrough_enabled: bool = False
+    """Experimental, default off. If enabled by the full-duplex owner for a
+    qualifying HOLD decision, live TTS frames after fade-out may continue at
+    ``duck_suspended_passthrough_volume`` instead of silent buffering."""
+
+    duck_suspended_passthrough_volume: float = 0.25
+    """Low-volume cap for explicit SUSPENDED passthrough experiments."""
+
     duck_buffer_max_sec: float = 2.0
     """Maximum audio duration to buffer during SUSPENDED. Safety cap to
     bound memory. In normal operation the suspend window (0.8 s) is well

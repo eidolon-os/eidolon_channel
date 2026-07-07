@@ -322,6 +322,27 @@ def test_turn_policy_filler_maps_to_eot_config() -> None:
     assert kwargs["filler_silence_lead_in_ms"] == 180
 
 
+def test_turn_policy_suspended_passthrough_maps_to_eot_config() -> None:
+    """Audible-hold passthrough is runtime config and defaults off."""
+    from dataclasses import replace
+
+    from eidolon.livekit.agent.turn_policy import eot_kwargs_from_turn_policy
+    from eidolon.livekit.common.config import DuckingPolicyConfig, TurnPolicyConfig
+
+    policy = replace(
+        TurnPolicyConfig(),
+        ducking=DuckingPolicyConfig(
+            suspended_passthrough_enabled=True,
+            suspended_passthrough_volume=0.2,
+        ),
+    )
+
+    kwargs = eot_kwargs_from_turn_policy(policy)
+
+    assert kwargs["duck_suspended_passthrough_enabled"] is True
+    assert kwargs["duck_suspended_passthrough_volume"] == 0.2
+
+
 def test_fast_profile_has_shorter_decision_budget() -> None:
     """The e2e-like profile is more eager than the balanced default."""
     from eidolon.livekit.common.config.profiles import profile_defaults
@@ -339,6 +360,7 @@ def test_default_decision_budget_keeps_margin_under_500ms_sla() -> None:
 
     cfg = EidolonEOTConfig()
     assert cfg.duck_suspend_timeout_sec == pytest.approx(0.45)
+    assert cfg.duck_suspended_passthrough_enabled is False
 
 
 def test_default_min_chars_is_2() -> None:

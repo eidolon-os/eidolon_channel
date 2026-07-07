@@ -156,6 +156,10 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.ducking.fade_in_ms must be in [1, 500]")
     if not 0.0 <= duck.suspend_volume <= 1.0:
         errors.append("turn_policy.ducking.suspend_volume must be in [0, 1]")
+    if not 0.0 <= duck.suspended_passthrough_volume <= 1.0:
+        errors.append(
+            "turn_policy.ducking.suspended_passthrough_volume must be in [0, 1]"
+        )
 
     filler = cfg.turn_policy.filler
     if not 0 <= filler.fade_in_ms <= 500:

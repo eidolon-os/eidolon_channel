@@ -167,6 +167,8 @@ class DuckingPolicyConfig:
     fade_out_ms: int = 30
     fade_in_ms: int = 30
     suspend_volume: float = 0.0
+    suspended_passthrough_enabled: bool = False
+    suspended_passthrough_volume: float = 0.25
     buffer_max_ms: int = 2_000
     cooldown_ms: int = 800
 

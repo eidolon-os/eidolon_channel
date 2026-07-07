@@ -136,6 +136,8 @@ turn_policy:
     fade_out_ms: 30
     fade_in_ms: 30
     suspend_volume: 0.0
+    suspended_passthrough_enabled: false
+    suspended_passthrough_volume: 0.25
     buffer_max_ms: 2000
     cooldown_ms: 800
   filler:

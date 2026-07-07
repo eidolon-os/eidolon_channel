@@ -25,6 +25,8 @@ def test_balanced_profile_defaults() -> None:
     assert cfg.interrupt.decision_timeout_ms == 450
     assert cfg.interrupt.early_cancel_score_threshold == 0.70
     assert cfg.ducking.fade_out_ms == 30
+    assert cfg.ducking.suspended_passthrough_enabled is False
+    assert cfg.ducking.suspended_passthrough_volume == 0.25
 
 
 def test_fast_profile_is_more_eager() -> None:
@@ -91,6 +93,9 @@ turn_policy:
     segment_max_audio_ms: 18000
     segment_min_rms_ppm: 25
     segment_tap_to_stop_max_audio_ms: 420
+  ducking:
+    suspended_passthrough_enabled: true
+    suspended_passthrough_volume: 0.2
   filler:
     enabled: true
     phrases:
@@ -133,6 +138,8 @@ voiceprint:
     assert cfg.turn_policy.ptt.segment_max_audio_ms == 18000
     assert cfg.turn_policy.ptt.segment_min_rms_ppm == 25
     assert cfg.turn_policy.ptt.segment_tap_to_stop_max_audio_ms == 420
+    assert cfg.turn_policy.ducking.suspended_passthrough_enabled is True
+    assert cfg.turn_policy.ducking.suspended_passthrough_volume == 0.2
     assert cfg.turn_policy.filler.enabled is True
     assert cfg.turn_policy.filler.phrases == ("嗯...", "收到...")
     assert cfg.turn_policy.filler.fade_in_ms == 40
@@ -302,6 +309,39 @@ worker:
         load_effective_config()
 
 
+def test_invalid_ducking_passthrough_volume_fails_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  livekit_url: ws://127.0.0.1:7880
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: direct_llm
+llm:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: OPENAI_LLM_API_KEY
+turn_policy:
+  ducking:
+    suspended_passthrough_volume: 1.5
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    with pytest.raises(ValueError, match="suspended_passthrough_volume"):
+        load_effective_config()
+
+
 def test_invalid_idle_disconnect_grace_fails_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -363,6 +403,7 @@ def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPa
     assert cfg.turn_policy.profile == "balanced_semantic"
     assert cfg.turn_policy.interrupt.fast_lexical_intents is True
     assert cfg.turn_policy.interrupt.correction_topic_stability_window_ms == 0
+    assert cfg.turn_policy.ducking.suspended_passthrough_enabled is False
 
 
 def test_remote_agent_rejects_legacy_device_token_field(

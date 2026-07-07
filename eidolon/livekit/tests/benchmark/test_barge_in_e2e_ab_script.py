@@ -44,6 +44,22 @@ def test_overlay_payload_isolates_owner_port_and_timeline() -> None:
     }
 
 
+def test_overlay_payload_can_enable_suspended_passthrough() -> None:
+    payload = _overlay_payload(
+        interruption_owner="channel",
+        suspended_passthrough_enabled=True,
+        suspended_passthrough_volume=0.2,
+        server_port=18766,
+        timeline_path=Path("runs/channel/worker-turn-timeline.jsonl"),
+    )
+
+    assert payload["turn_policy"]["ducking"] == {
+        "suspended_passthrough_enabled": True,
+        "suspended_passthrough_volume": 0.2,
+    }
+    assert payload["turn_policy"]["attention"] == {"enforce": True}
+
+
 def test_summary_stat_reads_report_metric_distribution() -> None:
     payload = {
         "summary": {

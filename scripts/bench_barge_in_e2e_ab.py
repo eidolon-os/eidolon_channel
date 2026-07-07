@@ -183,6 +183,8 @@ def _overlay_payload(
     *,
     interruption_owner: str,
     ptt_segment_stt_strategy: str | None = None,
+    suspended_passthrough_enabled: bool = False,
+    suspended_passthrough_volume: float | None = None,
     server_port: int,
     timeline_path: Path,
 ) -> dict[str, Any]:
@@ -190,6 +192,11 @@ def _overlay_payload(
         "interruption_owner": interruption_owner,
         "attention": {"enforce": True},
     }
+    if suspended_passthrough_enabled:
+        ducking: dict[str, Any] = {"suspended_passthrough_enabled": True}
+        if suspended_passthrough_volume is not None:
+            ducking["suspended_passthrough_volume"] = suspended_passthrough_volume
+        turn_policy["ducking"] = ducking
     if ptt_segment_stt_strategy:
         ptt = dict(turn_policy.get("ptt") or {})
         ptt["segment_stt_strategy"] = ptt_segment_stt_strategy
@@ -208,11 +215,15 @@ def _write_overlay(
     profile_dir: Path,
     server_port: int,
     ptt_segment_stt_strategy: str | None = None,
+    suspended_passthrough_enabled: bool = False,
+    suspended_passthrough_volume: float | None = None,
 ) -> Path:
     overlay_path = profile_dir / "settings.overlay.yaml"
     payload = _overlay_payload(
         interruption_owner=profile,
         ptt_segment_stt_strategy=ptt_segment_stt_strategy,
+        suspended_passthrough_enabled=suspended_passthrough_enabled,
+        suspended_passthrough_volume=suspended_passthrough_volume,
         server_port=server_port,
         timeline_path=profile_dir / "worker-turn-timeline.jsonl",
     )
@@ -428,6 +439,8 @@ async def _run_profile(
             profile_dir=profile_dir,
             server_port=args.worker_base_port + profile_index,
             ptt_segment_stt_strategy=args.ptt_segment_stt_strategy,
+            suspended_passthrough_enabled=args.suspended_passthrough_enabled,
+            suspended_passthrough_volume=args.suspended_passthrough_volume,
         )
         worker_log_path = profile_dir / "worker.stdout.log"
         overlay_ctx = _temporary_overlay_env(overlay_path)
@@ -458,6 +471,23 @@ async def _run_profile(
                 f"{args.ptt_segment_stt_strategy}, got "
                 f"{cfg.turn_policy.ptt.segment_stt_strategy}"
             )
+        if args.manage_worker and args.suspended_passthrough_enabled:
+            ducking_cfg = cfg.turn_policy.ducking
+            if not ducking_cfg.suspended_passthrough_enabled:
+                raise SystemExit("suspended passthrough overlay did not take effect")
+            if (
+                args.suspended_passthrough_volume is not None
+                and abs(
+                    ducking_cfg.suspended_passthrough_volume
+                    - args.suspended_passthrough_volume
+                )
+                > 1e-9
+            ):
+                raise SystemExit(
+                    "suspended passthrough volume overlay did not take effect: "
+                    f"expected {args.suspended_passthrough_volume}, got "
+                    f"{ducking_cfg.suspended_passthrough_volume}"
+                )
         preflight_checks = (
             ("stt", "tts")
             if cfg.providers.brain_provider == "eidolon_agent"
@@ -839,6 +869,23 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--suspended-passthrough-enabled",
+        action="store_true",
+        help=(
+            "Optional managed-worker overlay for "
+            "turn_policy.ducking.suspended_passthrough_enabled."
+        ),
+    )
+    parser.add_argument(
+        "--suspended-passthrough-volume",
+        type=float,
+        default=None,
+        help=(
+            "Optional managed-worker overlay for "
+            "turn_policy.ducking.suspended_passthrough_volume."
+        ),
+    )
+    parser.add_argument(
         "--allow-existing-workers",
         action="store_true",
         help=(
@@ -890,6 +937,21 @@ async def _main() -> int:
         raise SystemExit("--repeat must be >= 1")
     if args.ptt_segment_stt_strategy and not args.manage_worker:
         raise SystemExit("--ptt-segment-stt-strategy requires --manage-worker")
+    if args.suspended_passthrough_enabled and not args.manage_worker:
+        raise SystemExit("--suspended-passthrough-enabled requires --manage-worker")
+    if (
+        args.suspended_passthrough_volume is not None
+        and not args.suspended_passthrough_enabled
+    ):
+        raise SystemExit(
+            "--suspended-passthrough-volume requires "
+            "--suspended-passthrough-enabled"
+        )
+    if (
+        args.suspended_passthrough_volume is not None
+        and not 0.0 < args.suspended_passthrough_volume <= 1.0
+    ):
+        raise SystemExit("--suspended-passthrough-volume must be in (0, 1]")
     root = Path.cwd()
     case_paths = _case_paths_for_args(args)
     suites = load_suites(case_paths)

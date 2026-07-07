@@ -233,6 +233,18 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_transcript_ingress_chain",
         "transcript ingress 链路",
     ),
+    (
+        "timeline_transcript_ingress_recent_chain",
+        "transcript ingress 最近入口链",
+    ),
+    (
+        "timeline_transcript_ingress_pre_timeline_chain",
+        "transcript ingress pre-timeline 链",
+    ),
+    (
+        "timeline_transcript_ingress_recent_cross_turn_chain",
+        "transcript ingress 跨 turn 链",
+    ),
     ("timeline_transcript_admission_event_count", "transcript admission 事件数"),
     ("timeline_transcript_admission_last_reason", "transcript admission 最后原因"),
     (

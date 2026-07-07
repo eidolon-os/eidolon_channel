@@ -2327,6 +2327,25 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '{"transcript_preview":"我们聊点别的",'
             '"is_final":false,'
             '"event_type":"UserInputTranscribedEvent"}],'
+            '"transcript_ingress_recent_events":['
+            '{"transcript_preview":"换个话题",'
+            '"is_final":true,'
+            '"event_type":"UserInputTranscribedEvent",'
+            '"timeline_present":false},'
+            '{"transcript_preview":"我们聊点别的",'
+            '"is_final":false,'
+            '"event_type":"UserInputTranscribedEvent",'
+            '"timeline_present":true}],'
+            '"transcript_ingress_pre_timeline_events":['
+            '{"transcript_preview":"换个话题",'
+            '"is_final":true,'
+            '"event_type":"UserInputTranscribedEvent",'
+            '"timeline_present":false}],'
+            '"transcript_ingress_recent_cross_turn_events":['
+            '{"transcript_preview":"换个话",'
+            '"is_final":false,'
+            '"event_type":"UserInputTranscribedEvent",'
+            '"timeline_turn_id":"previous-turn"}],'
             '"transcript_admission_events":['
             '{"accepted":false,"reason":"agent_echo",'
             '"transcript_preview":"助手自己的回声"},'
@@ -2445,6 +2464,18 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_transcript_ingress_last_final"] is False
     assert metrics["timeline_transcript_ingress_chain"] == (
         "interim:换个话 ; final:换个话题 ; interim:我们聊点别的"
+    )
+    assert metrics["timeline_transcript_ingress_recent_event_count"] == 2
+    assert metrics["timeline_transcript_ingress_recent_chain"] == (
+        "final:换个话题 ; interim:我们聊点别的"
+    )
+    assert metrics["timeline_transcript_ingress_pre_timeline_event_count"] == 1
+    assert metrics["timeline_transcript_ingress_pre_timeline_chain"] == (
+        "final:换个话题"
+    )
+    assert metrics["timeline_transcript_ingress_recent_cross_turn_event_count"] == 1
+    assert metrics["timeline_transcript_ingress_recent_cross_turn_chain"] == (
+        "interim:换个话"
     )
     assert metrics["timeline_transcript_admission_event_count"] == 3
     assert metrics["timeline_transcript_admission_last_reason"] == "accepted"

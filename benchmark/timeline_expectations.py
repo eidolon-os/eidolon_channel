@@ -1474,32 +1474,73 @@ def _transcript_ingress_metrics(records: list[dict[str, Any]]) -> dict[str, Any]
     """Expose raw LiveKit transcript events entering the Channel boundary."""
 
     events: list[dict[str, Any]] = []
+    recent_events: list[dict[str, Any]] = []
+    pre_timeline_events: list[dict[str, Any]] = []
+    cross_turn_events: list[dict[str, Any]] = []
     for record in records:
         attrs = _mapping(record.get("attrs"))
         raw_events = attrs.get("transcript_ingress_events")
-        if not isinstance(raw_events, list):
-            continue
-        events.extend(event for event in raw_events if isinstance(event, dict))
+        if isinstance(raw_events, list):
+            events.extend(event for event in raw_events if isinstance(event, dict))
+        raw_recent_events = attrs.get("transcript_ingress_recent_events")
+        if isinstance(raw_recent_events, list):
+            recent_events = [
+                event for event in raw_recent_events if isinstance(event, dict)
+            ]
+        raw_pre_timeline_events = attrs.get("transcript_ingress_pre_timeline_events")
+        if isinstance(raw_pre_timeline_events, list):
+            pre_timeline_events = [
+                event for event in raw_pre_timeline_events if isinstance(event, dict)
+            ]
+        raw_cross_turn_events = attrs.get("transcript_ingress_recent_cross_turn_events")
+        if isinstance(raw_cross_turn_events, list):
+            cross_turn_events = [
+                event for event in raw_cross_turn_events if isinstance(event, dict)
+            ]
     if not events:
-        return {}
+        metrics: dict[str, Any] = {}
+    else:
+        latest = events[-1]
+        metrics = {
+            "timeline_transcript_ingress_event_count": len(events),
+        }
+        for source_key, metric_key in (
+            ("transcript_preview", "timeline_transcript_ingress_last_preview"),
+            ("event_type", "timeline_transcript_ingress_last_event_type"),
+        ):
+            value = latest.get(source_key)
+            if isinstance(value, str) and value:
+                metrics[metric_key] = value
+        final = latest.get("is_final")
+        if isinstance(final, bool):
+            metrics["timeline_transcript_ingress_last_final"] = final
+        chain = _transcript_ingress_chain(events[-8:])
+        if chain:
+            metrics["timeline_transcript_ingress_chain"] = chain
 
-    latest = events[-1]
-    metrics: dict[str, Any] = {
-        "timeline_transcript_ingress_event_count": len(events),
-    }
-    for source_key, metric_key in (
-        ("transcript_preview", "timeline_transcript_ingress_last_preview"),
-        ("event_type", "timeline_transcript_ingress_last_event_type"),
-    ):
-        value = latest.get(source_key)
-        if isinstance(value, str) and value:
-            metrics[metric_key] = value
-    final = latest.get("is_final")
-    if isinstance(final, bool):
-        metrics["timeline_transcript_ingress_last_final"] = final
-    chain = _transcript_ingress_chain(events[-8:])
-    if chain:
-        metrics["timeline_transcript_ingress_chain"] = chain
+    if recent_events:
+        metrics["timeline_transcript_ingress_recent_event_count"] = len(recent_events)
+        recent_chain = _transcript_ingress_chain(recent_events[-8:])
+        if recent_chain:
+            metrics["timeline_transcript_ingress_recent_chain"] = recent_chain
+    if pre_timeline_events:
+        metrics["timeline_transcript_ingress_pre_timeline_event_count"] = len(
+            pre_timeline_events
+        )
+        pre_timeline_chain = _transcript_ingress_chain(pre_timeline_events[-8:])
+        if pre_timeline_chain:
+            metrics["timeline_transcript_ingress_pre_timeline_chain"] = (
+                pre_timeline_chain
+            )
+    if cross_turn_events:
+        metrics["timeline_transcript_ingress_recent_cross_turn_event_count"] = len(
+            cross_turn_events
+        )
+        cross_turn_chain = _transcript_ingress_chain(cross_turn_events[-8:])
+        if cross_turn_chain:
+            metrics["timeline_transcript_ingress_recent_cross_turn_chain"] = (
+                cross_turn_chain
+            )
     return metrics
 
 

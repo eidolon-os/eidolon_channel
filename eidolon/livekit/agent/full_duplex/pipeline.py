@@ -95,6 +95,7 @@ from .output_flow import FullDuplexOutputFlow
 from .runtime_defaults import ensure_full_duplex_runtime_defaults
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_handler import FullDuplexTranscriptHandler
+from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
 from .transcript_recorder import FullDuplexTranscriptRecorder
 from .turn_handling import (
     build_full_duplex_turn_handling,
@@ -205,6 +206,7 @@ class StreamingPipeline(BasePipeline):
         self._deferred_low_eot_commit_task: asyncio.Task | None = None
         self._suppress_transcripts_until_next_speech = False
         self._transcript_admission = self._build_transcript_admission_gate()
+        self._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
         self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
@@ -702,12 +704,31 @@ class StreamingPipeline(BasePipeline):
         )
 
     def _record_transcript_ingress_event(self, payload: dict[str, object]) -> None:
+        timeline = getattr(self, "_timeline", None)
+        event = self._ensure_transcript_ingress_ledger().record(
+            payload,
+            timeline=timeline,
+            user_speaking_active=getattr(self, "_user_speaking_start_time", None)
+            is not None,
+            pipeline_state=getattr(self, "_state", None),
+        )
         if self._timeline is None:
             return
         events = list(self._timeline.attrs.get("transcript_ingress_events") or ())
-        events.append(dict(payload))
+        events.append(dict(event))
         self._timeline.set_attr("transcript_ingress_events", events[-16:])
-        self._timeline.set_attr("transcript_ingress_last_event", dict(payload))
+        self._timeline.set_attr("transcript_ingress_last_event", dict(event))
+
+    def _attach_transcript_ingress_recent_events(self, reason: str) -> None:
+        self._ensure_transcript_ingress_ledger().attach_to_timeline(
+            getattr(self, "_timeline", None),
+            reason=reason,
+        )
+
+    def _ensure_transcript_ingress_ledger(self) -> FullDuplexTranscriptIngressLedger:
+        if not hasattr(self, "_transcript_ingress_ledger"):
+            self._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
+        return self._transcript_ingress_ledger
 
     def _record_transcript_admission_event(self, payload: dict[str, object]) -> None:
         if self._timeline is None:

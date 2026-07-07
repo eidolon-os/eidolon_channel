@@ -13,6 +13,7 @@ from eidolon.livekit.common.config import (
 )
 
 from ..shared.types import PipelineCallbacks, PipelineState
+from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
 from ..session.voiceprint import VoiceprintTurnObserver
 from ..turn_policy import TurnPolicyRuntime
 
@@ -64,6 +65,8 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
     if not hasattr(pipeline, "_suppress_transcripts_until_next_speech"):
         pipeline._suppress_transcripts_until_next_speech = False
     pipeline._ensure_transcript_admission_gate()
+    if not hasattr(pipeline, "_transcript_ingress_ledger"):
+        pipeline._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
     if not hasattr(pipeline, "_completed_turn_voiceprint_task"):
         pipeline._completed_turn_voiceprint_task = None
     if not hasattr(pipeline, "_completed_turn_voiceprint_result"):

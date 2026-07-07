@@ -344,6 +344,99 @@ def test_pipeline_records_semantic_interrupt_gate_events() -> None:
     }
 
 
+def test_pipeline_keeps_recent_transcript_ingress_across_timeline_start() -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = None
+    pipeline._user_speaking_start_time = None
+    pipeline._state = PipelineState.SPEAKING
+
+    pipeline._record_transcript_ingress_event(
+        {
+            "transcript_preview": "换个话题",
+            "text_length": 4,
+            "is_final": True,
+            "speaker_id": "user",
+            "event_type": "UserInputTranscribedEvent",
+        }
+    )
+
+    pipeline._timeline = TurnTimeline("turn-after-pre-timeline-transcript")
+    pipeline._attach_transcript_ingress_recent_events("speech_started")
+
+    recent = pipeline._timeline.attrs["transcript_ingress_recent_events"]
+    pre_timeline = pipeline._timeline.attrs["transcript_ingress_pre_timeline_events"]
+    assert recent[0]["transcript_preview"] == "换个话题"
+    assert recent[0]["timeline_present"] is False
+    assert recent[0]["user_speaking_active"] is False
+    assert recent[0]["pipeline_state"] == "speaking"
+    assert pipeline._timeline.attrs["transcript_ingress_pre_timeline_event_count"] == 1
+    assert pre_timeline == recent
+
+
+def test_pipeline_records_timeline_transcript_ingress_with_boundary_state() -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = TurnTimeline("turn-with-transcript")
+    pipeline._user_speaking_start_time = 1.0
+    pipeline._state = PipelineState.PROCESSING_AUDIO
+
+    pipeline._record_transcript_ingress_event(
+        {
+            "transcript_preview": "我们聊点别的",
+            "text_length": 6,
+            "is_final": False,
+            "speaker_id": "user",
+            "event_type": "UserInputTranscribedEvent",
+        }
+    )
+
+    events = pipeline._timeline.attrs["transcript_ingress_events"]
+    assert events[0]["transcript_preview"] == "我们聊点别的"
+    assert events[0]["timeline_present"] is True
+    assert events[0]["user_speaking_active"] is True
+    assert events[0]["pipeline_state"] == "processing_audio"
+    assert events[0]["timeline_turn_id"] == "turn-with-transcript"
+    assert pipeline._timeline.attrs["transcript_ingress_pre_timeline_event_count"] == 0
+    assert (
+        pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_event_count"]
+        == 0
+    )
+
+
+def test_pipeline_marks_recent_transcript_ingress_from_prior_timeline() -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._timeline = TurnTimeline("previous-turn")
+    pipeline._user_speaking_start_time = 1.0
+    pipeline._state = PipelineState.PROCESSING_AUDIO
+    pipeline._record_transcript_ingress_event(
+        {
+            "transcript_preview": "换个话",
+            "text_length": 3,
+            "is_final": False,
+            "speaker_id": "user",
+            "event_type": "UserInputTranscribedEvent",
+        }
+    )
+
+    pipeline._timeline = TurnTimeline("current-turn")
+    pipeline._attach_transcript_ingress_recent_events("speech_started")
+
+    cross_turn = pipeline._timeline.attrs[
+        "transcript_ingress_recent_cross_turn_events"
+    ]
+    assert (
+        pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_event_count"]
+        == 1
+    )
+    assert cross_turn[0]["transcript_preview"] == "换个话"
+    assert cross_turn[0]["timeline_turn_id"] == "previous-turn"
+
+
 def test_timeline_mark_after_sets_synthetic_llm_first_delta() -> None:
     timeline = TurnTimeline("turn-4")
     timeline.mark("turn_committed_at")

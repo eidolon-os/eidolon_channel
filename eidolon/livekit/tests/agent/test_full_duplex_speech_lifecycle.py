@@ -50,8 +50,10 @@ def _owner() -> SimpleNamespace:
     owner._uses_livekit_native_adaptive_interruption = MagicMock(return_value=False)
     owner._attention_effects = MagicMock()
     owner._attention_effects.handle_speaking_started.return_value = True
+    owner._attach_transcript_ingress_recent_events = MagicMock()
     owner._ducking = SimpleNamespace(is_suspended=True)
     owner._interruption_orchestrator = MagicMock()
+
     def set_interrupt_cancel_suppression(active: bool, until: float) -> None:
         owner._skip_commit_after_interrupt_cancel = active
         owner._suppress_commit_after_interrupt_until = until
@@ -75,6 +77,9 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._timeline is not None
     assert owner._timeline.attrs["room_name"] == "room-a"
     owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
+    owner._attach_transcript_ingress_recent_events.assert_called_once_with(
+        "speech_started"
+    )
     owner._voiceprint_turns.start_turn.assert_called_once_with(timeline=owner._timeline)
     owner._ensure_provider_event_observer.assert_called_once_with()
     owner._provider_events.apply_pending_stt_provider_events.assert_called_once_with()

@@ -49,6 +49,7 @@ class FullDuplexSpeechLifecycle:
 
         owner._user_turns.start_speech(timeline=owner._timeline)
         owner._timeline.mark("speech_started_at")
+        owner._attach_transcript_ingress_recent_events("speech_started")
         owner._apply_pending_explicit_client_preempt(owner._timeline)
         owner._apply_pending_client_control_events(owner._timeline)
         owner._voiceprint_turns.start_turn(timeline=owner._timeline)

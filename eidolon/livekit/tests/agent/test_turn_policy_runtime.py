@@ -325,6 +325,97 @@ def test_runtime_deadline_stable_topic_prefix_cancels_as_redirect() -> None:
     assert decision.tier == "tier1_redirect"
 
 
+def test_runtime_zero_redirect_window_cancels_topic_prefix_immediately() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(
+            InterruptPolicyConfig(),
+            fast_lexical_intents=True,
+            correction_topic_stability_window_ms=0,
+        ),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    decision = runtime.decide_from_transcript(
+        "换个话",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.topic_switch_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_zero_redirect_window_cancels_correction_immediately() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(
+            InterruptPolicyConfig(),
+            fast_lexical_intents=True,
+            correction_topic_stability_window_ms=0,
+        ),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    decision = runtime.decide_from_transcript(
+        "不是",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent.value == "normal_interrupt"
+    assert decision.correction_hint is True
+    assert decision.tier == "tier1_redirect"
+
+
+def test_runtime_zero_redirect_window_keeps_non_redirect_guards() -> None:
+    policy = replace(
+        TurnPolicyConfig(),
+        interrupt=replace(
+            InterruptPolicyConfig(),
+            fast_lexical_intents=True,
+            correction_topic_stability_window_ms=0,
+        ),
+    )
+    runtime = TurnPolicyRuntime(policy)
+
+    short_prefix = runtime.decide_from_transcript(
+        "换个",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=100.0,
+    )
+    ack = runtime.decide_from_transcript(
+        "好的",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=160.0,
+    )
+    followup = runtime.decide_from_transcript(
+        "那它的主要风险是什么",
+        0.0,
+        vad_active=True,
+        agent_speaking=True,
+        event_time_ms=220.0,
+    )
+
+    assert short_prefix.action is Action.HOLD
+    assert "insufficient_transcript_evidence" in short_prefix.reason
+    assert ack.action is Action.ROLLBACK
+    assert ack.intent.value == "backchannel"
+    assert followup.action is Action.HOLD
+    assert followup.reason.startswith("semantic_score_wait")
+
+
 def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 

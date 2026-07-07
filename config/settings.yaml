@@ -113,7 +113,7 @@ turn_policy:
     transcript_evidence_gate_enabled: true
     min_normal_interim_cjk_chars: 3
     latin_artifact_hold_max_chars: 4
-    correction_topic_stability_window_ms: 120
+    correction_topic_stability_window_ms: 0
     normal_interrupt_stability_window_ms: 350
     cancel_residual_commit_suppress_ms: 2000
     hard_stop_prefix_min_cjk_chars: 2

@@ -18,6 +18,7 @@ from eidolon_sdk.biz.contracts import SESSION_END_ERROR, SESSION_END_USER_LEFT
 
 from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
+from eidolon.livekit.agent.half_duplex import HalfDuplexPttPipeline
 
 
 @pytest.mark.asyncio
@@ -82,5 +83,48 @@ async def test_session_close_publishes_error_on_error_close():
     p._on_session_closed = _closed
     p._close_error = RuntimeError("boom")
     await FullDuplexSessionLifecycle(p)._delete_room_on_close()
+    assert calls[0] == ("end", SESSION_END_ERROR)
+    assert ("delete", None) in calls
+
+
+@pytest.mark.asyncio
+async def test_half_duplex_session_close_publishes_user_left_before_delete():
+    """Half-duplex close follows the same session_end-before-delete contract."""
+    p = HalfDuplexPttPipeline.__new__(HalfDuplexPttPipeline)
+    calls: list[tuple[str, str | None]] = []
+
+    async def _end(reason: str) -> None:
+        calls.append(("end", reason))
+
+    async def _closed() -> None:
+        calls.append(("delete", None))
+
+    p._on_session_end = _end
+    p._on_session_closed = _closed
+    p._close_error = None
+
+    await p._delete_room_on_close()
+
+    assert calls == [("end", SESSION_END_USER_LEFT), ("delete", None)]
+
+
+@pytest.mark.asyncio
+async def test_half_duplex_session_close_publishes_error_on_error_close():
+    """Half-duplex error close maps to session_end{error}, then still deletes."""
+    p = HalfDuplexPttPipeline.__new__(HalfDuplexPttPipeline)
+    calls: list[tuple[str, str | None]] = []
+
+    async def _end(reason: str) -> None:
+        calls.append(("end", reason))
+
+    async def _closed() -> None:
+        calls.append(("delete", None))
+
+    p._on_session_end = _end
+    p._on_session_closed = _closed
+    p._close_error = RuntimeError("boom")
+
+    await p._delete_room_on_close()
+
     assert calls[0] == ("end", SESSION_END_ERROR)
     assert ("delete", None) in calls

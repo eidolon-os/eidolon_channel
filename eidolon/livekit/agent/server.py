@@ -252,12 +252,16 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     # so the shutdown callback that always follows an idle delete does not
     # overwrite idle_normal_end with user_left.
     _SESSION_CONTROL_TOPIC = SESSION_CONTROL_TOPIC
-    session_end_state: dict[str, str | bool] = {"sent": False}
+    session_end_state: dict[str, str | bool] = {"sent": False, "reason": ""}
 
     async def _publish_session_end(reason: str) -> None:
         if session_end_state["sent"]:
             return
-        session_end_state["sent"] = True
+        first_reason = str(session_end_state.get("reason") or "")
+        if first_reason:
+            reason = first_reason
+        else:
+            session_end_state["reason"] = reason
         local = getattr(room, "local_participant", None)
         if local is None:
             logger.info(
@@ -280,6 +284,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 reliable=True,
                 topic=_SESSION_CONTROL_TOPIC,
             )
+            session_end_state["sent"] = True
             logger.info("[lifecycle] session_end reason=%s room=%s sent", reason, room.name)
         except Exception:
             logger.debug(
@@ -350,6 +355,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             turn_policy=session_turn_policy,
             observability=cfg.observability,
+            on_session_end=_publish_session_end,
             on_session_closed=lambda: _delete_room("session closed (device left)"),
         )
     else:

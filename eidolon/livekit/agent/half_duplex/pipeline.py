@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any, Callable
 
 from eidolon_sdk.biz.contracts import (
@@ -23,6 +24,8 @@ from eidolon_sdk.biz.contracts import (
     CONTROL_OP_PTT_TURN_STATUS,
     CONTROL_TOPIC,
     INTERACTION_MODE_HALF_DUPLEX,
+    SESSION_END_ERROR,
+    SESSION_END_USER_LEFT,
     WIRE_SCHEMA_VERSION,
 )
 
@@ -73,6 +76,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
         callbacks: PipelineCallbacks | None = None,
+        on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_session_closed: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
@@ -81,7 +85,9 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._audio_sample_rate = audio_sample_rate
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._observability = observability or ObservabilityConfig()
+        self._on_session_end = on_session_end
         self._on_session_closed = on_session_closed
+        self._close_error: Any | None = None
         self._session: AgentSession | None = None
         self._session_closed_event: asyncio.Event = asyncio.Event()
         self._room_disconnected_event: asyncio.Event = asyncio.Event()
@@ -501,6 +507,7 @@ class HalfDuplexPttPipeline(BasePipeline):
     def _on_session_close(self, event: Any) -> None:
         reason = getattr(event, "reason", None)
         error = getattr(event, "error", None)
+        self._close_error = error
         logger.info(
             "[HalfDuplexPttPipeline] session close event reason=%s error=%s",
             reason,
@@ -509,6 +516,16 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._session_closed_event.set()
 
     async def _delete_room_on_close(self) -> None:
+        on_end = self._on_session_end
+        if on_end is not None:
+            reason = SESSION_END_ERROR if self._close_error else SESSION_END_USER_LEFT
+            try:
+                await on_end(reason)
+            except Exception:
+                logger.exception(
+                    "[HalfDuplexPttPipeline] session_end on close failed (reason=%s)",
+                    reason,
+                )
         cb = self._on_session_closed
         if cb is None:
             return

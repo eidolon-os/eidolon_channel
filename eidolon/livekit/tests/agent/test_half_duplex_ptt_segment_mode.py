@@ -8,7 +8,11 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC, WIRE_SCHEMA_VERSION
+from eidolon_sdk.biz.contracts import (
+    CLIENT_AUDIO_STATE_TOPIC,
+    LIVEKIT_TRANSCRIPTION_TOPIC,
+    WIRE_SCHEMA_VERSION,
+)
 from livekit.agents.voice import AgentSession
 from livekit.agents.voice.room_io import RoomOptions
 
@@ -192,6 +196,12 @@ def test_agent_session_supports_segment_ptt_text_reply_entrypoint() -> None:
     assert room_options.audio_input is False
     assert room_options.audio_output is True
     assert room_options.text_output is True
+
+
+def test_livekit_transcription_topic_matches_sdk_contract() -> None:
+    from livekit.agents.types import TOPIC_TRANSCRIPTION
+
+    assert TOPIC_TRANSCRIPTION == LIVEKIT_TRANSCRIPTION_TOPIC
 
 
 def test_server_uses_half_duplex_pipeline_for_half_duplex_mode() -> None:

@@ -372,6 +372,11 @@ class OutputController(lk_io.AudioOutput):
         if clamped <= 0.0:
             self.disable_suspended_passthrough()
             return False
+        if (
+            self._suspended_passthrough_volume is not None
+            and abs(self._suspended_passthrough_volume - clamped) <= 1e-9
+        ):
+            return False
         dropped = len(self._buffer)
         if dropped:
             self._total_buffer_frames_dropped_on_passthrough += dropped

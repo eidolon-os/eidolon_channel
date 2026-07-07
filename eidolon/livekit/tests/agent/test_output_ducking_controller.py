@@ -114,6 +114,7 @@ def test_suspended_passthrough_only_enables_while_suspended() -> None:
 
     assert controller.duck(now=123.0) is True
     assert controller.enable_suspended_passthrough(volume=0.25) is True
+    assert controller.enable_suspended_passthrough(volume=0.25) is False
     assert controller.mixer is not None
     assert controller.mixer.suspended_passthrough_volume == 0.25
 

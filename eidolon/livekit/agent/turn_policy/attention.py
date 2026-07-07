@@ -34,6 +34,7 @@ class AttentionDecision:
     client_state_used: bool = False
     tier: str = ""
     tier_reason: str = ""
+    evidence_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ class AttentionAdmission:
                     f"transcript_evidence:{evidence.reason}",
                     transcript_preview=preview,
                     client_state_used=True,
+                    evidence_reason=evidence.reason,
                 )
             if self._config.require_direct_signal_during_playback:
                 return AttentionDecision(
@@ -177,6 +179,7 @@ class AttentionAdmission:
                     f"playback_low_evidence_transcript:{evidence.reason}",
                     transcript_preview=preview,
                     client_state_used=True,
+                    evidence_reason=evidence.reason,
                 )
 
         return AttentionDecision(

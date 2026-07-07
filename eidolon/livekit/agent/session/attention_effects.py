@@ -148,6 +148,7 @@ class AttentionEffectHandler:
             "client_state_used": decision.client_state_used,
             "tier": decision.tier or None,
             "tier_reason": decision.tier_reason or None,
+            "evidence_reason": decision.evidence_reason or None,
             "enforced": self._turn_policy.attention.enforce,
         }
         if state:
@@ -237,9 +238,7 @@ class AttentionEffectHandler:
     ) -> bool:
         if decision.action is not AdmissionAction.OBSERVE:
             return False
-        if not decision.reason.startswith(
-            "playback_low_evidence_transcript:substantive_"
-        ):
+        if not decision.evidence_reason.startswith("substantive_"):
             return False
         if state.get("client_state_fresh") is not True:
             return False

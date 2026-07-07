@@ -84,6 +84,10 @@ def test_allows_eot_routes_substantive_fresh_playback_without_ducking() -> None:
     assert timeline.attrs["attention_admission"]["reason"] == (
         "playback_low_evidence_transcript:substantive_cjk_transcript"
     )
+    assert (
+        timeline.attrs["attention_admission"]["evidence_reason"]
+        == "substantive_cjk_transcript"
+    )
 
 
 def test_allows_eot_blocks_substantive_stale_playback_evidence() -> None:

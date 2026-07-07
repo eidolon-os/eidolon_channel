@@ -61,6 +61,7 @@ def test_attention_observes_substantive_overlap_during_playback_without_eot() ->
 
     assert decision.action is AdmissionAction.OBSERVE
     assert decision.reason == "playback_low_evidence_transcript:substantive_cjk_transcript"
+    assert decision.evidence_reason == "substantive_cjk_transcript"
 
 
 def test_attention_soft_ducks_playback_speech_start_when_configured() -> None:
@@ -530,6 +531,10 @@ def test_user_transcript_routes_observed_substantive_playback_to_semantic_owner(
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
         == "playback_low_evidence_transcript:substantive_cjk_transcript"
+    )
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["evidence_reason"]
+        == "substantive_cjk_transcript"
     )
     assert (
         pipeline._timeline.attrs["semantic_interrupt_gate_last_event"]["reason"]

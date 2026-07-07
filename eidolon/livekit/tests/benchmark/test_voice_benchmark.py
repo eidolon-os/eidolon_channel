@@ -2317,6 +2317,16 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
             '"source":"tts_in_flight",'
             '"played_seconds":1.2,'
             '"text_preview":"上一轮被打断的回答"},'
+            '"transcript_ingress_events":['
+            '{"transcript_preview":"换个话",'
+            '"is_final":false,'
+            '"event_type":"UserInputTranscribedEvent"},'
+            '{"transcript_preview":"换个话题",'
+            '"is_final":true,'
+            '"event_type":"UserInputTranscribedEvent"},'
+            '{"transcript_preview":"我们聊点别的",'
+            '"is_final":false,'
+            '"event_type":"UserInputTranscribedEvent"}],'
             '"transcript_admission_events":['
             '{"accepted":false,"reason":"agent_echo",'
             '"transcript_preview":"助手自己的回声"},'
@@ -2427,6 +2437,15 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_interrupted_context_source"] == "tts_in_flight"
     assert metrics["timeline_interrupted_context_played_seconds"] == 1.2
     assert metrics["timeline_interrupted_context_preview"] == "上一轮被打断的回答"
+    assert metrics["timeline_transcript_ingress_event_count"] == 3
+    assert metrics["timeline_transcript_ingress_last_preview"] == "我们聊点别的"
+    assert metrics["timeline_transcript_ingress_last_event_type"] == (
+        "UserInputTranscribedEvent"
+    )
+    assert metrics["timeline_transcript_ingress_last_final"] is False
+    assert metrics["timeline_transcript_ingress_chain"] == (
+        "interim:换个话 ; final:换个话题 ; interim:我们聊点别的"
+    )
     assert metrics["timeline_transcript_admission_event_count"] == 3
     assert metrics["timeline_transcript_admission_last_reason"] == "accepted"
     assert metrics["timeline_transcript_admission_last_preview"] == "我们聊点别的"

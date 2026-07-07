@@ -695,10 +695,19 @@ class StreamingPipeline(BasePipeline):
             ),
             reject_agent_echo=self._reject_agent_echo_transcript,
             forward_to_base=lambda event: BasePipeline._on_user_transcribed(self, event),
+            record_transcript_ingress_event=self._record_transcript_ingress_event,
             record_transcript_admission_event=self._record_transcript_admission_event,
             record_semantic_gate_event=self._record_semantic_gate_event,
             warm_preemptive=self._warm_preemptive_from_partial,
         )
+
+    def _record_transcript_ingress_event(self, payload: dict[str, object]) -> None:
+        if self._timeline is None:
+            return
+        events = list(self._timeline.attrs.get("transcript_ingress_events") or ())
+        events.append(dict(payload))
+        self._timeline.set_attr("transcript_ingress_events", events[-16:])
+        self._timeline.set_attr("transcript_ingress_last_event", dict(payload))
 
     def _record_transcript_admission_event(self, payload: dict[str, object]) -> None:
         if self._timeline is None:

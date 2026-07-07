@@ -52,6 +52,7 @@ def apply_timeline_expectations(
         result.metrics.update(_latency_metrics(case_records))
         result.metrics.update(_duck_passthrough_metrics(case_records))
         result.metrics.update(_interrupted_context_metrics(case_records))
+        result.metrics.update(_transcript_ingress_metrics(case_records))
         result.metrics.update(_transcript_admission_metrics(case_records))
         result.metrics.update(_attention_admission_metrics(case_records))
         result.metrics.update(_semantic_gate_metrics(case_records))
@@ -1467,6 +1468,48 @@ def _transcript_admission_metrics(records: list[dict[str, Any]]) -> dict[str, An
     if rejected_chain:
         metrics["timeline_transcript_admission_rejected_chain"] = rejected_chain
     return metrics
+
+
+def _transcript_ingress_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose raw LiveKit transcript events entering the Channel boundary."""
+
+    events: list[dict[str, Any]] = []
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        raw_events = attrs.get("transcript_ingress_events")
+        if not isinstance(raw_events, list):
+            continue
+        events.extend(event for event in raw_events if isinstance(event, dict))
+    if not events:
+        return {}
+
+    latest = events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_transcript_ingress_event_count": len(events),
+    }
+    for source_key, metric_key in (
+        ("transcript_preview", "timeline_transcript_ingress_last_preview"),
+        ("event_type", "timeline_transcript_ingress_last_event_type"),
+    ):
+        value = latest.get(source_key)
+        if isinstance(value, str) and value:
+            metrics[metric_key] = value
+    final = latest.get("is_final")
+    if isinstance(final, bool):
+        metrics["timeline_transcript_ingress_last_final"] = final
+    chain = _transcript_ingress_chain(events[-8:])
+    if chain:
+        metrics["timeline_transcript_ingress_chain"] = chain
+    return metrics
+
+
+def _transcript_ingress_chain(events: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        kind = "final" if event.get("is_final") is True else "interim"
+        preview = str(event.get("transcript_preview") or "")[:40]
+        parts.append(f"{kind}:{preview}")
+    return " ; ".join(parts)
 
 
 def _transcript_admission_chain(events: list[dict[str, Any]]) -> str:

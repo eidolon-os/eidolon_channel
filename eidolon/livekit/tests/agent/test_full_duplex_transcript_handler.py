@@ -49,6 +49,7 @@ def _handler(
         "attention": [],
         "speaker_checks": [],
         "echo_rejected": [],
+        "ingress_events": [],
         "admission_events": [],
         "semantic_gate_events": [],
     }
@@ -71,6 +72,9 @@ def _handler(
         ),
         reject_agent_echo=lambda transcript: calls["echo_rejected"].append(transcript),
         forward_to_base=lambda event: calls["forwarded"].append(event),
+        record_transcript_ingress_event=lambda payload: calls[
+            "ingress_events"
+        ].append(payload),
         record_transcript_admission_event=lambda payload: calls[
             "admission_events"
         ].append(payload),
@@ -87,6 +91,15 @@ def test_transcript_handler_records_and_forwards_non_interrupt_transcript() -> N
     handler.handle(event)
 
     assert gate.events[0].transcript == "你好"
+    assert calls["ingress_events"] == [
+        {
+            "transcript_preview": "你好",
+            "text_length": 2,
+            "is_final": True,
+            "speaker_id": "user",
+            "event_type": "SimpleNamespace",
+        }
+    ]
     assert calls["recorded"][0].transcript == "你好"
     assert calls["semantic"] == []
     assert calls["forwarded"] == [event]
@@ -224,6 +237,15 @@ def test_transcript_handler_drops_rejected_admission() -> None:
 
     handler.handle(_event("你好", speaker_id="agent"))
 
+    assert calls["ingress_events"] == [
+        {
+            "transcript_preview": "你好",
+            "text_length": 2,
+            "is_final": False,
+            "speaker_id": "agent",
+            "event_type": "SimpleNamespace",
+        }
+    ]
     assert calls["recorded"] == []
     assert calls["attention"] == []
     assert calls["semantic"] == []

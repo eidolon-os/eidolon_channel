@@ -35,6 +35,8 @@ class FullDuplexTranscriptHandler:
         run_semantic_interrupt: Callable[[str, bool], None],
         reject_agent_echo: Callable[[str], None],
         forward_to_base: Callable[[Any], None],
+        record_transcript_ingress_event: Callable[[dict[str, Any]], None]
+        | None = None,
         record_transcript_admission_event: Callable[[dict[str, Any]], None]
         | None = None,
         record_semantic_gate_event: Callable[[dict[str, Any]], None] | None = None,
@@ -51,6 +53,7 @@ class FullDuplexTranscriptHandler:
         self._run_semantic_interrupt = run_semantic_interrupt
         self._reject_agent_echo = reject_agent_echo
         self._forward_to_base = forward_to_base
+        self._record_transcript_ingress_event = record_transcript_ingress_event
         self._record_transcript_admission_event = record_transcript_admission_event
         self._record_semantic_gate_event = record_semantic_gate_event
         # Optional: preemptively warm the brain on a stabilizing partial
@@ -59,6 +62,7 @@ class FullDuplexTranscriptHandler:
 
     def handle(self, event: Any) -> None:
         transcript_event = FullDuplexTranscriptEvent.from_event(event)
+        self._record_ingress_event(transcript_event, event)
         admission = self._admission_gate().evaluate(transcript_event)
         self._record_admission_event(admission)
         if not admission.accepted:
@@ -162,6 +166,23 @@ class FullDuplexTranscriptHandler:
                 "text_length": len(admission.transcript),
                 "is_final": admission.is_final,
                 "speaker_id": admission.speaker_id,
+            }
+        )
+
+    def _record_ingress_event(
+        self,
+        transcript_event: FullDuplexTranscriptEvent,
+        raw_event: Any,
+    ) -> None:
+        if self._record_transcript_ingress_event is None:
+            return
+        self._record_transcript_ingress_event(
+            {
+                "transcript_preview": transcript_event.transcript[:120],
+                "text_length": len(transcript_event.transcript),
+                "is_final": transcript_event.is_final,
+                "speaker_id": transcript_event.speaker_id,
+                "event_type": type(raw_event).__name__,
             }
         )
 

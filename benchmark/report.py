@@ -224,6 +224,15 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "timeline_interrupt_intent_admitted_to_cancel_resolved_ms",
         "直接意图通过 -> cancel 完成(精确)",
     ),
+    ("timeline_transcript_ingress_event_count", "transcript ingress 事件数"),
+    (
+        "timeline_transcript_ingress_last_preview",
+        "transcript ingress 最后文本",
+    ),
+    (
+        "timeline_transcript_ingress_chain",
+        "transcript ingress 链路",
+    ),
     ("timeline_transcript_admission_event_count", "transcript admission 事件数"),
     ("timeline_transcript_admission_last_reason", "transcript admission 最后原因"),
     (

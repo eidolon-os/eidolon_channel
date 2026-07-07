@@ -66,6 +66,13 @@ During SUSPENDED the mixer operates in two sub-phases:
     Frames are stored in ``_buffer`` and NOT forwarded. The user hears
     silence. TTS continues generating in the background.
 
+  Optional — SUSPENDED PASSTHROUGH:
+    ``enable_suspended_passthrough(volume=...)`` is an explicit opt-in
+    primitive for future reversible "audible hold" strategies. After the
+    fade-out ramp completes, new live frames are forwarded at the capped
+    volume instead of being buffered. Default production behaviour remains
+    silent buffering until a caller deliberately enables passthrough.
+
 On unduck (default ``drop_buffered=False``), the buffered frames are
 drained through the inner sink with a fade-in ramp. LiveKit's
 ``AudioSource`` has internal queue pacing, so burst-pushing buffered
@@ -205,6 +212,7 @@ class OutputController(lk_io.AudioOutput):
         # Frame buffer for SUSPENDED state (Phase 2).
         self._buffer: list[rtc.AudioFrame] = []
         self._buffer_duration_sec: float = 0.0
+        self._suspended_passthrough_volume: float | None = None
 
         # Metrics (monotonic, never reset during session).
         self._total_ducks: int = 0
@@ -214,6 +222,8 @@ class OutputController(lk_io.AudioOutput):
         self._total_buffer_frames_drained: int = 0
         self._total_buffer_frames_dropped: int = 0
         self._total_buffer_frames_dropped_on_unduck: int = 0
+        self._total_buffer_frames_dropped_on_passthrough: int = 0
+        self._total_suspended_passthrough_frames: int = 0
         self._duck_start_time: float = 0.0
         self._total_suspend_ms: float = 0.0
         # G6 (2026-05-17): track audio actually forwarded to the inner sink
@@ -252,6 +262,11 @@ class OutputController(lk_io.AudioOutput):
         return len(self._buffer)
 
     @property
+    def suspended_passthrough_volume(self) -> float | None:
+        """Current opt-in passthrough volume while SUSPENDED, if enabled."""
+        return self._suspended_passthrough_volume
+
+    @property
     def played_seconds(self) -> float:
         """G6 (2026-05-17): seconds of audio actually forwarded to the inner
         sink since the last ``duck()`` reset. Approximates "how much of the
@@ -287,6 +302,12 @@ class OutputController(lk_io.AudioOutput):
             "total_buffer_frames_dropped_on_unduck": (
                 self._total_buffer_frames_dropped_on_unduck
             ),
+            "total_buffer_frames_dropped_on_passthrough": (
+                self._total_buffer_frames_dropped_on_passthrough
+            ),
+            "total_suspended_passthrough_frames": (
+                self._total_suspended_passthrough_frames
+            ),
         }
 
     def duck(self) -> None:
@@ -313,6 +334,7 @@ class OutputController(lk_io.AudioOutput):
         self._duck_start_time = time.monotonic()
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
+        self._suspended_passthrough_volume = None
         self._begin_ramp(target=self._suspend_volume, duration_ms=self._fade_ms)
         logger.info(
             "[OutputController] duck  %s→SUSPENDED  target_vol=%.2f  "
@@ -335,6 +357,38 @@ class OutputController(lk_io.AudioOutput):
             "[OutputController] on_agent_started_speaking: "
             "played counter reset for new turn"
         )
+
+    def enable_suspended_passthrough(self, *, volume: float) -> bool:
+        """Forward live SUSPENDED frames at ``volume`` instead of buffering.
+
+        This is intentionally opt-in and only valid while the output is already
+        SUSPENDED. If frames were buffered before passthrough was enabled, they
+        are discarded because live passthrough makes the buffered audio stale
+        and out of order. Terminal cancel/unduck behaviour remains unchanged.
+        """
+        if self._state != "SUSPENDED":
+            return False
+        clamped = max(0.0, min(1.0, float(volume)))
+        if clamped <= 0.0:
+            self.disable_suspended_passthrough()
+            return False
+        dropped = len(self._buffer)
+        if dropped:
+            self._total_buffer_frames_dropped_on_passthrough += dropped
+            self._buffer.clear()
+            self._buffer_duration_sec = 0.0
+        self._suspended_passthrough_volume = clamped
+        logger.info(
+            "[OutputController] suspended passthrough enabled  "
+            "volume=%.2f  discarded_stale=%d",
+            clamped,
+            dropped,
+        )
+        return True
+
+    def disable_suspended_passthrough(self) -> None:
+        """Return SUSPENDED handling to silent buffering for future frames."""
+        self._suspended_passthrough_volume = None
 
     def unduck(self, *, drop_buffered: bool = False) -> None:
         """Drain buffered frames with fade-in, then resume normal flow.
@@ -372,10 +426,12 @@ class OutputController(lk_io.AudioOutput):
             self._buffer_duration_sec = 0.0
             self._total_buffer_frames_dropped_on_unduck += dropped
 
-        # Ramp from 0 → 1.0 will be applied to drained buffer frames
-        # (when drop_buffered=False) or to subsequent live TTS frames
-        # (when drop_buffered=True).
-        self._volume_current = 0.0
+        # Ramp back to 1.0. Silent-buffering windows start from 0; if an
+        # explicit suspended passthrough was active, fade from that audible
+        # hold volume instead of dipping to silence first.
+        resume_start_volume = self._suspended_passthrough_volume or 0.0
+        self._suspended_passthrough_volume = None
+        self._volume_current = resume_start_volume
         self._begin_ramp(target=1.0, duration_ms=self._fade_in_ms)
         logger.info(
             "[OutputController] unduck  SUSPENDED→NORMAL  "
@@ -404,6 +460,7 @@ class OutputController(lk_io.AudioOutput):
         self._volume_current = 0.0
         self._ramp_target = 0.0
         self._ramp_samples_remaining = 0
+        self._suspended_passthrough_volume = None
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
         try:
@@ -422,6 +479,7 @@ class OutputController(lk_io.AudioOutput):
         self._ramp_target = 1.0
         self._ramp_samples_remaining = 0
         self._ramp_step_per_sample = 0.0
+        self._suspended_passthrough_volume = None
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
 
@@ -467,13 +525,20 @@ class OutputController(lk_io.AudioOutput):
 
     async def _handle_suspended(self, frame: rtc.AudioFrame) -> None:
         """SUSPENDED: fade-out phase forwards attenuated frames;
-        after ramp completes, buffer frames silently."""
+        after ramp completes, buffer frames silently unless explicit
+        suspended passthrough is enabled."""
         if self._ramp_samples_remaining > 0:
             scaled = self._scale_frame(frame)
             await self._inner.capture_frame(scaled)
             # G6 (2026-05-17): fade-out frames ARE played (just attenuated)
             # — the user heard them. Count toward played_seconds.
             self._played_samples_this_turn += frame.samples_per_channel
+        elif self._suspended_passthrough_volume is not None:
+            await self._forward_with_static_gain(
+                frame,
+                self._suspended_passthrough_volume,
+            )
+            self._total_suspended_passthrough_frames += 1
         else:
             sr = frame.sample_rate or self._sample_rate or 16000
             frame_sec = frame.samples_per_channel / sr
@@ -523,6 +588,20 @@ class OutputController(lk_io.AudioOutput):
         # ramp-up volume but they ARE played.
         self._played_samples_this_turn += frame.samples_per_channel
 
+    async def _forward_with_static_gain(
+        self,
+        frame: rtc.AudioFrame,
+        gain: float,
+    ) -> None:
+        """Forward a frame at a fixed gain without touching ramp state."""
+        gain = max(0.0, min(1.0, float(gain)))
+        if abs(gain - 1.0) < 1e-6:
+            await self._inner.capture_frame(frame)
+        else:
+            scaled = self._scale_frame_static(frame, gain)
+            await self._inner.capture_frame(scaled)
+        self._played_samples_this_turn += frame.samples_per_channel
+
     def _begin_ramp(self, *, target: float, duration_ms: int | None = None) -> None:
         """Set up a linear ramp from ``_volume_current`` to ``target``."""
         target = max(0.0, min(1.0, float(target)))
@@ -563,6 +642,16 @@ class OutputController(lk_io.AudioOutput):
                 samples.astype(np.float32) * gains, -32768, 32767
             ).astype(np.int16)
 
+        return rtc.AudioFrame(
+            data=scaled.tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=frame.samples_per_channel,
+        )
+
+    def _scale_frame_static(self, frame: rtc.AudioFrame, gain: float) -> rtc.AudioFrame:
+        samples = np.frombuffer(frame.data, dtype=np.int16)
+        scaled = self._apply_static_gain(samples, gain)
         return rtc.AudioFrame(
             data=scaled.tobytes(),
             sample_rate=frame.sample_rate,

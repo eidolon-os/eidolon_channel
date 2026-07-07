@@ -106,6 +106,18 @@ def test_unduck_only_when_suspended() -> None:
     assert controller.last_unduck_time > 0
 
 
+def test_suspended_passthrough_only_enables_while_suspended() -> None:
+    controller = OutputDuckingController()
+    controller.install(_session(_FakeInnerOutput()), _cfg())
+
+    assert controller.enable_suspended_passthrough(volume=0.25) is False
+
+    assert controller.duck(now=123.0) is True
+    assert controller.enable_suspended_passthrough(volume=0.25) is True
+    assert controller.mixer is not None
+    assert controller.mixer.suspended_passthrough_volume == 0.25
+
+
 def test_duck_returns_false_when_cancelled_output_cannot_suspend() -> None:
     controller = OutputDuckingController()
     controller.install(_session(_FakeInnerOutput()), _cfg())

@@ -148,6 +148,81 @@ async def test_duck_with_partial_suspend_volume_then_buffers() -> None:
     assert mixer.buffered_frames == 1
 
 
+@pytest.mark.asyncio
+async def test_suspended_passthrough_forwards_low_volume_without_buffering() -> None:
+    inner = _FakeInnerOutput()
+    mixer = DuckingMixer(inner, fade_ms=10)
+    mixer.duck()
+    await mixer.capture_frame(_make_frame(10000))  # fade-out
+    inner.frames.clear()
+
+    assert mixer.enable_suspended_passthrough(volume=0.25) is True
+    await mixer.capture_frame(_make_frame(10000))
+
+    assert mixer.buffered_frames == 0
+    assert mixer.suspended_passthrough_volume == 0.25
+    assert len(inner.frames) == 1
+    assert (_samples_of(inner.frames[0]) == 2500).all()
+    assert mixer.get_metrics()["total_suspended_passthrough_frames"] == 1
+
+
+@pytest.mark.asyncio
+async def test_suspended_passthrough_discards_prior_buffer_as_stale() -> None:
+    inner = _FakeInnerOutput()
+    mixer = DuckingMixer(inner, fade_ms=10)
+    mixer.duck()
+    await mixer.capture_frame(_make_frame(10000))  # fade-out
+    await mixer.capture_frame(_make_frame(1111))
+    await mixer.capture_frame(_make_frame(2222))
+
+    assert mixer.buffered_frames == 2
+    assert mixer.enable_suspended_passthrough(volume=0.25) is True
+
+    assert mixer.buffered_frames == 0
+    assert (
+        mixer.get_metrics()["total_buffer_frames_dropped_on_passthrough"]
+        == 2
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_suspended_passthrough_drops_subsequent_frames() -> None:
+    inner = _FakeInnerOutput()
+    mixer = DuckingMixer(inner, fade_ms=10)
+    mixer.duck()
+    await mixer.capture_frame(_make_frame(10000))  # fade-out
+    assert mixer.enable_suspended_passthrough(volume=0.25) is True
+    await mixer.capture_frame(_make_frame(10000))
+    inner.frames.clear()
+
+    mixer.cancel()
+    await mixer.capture_frame(_make_frame(10000))
+
+    assert mixer.state == "CANCELLED"
+    assert mixer.suspended_passthrough_volume is None
+    assert inner.frames == []
+
+
+@pytest.mark.asyncio
+async def test_unduck_after_suspended_passthrough_fades_from_hold_volume() -> None:
+    inner = _FakeInnerOutput()
+    mixer = DuckingMixer(inner, fade_ms=10, fade_in_ms=10)
+    mixer.duck()
+    await mixer.capture_frame(_make_frame(10000))  # fade-out
+    assert mixer.enable_suspended_passthrough(volume=0.25) is True
+    await mixer.capture_frame(_make_frame(10000))  # audible hold frame
+    inner.frames.clear()
+
+    mixer.unduck()
+    await mixer.capture_frame(_make_frame(10000))
+
+    assert mixer.state == "NORMAL"
+    assert mixer.suspended_passthrough_volume is None
+    samples = _samples_of(inner.frames[0])
+    assert 2000 < samples[0] < 3000
+    assert samples[-1] > 9000
+
+
 # ──────────────────────────────────────────────────────────────────
 # unduck() → drain buffer → fade-in → NORMAL
 # ──────────────────────────────────────────────────────────────────

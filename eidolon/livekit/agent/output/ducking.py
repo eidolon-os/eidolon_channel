@@ -104,6 +104,11 @@ class OutputDuckingController:
         if self.mixer is not None:
             self.mixer.cancel()
 
+    def enable_suspended_passthrough(self, *, volume: float) -> bool:
+        if self.mixer is None:
+            return False
+        return self.mixer.enable_suspended_passthrough(volume=volume)
+
     def unduck_if_suspended(self, *, drop_buffered: bool = False) -> bool:
         if self.mixer is None:
             return False

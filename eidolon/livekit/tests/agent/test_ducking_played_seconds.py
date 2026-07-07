@@ -163,6 +163,25 @@ async def test_played_seconds_excludes_buffered_suspended_frames() -> None:
 
 
 @pytest.mark.asyncio
+async def test_played_seconds_includes_suspended_passthrough_frames() -> None:
+    """Explicit suspended passthrough is audible, so it counts as played."""
+    inner = _StubInnerSink()
+    mixer = DuckingMixer(inner, fade_ms=10, sample_rate=16000)
+    mixer.duck()
+    await mixer.capture_frame(_silent_frame(800))
+    before_passthrough = mixer.played_seconds
+
+    assert mixer.enable_suspended_passthrough(volume=0.25) is True
+    await mixer.capture_frame(_silent_frame(800))
+
+    assert mixer.buffered_frames == 0
+    assert mixer.played_seconds == pytest.approx(
+        before_passthrough + 0.05,
+        abs=1e-3,
+    )
+
+
+@pytest.mark.asyncio
 async def test_played_seconds_includes_drained_buffer_on_unduck() -> None:
     """When the mixer unducks and drains the buffer through the inner sink
     (with fade-in), those frames DO count — the user hears them, just at

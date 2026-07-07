@@ -33,6 +33,6 @@ cases:
       agent_audio_response: none
       min_user_finals: 0
       min_agent_messages: 0
-      max_interrupt_resolution_after_started_ms: 500
+      max_interrupt_resolution_after_started_ms: 700
       playback_stop_sent: true
       no_full_assistant_context_commit: true

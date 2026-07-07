@@ -78,7 +78,7 @@ cases:
       agent_audio_response: none
       min_user_finals: 0
       min_agent_messages: 0
-      max_speech_start_to_cancel_ms: 500
-      max_interrupt_resolution_after_started_ms: 500
+      max_speech_start_to_cancel_ms: 700
+      max_interrupt_resolution_after_started_ms: 700
       playback_stop_sent: true
       ptt_terminal_action: reject

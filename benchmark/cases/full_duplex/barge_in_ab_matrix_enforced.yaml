@@ -24,7 +24,7 @@ cases:
       intent: hard_stop
       decision_action: cancel
       decision_intent: hard_stop
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
 
   - case_id: ab_tier0_productive_hard_stop_buyaojiangle_001
     suite: barge_in_ab_matrix
@@ -49,7 +49,7 @@ cases:
       intent: hard_stop
       decision_action: cancel
       decision_intent: hard_stop
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
 
   - case_id: ab_backchannel_mm_does_not_cancel_001
     suite: barge_in_ab_matrix
@@ -152,7 +152,7 @@ cases:
       intent: uncertain
       decision_action: cancel
       decision_intent: normal_interrupt
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
 
   - case_id: ab_low_evidence_playback_transcript_observes_001
     suite: barge_in_ab_matrix

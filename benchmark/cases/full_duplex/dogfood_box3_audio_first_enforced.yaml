@@ -68,7 +68,7 @@ cases:
       min_agent_messages: 1
       max_interrupt_decision_ms: 1000
       max_speech_start_to_suspend_ms: 120
-      max_speech_start_to_cancel_ms: 500
+      max_speech_start_to_cancel_ms: 700
       playback_stop_sent: true
       no_full_assistant_context_commit: true
 

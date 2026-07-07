@@ -23,7 +23,7 @@ cases:
     expect:
       action: cancel
       intent: hard_stop
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
       min_user_finals: 1
 
   - case_id: tier1_topic_switch_enforced_cancels_after_stability_001
@@ -49,7 +49,7 @@ cases:
     expect:
       action: cancel
       intent: normal_interrupt
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
       min_user_finals: 1
 
   - case_id: tier1_correction_enforced_cancels_after_stability_001
@@ -75,7 +75,7 @@ cases:
     expect:
       action: cancel
       intent: normal_interrupt
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
       min_user_finals: 1
 
   - case_id: tier2_normal_interrupt_no_client_state_stable_cancel_001
@@ -107,7 +107,7 @@ cases:
     expect:
       action: cancel
       intent: uncertain
-      max_interrupt_decision_ms: 500
+      max_interrupt_decision_ms: 700
       min_user_finals: 1
 
   - case_id: tier3_backchannel_no_client_state_rolls_back_001

@@ -2018,6 +2018,53 @@ def test_livekit_room_timeline_expectations_pass_expected_hard_stop(
     assert not run.cases[0].errors
 
 
+def test_livekit_room_timeline_interrupt_slo_ignores_setup_commit(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="fd_gate_topic_switch_cancels_and_replies_001",
+                suite="full_duplex_gate",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"setup","attrs":{"room_name":'
+            '"voice-bench-fd_gate_topic_switch_cancels_and_replies_001-1234abcd"},'
+            '"timestamps":{"speech_started_at":1.0,"turn_committed_at":3.196}}\n'
+            '{"turn_id":"cancel","attrs":{"room_name":'
+            '"voice-bench-fd_gate_topic_switch_cancels_and_replies_001-1234abcd",'
+            '"interrupt_action":"cancel",'
+            '"decision":{"action":"cancel","intent":"normal_interrupt",'
+            '"topic_switch_hint":true},'
+            '"interrupted_context":{"source":"tts_in_flight",'
+            '"played_seconds":1.2,"text_preview":"上一轮回答"},'
+            '"client_control_events":[{"op":"playback.stop"}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_cancel_resolved_at":10.49,'
+            '"interrupt_resolved_at":10.49,'
+            '"transcript_actionable_first_at":10.48},'
+            '"durations_ms":{"vad_start_to_interrupt_cancel_resolved":490}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+
+
 def test_livekit_room_timeline_expectations_fail_wrong_ptt_terminal(
     tmp_path,
 ) -> None:

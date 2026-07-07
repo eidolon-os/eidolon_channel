@@ -635,7 +635,7 @@ def _interrupt_decision_durations_ms(
                 timestamps.get(key)
                 for key in _resolved_timestamp_keys(expected_action)
             )
-            if end is None:
+            if end is None and expected_action in ("", "any", "none"):
                 end = _number(timestamps.get("turn_committed_at"))
             if start is not None and end is not None:
                 duration = max(0.0, (end - start) * 1000.0)

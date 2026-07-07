@@ -1,9 +1,9 @@
 """Real LiveKit room benchmark runner.
 
 This runner exercises the actual room boundary: a benchmark participant joins a
-LiveKit room with agent dispatch, publishes microphone audio, subscribes to the
-agent's audio, and records room-level latency. It assumes the LiveKit server and
-the Eidolon agent worker are already running.
+LiveKit room with explicit agent dispatch, publishes microphone audio, subscribes
+to the agent's audio, and records room-level latency. It assumes the LiveKit
+server and the Eidolon agent worker are already running.
 """
 
 from __future__ import annotations

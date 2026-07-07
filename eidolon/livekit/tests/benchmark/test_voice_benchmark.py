@@ -1578,6 +1578,7 @@ def test_livekit_dispatch_token_includes_participant_metadata() -> None:
     )
 
     assert payload["sub"] == "manson"
+    assert payload["roomConfig"]["agents"][0]["agentName"] == "eidolon"
     assert json.loads(payload["metadata"]) == {
         "client": "bench",
         "kind": "user",

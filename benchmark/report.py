@@ -277,6 +277,18 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "interruption owner fast-resume elapsed",
     ),
     (
+        "timeline_interruption_owner_last_backchannel_hold_elapsed_ms",
+        "interruption owner last backchannel hold elapsed",
+    ),
+    (
+        "timeline_interruption_owner_backchannel_hold_to_resume_ms",
+        "最后 backchannel hold -> resume",
+    ),
+    (
+        "timeline_interruption_owner_last_backchannel_hold_preview",
+        "interruption owner 最后 backchannel 文本",
+    ),
+    (
         "timeline_interruption_owner_resolved_elapsed_ms",
         "interruption owner resolved elapsed",
     ),

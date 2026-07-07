@@ -2556,12 +2556,172 @@ def test_livekit_room_timeline_expectations_export_interruption_owner_metrics(
     assert metrics["timeline_interruption_owner_last_elapsed_ms"] == 646
     assert metrics["timeline_interruption_owner_last_since_previous_ms"] == 1
     assert metrics["timeline_interruption_owner_fast_resume_elapsed_ms"] == 645
+    assert metrics["timeline_interruption_owner_last_backchannel_hold_elapsed_ms"] == 410
+    assert metrics["timeline_interruption_owner_backchannel_hold_to_resume_ms"] == 236
+    assert metrics["timeline_interruption_owner_last_backchannel_hold_preview"] == "好"
     assert metrics["timeline_interruption_owner_resolved_elapsed_ms"] == 646
     assert metrics["timeline_interruption_owner_wait_chain"] == (
         "turn_policy_decision@410ms:hold:intent:backchannel_await_more_speech:好 ; "
         "short_false_interruption_fast_resume@645ms:hold:"
         "intent:backchannel_await_more_speech:好"
     )
+
+
+def test_livekit_room_timeline_expectations_use_latest_backchannel_hold_gap(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/core.yaml")
+    run = RunResult(
+        run_id="owner-latest-backchannel-gap-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="backchannel_001",
+                suite="false_interrupt",
+                runner="livekit_room",
+                passed=True,
+                metrics={"room_name": "voice-bench-backchannel_001-a1b2c3d4"},
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "timestamps": {
+                    "speech_started_at": 10.0,
+                    "speech_stopped_at": 10.651,
+                    "interrupt_resolved_at": 10.651,
+                    "interrupt_rollback_resolved_at": 10.651,
+                },
+                "attrs": {
+                    "room_name": "voice-bench-backchannel_001-a1b2c3d4",
+                    "interrupt_action": "rollback",
+                    "decision": {"intent": "backchannel"},
+                    "interruption_orchestrator_events": [
+                        {
+                            "event": "candidate_started",
+                            "state": "suspended_waiting_evidence",
+                            "elapsed_ms": 0,
+                        },
+                        {
+                            "event": "turn_policy_decision",
+                            "state": "suspended_waiting_evidence",
+                            "action": "hold",
+                            "reason": "intent:backchannel_await_more_speech",
+                            "intent": "backchannel",
+                            "transcript_preview": "啊",
+                            "elapsed_ms": 307,
+                        },
+                        {
+                            "event": "turn_policy_decision",
+                            "state": "suspended_waiting_evidence",
+                            "action": "hold",
+                            "reason": "intent:backchannel_await_more_speech",
+                            "intent": "backchannel",
+                            "transcript_preview": "好",
+                            "elapsed_ms": 553,
+                        },
+                        {
+                            "event": "short_false_interruption_fast_resume",
+                            "state": "suspended_waiting_evidence",
+                            "transcript_preview": "好",
+                            "last_policy_action": "hold",
+                            "last_policy_reason": "intent:backchannel_await_more_speech",
+                            "elapsed_ms": 651,
+                        },
+                        {
+                            "event": "candidate_resolved",
+                            "state": "confirmed_false_resume",
+                            "action": "rollback",
+                            "reason": "user_silent",
+                            "elapsed_ms": 651,
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    metrics = run.cases[0].metrics
+    assert metrics["timeline_interruption_owner_last_backchannel_hold_elapsed_ms"] == 553
+    assert metrics["timeline_interruption_owner_backchannel_hold_to_resume_ms"] == 98
+    assert metrics["timeline_interruption_owner_last_backchannel_hold_preview"] == "好"
+
+
+def test_livekit_room_timeline_expectations_skip_backchannel_resume_gap_for_cancel(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/core.yaml")
+    run = RunResult(
+        run_id="owner-cancel-after-backchannel-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="backchannel_001",
+                suite="false_interrupt",
+                runner="livekit_room",
+                passed=True,
+                metrics={"room_name": "voice-bench-backchannel_001-a1b2c3d4"},
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "timestamps": {
+                    "speech_started_at": 10.0,
+                    "interrupt_resolved_at": 10.689,
+                    "interrupt_cancel_resolved_at": 10.689,
+                },
+                "attrs": {
+                    "room_name": "voice-bench-backchannel_001-a1b2c3d4",
+                    "interrupt_action": "cancel",
+                    "decision": {"intent": "normal_interrupt"},
+                    "interruption_orchestrator_events": [
+                        {
+                            "event": "turn_policy_decision",
+                            "state": "suspended_waiting_evidence",
+                            "action": "hold",
+                            "reason": "intent:backchannel_await_more_speech",
+                            "intent": "backchannel",
+                            "transcript_preview": "是",
+                            "elapsed_ms": 264,
+                        },
+                        {
+                            "event": "candidate_resolved",
+                            "state": "confirmed_cancelled",
+                            "action": "cancel",
+                            "reason": "confirmed_cancel_turn_committed",
+                            "elapsed_ms": 689,
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    metrics = run.cases[0].metrics
+    assert "timeline_interruption_owner_backchannel_hold_to_resume_ms" not in metrics
+    assert "timeline_interruption_owner_last_backchannel_hold_elapsed_ms" not in metrics
+    assert "timeline_interruption_owner_last_backchannel_hold_preview" not in metrics
 
 
 def test_livekit_room_timeline_expectations_ignore_stale_retry_room(

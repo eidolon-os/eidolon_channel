@@ -1305,6 +1305,24 @@ def _interruption_owner_metrics(records: list[dict[str, Any]]) -> dict[str, Any]
         if value is not None:
             metrics[metric_key] = value
 
+    backchannel_hold = _latest_backchannel_hold_event(events)
+    resume_event = _latest_resume_resolved_event(events)
+    if backchannel_hold is not None and resume_event is not None:
+        hold_elapsed = _number(backchannel_hold.get("elapsed_ms"))
+        resolved_elapsed = _number(resume_event.get("elapsed_ms"))
+        if hold_elapsed is not None:
+            metrics["timeline_interruption_owner_last_backchannel_hold_elapsed_ms"] = (
+                hold_elapsed
+            )
+            if resolved_elapsed is not None:
+                metrics["timeline_interruption_owner_backchannel_hold_to_resume_ms"] = max(
+                    0.0,
+                    resolved_elapsed - hold_elapsed,
+                )
+        preview = backchannel_hold.get("transcript_preview")
+        if isinstance(preview, str) and preview:
+            metrics["timeline_interruption_owner_last_backchannel_hold_preview"] = preview
+
     chain = _interruption_owner_chain(events[-8:])
     if chain:
         metrics["timeline_interruption_owner_chain"] = chain
@@ -1453,6 +1471,31 @@ def _latest_event_number(
         value = _number(event.get(field))
         if value is not None:
             return value
+    return None
+
+
+def _latest_backchannel_hold_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("event") != "turn_policy_decision":
+            continue
+        if event.get("action") != "hold":
+            continue
+        if event.get("intent") != "backchannel":
+            continue
+        reason = event.get("reason")
+        if not isinstance(reason, str) or "backchannel_await_more_speech" not in reason:
+            continue
+        return event
+    return None
+
+
+def _latest_resume_resolved_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("event") != "candidate_resolved":
+            continue
+        if event.get("action") not in {"rollback", "resume"}:
+            continue
+        return event
     return None
 
 

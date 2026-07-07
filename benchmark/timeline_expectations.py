@@ -858,6 +858,34 @@ def _duck_passthrough_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             metrics["timeline_duck_suspended_passthrough_dropped_frames"] = (
                 dropped_frames
             )
+        first_frame_ms = _number(
+            terminal.get("suspended_passthrough_first_frame_ms")
+        )
+        if first_frame_ms is not None:
+            metrics[
+                "timeline_duck_suspended_passthrough_first_frame_since_duck_ms"
+            ] = first_frame_ms
+            vad_to_duck = _duck_started_duration_ms(latest_record)
+            if vad_to_duck is not None:
+                metrics[
+                    "timeline_duck_speech_to_suspended_passthrough_first_frame_ms"
+                ] = vad_to_duck + first_frame_ms
+            enabled_ms = _number(
+                terminal.get("suspended_passthrough_enabled_ms")
+            )
+            if enabled_ms is None:
+                enabled_ms = suspend_ms
+            if enabled_ms is not None:
+                metrics[
+                    "timeline_duck_suspended_passthrough_enabled_to_first_frame_ms"
+                ] = max(0.0, first_frame_ms - enabled_ms)
+        last_frame_ms = _number(
+            terminal.get("suspended_passthrough_last_frame_ms")
+        )
+        if last_frame_ms is not None:
+            metrics[
+                "timeline_duck_suspended_passthrough_last_frame_since_duck_ms"
+            ] = last_frame_ms
     return metrics
 
 

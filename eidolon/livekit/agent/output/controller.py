@@ -213,6 +213,9 @@ class OutputController(lk_io.AudioOutput):
         self._buffer: list[rtc.AudioFrame] = []
         self._buffer_duration_sec: float = 0.0
         self._suspended_passthrough_volume: float | None = None
+        self._suspended_passthrough_enabled_at: float | None = None
+        self._first_suspended_passthrough_frame_at: float | None = None
+        self._last_suspended_passthrough_frame_at: float | None = None
 
         # Metrics (monotonic, never reset during session).
         self._total_ducks: int = 0
@@ -282,7 +285,7 @@ class OutputController(lk_io.AudioOutput):
     def get_metrics(self) -> dict:
         """Session-lifetime ducking metrics for telemetry."""
         total = self._total_ducks or 1
-        return {
+        metrics = {
             "total_ducks": self._total_ducks,
             "total_unducks": self._total_unducks,
             "total_cancels": self._total_cancels,
@@ -309,6 +312,23 @@ class OutputController(lk_io.AudioOutput):
                 self._total_suspended_passthrough_frames
             ),
         }
+        if self._duck_start_time > 0:
+            if self._suspended_passthrough_enabled_at is not None:
+                metrics["suspended_passthrough_enabled_since_duck_ms"] = (
+                    self._suspended_passthrough_enabled_at
+                    - self._duck_start_time
+                ) * 1000.0
+            if self._first_suspended_passthrough_frame_at is not None:
+                metrics["suspended_passthrough_first_frame_since_duck_ms"] = (
+                    self._first_suspended_passthrough_frame_at
+                    - self._duck_start_time
+                ) * 1000.0
+            if self._last_suspended_passthrough_frame_at is not None:
+                metrics["suspended_passthrough_last_frame_since_duck_ms"] = (
+                    self._last_suspended_passthrough_frame_at
+                    - self._duck_start_time
+                ) * 1000.0
+        return metrics
 
     def duck(self) -> None:
         """Begin fade-out and arm frame buffering.
@@ -335,6 +355,9 @@ class OutputController(lk_io.AudioOutput):
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
         self._suspended_passthrough_volume = None
+        self._suspended_passthrough_enabled_at = None
+        self._first_suspended_passthrough_frame_at = None
+        self._last_suspended_passthrough_frame_at = None
         self._begin_ramp(target=self._suspend_volume, duration_ms=self._fade_ms)
         logger.info(
             "[OutputController] duck  %s→SUSPENDED  target_vol=%.2f  "
@@ -383,6 +406,7 @@ class OutputController(lk_io.AudioOutput):
             self._buffer.clear()
             self._buffer_duration_sec = 0.0
         self._suspended_passthrough_volume = clamped
+        self._suspended_passthrough_enabled_at = time.monotonic()
         logger.info(
             "[OutputController] suspended passthrough enabled  "
             "volume=%.2f  discarded_stale=%d",
@@ -485,6 +509,9 @@ class OutputController(lk_io.AudioOutput):
         self._ramp_samples_remaining = 0
         self._ramp_step_per_sample = 0.0
         self._suspended_passthrough_volume = None
+        self._suspended_passthrough_enabled_at = None
+        self._first_suspended_passthrough_frame_at = None
+        self._last_suspended_passthrough_frame_at = None
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
 
@@ -543,6 +570,10 @@ class OutputController(lk_io.AudioOutput):
                 frame,
                 self._suspended_passthrough_volume,
             )
+            now = time.monotonic()
+            if self._first_suspended_passthrough_frame_at is None:
+                self._first_suspended_passthrough_frame_at = now
+            self._last_suspended_passthrough_frame_at = now
             self._total_suspended_passthrough_frames += 1
         else:
             sr = frame.sample_rate or self._sample_rate or 16000

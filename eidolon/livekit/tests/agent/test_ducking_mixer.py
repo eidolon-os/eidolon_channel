@@ -163,7 +163,14 @@ async def test_suspended_passthrough_forwards_low_volume_without_buffering() -> 
     assert mixer.suspended_passthrough_volume == 0.25
     assert len(inner.frames) == 1
     assert (_samples_of(inner.frames[0]) == 2500).all()
-    assert mixer.get_metrics()["total_suspended_passthrough_frames"] == 1
+    metrics = mixer.get_metrics()
+    assert metrics["total_suspended_passthrough_frames"] == 1
+    assert metrics["suspended_passthrough_enabled_since_duck_ms"] >= 0
+    assert metrics["suspended_passthrough_first_frame_since_duck_ms"] >= 0
+    assert (
+        metrics["suspended_passthrough_last_frame_since_duck_ms"]
+        >= metrics["suspended_passthrough_first_frame_since_duck_ms"]
+    )
 
 
 @pytest.mark.asyncio

@@ -2702,6 +2702,9 @@ def test_livekit_room_timeline_expectations_report_suspended_passthrough(
                             "reason": "timeout",
                             "suspended_passthrough_frames": 3,
                             "buffer_frames_dropped_on_passthrough": 2,
+                            "suspended_passthrough_enabled_ms": 430,
+                            "suspended_passthrough_first_frame_ms": 455,
+                            "suspended_passthrough_last_frame_ms": 475,
                         },
                     ],
                 },
@@ -2727,6 +2730,22 @@ def test_livekit_room_timeline_expectations_report_suspended_passthrough(
     assert metrics["timeline_duck_suspended_passthrough_buffered_sec"] == 0.02
     assert metrics["timeline_duck_suspended_passthrough_forwarded_frames"] == 3
     assert metrics["timeline_duck_suspended_passthrough_dropped_frames"] == 2
+    assert (
+        metrics["timeline_duck_suspended_passthrough_first_frame_since_duck_ms"]
+        == 455
+    )
+    assert (
+        metrics["timeline_duck_speech_to_suspended_passthrough_first_frame_ms"]
+        == 505
+    )
+    assert (
+        metrics["timeline_duck_suspended_passthrough_enabled_to_first_frame_ms"]
+        == 25
+    )
+    assert (
+        metrics["timeline_duck_suspended_passthrough_last_frame_since_duck_ms"]
+        == 475
+    )
 
 
 def test_livekit_room_timeline_expectations_skip_backchannel_resume_gap_for_cancel(

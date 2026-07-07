@@ -80,6 +80,14 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "低音量实际透传帧",
     ),
     (
+        "timeline_duck_speech_to_suspended_passthrough_first_frame_ms",
+        "VAD 起声 -> 首个低音量帧",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_enabled_to_first_frame_ms",
+        "低音量开启 -> 首帧",
+    ),
+    (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
         "直接意图通过 -> cancel 完成",
     ),
@@ -187,6 +195,18 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_duck_suspended_passthrough_forwarded_frames",
         "低音量实际透传帧",
+    ),
+    (
+        "timeline_duck_speech_to_suspended_passthrough_first_frame_ms",
+        "VAD 起声 -> 首个低音量帧",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_enabled_to_first_frame_ms",
+        "低音量开启 -> 首帧",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_last_frame_since_duck_ms",
+        "duck -> 最后低音量帧",
     ),
     (
         "timeline_duck_suspended_passthrough_buffered_frames",

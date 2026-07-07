@@ -64,6 +64,18 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ("timeline_decision_event_hold_chain", "decision HOLD 链路"),
     ("timeline_decision_event_terminal_chain", "decision terminal 链路"),
     (
+        "timeline_duck_speech_to_suspended_passthrough_ms",
+        "VAD 起声 -> 低音量继续播放",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_since_duck_ms",
+        "duck -> 低音量继续播放",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_last_volume",
+        "低音量继续播放音量",
+    ),
+    (
         "timeline_interrupt_intent_admitted_to_resolved_ms",
         "直接意图通过 -> cancel 完成",
     ),
@@ -151,6 +163,26 @@ CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     (
         "timeline_decision_stable_signal_chain",
         "stable-signal wait 链路",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_count",
+        "低音量继续播放次数",
+    ),
+    (
+        "timeline_duck_speech_to_suspended_passthrough_ms",
+        "VAD 起声 -> 低音量继续播放",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_since_duck_ms",
+        "duck -> 低音量继续播放",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_last_volume",
+        "低音量继续播放音量",
+    ),
+    (
+        "timeline_duck_suspended_passthrough_buffered_frames",
+        "低音量继续播放前丢弃缓冲帧",
     ),
     (
         "timeline_interrupt_intent_admitted_to_resolved_ms",

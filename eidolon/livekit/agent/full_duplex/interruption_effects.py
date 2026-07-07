@@ -164,11 +164,17 @@ class FullDuplexInterruptionEffects:
         enabled = self._ducking.enable_suspended_passthrough(volume=volume)
         if not enabled:
             return
+        stats = (
+            self._ducking.stats()
+            if hasattr(self._ducking, "stats")
+            else DuckingStats()
+        )
         logger.info(
             "[FullDuplexInterruptionEffects] suspended passthrough enabled "
-            "for hold reason=%s volume=%.2f",
+            "for hold reason=%s volume=%.2f suspend_ms=%.0f",
             decision.reason,
             volume,
+            stats.suspend_ms,
         )
         timeline = self._get_timeline()
         if timeline is not None:
@@ -177,6 +183,9 @@ class FullDuplexInterruptionEffects:
                 "duck_suspended_passthrough_enabled",
                 reason=decision.reason,
                 volume=volume,
+                suspend_ms=stats.suspend_ms,
+                buffered_frames=stats.buffered_frames,
+                buffered_sec=stats.buffered_sec,
             )
 
     async def _stable_signal_recheck(self, timeout_sec: float, transcript: str) -> None:

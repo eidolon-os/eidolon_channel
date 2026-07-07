@@ -2657,6 +2657,70 @@ def test_livekit_room_timeline_expectations_use_latest_backchannel_hold_gap(
     assert metrics["timeline_interruption_owner_last_backchannel_hold_preview"] == "好"
 
 
+def test_livekit_room_timeline_expectations_report_suspended_passthrough(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/core.yaml")
+    run = RunResult(
+        run_id="owner-passthrough-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="backchannel_001",
+                suite="false_interrupt",
+                runner="livekit_room",
+                passed=True,
+                metrics={"room_name": "voice-bench-backchannel_001-a1b2c3d4"},
+            )
+        ],
+    )
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "timestamps": {
+                    "speech_started_at": 10.0,
+                    "interrupt_started_at": 10.05,
+                },
+                "attrs": {
+                    "room_name": "voice-bench-backchannel_001-a1b2c3d4",
+                    "duck_events": [
+                        {"event": "duck_started", "vad_to_duck_ms": 50},
+                        {
+                            "event": "duck_suspended_passthrough_enabled",
+                            "reason": "intent:backchannel_await_more_speech",
+                            "volume": 0.2,
+                            "suspend_ms": 430,
+                            "buffered_frames": 2,
+                            "buffered_sec": 0.02,
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    metrics = run.cases[0].metrics
+    assert metrics["timeline_duck_suspended_passthrough_count"] == 1
+    assert (
+        metrics["timeline_duck_suspended_passthrough_last_reason"]
+        == "intent:backchannel_await_more_speech"
+    )
+    assert metrics["timeline_duck_suspended_passthrough_last_volume"] == 0.2
+    assert metrics["timeline_duck_suspended_passthrough_since_duck_ms"] == 430
+    assert metrics["timeline_duck_speech_to_suspended_passthrough_ms"] == 480
+    assert metrics["timeline_duck_suspended_passthrough_buffered_frames"] == 2
+    assert metrics["timeline_duck_suspended_passthrough_buffered_sec"] == 0.02
+
+
 def test_livekit_room_timeline_expectations_skip_backchannel_resume_gap_for_cancel(
     tmp_path,
 ) -> None:

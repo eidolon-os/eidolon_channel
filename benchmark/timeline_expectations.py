@@ -50,6 +50,7 @@ def apply_timeline_expectations(
         )
         result.metrics.update(_decision_event_metrics(case_records))
         result.metrics.update(_latency_metrics(case_records))
+        result.metrics.update(_duck_passthrough_metrics(case_records))
         result.metrics.update(_interrupted_context_metrics(case_records))
         result.metrics.update(_transcript_admission_metrics(case_records))
         result.metrics.update(_attention_admission_metrics(case_records))
@@ -800,6 +801,44 @@ def _duck_started_duration_ms(record: dict[str, Any]) -> float | None:
         if duration is not None:
             return max(0.0, duration)
     return None
+
+
+def _duck_passthrough_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    passthrough_events: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for record in records:
+        for event in _duck_events(record):
+            if event.get("event") == "duck_suspended_passthrough_enabled":
+                passthrough_events.append((record, event))
+    if not passthrough_events:
+        return {}
+
+    latest_record, latest = passthrough_events[-1]
+    metrics: dict[str, Any] = {
+        "timeline_duck_suspended_passthrough_count": len(passthrough_events),
+    }
+    reason = latest.get("reason")
+    if isinstance(reason, str) and reason:
+        metrics["timeline_duck_suspended_passthrough_last_reason"] = reason
+    volume = _number(latest.get("volume"))
+    if volume is not None:
+        metrics["timeline_duck_suspended_passthrough_last_volume"] = volume
+    suspend_ms = _number(latest.get("suspend_ms"))
+    if suspend_ms is not None:
+        metrics["timeline_duck_suspended_passthrough_since_duck_ms"] = suspend_ms
+        vad_to_duck = _duck_started_duration_ms(latest_record)
+        if vad_to_duck is not None:
+            metrics["timeline_duck_speech_to_suspended_passthrough_ms"] = (
+                vad_to_duck + suspend_ms
+            )
+    buffered_frames = _number(latest.get("buffered_frames"))
+    if buffered_frames is not None:
+        metrics["timeline_duck_suspended_passthrough_buffered_frames"] = (
+            buffered_frames
+        )
+    buffered_sec = _number(latest.get("buffered_sec"))
+    if buffered_sec is not None:
+        metrics["timeline_duck_suspended_passthrough_buffered_sec"] = buffered_sec
+    return metrics
 
 
 def _client_control_sent(records: list[dict[str, Any]], op: str) -> bool:

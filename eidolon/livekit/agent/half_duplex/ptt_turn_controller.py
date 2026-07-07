@@ -33,6 +33,8 @@ class PttSegmentTurnResult:
     stt_mode: str = "none"
     stt_latency_ms: float = 0.0
     audio_duration_sec: float = 0.0
+    audio_effective_duration_sec: float = 0.0
+    audio_leading_silence_sec: float = 0.0
     audio_rms_ppm: int = 0
 
 
@@ -105,9 +107,11 @@ class HalfDuplexPttTurnController:
 
         self._state = "transcribing"
         segment = self._recorder.stop()
+        leading_silence_sec = segment.leading_silence_sec()
+        effective_duration_sec = max(0.0, segment.duration_sec - leading_silence_sec)
         if (
             self._preempted_agent_output
-            and segment.duration_sec <= self._tap_to_stop_max_audio_sec
+            and effective_duration_sec <= self._tap_to_stop_max_audio_sec
         ):
             self._state = "idle"
             return PttSegmentTurnResult(
@@ -116,6 +120,8 @@ class HalfDuplexPttTurnController:
                 state=self._state,
                 preempted_agent_output=self._preempted_agent_output,
                 audio_duration_sec=segment.duration_sec,
+                audio_effective_duration_sec=effective_duration_sec,
+                audio_leading_silence_sec=leading_silence_sec,
                 audio_rms_ppm=segment.rms_ppm,
             )
         try:
@@ -131,6 +137,8 @@ class HalfDuplexPttTurnController:
                 stt_mode=transcription.mode,
                 stt_latency_ms=transcription.latency_ms,
                 audio_duration_sec=transcription.audio_duration_sec,
+                audio_effective_duration_sec=effective_duration_sec,
+                audio_leading_silence_sec=leading_silence_sec,
                 audio_rms_ppm=transcription.audio_rms_ppm,
             )
 
@@ -143,5 +151,7 @@ class HalfDuplexPttTurnController:
             stt_mode=transcription.mode,
             stt_latency_ms=transcription.latency_ms,
             audio_duration_sec=transcription.audio_duration_sec,
+            audio_effective_duration_sec=effective_duration_sec,
+            audio_leading_silence_sec=leading_silence_sec,
             audio_rms_ppm=transcription.audio_rms_ppm,
         )

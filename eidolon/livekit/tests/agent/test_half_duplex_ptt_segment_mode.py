@@ -438,6 +438,50 @@ async def test_preempted_buffered_backchannel_rejects_as_tap_to_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preempted_backchannel_with_control_lead_rejects_as_tap_to_stop() -> None:
+    stt = _FakeSttStage(streaming_text="嗯嗯")
+    controller = _controller(
+        stt,
+        agent_output_active=True,
+        tap_to_stop_max_audio_sec=0.9,
+    )
+
+    controller.press()
+    controller.push_frame(_Frame(_pcm(640, sample=0) + _pcm(670, sample=1200)))
+    result = await controller.release()
+
+    assert result.action == "reject"
+    assert result.reason == "tap_to_stop"
+    assert result.audio_duration_sec == pytest.approx(1.31, abs=0.02)
+    assert result.audio_effective_duration_sec == pytest.approx(0.67, abs=0.02)
+    assert result.audio_leading_silence_sec == pytest.approx(0.64, abs=0.02)
+    assert stt.recognize_calls == []
+    assert stt.recognize_streaming_calls == []
+
+
+@pytest.mark.asyncio
+async def test_preempted_long_speech_after_control_lead_commits() -> None:
+    stt = _FakeSttStage(streaming_text="继续讲这个方案")
+    controller = _controller(
+        stt,
+        agent_output_active=True,
+        tap_to_stop_max_audio_sec=0.9,
+    )
+
+    controller.press()
+    controller.push_frame(_Frame(_pcm(640, sample=0) + _pcm(1000, sample=1200)))
+    result = await controller.release()
+
+    assert result.action == "commit"
+    assert result.reason == "segment_transcribed"
+    assert result.transcript == "继续讲这个方案"
+    assert result.audio_duration_sec == pytest.approx(1.64, abs=0.02)
+    assert result.audio_effective_duration_sec == pytest.approx(1.0, abs=0.02)
+    assert result.audio_leading_silence_sec == pytest.approx(0.64, abs=0.02)
+    assert len(stt.recognize_streaming_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_tap_to_stop_then_next_ptt_commit_uses_clean_segment() -> None:
     preemptions: list[str] = []
     agent_output_active = True

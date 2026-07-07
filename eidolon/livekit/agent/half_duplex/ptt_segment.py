@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 PttRecorderState = Literal["idle", "recording"]
+DEFAULT_ACTIVE_AUDIO_RMS_PPM = 500
+DEFAULT_ACTIVE_AUDIO_WINDOW_MS = 20
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,49 @@ class PttAudioSegment:
             return 0
         rms = _pcm_rms(self.audio, sample_width_bytes=self.sample_width_bytes)
         return int(round((rms / 32768.0) * 1_000_000))
+
+    def leading_silence_sec(
+        self,
+        *,
+        rms_threshold_ppm: int = DEFAULT_ACTIVE_AUDIO_RMS_PPM,
+        window_ms: int = DEFAULT_ACTIVE_AUDIO_WINDOW_MS,
+    ) -> float:
+        """Return leading low-energy audio before the first active window."""
+
+        if not self.audio or self.sample_width_bytes != 2 or self.sample_rate <= 0:
+            return 0.0
+
+        bytes_per_sample = self.sample_width_bytes * max(1, self.num_channels)
+        even = len(self.audio) - (len(self.audio) % bytes_per_sample)
+        if even <= 0:
+            return 0.0
+
+        threshold = max(0, int(rms_threshold_ppm))
+        window_samples = max(1, int(self.sample_rate * max(1, window_ms) / 1000))
+        window_bytes = window_samples * bytes_per_sample
+        silence_bytes = 0
+        for offset in range(0, even, window_bytes):
+            chunk = self.audio[offset : min(offset + window_bytes, even)]
+            if _pcm_rms_ppm(chunk, sample_width_bytes=self.sample_width_bytes) >= threshold:
+                break
+            silence_bytes += len(chunk)
+        else:
+            silence_bytes = even
+
+        samples = silence_bytes // bytes_per_sample
+        return samples / float(self.sample_rate)
+
+    def active_duration_sec(
+        self,
+        *,
+        rms_threshold_ppm: int = DEFAULT_ACTIVE_AUDIO_RMS_PPM,
+        window_ms: int = DEFAULT_ACTIVE_AUDIO_WINDOW_MS,
+    ) -> float:
+        leading = self.leading_silence_sec(
+            rms_threshold_ppm=rms_threshold_ppm,
+            window_ms=window_ms,
+        )
+        return max(0.0, self.duration_sec - leading)
 
 
 class PttAudioSegmentRecorder:
@@ -175,3 +220,8 @@ def _pcm_rms(audio: bytes, *, sample_width_bytes: int) -> float:
         return 0.0
     mean_square = sum(sample * sample for sample in samples) / len(samples)
     return mean_square**0.5
+
+
+def _pcm_rms_ppm(audio: bytes, *, sample_width_bytes: int) -> int:
+    rms = _pcm_rms(audio, sample_width_bytes=sample_width_bytes)
+    return int(round((rms / 32768.0) * 1_000_000))

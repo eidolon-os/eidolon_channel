@@ -367,12 +367,15 @@ class HalfDuplexPttPipeline(BasePipeline):
     def _record_ptt_result(self, result: PttSegmentTurnResult) -> None:
         logger.info(
             "[HalfDuplexPttPipeline] PTT result action=%s reason=%s mode=%s "
-            "latency_ms=%.1f audio_ms=%.1f rms_ppm=%d text=%r",
+            "latency_ms=%.1f audio_ms=%.1f effective_audio_ms=%.1f "
+            "leading_silence_ms=%.1f rms_ppm=%d text=%r",
             result.action,
             result.reason,
             result.stt_mode,
             result.stt_latency_ms,
             result.audio_duration_sec * 1000,
+            result.audio_effective_duration_sec * 1000,
+            result.audio_leading_silence_sec * 1000,
             result.audio_rms_ppm,
             result.transcript[:80],
         )
@@ -449,6 +452,8 @@ class HalfDuplexPttPipeline(BasePipeline):
                     "stt_mode": result.stt_mode,
                     "stt_latency_ms": result.stt_latency_ms,
                     "audio_duration_sec": result.audio_duration_sec,
+                    "audio_effective_duration_sec": result.audio_effective_duration_sec,
+                    "audio_leading_silence_sec": result.audio_leading_silence_sec,
                     "audio_rms_ppm": result.audio_rms_ppm,
                     "preempted_agent_output": result.preempted_agent_output,
                     "transcript_preview": result.transcript[:120],

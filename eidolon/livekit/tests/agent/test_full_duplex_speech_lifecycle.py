@@ -30,6 +30,7 @@ def _owner() -> SimpleNamespace:
     owner._user_turns = MagicMock()
     owner._user_turns.can_merge_new_speech.return_value = False
     owner._skip_commit_after_interrupt_cancel = True
+    owner._suppress_commit_after_interrupt_until = 123.0
     owner._suppress_transcripts_until_next_speech = True
     owner._completed_turn_voiceprint_task = object()
     owner._completed_turn_voiceprint_result = object()
@@ -51,7 +52,13 @@ def _owner() -> SimpleNamespace:
     owner._attention_effects.handle_speaking_started.return_value = True
     owner._ducking = SimpleNamespace(is_suspended=True)
     owner._interruption_orchestrator = MagicMock()
-    owner._set_interrupt_cancel_suppression = MagicMock()
+    def set_interrupt_cancel_suppression(active: bool, until: float) -> None:
+        owner._skip_commit_after_interrupt_cancel = active
+        owner._suppress_commit_after_interrupt_until = until
+
+    owner._set_interrupt_cancel_suppression = MagicMock(
+        side_effect=set_interrupt_cancel_suppression
+    )
     return owner
 
 
@@ -62,6 +69,7 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
 
     owner._callbacks.on_user_started_speaking.assert_called_once_with()
     assert owner._skip_commit_after_interrupt_cancel is False
+    assert owner._suppress_commit_after_interrupt_until == 0.0
     assert owner._suppress_transcripts_until_next_speech is False
     assert owner._latest_asr_text == ""
     assert owner._timeline is not None
@@ -72,6 +80,7 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     owner._provider_events.apply_pending_stt_provider_events.assert_called_once_with()
     owner._provider_events.observe_stt_turn_audio.assert_called_once_with()
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)
+    owner._set_interrupt_cancel_suppression.assert_called_once_with(False, 0.0)
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_called_once_with(
         timeline=owner._timeline,

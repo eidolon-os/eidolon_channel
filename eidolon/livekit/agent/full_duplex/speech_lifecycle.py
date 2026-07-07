@@ -30,6 +30,7 @@ class FullDuplexSpeechLifecycle:
         merge_continuation = owner._user_turns.can_merge_new_speech()
         owner._skip_commit_after_interrupt_cancel = False
         owner._suppress_transcripts_until_next_speech = False
+        owner._set_interrupt_cancel_suppression(False, 0.0)
         turn_completion.cancel_deferred_low_eot_commit("new_speech_started")
         if not merge_continuation:
             turn_completion.cancel_pending_voiceprint_commits("new_speech_started")

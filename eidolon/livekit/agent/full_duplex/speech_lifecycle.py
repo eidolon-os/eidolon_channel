@@ -42,6 +42,11 @@ class FullDuplexSpeechLifecycle:
         owner._callbacks.on_user_started_speaking()
         owner._user_speaking_start_time = time.monotonic()
         if not merge_continuation or owner._timeline is None:
+            if not merge_continuation and owner._timeline is not None:
+                owner._append_turn_timeline_snapshot(
+                    owner._timeline,
+                    "speech_started_replaced_unmerged_timeline",
+                )
             owner._timeline = TurnTimeline(generate_turn_id())
             owner._timeline_debug_flushed = False
             if owner._room is not None:

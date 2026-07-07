@@ -40,6 +40,7 @@ def _owner() -> SimpleNamespace:
     owner._timeline = None
     owner._timeline_debug_flushed = False
     owner._room = SimpleNamespace(name="room-a")
+    owner._append_turn_timeline_snapshot = MagicMock()
     owner._apply_pending_explicit_client_preempt = MagicMock()
     owner._apply_pending_client_control_events = MagicMock()
     owner._voiceprint_turns = MagicMock()
@@ -77,6 +78,7 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._timeline is not None
     assert owner._timeline.attrs["room_name"] == "room-a"
     owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
+    owner._append_turn_timeline_snapshot.assert_not_called()
     owner._attach_transcript_ingress_recent_events.assert_called_once_with(
         "speech_started"
     )
@@ -100,6 +102,32 @@ def test_speech_lifecycle_start_does_not_open_candidate_without_interrupt_window
 
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_not_called()
+
+
+def test_speech_lifecycle_snapshots_replaced_unmerged_timeline() -> None:
+    owner = _owner()
+    previous = TurnTimeline("previous-turn")
+    owner._timeline = previous
+
+    FullDuplexSpeechLifecycle(owner).handle_started()
+
+    owner._append_turn_timeline_snapshot.assert_called_once_with(
+        previous,
+        "speech_started_replaced_unmerged_timeline",
+    )
+    assert owner._timeline is not previous
+
+
+def test_speech_lifecycle_keeps_merge_continuation_timeline() -> None:
+    owner = _owner()
+    previous = TurnTimeline("previous-turn")
+    owner._timeline = previous
+    owner._user_turns.can_merge_new_speech.return_value = True
+
+    FullDuplexSpeechLifecycle(owner).handle_started()
+
+    owner._append_turn_timeline_snapshot.assert_not_called()
+    assert owner._timeline is previous
 
 
 def test_speech_lifecycle_stop_defers_when_interruption_owner_waits_for_stt() -> None:

@@ -268,6 +268,16 @@ class FullDuplexInterruptionEffects:
                 suspend_ms=stats.suspend_ms,
                 buffered_frames=stats.buffered_frames,
                 buffered_sec=stats.buffered_sec,
+                suspended_passthrough_frames=getattr(
+                    stats,
+                    "suspended_passthrough_frames",
+                    0,
+                ),
+                buffer_frames_dropped_on_passthrough=getattr(
+                    stats,
+                    "buffer_frames_dropped_on_passthrough",
+                    0,
+                ),
                 drop_buffered=True,
             )
             timeline.mark_interrupt_resolved("cancel")
@@ -328,6 +338,16 @@ class FullDuplexInterruptionEffects:
                 suspend_ms=stats.suspend_ms,
                 buffered_frames=stats.buffered_frames,
                 buffered_sec=stats.buffered_sec,
+                suspended_passthrough_frames=getattr(
+                    stats,
+                    "suspended_passthrough_frames",
+                    0,
+                ),
+                buffer_frames_dropped_on_passthrough=getattr(
+                    stats,
+                    "buffer_frames_dropped_on_passthrough",
+                    0,
+                ),
                 drop_buffered=drop_buffered,
             )
             timeline.mark_interrupt_resolved("rollback")

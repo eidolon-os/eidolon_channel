@@ -805,10 +805,16 @@ def _duck_started_duration_ms(record: dict[str, Any]) -> float | None:
 
 def _duck_passthrough_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     passthrough_events: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    passthrough_terminal_events: list[dict[str, Any]] = []
     for record in records:
         for event in _duck_events(record):
             if event.get("event") == "duck_suspended_passthrough_enabled":
                 passthrough_events.append((record, event))
+            if (
+                "suspended_passthrough_frames" in event
+                or "buffer_frames_dropped_on_passthrough" in event
+            ):
+                passthrough_terminal_events.append(event)
     if not passthrough_events:
         return {}
 
@@ -838,6 +844,20 @@ def _duck_passthrough_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     buffered_sec = _number(latest.get("buffered_sec"))
     if buffered_sec is not None:
         metrics["timeline_duck_suspended_passthrough_buffered_sec"] = buffered_sec
+    if passthrough_terminal_events:
+        terminal = passthrough_terminal_events[-1]
+        forwarded_frames = _number(terminal.get("suspended_passthrough_frames"))
+        if forwarded_frames is not None:
+            metrics["timeline_duck_suspended_passthrough_forwarded_frames"] = (
+                forwarded_frames
+            )
+        dropped_frames = _number(
+            terminal.get("buffer_frames_dropped_on_passthrough")
+        )
+        if dropped_frames is not None:
+            metrics["timeline_duck_suspended_passthrough_dropped_frames"] = (
+                dropped_frames
+            )
     return metrics
 
 

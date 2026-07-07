@@ -28,6 +28,8 @@ class DuckingStats:
     suspend_ms: float = 0.0
     buffered_frames: int = 0
     buffered_sec: float = 0.0
+    suspended_passthrough_frames: int = 0
+    buffer_frames_dropped_on_passthrough: int = 0
 
 
 class OutputDuckingController:
@@ -86,10 +88,17 @@ class OutputDuckingController:
     def stats(self) -> DuckingStats:
         if self.mixer is None:
             return DuckingStats()
+        metrics = self.mixer.get_metrics()
         return DuckingStats(
             suspend_ms=(time.monotonic() - self.suspend_start) * 1000,
             buffered_frames=self.mixer.buffered_frames,
             buffered_sec=self.mixer.buffered_sec,
+            suspended_passthrough_frames=int(
+                metrics.get("total_suspended_passthrough_frames") or 0
+            ),
+            buffer_frames_dropped_on_passthrough=int(
+                metrics.get("total_buffer_frames_dropped_on_passthrough") or 0
+            ),
         )
 
     def duck(self, *, now: float | None = None) -> bool:

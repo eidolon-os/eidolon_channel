@@ -1124,6 +1124,8 @@ def test_rollback_if_suspended_records_timeline_action() -> None:
                 suspend_ms=123.0,
                 buffered_frames=2,
                 buffered_sec=0.4,
+                suspended_passthrough_frames=3,
+                buffer_frames_dropped_on_passthrough=1,
             )
 
         def unduck_if_suspended(self, *, drop_buffered: bool) -> None:
@@ -1164,4 +1166,8 @@ def test_rollback_if_suspended_records_timeline_action() -> None:
     assert timeline.attrs["interrupt_action"] == "rollback"
     assert timeline.attrs["rollback_reason"] == "agent_echo"
     assert timeline.attrs["rollback_drop_buffered"] is False
+    duck_event = timeline.attrs["duck_events"][-1]
+    assert duck_event["event"] == "duck_unducked"
+    assert duck_event["suspended_passthrough_frames"] == 3
+    assert duck_event["buffer_frames_dropped_on_passthrough"] == 1
     orchestrator.resolve.assert_called_once_with(action="rollback", reason="agent_echo")

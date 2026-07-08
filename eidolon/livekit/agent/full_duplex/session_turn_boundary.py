@@ -71,6 +71,26 @@ class FullDuplexSessionTurnBoundary:
         if "context_error" in (reason or ""):
             self._notify_context_error_once(reason)
 
+    def clear_residual_audio_user_turn(self, reason: str) -> None:
+        pipeline = self._pipeline
+        session = getattr(pipeline, "_session", None)
+        if session is None:
+            return
+        clear_user_turn = getattr(session, "clear_user_turn", None)
+        if clear_user_turn is None:
+            return
+        try:
+            clear_user_turn()
+            logger.info(
+                "[StreamingPipeline] cleared residual audio user turn reason=%s",
+                reason,
+            )
+        except Exception:
+            logger.exception(
+                "[StreamingPipeline] failed to clear residual audio user turn reason=%s",
+                reason,
+            )
+
     def _clear_pending_canonical_user_text(self, reason: str) -> None:
         pipeline = self._pipeline
         try:

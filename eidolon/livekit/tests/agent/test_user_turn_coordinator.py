@@ -252,6 +252,62 @@ def test_late_final_after_commit_does_not_replace_committed_candidate() -> None:
     assert coordinator.snapshot()["state"] == "committed"
 
 
+def test_equivalent_late_final_after_commit_is_absorbed_as_revision() -> None:
+    timeline = TurnTimeline("turn-late-final-equivalent")
+    coordinator = UserTurnCoordinator()
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("那你现在能帮我做什么", is_final=True)
+    decision = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+    coordinator.mark_committed(
+        transcript=decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+
+    absorbed = coordinator.absorb_committed_transcript_revision(
+        "那你现在能帮我做什么。",
+        is_final=True,
+    )
+
+    assert absorbed is True
+    assert coordinator.selected_text == "那你现在能帮我做什么。"
+    assert coordinator.snapshot()["state"] == "committed"
+    assert _owner_events(timeline)[-1] == (
+        "accepted_user_turn",
+        "committed_revision",
+        "committed_turn_revision",
+    )
+
+
+def test_framework_completed_duplicate_after_commit_is_noop_revision() -> None:
+    timeline = TurnTimeline("turn-framework-duplicate")
+    coordinator = UserTurnCoordinator()
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("那你现在能帮我做什么", is_final=True)
+    decision = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+    coordinator.mark_committed(
+        transcript=decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+
+    first_completed = coordinator.mark_framework_completed(
+        transcript="那你现在能帮我做什么。",
+        reason="framework_completed_turn",
+        timeline=timeline,
+    )
+    duplicate = coordinator.mark_framework_completed(
+        transcript="那你现在能帮我做什么。",
+        reason="framework_completed_turn",
+        timeline=timeline,
+    )
+
+    assert first_completed.action == "commit"
+    assert duplicate.action == "none"
+    assert duplicate.reason == "committed_turn_revision"
+    assert duplicate.transcript == "那你现在能帮我做什么。"
+    assert coordinator.snapshot()["candidate_id"] == "turn-framework-duplicate"
+    assert coordinator.snapshot()["state"] == "committed"
+
+
 def test_framework_completed_after_commit_starts_fresh_candidate() -> None:
     coordinator = UserTurnCoordinator()
     first_timeline = TurnTimeline("turn-first")

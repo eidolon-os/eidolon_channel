@@ -51,6 +51,7 @@ class FullDuplexInterruptionEffects:
         soft_interrupt_timeout_sec: Callable[[], float],
         playback_evidence_active: Callable[[], bool] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
+        claim_irreversible_side_effect: Callable[..., bool] | None = None,
     ) -> None:
         self._ducking = ducking
         self._callbacks = callbacks
@@ -78,6 +79,9 @@ class FullDuplexInterruptionEffects:
         self._soft_interrupt_timeout_sec = soft_interrupt_timeout_sec
         self._playback_evidence_active = playback_evidence_active or (lambda: False)
         self._record_full_duplex_transition = record_full_duplex_transition
+        self._claim_irreversible_side_effect = (
+            claim_irreversible_side_effect or (lambda **_kwargs: True)
+        )
         self._soft_interrupt = SoftInterruptController(
             timeout_sec=self._soft_interrupt_timeout_sec(),
             on_timeout=lambda: self.interrupt_current_turn(),
@@ -255,6 +259,35 @@ class FullDuplexInterruptionEffects:
             stats.buffered_sec,
         )
         self.cancel_stable_signal_timer()
+        timeline = self._get_timeline()
+        if not self._claim_irreversible_side_effect(
+            event="playback_stop_committed",
+            reason="interrupt_cancel",
+            timeline=timeline,
+        ):
+            logger.info(
+                "[FullDuplexInterruptionEffects] duplicate irreversible interrupt "
+                "ignored event=playback_stop_committed reason=interrupt_cancel"
+            )
+            self._record_contract_transition(
+                FullDuplexPhase.ACCEPTED_INTERRUPTION,
+                event="duplicate_playback_stop_ignored",
+                reason="interrupt_cancel",
+                side_effect="none",
+                transcript=post_speech_transcript,
+                details={
+                    "commit_post_speech_candidate": commit_post_speech_candidate,
+                    "collect_confirmed_cancel_turn": collect_confirmed_cancel_turn,
+                },
+            )
+            if not collect_confirmed_cancel_turn:
+                resolve = getattr(orchestrator, "resolve", None)
+                if callable(resolve):
+                    resolve(
+                        action="cancel",
+                        reason="duplicate_irreversible_side_effect",
+                    )
+            return
         self._snapshot_context()
         self._record_contract_transition(
             FullDuplexPhase.ACCEPTED_INTERRUPTION,
@@ -274,7 +307,6 @@ class FullDuplexInterruptionEffects:
         else:
             orchestrator.resolve(action="cancel", reason="eot_cancel")
         self._callbacks.on_duck_resolved("cancel")
-        timeline = self._get_timeline()
         if timeline is not None:
             self._record_duck_event(
                 timeline,

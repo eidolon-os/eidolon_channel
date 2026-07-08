@@ -78,6 +78,26 @@ def test_rejects_agent_echo_during_output() -> None:
     assert echo_gate.calls == ["这是 AI 正在说的话"]
 
 
+def test_rejects_committed_turn_revision_before_echo_gate() -> None:
+    echo_gate = _EchoGate(result=True)
+    absorbed: list[tuple[str, bool]] = []
+    gate = TranscriptAdmissionGate(
+        suppress_until_next_speech=lambda: False,
+        agent_output_active=lambda _speaker_id: True,
+        echo_gate=lambda: echo_gate,
+        absorb_committed_turn_revision=lambda transcript, is_final: (
+            absorbed.append((transcript, is_final)) or True
+        ),
+    )
+
+    decision = gate.evaluate(_event("那你现在能帮我做什么。", is_final=True))
+
+    assert not decision.accepted
+    assert decision.reason == "committed_turn_revision"
+    assert absorbed == [("那你现在能帮我做什么。", True)]
+    assert echo_gate.calls == []
+
+
 def test_allows_echo_like_transcript_when_agent_output_is_inactive() -> None:
     echo_gate = _EchoGate(result=True)
     gate = TranscriptAdmissionGate(

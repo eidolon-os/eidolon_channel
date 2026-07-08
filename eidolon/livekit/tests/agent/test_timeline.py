@@ -1082,6 +1082,69 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
     session.interrupt.assert_not_called()
 
 
+def test_cancel_claim_prevents_duplicate_playback_stop_side_effect() -> None:
+    class SuspendedDucking:
+        is_cancelled = False
+        is_suspended = True
+
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def stats(self):
+            return SimpleNamespace(
+                suspend_ms=10.0,
+                buffered_frames=0,
+                buffered_sec=0.0,
+            )
+
+        def cancel_output(self) -> None:
+            self.cancelled = True
+
+    ducking = SuspendedDucking()
+    callbacks = MagicMock()
+    session = MagicMock()
+    timeline = TurnTimeline("turn-duplicate-stop")
+    publish_playback_stop = MagicMock()
+    snapshot_context = MagicMock()
+    record_transition = MagicMock()
+    effects = FullDuplexInterruptionEffects(
+        ducking=ducking,
+        callbacks=callbacks,
+        get_session=lambda: session,
+        allow_interruptions=lambda: True,
+        get_eot_model=lambda: MagicMock(),
+        get_timeline=lambda: timeline,
+        get_latest_asr_text=lambda: "",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=lambda: SimpleNamespace(
+            should_collect_after_confirmed_cancel=MagicMock(return_value=False),
+            should_commit_after_confirmed_cancel=MagicMock(return_value=False),
+            current_transcript="那你现在能帮我做什么。",
+        ),
+        publish_playback_stop=publish_playback_stop,
+        snapshot_interrupted_context=snapshot_context,
+        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
+        reject_post_speech_interruption_candidate=MagicMock(),
+        cancel_residual_commit_suppress_sec=lambda: 0.0,
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=MagicMock(),
+        soft_interrupt_timeout_sec=lambda: 0.5,
+        record_full_duplex_transition=record_transition,
+        claim_irreversible_side_effect=MagicMock(return_value=False),
+    )
+
+    effects.cancel_and_interrupt()
+
+    snapshot_context.assert_not_called()
+    publish_playback_stop.assert_not_called()
+    assert ducking.cancelled is False
+    callbacks.on_duck_resolved.assert_not_called()
+    session.interrupt.assert_not_called()
+    record_transition.assert_called_once()
+    assert record_transition.call_args.kwargs["event"] == "duplicate_playback_stop_ignored"
+
+
 def test_streaming_pipeline_cancels_when_playback_evidence_outlives_duck_state() -> None:
     class CancelledDucking:
         is_cancelled = True

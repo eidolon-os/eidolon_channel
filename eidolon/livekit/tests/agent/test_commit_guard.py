@@ -167,6 +167,54 @@ def test_late_final_transcript_is_dropped_after_voiceprint_block() -> None:
     assert pipeline._latest_asr_text == ""
 
 
+def test_committed_final_before_framework_completed_is_not_absorbed() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("committed-final-duplicate")
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._user_turns.add_transcript("那你现在能帮我做什么", is_final=True)
+    decision = pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
+    pipeline._user_turns.mark_committed(
+        transcript=decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+
+    pipeline._on_user_transcribed(
+        _transcript_event("那你现在能帮我做什么。", final=True)
+    )
+
+    assert pipeline._timeline.attrs["transcript_admission_last_event"]["accepted"] is True
+
+
+def test_duplicate_committed_final_transcript_is_absorbed_after_completed_turn() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("committed-final-duplicate-after-completed")
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._user_turns.add_transcript("那你现在能帮我做什么", is_final=True)
+    decision = pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
+    pipeline._user_turns.mark_committed(
+        transcript=decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+    pipeline._user_turns.mark_framework_completed(
+        transcript="那你现在能帮我做什么。",
+        reason="framework_completed_turn",
+        timeline=pipeline._timeline,
+    )
+
+    pipeline._on_user_transcribed(
+        _transcript_event("那你现在能帮我做什么。", final=True)
+    )
+
+    pipeline._callbacks.on_user_message.assert_not_called()
+    assert pipeline._user_turns.selected_text == "那你现在能帮我做什么。"
+    assert (
+        pipeline._timeline.attrs["transcript_admission_last_event"]["reason"]
+        == "committed_turn_revision"
+    )
+
+
 def test_new_speech_reopens_transcript_admission() -> None:
     pipeline = _make_pipeline_with_session(latest_asr_text="")
     pipeline._suppress_transcripts_until_next_speech = True
@@ -194,6 +242,47 @@ def test_agent_echo_rejection_suppresses_remaining_segment_transcripts() -> None
     effects.rollback_if_suspended.assert_called_once_with(
         reason="agent_echo",
         drop_buffered=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_skips_committed_duplicate_revision() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    pipeline._timeline = TurnTimeline("completed-final-duplicate")
+    clear_next = MagicMock()
+    set_next = MagicMock()
+    pipeline._factory = SimpleNamespace(
+        llm=SimpleNamespace(
+            llm=SimpleNamespace(
+                clear_next_user_text=clear_next,
+                set_next_user_text=set_next,
+            )
+        )
+    )
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._user_turns.add_transcript("那你现在能帮我做什么", is_final=True)
+    decision = pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
+    pipeline._user_turns.mark_committed(
+        transcript=decision.transcript,
+        reason="framework_commit_user_turn",
+    )
+    pipeline._user_turns.mark_framework_completed(
+        transcript="那你现在能帮我做什么。",
+        reason="framework_completed_turn",
+        timeline=pipeline._timeline,
+    )
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="那你现在能帮我做什么。")
+    )
+
+    assert allowed is False
+    pipeline._session.clear_user_turn.assert_called_once()
+    clear_next.assert_not_called()
+    set_next.assert_not_called()
+    assert pipeline._timeline.attrs["framework_completed_duplicate"]["reason"] == (
+        "committed_turn_revision"
     )
 
 
@@ -303,7 +392,7 @@ async def test_completed_turn_hook_preempts_playback_topic_switch_without_active
 
     assert allowed is True
     pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
-    pipeline._session.clear_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
     clear_next.assert_not_called()
     set_next.assert_called_once()
     assert pipeline._timeline.attrs["decision"]["action"] == "cancel"
@@ -644,7 +733,7 @@ async def test_completed_turn_hook_allows_owner_voiceprint() -> None:
     )
 
     assert allowed is True
-    pipeline._session.clear_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_called_once()
     assert pipeline._timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
 
 
@@ -733,6 +822,10 @@ async def test_completed_turn_hook_aligns_waiting_candidate_and_cancels_deferred
         "换个话题。我们聊一下定价。",
         source="framework_completed_turn",
     )
+    pipeline._session.clear_user_turn.assert_called_once()
+    assert pipeline._timeline.attrs["framework_completed_audio_turn_cleared"] == {
+        "reason": "framework_completed_turn_committed"
+    }
 
 
 @pytest.mark.asyncio

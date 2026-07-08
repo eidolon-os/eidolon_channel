@@ -184,6 +184,7 @@ class StreamingPipeline(BasePipeline):
         self._explicit_preempt_control_timeline: TurnTimeline | None = None
         self._assistant_speech = AssistantSpeechLedger()
         self._pending_client_control_events: list[dict[str, Any]] = []
+        self._full_duplex_irreversible_side_effects: set[tuple[str, str, str]] = set()
         self._skip_commit_after_interrupt_cancel = False
         self._suppress_commit_after_interrupt_until = 0.0
         # Ducking state is shared by several effect handlers. It must exist
@@ -393,6 +394,25 @@ class StreamingPipeline(BasePipeline):
         self._skip_commit_after_interrupt_cancel = active
         self._suppress_commit_after_interrupt_until = until
 
+    def _claim_full_duplex_irreversible_side_effect(
+        self,
+        *,
+        event: str,
+        reason: str,
+        timeline: TurnTimeline | None = None,
+    ) -> bool:
+        timeline = timeline or getattr(self, "_timeline", None)
+        turn_id = getattr(timeline, "turn_id", "") if timeline is not None else ""
+        if not turn_id:
+            return True
+        if not hasattr(self, "_full_duplex_irreversible_side_effects"):
+            self._full_duplex_irreversible_side_effects = set()
+        key = (turn_id, event, reason)
+        if key in self._full_duplex_irreversible_side_effects:
+            return False
+        self._full_duplex_irreversible_side_effects.add(key)
+        return True
+
     def _build_context_ledger(self) -> FullDuplexContextLedger:
         return FullDuplexContextLedger(
             get_session=lambda: getattr(self, "_session", None),
@@ -453,6 +473,9 @@ class StreamingPipeline(BasePipeline):
                 self._ensure_client_audio_state_view().agent_output_active_for_interrupts()
             ),
             record_full_duplex_transition=self._record_full_duplex_transition,
+            claim_irreversible_side_effect=(
+                self._claim_full_duplex_irreversible_side_effect
+            ),
         )
 
     def _ensure_interruption_effects(self) -> FullDuplexInterruptionEffects:
@@ -730,6 +753,9 @@ class StreamingPipeline(BasePipeline):
                 )
             ),
             echo_gate=lambda: self._ensure_transcript_echo_gate(),
+            absorb_committed_turn_revision=(
+                self._absorb_committed_turn_transcript_revision
+            ),
         )
 
     def _ensure_transcript_admission_gate(self) -> TranscriptAdmissionGate:
@@ -750,6 +776,18 @@ class StreamingPipeline(BasePipeline):
         self._ensure_interruption_effects().rollback_if_suspended(
             reason="agent_echo",
             drop_buffered=False,
+        )
+
+    def _absorb_committed_turn_transcript_revision(
+        self,
+        transcript: str,
+        is_final: bool,
+    ) -> bool:
+        self._ensure_user_turn_coordinator()
+        return self._user_turns.absorb_committed_transcript_revision(
+            transcript,
+            is_final=is_final,
+            require_framework_completed=True,
         )
 
     def _build_transcript_handler(self) -> FullDuplexTranscriptHandler:

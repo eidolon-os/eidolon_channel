@@ -51,6 +51,7 @@ TIMELINE_TEXT_PREVIEW_MAX_CHARS = 120
 OWNER_LEDGER_MAX_TRANSITIONS = 16
 NON_ACTIONABLE_META_TURN_REASON = "non_actionable_meta_turn"
 SUPERSEDED_BY_NEW_SPEECH_REASON = "superseded_by_new_speech"
+COMMITTED_TURN_REVISION_REASON = "committed_turn_revision"
 _NON_ACTIONABLE_META_TURN_PREFIX_SUFFIXES = {
     "那我再说": frozenset(("", "了", "一下", "一遍", "吧")),
     "我再说": frozenset(("", "了", "一下", "一遍", "吧")),
@@ -364,6 +365,47 @@ class UserTurnCoordinator:
             candidate, event="transcript_final" if is_final else "transcript_interim"
         )
 
+    def absorb_committed_transcript_revision(
+        self,
+        text: str,
+        *,
+        is_final: bool,
+        reason: str = COMMITTED_TURN_REVISION_REASON,
+        require_framework_completed: bool = False,
+        now: float | None = None,
+    ) -> bool:
+        """Absorb a late STT final that is only a revision of a committed turn."""
+
+        if not is_final:
+            return False
+        candidate = self._active
+        stripped = text.strip()
+        if (
+            candidate is None
+            or candidate.state != "committed"
+            or not stripped
+            or not _normalized_text_equal(candidate.selected_text, stripped)
+        ):
+            return False
+        if require_framework_completed and not self._has_framework_completed_owner(
+            candidate
+        ):
+            return False
+
+        current_time = self._now(now)
+        self._replace_committed_text(candidate, stripped, now=current_time)
+        candidate.updated_at = current_time
+        self._record_owner_transition(
+            candidate,
+            owner="accepted_user_turn",
+            event="committed_revision",
+            reason=reason,
+            now=current_time,
+            transcript=stripped,
+        )
+        self._record_attrs(candidate, event="committed_revision", transcript=stripped)
+        return True
+
     def finish_speech(
         self,
         *,
@@ -583,6 +625,20 @@ class UserTurnCoordinator:
         current_time = self._now(now)
         stripped = transcript.strip()
         candidate = self._active
+        if self.absorb_committed_transcript_revision(
+            stripped,
+            is_final=True,
+            reason=COMMITTED_TURN_REVISION_REASON,
+            require_framework_completed=True,
+            now=current_time,
+        ):
+            candidate = self._require_active()
+            return UserTurnDecision(
+                action="none",
+                candidate_id=candidate.candidate_id,
+                transcript=candidate.selected_text,
+                reason=COMMITTED_TURN_REVISION_REASON,
+            )
         if candidate is None or self._is_terminal(candidate):
             candidate = self._new_candidate(
                 timeline=timeline,
@@ -989,6 +1045,48 @@ class UserTurnCoordinator:
             )
         )
 
+    def _replace_committed_text(
+        self,
+        candidate: UserTurnCandidate,
+        transcript: str,
+        *,
+        now: float,
+    ) -> None:
+        if not candidate.segments:
+            candidate.segments.append(
+                SpeechSegment(
+                    started_at=candidate.created_at,
+                    ended_at=now,
+                    text=transcript,
+                    final_text=transcript,
+                )
+            )
+            return
+        if len(candidate.segments) == 1:
+            segment = candidate.segments[0]
+            segment.text = transcript
+            segment.final_text = transcript
+            if segment.ended_at is None:
+                segment.ended_at = now
+            return
+        candidate.segments = [
+            SpeechSegment(
+                started_at=candidate.created_at,
+                ended_at=now,
+                text=transcript,
+                final_text=transcript,
+            )
+        ]
+
+    @staticmethod
+    def _has_framework_completed_owner(candidate: UserTurnCandidate) -> bool:
+        if candidate.commit_reason == "framework_completed_turn":
+            return True
+        return any(
+            transition.event == "framework_completed"
+            for transition in candidate.owner_transitions
+        )
+
     def _drop_non_actionable_meta_tail_if_needed(
         self,
         candidate: UserTurnCandidate,
@@ -1292,6 +1390,12 @@ def _text_matches_revision(
         else (revision_norm, existing_norm)
     )
     return shorter in longer
+
+
+def _normalized_text_equal(left: str, right: str) -> bool:
+    left_norm = _normalize_revision_text(left)
+    right_norm = _normalize_revision_text(right)
+    return bool(left_norm and right_norm and left_norm == right_norm)
 
 
 def _normalize_revision_text(text: str) -> str:

@@ -46,6 +46,8 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._timeline_debug_flushed = False
     if not hasattr(pipeline, "_pending_client_control_events"):
         pipeline._pending_client_control_events = []
+    if not hasattr(pipeline, "_full_duplex_irreversible_side_effects"):
+        pipeline._full_duplex_irreversible_side_effects = set()
     if not hasattr(pipeline, "_skip_commit_after_interrupt_cancel"):
         pipeline._skip_commit_after_interrupt_cancel = False
     if not hasattr(pipeline, "_suppress_commit_after_interrupt_until"):

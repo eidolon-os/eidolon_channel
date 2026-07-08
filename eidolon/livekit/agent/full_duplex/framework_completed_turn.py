@@ -543,6 +543,31 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
         )
+        if decision.action == "none":
+            self._session_turns.clear_residual_audio_user_turn(decision.reason)
+            if timeline is not None:
+                timeline.set_attr(
+                    "framework_completed_duplicate",
+                    {
+                        "reason": decision.reason,
+                        "text_preview": (decision.transcript or completed_transcript)[:120],
+                        "text_length": len(decision.transcript or completed_transcript),
+                    },
+                )
+                self._record_completed_gate_event(
+                    timeline,
+                    stage="framework_completed_turn",
+                    action="skip",
+                    reason=decision.reason,
+                    transcript=decision.transcript or completed_transcript,
+                )
+            logger.info(
+                "[StreamingPipeline] skipped duplicate framework completed turn "
+                "reason=%s transcript=%r",
+                decision.reason,
+                completed_transcript[:80],
+            )
+            return False
         if decision.action == "reject":
             _record_contract_transition(
                 owner,
@@ -576,6 +601,14 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript=canonical,
             timeline=timeline,
         )
+        self._session_turns.clear_residual_audio_user_turn(
+            "framework_completed_turn_committed"
+        )
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_audio_turn_cleared",
+                {"reason": "framework_completed_turn_committed"},
+            )
         return True
 
     @staticmethod

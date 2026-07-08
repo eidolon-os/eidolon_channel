@@ -14,6 +14,8 @@ def _owner() -> SimpleNamespace:
     turn_completion = SimpleNamespace(
         cancel_deferred_low_eot_commit=MagicMock(),
         cancel_pending_voiceprint_commits=MagicMock(),
+        clear_completed_voiceprint_turn=MagicMock(),
+        remember_completed_voiceprint_turn=MagicMock(),
         reset_candidate_voiceprint_tasks=MagicMock(),
         remember_candidate_voiceprint_task=MagicMock(),
         attention_admission_reject_reason=MagicMock(return_value=""),
@@ -74,6 +76,7 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._skip_commit_after_interrupt_cancel is False
     assert owner._suppress_commit_after_interrupt_until == 0.0
     assert owner._suppress_transcripts_until_next_speech is False
+    owner._turn_completion.clear_completed_voiceprint_turn.assert_called_once_with()
     assert owner._latest_asr_text == ""
     assert owner._timeline is not None
     assert owner._timeline.attrs["room_name"] == "room-a"

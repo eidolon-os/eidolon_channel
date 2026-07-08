@@ -47,11 +47,12 @@ class FullDuplexFrameworkCompletedTurnGate:
         owner = self._pipeline
         completion = self._completion
         owner._ensure_runtime_defaults()
-        task = getattr(owner, "_completed_turn_voiceprint_task", None)
-        result = getattr(owner, "_completed_turn_voiceprint_result", None)
-        timeline = getattr(owner, "_completed_turn_voiceprint_timeline", None) or getattr(
-            owner, "_timeline", None
+        voiceprint_turn = completion.completed_voiceprint_turn(
+            fallback_timeline=getattr(owner, "_timeline", None)
         )
+        task = voiceprint_turn.task
+        result = voiceprint_turn.result
+        timeline = voiceprint_turn.timeline
         completed_transcript = message_text(new_message)
         if timeline is not None:
             timeline.mark("framework_completed_turn_at")
@@ -101,7 +102,7 @@ class FullDuplexFrameworkCompletedTurnGate:
                 owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
                 logger.exception("[StreamingPipeline] voiceprint gate failed in turn hook")
                 return False
-            owner._completed_turn_voiceprint_result = result
+            completion.remember_completed_voiceprint_result(result)
 
         allowed = bool(getattr(result, "commit_allowed", False))
         reason = str(getattr(result, "commit_reason", "") or "unknown")
@@ -493,9 +494,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
             delay_sec=decision.delay_sec,
         )
-        owner._completed_turn_voiceprint_task = None
-        owner._completed_turn_voiceprint_result = None
-        owner._completed_turn_voiceprint_timeline = None
+        completion.clear_completed_voiceprint_turn()
         logger.info(
             "[StreamingPipeline] deferred framework completed turn "
             "for continuation transcript=%r voiceprint_reason=%s",

@@ -27,6 +27,7 @@ class FullDuplexPostSpeechInterruptionCommitter:
         clear_session_user_turn: Callable[[str], None],
         candidate_voiceprint_gate_task: Callable[[], asyncio.Task | None],
         schedule_voiceprint_gated_commit: Callable[..., None],
+        cancel_completed_voiceprint_turn: Callable[[], None],
         reset_candidate_voiceprint_tasks: Callable[[], None],
     ) -> None:
         self._pipeline = pipeline
@@ -34,6 +35,7 @@ class FullDuplexPostSpeechInterruptionCommitter:
         self._clear_session_user_turn = clear_session_user_turn
         self._candidate_voiceprint_gate_task = candidate_voiceprint_gate_task
         self._schedule_voiceprint_gated_commit = schedule_voiceprint_gated_commit
+        self._cancel_completed_voiceprint_turn = cancel_completed_voiceprint_turn
         self._reset_candidate_voiceprint_tasks = reset_candidate_voiceprint_tasks
 
     def commit_candidate(
@@ -119,12 +121,7 @@ class FullDuplexPostSpeechInterruptionCommitter:
                 "post-speech interruption candidate",
                 exc_info=True,
             )
-        task = getattr(pipeline, "_completed_turn_voiceprint_task", None)
-        if task is not None and not task.done():
-            task.cancel()
-        pipeline._completed_turn_voiceprint_task = None
-        pipeline._completed_turn_voiceprint_result = None
-        pipeline._completed_turn_voiceprint_timeline = None
+        self._cancel_completed_voiceprint_turn()
         self._reset_candidate_voiceprint_tasks()
         self._clear_session_user_turn(reason)
         pipeline._latest_asr_text = ""

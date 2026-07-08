@@ -24,6 +24,8 @@ from .turn_completion_policy import (
     should_wait_for_inconclusive_voiceprint_merge,
     voiceprint_result_is_inconclusive,
 )
+from .voiceprint_commit_state import CompletedVoiceprintTurnState
+from .voiceprint_commit_state import FullDuplexVoiceprintCommitState
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -36,6 +38,7 @@ class FullDuplexTurnCompletion:
 
     def __init__(self, pipeline: StreamingPipeline) -> None:
         self._pipeline = pipeline
+        self._voiceprint_state = FullDuplexVoiceprintCommitState(pipeline)
         self._session_turns = FullDuplexSessionTurnBoundary(pipeline)
         self._framework_completed_turn = FullDuplexFrameworkCompletedTurnGate(
             pipeline,
@@ -48,13 +51,12 @@ class FullDuplexTurnCompletion:
             clear_session_user_turn=self.clear_session_user_turn,
             candidate_voiceprint_gate_task=self.candidate_voiceprint_gate_task,
             schedule_voiceprint_gated_commit=self.schedule_voiceprint_gated_commit,
+            cancel_completed_voiceprint_turn=self.cancel_completed_voiceprint_turn,
             reset_candidate_voiceprint_tasks=self.reset_candidate_voiceprint_tasks,
         )
 
     def cancel_pending_voiceprint_commits(self, reason: str) -> None:
-        owner = self._pipeline
-        tasks = getattr(owner, "_pending_voiceprint_commit_tasks", set())
-        for task in list(tasks):
+        for task in list(self._voiceprint_state.pending_commit_tasks()):
             if not task.done():
                 logger.info(
                     "[StreamingPipeline] cancelling pending voiceprint-gated commit reason=%s",
@@ -63,20 +65,13 @@ class FullDuplexTurnCompletion:
                 task.cancel()
 
     def reset_candidate_voiceprint_tasks(self) -> None:
-        self._pipeline._candidate_voiceprint_tasks = []
+        self._voiceprint_state.reset_candidate_tasks()
 
     def remember_candidate_voiceprint_task(self, task: asyncio.Task | None) -> None:
-        owner = self._pipeline
-        if task is None:
-            return
-        if not hasattr(owner, "_candidate_voiceprint_tasks"):
-            owner._candidate_voiceprint_tasks = []
-        owner._candidate_voiceprint_tasks.append(task)
+        self._voiceprint_state.remember_candidate_task(task)
 
     def candidate_voiceprint_gate_task(self) -> asyncio.Task | None:
-        owner = self._pipeline
-        tasks = list(getattr(owner, "_candidate_voiceprint_tasks", []))
-        owner._candidate_voiceprint_tasks = []
+        tasks = self._voiceprint_state.pop_candidate_tasks()
         if not tasks:
             return None
         if len(tasks) == 1:
@@ -89,6 +84,30 @@ class FullDuplexTurnCompletion:
     ) -> Any:
         results = await asyncio.gather(*tasks)
         return select_combined_voiceprint_result(results)
+
+    def remember_completed_voiceprint_turn(
+        self,
+        task: asyncio.Task | None,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> None:
+        self._voiceprint_state.remember_completed_turn(task, timeline=timeline)
+
+    def remember_completed_voiceprint_result(self, result: Any) -> None:
+        self._voiceprint_state.remember_completed_result(result)
+
+    def completed_voiceprint_turn(
+        self,
+        *,
+        fallback_timeline: TurnTimeline | None,
+    ) -> CompletedVoiceprintTurnState:
+        return self._voiceprint_state.completed_turn(fallback_timeline=fallback_timeline)
+
+    def clear_completed_voiceprint_turn(self) -> None:
+        self._voiceprint_state.clear_completed_turn()
+
+    def cancel_completed_voiceprint_turn(self) -> None:
+        self._voiceprint_state.cancel_completed_turn()
 
     def cancel_deferred_low_eot_commit(self, reason: str) -> None:
         owner = self._pipeline
@@ -292,7 +311,6 @@ class FullDuplexTurnCompletion:
         transcript: str,
         timeline: TurnTimeline | None,
     ) -> None:
-        owner = self._pipeline
         if verify_task is None:
             self._commit_user_turn_now(
                 eot_model=eot_model,
@@ -300,9 +318,7 @@ class FullDuplexTurnCompletion:
                 timeline=timeline,
             )
             return
-        owner._completed_turn_voiceprint_task = verify_task
-        owner._completed_turn_voiceprint_result = None
-        owner._completed_turn_voiceprint_timeline = timeline
+        self.remember_completed_voiceprint_turn(verify_task, timeline=timeline)
         task = asyncio.create_task(
             self._finalize_voiceprint_gated_commit(
                 verify_task=verify_task,
@@ -311,8 +327,7 @@ class FullDuplexTurnCompletion:
                 timeline=timeline,
             )
         )
-        owner._pending_voiceprint_commit_tasks.add(task)
-        task.add_done_callback(owner._pending_voiceprint_commit_tasks.discard)
+        self._voiceprint_state.add_pending_commit_task(task)
 
     async def _finalize_voiceprint_gated_commit(
         self,
@@ -340,7 +355,7 @@ class FullDuplexTurnCompletion:
             logger.exception("[StreamingPipeline] voiceprint gate failed")
             return
 
-        owner._completed_turn_voiceprint_result = result
+        self.remember_completed_voiceprint_result(result)
         owner._ensure_user_turn_coordinator()
         allowed = bool(getattr(result, "commit_allowed", False))
         raw_reason = str(getattr(result, "commit_reason", "") or "unknown")

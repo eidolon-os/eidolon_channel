@@ -34,9 +34,7 @@ class FullDuplexSpeechLifecycle:
         turn_completion.cancel_deferred_low_eot_commit("new_speech_started")
         if not merge_continuation:
             turn_completion.cancel_pending_voiceprint_commits("new_speech_started")
-            owner._completed_turn_voiceprint_task = None
-            owner._completed_turn_voiceprint_result = None
-            owner._completed_turn_voiceprint_timeline = None
+            turn_completion.clear_completed_voiceprint_turn()
             turn_completion.reset_candidate_voiceprint_tasks()
 
         owner._callbacks.on_user_started_speaking()
@@ -81,9 +79,10 @@ class FullDuplexSpeechLifecycle:
         if owner._timeline is not None:
             owner._timeline.mark("speech_stopped_at")
         voiceprint_task = owner._voiceprint_turns.finish_turn()
-        owner._completed_turn_voiceprint_task = voiceprint_task
-        owner._completed_turn_voiceprint_result = None
-        owner._completed_turn_voiceprint_timeline = owner._timeline
+        turn_completion.remember_completed_voiceprint_turn(
+            voiceprint_task,
+            timeline=owner._timeline,
+        )
 
         eot_model = owner._get_eot_model()
         eot_model.update_vad(False)

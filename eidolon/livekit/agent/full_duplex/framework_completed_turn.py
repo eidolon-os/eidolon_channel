@@ -65,37 +65,21 @@ class FullDuplexFrameworkCompletedTurnGate:
                 reason="framework_completed_turn",
                 transcript=completed_transcript,
             )
-        if self._stop_active_interruption_framework_completed_turn(
-            completed_transcript,
-            timeline=timeline,
-        ):
-            return False
-        playback_redirect_allowed = self._resolve_playback_completed_turn_evidence(
-            completed_transcript,
-            timeline=timeline,
-            voiceprint_reason="",
-        )
-        if playback_redirect_allowed is not None:
-            return playback_redirect_allowed
         if task is None and result is None:
-            if self._stop_non_semantic_framework_completed_turn(
-                completed_transcript,
-                timeline=timeline,
-            ):
-                return False
-            if self._should_defer_framework_completed_turn(completed_transcript):
-                self._defer_framework_completed_turn(
-                    completed_transcript=completed_transcript,
-                    timeline=timeline,
-                    voiceprint_reason="",
-                )
-                return False
-            self._align_framework_completed_turn(
-                completed_transcript,
+            return self._route_allowed_framework_completed_turn(
+                completed_transcript=completed_transcript,
                 timeline=timeline,
                 voiceprint_reason="",
             )
-            return True
+
+        interruption_allowed = self._resolve_completed_turn_interruption_evidence(
+            completed_transcript=completed_transcript,
+            timeline=timeline,
+            voiceprint_reason="",
+        )
+        if interruption_allowed is not None:
+            return interruption_allowed
+
         if result is None and task is not None:
             try:
                 result = await task
@@ -123,36 +107,11 @@ class FullDuplexFrameworkCompletedTurnGate:
             reason=reason,
         )
         if allowed:
-            if self._stop_active_interruption_framework_completed_turn(
-                completed_transcript,
-                timeline=timeline,
-            ):
-                return False
-            playback_redirect_allowed = self._resolve_playback_completed_turn_evidence(
-                completed_transcript,
+            return self._route_allowed_framework_completed_turn(
+                completed_transcript=completed_transcript,
                 timeline=timeline,
                 voiceprint_reason=reason,
             )
-            if playback_redirect_allowed is not None:
-                return playback_redirect_allowed
-            if self._stop_non_semantic_framework_completed_turn(
-                completed_transcript,
-                timeline=timeline,
-            ):
-                return False
-            if self._should_defer_framework_completed_turn(completed_transcript):
-                self._defer_framework_completed_turn(
-                    completed_transcript=completed_transcript,
-                    timeline=timeline,
-                    voiceprint_reason=reason,
-                )
-                return False
-            self._align_framework_completed_turn(
-                completed_transcript,
-                timeline=timeline,
-                voiceprint_reason=reason,
-            )
-            return True
 
         if completion._should_keep_waiting_merge_after_inconclusive_voiceprint(
             result,
@@ -174,6 +133,57 @@ class FullDuplexFrameworkCompletedTurnGate:
             completed_transcript[:80],
         )
         return False
+
+    def _route_allowed_framework_completed_turn(
+        self,
+        *,
+        completed_transcript: str,
+        timeline: TurnTimeline | None,
+        voiceprint_reason: str,
+    ) -> bool:
+        interruption_allowed = self._resolve_completed_turn_interruption_evidence(
+            completed_transcript=completed_transcript,
+            timeline=timeline,
+            voiceprint_reason=voiceprint_reason,
+        )
+        if interruption_allowed is not None:
+            return interruption_allowed
+        if self._stop_non_semantic_framework_completed_turn(
+            completed_transcript,
+            timeline=timeline,
+        ):
+            return False
+        if self._should_defer_framework_completed_turn(completed_transcript):
+            self._defer_framework_completed_turn(
+                completed_transcript=completed_transcript,
+                timeline=timeline,
+                voiceprint_reason=voiceprint_reason,
+            )
+            return False
+        self._align_framework_completed_turn(
+            completed_transcript,
+            timeline=timeline,
+            voiceprint_reason=voiceprint_reason,
+        )
+        return True
+
+    def _resolve_completed_turn_interruption_evidence(
+        self,
+        *,
+        completed_transcript: str,
+        timeline: TurnTimeline | None,
+        voiceprint_reason: str,
+    ) -> bool | None:
+        if self._stop_active_interruption_framework_completed_turn(
+            completed_transcript,
+            timeline=timeline,
+        ):
+            return False
+        return self._resolve_playback_completed_turn_evidence(
+            completed_transcript,
+            timeline=timeline,
+            voiceprint_reason=voiceprint_reason,
+        )
 
     def _resolve_playback_completed_turn_evidence(
         self,

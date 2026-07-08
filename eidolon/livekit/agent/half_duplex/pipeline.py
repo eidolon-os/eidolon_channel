@@ -26,10 +26,12 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     SESSION_END_ERROR,
     SESSION_END_USER_LEFT,
+    SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
 )
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.runtime.interaction_mode import resolve_idle_policy
 from eidolon.livekit.agent.shared.pipeline import BasePipeline
 from eidolon.livekit.agent.shared.types import (
     PipelineCallbacks,
@@ -41,6 +43,7 @@ from eidolon.livekit.agent.session.client_control import (
     build_client_control_event,
     build_session_client_control_envelope,
 )
+from eidolon.livekit.agent.session.idle import IdleWatchdog
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
 
@@ -76,7 +79,9 @@ class HalfDuplexPttPipeline(BasePipeline):
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
         callbacks: PipelineCallbacks | None = None,
+        session_intent: str = SESSION_INTENT_USER_INITIATED,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
+        on_idle_disconnect: Callable[[], Any] | None = None,
         on_session_closed: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
@@ -86,6 +91,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._observability = observability or ObservabilityConfig()
         self._on_session_end = on_session_end
+        self._on_idle_disconnect = on_idle_disconnect
         self._on_session_closed = on_session_closed
         self._close_error: Any | None = None
         self._session: AgentSession | None = None
@@ -100,6 +106,17 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._observed_audio_track_ids: set[int] = set()
         self._turn_tasks: set[asyncio.Task[Any]] = set()
         self._ptt_controller = self._build_ptt_controller()
+        idle_policy = resolve_idle_policy(
+            session_intent=session_intent,
+            idle_config=self._turn_policy.idle,
+        )
+        self._idle_timeout_sec: float = idle_policy.timeout_sec
+        self._idle_end_reason = idle_policy.end_reason
+        self._idle_disconnect_grace_sec: float = (
+            self._turn_policy.idle.disconnect_grace_ms / 1000.0
+        )
+        self._idle_disconnect_started = False
+        self._idle_watchdog_controller = self._build_idle_watchdog()
 
     async def run(self, room: Room) -> None:
         from livekit.agents.voice import Agent, AgentSession
@@ -146,6 +163,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         )
         self._publish_companion_ui_state("listening", "session_started")
         logger.info("[HalfDuplexPttPipeline] session started")
+        self._start_idle_watchdog()
 
         session_wait = asyncio.create_task(self._session_closed_event.wait())
         room_wait = asyncio.create_task(self._room_disconnected_event.wait())
@@ -160,13 +178,14 @@ class HalfDuplexPttPipeline(BasePipeline):
                 await asyncio.gather(*pending, return_exceptions=True)
             for task in done:
                 task.result()
-            if session_wait in done:
+            if session_wait in done and not self._idle_disconnect_started:
                 await self._delete_room_on_close()
         finally:
             await self.shutdown()
 
     async def shutdown(self) -> None:
         logger.info("[HalfDuplexPttPipeline] shutting down")
+        self._stop_idle_watchdog()
         for task in list(self._track_tasks):
             task.cancel()
         for task in list(self._turn_tasks):
@@ -208,6 +227,55 @@ class HalfDuplexPttPipeline(BasePipeline):
             preempt_agent_output=self._preempt_agent_output_for_ptt,
             tap_to_stop_max_audio_sec=ptt.segment_tap_to_stop_max_audio_ms / 1000.0,
         )
+
+    def _build_idle_watchdog(self) -> IdleWatchdog:
+        return IdleWatchdog(
+            timeout_sec=self._idle_timeout_sec,
+            get_session=lambda: self._session,
+            get_room=lambda: getattr(self, "_room", None),
+            get_timeline=lambda: self._timeline,
+            session_closed_event=self._session_closed_event,
+            on_idle_disconnect=(
+                self._disconnect_idle_room if self._on_idle_disconnect is not None else None
+            ),
+            on_session_end=self._on_session_end,
+            disconnect_grace_sec=self._idle_disconnect_grace_sec,
+            idle_end_reason=self._idle_end_reason,
+            is_busy=self._idle_busy,
+        )
+
+    def _mark_activity(self) -> None:
+        self._idle_watchdog_controller.mark_activity()
+
+    def _start_idle_watchdog(self) -> None:
+        self._idle_watchdog_controller.start()
+
+    def _stop_idle_watchdog(self) -> None:
+        self._idle_watchdog_controller.stop()
+
+    def _idle_busy(self) -> bool:
+        ptt_controller = getattr(self, "_ptt_controller", None)
+        if ptt_controller is not None and getattr(ptt_controller, "state", "idle") != "idle":
+            return True
+        if self._state in {PipelineState.GENERATING, PipelineState.SPEAKING}:
+            return True
+        session = self._session
+        return bool(
+            session is not None
+            and (
+                getattr(session, "agent_state", None) in ("thinking", "speaking")
+                or getattr(session, "user_state", None) == "speaking"
+            )
+        )
+
+    async def _disconnect_idle_room(self) -> None:
+        self._idle_disconnect_started = True
+        cb = self._on_idle_disconnect
+        if cb is None:
+            return
+        result = cb()
+        if hasattr(result, "__await__"):
+            await result
 
     def _install_room_observers(self, room: Room) -> None:
         self._room_data.install(room, on_packet=self._on_room_packet)
@@ -301,6 +369,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         held = bool(state.ptt)
         was_held = self._last_ptt_held
         if held and not was_held:
+            self._mark_activity()
             result = self._ptt_controller.press()
             if result.action == "reject":
                 self._publish_ptt_turn_status(
@@ -323,6 +392,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             )
             return
         if was_held and not held:
+            self._mark_activity()
             self._last_ptt_held = False
             self._mark_ptt_released()
             self._publish_ptt_turn_status(PTT_OUTCOME_FINALIZING, "released")
@@ -362,6 +432,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             )
             return
         self._callbacks.on_user_message(result.transcript)
+        self._mark_activity()
         self._publish_ptt_turn_status(
             PTT_OUTCOME_COMMITTED,
             result.reason,
@@ -503,6 +574,18 @@ class HalfDuplexPttPipeline(BasePipeline):
             done.result()
         except Exception:
             logger.debug("[HalfDuplexPttPipeline] session interrupt future failed", exc_info=True)
+
+    def _on_agent_state_changed(self, event: Any) -> None:
+        super()._on_agent_state_changed(event)
+        new = str(getattr(event, "new_state", "") or "")
+        if new:
+            self._mark_activity()
+        if new == "thinking":
+            self._publish_companion_ui_state("thinking", "agent_state:thinking")
+        elif new == "speaking":
+            self._publish_companion_ui_state("speaking", "agent_state:speaking")
+        elif new in ("idle", "listening"):
+            self._publish_companion_ui_state("listening", f"agent_state:{new}")
 
     def _on_session_close(self, event: Any) -> None:
         reason = getattr(event, "reason", None)

@@ -24,6 +24,7 @@ def _watchdog(
     on_idle_disconnect=None,
     on_session_end=None,
     idle_end_reason="idle_normal_end",
+    is_busy=None,
 ) -> tuple[IdleWatchdog, asyncio.Event]:
     closed = asyncio.Event()
     watchdog = IdleWatchdog(
@@ -36,6 +37,7 @@ def _watchdog(
         on_session_end=on_session_end,
         disconnect_grace_sec=0.0,
         idle_end_reason=idle_end_reason,
+        is_busy=is_busy,
     )
     return watchdog, closed
 
@@ -127,6 +129,28 @@ async def test_idle_watchdog_rearms_while_agent_is_active() -> None:
     session.aclose.assert_not_awaited()
 
     session.agent_state = "idle"
+    await asyncio.wait_for(watchdog.task, timeout=2.0)
+    session.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_idle_watchdog_uses_injected_busy_guard() -> None:
+    session = SimpleNamespace(
+        agent_state="idle",
+        user_state="listening",
+        aclose=AsyncMock(),
+    )
+    busy = True
+    watchdog, _closed = _watchdog(session=session, is_busy=lambda: busy)
+
+    watchdog.start()
+    await asyncio.sleep(0.2)
+
+    assert watchdog.task is not None
+    assert not watchdog.task.done()
+    session.aclose.assert_not_awaited()
+
+    busy = False
     await asyncio.wait_for(watchdog.task, timeout=2.0)
     session.aclose.assert_awaited_once()
 

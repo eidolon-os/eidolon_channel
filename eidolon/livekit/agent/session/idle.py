@@ -36,6 +36,7 @@ class IdleWatchdog:
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         disconnect_grace_sec: float = 0.3,
         idle_end_reason: str = SESSION_END_IDLE_NORMAL,
+        is_busy: Callable[[], bool] | None = None,
     ) -> None:
         self.timeout_sec = timeout_sec
         self._get_session = get_session
@@ -53,6 +54,7 @@ class IdleWatchdog:
         # The session_end reason emitted on idle teardown — idle_normal_end for a
         # user_initiated session, proactive_done for a proactive wake-up (§3.2).
         self._idle_end_reason = idle_end_reason
+        self._is_busy = is_busy or self._default_busy
         self.task: asyncio.Task | None = None
         self.last_activity_monotonic: float = 0.0
 
@@ -63,6 +65,16 @@ class IdleWatchdog:
     def _room_name(self) -> str | None:
         room = self._get_room()
         return getattr(room, "name", None) if room else None
+
+    def _default_busy(self) -> bool:
+        session = self._get_session()
+        return bool(
+            session is not None
+            and (
+                session.agent_state in ("thinking", "speaking")
+                or session.user_state == "speaking"
+            )
+        )
 
     def start(self) -> None:
         if self.timeout_sec <= 0:
@@ -94,11 +106,7 @@ class IdleWatchdog:
                 if remaining > 0:
                     await asyncio.sleep(remaining)
                     continue
-                session = self._get_session()
-                if session is not None and (
-                    session.agent_state in ("thinking", "speaking")
-                    or session.user_state == "speaking"
-                ):
+                if self._is_busy():
                     self.mark_activity()
                     continue
                 logger.info(

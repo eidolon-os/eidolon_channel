@@ -355,7 +355,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             turn_policy=session_turn_policy,
             observability=cfg.observability,
+            session_intent=session_intent,
             on_session_end=_publish_session_end,
+            on_idle_disconnect=lambda: _delete_room("idle timeout"),
             on_session_closed=lambda: _delete_room("session closed (device left)"),
         )
     else:

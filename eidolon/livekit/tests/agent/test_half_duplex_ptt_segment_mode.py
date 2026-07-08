@@ -6,11 +6,15 @@ import json
 from dataclasses import dataclass
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from eidolon_sdk.biz.contracts import (
     CLIENT_AUDIO_STATE_TOPIC,
     LIVEKIT_TRANSCRIPTION_TOPIC,
+    SESSION_END_IDLE_NORMAL,
+    SESSION_END_PROACTIVE_DONE,
+    SESSION_INTENT_PROACTIVE,
     WIRE_SCHEMA_VERSION,
 )
 from livekit.agents.voice import AgentSession
@@ -210,6 +214,90 @@ def test_server_uses_half_duplex_pipeline_for_half_duplex_mode() -> None:
 
     assert _use_half_duplex_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX) is True
     assert _use_half_duplex_ptt_pipeline(INTERACTION_MODE_FULL_DUPLEX) is False
+
+
+def test_half_duplex_idle_policy_uses_session_intent() -> None:
+    policy = _segment_policy()
+    pipeline = HalfDuplexPttPipeline(
+        _FakeFactory(_FakeSttStage()),
+        turn_policy=policy,
+        session_intent=SESSION_INTENT_PROACTIVE,
+    )
+
+    assert pipeline._idle_timeout_sec == (
+        policy.idle.proactive_disconnect_after_idle_ms / 1000.0
+    )
+    assert pipeline._idle_end_reason == SESSION_END_PROACTIVE_DONE
+
+
+@pytest.mark.asyncio
+async def test_half_duplex_idle_watchdog_notifies_and_deletes_room() -> None:
+    policy = _segment_policy()
+    policy = replace(
+        policy,
+        idle=replace(
+            policy.idle,
+            disconnect_after_idle_ms=50,
+            disconnect_grace_ms=0,
+        ),
+    )
+    on_session_end = AsyncMock()
+    on_idle_disconnect = AsyncMock()
+    pipeline = HalfDuplexPttPipeline(
+        _FakeFactory(_FakeSttStage()),
+        turn_policy=policy,
+        on_session_end=on_session_end,
+        on_idle_disconnect=on_idle_disconnect,
+    )
+    pipeline._room = SimpleNamespace(
+        name="ptt-room",
+        local_participant=_FakeLocalParticipant(),
+    )
+    pipeline._session = SimpleNamespace(agent_state="idle", user_state="listening")
+
+    pipeline._start_idle_watchdog()
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
+
+    on_session_end.assert_awaited_once_with(SESSION_END_IDLE_NORMAL)
+    on_idle_disconnect.assert_awaited_once()
+    assert pipeline._session_closed_event.is_set()
+    assert pipeline._idle_disconnect_started is True
+
+
+@pytest.mark.asyncio
+async def test_half_duplex_idle_watchdog_rearms_while_ptt_turn_is_busy() -> None:
+    policy = _segment_policy()
+    policy = replace(
+        policy,
+        idle=replace(
+            policy.idle,
+            disconnect_after_idle_ms=50,
+            disconnect_grace_ms=0,
+        ),
+    )
+    on_idle_disconnect = AsyncMock()
+    pipeline = HalfDuplexPttPipeline(
+        _FakeFactory(_FakeSttStage()),
+        turn_policy=policy,
+        on_idle_disconnect=on_idle_disconnect,
+    )
+    pipeline._room = SimpleNamespace(
+        name="ptt-room",
+        local_participant=_FakeLocalParticipant(),
+    )
+    pipeline._session = SimpleNamespace(agent_state="idle", user_state="listening")
+
+    pipeline._ptt_controller.press()
+    pipeline._start_idle_watchdog()
+    await asyncio.sleep(0.2)
+
+    assert pipeline._idle_watchdog_controller.task is not None
+    assert not pipeline._idle_watchdog_controller.task.done()
+    on_idle_disconnect.assert_not_awaited()
+
+    await pipeline._ptt_controller.release()
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
+    on_idle_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio

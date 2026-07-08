@@ -13,6 +13,7 @@ from ..session.voiceprint_reasons import (
     voiceprint_inconclusive_reason,
 )
 from ..turn_policy import TranscriptEvidenceGate
+from .deferred_commit_state import FullDuplexDeferredCommitState
 from .framework_completed_turn import FullDuplexFrameworkCompletedTurnGate
 from .post_speech_interruption import FullDuplexPostSpeechInterruptionCommitter
 from .session_turn_boundary import FullDuplexSessionTurnBoundary
@@ -38,6 +39,7 @@ class FullDuplexTurnCompletion:
 
     def __init__(self, pipeline: StreamingPipeline) -> None:
         self._pipeline = pipeline
+        self._deferred_commit_state = FullDuplexDeferredCommitState(pipeline)
         self._voiceprint_state = FullDuplexVoiceprintCommitState(pipeline)
         self._session_turns = FullDuplexSessionTurnBoundary(pipeline)
         self._framework_completed_turn = FullDuplexFrameworkCompletedTurnGate(
@@ -110,17 +112,15 @@ class FullDuplexTurnCompletion:
         self._voiceprint_state.cancel_completed_turn()
 
     def cancel_deferred_low_eot_commit(self, reason: str) -> None:
-        owner = self._pipeline
-        task = getattr(owner, "_deferred_low_eot_commit_task", None)
-        if task is None or task.done():
-            owner._deferred_low_eot_commit_task = None
+        if self._deferred_commit_state.current() is None:
+            self._deferred_commit_state.clear()
             return
-        logger.info(
-            "[StreamingPipeline] cancelling deferred low-EOT commit reason=%s",
-            reason,
-        )
-        task.cancel()
-        owner._deferred_low_eot_commit_task = None
+        cancelled = self._deferred_commit_state.cancel()
+        if cancelled:
+            logger.info(
+                "[StreamingPipeline] cancelling deferred low-EOT commit reason=%s",
+                reason,
+            )
 
     def should_defer_low_eot_commit(self, *, transcript: str, eot_model: Any) -> bool:
         owner = self._pipeline
@@ -245,7 +245,7 @@ class FullDuplexTurnCompletion:
                 timeline=timeline,
             )
         )
-        owner._deferred_low_eot_commit_task = task
+        self._deferred_commit_state.replace(task)
         logger.info(
             "[StreamingPipeline] deferred low-EOT commit delay=%.3fs score=%s transcript=%r",
             delay,
@@ -300,8 +300,7 @@ class FullDuplexTurnCompletion:
         except asyncio.CancelledError:
             raise
         finally:
-            if owner._deferred_low_eot_commit_task is asyncio.current_task():
-                owner._deferred_low_eot_commit_task = None
+            self._deferred_commit_state.clear_if_current()
 
     def schedule_voiceprint_gated_commit(
         self,

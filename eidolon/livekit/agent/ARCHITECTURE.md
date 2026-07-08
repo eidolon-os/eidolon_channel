@@ -109,6 +109,7 @@ eidolon/livekit/agent/
 │   ├── client_audio.py      # FullDuplexClientAudioStateView / RoomDataBridge
 │   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
 │   ├── context_ledger.py     # FullDuplexContextLedger: interrupted context runtime wiring
+│   ├── deferred_commit_state.py # deferred low-EOT commit task state adapter
 │   ├── interruption_effects.py # FullDuplexInterruptionEffects: output/framework effects
 │   ├── lifecycle.py          # FullDuplexSessionLifecycle: AgentSession run/start/shutdown
 │   ├── output_flow.py        # FullDuplexOutputFlow: duck mixer install + VAD duck arming
@@ -191,6 +192,8 @@ eidolon/livekit/agent/
 `full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、session user turn boundary 调度，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume、LiveKit framework completed-turn hook 细节或 interrupted context capture 算法。
 
 `full_duplex/turn_completion_policy.py` 是 full-duplex completion 的纯机制 contract。它只判断低 EOT commit 是否应等待、短 CJK 片段是否像续接、多个 voiceprint candidate 结果如何合并，以及 inconclusive voiceprint 是否应继续等待 merge；不创建 task、不读写 `AgentSession`、不清理 user turn，也不写 timeline。runtime owner 只能消费它的结构化结果再执行副作用。
+
+`full_duplex/deferred_commit_state.py` 是低 EOT deferred commit task 的 runtime state adapter。它只管理当前 deferred task 的 replace/cancel/clear-if-current 生命周期，继续使用 pipeline 上的底层字段以兼容现有构造和测试；它不判断是否应 defer，也不执行 commit。
 
 `full_duplex/voiceprint_commit_state.py` 是 full-duplex voiceprint commit task/result/timeline 的 runtime state adapter。它集中管理 candidate voiceprint tasks、pending voiceprint commit tasks、completed-turn voiceprint task/result/timeline 的读写和取消；它不是决策层，不判断 owner 身份或 commit 结果，只把历史散落在 speech lifecycle、framework completed-turn hook、post-speech interruption owner 内的 pipeline 私有字段访问收回到一个状态边界。
 

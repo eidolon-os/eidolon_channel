@@ -351,6 +351,21 @@ After a real device dogfood attempt, inspect the worker timeline evidence:
   --require-cancel
 ```
 
+For the full-duplex contract work, the timeline review should also inspect:
+
+- `full_duplex_state_transitions`: reversible `provisional_duck` may happen early;
+  irreversible `accepted_interruption` / `user_turn_committed` must have terminal
+  evidence, or explicit client preempt evidence.
+- `user_turn_owner_ledger`: every candidate should end as accepted, rejected,
+  merged, dropped, or superseded; no candidate should be both rejected and used as
+  canonical user text.
+- `user_turn_superseded_finalized`: when a replacement speech is accepted after
+  superseding an older pending request, the old request should have a final owner
+  record instead of disappearing silently.
+- `playback.stop` publish/ack: for natural-language full-duplex interrupts, a
+  rejected artifact/backchannel candidate should not leave this irreversible
+  output effect behind. Explicit PTT/client-preempt paths are separate controls.
+
 The device-envelope YAML extension is intentionally benchmark-owned. It can be
 used by both real dogfood suites and deterministic policy regression suites:
 

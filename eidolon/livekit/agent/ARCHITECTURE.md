@@ -207,6 +207,10 @@ eidolon/livekit/agent/
 
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 
+`full_duplex/state_machine.py` 是 full-duplex turn contract 的无副作用可观测状态机。它把 timeline 统一标注为 `idle`、`user_speech_open`、`provisional_duck`、`evidence_arbitration`、`accepted_interruption`、`rejected_interruption`、`user_turn_pending`、`user_turn_committed`、`user_turn_rejected` 等阶段，并为每次 transition 标出 `side_effect=none|reversible|irreversible`。当前 contract 原则是：VAD 后的 duck/suspend 属于可回滚阶段；`AgentSession.interrupt()`、`playback.stop`、framework completed-turn 放行、用户 turn commit 属于不可逆或高副作用阶段，必须由 evidence/artifact gate 或 explicit client preempt 后的 terminal owner 触发。
+
+`session/user_turn_coordinator.py` 的 owner ledger 是 full-duplex 用户 turn ownership 的纯状态边界。每个 candidate 会在 timeline 的 `user_turn_owner_ledger` 中记录 provisional、accepted、rejected、merged、dropped、superseded 等 owner transition；当连续插话中新 speech 不能与旧 pending candidate 合并时，旧 candidate 进入 `superseded_user_turn`，如果替换 speech 后续被 reject 可恢复旧 pending candidate，如果替换 speech 被 accept/commit/defer 则记录 `superseded_finalized` 并清空可恢复槽。这个 ledger 不直接发布 `playback.stop`，也不直接写 LiveKit chat context。
+
 #### 2.1.1 产品交互模式边界
 
 Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达：
@@ -230,6 +234,23 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - `FullDuplexInterruptionEffects` 负责 terminal decision 之后的输出/框架副作用；它不判断“要不要打断”。
    - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
    - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
+
+#### 2.1.2 Full-duplex contract 收敛状态（2026-07-08）
+
+当前已落地并已提交的收敛点：
+
+- `23f9d2c refactor(channel): formalize full duplex turn contract`：新增 `FullDuplexStateMachine`，把 full-duplex timeline transition 与 side-effect 等级统一记录；短 latin hard-stop artifact 不再走早期 hard cancel fast lane；non-actionable meta turn 不进入 canonical user turn；framework completed-turn hook 会尊重 coordinator reject。
+- `86fd159 refactor(channel): preserve superseded turn owner`：连续插话不能合并时，旧 pending candidate 不再被静默覆盖；替换 speech 被 reject 时可以恢复旧 candidate 并重新进入 commit gate。
+
+当前未提交的同线小改动只增加可观测性：当替换 speech 被 accept/commit/defer 后，旧 superseded candidate 会记录 `superseded_finalized` 和 timeline attr `user_turn_superseded_finalized`。这不改变 turn 裁决，只让“旧 candidate 不再可恢复”的时机可复盘。
+
+截至本记录，代码层 contract 已有 focused tests 覆盖：state-machine timeline 写入、短 latin artifact hold、non-actionable meta turn reject、framework completed-turn reject、superseded candidate restore/finalize。尚未完成的是新的真实 Box-3 dogfood 复测；因此只能说架构 contract 与单测已收敛，不能宣称 full-duplex UX 已稳定。
+
+下一步按 contract 顺序验证，而不是先调阈值：
+
+- 用真实 worker timeline/log 复查 `full_duplex_state_transitions`、`user_turn_owner_ledger`、`user_turn_superseded_finalized`、`playback.stop` publish/ack、canonical user text 是否同属一个 terminal owner。
+- 先验证 13:06:28 类短 latin artifact：rejected candidate 不应伴随 natural-language path 的不可逆 `playback.stop`。
+- 再验证 13:04:50 类连续插话：旧真实请求被新 speech supersede 后，替换 speech 若被 reject 应恢复旧 request；若替换 speech 被 accept，应有 `superseded_finalized` 证据。
 
 `StreamingPipeline` 的实现位于 `full_duplex/pipeline.py`，是 full-duplex realtime path，不承载 half-duplex PTT 状态机，也不再保留 half-duplex direct-construction fallback。新增产品体验时，优先判断它属于 explicit client control、natural full-duplex evidence、turn ledger，还是 output side-effect，再放入对应模块；half-duplex PTT 上层逻辑放入 `half_duplex/`。
 

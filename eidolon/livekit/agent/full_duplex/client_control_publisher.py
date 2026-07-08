@@ -55,6 +55,8 @@ class FullDuplexClientControlPublisher:
             "client_control_events",
             append_client_control_event(events, event),
         )
+        if op == "playback.stop":
+            timeline.mark_at("playback_stop_sent_at", time.monotonic())
 
     def apply_pending(self, timeline: TurnTimeline | None = None) -> None:
         pipeline = self._pipeline

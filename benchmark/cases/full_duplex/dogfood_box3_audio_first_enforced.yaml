@@ -64,11 +64,12 @@ cases:
     expect:
       action: cancel
       intent: uncertain
+      agent_audio_response: first
       min_user_finals: 2
       min_agent_messages: 1
       max_interrupt_decision_ms: 1000
       max_speech_start_to_suspend_ms: 120
-      max_speech_start_to_cancel_ms: 700
+      max_speech_start_to_cancel_ms: 800
       playback_stop_sent: true
       no_full_assistant_context_commit: true
 

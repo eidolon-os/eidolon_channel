@@ -49,6 +49,7 @@ TIMELINE_FIELDS = (
     "interrupt_resolved_at",
     "interrupt_cancel_resolved_at",
     "interrupt_rollback_resolved_at",
+    "playback_stop_sent_at",
     "idle_timeout_triggered_at",
 )
 
@@ -239,6 +240,13 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         stage="interrupt",
         start="speech_started_at",
         end="interrupt_cancel_resolved_at",
+    ),
+    ProviderLatencySegment(
+        name="interrupt_playback_stop",
+        label="Interrupt: VAD start -> playback.stop sent",
+        stage="interrupt",
+        start="speech_started_at",
+        end="playback_stop_sent_at",
     ),
     ProviderLatencySegment(
         name="interrupt_rollback_resolution",
@@ -552,6 +560,9 @@ class TurnTimeline:
             "interrupt_started_to_cancel_resolved_ms": self.duration_ms(
                 "interrupt_started_at", "interrupt_cancel_resolved_at"
             ),
+            "interrupt_started_to_playback_stop_ms": self.duration_ms(
+                "interrupt_started_at", "playback_stop_sent_at"
+            ),
             "interrupt_started_to_rollback_resolved_ms": self.duration_ms(
                 "interrupt_started_at", "interrupt_rollback_resolved_at"
             ),
@@ -560,6 +571,9 @@ class TurnTimeline:
             ),
             "interrupt_speech_to_cancel_resolved_ms": self.duration_ms(
                 "speech_started_at", "interrupt_cancel_resolved_at"
+            ),
+            "interrupt_speech_to_playback_stop_ms": self.duration_ms(
+                "speech_started_at", "playback_stop_sent_at"
             ),
             "interrupt_speech_to_rollback_resolved_ms": self.duration_ms(
                 "speech_started_at", "interrupt_rollback_resolved_at"
@@ -670,6 +684,9 @@ class TurnTimeline:
                 ),
                 "vad_start_to_interrupt_cancel_resolved": self.duration_ms(
                     "speech_started_at", "interrupt_cancel_resolved_at"
+                ),
+                "vad_start_to_playback_stop_sent": self.duration_ms(
+                    "speech_started_at", "playback_stop_sent_at"
                 ),
                 "vad_start_to_interrupt_rollback_resolved": self.duration_ms(
                     "speech_started_at", "interrupt_rollback_resolved_at"

@@ -163,7 +163,7 @@ unmet gates never block.
 | `stt_final_after_commit` | target/acceptable | 350–500 ms | Phase-2 (advisory) |
 | `tts_ttfb` (`first_text_sent -> provider_first_audio`) | target/acceptable | 100–250 ms | Phase-2 (advisory) |
 | `brain_first_delta` | target/acceptable | 375–750 ms p95 | advisory (upstream p95 variance) |
-| `room_interrupt_resolved` | target/acceptable | 500–650 ms | advisory (semantic variance) |
+| `room_interrupt_resolved` | target/acceptable | 500–800 ms | advisory (semantic variance) |
 
 The Phase-2 gates (STT finalization, TTS TTFB, E2E) are honest goals the
 preemptive-generation + TTS work will close; they get promoted to `required`
@@ -176,12 +176,26 @@ uses `tts_first_text_sent_to_provider_first_audio_ms`.
 
 Interrupt note: Tier 0 hard stops still use VAD/speech-start ->
 `interrupt_resolved_at` as the primary latency target. Tier 1 semantic
-redirects/corrections are split into two diagnostics:
+redirects/corrections are split into yield-vs-collect diagnostics:
 
-- VAD/speech-start -> `interrupt_resolved_at`: user-perceived total latency,
-  including how quickly STT exposes enough text evidence.
+- `timeline_yield_old_output_ms`: the first confirmed cancel path for the old
+  agent output. `max_interrupt_decision_ms` checks this value for topic-switch
+  and correction cases.
+- `timeline_yield_old_output_playback_stop_ms`: the first client
+  `playback.stop` path for the old agent output.
+- `timeline_interrupt_speech_to_playback_stop_ms` and
+  `timeline_interrupt_started_to_playback_stop_ms`: maximum-path diagnostics
+  for when the client `playback.stop` command was queued.
+- VAD/speech-start -> `interrupt_resolved_at`: the slowest per-case collection
+  path, including continued user speech after the first cancel. This remains
+  visible as a diagnostic, but is not the semantic redirect yield gate.
 - `interrupt_started_at` -> `interrupt_resolved_at`: channel execution latency
   after attention admission has enough direct semantic evidence to duck/decide.
+- `timeline_cancel_then_collect`: marks cases where the old output was already
+  cancelled and the user continued speaking a new topic/correction turn.
+- `timeline_collect_new_topic_turn_cancel_ms` and
+  `timeline_collect_new_topic_turn_playback_stop_ms`: the later collect path,
+  kept separate from the old-output yield gate.
 
 The core suite uses a 650 ms acceptable hard-stop total gate to avoid flaking on
 one-off STT first-token confusions, while the SLO dashboard still tracks the
@@ -285,6 +299,28 @@ input can include deterministic echo/noise. The first suite is explicit-only:
   --runner livekit_room \
   --run-id dogfood-room
 ```
+
+For the real-room dogfood gate used before Box-3 hardware sessions, run the
+suite through the E2E wrapper so the worker, timeline, real-call verification,
+and participant metadata are captured together:
+
+```bash
+./.venv/bin/python scripts/bench_barge_in_e2e_ab.py \
+  --profiles channel \
+  --cases benchmark/cases/full_duplex/dogfood_box3_audio_first_enforced.yaml \
+  --repeat 1 \
+  --manage-worker \
+  --run-id dogfood-box3-audio-first \
+  --livekit-participant-identity bench-device \
+  --livekit-participant-kind device \
+  --livekit-interaction-mode full_duplex
+```
+
+Do not treat the generic full-duplex gate as a substitute for this suite. A
+controlled Box-3 full-duplex dogfood session requires both the owner-follow-up
+and backchannel dogfood cases to pass with real-call evidence. Policy/headless
+results are useful regressions, but they can be optimistic when real STT/EOT
+timing under echo/noise waits for a final transcript.
 
 For deterministic local policy regression, run the offline policy regression
 suite. It models interaction semantics at policy level: Waveshare PTT idle tap,

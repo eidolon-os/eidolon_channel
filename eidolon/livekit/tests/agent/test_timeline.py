@@ -934,6 +934,7 @@ async def test_streaming_pipeline_publishes_client_playback_stop_control() -> No
         "reason": "interrupt_cancel",
         "turn_id": "turn-playback-stop",
     }
+    assert "playback_stop_sent_at" in pipeline._timeline.timestamps
 
 
 @pytest.mark.asyncio

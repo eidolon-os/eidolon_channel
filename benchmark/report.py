@@ -18,6 +18,34 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
         "VAD 起声 -> duck/手动打断开始",
     ),
     (
+        "timeline_yield_old_output_ms",
+        "首次确认 cancel / 停旧输出",
+    ),
+    (
+        "timeline_yield_old_output_playback_stop_ms",
+        "首次 playback.stop / 停旧输出",
+    ),
+    (
+        "timeline_interrupt_speech_to_playback_stop_ms",
+        "VAD 起声 -> playback.stop（最大路径）",
+    ),
+    (
+        "timeline_interrupt_started_to_playback_stop_ms",
+        "duck/手动打断开始 -> playback.stop",
+    ),
+    (
+        "timeline_cancel_then_collect",
+        "先 cancel 后继续收集",
+    ),
+    (
+        "timeline_collect_new_topic_turn_cancel_ms",
+        "后续新话题收集 -> cancel",
+    ),
+    (
+        "timeline_collect_new_topic_turn_playback_stop_ms",
+        "后续新话题收集 -> playback.stop",
+    ),
+    (
         "timeline_interrupt_speech_to_first_transcript_ms",
         "VAD 起声 -> 首次转写",
     ),
@@ -120,6 +148,28 @@ INTERRUPT_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
 CASE_FOCUS_METRICS: tuple[tuple[str, str], ...] = (
     ("elapsed_ms", "用例总耗时"),
     ("interrupt_decision_ms", "策略决策耗时"),
+    ("timeline_yield_old_output_ms", "首次确认 cancel / 停旧输出"),
+    (
+        "timeline_yield_old_output_playback_stop_ms",
+        "首次 playback.stop / 停旧输出",
+    ),
+    (
+        "timeline_interrupt_speech_to_playback_stop_ms",
+        "VAD 起声 -> playback.stop（最大路径）",
+    ),
+    (
+        "timeline_interrupt_started_to_playback_stop_ms",
+        "duck/手动打断开始 -> playback.stop",
+    ),
+    ("timeline_cancel_then_collect", "先 cancel 后继续收集"),
+    (
+        "timeline_collect_new_topic_turn_cancel_ms",
+        "后续新话题收集 -> cancel",
+    ),
+    (
+        "timeline_collect_new_topic_turn_playback_stop_ms",
+        "后续新话题收集 -> playback.stop",
+    ),
     ("timeline_vad_start_to_interrupt_resolved", "VAD 起声 -> 打断完成"),
     (
         "timeline_vad_start_to_interrupt_cancel_resolved",

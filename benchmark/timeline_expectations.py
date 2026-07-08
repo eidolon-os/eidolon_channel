@@ -242,7 +242,11 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         errors.append("timeline expected correction_hint=True")
 
     if expected.max_interrupt_decision_ms is not None:
-        durations = _interrupt_decision_durations_ms(records, expected.action)
+        durations = _interrupt_decision_durations_ms(
+            records,
+            expected.action,
+            first_yield_only=_is_semantic_redirect_case(case_id, expected),
+        )
         if durations:
             slow = [
                 round(duration, 1)
@@ -620,9 +624,12 @@ def _any_decision_flag(records: list[dict[str, Any]], key: str) -> bool:
 def _interrupt_decision_durations_ms(
     records: list[dict[str, Any]],
     expected_action: str = "",
+    *,
+    first_yield_only: bool = False,
 ) -> list[float]:
     durations: list[float] = []
-    for record in records:
+    resolved_records = _resolved_interrupt_records(records, expected_action)
+    for record in resolved_records:
         duration = _speech_start_to_action_resolved_ms(record, expected_action)
         if duration is None:
             timestamps = (
@@ -641,7 +648,52 @@ def _interrupt_decision_durations_ms(
                 duration = max(0.0, (end - start) * 1000.0)
         if duration is not None:
             durations.append(duration)
+    if first_yield_only and durations:
+        return [durations[0]]
     return durations
+
+
+def _resolved_interrupt_records(
+    records: list[dict[str, Any]],
+    expected_action: str = "",
+) -> list[dict[str, Any]]:
+    matching: list[tuple[float, int, dict[str, Any]]] = []
+    for index, record in enumerate(records):
+        if expected_action == "cancel" and not _record_is_cancel(record):
+            continue
+        if expected_action in {"rollback", "resume"} and not _record_is_resume(record):
+            continue
+        duration = _speech_start_to_action_resolved_ms(record, expected_action)
+        if duration is None:
+            timestamps = _mapping(record.get("timestamps"))
+            if not any(_number(timestamps.get(key)) is not None for key in _resolved_timestamp_keys(expected_action)):
+                continue
+        matching.append((_interrupt_sort_key(record, expected_action), index, record))
+    matching.sort(key=lambda item: (item[0], item[1]))
+    return [record for _sort_key, _index, record in matching]
+
+
+def _interrupt_sort_key(record: dict[str, Any], expected_action: str = "") -> float:
+    timestamps = _mapping(record.get("timestamps"))
+    for key in _resolved_timestamp_keys(expected_action):
+        value = _number(timestamps.get(key))
+        if value is not None:
+            return value
+    speech_started = _number(timestamps.get("speech_started_at"))
+    if speech_started is not None:
+        return speech_started
+    return float("inf")
+
+
+def _is_semantic_redirect_case(case_id: str, expected: Any) -> bool:
+    if str(getattr(expected, "action", "") or "") != "cancel":
+        return False
+    if bool(getattr(expected, "topic_switch_hint", False)) or bool(
+        getattr(expected, "correction_hint", False)
+    ):
+        return True
+    normalized = case_id.lower()
+    return "topic_switch" in normalized or "correction" in normalized
 
 
 def _speech_stop_to_commit_durations_ms(records: list[dict[str, Any]]) -> list[float]:
@@ -982,6 +1034,8 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
     """
 
     samples: dict[str, list[float]] = {}
+    cancel_durations: list[tuple[float, float]] = []
+    playback_stop_durations: list[tuple[float, float]] = []
     for record in records:
         durations = _mapping(record.get("durations_ms"))
         attrs = _mapping(record.get("attrs"))
@@ -1010,6 +1064,32 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
                 "timeline_vad_start_to_interrupt_cancel_resolved",
                 [],
             ).append(cancel_interrupt)
+            cancel_durations.append(
+                (_interrupt_sort_key(record, "cancel"), cancel_interrupt)
+            )
+        playback_stop = _number(durations.get("vad_start_to_playback_stop_sent"))
+        if playback_stop is None:
+            playback_stop = _number(
+                provider_latency.get("interrupt_speech_to_playback_stop_ms")
+            )
+        if playback_stop is None:
+            timestamps = _mapping(record.get("timestamps"))
+            start = _number(timestamps.get("speech_started_at"))
+            end = _number(timestamps.get("playback_stop_sent_at"))
+            if start is not None and end is not None:
+                playback_stop = max(0.0, (end - start) * 1000.0)
+        if playback_stop is not None:
+            samples.setdefault(
+                "timeline_vad_start_to_playback_stop_sent",
+                [],
+            ).append(playback_stop)
+            samples.setdefault(
+                "timeline_interrupt_speech_to_playback_stop_ms",
+                [],
+            ).append(playback_stop)
+            playback_stop_durations.append(
+                (_playback_stop_sort_key(record), playback_stop)
+            )
         rollback_interrupt = _number(
             durations.get("vad_start_to_interrupt_rollback_resolved")
         )
@@ -1018,11 +1098,38 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
                 "timeline_vad_start_to_interrupt_rollback_resolved",
                 [],
             ).append(rollback_interrupt)
-    return {
+    metrics = {
         key: max(values)
         for key, values in sorted(samples.items())
         if values
     }
+    if cancel_durations:
+        cancel_durations.sort(key=lambda item: item[0])
+        metrics["timeline_yield_old_output_ms"] = cancel_durations[0][1]
+        if len(cancel_durations) > 1:
+            metrics["timeline_cancel_then_collect"] = 1.0
+            metrics["timeline_cancel_then_collect_count"] = float(len(cancel_durations))
+            metrics["timeline_collect_new_topic_turn_cancel_ms"] = max(
+                duration for _sort_key, duration in cancel_durations[1:]
+            )
+    if playback_stop_durations:
+        playback_stop_durations.sort(key=lambda item: item[0])
+        metrics["timeline_yield_old_output_playback_stop_ms"] = (
+            playback_stop_durations[0][1]
+        )
+        if len(playback_stop_durations) > 1:
+            metrics["timeline_collect_new_topic_turn_playback_stop_ms"] = max(
+                duration for _sort_key, duration in playback_stop_durations[1:]
+            )
+    return metrics
+
+
+def _playback_stop_sort_key(record: dict[str, Any]) -> float:
+    timestamps = _mapping(record.get("timestamps"))
+    value = _number(timestamps.get("playback_stop_sent_at"))
+    if value is not None:
+        return value
+    return _interrupt_sort_key(record, "cancel")
 
 
 def _interrupted_context_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:

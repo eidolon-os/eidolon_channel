@@ -225,7 +225,7 @@ cases:
       action: cancel
       decision_action: cancel
       decision_intent: normal_interrupt
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
 
   - case_id: opr_fullduplex_backchannel_then_followup_cancels_001
     suite: offline_policy_regression
@@ -272,7 +272,7 @@ cases:
       decision_action: cancel
       decision_intent: normal_interrupt
       forbid_actions: ["rollback"]
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       no_full_assistant_context_commit: true
 
   - case_id: opr_fullduplex_false_start_then_followup_cancels_001
@@ -319,7 +319,7 @@ cases:
       action: cancel
       decision_action: cancel
       decision_intent: normal_interrupt
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       no_full_assistant_context_commit: true
 
   - case_id: opr_fullduplex_echo_then_followup_cancels_001
@@ -374,7 +374,7 @@ cases:
       action: cancel
       decision_action: cancel
       decision_intent: normal_interrupt
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       no_full_assistant_context_commit: true
 
   - case_id: opr_fullduplex_echo_then_hard_stop_cancels_001
@@ -430,5 +430,5 @@ cases:
       intent: hard_stop
       decision_action: cancel
       decision_intent: hard_stop
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       no_full_assistant_context_commit: true

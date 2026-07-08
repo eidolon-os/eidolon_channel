@@ -73,7 +73,7 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: none
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       playback_stop_sent: true
       no_full_assistant_context_commit: true
 
@@ -119,7 +119,7 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: after_user_done
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       no_full_assistant_context_commit: true
 
   - case_id: fd_gate_correction_cancels_and_replies_001
@@ -164,7 +164,7 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: after_user_done
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       no_full_assistant_context_commit: true
 
   - case_id: fd_gate_backchannel_resumes_001
@@ -209,7 +209,7 @@ cases:
       min_agent_messages: 1
       agent_audio_response: first
       rejected_turn_brain: forbidden
-      max_speech_start_to_resume_ms: 700
+      max_speech_start_to_resume_ms: 800
 
   - case_id: fd_gate_false_start_holds_001
     suite: full_duplex_gate

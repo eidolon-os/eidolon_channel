@@ -2065,6 +2065,191 @@ def test_livekit_room_timeline_interrupt_slo_ignores_setup_commit(
     assert not run.cases[0].errors
 
 
+def test_livekit_room_topic_switch_uses_first_yield_for_slo(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="fd_gate_topic_switch_cancels_and_replies_001",
+                suite="full_duplex_gate",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    room = "voice-bench-fd_gate_topic_switch_cancels_and_replies_001-1234abcd"
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    records = [
+        {
+            "turn_id": "setup",
+            "attrs": {"room_name": room},
+            "timestamps": {"speech_started_at": 1.0, "turn_committed_at": 2.0},
+        },
+        {
+            "turn_id": "first-yield",
+            "attrs": {
+                "room_name": room,
+                "interrupt_action": "cancel",
+                "decision": {
+                    "action": "cancel",
+                    "intent": "normal_interrupt",
+                    "topic_switch_hint": True,
+                },
+                "interrupted_context": {
+                    "source": "tts_in_flight",
+                    "played_seconds": 1.2,
+                    "text_preview": "上一轮回答",
+                },
+                "client_control_events": [{"op": "playback.stop"}],
+            },
+            "timestamps": {
+                "speech_started_at": 10.0,
+                "transcript_actionable_first_at": 10.550,
+                "playback_stop_sent_at": 10.5511,
+                "interrupt_cancel_resolved_at": 10.5512,
+                "interrupt_resolved_at": 10.5512,
+            },
+            "durations_ms": {
+                "vad_start_to_interrupt_cancel_resolved": 551.2,
+                "vad_start_to_interrupt_resolved": 551.2,
+                "vad_start_to_playback_stop_sent": 551.1,
+            },
+        },
+        {
+            "turn_id": "collect-new-topic",
+            "attrs": {
+                "room_name": room,
+                "interrupt_action": "cancel",
+                "decision": {
+                    "action": "cancel",
+                    "intent": "normal_interrupt",
+                    "topic_switch_hint": True,
+                },
+                "interrupted_context": {
+                    "source": "tts_in_flight",
+                    "played_seconds": 1.2,
+                    "text_preview": "上一轮回答",
+                },
+                "client_control_events": [{"op": "playback.stop"}],
+            },
+            "timestamps": {
+                "speech_started_at": 20.0,
+                "transcript_actionable_first_at": 21.2476,
+                "playback_stop_sent_at": 21.2477,
+                "interrupt_cancel_resolved_at": 21.2478,
+                "interrupt_resolved_at": 21.2478,
+            },
+            "durations_ms": {
+                "vad_start_to_interrupt_cancel_resolved": 1247.8,
+                "vad_start_to_interrupt_resolved": 1247.8,
+                "vad_start_to_playback_stop_sent": 1247.7,
+            },
+        },
+    ]
+    timeline_path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    metrics = run.cases[0].metrics
+    assert run.cases[0].passed is True
+    assert not run.cases[0].errors
+    assert metrics["timeline_yield_old_output_ms"] == 551.2
+    assert metrics["timeline_yield_old_output_playback_stop_ms"] == 551.1
+    assert metrics["timeline_vad_start_to_interrupt_cancel_resolved"] == 1247.8
+    assert metrics["timeline_interrupt_speech_to_playback_stop_ms"] == 1247.7
+    assert metrics["timeline_cancel_then_collect"] == 1.0
+    assert metrics["timeline_cancel_then_collect_count"] == 2.0
+    assert metrics["timeline_collect_new_topic_turn_cancel_ms"] == 1247.8
+    assert metrics["timeline_collect_new_topic_turn_playback_stop_ms"] == 1247.7
+
+
+def test_livekit_room_topic_switch_fails_when_first_yield_is_slow(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    run = RunResult(
+        run_id="expectation-test",
+        git_sha="abc123",
+        runner="livekit_room",
+        profile="test",
+        cases=[
+            CaseResult(
+                case_id="fd_gate_topic_switch_cancels_and_replies_001",
+                suite="full_duplex_gate",
+                runner="livekit_room",
+                passed=True,
+            )
+        ],
+    )
+    room = "voice-bench-fd_gate_topic_switch_cancels_and_replies_001-1234abcd"
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    records = [
+        {
+            "turn_id": "first-yield",
+            "attrs": {
+                "room_name": room,
+                "interrupt_action": "cancel",
+                "decision": {
+                    "action": "cancel",
+                    "intent": "normal_interrupt",
+                    "topic_switch_hint": True,
+                },
+            },
+            "timestamps": {
+                "speech_started_at": 10.0,
+                "interrupt_cancel_resolved_at": 10.9,
+                "interrupt_resolved_at": 10.9,
+            },
+            "durations_ms": {
+                "vad_start_to_interrupt_cancel_resolved": 900.0,
+                "vad_start_to_interrupt_resolved": 900.0,
+            },
+        },
+        {
+            "turn_id": "later-fast-cancel",
+            "attrs": {
+                "room_name": room,
+                "interrupt_action": "cancel",
+                "decision": {
+                    "action": "cancel",
+                    "intent": "normal_interrupt",
+                    "topic_switch_hint": True,
+                },
+            },
+            "timestamps": {
+                "speech_started_at": 20.0,
+                "interrupt_cancel_resolved_at": 20.3,
+                "interrupt_resolved_at": 20.3,
+            },
+            "durations_ms": {
+                "vad_start_to_interrupt_cancel_resolved": 300.0,
+                "vad_start_to_interrupt_resolved": 300.0,
+            },
+        },
+    ]
+    timeline_path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any(
+        "timeline interrupt decision exceeded" in error
+        for error in run.cases[0].errors
+    )
+
+
 def test_livekit_room_timeline_expectations_fail_wrong_ptt_terminal(
     tmp_path,
 ) -> None:

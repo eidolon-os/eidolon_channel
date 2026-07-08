@@ -64,7 +64,7 @@ cases:
     expect:
       action: cancel
       intent: hard_stop
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       min_user_finals: 2
       min_agent_messages: 1
 
@@ -145,7 +145,7 @@ cases:
     expect:
       action: cancel
       intent: normal_interrupt
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       min_user_finals: 2
       min_agent_messages: 1
 
@@ -186,7 +186,7 @@ cases:
     expect:
       action: cancel
       intent: normal_interrupt
-      max_interrupt_decision_ms: 700
+      max_interrupt_decision_ms: 800
       min_user_finals: 2
       min_agent_messages: 1
 

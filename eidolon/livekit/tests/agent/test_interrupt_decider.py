@@ -212,6 +212,18 @@ def test_short_latin_artifact_holds_instead_of_cancel() -> None:
     assert "short_latin_artifact" in decision.reason
 
 
+def test_short_latin_hard_stop_artifact_holds_instead_of_cancel() -> None:
+    """Even lexicon hard-stop words need evidence before irreversible effects."""
+    d = InterruptDecider(min_interim_chars=2)
+
+    decision = d.on_stt_interim("stop", score=0.0)
+
+    assert decision.action is Action.HOLD
+    assert "short_latin_artifact" in decision.reason
+    assert decision.intent is not None
+    assert decision.intent.value == "uncertain"
+
+
 def test_final_short_latin_transcript_still_waits_for_semantics() -> None:
     """Provider finals prove ASR stability, not interrupt intent."""
     d = InterruptDecider(min_interim_chars=2)
@@ -419,6 +431,19 @@ def test_deadline_vad_active_with_transcript_cancels() -> None:
     )
     assert decision.action is Action.CANCEL
     assert "trust_vad" in decision.reason
+
+
+def test_deadline_short_latin_hard_stop_artifact_holds() -> None:
+    d = InterruptDecider()
+    decision = d.on_decision_deadline(
+        vad_still_active=True,
+        has_transcript=True,
+        transcript="stop",
+        eot_score=0.8,
+    )
+
+    assert decision.action is Action.HOLD
+    assert "short_latin_artifact" in decision.reason
 
 
 def test_deadline_vad_active_waits_for_semantic_score() -> None:

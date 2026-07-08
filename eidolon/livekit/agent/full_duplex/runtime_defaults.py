@@ -58,6 +58,7 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._candidate_voiceprint_tasks = []
     if not hasattr(pipeline, "_deferred_low_eot_commit_task"):
         pipeline._deferred_low_eot_commit_task = None
+    pipeline._ensure_full_duplex_state_machine()
     pipeline._ensure_user_turn_coordinator()
     pipeline._ensure_turn_completion()
     if not hasattr(pipeline, "_interaction_mode"):

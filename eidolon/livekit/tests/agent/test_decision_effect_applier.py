@@ -104,8 +104,12 @@ def test_apply_hold_calls_hold_callback() -> None:
 
 
 def test_apply_notifies_owner_before_side_effects() -> None:
-    on_cancel = MagicMock()
-    on_decision = MagicMock()
+    order: list[str] = []
+    on_cancel = MagicMock(side_effect=lambda: order.append("cancel"))
+    on_decision = MagicMock(side_effect=lambda *args, **kwargs: order.append("owner"))
+    record_transition = MagicMock(
+        side_effect=lambda *args, **kwargs: order.append("contract")
+    )
     factory = SimpleNamespace(llm=SimpleNamespace(llm=SimpleNamespace()))
     applier = DecisionEffectApplier(
         factory=factory,
@@ -114,6 +118,7 @@ def test_apply_notifies_owner_before_side_effects() -> None:
         on_cancel=on_cancel,
         on_rollback=MagicMock(),
         on_decision=on_decision,
+        record_full_duplex_transition=record_transition,
     )
     decision = Decision(
         action=Action.CANCEL,
@@ -130,4 +135,12 @@ def test_apply_notifies_owner_before_side_effects() -> None:
         vad_active=True,
         eot_score=0.9,
     )
+    record_transition.assert_called_once_with(
+        decision,
+        source="turn_policy",
+        transcript="停一下",
+        vad_active=True,
+        eot_score=0.9,
+    )
     on_cancel.assert_called_once_with()
+    assert order == ["owner", "contract", "cancel"]

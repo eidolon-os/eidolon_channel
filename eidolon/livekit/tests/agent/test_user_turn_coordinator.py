@@ -19,6 +19,13 @@ class _Clock:
         self.value += seconds
 
 
+def _owner_events(timeline: TurnTimeline) -> list[tuple[str, str, str]]:
+    return [
+        (entry["owner"], entry["event"], entry["reason"])
+        for entry in timeline.attrs["user_turn_owner_ledger"]["transitions"]
+    ]
+
+
 def test_low_eot_candidate_merges_short_continuation() -> None:
     clock = _Clock()
     coordinator = UserTurnCoordinator(
@@ -113,6 +120,11 @@ def test_deferred_candidate_commits_once_after_grace() -> None:
         reason="framework_commit_user_turn",
     )
     assert coordinator.snapshot()["state"] == "committed"
+    assert _owner_events(timeline)[-1] == (
+        "accepted_user_turn",
+        "committed",
+        "framework_commit_user_turn",
+    )
 
 
 def test_late_final_after_commit_does_not_replace_committed_candidate() -> None:
@@ -181,6 +193,145 @@ def test_framework_deferred_after_commit_starts_fresh_candidate() -> None:
     assert second_decision.transcript == "原来你认识铁。"
     assert coordinator.snapshot()["candidate_id"] == "turn-second"
     assert coordinator.snapshot()["selected_text_preview"] == "原来你认识铁。"
+
+
+def test_non_actionable_meta_turn_rejected_before_commit() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-meta")
+
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("那我再说了。", is_final=True)
+    decision = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+
+    assert decision.action == "reject"
+    assert decision.reason == "non_actionable_meta_turn"
+    assert decision.transcript == "那我再说了。"
+    assert coordinator.snapshot()["state"] == "rejected"
+    assert coordinator.snapshot()["last_owner_transition"]["owner"] == (
+        "rejected_user_turn"
+    )
+    assert timeline.attrs["user_turn_coordinator"]["event"] == "rejected"
+    assert _owner_events(timeline)[-1] == (
+        "rejected_user_turn",
+        "rejected",
+        "non_actionable_meta_turn",
+    )
+
+
+def test_non_actionable_meta_turn_rejected_before_deferred_commit() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-meta-deferred")
+
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("我再说一下。", is_final=True)
+    decision = coordinator.finish_speech(eot_score=0.01, should_defer=True)
+
+    assert decision.action == "reject"
+    assert decision.reason == "non_actionable_meta_turn"
+    assert coordinator.snapshot()["state"] == "rejected"
+    assert timeline.attrs["user_turn_coordinator"]["merge_reason"] == ""
+
+
+def test_non_actionable_meta_tail_does_not_attach_to_prior_owner() -> None:
+    clock = _Clock()
+    coordinator = UserTurnCoordinator(
+        merge_grace_sec=0.8,
+        low_eot_delay_sec=0.8,
+        clock=clock,
+    )
+    timeline = TurnTimeline("turn-meta-tail")
+
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("你给我查查今天的天气吧。", is_final=True)
+    decision = coordinator.finish_speech(eot_score=0.01, should_defer=True)
+    assert decision.action == "defer"
+
+    clock.advance(0.4)
+    assert coordinator.can_merge_new_speech()
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("那我再说了。", is_final=True)
+    decision = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+
+    assert decision.action == "commit"
+    assert decision.transcript == "你给我查查今天的天气吧。"
+    assert coordinator.snapshot()["state"] == "waiting_voiceprint"
+    assert coordinator.snapshot()["last_owner_transition"]["event"] == (
+        "waiting_voiceprint"
+    )
+    assert (
+        "dropped_fragment",
+        "non_actionable_meta_tail_dropped",
+        "non_actionable_meta_turn",
+    ) in _owner_events(timeline)
+    assert (
+        timeline.attrs["user_turn_coordinator"]["selected_text_preview"]
+        == "你给我查查今天的天气吧。"
+    )
+
+
+def test_framework_completed_non_actionable_meta_turn_is_not_accepted_owner() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-framework-meta")
+
+    decision = coordinator.mark_framework_completed(
+        transcript="那我再说了。",
+        reason="framework_completed_turn",
+        timeline=timeline,
+        voiceprint_reason="cached_owner_context",
+    )
+
+    assert decision.action == "reject"
+    assert decision.reason == "non_actionable_meta_turn"
+    assert coordinator.snapshot()["state"] == "rejected"
+    assert coordinator.snapshot()["commit_reason"] == ""
+    assert timeline.attrs["user_turn_coordinator"]["event"] == "rejected"
+
+
+def test_framework_completed_meta_tail_does_not_replace_waiting_owner() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-framework-meta-tail")
+
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("你给我查查今天的天气吧。", is_final=True)
+    coordinator.finish_speech(eot_score=0.01, should_defer=True)
+    decision = coordinator.mark_framework_completed(
+        transcript="那我再说了。",
+        reason="framework_completed_turn",
+        timeline=timeline,
+        voiceprint_reason="cached_owner_context",
+    )
+
+    assert decision.action == "commit"
+    assert decision.transcript == "你给我查查今天的天气吧。"
+    assert coordinator.snapshot()["state"] == "committed"
+    assert coordinator.snapshot()["commit_reason"] == "framework_completed_turn"
+    assert (
+        "dropped_fragment",
+        "non_actionable_meta_tail_dropped",
+        "non_actionable_meta_turn",
+    ) in _owner_events(timeline)
+    assert _owner_events(timeline)[-1] == (
+        "accepted_user_turn",
+        "framework_completed",
+        "framework_completed_turn",
+    )
+
+
+def test_framework_deferred_non_actionable_meta_turn_is_not_waiting_owner() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-framework-meta-deferred")
+
+    decision = coordinator.defer_framework_completed(
+        transcript="我重新说一下。",
+        reason="framework_completed_wait_for_continuation",
+        timeline=timeline,
+        voiceprint_reason="cached_owner_context",
+    )
+
+    assert decision.action == "reject"
+    assert decision.reason == "non_actionable_meta_turn"
+    assert coordinator.snapshot()["state"] == "rejected"
+    assert coordinator.snapshot()["merge_reason"] == ""
 
 
 def test_voiceprint_reject_has_explicit_reason() -> None:

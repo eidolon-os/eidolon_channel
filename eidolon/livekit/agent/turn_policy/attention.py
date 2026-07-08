@@ -65,6 +65,7 @@ class AttentionAdmission:
     def decide(self, signal: AttentionInput) -> AttentionDecision:
         text = signal.transcript.strip()
         preview = _preview(text)
+        eot_score = _numeric_score(signal.eot_score)
         if not self._config.enabled:
             return AttentionDecision(
                 AdmissionAction.DUCK_AND_DECIDE,
@@ -136,8 +137,20 @@ class AttentionAdmission:
             )
 
         if text:
+            evidence = self._evidence_gate.evaluate_attention(
+                text,
+                eot_score=eot_score,
+            )
             intent = hard_stop_intent(text)
             if intent is InterruptIntent.HARD_STOP:
+                if evidence.reason == "short_latin_artifact":
+                    return AttentionDecision(
+                        AdmissionAction.OBSERVE,
+                        f"playback_low_evidence_transcript:{evidence.reason}",
+                        transcript_preview=preview,
+                        client_state_used=True,
+                        evidence_reason=evidence.reason,
+                    )
                 return AttentionDecision(
                     AdmissionAction.HARD_INTERRUPT,
                     "transcript_hard_stop",
@@ -148,7 +161,7 @@ class AttentionAdmission:
                 text,
                 vad_active=True,
                 agent_speaking=True,
-                eot_score=signal.eot_score,
+                eot_score=eot_score,
             )
             if lexical_intent.intent in (
                 InterruptIntent.TOPIC_SWITCH,
@@ -161,10 +174,6 @@ class AttentionAdmission:
                     client_state_used=True,
                 )
 
-            evidence = self._evidence_gate.evaluate_attention(
-                text,
-                eot_score=signal.eot_score,
-            )
             if evidence.allow_decision and evidence.reason == "high_eot_transcript":
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,
@@ -192,3 +201,11 @@ class AttentionAdmission:
 
 def _preview(text: str) -> str:
     return text[:TRANSCRIPT_PREVIEW_MAX_CHARS]
+
+
+def _numeric_score(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0

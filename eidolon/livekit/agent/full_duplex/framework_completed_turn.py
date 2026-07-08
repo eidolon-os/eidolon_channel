@@ -20,6 +20,7 @@ from .turn_completion_policy import (
     eot_thinks_turn_complete,
     looks_like_short_statement_continuation,
 )
+from .state_machine import FullDuplexPhase
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -165,12 +166,11 @@ class FullDuplexFrameworkCompletedTurnGate:
                 voiceprint_reason=voiceprint_reason,
             )
             return False
-        self._align_framework_completed_turn(
+        return self._align_framework_completed_turn(
             completed_transcript,
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
         )
-        return True
 
     def _resolve_completed_turn_interruption_evidence(
         self,
@@ -218,12 +218,11 @@ class FullDuplexFrameworkCompletedTurnGate:
             return None
 
         if continue_to_llm:
-            self._align_framework_completed_turn(
+            return self._align_framework_completed_turn(
                 completed_transcript,
                 timeline=timeline,
                 voiceprint_reason=voiceprint_reason,
             )
-            return True
 
         return False
 
@@ -473,6 +472,24 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
         )
+        if decision.action == "reject":
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="framework_completed_rejected",
+                reason=decision.reason,
+                transcript=decision.transcript or completed_transcript,
+                timeline=timeline,
+            )
+            completion.clear_session_user_turn(decision.reason)
+            owner._flush_turn_timeline(timeline, decision.reason)
+            logger.info(
+                "[StreamingPipeline] rejected framework completed turn "
+                "reason=%s transcript=%r",
+                decision.reason,
+                completed_transcript[:80],
+            )
+            return
         if timeline is not None:
             timeline.set_attr(
                 "framework_completed_deferred",
@@ -487,6 +504,14 @@ class FullDuplexFrameworkCompletedTurnGate:
                 timeline,
                 "framework_completed_waiting_merge",
             )
+        _record_contract_transition(
+            owner,
+            FullDuplexPhase.USER_TURN_PENDING,
+            event="framework_completed_deferred",
+            reason=decision.reason,
+            transcript=decision.transcript or completed_transcript,
+            timeline=timeline,
+        )
         completion.schedule_deferred_low_eot_commit(
             verify_task=None,
             eot_model=owner._get_eot_model(),
@@ -508,7 +533,7 @@ class FullDuplexFrameworkCompletedTurnGate:
         *,
         timeline: TurnTimeline | None,
         voiceprint_reason: str,
-    ) -> None:
+    ) -> bool:
         owner = self._pipeline
         self._completion.cancel_deferred_low_eot_commit("framework_completed_turn")
         owner._ensure_user_turn_coordinator()
@@ -518,12 +543,40 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
         )
+        if decision.action == "reject":
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="framework_completed_rejected",
+                reason=decision.reason,
+                transcript=decision.transcript or completed_transcript,
+                timeline=timeline,
+            )
+            self._completion.clear_session_user_turn(decision.reason)
+            owner._flush_turn_timeline(timeline, decision.reason)
+            logger.info(
+                "[StreamingPipeline] rejected framework completed turn "
+                "reason=%s transcript=%r",
+                decision.reason,
+                completed_transcript[:80],
+            )
+            return False
         canonical = decision.transcript or completed_transcript
         self._session_turns.publish_canonical_user_text(
             canonical,
             source="framework_completed_turn",
             timeline=timeline,
         )
+        _record_contract_transition(
+            owner,
+            FullDuplexPhase.USER_TURN_COMMITTED,
+            event="framework_completed_turn",
+            reason=decision.reason,
+            side_effect="irreversible",
+            transcript=canonical,
+            timeline=timeline,
+        )
+        return True
 
     @staticmethod
     def _non_semantic_completed_turn_reason(
@@ -692,3 +745,26 @@ def _timeline_client_audio_state(timeline: TurnTimeline | None) -> dict[str, Any
         return {}
     value = timeline.attrs.get("client_audio_state")
     return value if isinstance(value, dict) else {}
+
+
+def _record_contract_transition(
+    owner: Any,
+    phase: FullDuplexPhase,
+    *,
+    event: str,
+    reason: str,
+    transcript: str = "",
+    side_effect: str = "none",
+    timeline: TurnTimeline | None = None,
+) -> None:
+    recorder = getattr(owner, "_record_full_duplex_transition", None)
+    if recorder is None:
+        return
+    recorder(
+        phase,
+        event=event,
+        reason=reason,
+        side_effect=side_effect,
+        transcript=transcript,
+        timeline=timeline,
+    )

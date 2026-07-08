@@ -93,6 +93,11 @@ from .interruption_effects import FullDuplexInterruptionEffects
 from .lifecycle import FullDuplexSessionLifecycle
 from .output_flow import FullDuplexOutputFlow
 from .runtime_defaults import ensure_full_duplex_runtime_defaults
+from .state_machine import (
+    FullDuplexPhase,
+    FullDuplexSideEffect,
+    FullDuplexStateMachine,
+)
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_handler import FullDuplexTranscriptHandler
 from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
@@ -447,6 +452,7 @@ class StreamingPipeline(BasePipeline):
             playback_evidence_active=lambda: (
                 self._ensure_client_audio_state_view().agent_output_active_for_interrupts()
             ),
+            record_full_duplex_transition=self._record_full_duplex_transition,
         )
 
     def _ensure_interruption_effects(self) -> FullDuplexInterruptionEffects:
@@ -460,6 +466,7 @@ class StreamingPipeline(BasePipeline):
             self._allow_interruptions = True
         if not hasattr(self, "_state"):
             self._state = PipelineState.IDLE
+        self._ensure_full_duplex_state_machine()
         self._ensure_ducking_controller()
         if not hasattr(self, "_soft_interrupt_timeout"):
             self._soft_interrupt_timeout = self._turn_runtime.decision_timeout_sec
@@ -486,6 +493,7 @@ class StreamingPipeline(BasePipeline):
                     **kwargs,
                 )
             ),
+            record_full_duplex_transition=self._record_policy_decision_transition,
         )
 
     def _ensure_decision_effect_applier(self) -> None:
@@ -534,6 +542,77 @@ class StreamingPipeline(BasePipeline):
             or getattr(handler, "_turn_runtime", None) is not self._turn_runtime
         ):
             self._attention_effects = self._build_attention_effect_handler()
+
+    def _ensure_full_duplex_state_machine(self) -> None:
+        if not hasattr(self, "_full_duplex_state"):
+            self._full_duplex_state = FullDuplexStateMachine()
+
+    def _record_full_duplex_transition(
+        self,
+        phase: FullDuplexPhase,
+        *,
+        event: str,
+        reason: str,
+        side_effect: FullDuplexSideEffect = "none",
+        transcript: str = "",
+        details: dict[str, object] | None = None,
+        timeline: TurnTimeline | None = None,
+    ) -> None:
+        self._ensure_full_duplex_state_machine()
+        self._full_duplex_state.transition(
+            phase,
+            event=event,
+            reason=reason,
+            side_effect=side_effect,
+            transcript=transcript,
+            details=details,
+            timeline=self._timeline if timeline is None else timeline,
+        )
+
+    def _record_policy_decision_transition(
+        self,
+        decision: Any,
+        *,
+        source: str = "turn_policy",
+        transcript: str = "",
+        vad_active: bool | None = None,
+        eot_score: float | None = None,
+    ) -> None:
+        action = str(getattr(getattr(decision, "action", None), "value", "") or "")
+        reason = str(getattr(decision, "reason", "") or source)
+        details: dict[str, object] = {"source": source, "action": action}
+        if vad_active is not None:
+            details["vad_active"] = vad_active
+        if eot_score is not None:
+            details["eot_score"] = eot_score
+        if action == "cancel":
+            self._record_full_duplex_transition(
+                FullDuplexPhase.ACCEPTED_INTERRUPTION,
+                event="turn_policy_cancel_accepted",
+                reason=reason,
+                side_effect="irreversible",
+                transcript=transcript,
+                details=details,
+            )
+            return
+        if action == "rollback":
+            self._record_full_duplex_transition(
+                FullDuplexPhase.REJECTED_INTERRUPTION,
+                event="turn_policy_rollback",
+                reason=reason,
+                side_effect="reversible",
+                transcript=transcript,
+                details=details,
+            )
+            return
+        if action == "hold":
+            self._record_full_duplex_transition(
+                FullDuplexPhase.EVIDENCE_ARBITRATION,
+                event="turn_policy_hold",
+                reason=reason,
+                transcript=transcript,
+                details=details,
+            )
 
     def _build_session_signal_bridge(self) -> SessionSignalBridge:
         return SessionSignalBridge(

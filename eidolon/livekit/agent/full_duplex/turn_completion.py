@@ -25,6 +25,7 @@ from .turn_completion_policy import (
     should_wait_for_inconclusive_voiceprint_merge,
     voiceprint_result_is_inconclusive,
 )
+from .state_machine import FullDuplexPhase
 from .voiceprint_commit_state import CompletedVoiceprintTurnState
 from .voiceprint_commit_state import FullDuplexVoiceprintCommitState
 
@@ -281,6 +282,14 @@ class FullDuplexTurnCompletion:
             final_transcript = (
                 decision.transcript.strip() or owner._latest_asr_text.strip() or transcript
             )
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_PENDING,
+                event="deferred_low_eot_ready",
+                reason=decision.reason,
+                transcript=final_transcript,
+                timeline=timeline,
+            )
             playback_resolution = (
                 self._framework_completed_turn.resolve_deferred_playback_commit_evidence(
                     final_transcript,
@@ -381,6 +390,14 @@ class FullDuplexTurnCompletion:
         if not allowed:
             eot_model.reset()
             owner._suppress_transcripts_until_next_speech = True
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="voiceprint_commit_blocked",
+                reason=reason,
+                transcript=transcript,
+                timeline=timeline,
+            )
             self.clear_session_user_turn(voiceprint_blocked_reason(reason))
             owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
             logger.info(
@@ -433,12 +450,29 @@ class FullDuplexTurnCompletion:
         if not committed:
             owner._ensure_user_turn_coordinator()
             owner._user_turns.reject_active("empty_transcript")
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="framework_commit_empty",
+                reason="empty_transcript",
+                transcript=transcript,
+                timeline=timeline,
+            )
             self.clear_session_user_turn("empty_transcript")
         else:
             owner._ensure_user_turn_coordinator()
             owner._user_turns.mark_committed(
                 transcript=transcript,
                 reason="framework_commit_user_turn",
+            )
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_COMMITTED,
+                event="framework_commit_user_turn",
+                reason="framework_commit_user_turn",
+                side_effect="irreversible",
+                transcript=transcript,
+                timeline=timeline,
             )
         return committed
 
@@ -536,3 +570,26 @@ class FullDuplexTurnCompletion:
                 "reason": reason,
             },
         )
+
+
+def _record_contract_transition(
+    owner: Any,
+    phase: FullDuplexPhase,
+    *,
+    event: str,
+    reason: str,
+    transcript: str = "",
+    side_effect: str = "none",
+    timeline: TurnTimeline | None = None,
+) -> None:
+    recorder = getattr(owner, "_record_full_duplex_transition", None)
+    if recorder is None:
+        return
+    recorder(
+        phase,
+        event=event,
+        reason=reason,
+        side_effect=side_effect,
+        transcript=transcript,
+        timeline=timeline,
+    )

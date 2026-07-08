@@ -723,10 +723,43 @@ async def test_completed_turn_hook_aligns_waiting_candidate_and_cancels_deferred
         pipeline._timeline.attrs["canonical_user_text"]["text_preview"]
         == "换个话题。我们聊一下定价。"
     )
+    assert pipeline._timeline.attrs["full_duplex_state"]["phase"] == (
+        "user_turn_committed"
+    )
+    assert pipeline._timeline.attrs["full_duplex_state"]["last"]["event"] == (
+        "framework_completed_turn"
+    )
     setter.assert_called_once_with(
         "换个话题。我们聊一下定价。",
         source="framework_completed_turn",
     )
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_hook_rejects_non_actionable_meta_owner() -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text="")
+    timeline = TurnTimeline("owner-hook-meta-turn")
+    pipeline._timeline = timeline
+    setter = MagicMock()
+    pipeline._factory = SimpleNamespace(
+        llm=SimpleNamespace(llm=SimpleNamespace(set_next_user_text=setter))
+    )
+    pipeline._ensure_runtime_defaults()
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="那我再说了。")
+    )
+
+    assert allowed is False
+    pipeline._session.clear_user_turn.assert_called_once()
+    assert pipeline._user_turns.snapshot()["state"] == "rejected"
+    assert pipeline._user_turns.snapshot()["reject_reason"] == "non_actionable_meta_turn"
+    assert "canonical_user_text" not in timeline.attrs
+    assert timeline.attrs["full_duplex_state"]["phase"] == "user_turn_rejected"
+    assert timeline.attrs["full_duplex_state"]["last"]["event"] == (
+        "framework_completed_rejected"
+    )
+    setter.assert_called_once_with("", source="clear:non_actionable_meta_turn")
 
 
 @pytest.mark.asyncio

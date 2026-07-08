@@ -7,6 +7,8 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from .state_machine import FullDuplexPhase
+
 if TYPE_CHECKING:
     from livekit.agents.voice import AgentSession
 
@@ -91,6 +93,16 @@ class FullDuplexOutputFlow:
                 ),
                 timeout_sec=cfg.duck_suspend_timeout_sec,
                 cooldown_sec=cfg.duck_cooldown_sec,
+            )
+            pipeline._record_full_duplex_transition(
+                FullDuplexPhase.PROVISIONAL_DUCK,
+                event="duck_started",
+                reason="vad_started",
+                side_effect="reversible",
+                details={
+                    "timeout_sec": cfg.duck_suspend_timeout_sec,
+                    "cooldown_sec": cfg.duck_cooldown_sec,
+                },
             )
         pipeline._callbacks.on_duck_started()
         vad_to_duck_ms = 0.0

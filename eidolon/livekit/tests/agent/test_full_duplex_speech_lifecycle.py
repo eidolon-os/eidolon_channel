@@ -56,6 +56,7 @@ def _owner() -> SimpleNamespace:
     owner._attach_transcript_ingress_recent_events = MagicMock()
     owner._ducking = SimpleNamespace(is_suspended=True)
     owner._interruption_orchestrator = MagicMock()
+    owner._record_full_duplex_transition = MagicMock()
 
     def set_interrupt_cancel_suppression(active: bool, until: float) -> None:
         owner._skip_commit_after_interrupt_cancel = active
@@ -94,6 +95,13 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_called_once_with(
         timeline=owner._timeline,
+    )
+    owner._record_full_duplex_transition.assert_called_once()
+    assert owner._record_full_duplex_transition.call_args.args[0].value == (
+        "user_speech_open"
+    )
+    assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
+        "speech_started"
     )
 
 
@@ -225,6 +233,12 @@ def test_speech_lifecycle_stop_schedules_voiceprint_gated_commit() -> None:
         transcript="你好",
         timeline=owner._timeline,
     )
+    assert owner._record_full_duplex_transition.call_args.args[0].value == (
+        "user_turn_pending"
+    )
+    assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
+        "user_turn_voiceprint_pending"
+    )
     assert owner._latest_asr_text == ""
 
 
@@ -256,4 +270,10 @@ def test_speech_lifecycle_stop_rejects_attention_ignored_transcript() -> None:
     owner._turn_completion.schedule_voiceprint_gated_commit.assert_not_called()
     owner._turn_completion.schedule_deferred_low_eot_commit.assert_not_called()
     owner._get_eot_model.return_value.reset.assert_called_once_with()
+    assert owner._record_full_duplex_transition.call_args.args[0].value == (
+        "user_turn_rejected"
+    )
+    assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
+        "attention_admission_rejected"
+    )
     assert owner._latest_asr_text == ""

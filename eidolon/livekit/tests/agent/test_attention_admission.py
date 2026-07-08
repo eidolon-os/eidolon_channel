@@ -172,6 +172,22 @@ def test_attention_hard_stop_upgrades_during_playback() -> None:
     assert decision.reason == "transcript_hard_stop"
 
 
+def test_attention_observes_short_latin_hard_stop_artifact_during_playback() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
+
+    decision = admission.decide(
+        AttentionInput(
+            agent_speaking=True,
+            client_state=_client_state(),
+            transcript="stop",
+        )
+    )
+
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "playback_low_evidence_transcript:short_latin_artifact"
+    assert decision.evidence_reason == "short_latin_artifact"
+
+
 def test_attention_hard_stop_homophone_upgrades_during_playback() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
@@ -539,6 +555,42 @@ def test_user_transcript_routes_observed_substantive_playback_to_semantic_owner(
     assert (
         pipeline._timeline.attrs["semantic_interrupt_gate_last_event"]["reason"]
         == "eligible"
+    )
+
+
+def test_user_transcript_blocks_short_latin_hard_stop_artifact_during_playback() -> None:
+    pipeline = _pipeline_with_client_state(
+        _client_state(participant_identity="manson"),
+        pipeline_state=PipelineState.SPEAKING,
+    )
+    eot = MagicMock()
+    eot.current_eot_score = 0.0
+    eot.update_asr = MagicMock()
+    pipeline._get_eot_model = MagicMock(return_value=eot)
+    pipeline._semantic_interrupts = SimpleNamespace(
+        run=MagicMock(),
+        _turn_runtime=pipeline._turn_runtime,
+    )
+    pipeline._allow_interruptions = True
+    pipeline._mark_activity = MagicMock()
+
+    pipeline._on_user_transcribed(
+        SimpleNamespace(
+            transcript="stop",
+            is_final=False,
+            speaker_id="manson",
+        )
+    )
+
+    pipeline._semantic_interrupts.run.assert_not_called()
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
+    assert (
+        pipeline._timeline.attrs["attention_admission"]["reason"]
+        == "playback_low_evidence_transcript:short_latin_artifact"
+    )
+    assert (
+        pipeline._timeline.attrs["semantic_interrupt_gate_last_event"]["reason"]
+        == "attention_blocked"
     )
 
 

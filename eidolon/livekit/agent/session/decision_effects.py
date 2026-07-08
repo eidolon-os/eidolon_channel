@@ -33,6 +33,7 @@ class DecisionEffectApplier:
         on_rollback: Callable[[str, bool], None],
         on_hold: Callable[[Decision, str, float | None, bool | None], None] | None = None,
         on_decision: Callable[..., object] | None = None,
+        record_full_duplex_transition: Callable[..., object] | None = None,
     ) -> None:
         self._factory = factory
         self._turn_runtime = turn_runtime
@@ -41,6 +42,7 @@ class DecisionEffectApplier:
         self._on_rollback = on_rollback
         self._on_hold = on_hold
         self._on_decision = on_decision
+        self._record_full_duplex_transition = record_full_duplex_transition
 
     def apply(
         self,
@@ -60,6 +62,14 @@ class DecisionEffectApplier:
         )
         if self._on_decision is not None:
             self._on_decision(
+                decision,
+                source=resolved_reason or "turn_policy",
+                transcript=transcript,
+                vad_active=vad_active,
+                eot_score=eot_score,
+            )
+        if self._record_full_duplex_transition is not None:
+            self._record_full_duplex_transition(
                 decision,
                 source=resolved_reason or "turn_policy",
                 transcript=transcript,

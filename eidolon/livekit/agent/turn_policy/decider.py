@@ -315,6 +315,7 @@ class InterruptDecider:
                 normalized_text=text,
                 vad_active=True,
                 is_final=False,
+                artifact_reason_prefix=DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
             )
             if forced is not None:
                 return forced
@@ -418,15 +419,23 @@ class InterruptDecider:
             return InterruptIntent.TOPIC_SWITCH
         return None
 
-    @staticmethod
     def _decision_from_intent(
+        self,
         intent: InterruptIntentResult,
         *,
         normalized_text: str,
         vad_active: bool,
         is_final: bool,
+        artifact_reason_prefix: str = TRANSCRIPT_EVIDENCE_HOLD_REASON_PREFIX,
     ) -> Decision | None:
         if intent.intent == InterruptIntent.HARD_STOP:
+            artifact_hold = self._hold_short_latin_hard_stop_artifact(
+                intent,
+                normalized_text,
+                reason_prefix=artifact_reason_prefix,
+            )
+            if artifact_hold is not None:
+                return artifact_hold
             return Decision(
                 action=Action.CANCEL,
                 reason=f"intent:{intent.reason}",
@@ -477,6 +486,27 @@ class InterruptDecider:
                 intent_confidence=intent.confidence,
             )
         return None
+
+    def _hold_short_latin_hard_stop_artifact(
+        self,
+        intent: InterruptIntentResult,
+        normalized_text: str,
+        *,
+        reason_prefix: str,
+    ) -> Decision | None:
+        evidence = self._evidence_gate.evaluate_attention(normalized_text)
+        if evidence.reason != "short_latin_artifact":
+            return None
+        return Decision(
+            action=Action.HOLD,
+            reason=(
+                f"{reason_prefix}{evidence.reason} "
+                f"cjk={evidence.cjk_chars} latin={evidence.latin_chars}"
+            ),
+            intent=InterruptIntent.UNCERTAIN,
+            intent_source=intent.source,
+            intent_confidence=0.0,
+        )
 
     @staticmethod
     def _count_cjk(text: str) -> int:

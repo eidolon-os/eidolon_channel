@@ -31,6 +31,13 @@ CandidateState = Literal[
     "rejected",
 ]
 DecisionAction = Literal["none", "defer", "commit", "reject"]
+OwnerKind = Literal[
+    "provisional_user_turn",
+    "accepted_user_turn",
+    "rejected_user_turn",
+    "merged_fragment",
+    "dropped_fragment",
+]
 
 DEFAULT_MERGE_GRACE_SEC = 0.8
 DEFAULT_STATEMENT_DEFERRED_MERGE_GRACE_SEC = 3.5
@@ -40,6 +47,16 @@ DEFAULT_STATEMENT_SEQUENCE_MERGE_MAX_CJK_CHARS = 28
 DEFAULT_STATEMENT_SEQUENCE_FRAGMENT_MAX_CJK_CHARS = 14
 DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS = 4
 TIMELINE_TEXT_PREVIEW_MAX_CHARS = 120
+OWNER_LEDGER_MAX_TRANSITIONS = 16
+NON_ACTIONABLE_META_TURN_REASON = "non_actionable_meta_turn"
+_NON_ACTIONABLE_META_TURN_PREFIX_SUFFIXES = {
+    "那我再说": frozenset(("", "了", "一下", "一遍", "吧")),
+    "我再说": frozenset(("", "了", "一下", "一遍", "吧")),
+    "我重新说": frozenset(("", "一下", "一遍")),
+    "我重说": frozenset(("", "一下", "一遍")),
+    "等我再说": frozenset(("", "吧")),
+    "等下我再说": frozenset(("", "吧")),
+}
 
 
 @dataclass(frozen=True)
@@ -51,6 +68,30 @@ class UserTurnDecision:
     transcript: str = ""
     reason: str = ""
     delay_sec: float = 0.0
+
+
+@dataclass(frozen=True)
+class OwnerTransition:
+    """A side-effect-free record of which owner currently owns a candidate."""
+
+    owner: OwnerKind
+    event: str
+    reason: str
+    at: float
+    text_preview: str = ""
+    segment_index: int | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "owner": self.owner,
+            "event": self.event,
+            "reason": self.reason,
+            "at": self.at,
+            "text_preview": self.text_preview,
+        }
+        if self.segment_index is not None:
+            payload["segment_index"] = self.segment_index
+        return payload
 
 
 @dataclass
@@ -88,6 +129,7 @@ class UserTurnCandidate:
     commit_reason: str = ""
     reject_reason: str = ""
     committed_at: float | None = None
+    owner_transitions: list[OwnerTransition] = field(default_factory=list)
 
     @property
     def selected_text(self) -> str:
@@ -235,6 +277,14 @@ class UserTurnCoordinator:
             candidate.state = "open"
             candidate.updated_at = current_time
             candidate.segments.append(SpeechSegment(started_at=current_time))
+            self._record_owner_transition(
+                candidate,
+                owner="merged_fragment",
+                event="speech_continued",
+                reason="merge_window",
+                now=current_time,
+                segment_index=len(candidate.segments) - 1,
+            )
             self._record_attrs(candidate, event="speech_continued")
             return candidate
 
@@ -249,6 +299,14 @@ class UserTurnCoordinator:
             segments=[SpeechSegment(started_at=current_time)],
         )
         self._active = candidate
+        self._record_owner_transition(
+            candidate,
+            owner="provisional_user_turn",
+            event="speech_started",
+            reason="new_candidate",
+            now=current_time,
+            segment_index=0,
+        )
         self._record_attrs(candidate, event="speech_started")
         return candidate
 
@@ -308,19 +366,45 @@ class UserTurnCoordinator:
             segment.ended_at = current_time
         candidate.eot_score = eot_score
         candidate.updated_at = current_time
+        self._drop_non_actionable_meta_tail_if_needed(
+            candidate,
+            now=current_time,
+        )
         transcript = candidate.selected_text
         if not transcript:
             candidate.state = "rejected"
             candidate.reject_reason = "empty_transcript"
+            self._record_owner_transition(
+                candidate,
+                owner="rejected_user_turn",
+                event="rejected",
+                reason="empty_transcript",
+                now=current_time,
+            )
             self._record_attrs(candidate, event="rejected")
             return UserTurnDecision(
                 action="reject",
                 candidate_id=candidate.candidate_id,
                 reason="empty_transcript",
             )
+        meta_turn_decision = self._reject_non_actionable_meta_turn_if_needed(
+            candidate,
+            transcript=transcript,
+            now=current_time,
+        )
+        if meta_turn_decision is not None:
+            return meta_turn_decision
         if should_defer:
             candidate.state = "waiting_merge"
             candidate.merge_reason = "low_eot_wait_for_continuation"
+            self._record_owner_transition(
+                candidate,
+                owner="provisional_user_turn",
+                event="deferred_low_eot",
+                reason="low_eot_wait_for_continuation",
+                now=current_time,
+                transcript=transcript,
+            )
             self._record_attrs(candidate, event="deferred_low_eot")
             return UserTurnDecision(
                 action="defer",
@@ -330,6 +414,14 @@ class UserTurnCoordinator:
                 delay_sec=self._low_eot_delay_sec,
             )
         candidate.state = "waiting_voiceprint"
+        self._record_owner_transition(
+            candidate,
+            owner="provisional_user_turn",
+            event="waiting_voiceprint",
+            reason="speech_finished",
+            now=current_time,
+            transcript=transcript,
+        )
         self._record_attrs(candidate, event="waiting_voiceprint")
         return UserTurnDecision(
             action="commit",
@@ -351,6 +443,14 @@ class UserTurnCoordinator:
             )
         candidate.state = "waiting_voiceprint"
         candidate.updated_at = self._now(now)
+        self._record_owner_transition(
+            candidate,
+            owner="provisional_user_turn",
+            event="deferred_ready",
+            reason="low_eot_grace_elapsed",
+            now=candidate.updated_at,
+            transcript=candidate.selected_text,
+        )
         self._record_attrs(candidate, event="deferred_ready")
         return UserTurnDecision(
             action="commit",
@@ -375,6 +475,14 @@ class UserTurnCoordinator:
         if not allowed:
             candidate.state = "rejected"
             candidate.reject_reason = voiceprint_blocked_reason(reason)
+            self._record_owner_transition(
+                candidate,
+                owner="rejected_user_turn",
+                event="voiceprint_rejected",
+                reason=candidate.reject_reason,
+                now=candidate.updated_at,
+                transcript=candidate.selected_text,
+            )
             self._record_attrs(candidate, event="voiceprint_rejected")
             return UserTurnDecision(
                 action="reject",
@@ -384,6 +492,14 @@ class UserTurnCoordinator:
             )
         candidate.state = "ready_to_commit"
         candidate.commit_reason = voiceprint_allowed_reason(reason)
+        self._record_owner_transition(
+            candidate,
+            owner="accepted_user_turn",
+            event="voiceprint_allowed",
+            reason=candidate.commit_reason,
+            now=candidate.updated_at,
+            transcript=candidate.selected_text,
+        )
         self._record_attrs(candidate, event="voiceprint_allowed")
         return UserTurnDecision(
             action="commit",
@@ -406,6 +522,14 @@ class UserTurnCoordinator:
         candidate.commit_reason = reason
         candidate.committed_at = self._now(now)
         candidate.updated_at = candidate.committed_at
+        self._record_owner_transition(
+            candidate,
+            owner="accepted_user_turn",
+            event="committed",
+            reason=reason,
+            now=candidate.committed_at,
+            transcript=transcript,
+        )
         self._record_attrs(candidate, event="committed", transcript=transcript)
 
     def mark_framework_completed(
@@ -433,13 +557,29 @@ class UserTurnCoordinator:
 
         if stripped:
             self._merge_framework_transcript(candidate, stripped, now=current_time)
+        self._drop_non_actionable_meta_tail_if_needed(candidate, now=current_time)
+        canonical = candidate.selected_text or stripped
+        meta_turn_decision = self._reject_non_actionable_meta_turn_if_needed(
+            candidate,
+            transcript=canonical,
+            now=current_time,
+        )
+        if meta_turn_decision is not None:
+            return meta_turn_decision
         candidate.state = "committed"
         candidate.commit_reason = reason
         if voiceprint_reason:
             candidate.voiceprint_reason = voiceprint_reason
         candidate.committed_at = current_time
         candidate.updated_at = current_time
-        canonical = candidate.selected_text or stripped
+        self._record_owner_transition(
+            candidate,
+            owner="accepted_user_turn",
+            event="framework_completed",
+            reason=reason,
+            now=current_time,
+            transcript=canonical,
+        )
         self._record_attrs(candidate, event="framework_completed", transcript=canonical)
         return UserTurnDecision(
             action="commit",
@@ -481,6 +621,15 @@ class UserTurnCoordinator:
                 and _normalize_revision_text(selected) == _normalize_revision_text(stripped)
             ):
                 self._merge_framework_transcript(candidate, stripped, now=current_time)
+        self._drop_non_actionable_meta_tail_if_needed(candidate, now=current_time)
+        canonical = candidate.selected_text or stripped
+        meta_turn_decision = self._reject_non_actionable_meta_turn_if_needed(
+            candidate,
+            transcript=canonical,
+            now=current_time,
+        )
+        if meta_turn_decision is not None:
+            return meta_turn_decision
         candidate.state = "waiting_merge"
         if not candidate.merge_reason:
             candidate.merge_reason = reason
@@ -489,7 +638,14 @@ class UserTurnCoordinator:
         ):
             candidate.voiceprint_reason = voiceprint_reason
         candidate.updated_at = current_time
-        canonical = candidate.selected_text or stripped
+        self._record_owner_transition(
+            candidate,
+            owner="provisional_user_turn",
+            event="framework_completed_deferred",
+            reason=reason,
+            now=current_time,
+            transcript=canonical,
+        )
         if delay_sec <= 0.0:
             delay_sec = self.merge_remaining_sec(now=current_time)
         if delay_sec <= 0.0:
@@ -536,6 +692,14 @@ class UserTurnCoordinator:
         candidate.voiceprint_reason = reason
         candidate.updated_at = current_time
         canonical = candidate.selected_text or stripped
+        self._record_owner_transition(
+            candidate,
+            owner="provisional_user_turn",
+            event="voiceprint_deferred",
+            reason=reason,
+            now=current_time,
+            transcript=canonical,
+        )
         self._record_attrs(
             candidate,
             event="voiceprint_deferred",
@@ -561,6 +725,14 @@ class UserTurnCoordinator:
         candidate.state = "rejected"
         candidate.reject_reason = reason
         candidate.updated_at = self._now(now)
+        self._record_owner_transition(
+            candidate,
+            owner="rejected_user_turn",
+            event="rejected",
+            reason=reason,
+            now=candidate.updated_at,
+            transcript=candidate.selected_text,
+        )
         self._record_attrs(candidate, event="rejected")
         return UserTurnDecision(
             action="reject",
@@ -710,6 +882,107 @@ class UserTurnCoordinator:
             )
         )
 
+    def _drop_non_actionable_meta_tail_if_needed(
+        self,
+        candidate: UserTurnCandidate,
+        *,
+        now: float,
+    ) -> None:
+        current = candidate.current_segment
+        if current is None or not _looks_like_non_actionable_meta_turn(
+            current.selected_text
+        ):
+            return
+        prior_text = ""
+        for segment in candidate.segments[:-1]:
+            prior_text = _merge_text(prior_text, segment.selected_text)
+        if not prior_text.strip():
+            return
+        current.text = ""
+        current.final_text = ""
+        current.ended_at = now
+        candidate.updated_at = now
+        self._record_owner_transition(
+            candidate,
+            owner="dropped_fragment",
+            event="non_actionable_meta_tail_dropped",
+            reason=NON_ACTIONABLE_META_TURN_REASON,
+            now=now,
+            transcript=prior_text.strip(),
+            segment_index=len(candidate.segments) - 1,
+        )
+        self._record_attrs(
+            candidate,
+            event="non_actionable_meta_tail_dropped",
+            transcript=prior_text.strip(),
+        )
+
+    def _reject_non_actionable_meta_turn_if_needed(
+        self,
+        candidate: UserTurnCandidate,
+        *,
+        transcript: str,
+        now: float,
+    ) -> UserTurnDecision | None:
+        if not _looks_like_non_actionable_meta_turn(transcript):
+            return None
+        candidate.state = "rejected"
+        candidate.reject_reason = NON_ACTIONABLE_META_TURN_REASON
+        candidate.updated_at = now
+        self._record_owner_transition(
+            candidate,
+            owner="rejected_user_turn",
+            event="rejected",
+            reason=NON_ACTIONABLE_META_TURN_REASON,
+            now=now,
+            transcript=transcript,
+        )
+        self._record_attrs(candidate, event="rejected", transcript=transcript)
+        return UserTurnDecision(
+            action="reject",
+            candidate_id=candidate.candidate_id,
+            transcript=transcript,
+            reason=NON_ACTIONABLE_META_TURN_REASON,
+        )
+
+    def _record_owner_transition(
+        self,
+        candidate: UserTurnCandidate,
+        *,
+        owner: OwnerKind,
+        event: str,
+        reason: str,
+        now: float,
+        transcript: str | None = None,
+        segment_index: int | None = None,
+    ) -> None:
+        text = transcript if transcript is not None else candidate.selected_text
+        transition = OwnerTransition(
+            owner=owner,
+            event=event,
+            reason=reason,
+            at=now,
+            text_preview=text[:TIMELINE_TEXT_PREVIEW_MAX_CHARS],
+            segment_index=segment_index,
+        )
+        candidate.owner_transitions.append(transition)
+        timeline = candidate.timeline
+        if timeline is None:
+            return
+        timeline.set_attr(
+            "user_turn_owner_ledger",
+            {
+                "candidate_id": candidate.candidate_id,
+                "last": transition.snapshot(),
+                "transitions": [
+                    entry.snapshot()
+                    for entry in candidate.owner_transitions[
+                        -OWNER_LEDGER_MAX_TRANSITIONS:
+                    ]
+                ],
+            },
+        )
+
     def _record_attrs(
         self,
         candidate: UserTurnCandidate,
@@ -742,6 +1015,12 @@ class UserTurnCoordinator:
             "voiceprint_reason": candidate.voiceprint_reason,
             "commit_reason": candidate.commit_reason,
             "reject_reason": candidate.reject_reason,
+            "owner_transition_count": len(candidate.owner_transitions),
+            "last_owner_transition": (
+                candidate.owner_transitions[-1].snapshot()
+                if candidate.owner_transitions
+                else None
+            ),
         }
 
     def _text_matches_revision(self, existing: str, revision: str) -> bool:
@@ -791,6 +1070,19 @@ def _looks_like_statement_fragment(
     if stripped.startswith(("帮我", "请", "麻烦", "换个话题", "换一个话题")):
         return False
     return stripped.endswith(("。", "，", ",", "、", "的", "了", "呢", "吧"))
+
+
+def _looks_like_non_actionable_meta_turn(text: str) -> bool:
+    normalized = _normalize_revision_text(text)
+    if not normalized:
+        return False
+    for prefix, suffixes in _NON_ACTIONABLE_META_TURN_PREFIX_SUFFIXES.items():
+        if not normalized.startswith(prefix):
+            continue
+        suffix = normalized[len(prefix) :]
+        if suffix in suffixes:
+            return True
+    return False
 
 
 def _text_matches_revision(

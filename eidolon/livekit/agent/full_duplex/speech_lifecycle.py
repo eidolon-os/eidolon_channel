@@ -9,6 +9,8 @@ from typing import Any
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.shared.types import generate_turn_id
 
+from .state_machine import FullDuplexPhase
+
 logger = logging.getLogger("agent")
 
 
@@ -51,6 +53,12 @@ class FullDuplexSpeechLifecycle:
                 owner._timeline.set_attr("room_name", owner._room.name or "")
 
         owner._user_turns.start_speech(timeline=owner._timeline)
+        _record_contract_transition(
+            owner,
+            FullDuplexPhase.USER_SPEECH_OPEN,
+            event="speech_started",
+            reason="merge_continuation" if merge_continuation else "new_speech_started",
+        )
         owner._timeline.mark("speech_started_at")
         owner._attach_transcript_ingress_recent_events("speech_started")
         owner._apply_pending_explicit_client_preempt(owner._timeline)
@@ -120,6 +128,13 @@ class FullDuplexSpeechLifecycle:
             )
             if owner._user_turns.active is not None:
                 owner._user_turns.reject_active(attention_reject_reason)
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="attention_admission_rejected",
+                reason=attention_reject_reason,
+                transcript=transcript,
+            )
             eot_model.reset()
             turn_completion.clear_session_user_turn(attention_reject_reason)
             turn_completion.reset_candidate_voiceprint_tasks()
@@ -148,6 +163,13 @@ class FullDuplexSpeechLifecycle:
                 transcript[:80],
             )
             owner._user_turns.reject_active(low_evidence_reason)
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="playback_low_evidence_rejected",
+                reason=low_evidence_reason,
+                transcript=transcript,
+            )
             eot_model.reset()
             turn_completion.clear_session_user_turn(low_evidence_reason)
             turn_completion.reset_candidate_voiceprint_tasks()
@@ -167,11 +189,25 @@ class FullDuplexSpeechLifecycle:
             should_defer=should_defer,
         )
         if decision.action == "reject":
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="user_turn_rejected",
+                reason=decision.reason,
+                transcript=decision.transcript or transcript,
+            )
             eot_model.reset()
             turn_completion.clear_session_user_turn(decision.reason)
             turn_completion.reset_candidate_voiceprint_tasks()
             owner._latest_asr_text = ""
         elif decision.action == "defer":
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_PENDING,
+                event="user_turn_deferred",
+                reason=decision.reason,
+                transcript=decision.transcript,
+            )
             turn_completion.schedule_deferred_low_eot_commit(
                 verify_task=None,
                 eot_model=eot_model,
@@ -180,6 +216,13 @@ class FullDuplexSpeechLifecycle:
                 delay_sec=decision.delay_sec,
             )
         else:
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_PENDING,
+                event="user_turn_voiceprint_pending",
+                reason=decision.reason,
+                transcript=decision.transcript or transcript,
+            )
             turn_completion.schedule_voiceprint_gated_commit(
                 verify_task=turn_completion.candidate_voiceprint_gate_task(),
                 eot_model=eot_model,
@@ -242,3 +285,22 @@ class FullDuplexSpeechLifecycle:
                 )
             return should_defer
         return False
+
+
+def _record_contract_transition(
+    owner: Any,
+    phase: FullDuplexPhase,
+    *,
+    event: str,
+    reason: str,
+    transcript: str = "",
+) -> None:
+    recorder = getattr(owner, "_record_full_duplex_transition", None)
+    if recorder is None:
+        return
+    recorder(
+        phase,
+        event=event,
+        reason=reason,
+        transcript=transcript,
+    )

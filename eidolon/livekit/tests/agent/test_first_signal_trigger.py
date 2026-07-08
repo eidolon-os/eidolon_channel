@@ -116,6 +116,15 @@ def test_first_signal_holds_short_latin_artifact() -> None:
     pipeline._ducking.mixer.cancel.assert_not_called()
 
 
+def test_first_signal_holds_short_latin_hard_stop_artifact() -> None:
+    """A short latin hard-stop lexicon hit is still provisional evidence."""
+    pipeline = _make_pipeline()
+
+    _run_semantic_check(pipeline, "stop", is_final=False)
+
+    pipeline._ducking.mixer.cancel.assert_not_called()
+
+
 def test_first_signal_skips_backchannel() -> None:
     """Backchannel ("嗯") must NOT trigger first-signal cancel — caller
     should wait for the next INTERIM."""

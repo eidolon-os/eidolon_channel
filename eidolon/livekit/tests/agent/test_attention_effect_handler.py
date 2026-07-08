@@ -214,6 +214,21 @@ def test_hard_stop_during_playback_allows_eot_without_ducking() -> None:
     assert "interrupt_intent_admitted_at" in timeline.timestamps
 
 
+def test_short_latin_hard_stop_artifact_during_playback_blocks_eot() -> None:
+    handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
+
+    allowed = handler.allows_eot_check("stop")
+
+    assert allowed is False
+    on_duck.assert_not_called()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["action"] == "observe"
+    assert timeline.attrs["attention_admission"]["reason"] == (
+        "playback_low_evidence_transcript:short_latin_artifact"
+    )
+    assert "interrupt_intent_admitted_at" not in timeline.timestamps
+
+
 def test_single_char_prefix_observes_without_direct_intent_mark() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
 

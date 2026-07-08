@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from ..observability import TurnTimeline
 from ..shared.types import generate_turn_id
+from .state_machine import FullDuplexPhase
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -82,6 +83,14 @@ class FullDuplexPostSpeechInterruptionCommitter:
             self._clear_session_user_turn(decision.reason)
             return False
         committed_text = decision.transcript or transcript
+        _record_contract_transition(
+            pipeline,
+            FullDuplexPhase.USER_TURN_PENDING,
+            event="post_speech_interruption_candidate_pending",
+            reason=reason,
+            transcript=committed_text,
+            timeline=timeline,
+        )
         if timeline is not None:
             timeline.set_attr(
                 "post_speech_interruption_candidate_committed",
@@ -125,6 +134,14 @@ class FullDuplexPostSpeechInterruptionCommitter:
         self._reset_candidate_voiceprint_tasks()
         self._clear_session_user_turn(reason)
         pipeline._latest_asr_text = ""
+        _record_contract_transition(
+            pipeline,
+            FullDuplexPhase.USER_TURN_REJECTED,
+            event="post_speech_interruption_candidate_rejected",
+            reason=reason,
+            transcript=decision.transcript,
+            timeline=timeline,
+        )
         if timeline is not None:
             timeline.set_attr(
                 "post_speech_interruption_candidate_rejected",
@@ -141,3 +158,24 @@ class FullDuplexPostSpeechInterruptionCommitter:
             reason,
             decision.transcript[:80],
         )
+
+
+def _record_contract_transition(
+    pipeline: StreamingPipeline,
+    phase: FullDuplexPhase,
+    *,
+    event: str,
+    reason: str,
+    transcript: str = "",
+    timeline: TurnTimeline | None = None,
+) -> None:
+    recorder = getattr(pipeline, "_record_full_duplex_transition", None)
+    if recorder is None:
+        return
+    recorder(
+        phase,
+        event=event,
+        reason=reason,
+        transcript=transcript,
+        timeline=timeline,
+    )

@@ -15,6 +15,8 @@ from eidolon.livekit.agent.session.interruption import SoftInterruptController
 from eidolon.livekit.agent.turn_policy import Decision
 from eidolon.livekit.agent.turn_policy.constants import STABLE_SIGNAL_WAIT_REASON_PREFIX
 
+from .state_machine import FullDuplexPhase
+
 logger = logging.getLogger("agent.full_duplex.interruption_effects")
 
 
@@ -48,6 +50,7 @@ class FullDuplexInterruptionEffects:
         set_interrupt_cancel_suppression: Callable[[bool, float], None],
         soft_interrupt_timeout_sec: Callable[[], float],
         playback_evidence_active: Callable[[], bool] | None = None,
+        record_full_duplex_transition: Callable[..., object] | None = None,
     ) -> None:
         self._ducking = ducking
         self._callbacks = callbacks
@@ -74,6 +77,7 @@ class FullDuplexInterruptionEffects:
         self._set_interrupt_cancel_suppression = set_interrupt_cancel_suppression
         self._soft_interrupt_timeout_sec = soft_interrupt_timeout_sec
         self._playback_evidence_active = playback_evidence_active or (lambda: False)
+        self._record_full_duplex_transition = record_full_duplex_transition
         self._soft_interrupt = SoftInterruptController(
             timeout_sec=self._soft_interrupt_timeout_sec(),
             on_timeout=lambda: self.interrupt_current_turn(),
@@ -252,6 +256,17 @@ class FullDuplexInterruptionEffects:
         )
         self.cancel_stable_signal_timer()
         self._snapshot_context()
+        self._record_contract_transition(
+            FullDuplexPhase.ACCEPTED_INTERRUPTION,
+            event="playback_stop_committed",
+            reason="interrupt_cancel",
+            side_effect="irreversible",
+            transcript=post_speech_transcript,
+            details={
+                "commit_post_speech_candidate": commit_post_speech_candidate,
+                "collect_confirmed_cancel_turn": collect_confirmed_cancel_turn,
+            },
+        )
         self._publish_playback_stop("interrupt_cancel")
         self._ducking.cancel_output()
         if collect_confirmed_cancel_turn:
@@ -342,6 +357,14 @@ class FullDuplexInterruptionEffects:
         )
         self.cancel_stable_signal_timer()
         self._ducking.unduck_if_suspended(drop_buffered=drop_buffered)
+        self._record_contract_transition(
+            FullDuplexPhase.REJECTED_INTERRUPTION,
+            event="duck_rollback_committed",
+            reason=reason,
+            side_effect="reversible",
+            transcript=self._get_latest_asr_text(),
+            details={"drop_buffered": drop_buffered},
+        )
         orchestrator.resolve(action="rollback", reason=reason)
         self._callbacks.on_duck_resolved("unduck")
         timeline = self._get_timeline()
@@ -425,3 +448,24 @@ class FullDuplexInterruptionEffects:
         events.append(payload)
         timeline.set_attr("duck_events", events)
         timeline.set_attr("duck_last_event", payload)
+
+    def _record_contract_transition(
+        self,
+        phase: FullDuplexPhase,
+        *,
+        event: str,
+        reason: str,
+        side_effect: str,
+        transcript: str = "",
+        details: dict[str, object] | None = None,
+    ) -> None:
+        if self._record_full_duplex_transition is None:
+            return
+        self._record_full_duplex_transition(
+            phase,
+            event=event,
+            reason=reason,
+            side_effect=side_effect,
+            transcript=transcript,
+            details=details,
+        )

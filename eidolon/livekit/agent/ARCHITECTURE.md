@@ -115,6 +115,7 @@ eidolon/livekit/agent/
 │   ├── playback_turn_evidence.py # playback-overlap completed-turn pure decision contract
 │   ├── semantic_interrupt_gate.py # SemanticInterruptGate: transcript-triggered semantic interrupt gate
 │   ├── turn_completion.py    # FullDuplexTurnCompletion: user-turn completion + voiceprint commit gate
+│   ├── turn_completion_policy.py # pure low-EOT / voiceprint merge completion contract
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
 │   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
 │   ├── transcript_handler.py # FullDuplexTranscriptHandler: STT transcript entry routing
@@ -187,6 +188,8 @@ eidolon/livekit/agent/
 `full_duplex/output_flow.py` 是 full-duplex output ducking flow owner。它只负责在 `AgentSession.start()` 后安装 `OutputDuckingController`，以及在 attention/VAD speech-start 触发时执行 `duck -> mark interrupt_started -> arm duck deadline`。cancel、rollback、hold、explicit preempt 的 terminal output effect 仍由 `FullDuplexInterruptionEffects` 执行。
 
 `full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、session user turn boundary 调度，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume、LiveKit framework completed-turn hook 细节或 interrupted context capture 算法。
+
+`full_duplex/turn_completion_policy.py` 是 full-duplex completion 的纯机制 contract。它只判断低 EOT commit 是否应等待、短 CJK 片段是否像续接、多个 voiceprint candidate 结果如何合并，以及 inconclusive voiceprint 是否应继续等待 merge；不创建 task、不读写 `AgentSession`、不清理 user turn，也不写 timeline。runtime owner 只能消费它的结构化结果再执行副作用。
 
 `full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的门禁 owner。它负责裁决 framework completed-turn 是否允许进入 LLM、是否等待短句/声纹合并、是否因 active interruption owner 或非语义 backchannel/noise/hard-stop 阻断，并把允许通过的 framework transcript 对齐到 canonical user text。它可以执行 LiveKit/session/user-turn 副作用，但 playback-overlap completed-turn 的“哪些 decision 可终结、哪些 semantic redirect 应继续进 LLM”必须委托给纯 contract，不在 hook owner 内重复手写。
 

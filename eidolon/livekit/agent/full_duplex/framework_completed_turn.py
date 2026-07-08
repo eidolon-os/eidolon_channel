@@ -16,6 +16,10 @@ from .playback_turn_evidence import (
     non_semantic_completed_turn_reason,
     resolve_playback_turn_decision,
 )
+from .turn_completion_policy import (
+    eot_thinks_turn_complete,
+    looks_like_short_statement_continuation,
+)
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -426,18 +430,10 @@ class FullDuplexFrameworkCompletedTurnGate:
 
     def _eot_thinks_turn_complete(self) -> bool:
         owner = self._pipeline
-        eot_model = owner._get_eot_model()
-        if eot_model is None:
-            return True
-        score = float(
-            getattr(
-                eot_model,
-                "current_eot_score",
-                getattr(eot_model, "_current_eot_score", 1.0),
-            )
-            or 0.0
+        return eot_thinks_turn_complete(
+            owner._get_eot_model(),
+            unlikely_threshold=float(owner._turn_policy.eot.eot_unlikely_threshold),
         )
-        return score >= float(owner._turn_policy.eot.eot_unlikely_threshold)
 
     def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
         owner = self._pipeline
@@ -454,7 +450,10 @@ class FullDuplexFrameworkCompletedTurnGate:
         if self._eot_thinks_turn_complete():
             return False
         selected = candidate.selected_text or transcript
-        return self._completion._looks_like_short_statement_continuation(selected)
+        return looks_like_short_statement_continuation(
+            selected,
+            max_cjk_chars=owner._turn_policy.eot.short_statement_defer_max_cjk_chars,
+        )
 
     def _defer_framework_completed_turn(
         self,

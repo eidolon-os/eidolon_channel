@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 
 from ..observability import TurnTimeline
 from ..session.voiceprint_reasons import (
-    is_voiceprint_inconclusive_reason,
     voiceprint_blocked_reason,
     voiceprint_error_reason,
     voiceprint_inconclusive_reason,
@@ -17,6 +16,14 @@ from ..turn_policy import TranscriptEvidenceGate
 from .framework_completed_turn import FullDuplexFrameworkCompletedTurnGate
 from .post_speech_interruption import FullDuplexPostSpeechInterruptionCommitter
 from .session_turn_boundary import FullDuplexSessionTurnBoundary
+from .turn_completion_policy import (
+    decide_low_eot_commit_deferral,
+    eot_score_from_model,
+    looks_like_short_statement_continuation,
+    select_combined_voiceprint_result,
+    should_wait_for_inconclusive_voiceprint_merge,
+    voiceprint_result_is_inconclusive,
+)
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -81,18 +88,7 @@ class FullDuplexTurnCompletion:
         tasks: list[asyncio.Task],
     ) -> Any:
         results = await asyncio.gather(*tasks)
-        inconclusive = None
-        for result in results:
-            if not bool(getattr(result, "commit_allowed", False)):
-                if _voiceprint_result_is_inconclusive(result):
-                    inconclusive = inconclusive or result
-                    continue
-                return result
-        if results and bool(getattr(results[-1], "commit_allowed", False)):
-            return results[-1]
-        if inconclusive is not None:
-            return inconclusive
-        return results[-1]
+        return select_combined_voiceprint_result(results)
 
     def cancel_deferred_low_eot_commit(self, reason: str) -> None:
         owner = self._pipeline
@@ -112,17 +108,16 @@ class FullDuplexTurnCompletion:
         owner._ensure_runtime_defaults()
         if not transcript.strip():
             return False
-        score = float(
-            getattr(
-                eot_model,
-                "current_eot_score",
-                getattr(eot_model, "_current_eot_score", 1.0),
-            )
-            or 0.0
+        score = eot_score_from_model(eot_model, default=1.0)
+        decision = decide_low_eot_commit_deferral(
+            transcript,
+            eot_score=score,
+            unlikely_threshold=float(owner._turn_policy.eot.eot_unlikely_threshold),
+            short_statement_defer_max_cjk_chars=(
+                owner._turn_policy.eot.short_statement_defer_max_cjk_chars
+            ),
         )
-        if score < float(owner._turn_policy.eot.eot_unlikely_threshold):
-            return True
-        return self._looks_like_short_statement_continuation(transcript)
+        return decision.should_defer
 
     def playback_low_evidence_reject_reason(
         self,
@@ -199,19 +194,10 @@ class FullDuplexTurnCompletion:
 
     def _looks_like_short_statement_continuation(self, transcript: str) -> bool:
         owner = self._pipeline
-        text = transcript.strip()
-        if not text:
-            return False
-        if any(mark in text for mark in ("？", "?", "！", "!")):
-            return False
-        cjk_chars = _count_cjk_chars(text)
-        if cjk_chars <= 0:
-            return False
-        if cjk_chars > owner._turn_policy.eot.short_statement_defer_max_cjk_chars:
-            return False
-        if text.startswith(("帮我", "请", "麻烦", "换个话题", "换一个话题")):
-            return False
-        return text.endswith(("。", "，", ",", "、", "的", "了", "呢", "吧"))
+        return looks_like_short_statement_continuation(
+            transcript,
+            max_cjk_chars=owner._turn_policy.eot.short_statement_defer_max_cjk_chars,
+        )
 
     def schedule_deferred_low_eot_commit(
         self,
@@ -457,18 +443,21 @@ class FullDuplexTurnCompletion:
         transcript: str,
     ) -> bool:
         owner = self._pipeline
-        if not _voiceprint_result_is_inconclusive(result):
+        if not voiceprint_result_is_inconclusive(result):
             return False
         owner._ensure_user_turn_coordinator()
         candidate = owner._user_turns.active
         if candidate is None:
             return False
-        if candidate.state == "waiting_merge":
-            return True
-        if candidate.state in {"committed", "rejected"}:
-            return False
-        selected = candidate.selected_text or transcript
-        return self._looks_like_short_statement_continuation(selected)
+        return should_wait_for_inconclusive_voiceprint_merge(
+            commit_reason=str(getattr(result, "commit_reason", "") or ""),
+            candidate_state=candidate.state,
+            selected_text=candidate.selected_text,
+            transcript=transcript,
+            short_statement_defer_max_cjk_chars=(
+                owner._turn_policy.eot.short_statement_defer_max_cjk_chars
+            ),
+        )
 
     def _defer_inconclusive_voiceprint_result(
         self,
@@ -533,12 +522,3 @@ class FullDuplexTurnCompletion:
                 "reason": reason,
             },
         )
-
-
-def _count_cjk_chars(text: str) -> int:
-    return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-
-
-def _voiceprint_result_is_inconclusive(result: Any) -> bool:
-    reason = str(getattr(result, "commit_reason", "") or "")
-    return is_voiceprint_inconclusive_reason(reason)

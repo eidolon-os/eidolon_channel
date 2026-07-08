@@ -56,6 +56,34 @@ logging.getLogger("websockets.client").setLevel(logging.INFO)
 logging.getLogger("websockets.server").setLevel(logging.INFO)
 
 
+def _eidolon_log_root() -> Path:
+    raw = os.getenv("EIDOLON_LOG_ROOT", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / "eidolon" / "logs"
+
+
+def _default_log_dir() -> Path:
+    return _eidolon_log_root() / "channel"
+
+
+def _resolve_log_dir() -> Path:
+    raw = os.getenv("LOG_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return _default_log_dir()
+
+
+def _normalize_optional_log_file_env(name: str, log_dir: Path) -> None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = log_dir / path
+    os.environ[name] = str(path)
+
+
 def _configure_logging(
     env: str,
     log_dir: Path | None = None,
@@ -575,9 +603,9 @@ async def _serve() -> None:
 
 def main() -> None:
     env = os.getenv("EIDOLON_ENV", "prod")
-    log_dir_str = os.getenv("LOG_DIR", "")
-    log_dir = Path(log_dir_str) if log_dir_str else None
-    _configure_logging(env, log_dir=log_dir, log_to_file=bool(log_dir_str))
+    log_dir = _resolve_log_dir()
+    _normalize_optional_log_file_env("EIDOLON_EOT_DEBUG_LOG", log_dir)
+    _configure_logging(env, log_dir=log_dir, log_to_file=True)
     _register_plugins()
 
     loop = asyncio.new_event_loop()

@@ -178,7 +178,7 @@ turn_policy:
 observability:
   structured_logs: true
   metrics_enabled: true
-  timeline_debug_path: "benchmark/runs/channel-worker-turn-timeline.jsonl"
+  timeline_debug_path: "~/eidolon/logs/channel/turn-timeline.jsonl"
   llm_first_delta_timeout_ms: 3000
   stt_pending_provider_event_window_ms: 2000
   stt_pending_provider_event_preroll_ms: 500

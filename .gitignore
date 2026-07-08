@@ -31,3 +31,31 @@ reports/e2e_*/
 
 # macOS Finder metadata
 .DS_Store
+
+# Local OS/editor/runtime hygiene
+**/.DS_Store
+._*
+**/._*
+.AppleDouble/
+.LSOverride
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+Thumbs.db
+desktop.ini
+.vscode/
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+.claude/
+.import_linter_cache/
+logs/
+*.log
+*.pid
+*.sock
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm

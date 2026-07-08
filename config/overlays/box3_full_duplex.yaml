@@ -18,4 +18,4 @@ voiceprint:
   enabled: false
 
 observability:
-  timeline_debug_path: "benchmark/runs/channel-worker-turn-timeline.jsonl"
+  timeline_debug_path: "~/eidolon/logs/channel/turn-timeline.jsonl"

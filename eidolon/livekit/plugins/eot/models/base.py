@@ -60,6 +60,7 @@ import json
 import os
 import time
 from abc import ABC
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..config import EidolonEOTConfig
@@ -71,7 +72,23 @@ from ..impl.state import TurnDetectionStateManager
 from ..impl.eot_policy import PolicyChain
 from ..log import logger
 
-_DEBUG_LOG_PATH = os.environ.get("EIDOLON_EOT_DEBUG_LOG", "")
+
+def _resolve_debug_log_path() -> str:
+    raw = os.environ.get("EIDOLON_EOT_DEBUG_LOG", "").strip()
+    if not raw:
+        return ""
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return str(path)
+    log_dir = os.environ.get("LOG_DIR", "").strip()
+    if log_dir:
+        return str(Path(log_dir).expanduser() / path)
+    log_root = os.environ.get("EIDOLON_LOG_ROOT", "").strip()
+    base = Path(log_root).expanduser() if log_root else Path.home() / "eidolon" / "logs"
+    return str(base / "channel" / path)
+
+
+_DEBUG_LOG_PATH = _resolve_debug_log_path()
 
 
 def _eot_log(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:

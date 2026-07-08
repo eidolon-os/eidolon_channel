@@ -12,7 +12,10 @@ from ..session.voiceprint_reasons import (
     voiceprint_blocked_reason,
     voiceprint_error_reason,
 )
-from ..turn_policy import Action, InterruptIntent
+from .playback_turn_evidence import (
+    non_semantic_completed_turn_reason,
+    resolve_playback_turn_decision,
+)
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -282,17 +285,14 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript,
             timeline=timeline,
         )
-        if decision is None or not self._completed_turn_can_resolve(decision):
+        resolution = resolve_playback_turn_decision(decision)
+        if not resolution.should_apply:
             if timeline is not None:
                 self._record_completed_gate_event(
                     timeline,
                     stage=timeline_attr,
                     action="skip",
-                    reason=(
-                        "no_decision"
-                        if decision is None
-                        else f"decision_not_resolvable:{decision.action.value}"
-                    ),
+                    reason=resolution.reason,
                     transcript=transcript,
                     playback_active=True,
                     intent=(
@@ -306,7 +306,7 @@ class FullDuplexFrameworkCompletedTurnGate:
 
         owner = self._pipeline
         completion = self._completion
-        continue_to_llm = self._completed_turn_decision_continues_to_llm(decision)
+        continue_to_llm = resolution.continue_to_llm
         if timeline is not None:
             timeline.mark("framework_completed_playback_evidence_at")
             timeline.set_attr(
@@ -413,14 +413,6 @@ class FullDuplexFrameworkCompletedTurnGate:
             return True
         timeline_client = _timeline_client_audio_state(timeline)
         return timeline_client.get("playback_state") == "agent_speaking"
-
-    @staticmethod
-    def _completed_turn_decision_continues_to_llm(decision: Any) -> bool:
-        return (
-            decision.action is Action.CANCEL
-            and decision.intent is InterruptIntent.NORMAL_INTERRUPT
-            and bool(decision.topic_switch_hint or decision.correction_hint)
-        )
 
     def _eot_thinks_turn_complete(self) -> bool:
         owner = self._pipeline
@@ -534,13 +526,7 @@ class FullDuplexFrameworkCompletedTurnGate:
         decision = timeline.attrs.get("decision")
         if not isinstance(decision, dict):
             return ""
-        action = str(decision.get("action") or "")
-        intent = str(decision.get("intent") or "")
-        if action == "rollback":
-            return f"non_semantic_completed_turn:{intent or action}"
-        if intent in {"backchannel", "noise", "hard_stop"}:
-            return f"non_semantic_completed_turn:{intent}"
-        return ""
+        return non_semantic_completed_turn_reason(decision)
 
     def _stop_non_semantic_framework_completed_turn(
         self,
@@ -583,7 +569,8 @@ class FullDuplexFrameworkCompletedTurnGate:
             completed_transcript,
             timeline=timeline,
         )
-        if decision is not None and self._completed_turn_can_resolve(decision):
+        resolution = resolve_playback_turn_decision(decision)
+        if resolution.should_apply:
             owner._ensure_decision_effect_applier()
             owner._decision_effects.apply(
                 decision,
@@ -618,16 +605,6 @@ class FullDuplexFrameworkCompletedTurnGate:
             completed_transcript[:80],
         )
         return True
-
-    @staticmethod
-    def _completed_turn_can_resolve(decision: Any) -> bool:
-        if decision.action is Action.ROLLBACK:
-            return True
-        if decision.action is not Action.CANCEL:
-            return False
-        if decision.intent is InterruptIntent.HARD_STOP:
-            return True
-        return bool(decision.topic_switch_hint or decision.correction_hint)
 
     def _decide_from_completed_turn_evidence(
         self,

@@ -1,6 +1,6 @@
 # LiveKit Agent Server 架构分析
 
-> 最近更新: 2026-07-03
+> 最近更新: 2026-07-08
 > 代码路径: `eidolon/livekit/agent/`
 
 ---
@@ -112,6 +112,7 @@ eidolon/livekit/agent/
 │   ├── interruption_effects.py # FullDuplexInterruptionEffects: output/framework effects
 │   ├── lifecycle.py          # FullDuplexSessionLifecycle: AgentSession run/start/shutdown
 │   ├── output_flow.py        # FullDuplexOutputFlow: duck mixer install + VAD duck arming
+│   ├── playback_turn_evidence.py # playback-overlap completed-turn pure decision contract
 │   ├── semantic_interrupt_gate.py # SemanticInterruptGate: transcript-triggered semantic interrupt gate
 │   ├── turn_completion.py    # FullDuplexTurnCompletion: user-turn completion + voiceprint commit gate
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
@@ -187,7 +188,9 @@ eidolon/livekit/agent/
 
 `full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、session user turn boundary 调度，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume、LiveKit framework completed-turn hook 细节或 interrupted context capture 算法。
 
-`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的门禁 owner。它负责裁决 framework completed-turn 是否允许进入 LLM、是否等待短句/声纹合并、是否因 active interruption owner 或非语义 backchannel/noise/hard-stop 阻断，并把允许通过的 framework transcript 对齐到 canonical user text。
+`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的门禁 owner。它负责裁决 framework completed-turn 是否允许进入 LLM、是否等待短句/声纹合并、是否因 active interruption owner 或非语义 backchannel/noise/hard-stop 阻断，并把允许通过的 framework transcript 对齐到 canonical user text。它可以执行 LiveKit/session/user-turn 副作用，但 playback-overlap completed-turn 的“哪些 decision 可终结、哪些 semantic redirect 应继续进 LLM”必须委托给纯 contract，不在 hook owner 内重复手写。
+
+`full_duplex/playback_turn_evidence.py` 是 playback-overlap completed-turn evidence 的纯决策 contract。它只消费 `turn_policy.Decision` 或 timeline 中已结构化的 decision dict，输出 `should_apply / continue_to_llm / reason`；不读取 LiveKit、Room、AgentSession、timeline clock 或 pipeline 私有状态，也不发布 control packet。topic/correction redirect 可以 `cancel` 后继续进入 LLM；hard-stop/backchannel/noise/rollback 只能终结当前 turn；没有 semantic hint 的普通 cancel 不允许被 completed-turn 兜底误当成 redirect。
 
 `full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/injection 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context snapshot/inject 细节。
 

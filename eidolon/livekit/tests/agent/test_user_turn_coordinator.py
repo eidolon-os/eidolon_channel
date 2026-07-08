@@ -127,6 +127,79 @@ def test_deferred_candidate_commits_once_after_grace() -> None:
     )
 
 
+def test_unmerged_pending_candidate_gets_superseded_owner() -> None:
+    clock = _Clock()
+    coordinator = UserTurnCoordinator(
+        merge_grace_sec=0.8,
+        low_eot_delay_sec=0.8,
+        clock=clock,
+    )
+    old_timeline = TurnTimeline("turn-old")
+    new_timeline = TurnTimeline("turn-new")
+
+    coordinator.start_speech(timeline=old_timeline)
+    coordinator.add_transcript("你给我查查今天的天气吧。", is_final=True)
+    decision = coordinator.finish_speech(eot_score=0.01, should_defer=True)
+    assert decision.action == "defer"
+
+    clock.advance(1.0)
+    assert not coordinator.can_merge_new_speech()
+    coordinator.start_speech(timeline=new_timeline)
+
+    assert coordinator.snapshot()["candidate_id"] == "turn-new"
+    assert old_timeline.attrs["user_turn_coordinator"]["state"] == "rejected"
+    assert old_timeline.attrs["user_turn_coordinator"]["reject_reason"] == (
+        "superseded_by_new_speech"
+    )
+    assert old_timeline.attrs["user_turn_superseded_by"] == {
+        "replacement_candidate_id": "turn-new",
+        "reason": "superseded_by_new_speech",
+    }
+    assert _owner_events(old_timeline)[-1] == (
+        "superseded_user_turn",
+        "superseded",
+        "superseded_by_new_speech",
+    )
+
+
+def test_rejected_replacement_restores_superseded_pending_candidate() -> None:
+    clock = _Clock()
+    coordinator = UserTurnCoordinator(
+        merge_grace_sec=0.8,
+        low_eot_delay_sec=0.8,
+        clock=clock,
+    )
+    old_timeline = TurnTimeline("turn-old-restore")
+    new_timeline = TurnTimeline("turn-new-rejected")
+
+    coordinator.start_speech(timeline=old_timeline)
+    coordinator.add_transcript("你给我查查今天的天气吧。", is_final=True)
+    decision = coordinator.finish_speech(eot_score=0.01, should_defer=True)
+    assert decision.action == "defer"
+
+    clock.advance(1.0)
+    coordinator.start_speech(timeline=new_timeline)
+    coordinator.add_transcript("那我再说了。", is_final=True)
+    replacement = coordinator.finish_speech(eot_score=1.0, should_defer=False)
+    assert replacement.action == "reject"
+
+    restored = coordinator.restore_superseded_candidate_if_replacement_rejected(
+        replacement.reason
+    )
+
+    assert restored.action == "commit"
+    assert restored.reason == "superseded_candidate_restored"
+    assert restored.candidate_id == "turn-old-restore"
+    assert restored.transcript == "你给我查查今天的天气吧。"
+    assert coordinator.snapshot()["candidate_id"] == "turn-old-restore"
+    assert coordinator.snapshot()["state"] == "waiting_merge"
+    assert _owner_events(old_timeline)[-1] == (
+        "provisional_user_turn",
+        "superseded_restored",
+        "replacement_rejected:non_actionable_meta_turn",
+    )
+
+
 def test_late_final_after_commit_does_not_replace_committed_candidate() -> None:
     coordinator = UserTurnCoordinator()
     coordinator.start_speech(timeline=TurnTimeline("turn-late-final"))

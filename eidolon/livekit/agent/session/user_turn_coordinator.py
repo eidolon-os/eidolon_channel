@@ -35,6 +35,7 @@ OwnerKind = Literal[
     "provisional_user_turn",
     "accepted_user_turn",
     "rejected_user_turn",
+    "superseded_user_turn",
     "merged_fragment",
     "dropped_fragment",
 ]
@@ -49,6 +50,7 @@ DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS = 4
 TIMELINE_TEXT_PREVIEW_MAX_CHARS = 120
 OWNER_LEDGER_MAX_TRANSITIONS = 16
 NON_ACTIONABLE_META_TURN_REASON = "non_actionable_meta_turn"
+SUPERSEDED_BY_NEW_SPEECH_REASON = "superseded_by_new_speech"
 _NON_ACTIONABLE_META_TURN_PREFIX_SUFFIXES = {
     "那我再说": frozenset(("", "了", "一下", "一遍", "吧")),
     "我再说": frozenset(("", "了", "一下", "一遍", "吧")),
@@ -152,6 +154,13 @@ class UserTurnCandidate:
         return self.segments[-1]
 
 
+@dataclass
+class SupersededCandidate:
+    candidate: UserTurnCandidate
+    previous_state: CandidateState
+    replacement_candidate_id: str
+
+
 class UserTurnCoordinator:
     """Own the product-level user turn state machine.
 
@@ -207,6 +216,7 @@ class UserTurnCoordinator:
         )
         self._clock = clock or time.monotonic
         self._active: UserTurnCandidate | None = None
+        self._superseded: SupersededCandidate | None = None
         self._counter = 0
 
     @property
@@ -290,6 +300,10 @@ class UserTurnCoordinator:
 
         self._counter += 1
         candidate_id = timeline.turn_id if timeline is not None else f"user-turn-{self._counter}"
+        self._supersede_active_candidate_if_needed(
+            now=current_time,
+            replacement_candidate_id=candidate_id,
+        )
         candidate = UserTurnCandidate(
             candidate_id=candidate_id,
             timeline=timeline,
@@ -395,6 +409,7 @@ class UserTurnCoordinator:
         if meta_turn_decision is not None:
             return meta_turn_decision
         if should_defer:
+            self._superseded = None
             candidate.state = "waiting_merge"
             candidate.merge_reason = "low_eot_wait_for_continuation"
             self._record_owner_transition(
@@ -413,6 +428,7 @@ class UserTurnCoordinator:
                 reason="low_eot_wait_for_continuation",
                 delay_sec=self._low_eot_delay_sec,
             )
+        self._superseded = None
         candidate.state = "waiting_voiceprint"
         self._record_owner_transition(
             candidate,
@@ -443,6 +459,7 @@ class UserTurnCoordinator:
             )
         candidate.state = "waiting_voiceprint"
         candidate.updated_at = self._now(now)
+        self._superseded = None
         self._record_owner_transition(
             candidate,
             owner="provisional_user_turn",
@@ -492,6 +509,7 @@ class UserTurnCoordinator:
             )
         candidate.state = "ready_to_commit"
         candidate.commit_reason = voiceprint_allowed_reason(reason)
+        self._superseded = None
         self._record_owner_transition(
             candidate,
             owner="accepted_user_turn",
@@ -519,6 +537,7 @@ class UserTurnCoordinator:
         if candidate is None:
             return
         candidate.state = "committed"
+        self._superseded = None
         candidate.commit_reason = reason
         candidate.committed_at = self._now(now)
         candidate.updated_at = candidate.committed_at
@@ -567,6 +586,7 @@ class UserTurnCoordinator:
         if meta_turn_decision is not None:
             return meta_turn_decision
         candidate.state = "committed"
+        self._superseded = None
         candidate.commit_reason = reason
         if voiceprint_reason:
             candidate.voiceprint_reason = voiceprint_reason
@@ -631,6 +651,7 @@ class UserTurnCoordinator:
         if meta_turn_decision is not None:
             return meta_turn_decision
         candidate.state = "waiting_merge"
+        self._superseded = None
         if not candidate.merge_reason:
             candidate.merge_reason = reason
         if voiceprint_reason and not candidate.voiceprint_reason.startswith(
@@ -688,6 +709,7 @@ class UserTurnCoordinator:
         if stripped:
             self._merge_framework_transcript(candidate, stripped, now=current_time)
         candidate.state = "waiting_merge"
+        self._superseded = None
         candidate.merge_reason = reason
         candidate.voiceprint_reason = reason
         candidate.updated_at = current_time
@@ -741,8 +763,61 @@ class UserTurnCoordinator:
             reason=reason,
         )
 
+    def restore_superseded_candidate_if_replacement_rejected(
+        self,
+        replacement_reject_reason: str,
+        *,
+        now: float | None = None,
+    ) -> UserTurnDecision:
+        superseded = self._superseded
+        replacement = self._active
+        if superseded is None or replacement is None:
+            return UserTurnDecision(action="none", reason="no_superseded_candidate")
+        if replacement.state != "rejected":
+            return UserTurnDecision(
+                action="none",
+                candidate_id=replacement.candidate_id,
+                transcript=replacement.selected_text,
+                reason=f"replacement_not_rejected:{replacement.state}",
+            )
+        if replacement.candidate_id != superseded.replacement_candidate_id:
+            return UserTurnDecision(
+                action="none",
+                candidate_id=replacement.candidate_id,
+                transcript=replacement.selected_text,
+                reason="replacement_candidate_mismatch",
+            )
+        current_time = self._now(now)
+        candidate = superseded.candidate
+        candidate.state = superseded.previous_state
+        candidate.reject_reason = ""
+        candidate.updated_at = current_time
+        restore_reason = f"replacement_rejected:{replacement_reject_reason}"
+        self._active = candidate
+        self._superseded = None
+        self._record_owner_transition(
+            candidate,
+            owner="provisional_user_turn",
+            event="superseded_restored",
+            reason=restore_reason,
+            now=current_time,
+            transcript=candidate.selected_text,
+        )
+        self._record_attrs(
+            candidate,
+            event="superseded_restored",
+            transcript=candidate.selected_text,
+        )
+        return UserTurnDecision(
+            action="commit",
+            candidate_id=candidate.candidate_id,
+            transcript=candidate.selected_text,
+            reason="superseded_candidate_restored",
+        )
+
     def reset(self) -> None:
         self._active = None
+        self._superseded = None
 
     def snapshot(self) -> dict[str, Any]:
         candidate = self._active
@@ -916,6 +991,47 @@ class UserTurnCoordinator:
             event="non_actionable_meta_tail_dropped",
             transcript=prior_text.strip(),
         )
+
+    def _supersede_active_candidate_if_needed(
+        self,
+        *,
+        now: float,
+        replacement_candidate_id: str,
+    ) -> None:
+        candidate = self._active
+        if candidate is None or self._is_terminal(candidate):
+            return
+        previous_state = candidate.state
+        candidate.state = "rejected"
+        candidate.reject_reason = SUPERSEDED_BY_NEW_SPEECH_REASON
+        candidate.updated_at = now
+        self._superseded = SupersededCandidate(
+            candidate=candidate,
+            previous_state=previous_state,
+            replacement_candidate_id=replacement_candidate_id,
+        )
+        self._record_owner_transition(
+            candidate,
+            owner="superseded_user_turn",
+            event="superseded",
+            reason=SUPERSEDED_BY_NEW_SPEECH_REASON,
+            now=now,
+            transcript=candidate.selected_text,
+        )
+        self._record_attrs(
+            candidate,
+            event="superseded",
+            transcript=candidate.selected_text,
+        )
+        timeline = candidate.timeline
+        if timeline is not None:
+            timeline.set_attr(
+                "user_turn_superseded_by",
+                {
+                    "replacement_candidate_id": replacement_candidate_id,
+                    "reason": SUPERSEDED_BY_NEW_SPEECH_REASON,
+                },
+            )
 
     def _reject_non_actionable_meta_turn_if_needed(
         self,

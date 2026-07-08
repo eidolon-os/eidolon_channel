@@ -126,6 +126,10 @@ def test_speech_lifecycle_snapshots_replaced_unmerged_timeline() -> None:
         previous,
         "speech_started_replaced_unmerged_timeline",
     )
+    first_transition = owner._record_full_duplex_transition.call_args_list[0]
+    assert first_transition.args[0].value == "user_turn_rejected"
+    assert first_transition.kwargs["event"] == "user_turn_superseded_by_new_speech"
+    assert first_transition.kwargs["timeline"] is previous
     assert owner._timeline is not previous
 
 
@@ -239,6 +243,56 @@ def test_speech_lifecycle_stop_schedules_voiceprint_gated_commit() -> None:
     assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
         "user_turn_voiceprint_pending"
     )
+    assert owner._latest_asr_text == ""
+
+
+def test_speech_lifecycle_restores_superseded_candidate_after_rejected_replacement() -> None:
+    owner = _owner()
+    owner._timeline = TurnTimeline("turn-replacement")
+    restored_timeline = TurnTimeline("turn-restored")
+    voiceprint_task = object()
+    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
+    owner._ducking = SimpleNamespace(is_suspended=False)
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
+    owner._session = MagicMock()
+    owner._user_turns.selected_text = "那我再说了。"
+    owner._user_turns.active = SimpleNamespace(timeline=owner._timeline)
+    owner._user_turns.finish_speech.return_value = SimpleNamespace(
+        action="reject",
+        reason="non_actionable_meta_turn",
+        transcript="那我再说了。",
+        delay_sec=0.0,
+    )
+
+    def restore_superseded(_reason: str):
+        owner._user_turns.active = SimpleNamespace(timeline=restored_timeline)
+        return SimpleNamespace(
+            action="commit",
+            reason="superseded_candidate_restored",
+            transcript="你给我查查今天的天气吧。",
+        )
+
+    owner._user_turns.restore_superseded_candidate_if_replacement_rejected.side_effect = (
+        restore_superseded
+    )
+
+    FullDuplexSpeechLifecycle(owner).handle_stopped()
+
+    owner._turn_completion.clear_session_user_turn.assert_called_once_with(
+        "non_actionable_meta_turn"
+    )
+    owner._turn_completion.reset_candidate_voiceprint_tasks.assert_called_once_with()
+    owner._turn_completion.schedule_voiceprint_gated_commit.assert_called_once_with(
+        verify_task=None,
+        eot_model=owner._get_eot_model.return_value,
+        transcript="你给我查查今天的天气吧。",
+        timeline=restored_timeline,
+    )
+    last_transition = owner._record_full_duplex_transition.call_args
+    assert last_transition.args[0].value == "user_turn_pending"
+    assert last_transition.kwargs["event"] == "superseded_candidate_restored"
     assert owner._latest_asr_text == ""
 
 

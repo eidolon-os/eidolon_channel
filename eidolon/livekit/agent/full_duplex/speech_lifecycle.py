@@ -38,21 +38,39 @@ class FullDuplexSpeechLifecycle:
             turn_completion.cancel_pending_voiceprint_commits("new_speech_started")
             turn_completion.clear_completed_voiceprint_turn()
             turn_completion.reset_candidate_voiceprint_tasks()
+        replaced_unmerged_timeline = owner._timeline if not merge_continuation else None
+        replaced_candidate = (
+            owner._user_turns.active if not merge_continuation else None
+        )
+        superseding_pending_candidate = (
+            replaced_unmerged_timeline is not None
+            and replaced_candidate is not None
+            and getattr(replaced_candidate, "state", None)
+            not in {"committed", "rejected"}
+        )
 
         owner._callbacks.on_user_started_speaking()
         owner._user_speaking_start_time = time.monotonic()
         if not merge_continuation or owner._timeline is None:
-            if not merge_continuation and owner._timeline is not None:
-                owner._append_turn_timeline_snapshot(
-                    owner._timeline,
-                    "speech_started_replaced_unmerged_timeline",
-                )
             owner._timeline = TurnTimeline(generate_turn_id())
             owner._timeline_debug_flushed = False
             if owner._room is not None:
                 owner._timeline.set_attr("room_name", owner._room.name or "")
 
         owner._user_turns.start_speech(timeline=owner._timeline)
+        if replaced_unmerged_timeline is not None:
+            if superseding_pending_candidate:
+                _record_contract_transition(
+                    owner,
+                    FullDuplexPhase.USER_TURN_REJECTED,
+                    event="user_turn_superseded_by_new_speech",
+                    reason="superseded_by_new_speech",
+                    timeline=replaced_unmerged_timeline,
+                )
+            owner._append_turn_timeline_snapshot(
+                replaced_unmerged_timeline,
+                "speech_started_replaced_unmerged_timeline",
+            )
         _record_contract_transition(
             owner,
             FullDuplexPhase.USER_SPEECH_OPEN,
@@ -128,6 +146,14 @@ class FullDuplexSpeechLifecycle:
             )
             if owner._user_turns.active is not None:
                 owner._user_turns.reject_active(attention_reject_reason)
+            if _restore_superseded_candidate_after_reject(
+                owner,
+                turn_completion,
+                eot_model,
+                attention_reject_reason,
+            ):
+                owner._latest_asr_text = ""
+                return
             _record_contract_transition(
                 owner,
                 FullDuplexPhase.USER_TURN_REJECTED,
@@ -163,6 +189,14 @@ class FullDuplexSpeechLifecycle:
                 transcript[:80],
             )
             owner._user_turns.reject_active(low_evidence_reason)
+            if _restore_superseded_candidate_after_reject(
+                owner,
+                turn_completion,
+                eot_model,
+                low_evidence_reason,
+            ):
+                owner._latest_asr_text = ""
+                return
             _record_contract_transition(
                 owner,
                 FullDuplexPhase.USER_TURN_REJECTED,
@@ -189,6 +223,14 @@ class FullDuplexSpeechLifecycle:
             should_defer=should_defer,
         )
         if decision.action == "reject":
+            if _restore_superseded_candidate_after_reject(
+                owner,
+                turn_completion,
+                eot_model,
+                decision.reason,
+            ):
+                owner._latest_asr_text = ""
+                return
             _record_contract_transition(
                 owner,
                 FullDuplexPhase.USER_TURN_REJECTED,
@@ -287,6 +329,38 @@ class FullDuplexSpeechLifecycle:
         return False
 
 
+def _restore_superseded_candidate_after_reject(
+    owner: Any,
+    turn_completion: Any,
+    eot_model: Any,
+    reject_reason: str,
+) -> bool:
+    restore = owner._user_turns.restore_superseded_candidate_if_replacement_rejected(
+        reject_reason
+    )
+    if restore.action != "commit":
+        return False
+    restored_candidate = owner._user_turns.active
+    restored_timeline = getattr(restored_candidate, "timeline", None)
+    _record_contract_transition(
+        owner,
+        FullDuplexPhase.USER_TURN_PENDING,
+        event="superseded_candidate_restored",
+        reason=restore.reason,
+        transcript=restore.transcript,
+        timeline=restored_timeline,
+    )
+    turn_completion.clear_session_user_turn(reject_reason)
+    turn_completion.reset_candidate_voiceprint_tasks()
+    turn_completion.schedule_voiceprint_gated_commit(
+        verify_task=None,
+        eot_model=eot_model,
+        transcript=restore.transcript,
+        timeline=restored_timeline,
+    )
+    return True
+
+
 def _record_contract_transition(
     owner: Any,
     phase: FullDuplexPhase,
@@ -294,6 +368,7 @@ def _record_contract_transition(
     event: str,
     reason: str,
     transcript: str = "",
+    timeline: TurnTimeline | None = None,
 ) -> None:
     recorder = getattr(owner, "_record_full_duplex_transition", None)
     if recorder is None:
@@ -303,4 +378,5 @@ def _record_contract_transition(
         event=event,
         reason=reason,
         transcript=transcript,
+        timeline=timeline,
     )

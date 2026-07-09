@@ -531,6 +531,9 @@ class StreamingPipeline(BasePipeline):
         return InterruptionOrchestrator(
             evidence_timeout_sec=timeout_sec,
             min_speech_sec=min_speech_sec,
+            no_evidence_timeout_sec=(
+                interrupt_policy.post_speech_no_evidence_timeout_ms / 1000.0
+            ),
         )
 
     def _ensure_interruption_orchestrator(self) -> None:

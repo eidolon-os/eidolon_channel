@@ -124,6 +124,12 @@ class InterruptPolicyConfig:
     decision_timeout_ms: int = 450
     post_speech_evidence_timeout_ms: int = 6_000
     post_speech_evidence_min_speech_ms: int = 250
+    # Shorter cap for the post-speech evidence wait when NO transcript has
+    # arrived at all: a real interruption yields a transcript quickly (interim
+    # during speech, final within a few hundred ms of VAD end), so total silence
+    # past this grace is almost certainly a false trigger and the agent should
+    # resume promptly instead of staying suspended for the full evidence window.
+    post_speech_no_evidence_timeout_ms: int = 800
     framework_false_interruption_timeout_ms: int = 6_000
     stt_commit_transcript_timeout_ms: int = 5_000
     aec_warmup_ms: int | None = 1_000

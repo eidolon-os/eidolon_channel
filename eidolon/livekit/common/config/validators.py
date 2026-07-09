@@ -94,6 +94,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "turn_policy.interrupt.stt_commit_transcript_timeout_ms must be in [0, 30000]"
         )
+    if not 0 <= intr.post_speech_no_evidence_timeout_ms <= intr.post_speech_evidence_timeout_ms:
+        errors.append(
+            "turn_policy.interrupt.post_speech_no_evidence_timeout_ms must be in "
+            "[0, post_speech_evidence_timeout_ms]"
+        )
     if intr.aec_warmup_ms is not None and not 0 <= intr.aec_warmup_ms <= 30_000:
         errors.append("turn_policy.interrupt.aec_warmup_ms must be null or in [0, 30000]")
     if not 1 <= intr.min_interim_chars <= 12:

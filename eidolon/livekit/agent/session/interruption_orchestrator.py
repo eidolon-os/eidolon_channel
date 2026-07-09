@@ -99,10 +99,19 @@ class InterruptionOrchestrator:
         *,
         evidence_timeout_sec: float,
         min_speech_sec: float,
+        no_evidence_timeout_sec: float | None = None,
         clock: Any | None = None,
     ) -> None:
         self._evidence_timeout_sec = max(0.0, float(evidence_timeout_sec))
         self._min_speech_sec = max(0.0, float(min_speech_sec))
+        # Shorter cap for the post-speech wait when NO transcript has arrived
+        # (false trigger). Defaults to the full evidence window so existing
+        # callers keep prior behavior.
+        self._no_evidence_timeout_sec = (
+            self._evidence_timeout_sec
+            if no_evidence_timeout_sec is None
+            else max(0.0, float(no_evidence_timeout_sec))
+        )
         self._clock = clock or time.monotonic
         self._candidate: InterruptionCandidate | None = None
         self._timeline: TurnTimeline | None = None
@@ -429,16 +438,46 @@ class InterruptionOrchestrator:
         return True
 
     def should_hold_deadline(self) -> bool:
-        """Whether duck deadline should keep holding after VAD became idle."""
+        """Whether duck deadline should keep holding after VAD became idle.
 
-        return self.awaiting_post_speech_evidence
+        Holds while waiting for post-speech evidence — but a real interruption
+        yields a transcript quickly (interim during speech, final within a few
+        hundred ms of VAD end). If NO transcript has arrived at all past a short
+        no-evidence grace, it is almost certainly a false trigger; stop holding
+        so the deadline resumes the agent promptly instead of leaving it silent
+        for the full evidence window.
+        """
+
+        if not self.awaiting_post_speech_evidence:
+            return False
+        return not self._no_evidence_grace_elapsed()
 
     def max_suspend_sec(self) -> float:
-        """Max suspend window while waiting for post-speech evidence."""
+        """Max suspend window while waiting for post-speech evidence.
+
+        Capped to the shorter no-evidence window when no transcript has arrived.
+        """
 
         if not self.awaiting_post_speech_evidence:
             return 0.0
+        candidate = self._candidate
+        if candidate is not None and not (
+            candidate.final_transcript or candidate.transcript
+        ).strip():
+            return self._no_evidence_timeout_sec
         return self._evidence_timeout_sec
+
+    def _no_evidence_grace_elapsed(self) -> bool:
+        """True once no transcript has arrived and the no-evidence grace passed."""
+
+        candidate = self._candidate
+        if candidate is None:
+            return False
+        if (candidate.final_transcript or candidate.transcript).strip():
+            return False
+        if candidate.stopped_at is None:
+            return False
+        return (self._now() - candidate.stopped_at) >= self._no_evidence_timeout_sec
 
     def blocks_framework_completed_turn(self) -> bool:
         """True while LiveKit must not commit a not-yet-owned interrupt turn."""

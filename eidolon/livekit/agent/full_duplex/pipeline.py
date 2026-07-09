@@ -390,9 +390,59 @@ class StreamingPipeline(BasePipeline):
         state = getattr(self, "_state", "unknown")
         return state.name if hasattr(state, "name") else str(state)
 
-    def _set_interrupt_cancel_suppression(self, active: bool, until: float) -> None:
+    def _set_interrupt_cancel_suppression(
+        self,
+        active: bool,
+        until: float | None = None,
+        *,
+        reason: str = "",
+    ) -> None:
+        # Single writer (F1 §1c) for the interrupt-cancel suppression flags.
+        # ``until=None`` leaves the residual-commit-suppress window unchanged
+        # (callers that only clear the skip flag must not shorten the window).
         self._skip_commit_after_interrupt_cancel = active
-        self._suppress_commit_after_interrupt_until = until
+        if until is not None:
+            self._suppress_commit_after_interrupt_until = until
+        self._record_suppression_change(
+            "interrupt_cancel",
+            active=active,
+            reason=reason,
+            until=self._suppress_commit_after_interrupt_until,
+        )
+
+    def _set_suppress_transcripts_until_next_speech(
+        self,
+        value: bool,
+        *,
+        reason: str = "",
+    ) -> None:
+        # Single writer (F1 §1c) for the transcript-suppression flag, previously
+        # mutated directly by several collaborators (owner._x = ...).
+        self._suppress_transcripts_until_next_speech = value
+        self._record_suppression_change("suppress_transcripts", active=value, reason=reason)
+
+    def _record_suppression_change(
+        self,
+        flag: str,
+        *,
+        active: bool,
+        reason: str,
+        until: float | None = None,
+    ) -> None:
+        # Observability for turn-suppression state changes: who flipped what and
+        # why. Never affects behavior. Serves F1 (single, observable authority).
+        logger.debug(
+            "[StreamingPipeline] suppression %s=%s reason=%s", flag, active, reason
+        )
+        timeline = getattr(self, "_timeline", None)
+        if timeline is None:
+            return
+        entry: dict[str, object] = {"flag": flag, "active": active, "reason": reason}
+        if until is not None:
+            entry["until"] = until
+        events = list(timeline.attrs.get("turn_suppression_changes") or ())
+        events.append(entry)
+        timeline.set_attr("turn_suppression_changes", events[-24:])
 
     def _claim_full_duplex_irreversible_side_effect(
         self,
@@ -767,7 +817,7 @@ class StreamingPipeline(BasePipeline):
         return self._transcript_admission
 
     def _reject_agent_echo_transcript(self, transcript: str) -> None:
-        self._suppress_transcripts_until_next_speech = True
+        self._set_suppress_transcripts_until_next_speech(True, reason="agent_echo")
         if self._timeline is not None:
             self._timeline.set_attr(
                 "agent_echo_suppressed",

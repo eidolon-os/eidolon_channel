@@ -130,7 +130,9 @@ class FullDuplexFrameworkCompletedTurnGate:
             )
             return False
 
-        owner._suppress_transcripts_until_next_speech = True
+        owner._set_suppress_transcripts_until_next_speech(
+            True, reason="voiceprint_commit_blocked"
+        )
         completion.clear_session_user_turn(voiceprint_blocked_reason(reason))
         owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
         logger.info(

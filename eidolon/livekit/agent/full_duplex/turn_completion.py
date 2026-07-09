@@ -389,7 +389,9 @@ class FullDuplexTurnCompletion:
         self._record_voiceprint_commit_gate(timeline, allowed=allowed, reason=reason)
         if not allowed:
             eot_model.reset()
-            owner._suppress_transcripts_until_next_speech = True
+            owner._set_suppress_transcripts_until_next_speech(
+                True, reason="voiceprint_rejected"
+            )
             _record_contract_transition(
                 owner,
                 FullDuplexPhase.USER_TURN_REJECTED,

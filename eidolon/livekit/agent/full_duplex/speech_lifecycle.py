@@ -30,9 +30,8 @@ class FullDuplexSpeechLifecycle:
         turn_completion = owner._ensure_turn_completion()
         owner._ensure_user_turn_coordinator()
         merge_continuation = owner._user_turns.can_merge_new_speech()
-        owner._skip_commit_after_interrupt_cancel = False
-        owner._suppress_transcripts_until_next_speech = False
-        owner._set_interrupt_cancel_suppression(False, 0.0)
+        owner._set_interrupt_cancel_suppression(False, 0.0, reason="new_speech_started")
+        owner._set_suppress_transcripts_until_next_speech(False, reason="new_speech_started")
         turn_completion.cancel_deferred_low_eot_commit("new_speech_started")
         if not merge_continuation:
             turn_completion.cancel_pending_voiceprint_commits("new_speech_started")
@@ -122,7 +121,8 @@ class FullDuplexSpeechLifecycle:
             else self._resolve_interruption_candidate_on_stop()
         )
         owner._callbacks.on_user_ended_speaking()
-        owner._skip_commit_after_interrupt_cancel = False
+        # Clear only the skip flag; leave the residual-commit-suppress window.
+        owner._set_interrupt_cancel_suppression(False, reason="speech_stopped")
         if committed_confirmed_cancel:
             owner._latest_asr_text = ""
             return

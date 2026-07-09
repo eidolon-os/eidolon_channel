@@ -58,12 +58,22 @@ def _owner() -> SimpleNamespace:
     owner._interruption_orchestrator = MagicMock()
     owner._record_full_duplex_transition = MagicMock()
 
-    def set_interrupt_cancel_suppression(active: bool, until: float) -> None:
+    def set_interrupt_cancel_suppression(
+        active: bool, until: float | None = None, *, reason: str = ""
+    ) -> None:
         owner._skip_commit_after_interrupt_cancel = active
-        owner._suppress_commit_after_interrupt_until = until
+        if until is not None:
+            owner._suppress_commit_after_interrupt_until = until
 
     owner._set_interrupt_cancel_suppression = MagicMock(
         side_effect=set_interrupt_cancel_suppression
+    )
+
+    def set_suppress_transcripts_until_next_speech(value: bool, *, reason: str = "") -> None:
+        owner._suppress_transcripts_until_next_speech = value
+
+    owner._set_suppress_transcripts_until_next_speech = MagicMock(
+        side_effect=set_suppress_transcripts_until_next_speech
     )
     return owner
 
@@ -91,7 +101,12 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     owner._provider_events.apply_pending_stt_provider_events.assert_called_once_with()
     owner._provider_events.observe_stt_turn_audio.assert_called_once_with()
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)
-    owner._set_interrupt_cancel_suppression.assert_called_once_with(False, 0.0)
+    owner._set_interrupt_cancel_suppression.assert_called_once_with(
+        False, 0.0, reason="new_speech_started"
+    )
+    owner._set_suppress_transcripts_until_next_speech.assert_called_once_with(
+        False, reason="new_speech_started"
+    )
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_called_once_with(
         timeline=owner._timeline,
@@ -198,7 +213,7 @@ def test_speech_lifecycle_stop_commits_confirmed_cancel_candidate() -> None:
         action="cancel",
         reason="confirmed_cancel_turn_committed",
     )
-    owner._set_interrupt_cancel_suppression.assert_called_once_with(False, 0.0)
+    owner._set_interrupt_cancel_suppression.assert_any_call(False, 0.0)
     owner._callbacks.on_user_ended_speaking.assert_called_once_with()
     owner._user_turns.finish_speech.assert_not_called()
     assert owner._skip_commit_after_interrupt_cancel is False

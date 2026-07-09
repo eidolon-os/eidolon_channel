@@ -50,3 +50,64 @@ def test_full_duplex_state_machine_projects_transitions_to_timeline() -> None:
         "details": {"timeout_sec": 2.0},
     }
     assert len(timeline.attrs["full_duplex_state_transitions"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# F1 guardrail (2026-07): unexpected-transition observability. Never blocks —
+# only records sequences outside the expected graph so anomalies surface.
+# ---------------------------------------------------------------------------
+
+
+def _machine() -> FullDuplexStateMachine:
+    return FullDuplexStateMachine(clock=_Clock())
+
+
+def test_expected_forward_transitions_are_not_flagged() -> None:
+    machine = _machine()
+    timeline = TurnTimeline("turn-ok")
+    machine.transition(
+        FullDuplexPhase.USER_SPEECH_OPEN, event="speech_started",
+        reason="new_speech", timeline=timeline,
+    )
+    machine.transition(
+        FullDuplexPhase.PROVISIONAL_DUCK, event="duck_started",
+        reason="vad_started", timeline=timeline,
+    )
+    assert machine.unexpected_transition_count == 0
+    assert "full_duplex_unexpected_transitions" not in timeline.attrs
+
+
+def test_unexpected_transition_is_flagged_but_still_applied() -> None:
+    # IDLE -> USER_TURN_COMMITTED skips speech/pending: unexpected. It must be
+    # recorded (observability) but still applied (recorder never blocks).
+    machine = _machine()
+    timeline = TurnTimeline("turn-weird")
+    machine.transition(
+        FullDuplexPhase.USER_TURN_COMMITTED, event="odd",
+        reason="skipped_states", timeline=timeline,
+    )
+    assert machine.phase is FullDuplexPhase.USER_TURN_COMMITTED  # applied
+    assert machine.unexpected_transition_count == 1
+    flagged = timeline.attrs["full_duplex_unexpected_transitions"]
+    assert flagged[-1] == {
+        "from": "idle",
+        "to": "user_turn_committed",
+        "event": "odd",
+        "reason": "skipped_states",
+    }
+    assert timeline.attrs["full_duplex_unexpected_transition_count"] == 1
+
+
+def test_reset_and_reject_allowed_from_any_phase() -> None:
+    machine = _machine()
+    machine.transition(FullDuplexPhase.USER_SPEECH_OPEN, event="s", reason="r")
+    machine.transition(FullDuplexPhase.USER_TURN_REJECTED, event="rej", reason="r")
+    machine.transition(FullDuplexPhase.IDLE, event="reset", reason="r")
+    assert machine.unexpected_transition_count == 0
+
+
+def test_self_transition_not_flagged() -> None:
+    machine = _machine()
+    machine.transition(FullDuplexPhase.USER_SPEECH_OPEN, event="s", reason="r")
+    machine.transition(FullDuplexPhase.USER_SPEECH_OPEN, event="s2", reason="r")
+    assert machine.unexpected_transition_count == 0

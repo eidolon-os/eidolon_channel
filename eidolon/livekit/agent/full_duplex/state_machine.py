@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
 from eidolon.livekit.agent.observability import TurnTimeline
+
+logger = logging.getLogger("agent.full_duplex.state_machine")
 
 FullDuplexSideEffect = Literal["none", "reversible", "irreversible"]
 
@@ -27,6 +30,73 @@ class FullDuplexPhase(str, Enum):
     USER_TURN_PENDING = "user_turn_pending"
     USER_TURN_COMMITTED = "user_turn_committed"
     USER_TURN_REJECTED = "user_turn_rejected"
+
+
+# F1 guardrail (2026-07): expected forward edges of the contract, derived from
+# the real transition call sites. This is a *heuristic* graph used only to flag
+# anomalous sequences as an observability signal — the recorder never enforces
+# or blocks. Reset (IDLE) and reject (USER_TURN_REJECTED) may happen from any
+# phase, so they are always allowed (see ``_is_expected_transition``).
+_ALWAYS_ALLOWED_PHASES: frozenset[FullDuplexPhase] = frozenset(
+    {FullDuplexPhase.IDLE, FullDuplexPhase.USER_TURN_REJECTED}
+)
+_EXPECTED_NEXT_PHASES: dict[FullDuplexPhase, frozenset[FullDuplexPhase]] = {
+    FullDuplexPhase.IDLE: frozenset({FullDuplexPhase.USER_SPEECH_OPEN}),
+    FullDuplexPhase.USER_SPEECH_OPEN: frozenset(
+        {
+            FullDuplexPhase.PROVISIONAL_DUCK,
+            FullDuplexPhase.USER_TURN_PENDING,
+            FullDuplexPhase.USER_TURN_COMMITTED,
+        }
+    ),
+    FullDuplexPhase.PROVISIONAL_DUCK: frozenset(
+        {
+            FullDuplexPhase.EVIDENCE_ARBITRATION,
+            FullDuplexPhase.ACCEPTED_INTERRUPTION,
+            FullDuplexPhase.REJECTED_INTERRUPTION,
+            FullDuplexPhase.USER_SPEECH_OPEN,
+            FullDuplexPhase.USER_TURN_PENDING,
+        }
+    ),
+    FullDuplexPhase.EVIDENCE_ARBITRATION: frozenset(
+        {
+            FullDuplexPhase.ACCEPTED_INTERRUPTION,
+            FullDuplexPhase.REJECTED_INTERRUPTION,
+            FullDuplexPhase.PROVISIONAL_DUCK,
+            FullDuplexPhase.USER_TURN_PENDING,
+        }
+    ),
+    FullDuplexPhase.ACCEPTED_INTERRUPTION: frozenset(
+        {
+            FullDuplexPhase.USER_TURN_PENDING,
+            FullDuplexPhase.USER_TURN_COMMITTED,
+        }
+    ),
+    FullDuplexPhase.REJECTED_INTERRUPTION: frozenset(
+        {
+            FullDuplexPhase.USER_SPEECH_OPEN,
+            FullDuplexPhase.USER_TURN_PENDING,
+        }
+    ),
+    FullDuplexPhase.USER_TURN_PENDING: frozenset(
+        {FullDuplexPhase.USER_TURN_COMMITTED}
+    ),
+    FullDuplexPhase.USER_TURN_COMMITTED: frozenset(
+        {FullDuplexPhase.USER_SPEECH_OPEN}
+    ),
+    FullDuplexPhase.USER_TURN_REJECTED: frozenset(
+        {FullDuplexPhase.USER_SPEECH_OPEN}
+    ),
+}
+
+
+def _is_expected_transition(
+    from_phase: FullDuplexPhase,
+    to_phase: FullDuplexPhase,
+) -> bool:
+    if to_phase == from_phase or to_phase in _ALWAYS_ALLOWED_PHASES:
+        return True
+    return to_phase in _EXPECTED_NEXT_PHASES.get(from_phase, frozenset())
 
 
 @dataclass(frozen=True)
@@ -62,6 +132,7 @@ class FullDuplexStateMachine:
         self._clock = clock or time.monotonic
         self._phase = FullDuplexPhase.IDLE
         self._transitions: list[FullDuplexTransition] = []
+        self._unexpected_count = 0
 
     @property
     def phase(self) -> FullDuplexPhase:
@@ -70,6 +141,11 @@ class FullDuplexStateMachine:
     @property
     def transitions(self) -> tuple[FullDuplexTransition, ...]:
         return tuple(self._transitions)
+
+    @property
+    def unexpected_transition_count(self) -> int:
+        """Count of transitions outside the expected graph (observability)."""
+        return self._unexpected_count
 
     def transition(
         self,
@@ -92,6 +168,10 @@ class FullDuplexStateMachine:
             transcript_preview=transcript[:TIMELINE_TEXT_PREVIEW_MAX_CHARS],
             details=dict(details or {}),
         )
+        if not _is_expected_transition(self._phase, phase):
+            self._note_unexpected_transition(
+                timeline, self._phase, phase, event=event, reason=reason
+            )
         self._phase = phase
         self._transitions.append(transition)
         self._record_timeline(timeline, transition)
@@ -107,6 +187,47 @@ class FullDuplexStateMachine:
 
     def _now(self, value: float | None) -> float:
         return float(self._clock() if value is None else value)
+
+    def _note_unexpected_transition(
+        self,
+        timeline: TurnTimeline | None,
+        from_phase: FullDuplexPhase,
+        to_phase: FullDuplexPhase,
+        *,
+        event: str,
+        reason: str,
+    ) -> None:
+        # F1 guardrail: never blocks — the transition still applies. This only
+        # surfaces sequences outside the expected graph so anomalies show up in
+        # the timeline and quantify how fragmented the real turn state is.
+        # Heuristic: treat entries as leads, not proof.
+        self._unexpected_count += 1
+        logger.warning(
+            "[FullDuplexStateMachine] unexpected transition %s -> %s "
+            "(event=%s reason=%s)",
+            from_phase.value,
+            to_phase.value,
+            event,
+            reason,
+        )
+        if timeline is None:
+            return
+        entry = {
+            "from": from_phase.value,
+            "to": to_phase.value,
+            "event": event,
+            "reason": reason,
+        }
+        events = list(timeline.attrs.get("full_duplex_unexpected_transitions") or ())
+        events.append(entry)
+        timeline.set_attr(
+            "full_duplex_unexpected_transitions",
+            events[-TIMELINE_TRANSITION_MAX_ITEMS:],
+        )
+        timeline.set_attr(
+            "full_duplex_unexpected_transition_count",
+            self._unexpected_count,
+        )
 
     def _record_timeline(
         self,

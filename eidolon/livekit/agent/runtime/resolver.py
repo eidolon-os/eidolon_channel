@@ -156,6 +156,9 @@ def make_device_token_resolver(
                 companion_id=ctx.companion_id,
                 memory_realm_id=ctx.memory_realm_id,
                 genome_id=ctx.genome_id,
+                schema_version=ctx.schema_version,
+                genome_hash=ctx.genome_hash,
+                compiler_version=ctx.compiler_version,
                 ttl_seconds=ttl_seconds,
             )
         except ValueError as exc:
@@ -163,12 +166,13 @@ def make_device_token_resolver(
 
         cache["token"] = token
         _log.info(
-            "resolved runtime token actor=%s:%s owner=%s companion=%s device=%s exp=%s",
+            "resolved runtime token actor=%s:%s owner=%s companion=%s device=%s genome=%s exp=%s",
             actor_kind,
             actor_id,
             ctx.owner_id,
             ctx.companion_id,
             ctx.device_id,
+            ctx.genome_hash,
             exp.isoformat(),
         )
         return token

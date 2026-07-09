@@ -308,11 +308,19 @@ class _DataStoreRuntimeResolveClient:
                 412,
                 f"genome {genome.genome_id!r} is {genome.status}",
             )
+        if not genome.genome_hash:
+            raise AdminResolvePrecondition(
+                412,
+                f"genome {genome.genome_id!r} has no genome_hash",
+            )
         return ResolvedContext(
             owner_id=companion.owner_id,
             companion_id=companion.companion_id,
             memory_realm_id=companion.default_memory_realm_id,
             genome_id=companion.current_genome_id,
+            schema_version=genome.schema_version,
+            genome_hash=genome.genome_hash,
+            compiler_version=genome.compiler_version,
             device_id=device_id,
         )
 

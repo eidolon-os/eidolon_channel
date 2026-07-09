@@ -46,15 +46,22 @@ pytestmark = pytest.mark.asyncio
 SECRET = "test-secret-with-enough-entropy-32b"
 
 
-async def test_resolver_dispatches_to_device_for_kind_device():
-    admin = _fake_admin()
-    admin.resolve_device.return_value = ResolvedContext(
+def _ctx(*, device_id: str | None = "dev-1") -> ResolvedContext:
+    return ResolvedContext(
         owner_id="owner-1",
         companion_id="companion-1",
         memory_realm_id="realm-1",
         genome_id="genome-1",
-        device_id="esp32-007",
+        schema_version="eidolon.persona_genome.v1",
+        genome_hash="pgv1_resolver",
+        compiler_version="eidolon.persona_compiler.v1",
+        device_id=device_id,
     )
+
+
+async def test_resolver_dispatches_to_device_for_kind_device():
+    admin = _fake_admin()
+    admin.resolve_device.return_value = _ctx(device_id="esp32-007")
     room = _room_with(
         _participant("esp32-007", '{"kind": "device", "device_id": "esp32-007"}')
     )
@@ -67,6 +74,7 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["companion_id"] == "companion-1"
     assert payload["memory_realm_id"] == "realm-1"
     assert payload["genome_id"] == "genome-1"
+    assert payload["genome_hash"] == "pgv1_resolver"
     assert payload["device_id"] == "esp32-007"
     assert payload["actor_kind"] == "device"
     assert payload["actor_id"] == "esp32-007"
@@ -75,13 +83,7 @@ async def test_resolver_dispatches_to_device_for_kind_device():
 
 async def test_resolver_dispatches_to_owner_for_kind_owner():
     admin = _fake_admin()
-    admin.resolve_owner.return_value = ResolvedContext(
-        owner_id="owner-1",
-        companion_id="companion-1",
-        memory_realm_id="realm-1",
-        genome_id="genome-1",
-        device_id=None,
-    )
+    admin.resolve_owner.return_value = _ctx(device_id=None)
     room = _room_with(
         _participant("owner-1", '{"kind": "owner", "owner_id": "owner-1"}')
     )
@@ -94,6 +96,7 @@ async def test_resolver_dispatches_to_owner_for_kind_owner():
     assert payload["companion_id"] == "companion-1"
     assert payload["memory_realm_id"] == "realm-1"
     assert payload["genome_id"] == "genome-1"
+    assert payload["genome_hash"] == "pgv1_resolver"
     assert payload["actor_kind"] == "owner"
     assert payload["actor_id"] == "owner-1"
     assert "device_id" not in payload
@@ -139,9 +142,7 @@ async def test_resolver_caches_token_across_calls():
     token without hitting admin again. One LK session = one HTTP +
     one sign — the whole point of the cache."""
     admin = _fake_admin()
-    admin.resolve_device.return_value = ResolvedContext(
-        "owner-1", "companion-1", "realm-1", "genome-1", "dev-1"
-    )
+    admin.resolve_device.return_value = _ctx(device_id="dev-1")
     room = _room_with(_participant("dev-1", '{"kind": "device"}'))
     resolve = make_device_token_resolver(
         room=room, admin=admin, jwt_secret=SECRET,
@@ -185,7 +186,7 @@ async def test_resolver_failure_does_not_cache():
     admin = _fake_admin()
     admin.resolve_device.side_effect = [
         AdminResolveNotFound("transient"),
-        ResolvedContext("owner-1", "companion-1", "realm-1", "genome-1", "dev-1"),
+        _ctx(device_id="dev-1"),
     ]
     room = _room_with(_participant("dev-1", '{"kind": "device"}'))
     resolve = make_device_token_resolver(

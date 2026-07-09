@@ -86,6 +86,7 @@ async def test_output_flow_arms_after_attention_admits_playback_even_if_state_id
         _user_speaking_start_time=time.monotonic() - 0.1,
         _callbacks=SimpleNamespace(on_duck_started=MagicMock()),
         _duck_deadline=deadline,
+        _record_full_duplex_transition=MagicMock(),
     )
 
     armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
@@ -121,6 +122,7 @@ async def test_output_flow_arms_duck_deadline_and_records_timeline() -> None:
         _user_speaking_start_time=time.monotonic() - 0.1,
         _callbacks=SimpleNamespace(on_duck_started=MagicMock()),
         _duck_deadline=deadline,
+        _record_full_duplex_transition=MagicMock(),
     )
 
     armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()

@@ -70,6 +70,10 @@ def _transcript_pipeline(owner: str) -> StreamingPipeline:
     pipeline._interrupt_decision_suppressed = MagicMock(return_value=False)
     pipeline._ensure_user_turn_coordinator = MagicMock()
     pipeline._user_turns = MagicMock()
+    # "停一下" is a fresh interrupt, not a revision of an already-committed turn:
+    # the admission gate calls absorb_committed_transcript_revision() and a bare
+    # MagicMock would return a truthy sentinel, wrongly rejecting the transcript.
+    pipeline._user_turns.absorb_committed_transcript_revision.return_value = False
     pipeline._interruption_orchestrator = MagicMock()
     pipeline._attention_effects = MagicMock()
     pipeline._attention_effects.allows_eot_check.return_value = True

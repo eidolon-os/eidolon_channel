@@ -685,6 +685,20 @@ class TurnTimeline:
                 "vad_start_to_interrupt_cancel_resolved": self.duration_ms(
                     "speech_started_at", "interrupt_cancel_resolved_at"
                 ),
+                # Barge-in decomposition (measurement, 2026-07): separate the
+                # "agent went silent" latency (duck) from the "turn cancelled /
+                # committed / answered" latency, to tell whether a slow
+                # speech-start->cancel is audible overlap or just commit/answer
+                # latency while the agent is already ducked silent.
+                "speech_start_to_commit": self.duration_ms(
+                    "speech_started_at", "turn_committed_at"
+                ),
+                "cancel_resolved_to_commit": self.duration_ms(
+                    "interrupt_cancel_resolved_at", "turn_committed_at"
+                ),
+                "speech_start_to_first_audio": self.duration_ms(
+                    "speech_started_at", "tts_first_audio_at"
+                ),
                 "vad_start_to_playback_stop_sent": self.duration_ms(
                     "speech_started_at", "playback_stop_sent_at"
                 ),

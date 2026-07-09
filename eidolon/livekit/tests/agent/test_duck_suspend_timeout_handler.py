@@ -8,8 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output import DuckingStats
 from eidolon.livekit.agent.session.duck_timeout import DuckSuspendTimeoutHandler
+from eidolon.livekit.agent.session.interruption_orchestrator import InterruptionOrchestrator
 from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 
 
@@ -179,3 +181,97 @@ async def test_vad_idle_can_hold_for_post_speech_evidence_window() -> None:
     assert applied.action is Action.HOLD
     assert applied.reason == "deadline_wait_for_post_speech_evidence"
     calls.create_task.call_args.args[0].close()
+
+
+# ---------------------------------------------------------------------------
+# Integration with a real InterruptionOrchestrator: a no-transcript false
+# interrupt must RESUME at the short no-evidence window, not hold the full 6s
+# (fix f5aad9f). Complements the orchestrator-level decision test in
+# test_false_interrupt_no_evidence_resume.py.
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self, t: float = 100.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _post_speech_no_transcript_owner(clock: _Clock) -> InterruptionOrchestrator:
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        no_evidence_timeout_sec=0.8,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=TurnTimeline("t"))
+    clock.t += 0.7  # spoke ~700ms, then VAD end with no transcript at all
+    owner.defer_false_resume_after_speech_end(transcript="", duck_suspended=True)
+    return owner
+
+
+def _owner_handler(
+    owner: InterruptionOrchestrator,
+) -> tuple[DuckSuspendTimeoutHandler, SimpleNamespace]:
+    runtime = MagicMock()
+    runtime.deadline_decision.return_value = Decision(
+        action=Action.ROLLBACK,
+        reason="deadline_vad_idle_drop_stale",
+        rollback_drop_buffered=True,
+        intent=InterruptIntent.UNCERTAIN,
+    )
+    runtime.tiers.annotate_decision.side_effect = lambda d: d
+    calls = SimpleNamespace(
+        create_task=MagicMock(),
+        set_timeout_task=MagicMock(),
+        apply_decision=MagicMock(),
+    )
+    handler = DuckSuspendTimeoutHandler(
+        turn_runtime=runtime,
+        sleep=_no_sleep,
+        create_task=calls.create_task,
+        get_duck_suspended=lambda: True,
+        get_duck_stats=lambda: DuckingStats(suspend_ms=1.0),
+        get_suspend_start=lambda: time.monotonic(),
+        set_timeout_task=calls.set_timeout_task,
+        get_latest_asr_text=lambda: "",
+        get_vad_active=lambda: False,
+        get_eot_model=lambda: _eot_model(max_suspend_sec=1.0),
+        apply_decision=calls.apply_decision,
+        should_hold_for_evidence=owner.should_hold_deadline,
+        get_max_suspend_sec=owner.max_suspend_sec,
+    )
+    return handler, calls
+
+
+@pytest.mark.asyncio
+async def test_no_transcript_false_interrupt_resumes_after_grace() -> None:
+    clock = _Clock()
+    owner = _post_speech_no_transcript_owner(clock)
+    handler, calls = _owner_handler(owner)
+
+    clock.t += 0.85  # past the 0.8s no-evidence grace, still no transcript
+
+    await handler.run(0.01)
+
+    applied = calls.apply_decision.call_args.args[0]
+    assert applied.action is Action.ROLLBACK  # resumed
+    calls.create_task.assert_not_called()  # did NOT re-arm / hold to full 6s
+
+
+@pytest.mark.asyncio
+async def test_no_transcript_false_interrupt_holds_within_grace() -> None:
+    clock = _Clock()
+    owner = _post_speech_no_transcript_owner(clock)
+    handler, calls = _owner_handler(owner)
+
+    clock.t += 0.2  # still within the no-evidence grace
+
+    await handler.run(0.01)
+
+    applied = calls.apply_decision.call_args.args[0]
+    assert applied.action is Action.HOLD
+    assert applied.reason == "deadline_wait_for_post_speech_evidence"
+    calls.create_task.call_args.args[0].close()  # close the re-armed coro

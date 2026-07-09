@@ -210,6 +210,37 @@ class FullDuplexSpeechLifecycle:
             owner._latest_asr_text = ""
             return
 
+        non_semantic_reason = turn_completion.non_semantic_turn_reject_reason()
+        if non_semantic_reason:
+            logger.info(
+                "[StreamingPipeline] rejecting non-semantic turn reason=%s "
+                "transcript=%r",
+                non_semantic_reason,
+                transcript[:80],
+            )
+            if owner._user_turns.active is not None:
+                owner._user_turns.reject_active(non_semantic_reason)
+            if _restore_superseded_candidate_after_reject(
+                owner,
+                turn_completion,
+                eot_model,
+                non_semantic_reason,
+            ):
+                owner._latest_asr_text = ""
+                return
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="non_semantic_turn_rejected",
+                reason=non_semantic_reason,
+                transcript=transcript,
+            )
+            eot_model.reset()
+            turn_completion.clear_session_user_turn(non_semantic_reason)
+            turn_completion.reset_candidate_voiceprint_tasks()
+            owner._latest_asr_text = ""
+            return
+
         should_defer = turn_completion.should_defer_low_eot_commit(
             transcript=transcript,
             eot_model=eot_model,

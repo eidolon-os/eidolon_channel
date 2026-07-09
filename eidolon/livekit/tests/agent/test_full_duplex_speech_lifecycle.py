@@ -20,6 +20,7 @@ def _owner() -> SimpleNamespace:
         remember_candidate_voiceprint_task=MagicMock(),
         attention_admission_reject_reason=MagicMock(return_value=""),
         playback_low_evidence_reject_reason=MagicMock(return_value=""),
+        non_semantic_turn_reject_reason=MagicMock(return_value=""),
         should_defer_low_eot_commit=MagicMock(return_value=False),
         candidate_voiceprint_gate_task=MagicMock(return_value=None),
         schedule_deferred_low_eot_commit=MagicMock(),
@@ -308,6 +309,47 @@ def test_speech_lifecycle_restores_superseded_candidate_after_rejected_replaceme
     last_transition = owner._record_full_duplex_transition.call_args
     assert last_transition.args[0].value == "user_turn_pending"
     assert last_transition.kwargs["event"] == "superseded_candidate_restored"
+    assert owner._latest_asr_text == ""
+
+
+def test_speech_lifecycle_stop_rejects_non_semantic_noise_transcript() -> None:
+    # Regression: a cough/backchannel classified noise->rollback by the semantic
+    # path must NOT be deferred as a "short statement continuation". Without this
+    # short-circuit the deferred low-EOT timer could later commit the noise turn
+    # (see turn 95be3aeb, 2026-07-09 dogfood).
+    owner = _owner()
+    owner._timeline = TurnTimeline("turn-cough")
+    voiceprint_task = object()
+    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
+    owner._ducking = SimpleNamespace(is_suspended=False)
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
+    owner._session = MagicMock()
+    owner._user_turns.selected_text = "咳咳。"
+    owner._user_turns.active = object()
+    owner._turn_completion.non_semantic_turn_reject_reason.return_value = (
+        "non_semantic_completed_turn:noise"
+    )
+
+    FullDuplexSpeechLifecycle(owner).handle_stopped()
+
+    owner._user_turns.reject_active.assert_called_once_with(
+        "non_semantic_completed_turn:noise"
+    )
+    owner._turn_completion.clear_session_user_turn.assert_called_once_with(
+        "non_semantic_completed_turn:noise"
+    )
+    owner._turn_completion.schedule_voiceprint_gated_commit.assert_not_called()
+    owner._turn_completion.schedule_deferred_low_eot_commit.assert_not_called()
+    owner._turn_completion.should_defer_low_eot_commit.assert_not_called()
+    owner._get_eot_model.return_value.reset.assert_called_once_with()
+    assert owner._record_full_duplex_transition.call_args.args[0].value == (
+        "user_turn_rejected"
+    )
+    assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
+        "non_semantic_turn_rejected"
+    )
     assert owner._latest_asr_text == ""
 
 

@@ -15,6 +15,7 @@ from ..session.voiceprint_reasons import (
 from ..turn_policy import TranscriptEvidenceGate
 from .deferred_commit_state import FullDuplexDeferredCommitState
 from .framework_completed_turn import FullDuplexFrameworkCompletedTurnGate
+from .playback_turn_evidence import non_semantic_completed_turn_reason
 from .post_speech_interruption import FullDuplexPostSpeechInterruptionCommitter
 from .session_turn_boundary import FullDuplexSessionTurnBoundary
 from .turn_completion_policy import (
@@ -181,6 +182,26 @@ class FullDuplexTurnCompletion:
         if evidence.allow_decision:
             return ""
         return f"playback_low_evidence_artifact:{evidence.reason}"
+
+    def non_semantic_turn_reject_reason(self) -> str:
+        """Reject reason when the segment was already classified non-semantic.
+
+        The semantic interrupt path records its verdict (noise / backchannel /
+        hard-stop / rollback) on the turn timeline but does not touch the
+        user-turn coordinator. The low-EOT deferral policy is transcript-shape
+        based and blind to that verdict, so a cough like ``咳咳。`` would
+        otherwise be deferred and committed as a user turn. This mirrors the
+        framework-completed gate (``_stop_non_semantic_framework_completed_turn``)
+        so noise short-circuits before it becomes a pending/committed turn.
+        """
+        owner = self._pipeline
+        timeline = getattr(owner, "_timeline", None)
+        if timeline is None:
+            return ""
+        decision = timeline.attrs.get("decision")
+        if not isinstance(decision, dict):
+            return ""
+        return non_semantic_completed_turn_reason(decision)
 
     def attention_admission_reject_reason(self, *, transcript: str) -> str:
         if not transcript.strip():

@@ -158,7 +158,7 @@ def make_device_token_resolver(
                 genome_id=ctx.genome_id,
                 schema_version=ctx.schema_version,
                 genome_hash=ctx.genome_hash,
-                compiler_version=ctx.compiler_version,
+                realizer_version=ctx.realizer_version,
                 ttl_seconds=ttl_seconds,
             )
         except ValueError as exc:

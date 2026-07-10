@@ -52,9 +52,9 @@ def _ctx(*, device_id: str | None = "dev-1") -> ResolvedContext:
         companion_id="companion-1",
         memory_realm_id="realm-1",
         genome_id="genome-1",
-        schema_version="eidolon.persona_genome.v1",
-        genome_hash="pgv1_resolver",
-        compiler_version="eidolon.persona_compiler.v1",
+        schema_version="eidolon.persona_genome",
+        genome_hash="pg_resolver",
+        realizer_version="eidolon.persona_realizer",
         device_id=device_id,
     )
 
@@ -74,7 +74,8 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["companion_id"] == "companion-1"
     assert payload["memory_realm_id"] == "realm-1"
     assert payload["genome_id"] == "genome-1"
-    assert payload["genome_hash"] == "pgv1_resolver"
+    assert payload["genome_hash"] == "pg_resolver"
+    assert payload["realizer_version"] == "eidolon.persona_realizer"
     assert payload["device_id"] == "esp32-007"
     assert payload["actor_kind"] == "device"
     assert payload["actor_id"] == "esp32-007"
@@ -96,7 +97,8 @@ async def test_resolver_dispatches_to_owner_for_kind_owner():
     assert payload["companion_id"] == "companion-1"
     assert payload["memory_realm_id"] == "realm-1"
     assert payload["genome_id"] == "genome-1"
-    assert payload["genome_hash"] == "pgv1_resolver"
+    assert payload["genome_hash"] == "pg_resolver"
+    assert payload["realizer_version"] == "eidolon.persona_realizer"
     assert payload["actor_kind"] == "owner"
     assert payload["actor_id"] == "owner-1"
     assert "device_id" not in payload

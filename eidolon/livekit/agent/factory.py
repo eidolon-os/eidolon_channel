@@ -320,7 +320,7 @@ class _DataStoreRuntimeResolveClient:
             genome_id=companion.current_genome_id,
             schema_version=genome.schema_version,
             genome_hash=genome.genome_hash,
-            compiler_version=genome.compiler_version,
+            realizer_version=genome.realizer_version,
             device_id=device_id,
         )
 

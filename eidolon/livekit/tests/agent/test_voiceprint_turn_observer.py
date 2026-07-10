@@ -53,9 +53,9 @@ async def _resolve_context(_room):
         companion_id="companion_1",
         memory_realm_id="realm_1",
         genome_id="genome_1",
-        schema_version="eidolon.persona_genome.v1",
-        genome_hash="pgv1_voiceprint",
-        compiler_version="eidolon.persona_compiler.v1",
+        schema_version="eidolon.persona_genome",
+        genome_hash="pg_voiceprint",
+        realizer_version="eidolon.persona_realizer",
         device_id=None,
     )
 
@@ -66,9 +66,9 @@ async def _resolve_device_context(_room):
         companion_id="companion_1",
         memory_realm_id="realm_1",
         genome_id="genome_1",
-        schema_version="eidolon.persona_genome.v1",
-        genome_hash="pgv1_voiceprint",
-        compiler_version="eidolon.persona_compiler.v1",
+        schema_version="eidolon.persona_genome",
+        genome_hash="pg_voiceprint",
+        realizer_version="eidolon.persona_realizer",
         device_id="1c:db:d4:7a:ef:0c",
     )
 

@@ -55,10 +55,9 @@ runtime_admin:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
-  # direct_llm + Hub dev_direct_voice 联调时，设备可以 approved 但未绑定 agent；
-  # 此时 voiceprint 会为上下文校验调用 Admin resolve，并因 unbound 返回
-  # AdminResolvePrecondition 而拦截用户 turn。测试 ESP32 barge-in 时先关闭；
-  # 回到正常 eidolon_agent/已绑定设备链路时再改回 true。
+  # 正常设备链路要求 Hub approved + Admin claimed + bound companion。
+  # Channel 会在 eidolon_agent 路径解析 runtime context；未绑定设备不会进入
+  # voice room，因此 voiceprint 只负责已绑定会话内的说话人校验/遥测策略。
   enabled: false
   provider: 3d_speaker
   model: campplus_zh_16k_common

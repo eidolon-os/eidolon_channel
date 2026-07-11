@@ -28,7 +28,7 @@ providers:
   stt_provider: bailian
   tts_provider: bailian
   vad_provider: firered_pvad
-  brain_provider: direct_llm
+  brain_provider: eidolon_agent  # [direct_llm", "eidolon_agent"]
 
 remote_agent_rpc:
   target: 127.0.0.1:45051

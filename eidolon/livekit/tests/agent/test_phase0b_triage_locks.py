@@ -6,10 +6,9 @@ silently regress it. See
 ``docs/子项目/eidolon_channel/打断与轮次/全双工打断延迟实测复盘-20260709.md``.
 
 Covered:
-  - L4: the post-speech interruption commit reuses ``UserTurnCoordinator.
-    finish_speech`` (it is *not* a hand-rolled commit), so the meta / empty
-    rejection filters apply. We lock the filter at the ``finish_speech`` seam
-    that ``commit_candidate`` delegates to.
+  - L4 correction: the transcript assembler preserves accepted text and does
+    not classify language with a phrase list. Semantic handling belongs to the
+    policy/brain boundary.
   - L6: ``select_combined_voiceprint_result`` is order-deterministic — a
     definitive reject wins regardless of its position (and the caller feeds it
     ``asyncio.gather`` output, which preserves input order, not completion
@@ -31,46 +30,41 @@ from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
 
 
-class _Clock:
-    def __init__(self) -> None:
-        self.value = 0.0
-
-    def __call__(self) -> float:
-        return self.value
-
-
-# --- L4: finish_speech rejects a non-actionable meta turn -------------------
+# --- L4: framework completion preserves accepted transcript text ------------
 
 
 def _coordinator() -> UserTurnCoordinator:
-    return UserTurnCoordinator(
-        merge_grace_sec=0.8,
-        low_eot_delay_sec=0.8,
-        clock=_Clock(),
-    )
+    return UserTurnCoordinator()
 
 
-def test_finish_speech_rejects_non_actionable_meta_turn() -> None:
-    # "我再说一下" is a non-actionable meta turn (prefix "我再说" + suffix "一下").
-    # The post-speech committer (commit_candidate) delegates to finish_speech
-    # and returns False on a reject decision, so this reject blocks a spurious
-    # post-speech commit too.
+def test_framework_completion_does_not_classify_meta_language() -> None:
     coordinator = _coordinator()
-    coordinator.start_speech(timeline=TurnTimeline("turn-meta"))
+    timeline = TurnTimeline("turn-meta")
+    coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("我再说一下", is_final=True)
 
-    decision = coordinator.finish_speech(eot_score=0.9, should_defer=False)
+    decision = coordinator.mark_framework_completed(
+        transcript="我再说一下",
+        reason="framework_completed_turn",
+        timeline=timeline,
+    )
 
-    assert decision.action == "reject"
+    assert decision.action == "commit"
+    assert decision.transcript == "我再说一下"
 
 
-def test_finish_speech_commits_ordinary_actionable_turn() -> None:
+def test_framework_completion_commits_ordinary_actionable_turn() -> None:
     # Contrast: a real request commits (proves the meta filter isn't over-broad).
     coordinator = _coordinator()
-    coordinator.start_speech(timeline=TurnTimeline("turn-ok"))
+    timeline = TurnTimeline("turn-ok")
+    coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("帮我查一下天气", is_final=True)
 
-    decision = coordinator.finish_speech(eot_score=0.9, should_defer=False)
+    decision = coordinator.mark_framework_completed(
+        transcript="帮我查一下天气",
+        reason="framework_completed_turn",
+        timeline=timeline,
+    )
 
     assert decision.action == "commit"
     assert decision.transcript == "帮我查一下天气"

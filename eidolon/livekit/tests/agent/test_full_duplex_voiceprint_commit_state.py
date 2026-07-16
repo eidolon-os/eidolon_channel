@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import suppress
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,8 +14,10 @@ from eidolon.livekit.agent.observability import TurnTimeline
 def test_candidate_voiceprint_tasks_pop_and_reset() -> None:
     owner = SimpleNamespace()
     state = FullDuplexVoiceprintCommitState(owner)
-    first = SimpleNamespace()
-    second = SimpleNamespace()
+    first = MagicMock()
+    first.done.return_value = False
+    second = MagicMock()
+    second.done.return_value = True
 
     state.remember_candidate_task(None)
     state.remember_candidate_task(first)
@@ -26,6 +29,8 @@ def test_candidate_voiceprint_tasks_pop_and_reset() -> None:
     state.remember_candidate_task(first)
     state.reset_candidate_tasks()
     assert state.pop_candidate_tasks() == []
+    first.cancel.assert_called_once_with()
+    second.cancel.assert_not_called()
 
 
 def test_completed_voiceprint_turn_snapshot_and_clear() -> None:
@@ -68,17 +73,3 @@ async def test_cancel_completed_voiceprint_turn_cancels_pending_task() -> None:
     assert snapshot.result is None
     with suppress(asyncio.CancelledError):
         await task
-
-
-@pytest.mark.asyncio
-async def test_pending_voiceprint_commit_task_discards_when_done() -> None:
-    owner = SimpleNamespace()
-    state = FullDuplexVoiceprintCommitState(owner)
-    task = asyncio.create_task(asyncio.sleep(0))
-
-    state.add_pending_commit_task(task)
-    assert task in state.pending_commit_tasks()
-    await task
-    await asyncio.sleep(0)
-
-    assert task not in state.pending_commit_tasks()

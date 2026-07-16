@@ -71,12 +71,6 @@ llm:
 turn_policy:
   profile: balanced_semantic
   eot:
-    low_eot_commit_grace_max_ms: 1700
-    statement_deferred_merge_grace_ms: 3200
-    voiceprint_deferred_merge_grace_ms: 4100
-    short_statement_defer_max_cjk_chars: 10
-    statement_sequence_merge_max_cjk_chars: 24
-    statement_sequence_fragment_max_cjk_chars: 11
     transcript_revision_min_normalized_chars: 5
   interrupt:
     decision_timeout_ms: 450
@@ -153,12 +147,6 @@ voiceprint:
     assert cfg.turn_policy.interrupt.hard_stop_prefix_min_cjk_chars == 3
     assert cfg.turn_policy.interrupt.repeated_noise_min_chars == 3
     assert cfg.turn_policy.interrupt.repeated_noise_max_chars == 8
-    assert cfg.turn_policy.eot.low_eot_commit_grace_max_ms == 1700
-    assert cfg.turn_policy.eot.statement_deferred_merge_grace_ms == 3200
-    assert cfg.turn_policy.eot.voiceprint_deferred_merge_grace_ms == 4100
-    assert cfg.turn_policy.eot.short_statement_defer_max_cjk_chars == 10
-    assert cfg.turn_policy.eot.statement_sequence_merge_max_cjk_chars == 24
-    assert cfg.turn_policy.eot.statement_sequence_fragment_max_cjk_chars == 11
     assert cfg.turn_policy.eot.transcript_revision_min_normalized_chars == 5
     assert cfg.observability.llm_first_delta_timeout_ms == 2500
     assert cfg.observability.stt_pending_provider_event_window_ms == 1600

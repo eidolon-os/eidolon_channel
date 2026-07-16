@@ -65,20 +65,6 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.vad.min_silence_duration_ms must be in [100, 5000]")
 
     eot = cfg.turn_policy.eot
-    if not 0 <= eot.low_eot_commit_grace_max_ms <= 10_000:
-        errors.append("turn_policy.eot.low_eot_commit_grace_max_ms must be in [0, 10000]")
-    if not 0 <= eot.statement_deferred_merge_grace_ms <= 15_000:
-        errors.append("turn_policy.eot.statement_deferred_merge_grace_ms must be in [0, 15000]")
-    if not 0 <= eot.voiceprint_deferred_merge_grace_ms <= 15_000:
-        errors.append("turn_policy.eot.voiceprint_deferred_merge_grace_ms must be in [0, 15000]")
-    if not 1 <= eot.short_statement_defer_max_cjk_chars <= 40:
-        errors.append("turn_policy.eot.short_statement_defer_max_cjk_chars must be in [1, 40]")
-    if not 1 <= eot.statement_sequence_merge_max_cjk_chars <= 80:
-        errors.append("turn_policy.eot.statement_sequence_merge_max_cjk_chars must be in [1, 80]")
-    if not 1 <= eot.statement_sequence_fragment_max_cjk_chars <= 40:
-        errors.append(
-            "turn_policy.eot.statement_sequence_fragment_max_cjk_chars must be in [1, 40]"
-        )
     if not 1 <= eot.transcript_revision_min_normalized_chars <= 20:
         errors.append("turn_policy.eot.transcript_revision_min_normalized_chars must be in [1, 20]")
 

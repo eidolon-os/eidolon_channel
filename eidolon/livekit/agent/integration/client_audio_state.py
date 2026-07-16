@@ -50,6 +50,7 @@ def _contract_violation(message: str, *, strict: bool) -> None:
 @dataclass(frozen=True)
 class ClientAudioState:
     participant_identity: str
+    seq: int | None = None
     input_mode: InputMode = INPUT_MODE_UNKNOWN
     ptt: bool = False
     manual_interrupt: bool = False
@@ -112,6 +113,7 @@ def parse_client_audio_state(
 
     return ClientAudioState(
         participant_identity=participant_identity,
+        seq=_optional_int(raw.get("seq")),
         input_mode=_input_mode(raw.get("input_mode"), strict=is_strict),
         ptt=bool(raw.get("ptt", False)),
         manual_interrupt=bool(raw.get("manual_interrupt", False)),

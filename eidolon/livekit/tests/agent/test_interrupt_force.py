@@ -38,8 +38,6 @@ def _effects(
         get_interruption_orchestrator=MagicMock(),
         publish_playback_stop=MagicMock(),
         snapshot_interrupted_context=MagicMock(),
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 0.0,
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,

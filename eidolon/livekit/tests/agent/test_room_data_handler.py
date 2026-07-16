@@ -41,11 +41,32 @@ def test_room_data_handler_records_client_audio_state_into_timeline() -> None:
     assert state.mic_muted is True
     assert snap["attrs"]["client_audio_state"]["participant_identity"] == "alice"
     assert snap["attrs"]["client_audio_state_packet_count"] == 1
+    assert snap["attrs"]["client_audio_state_events"][-1]["seq_status"] == "missing"
     assert snap["attrs"]["room_data_events"][-1] == {
         "topic": CLIENT_AUDIO_STATE_TOPIC,
         "participant_identity": "alice",
         "bytes": len(packet.data),
     }
+
+
+def test_room_data_handler_records_sequence_gaps_without_dropping_state() -> None:
+    timeline = TurnTimeline("turn-room-data-sequence")
+    handler = RoomDataHandler(get_timeline=lambda: timeline)
+
+    handler.handle_packet(_packet(data=b'{"type":"client.audio_state","seq":7}'))
+    handler.handle_packet(_packet(data=b'{"type":"client.audio_state","seq":10}'))
+    handler.handle_packet(_packet(data=b'{"type":"client.audio_state","seq":9}'))
+
+    attrs = timeline.snapshot()["attrs"]
+    assert handler.client_audio_states["alice"].seq == 9
+    assert attrs["client_audio_state_gap_count"] == 2
+    assert attrs["client_audio_state_reordered_count"] == 1
+    assert [event["seq_status"] for event in attrs["client_audio_state_events"]] == [
+        "first",
+        "gap",
+        "reordered_or_reset",
+    ]
+    assert attrs["client_audio_state_events"][1]["seq_gap"] == 2
 
 
 def test_room_data_handler_ignores_malformed_client_audio_state() -> None:

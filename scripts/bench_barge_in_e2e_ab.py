@@ -34,6 +34,7 @@ from benchmark.livekit_room_runner import (
 from benchmark.realcall import (
     apply_real_call_verification,
     preflight_real_stack,
+    preflight_runtime_identity,
 )
 from benchmark.report import write_repeated_reports
 from benchmark.schema import BenchmarkSuite, load_suites
@@ -493,17 +494,34 @@ async def _run_profile(
             if cfg.providers.brain_provider == "eidolon_agent"
             else ("llm", "stt", "tts")
         )
-        await _preflight_gate(
-            output_dir,
-            checks=preflight_checks,
-            skip=args.skip_preflight,
-        )
-        if _suite_requires_runtime_identity(suites) and not args.livekit_participant_identity:
+        requires_identity = _suite_requires_runtime_identity(suites)
+        if requires_identity and not args.livekit_participant_identity:
             raise SystemExit(
                 "real-room cases expecting agent replies require "
                 "--livekit-participant-identity or "
                 "EIDOLON_BENCH_LIVEKIT_PARTICIPANT_IDENTITY."
             )
+        await _preflight_gate(
+            output_dir,
+            checks=preflight_checks,
+            skip=args.skip_preflight,
+        )
+        if requires_identity:
+            identity_result = await preflight_runtime_identity(
+                identity=args.livekit_participant_identity,
+                kind=args.livekit_participant_kind,
+                admin_api_url=cfg.runtime_admin.admin_api_url,
+            )
+            identity_path = output_dir / "identity_preflight.json"
+            identity_path.write_text(
+                json.dumps(identity_result, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            if not identity_result["ok"]:
+                raise SystemExit(
+                    "livekit participant identity preflight failed: "
+                    f"{identity_result.get('error')}; see {identity_path}"
+                )
 
         worker_ctx: contextlib.AbstractContextManager[Any]
         if args.manage_worker:

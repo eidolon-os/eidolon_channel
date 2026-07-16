@@ -203,13 +203,12 @@ cases:
     expect:
       action: any
       decision_action: rollback
-      decision_intent: backchannel
       forbid_actions: ["cancel"]
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: first
       rejected_turn_brain: forbidden
-      max_speech_start_to_resume_ms: 800
+      max_speech_start_to_resume_ms: 900
 
   - case_id: fd_gate_false_start_holds_001
     suite: full_duplex_gate

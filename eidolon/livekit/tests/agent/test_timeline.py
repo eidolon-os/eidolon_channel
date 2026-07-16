@@ -169,7 +169,6 @@ def test_timeline_framework_completed_latency_breakdown() -> None:
     timeline = TurnTimeline("turn-framework-completed")
     timeline.mark_at("speech_started_at", 10.0)
     timeline.mark_at("framework_completed_turn_at", 11.2)
-    timeline.mark_at("framework_completed_playback_evidence_at", 11.24)
     timeline.mark_interrupt_resolved("cancel", timestamp=11.29)
 
     snap = timeline.snapshot()
@@ -178,13 +177,8 @@ def test_timeline_framework_completed_latency_breakdown() -> None:
 
     assert round(provider_latency["framework_completed_after_speech_ms"]) == 1200
     assert round(provider_latency["framework_completed_to_cancel_resolved_ms"]) == 90
-    assert (
-        round(provider_latency["framework_playback_evidence_to_cancel_resolved_ms"])
-        == 50
-    )
     assert round(durations["framework_completed_after_speech"]) == 1200
     assert round(durations["framework_completed_to_cancel_resolved"]) == 90
-    assert round(durations["framework_playback_evidence_to_cancel_resolved"]) == 50
 
 
 def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
@@ -263,8 +257,8 @@ def test_timeline_keeps_decision_history_when_latest_decision_overwrites() -> No
         reason="intent:topic_switch",
         rollback_drop_buffered=False,
         intent="normal_interrupt",
-        source="framework_completed_playback_evidence",
-        resolved_reason="framework_completed_playback_evidence",
+        source="interruption_owner",
+        resolved_reason="interruption_verdict",
         transcript_preview="换个话 换个话题",
     )
 
@@ -277,7 +271,7 @@ def test_timeline_keeps_decision_history_when_latest_decision_overwrites() -> No
     ]
     assert attrs["decision_first_event"]["reason"].startswith("stable_signal_wait")
     assert attrs["decision_last_event"]["resolved_reason"] == (
-        "framework_completed_playback_evidence"
+        "interruption_verdict"
     )
 
 
@@ -802,13 +796,14 @@ def test_streaming_pipeline_does_not_flush_cancelled_timeline_on_session_close(
 def test_parse_client_audio_state_sanitizes_payload() -> None:
     state = parse_client_audio_state(
         b'{"type":"client.audio_state","input_mode":"auto","ptt":false,'
-        b'"manual_interrupt":true,"playback_state":"agent_speaking",'
+        b'"seq":12,"manual_interrupt":true,"playback_state":"agent_speaking",'
         b'"mic_muted":false,"rms":1.3,"snr_hint":"0.4","client_ts_ms":42}',
         participant_identity="alice",
         received_at=10.0,
     )
 
     assert state.participant_identity == "alice"
+    assert state.seq == 12
     assert state.input_mode == "auto"
     assert state.manual_interrupt is True
     assert state.playback_state == "agent_speaking"
@@ -1026,8 +1021,6 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
             reason=reason,
         ),
         snapshot_interrupted_context=snapshot_interrupted_context,
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=(
             pipeline._cancel_residual_commit_suppress_sec
         ),
@@ -1067,8 +1060,6 @@ def test_streaming_pipeline_ignores_duplicate_duck_cancel() -> None:
         get_interruption_orchestrator=MagicMock(),
         publish_playback_stop=MagicMock(),
         snapshot_interrupted_context=MagicMock(),
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 0.0,
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,
@@ -1123,8 +1114,6 @@ def test_cancel_claim_prevents_duplicate_playback_stop_side_effect() -> None:
         ),
         publish_playback_stop=publish_playback_stop,
         snapshot_interrupted_context=snapshot_context,
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 0.0,
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,
@@ -1179,8 +1168,6 @@ def test_streaming_pipeline_cancels_when_playback_evidence_outlives_duck_state()
         get_interruption_orchestrator=lambda: orchestrator,
         publish_playback_stop=publish_playback_stop,
         snapshot_interrupted_context=MagicMock(),
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 0.0,
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,
@@ -1228,7 +1215,6 @@ def test_cancel_collects_confirmed_semantic_turn_without_resolving_candidate() -
     )
     publish_playback_stop = MagicMock()
     snapshot_context = MagicMock()
-    commit_candidate = MagicMock(return_value=True)
     set_suppression = MagicMock()
     effects = FullDuplexInterruptionEffects(
         ducking=ducking,
@@ -1242,8 +1228,6 @@ def test_cancel_collects_confirmed_semantic_turn_without_resolving_candidate() -
         get_interruption_orchestrator=lambda: orchestrator,
         publish_playback_stop=publish_playback_stop,
         snapshot_interrupted_context=snapshot_context,
-        commit_post_speech_interruption_candidate=commit_candidate,
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 2.0,
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,
@@ -1259,7 +1243,6 @@ def test_cancel_collects_confirmed_semantic_turn_without_resolving_candidate() -
     orchestrator.mark_confirmed_cancel_collecting_turn.assert_called_once_with()
     orchestrator.resolve.assert_not_called()
     orchestrator.should_commit_after_confirmed_cancel.assert_not_called()
-    commit_candidate.assert_not_called()
     callbacks.on_duck_resolved.assert_called_once_with("cancel")
     session.interrupt.assert_called_once_with(force=False)
     eot_model.update_vad.assert_called_once_with(False)
@@ -1311,8 +1294,6 @@ def test_rollback_if_suspended_records_timeline_action() -> None:
         get_interruption_orchestrator=lambda: orchestrator,
         publish_playback_stop=MagicMock(),
         snapshot_interrupted_context=MagicMock(),
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 0.0,
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,

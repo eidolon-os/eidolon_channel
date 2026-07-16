@@ -9,6 +9,7 @@ from eidolon.livekit.agent.session.interruption_orchestrator import (
     InterruptionDecisionAction,
     InterruptionOrchestrator,
     InterruptionState,
+    InterruptionVerdictAction,
 )
 from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 
@@ -208,6 +209,26 @@ def test_single_char_backchannel_fast_resumes_on_speech_end() -> None:
     assert round(last["elapsed_ms"]) == 550
 
 
+def test_single_char_backchannel_cannot_end_candidate_while_speech_is_active() -> None:
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=TurnTimeline("turn-active-backchannel"))
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.HOLD,
+            reason="intent:backchannel_await_more_speech",
+            intent=InterruptIntent.BACKCHANNEL,
+        ),
+        transcript="好",
+        vad_active=True,
+    )
+
+    assert owner.should_hold_deadline() is True
+    assert owner.max_suspend_sec() == 6.0
+
+
 def test_interruption_owner_events_record_elapsed_and_delta_ms() -> None:
     now = 10.0
 
@@ -277,7 +298,7 @@ def test_turn_policy_cancel_emits_confirm_cancel_decision() -> None:
     assert owner.state is InterruptionState.CONFIRMED_CANCELLED
 
 
-def test_owner_decides_from_transcript_and_records_policy_once() -> None:
+def test_owner_routes_transcript_then_effect_records_policy_once() -> None:
     timeline = TurnTimeline("turn-owner-decide")
     owner = InterruptionOrchestrator(
         evidence_timeout_sec=6.0,
@@ -298,6 +319,13 @@ def test_owner_decides_from_transcript_and_records_policy_once() -> None:
         vad_active=True,
         agent_speaking=True,
         is_final=False,
+    )
+    owner.note_turn_policy_decision(
+        decision,
+        source="turn_policy",
+        transcript="我想问一下",
+        vad_active=True,
+        eot_score=0.0,
     )
 
     assert decision.action is Action.HOLD
@@ -451,3 +479,57 @@ def test_hard_stop_cancel_does_not_collect_user_turn() -> None:
 
     assert owner.should_collect_after_confirmed_cancel() is False
     assert owner.finish_confirmed_cancel_speech("停一下") is False
+
+
+def test_resolved_normal_interrupt_exposes_committable_verdict() -> None:
+    timeline = TurnTimeline("turn-normal-interrupt")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=timeline)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            reason="eot_score_high",
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+        ),
+        transcript="换一个方向继续讲",
+        vad_active=False,
+        eot_score=1.0,
+    )
+
+    owner.resolve(action="cancel", reason="eot_cancel")
+
+    verdict = owner.verdict_for(timeline.turn_id)
+    assert verdict is not None
+    assert verdict.action is InterruptionVerdictAction.CONFIRMED_CANCEL
+    assert verdict.continue_to_llm is True
+    assert verdict.transcript == "换一个方向继续讲"
+    assert timeline.attrs["interruption_verdict"]["continue_to_llm"] is True
+
+
+def test_resolved_backchannel_exposes_non_committable_verdict() -> None:
+    timeline = TurnTimeline("turn-backchannel-verdict")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=timeline)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.ROLLBACK,
+            reason="intent:backchannel",
+            intent=InterruptIntent.BACKCHANNEL,
+        ),
+        transcript="right",
+        vad_active=False,
+        eot_score=0.0,
+    )
+
+    owner.resolve(action="rollback", reason="backchannel")
+
+    verdict = owner.verdict_for(timeline.turn_id)
+    assert verdict is not None
+    assert verdict.action is InterruptionVerdictAction.REJECTED_RESUME
+    assert verdict.continue_to_llm is False

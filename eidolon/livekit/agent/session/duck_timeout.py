@@ -78,17 +78,17 @@ class DuckSuspendTimeoutHandler:
                 transcript=latest_asr_text,
                 eot_score=eot_model.current_eot_score,
             )
-            if (
-                not vad_still_active
-                and decision.action is Action.ROLLBACK
-                and self._should_hold_for_evidence()
-            ):
+            if decision.action is Action.ROLLBACK and self._should_hold_for_evidence():
                 decision = Decision(
                     action=Action.HOLD,
-                    reason="deadline_wait_for_post_speech_evidence",
-                    intent=InterruptIntent.UNCERTAIN,
-                    intent_source="timeout",
-                    intent_confidence=0.0,
+                    reason=(
+                        "deadline_wait_for_active_speech_evidence"
+                        if vad_still_active
+                        else "deadline_wait_for_post_speech_evidence"
+                    ),
+                    intent=decision.intent,
+                    intent_source=decision.intent_source or "timeout",
+                    intent_confidence=decision.intent_confidence,
                 )
             if decision.action is Action.HOLD:
                 decision = self._resolve_hold_or_rearm(
@@ -125,11 +125,14 @@ class DuckSuspendTimeoutHandler:
         eot_model: Any,
     ) -> Decision:
         eot_config = getattr(eot_model, "_config", None)
-        max_suspend_sec = max(
-            timeout_sec,
-            getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
-            self._get_max_suspend_sec(),
-        )
+        owner_max_suspend_sec = self._get_max_suspend_sec()
+        if owner_max_suspend_sec > 0:
+            max_suspend_sec = max(timeout_sec, owner_max_suspend_sec)
+        else:
+            max_suspend_sec = max(
+                timeout_sec,
+                getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
+            )
         suspend_sec = time.monotonic() - self._get_suspend_start()
         if suspend_sec >= max_suspend_sec:
             rollback = Decision(

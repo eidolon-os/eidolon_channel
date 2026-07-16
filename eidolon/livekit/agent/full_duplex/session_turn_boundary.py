@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..observability import TurnTimeline
 
@@ -21,21 +21,22 @@ class FullDuplexSessionTurnBoundary:
 
     def publish_canonical_user_text(
         self,
+        new_message: Any,
         transcript: str,
         *,
         source: str,
         timeline: TurnTimeline | None,
     ) -> None:
-        pipeline = self._pipeline
         stripped = transcript.strip()
         if not stripped:
             return
         try:
-            llm_plugin = getattr(getattr(pipeline._factory, "llm", None), "llm", None)
-            setter = getattr(llm_plugin, "set_next_user_text", None)
-            if setter is None:
-                return
-            setter(stripped, source=source)
+            # LiveKit explicitly documents ``on_user_turn_completed`` as the
+            # public boundary where user code may edit ``new_message`` before
+            # it reaches the LLM and framework ChatContext.  Publishing the
+            # canonical turn here keeps every LLM adapter and future EOT
+            # history aligned without a provider-specific override channel.
+            new_message.content = [stripped]
             if timeline is not None:
                 timeline.set_attr(
                     "canonical_user_text",
@@ -47,69 +48,11 @@ class FullDuplexSessionTurnBoundary:
                 )
         except Exception:
             logger.debug(
-                "[StreamingPipeline] failed to publish canonical user text",
+                "[StreamingPipeline] failed to edit framework user message",
                 exc_info=True,
             )
 
-    def clear_session_user_turn(self, reason: str) -> None:
-        pipeline = self._pipeline
-        self._clear_pending_canonical_user_text(reason)
-        session = getattr(pipeline, "_session", None)
-        if session is None:
-            return
-        clear_user_turn = getattr(session, "clear_user_turn", None)
-        if clear_user_turn is None:
-            return
-        try:
-            clear_user_turn()
-            logger.info("[StreamingPipeline] cleared user turn reason=%s", reason)
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to clear user turn reason=%s",
-                reason,
-            )
-        if "context_error" in (reason or ""):
-            self._notify_context_error_once(reason)
-
-    def clear_residual_audio_user_turn(self, reason: str) -> None:
-        pipeline = self._pipeline
-        session = getattr(pipeline, "_session", None)
-        if session is None:
-            return
-        clear_user_turn = getattr(session, "clear_user_turn", None)
-        if clear_user_turn is None:
-            return
-        try:
-            clear_user_turn()
-            logger.info(
-                "[StreamingPipeline] cleared residual audio user turn reason=%s",
-                reason,
-            )
-        except Exception:
-            logger.exception(
-                "[StreamingPipeline] failed to clear residual audio user turn reason=%s",
-                reason,
-            )
-
-    def _clear_pending_canonical_user_text(self, reason: str) -> None:
-        pipeline = self._pipeline
-        try:
-            factory = getattr(pipeline, "_factory", None)
-            llm_plugin = getattr(getattr(factory, "llm", None), "llm", None)
-            clearer = getattr(llm_plugin, "clear_next_user_text", None)
-            if clearer is not None:
-                clearer(reason=reason)
-                return
-            setter = getattr(llm_plugin, "set_next_user_text", None)
-            if setter is not None:
-                setter("", source=f"clear:{reason}")
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] failed to clear canonical user text",
-                exc_info=True,
-            )
-
-    def _notify_context_error_once(self, reason: str) -> None:
+    def notify_context_error_once(self, reason: str) -> None:
         pipeline = self._pipeline
         if getattr(pipeline, "_context_error_notified", False):
             return

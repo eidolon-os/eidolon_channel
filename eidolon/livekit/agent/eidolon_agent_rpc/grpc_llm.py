@@ -51,7 +51,6 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
-_USER_TEXT_OVERRIDE_TTL_SEC = 10.0
 
 
 # ``device_token`` must be a zero-arg sync/async callable that mints the
@@ -161,7 +160,6 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
         self._pending_turn_control_metadata: dict[str, Any] | None = None
-        self._pending_user_text_override: dict[str, Any] | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
 
     def emit_provider_event(self, name: str, **payload: Any) -> None:
@@ -193,9 +191,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         try:
             self._device_token = await resolve_token_source(source)
         except Exception as exc:
-            raise APIConnectionError(
-                f"device_token resolver failed: {exc}"
-            ) from exc
+            raise APIConnectionError(f"device_token resolver failed: {exc}") from exc
         return self._device_token
 
     async def _get_session(self) -> EidolonAgentSession:
@@ -218,48 +214,6 @@ class EidolonAgentGrpcLlm(llm.LLM):
         metadata = self._pending_turn_control_metadata
         self._pending_turn_control_metadata = None
         return metadata
-
-    def set_next_user_text(self, text: str, *, source: str) -> None:
-        """Override the next StartTurn text with Eidolon's canonical user turn.
-
-        LiveKit still owns the framework lifecycle and ChatContext, but Eidolon
-        owns the product-level turn assembly.  This one-shot override is the
-        narrow adapter boundary that lets ``UserTurnCoordinator`` supply the
-        final transcript without mutating LiveKit internals.
-        """
-        stripped = text.strip()
-        self._pending_user_text_override = (
-            {
-                "text": stripped,
-                "source": source,
-                "created_at": time.monotonic(),
-            }
-            if stripped
-            else None
-        )
-
-    def clear_next_user_text(self, *, reason: str = "") -> None:
-        """Discard any pending canonical user-text override."""
-        _ = reason
-        self._pending_user_text_override = None
-
-    def _pop_next_user_text_for_chat(
-        self,
-        *,
-        framework_user_text: str,
-    ) -> dict[str, Any] | None:
-        override = self._pending_user_text_override
-        if override is None:
-            return None
-        created_at = override.get("created_at")
-        if isinstance(created_at, (int, float)):
-            if time.monotonic() - float(created_at) > _USER_TEXT_OVERRIDE_TTL_SEC:
-                self._pending_user_text_override = None
-                return None
-        if not framework_user_text.strip():
-            return None
-        self._pending_user_text_override = None
-        return override
 
     def _resolve_conversation_id_for_chat(self) -> str:
         # Resolve once per logical chat stream. LiveKit may retry _run() for
@@ -289,20 +243,15 @@ class EidolonAgentGrpcLlm(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> llm.LLMStream:
         if tools:
-            logger.debug(
-                "[EidolonAgentGrpcLlm] tools are not forwarded over eidolon.agent.v1"
-            )
-        framework_user_text = _last_user_text(chat_ctx)
+            logger.debug("[EidolonAgentGrpcLlm] tools are not forwarded over eidolon.agent.v1")
+        user_text = _last_user_text(chat_ctx)
         return EidolonAgentGrpcLlmStream(
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
             turn_control_metadata=self.pop_turn_control_metadata(),
-            user_text_override=self._pop_next_user_text_for_chat(
-                framework_user_text=framework_user_text,
-            ),
-            framework_user_text=framework_user_text,
+            user_text=user_text,
             conversation_id=self._resolve_conversation_id_for_chat(),
         )
 
@@ -349,9 +298,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
             )
 
             self._warmer = PreemptiveWarmer(session, spawn=session.spawn)
-        await self._warmer.warm(
-            text, conversation_id=self._resolve_conversation_id_for_chat()
-        )
+        await self._warmer.warm(text, conversation_id=self._resolve_conversation_id_for_chat())
 
     async def discard_warm(self) -> None:
         """Cancel any in-flight speculative warm-up (real turn supersedes it)."""
@@ -376,13 +323,11 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         turn_control_metadata: dict[str, Any] | None,
-        user_text_override: dict[str, Any] | None,
-        framework_user_text: str,
+        user_text: str,
         conversation_id: str,
     ) -> None:
         self._turn_control_metadata = turn_control_metadata
-        self._user_text_override = user_text_override
-        self._framework_user_text = framework_user_text
+        self._user_text = user_text
         self._conversation_id = conversation_id
         self._attempt_index = 0
         super().__init__(
@@ -396,21 +341,11 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         llm_v: EidolonAgentGrpcLlm = self._llm  # type: ignore[assignment]
         self._attempt_index += 1
         attempt = self._attempt_index
-        framework_user_text = self._framework_user_text
-        override = self._user_text_override
-        if override is not None and override["text"].strip():
-            user_text = override["text"]
-            text_source = override.get("source") or "override"
-        else:
-            user_text = framework_user_text
-            text_source = "framework_chat_context"
+        user_text = self._user_text
         llm_v.emit_provider_event(
             "brain_request_started",
             attempt=attempt,
             text_chars=len(user_text),
-            framework_text_chars=len(framework_user_text),
-            user_text_source=text_source,
-            text_overridden=user_text != framework_user_text,
         )
         timeout = max(float(getattr(self._conn_options, "timeout", 10.0) or 10.0), 0.1)
         try:
@@ -469,10 +404,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError as exc:
-                    message = (
-                        "eidolon_agent first delta timed out after "
-                        f"{timeout:.1f}s"
-                    )
+                    message = f"eidolon_agent first delta timed out after {timeout:.1f}s"
                     llm_v.emit_provider_event(
                         "brain_error",
                         conversation_id=conversation_id,
@@ -550,7 +482,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     )
                     logger.info(
                         "[EidolonAgentGrpcLlmStream] state=%s turn=%s",
-                        payload.state, turn_id,
+                        payload.state,
+                        turn_id,
                     )
                 elif isinstance(payload, ToolCallPayload):
                     # The channel neither forwards nor executes tools — the
@@ -558,7 +491,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     # name/args are visible alongside the matching TOOL_RESULT.
                     logger.info(
                         "[EidolonAgentGrpcLlmStream] tool_call name=%s turn=%s",
-                        payload.name, turn_id,
+                        payload.name,
+                        turn_id,
                     )
                     llm_v.emit_provider_event(
                         "brain_tool_call",
@@ -576,8 +510,11 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     logger.info(
                         "[EidolonAgentGrpcLlmStream] tool_result name=%s ok=%s "
                         "error=%s summary=%s turn=%s",
-                        payload.name, payload.ok, payload.error or "-",
-                        payload.summary or "-", turn_id,
+                        payload.name,
+                        payload.ok,
+                        payload.error or "-",
+                        payload.summary or "-",
+                        turn_id,
                     )
                     llm_v.emit_provider_event(
                         "brain_tool_result",
@@ -594,7 +531,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     # future work to grep.
                     logger.debug(
                         "[EidolonAgentGrpcLlmStream] %s turn=%s payload=%r",
-                        type(payload).__name__, turn_id, payload,
+                        type(payload).__name__,
+                        turn_id,
+                        payload,
                     )
                 # else: unknown payload type — ignore (forward-compat with new
                 # session.py additions).

@@ -23,7 +23,7 @@ class TimelineCapture:
     def start(cls, source_path: str) -> "TimelineCapture":
         if not source_path:
             return cls(source=None)
-        source = Path(source_path)
+        source = Path(source_path).expanduser()
         size = source.stat().st_size if source.exists() else 0
         return cls(source=source, start_size=size)
 

@@ -9,6 +9,7 @@ import statistics
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import jwt
@@ -18,6 +19,7 @@ from benchmark.compare import compare_metrics
 from benchmark.dashboard import DashboardRunner, write_dashboard
 from benchmark.realcall import (
     apply_real_call_verification,
+    preflight_runtime_identity,
     verify_provider_config,
     verify_real_call,
 )
@@ -31,6 +33,7 @@ from benchmark.livekit_room_runner import (
     LiveKitRoomOptions,
     _agent_audio_wait_mode,
     _agent_audio_wait_timeout_sec,
+    _transcription_role,
 )
 from benchmark.device_envelope import (
     audio_state_interval_sec,
@@ -52,7 +55,7 @@ from benchmark.timeline import (
     summarize_timeline_records,
 )
 from benchmark.timeline_expectations import apply_timeline_expectations
-from scripts.bench_voice import _default_cases
+from scripts.bench_voice import _default_cases, _participant_metadata as _bench_participant_metadata
 from scripts.bench_barge_in_ab import DEFAULT_CASES as DEFAULT_BARGE_IN_AB_CASES
 
 
@@ -155,6 +158,19 @@ def test_load_dogfood_box3_audio_first_suite() -> None:
     assert followup.device_envelope.acoustics.echo.enabled is True
     assert followup.expectations.max_speech_start_to_suspend_ms == 120
     assert followup.expectations.playback_stop_sent is True
+    assert followup.expectations.agent_audio_response == "after_user_done"
+    assert followup.expectations.max_user_done_to_agent_audio_ms is None
+    backchannel = next(
+        case
+        for case in suite.cases
+        if case.case_id == "dogfood_box3_backchannel_during_playback_001"
+    )
+    assert len(backchannel.user_steps) == 2
+    assert backchannel.user_steps[0].agent_speaking is False
+    assert backchannel.user_steps[1].agent_speaking is True
+    assert backchannel.expectations.agent_audio_response == "after_user_done"
+    assert backchannel.expectations.min_user_finals == 2
+    assert backchannel.expectations.min_agent_messages == 1
 
 
 def test_load_offline_policy_regression_suite() -> None:
@@ -1011,6 +1027,51 @@ def test_verify_real_call_component_tts_bytes() -> None:
     assert verify_real_call(ok, runner="component", provider_config=cfg) == []
 
 
+@pytest.mark.asyncio
+async def test_runtime_identity_preflight_resolves_device_boundary() -> None:
+    resolver = AsyncMock()
+    resolver.resolve_device.return_value = SimpleNamespace(
+        owner_id="owner-1",
+        companion_id="companion-1",
+        device_id="device-1",
+    )
+
+    result = await preflight_runtime_identity(
+        identity="device-1",
+        kind="device",
+        admin_api_url="http://unused",
+        resolver=resolver,
+    )
+
+    assert result == {
+        "ok": True,
+        "kind": "device",
+        "identity": "device-1",
+        "owner_id": "owner-1",
+        "companion_id": "companion-1",
+        "device_id": "device-1",
+    }
+    resolver.resolve_device.assert_awaited_once_with("device-1")
+    resolver.resolve_owner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_runtime_identity_preflight_surfaces_unregistered_identity() -> None:
+    resolver = AsyncMock()
+    resolver.resolve_device.side_effect = RuntimeError("device not found")
+
+    result = await preflight_runtime_identity(
+        identity="bench-device",
+        kind="device",
+        admin_api_url="http://unused",
+        resolver=resolver,
+    )
+
+    assert result["ok"] is False
+    assert result["identity"] == "bench-device"
+    assert result["error"] == "RuntimeError: device not found"
+
+
 def test_verify_real_call_component_stt_empty_allowed_only_for_noise() -> None:
     cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
     normal_empty = CaseResult(
@@ -1548,6 +1609,23 @@ async def test_livekit_room_refreshes_client_audio_state_periodically() -> None:
     assert {event["playback_state"] for event in events} == {"agent_speaking"}
 
 
+def test_livekit_room_transcription_attribution_excludes_agent_tts() -> None:
+    assert (
+        _transcription_role(
+            source_identity="device-1",
+            benchmark_identity="device-1",
+        )
+        == "user"
+    )
+    assert (
+        _transcription_role(
+            source_identity="agent-AJ_123",
+            benchmark_identity="device-1",
+        )
+        == "agent"
+    )
+
+
 def test_livekit_dispatch_token_includes_participant_metadata() -> None:
     from benchmark.livekit_room_runner import (
         LiveKitRoomOptions,
@@ -1583,6 +1661,41 @@ def test_livekit_dispatch_token_includes_participant_metadata() -> None:
         "client": "bench",
         "kind": "user",
     }
+
+
+def test_bench_voice_derives_full_duplex_participant_route_from_suite() -> None:
+    suite = load_suite("benchmark/cases/full_duplex/dogfood_box3_audio_first_enforced.yaml")
+    args = type(
+        "Args",
+        (),
+        {
+            "livekit_interaction_mode": None,
+            "livekit_session_intent": "user_initiated",
+        },
+    )()
+
+    metadata = _bench_participant_metadata(args, [suite])
+
+    assert metadata == {
+        "interaction_mode": "full_duplex",
+        "session_intent": "user_initiated",
+    }
+
+
+def test_bench_voice_explicit_route_overrides_suite_mode() -> None:
+    suite = load_suite("benchmark/cases/full_duplex/dogfood_box3_audio_first_enforced.yaml")
+    args = type(
+        "Args",
+        (),
+        {
+            "livekit_interaction_mode": "half_duplex",
+            "livekit_session_intent": "user_initiated",
+        },
+    )()
+
+    metadata = _bench_participant_metadata(args, [suite])
+
+    assert metadata["interaction_mode"] == "half_duplex"
 
 
 def test_timeline_records_are_summarized(tmp_path) -> None:
@@ -1640,6 +1753,21 @@ def test_timeline_capture_writes_only_new_lines(tmp_path) -> None:
     assert written == 2
     assert "old" not in output.read_text(encoding="utf-8")
     assert len(load_timeline_records(output)) == 2
+
+
+def test_timeline_capture_expands_home_config_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    source = tmp_path / "eidolon" / "logs" / "turn-timeline.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"turn_id":"old"}\n', encoding="utf-8")
+    capture = TimelineCapture.start("~/eidolon/logs/turn-timeline.jsonl")
+
+    with source.open("a", encoding="utf-8") as f:
+        f.write('{"turn_id":"new"}\n')
+
+    output = tmp_path / "captured" / "turn_timeline.jsonl"
+    assert capture.write_new_lines(output) == 1
+    assert load_timeline_records(output)[0]["turn_id"] == "new"
 
 
 def test_dashboard_includes_timeline_section(tmp_path) -> None:

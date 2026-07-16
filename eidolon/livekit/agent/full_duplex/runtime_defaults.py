@@ -54,12 +54,8 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._suppress_commit_after_interrupt_until = 0.0
     if not hasattr(pipeline, "_latest_asr_text"):
         pipeline._latest_asr_text = ""
-    if not hasattr(pipeline, "_pending_voiceprint_commit_tasks"):
-        pipeline._pending_voiceprint_commit_tasks = set()
     if not hasattr(pipeline, "_candidate_voiceprint_tasks"):
         pipeline._candidate_voiceprint_tasks = []
-    if not hasattr(pipeline, "_deferred_low_eot_commit_task"):
-        pipeline._deferred_low_eot_commit_task = None
     pipeline._ensure_full_duplex_state_machine()
     pipeline._ensure_user_turn_coordinator()
     pipeline._ensure_turn_completion()
@@ -88,9 +84,7 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
                 pipeline._voiceprint_config.accept_cache_short_audio_max_ms
             ),
             commit_threshold=pipeline._voiceprint_config.owner_commit_threshold,
-            owner_short_audio_bypass_ms=(
-                pipeline._voiceprint_config.owner_short_audio_bypass_ms
-            ),
+            owner_short_audio_bypass_ms=(pipeline._voiceprint_config.owner_short_audio_bypass_ms),
             trust_paired_devices=getattr(
                 factory,
                 "voiceprint_trust_paired_devices",
@@ -108,7 +102,6 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
     pipeline._ensure_client_audio_state_view()
     pipeline._ensure_client_preempt_handler()
     pipeline._ensure_room_data_bridge()
-    pipeline._ensure_turn_committer()
     pipeline._ensure_agent_state_effect_handler()
     pipeline._ensure_semantic_interrupt_handler()
     pipeline._ensure_duck_suspend_timeout_handler()

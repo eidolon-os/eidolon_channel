@@ -80,6 +80,14 @@ def test_no_transcript_max_suspend_capped() -> None:
     assert owner.max_suspend_sec() == _NO_EVIDENCE  # not the full 6s
 
 
+def test_no_transcript_max_suspend_caps_active_candidate_before_vad_end() -> None:
+    clock = _Clock()
+    owner = _owner(clock)
+    owner.start_candidate(timeline=TurnTimeline("turn-1"))
+
+    assert owner.max_suspend_sec() == _NO_EVIDENCE
+
+
 def test_transcript_present_keeps_full_evidence_window() -> None:
     clock = _Clock()
     owner = _owner(clock)

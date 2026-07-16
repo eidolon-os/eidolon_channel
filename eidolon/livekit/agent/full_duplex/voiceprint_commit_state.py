@@ -20,23 +20,15 @@ class CompletedVoiceprintTurnState:
 
 
 class FullDuplexVoiceprintCommitState:
-    """Own voiceprint task bookkeeping while preserving pipeline storage."""
+    """Own candidate and completed-turn voiceprint task bookkeeping."""
 
     def __init__(self, pipeline: Any) -> None:
         self._pipeline = pipeline
 
-    def pending_commit_tasks(self) -> set[asyncio.Task]:
-        tasks = getattr(self._pipeline, "_pending_voiceprint_commit_tasks", None)
-        if tasks is None:
-            tasks = set()
-            self._pipeline._pending_voiceprint_commit_tasks = tasks
-        return tasks
-
-    def add_pending_commit_task(self, task: asyncio.Task) -> None:
-        self.pending_commit_tasks().add(task)
-        task.add_done_callback(self.pending_commit_tasks().discard)
-
     def reset_candidate_tasks(self) -> None:
+        for task in getattr(self._pipeline, "_candidate_voiceprint_tasks", []):
+            if not task.done():
+                task.cancel()
         self._pipeline._candidate_voiceprint_tasks = []
 
     def remember_candidate_task(self, task: asyncio.Task | None) -> None:

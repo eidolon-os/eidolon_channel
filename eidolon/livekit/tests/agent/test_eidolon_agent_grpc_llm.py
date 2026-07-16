@@ -53,7 +53,9 @@ def _error(turn_id: str, seq: int, code: str, message: str, fatal: bool) -> pb.T
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.ERROR, data=data)
 
 
-def _usage(turn_id: str, seq: int, prompt: int, completion: int, total: int, model: str) -> pb.TurnEvent:
+def _usage(
+    turn_id: str, seq: int, prompt: int, completion: int, total: int, model: str
+) -> pb.TurnEvent:
     data = struct_pb2.Struct()
     data["prompt_tokens"] = prompt
     data["completion_tokens"] = completion
@@ -81,9 +83,7 @@ def _tool_call(turn_id: str, seq: int, name: str) -> pb.TurnEvent:
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.TOOL_CALL, data=data)
 
 
-def _tool_result(
-    turn_id: str, seq: int, *, name: str, ok: bool, error: str = ""
-) -> pb.TurnEvent:
+def _tool_result(turn_id: str, seq: int, *, name: str, ok: bool, error: str = "") -> pb.TurnEvent:
     data = struct_pb2.Struct()
     data["name"] = name
     data["ok"] = ok
@@ -128,9 +128,7 @@ class _ScriptedServicer(pbg.EidolonAgentServicer):
                 yield _delta(turn_id, seq, chunk)
                 if self._delay > 0:
                     try:
-                        await asyncio.wait_for(
-                            self._cancel_evt.wait(), timeout=self._delay
-                        )
+                        await asyncio.wait_for(self._cancel_evt.wait(), timeout=self._delay)
                         return  # cancelled mid-turn — don't emit DONE
                     except asyncio.TimeoutError:
                         pass
@@ -279,93 +277,7 @@ async def test_forwards_deltas_then_finishes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_next_user_text_override_supplies_canonical_turn_text() -> None:
-    servicer = _ScriptedServicer(deltas=["ok"])
-    server, target = await _serve(servicer)
-    try:
-        adapter = EidolonAgentGrpcLlm(
-            target=target,
-            device_token=lambda: "test-token",
-            conversation_id="livekit:canonical-text",
-        )
-        try:
-            provider_events: list[dict] = []
-            adapter.on("provider_event", provider_events.append)
-            adapter.set_next_user_text(
-                "对，不是陪伴了，是给一个嗯。私立医院的。医生他们做系统。",
-                source="user_turn_coordinator",
-            )
-
-            async for _ in adapter.chat(chat_ctx=_ctx("对，不是陪伴了，是给一个嗯。 私立医院的。")):
-                pass
-
-            assert len(servicer.starts) == 1
-            assert (
-                servicer.starts[0].text
-                == "对，不是陪伴了，是给一个嗯。私立医院的。医生他们做系统。"
-            )
-            assert provider_events[0]["user_text_source"] == "user_turn_coordinator"
-            assert provider_events[0]["text_overridden"] is True
-        finally:
-            await adapter.aclose()
-    finally:
-        await server.stop(grace=0.5)
-
-
-@pytest.mark.asyncio
-async def test_next_user_text_override_is_consumed_once() -> None:
-    servicer = _ScriptedServicer(deltas=["ok"])
-    server, target = await _serve(servicer)
-    try:
-        adapter = EidolonAgentGrpcLlm(
-            target=target,
-            device_token=lambda: "test-token",
-            conversation_id="livekit:canonical-text-once",
-        )
-        try:
-            adapter.set_next_user_text("第一轮 canonical", source="user_turn_coordinator")
-
-            async for _ in adapter.chat(chat_ctx=_ctx("第一轮 framework")):
-                pass
-            async for _ in adapter.chat(chat_ctx=_ctx("第二轮 framework")):
-                pass
-
-            assert [start.text for start in servicer.starts] == [
-                "第一轮 canonical",
-                "第二轮 framework",
-            ]
-        finally:
-            await adapter.aclose()
-    finally:
-        await server.stop(grace=0.5)
-
-
-@pytest.mark.asyncio
-async def test_clear_next_user_text_discards_pending_override() -> None:
-    servicer = _ScriptedServicer(deltas=["ok"])
-    server, target = await _serve(servicer)
-    try:
-        adapter = EidolonAgentGrpcLlm(
-            target=target,
-            device_token=lambda: "test-token",
-            conversation_id="livekit:canonical-text-clear",
-        )
-        try:
-            adapter.set_next_user_text("不应该提交的文本", source="test")
-            adapter.clear_next_user_text(reason="interruption_owner_reject")
-
-            async for _ in adapter.chat(chat_ctx=_ctx("framework 文本")):
-                pass
-
-            assert [start.text for start in servicer.starts] == ["framework 文本"]
-        finally:
-            await adapter.aclose()
-    finally:
-        await server.stop(grace=0.5)
-
-
-@pytest.mark.asyncio
-async def test_next_user_text_override_survives_retry_attempt() -> None:
+async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
     from livekit.agents._exceptions import APIConnectionError
     from livekit.agents.types import APIConnectOptions
 
@@ -407,11 +319,10 @@ async def test_next_user_text_override_survives_retry_attempt() -> None:
         return session
 
     adapter._get_session = _get_session  # type: ignore[method-assign]
-    adapter.set_next_user_text("第一轮 canonical", source="user_turn_coordinator")
     adapter.set_turn_control_metadata({"action": "cancel", "reason": "interrupt"})
 
     stream = adapter.chat(
-        chat_ctx=_ctx("第一轮 framework"),
+        chat_ctx=_ctx("第一轮 canonical"),
         conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
     )
     collected: list[str] = []
@@ -537,16 +448,10 @@ async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
         assert collected == ["ok"]
         assert session.turn_ids == ["turn-1", "turn-2"]
         request_events = [
-            event
-            for event in provider_events
-            if event.get("event") == "brain_request_sent"
+            event for event in provider_events if event.get("event") == "brain_request_sent"
         ]
         assert [event.get("attempt") for event in request_events] == [1, 2]
-        timeout_errors = [
-            event
-            for event in provider_events
-            if event.get("event") == "brain_error"
-        ]
+        timeout_errors = [event for event in provider_events if event.get("event") == "brain_error"]
         assert timeout_errors[0]["code"] == "first_delta_timeout"
         assert timeout_errors[0]["turn_id"] == "turn-1"
     finally:
@@ -574,9 +479,7 @@ async def test_cancel_writes_cancel_turn() -> None:
             # Barge-in: same path the LiveKit pipeline takes on user interrupt.
             await stream.aclose()
 
-            await asyncio.wait_for(
-                _wait_until(lambda: len(servicer.cancels) == 1), timeout=2.0
-            )
+            await asyncio.wait_for(_wait_until(lambda: len(servicer.cancels) == 1), timeout=2.0)
             assert servicer.cancels[0] == servicer.starts[0].turn_id
 
             # A2 regression guard: the cancel write is spawned through
@@ -586,7 +489,8 @@ async def test_cancel_writes_cancel_turn() -> None:
             # has completed, reader is still running for the reader task —
             # filter to only background tasks named like the cancel).
             cancel_tasks_left = [
-                t for t in adapter._session._background_tasks  # type: ignore[union-attr]
+                t
+                for t in adapter._session._background_tasks  # type: ignore[union-attr]
                 if t.get_name().startswith("eidolon-cancel-")
             ]
             assert cancel_tasks_left == [], f"leaked cancel tasks: {cancel_tasks_left}"
@@ -604,6 +508,7 @@ async def _wait_until(predicate, *, interval: float = 0.05) -> None:
 def test_tls_config_validation_unknown_mode() -> None:
     """D2: bogus tls_mode must fail loud at construction, not silently fall back."""
     from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
+
     with pytest.raises(ValueError, match="unrecognized"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
@@ -616,6 +521,7 @@ def test_tls_config_validation_unknown_mode() -> None:
 def test_tls_config_validation_mtls_missing_cert(tmp_path) -> None:
     """D2: mTLS mode without client cert/key paths must fail loud."""
     from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
+
     with pytest.raises(ValueError, match="mtls"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
@@ -628,6 +534,7 @@ def test_tls_config_validation_mtls_missing_cert(tmp_path) -> None:
 def test_tls_config_validation_missing_ca_file(tmp_path) -> None:
     """D2: configured CA path that doesn't exist must fail loud (no silent skip)."""
     from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
+
     with pytest.raises(ValueError, match="ca_path"):
         EidolonAgentGrpcLlm(
             target="127.0.0.1:1",
@@ -684,6 +591,7 @@ async def test_conversation_id_resolver_failure_falls_back() -> None:
     servicer = _ScriptedServicer(deltas=["ok"])
     server, target = await _serve(servicer)
     try:
+
         def broken_resolver() -> str:
             raise RuntimeError("resolver intentionally broken")
 
@@ -709,6 +617,7 @@ async def test_conversation_id_resolver_failure_falls_back() -> None:
 def test_tls_off_no_credentials_built() -> None:
     """D2: mode='off' yields no ChannelCredentials — same path as before D2."""
     from eidolon.livekit.agent.eidolon_agent_rpc.session import EidolonAgentSession, TlsConfig
+
     s = EidolonAgentSession(
         target="127.0.0.1:1",
         device_token="x",
@@ -822,10 +731,11 @@ async def test_state_and_usage_events_surface(caplog) -> None:
 
             # STATE event surfaces as INFO log with state=thinking
             state_logs = [r for r in caplog.records if "state=thinking" in r.getMessage()]
-            assert state_logs, f"expected STATE INFO log, got: {[r.getMessage() for r in caplog.records]}"
+            assert state_logs, (
+                f"expected STATE INFO log, got: {[r.getMessage() for r in caplog.records]}"
+            )
             assert any(
-                event.get("event") == "brain_state"
-                and event.get("state") == "thinking"
+                event.get("event") == "brain_state" and event.get("state") == "thinking"
                 for event in provider_events
             )
         finally:
@@ -839,13 +749,13 @@ async def test_state_and_usage_events_surface(caplog) -> None:
 # status_code if APIStatusError else None, expected retryable).
 _ERROR_CASES = [
     ("unauthenticated", False, "status", 401, False),
-    ("unauthenticated", True,  "status", 401, False),  # fatal flag ignored for known codes
+    ("unauthenticated", True, "status", 401, False),  # fatal flag ignored for known codes
     ("permission_denied", False, "status", 403, False),
     ("tenant_not_found", False, "status", 404, False),
     ("user_not_found", False, "status", 404, False),
     ("rate_limited", False, "status", 429, True),
-    ("internal", False, "connection", None, True),   # fatal=False → retryable
-    ("internal", True,  "connection", None, False),  # fatal=True  → not retryable
+    ("internal", False, "connection", None, True),  # fatal=False → retryable
+    ("internal", True, "connection", None, False),  # fatal=True  → not retryable
     ("anything_unknown", False, "connection", None, True),
 ]
 
@@ -881,7 +791,9 @@ async def test_error_code_mapping(
                     pass
             exc = exc_info.value
             if kind == "status":
-                assert isinstance(exc, APIStatusError), f"expected APIStatusError, got {type(exc).__name__}"
+                assert isinstance(exc, APIStatusError), (
+                    f"expected APIStatusError, got {type(exc).__name__}"
+                )
                 assert exc.status_code == status_code
                 assert exc.retryable is retryable
             else:
@@ -930,8 +842,7 @@ async def test_tool_events_surface_at_info(caplog) -> None:
             messages = [r.getMessage() for r in caplog.records]
             assert any("tool_call name=get_weather" in m for m in messages), messages
             assert any(
-                "tool_result name=get_weather ok=False" in m
-                and "error=weather_lookup_failed" in m
+                "tool_result name=get_weather ok=False" in m and "error=weather_lookup_failed" in m
                 for m in messages
             ), messages
 
@@ -943,8 +854,7 @@ async def test_tool_events_surface_at_info(caplog) -> None:
                 for e in provider_events
             ), provider_events
             assert any(
-                e.get("event") == "brain_tool_call"
-                and e.get("tool_name") == "get_weather"
+                e.get("event") == "brain_tool_call" and e.get("tool_name") == "get_weather"
                 for e in provider_events
             ), provider_events
         finally:

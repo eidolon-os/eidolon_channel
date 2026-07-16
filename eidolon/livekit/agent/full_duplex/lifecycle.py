@@ -12,6 +12,7 @@ from eidolon_sdk.biz.contracts import (
 )
 
 from ..integration import framework_patches
+from ..runtime.resolver import wait_for_runtime_participant_identity
 from ..shared.pipeline import BasePipeline
 from ..shared.types import generate_turn_id
 
@@ -38,6 +39,13 @@ class FullDuplexSessionLifecycle:
         logger.info("[StreamingPipeline] starting room=%s", room.name)
         pipeline._room = room
         pipeline._started = True
+
+        participant_identity = await wait_for_runtime_participant_identity(room)
+        pipeline._runtime_participant_identity = participant_identity
+        logger.info(
+            "[StreamingPipeline] binding RoomIO to runtime participant=%s",
+            participant_identity,
+        )
 
         agent = pipeline._build_agent()
         session = AgentSession(
@@ -68,6 +76,7 @@ class FullDuplexSessionLifecycle:
                 audio_output=AudioOutputOptions(
                     sample_rate=pipeline._audio_sample_rate,
                 ),
+                participant_identity=participant_identity,
             ),
         )
         pipeline._publish_companion_ui_state("listening", "session_started")
@@ -239,7 +248,8 @@ class FullDuplexSessionLifecycle:
         if hasattr(pipeline, "_interruption_effects"):
             pipeline._interruption_effects.cancel_soft_interrupt()
             pipeline._interruption_effects.cancel_stable_signal_timer()
-        pipeline._ensure_turn_completion().cancel_pending_voiceprint_commits("shutdown")
+        pipeline._ensure_turn_completion().reset_candidate_voiceprint_tasks()
+        pipeline._ensure_turn_completion().cancel_completed_voiceprint_turn()
         if hasattr(pipeline, "_provider_events"):
             pipeline._provider_events.cancel_output_watchdog()
         pipeline._ducking.cancel_timeout()

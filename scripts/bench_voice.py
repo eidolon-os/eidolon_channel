@@ -33,6 +33,7 @@ from benchmark.policy_runner import (
 from benchmark.realcall import (
     apply_real_call_verification,
     preflight_real_stack,
+    preflight_runtime_identity,
 )
 from benchmark.compare import load_metrics
 from benchmark.report import write_repeated_reports
@@ -191,14 +192,31 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
         if cfg.providers.brain_provider == "eidolon_agent"
         else ("llm", "stt", "tts")
     )
-    await _preflight_gate(args, output_dir, checks=preflight_checks)
-    if _suite_requires_runtime_identity(suites) and not args.livekit_participant_identity:
+    requires_identity = _suite_requires_runtime_identity(suites)
+    if requires_identity and not args.livekit_participant_identity:
         raise SystemExit(
             "livekit_room cases expecting agent replies require "
             "--livekit-participant-identity (or "
             "EIDOLON_BENCH_LIVEKIT_PARTICIPANT_IDENTITY). The identity must "
             "resolve through admin /api/resolve/{kind}/{identity}."
         )
+    await _preflight_gate(args, output_dir, checks=preflight_checks)
+    if requires_identity:
+        identity_result = await preflight_runtime_identity(
+            identity=args.livekit_participant_identity,
+            kind=args.livekit_participant_kind,
+            admin_api_url=cfg.runtime_admin.admin_api_url,
+        )
+        identity_path = output_dir / "identity_preflight.json"
+        identity_path.write_text(
+            json.dumps(identity_result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if not identity_result["ok"]:
+            raise SystemExit(
+                "livekit participant identity preflight failed: "
+                f"{identity_result.get('error')}; see {identity_path}"
+            )
     timeline_source = cfg.observability.timeline_debug_path
     runs = []
     for index in range(args.repeat):
@@ -216,6 +234,7 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
                 agent_name=args.livekit_agent_name,
                 participant_identity=args.livekit_participant_identity,
                 participant_kind=args.livekit_participant_kind,
+                participant_metadata=_participant_metadata(args, suites),
             ),
         )
         if args.livekit_timeline_flush_grace_sec > 0:
@@ -242,6 +261,29 @@ def _suite_requires_runtime_identity(suites) -> bool:
         for suite in suites
         for case in suite.cases
     )
+
+
+def _participant_metadata(
+    args: argparse.Namespace,
+    suites,
+) -> dict[str, str]:
+    """Route a room benchmark through the same runtime mode as its suite."""
+
+    metadata: dict[str, str] = {}
+    requested_mode = str(getattr(args, "livekit_interaction_mode", "") or "").strip()
+    suite_modes = {
+        str(suite.suite_mode)
+        for suite in suites
+        if str(suite.suite_mode) in {"full_duplex", "half_duplex"}
+    }
+    if requested_mode:
+        metadata["interaction_mode"] = requested_mode
+    elif len(suite_modes) == 1:
+        metadata["interaction_mode"] = next(iter(suite_modes))
+    session_intent = str(getattr(args, "livekit_session_intent", "") or "").strip()
+    if session_intent:
+        metadata["session_intent"] = session_intent
+    return metadata
 
 
 def _slo_enforcement_failures(output_dir: Path) -> list[dict]:
@@ -341,6 +383,20 @@ async def _main() -> int:
         choices=["user", "device"],
         default=os.getenv("EIDOLON_BENCH_LIVEKIT_PARTICIPANT_KIND", "user"),
         help="LiveKit participant metadata.kind used by channel runtime resolver.",
+    )
+    parser.add_argument(
+        "--livekit-interaction-mode",
+        choices=["full_duplex", "half_duplex"],
+        default=os.getenv("EIDOLON_BENCH_LIVEKIT_INTERACTION_MODE"),
+        help=(
+            "Participant interaction_mode metadata. When omitted, a mode-specific "
+            "suite derives it from suite_mode; mixed/shared suites must pass it explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--livekit-session-intent",
+        default=os.getenv("EIDOLON_BENCH_LIVEKIT_SESSION_INTENT", "user_initiated"),
+        help="Participant session_intent metadata for the benchmark room.",
     )
     args = parser.parse_args()
     if args.repeat < 1:

@@ -49,8 +49,7 @@ def _effects(
         get_session=lambda: None,
         allow_interruptions=lambda: True,
         get_eot_model=lambda: SimpleNamespace(
-            _config=eot_config
-            or SimpleNamespace(duck_suspended_passthrough_enabled=False)
+            _config=eot_config or SimpleNamespace(duck_suspended_passthrough_enabled=False)
         ),
         get_timeline=lambda: None,
         get_latest_asr_text=lambda: latest_asr_text,
@@ -58,8 +57,6 @@ def _effects(
         get_interruption_orchestrator=MagicMock(),
         publish_playback_stop=MagicMock(),
         snapshot_interrupted_context=MagicMock(),
-        commit_post_speech_interruption_candidate=MagicMock(return_value=False),
-        reject_post_speech_interruption_candidate=MagicMock(),
         cancel_residual_commit_suppress_sec=lambda: 0.0,
         semantic_interrupt_run=lambda text: semantic_interrupts.run(
             text,

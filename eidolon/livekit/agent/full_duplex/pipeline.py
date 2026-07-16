@@ -118,7 +118,6 @@ from ..session.room_data import RoomDataHandler
 from ..session.semantic_interrupt import SemanticInterruptHandler
 from ..session.signals import SessionSignalBridge
 from ..session.transcript_echo import TranscriptEchoGate
-from ..session.turn_commit import UserTurnCommitter
 from ..session.user_turn_coordinator import UserTurnCoordinator
 from ..session.voiceprint import VoiceprintTurnObserver
 
@@ -200,16 +199,13 @@ class StreamingPipeline(BasePipeline):
         self._attention_effects = self._build_attention_effect_handler()
         self._session_signals = self._build_session_signal_bridge()
         self._client_preempts = self._build_client_preempt_handler()
-        self._turn_committer = UserTurnCommitter()
         self._transcript_echo_gate = self._build_transcript_echo_gate()
         self._user_turns = self._build_user_turn_coordinator()
         self._turn_completion = FullDuplexTurnCompletion(self)
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
         self._duck_deadline = self._build_duck_suspend_timeout_handler()
-        self._pending_voiceprint_commit_tasks: set[asyncio.Task] = set()
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
-        self._deferred_low_eot_commit_task: asyncio.Task | None = None
         self._suppress_transcripts_until_next_speech = False
         self._transcript_admission = self._build_transcript_admission_gate()
         self._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
@@ -318,9 +314,7 @@ class StreamingPipeline(BasePipeline):
         self._on_session_closed = on_session_closed
         # Grace between notifying the client and deleting the room, so the
         # reliable data packet reaches the client before it is kicked.
-        self._idle_disconnect_grace_sec: float = (
-            self._turn_policy.idle.disconnect_grace_ms / 1000.0
-        )
+        self._idle_disconnect_grace_sec: float = self._turn_policy.idle.disconnect_grace_ms / 1000.0
         self._idle_watchdog_controller = build_full_duplex_idle_watchdog(self)
 
         # EOT semantic interruption check state
@@ -431,9 +425,7 @@ class StreamingPipeline(BasePipeline):
     ) -> None:
         # Observability for turn-suppression state changes: who flipped what and
         # why. Never affects behavior. Serves F1 (single, observable authority).
-        logger.debug(
-            "[StreamingPipeline] suppression %s=%s reason=%s", flag, active, reason
-        )
+        logger.debug("[StreamingPipeline] suppression %s=%s reason=%s", flag, active, reason)
         timeline = getattr(self, "_timeline", None)
         if timeline is None:
             return
@@ -498,17 +490,6 @@ class StreamingPipeline(BasePipeline):
                 reason=reason,
             ),
             snapshot_interrupted_context=lambda: self._ensure_context_ledger().snapshot(),
-            commit_post_speech_interruption_candidate=(
-                lambda reason, transcript: (
-                    self._ensure_turn_completion().commit_post_speech_interruption_candidate(
-                        reason,
-                        transcript_override=transcript,
-                    )
-                )
-            ),
-            reject_post_speech_interruption_candidate=(
-                self._ensure_turn_completion().reject_post_speech_interruption_candidate
-            ),
             cancel_residual_commit_suppress_sec=self._cancel_residual_commit_suppress_sec,
             semantic_interrupt_run=lambda text: self._semantic_interrupts.run(
                 text,
@@ -523,9 +504,7 @@ class StreamingPipeline(BasePipeline):
                 self._ensure_client_audio_state_view().agent_output_active_for_interrupts()
             ),
             record_full_duplex_transition=self._record_full_duplex_transition,
-            claim_irreversible_side_effect=(
-                self._claim_full_duplex_irreversible_side_effect
-            ),
+            claim_irreversible_side_effect=(self._claim_full_duplex_irreversible_side_effect),
         )
 
     def _ensure_interruption_effects(self) -> FullDuplexInterruptionEffects:
@@ -581,9 +560,7 @@ class StreamingPipeline(BasePipeline):
         return InterruptionOrchestrator(
             evidence_timeout_sec=timeout_sec,
             min_speech_sec=min_speech_sec,
-            no_evidence_timeout_sec=(
-                interrupt_policy.post_speech_no_evidence_timeout_ms / 1000.0
-            ),
+            no_evidence_timeout_sec=(interrupt_policy.post_speech_no_evidence_timeout_ms / 1000.0),
         )
 
     def _ensure_interruption_orchestrator(self) -> None:
@@ -771,18 +748,12 @@ class StreamingPipeline(BasePipeline):
                     participant_identity=participant_identity,
                 )
             ),
-            preempt_agent_turn_for_explicit_control=(
-                self._preempt_agent_turn_for_explicit_control
-            ),
+            preempt_agent_turn_for_explicit_control=(self._preempt_agent_turn_for_explicit_control),
         )
 
     def _ensure_client_preempt_handler(self) -> None:
         if not hasattr(self, "_client_preempts"):
             self._client_preempts = self._build_client_preempt_handler()
-
-    def _ensure_turn_committer(self) -> None:
-        if not hasattr(self, "_turn_committer"):
-            self._turn_committer = UserTurnCommitter()
 
     def _build_transcript_echo_gate(self) -> TranscriptEchoGate:
         return TranscriptEchoGate(
@@ -797,18 +768,14 @@ class StreamingPipeline(BasePipeline):
 
     def _build_transcript_admission_gate(self) -> TranscriptAdmissionGate:
         return TranscriptAdmissionGate(
-            suppress_until_next_speech=(
-                lambda: self._suppress_transcripts_until_next_speech
-            ),
+            suppress_until_next_speech=(lambda: self._suppress_transcripts_until_next_speech),
             agent_output_active=lambda speaker_id: (
                 self._ensure_client_audio_state_view().agent_output_active_for_interrupts(
                     participant_identity=speaker_id,
                 )
             ),
             echo_gate=lambda: self._ensure_transcript_echo_gate(),
-            absorb_committed_turn_revision=(
-                self._absorb_committed_turn_transcript_revision
-            ),
+            absorb_committed_turn_revision=(self._absorb_committed_turn_transcript_revision),
         )
 
     def _ensure_transcript_admission_gate(self) -> TranscriptAdmissionGate:
@@ -862,8 +829,8 @@ class StreamingPipeline(BasePipeline):
                     speaker_id=speaker_id,
                 )
             ),
-            run_semantic_interrupt=lambda transcript, is_final: (
-                self._semantic_interrupts.run(transcript, is_final=is_final)
+            run_semantic_interrupt=lambda transcript, is_final: self._semantic_interrupts.run(
+                transcript, is_final=is_final
             ),
             reject_agent_echo=self._reject_agent_echo_transcript,
             forward_to_base=lambda event: BasePipeline._on_user_transcribed(self, event),
@@ -878,8 +845,7 @@ class StreamingPipeline(BasePipeline):
         event = self._ensure_transcript_ingress_ledger().record(
             payload,
             timeline=timeline,
-            user_speaking_active=getattr(self, "_user_speaking_start_time", None)
-            is not None,
+            user_speaking_active=getattr(self, "_user_speaking_start_time", None) is not None,
             pipeline_state=getattr(self, "_state", None),
         )
         if self._timeline is None:
@@ -968,40 +934,11 @@ class StreamingPipeline(BasePipeline):
             self._user_state_handler = self._build_user_state_handler()
         return self._user_state_handler
 
-    def _low_eot_commit_grace_max_sec(self) -> float:
-        return max(self._turn_policy.eot.low_eot_commit_grace_max_ms, 0) / 1000.0
-
-    def _statement_deferred_merge_grace_sec(self) -> float:
-        return max(self._turn_policy.eot.statement_deferred_merge_grace_ms, 0) / 1000.0
-
-    def _voiceprint_deferred_merge_grace_sec(self) -> float:
-        return max(self._turn_policy.eot.voiceprint_deferred_merge_grace_ms, 0) / 1000.0
-
     def _cancel_residual_commit_suppress_sec(self) -> float:
         return max(self._turn_policy.interrupt.cancel_residual_commit_suppress_ms, 0) / 1000.0
 
     def _build_user_turn_coordinator(self) -> UserTurnCoordinator:
-        delay = min(
-            max(self._turn_policy.eot.tail_hang_silence_ms / 1000.0, 0.0),
-            self._low_eot_commit_grace_max_sec(),
-        )
         return UserTurnCoordinator(
-            merge_grace_sec=delay,
-            statement_deferred_merge_grace_sec=max(
-                delay,
-                self._statement_deferred_merge_grace_sec(),
-            ),
-            voiceprint_deferred_merge_grace_sec=max(
-                delay,
-                self._voiceprint_deferred_merge_grace_sec(),
-            ),
-            low_eot_delay_sec=delay,
-            statement_sequence_merge_max_cjk_chars=(
-                self._turn_policy.eot.statement_sequence_merge_max_cjk_chars
-            ),
-            statement_sequence_fragment_max_cjk_chars=(
-                self._turn_policy.eot.statement_sequence_fragment_max_cjk_chars
-            ),
             transcript_revision_min_normalized_chars=(
                 self._turn_policy.eot.transcript_revision_min_normalized_chars
             ),
@@ -1125,15 +1062,6 @@ class StreamingPipeline(BasePipeline):
                 lambda: self._interruption_orchestrator.should_hold_deadline()
             ),
             get_max_suspend_sec=lambda: self._interruption_orchestrator.max_suspend_sec(),
-            deadline_decision=(
-                lambda vad_still_active, **kwargs: (
-                    self._interruption_orchestrator.deadline_decision(
-                        self._turn_runtime,
-                        vad_still_active,
-                        **kwargs,
-                    )
-                )
-            ),
         )
 
     def _ensure_duck_suspend_timeout_handler(self) -> None:
@@ -1163,9 +1091,7 @@ class StreamingPipeline(BasePipeline):
             stt_pending_event_preroll_sec=(
                 self._observability.stt_pending_provider_event_preroll_ms / 1000.0
             ),
-            stt_pending_event_max_count=(
-                self._observability.stt_pending_provider_event_max_count
-            ),
+            stt_pending_event_max_count=(self._observability.stt_pending_provider_event_max_count),
         )
 
     def _ensure_provider_event_observer(self) -> None:
@@ -1410,9 +1336,7 @@ class StreamingPipeline(BasePipeline):
         self._agent_state_effects.handle(event)
         new = getattr(event, "new_state", "")
         if new:
-            self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(
-                new
-            )
+            self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(new)
 
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()

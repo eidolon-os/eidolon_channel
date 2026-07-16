@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,12 +46,11 @@ def resolve_playback_turn_decision(
 
 
 def playback_turn_decision_continues_to_llm(decision: Any) -> bool:
-    """True for semantic redirects that should become the next user turn."""
+    """True for confirmed normal interruptions that become a user turn."""
 
     return (
         decision.action is Action.CANCEL
         and decision.intent is InterruptIntent.NORMAL_INTERRUPT
-        and bool(decision.topic_switch_hint or decision.correction_hint)
     )
 
 
@@ -65,20 +63,4 @@ def playback_turn_decision_can_resolve(decision: Any) -> bool:
         return False
     if decision.intent is InterruptIntent.HARD_STOP:
         return True
-    return bool(decision.topic_switch_hint or decision.correction_hint)
-
-
-def non_semantic_completed_turn_reason(
-    decision: Mapping[str, object] | None,
-) -> str:
-    """Return the rejection reason for a completed non-semantic interrupt turn."""
-
-    if not decision:
-        return ""
-    action = str(decision.get("action") or "")
-    intent = str(decision.get("intent") or "")
-    if action == "rollback":
-        return f"non_semantic_completed_turn:{intent or action}"
-    if intent in {"backchannel", "noise", "hard_stop"}:
-        return f"non_semantic_completed_turn:{intent}"
-    return ""
+    return decision.intent is InterruptIntent.NORMAL_INTERRUPT

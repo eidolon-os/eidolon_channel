@@ -44,6 +44,15 @@ class InterruptionDecisionAction(str, Enum):
     REJECT_CANDIDATE = "reject_candidate"
 
 
+class InterruptionVerdictAction(str, Enum):
+    """Terminal meaning of one resolved playback interruption."""
+
+    CONFIRMED_CANCEL = "confirmed_cancel"
+    REJECTED_RESUME = "rejected_resume"
+    EXPIRED_RESUME = "expired_resume"
+    REJECTED_CANDIDATE = "rejected_candidate"
+
+
 @dataclass(frozen=True)
 class InterruptionDecision:
     """Pure owner decision; side effects are applied by session adapters."""
@@ -55,6 +64,24 @@ class InterruptionDecision:
     turn_policy_action: str = ""
     transcript_preview: str = ""
     drop_buffered: bool = False
+
+
+@dataclass(frozen=True)
+class InterruptionVerdict:
+    """Immutable result consumed by the framework turn boundary.
+
+    The terminal hook must not reconstruct interruption intent from transcript
+    length, language, EOT, or timeline dictionaries.  It consumes this verdict
+    produced by the interruption owner after output effects resolve.
+    """
+
+    action: InterruptionVerdictAction
+    reason: str
+    candidate_id: str | None
+    continue_to_llm: bool
+    turn_policy_action: str = ""
+    intent: str = ""
+    transcript: str = ""
 
 
 @dataclass
@@ -115,6 +142,8 @@ class InterruptionOrchestrator:
         self._clock = clock or time.monotonic
         self._candidate: InterruptionCandidate | None = None
         self._timeline: TurnTimeline | None = None
+        self._resolved_verdicts: dict[str, InterruptionVerdict] = {}
+        self._last_unkeyed_verdict: InterruptionVerdict | None = None
 
     @property
     def state(self) -> InterruptionState:
@@ -143,6 +172,13 @@ class InterruptionOrchestrator:
         if candidate is None:
             return ""
         return candidate.final_transcript or candidate.transcript
+
+    def verdict_for(self, candidate_id: str | None) -> InterruptionVerdict | None:
+        """Return the owner verdict for exactly one framework turn."""
+
+        if candidate_id:
+            return self._resolved_verdicts.get(candidate_id)
+        return self._last_unkeyed_verdict
 
     def start_candidate(
         self,
@@ -219,39 +255,6 @@ class InterruptionOrchestrator:
             agent_speaking=agent_speaking,
             is_final=is_final,
             event_time_ms=event_time_ms,
-        )
-        self.note_turn_policy_decision(
-            decision,
-            source="turn_policy",
-            transcript=text,
-            vad_active=vad_active,
-            eot_score=eot_score,
-        )
-        return decision
-
-    def deadline_decision(
-        self,
-        turn_runtime: TurnPolicyRuntime,
-        vad_still_active: bool,
-        *,
-        has_transcript: bool = False,
-        transcript: str = "",
-        eot_score: float = 0.0,
-    ) -> Decision:
-        """Route duck-deadline evidence through the owner-owned policy path."""
-
-        decision = turn_runtime.deadline_decision(
-            vad_still_active,
-            has_transcript=has_transcript,
-            transcript=transcript,
-            eot_score=eot_score,
-        )
-        self.note_turn_policy_decision(
-            decision,
-            source="timeout",
-            transcript=transcript,
-            vad_active=vad_still_active,
-            eot_score=eot_score,
         )
         return decision
 
@@ -438,16 +441,23 @@ class InterruptionOrchestrator:
         return True
 
     def should_hold_deadline(self) -> bool:
-        """Whether duck deadline should keep holding after VAD became idle.
+        """Whether the duck deadline is allowed to terminate the candidate.
 
-        Holds while waiting for post-speech evidence — but a real interruption
-        yields a transcript quickly (interim during speech, final within a few
-        hundred ms of VAD end). If NO transcript has arrived at all past a short
-        no-evidence grace, it is almost certainly a false trigger; stop holding
-        so the deadline resumes the agent promptly instead of leaving it silent
-        for the full evidence window.
+        While speech is still active, weak evidence can only HOLD: a short
+        backchannel-looking prefix is not terminal until the acoustic segment
+        closes.  After speech ends, keep holding only for the explicit delayed
+        evidence window; a no-transcript trigger expires on its shorter grace.
         """
 
+        candidate = self._candidate
+        if candidate is None or candidate.resolved:
+            return False
+        if (
+            candidate.stopped_at is None
+            and candidate.last_vad_active is True
+            and candidate.last_policy_action in (None, Action.HOLD)
+        ):
+            return True
         if not self.awaiting_post_speech_evidence:
             return False
         return not self._no_evidence_grace_elapsed()
@@ -458,14 +468,25 @@ class InterruptionOrchestrator:
         Capped to the shorter no-evidence window when no transcript has arrived.
         """
 
-        if not self.awaiting_post_speech_evidence:
-            return 0.0
         candidate = self._candidate
-        if candidate is not None and not (
-            candidate.final_transcript or candidate.transcript
-        ).strip():
-            return self._no_evidence_timeout_sec
-        return self._evidence_timeout_sec
+        if candidate is None or candidate.resolved:
+            return 0.0
+        if (
+            candidate.stopped_at is None
+            and candidate.last_vad_active is True
+            and candidate.last_policy_action in (None, Action.HOLD)
+        ):
+            return self._evidence_timeout_sec
+        if not (candidate.final_transcript or candidate.transcript).strip():
+            if (
+                candidate.awaiting_post_speech_evidence
+                or self._no_evidence_timeout_sec < self._evidence_timeout_sec
+            ):
+                return self._no_evidence_timeout_sec
+            return 0.0
+        if candidate.awaiting_post_speech_evidence:
+            return self._evidence_timeout_sec
+        return 0.0
 
     def _no_evidence_grace_elapsed(self) -> bool:
         """True once no transcript has arrived and the no-evidence grace passed."""
@@ -563,14 +584,83 @@ class InterruptionOrchestrator:
         candidate = self._candidate
         if candidate is None:
             return
+        verdict = self._build_verdict(candidate, action=action, reason=reason)
+        if verdict.candidate_id:
+            self._resolved_verdicts[verdict.candidate_id] = verdict
+            while len(self._resolved_verdicts) > 16:
+                self._resolved_verdicts.pop(next(iter(self._resolved_verdicts)))
+        else:
+            self._last_unkeyed_verdict = verdict
         candidate.resolved = True
-        self._record_event("candidate_resolved", action=action, reason=reason)
+        self._record_event(
+            "candidate_resolved",
+            action=action,
+            reason=reason,
+            verdict=verdict.action.value,
+            continue_to_llm=verdict.continue_to_llm,
+            intent=verdict.intent,
+        )
+        if self._timeline is not None:
+            self._timeline.set_attr(
+                "interruption_verdict",
+                {
+                    "action": verdict.action.value,
+                    "reason": verdict.reason,
+                    "candidate_id": verdict.candidate_id,
+                    "continue_to_llm": verdict.continue_to_llm,
+                    "turn_policy_action": verdict.turn_policy_action,
+                    "intent": verdict.intent,
+                    "transcript_preview": verdict.transcript[:120],
+                },
+            )
         logger.info(
-            "[InterruptionOrchestrator] resolved action=%s reason=%s",
+            "[InterruptionOrchestrator] resolved action=%s verdict=%s "
+            "continue_to_llm=%s reason=%s",
             action,
+            verdict.action.value,
+            verdict.continue_to_llm,
             reason,
         )
         self._candidate = None
+
+    @staticmethod
+    def _build_verdict(
+        candidate: InterruptionCandidate,
+        *,
+        action: str,
+        reason: str,
+    ) -> InterruptionVerdict:
+        normalized_action = action.strip().lower()
+        intent = candidate.last_intent
+        if normalized_action == "cancel":
+            verdict_action = InterruptionVerdictAction.CONFIRMED_CANCEL
+            continue_to_llm = (
+                candidate.last_policy_action is Action.CANCEL
+                and intent is InterruptIntent.NORMAL_INTERRUPT
+            )
+        elif normalized_action in {"rollback", "resume", "unduck"}:
+            verdict_action = (
+                InterruptionVerdictAction.EXPIRED_RESUME
+                if "timeout" in reason or "deadline" in reason
+                else InterruptionVerdictAction.REJECTED_RESUME
+            )
+            continue_to_llm = False
+        else:
+            verdict_action = InterruptionVerdictAction.REJECTED_CANDIDATE
+            continue_to_llm = False
+        return InterruptionVerdict(
+            action=verdict_action,
+            reason=reason,
+            candidate_id=candidate.candidate_id,
+            continue_to_llm=continue_to_llm,
+            turn_policy_action=(
+                candidate.last_policy_action.value
+                if candidate.last_policy_action is not None
+                else ""
+            ),
+            intent=intent.value if intent is not None else "",
+            transcript=(candidate.final_transcript or candidate.transcript).strip(),
+        )
 
     @staticmethod
     def _is_committable_cancel_candidate(

@@ -102,6 +102,30 @@ async def test_hold_rearms_before_max_suspend_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_owner_no_evidence_budget_caps_generic_duck_buffer() -> None:
+    runtime = MagicMock()
+    decision = Decision(
+        action=Action.HOLD,
+        reason="deadline_wait_for_transcript",
+        intent=InterruptIntent.UNCERTAIN,
+    )
+    runtime.deadline_decision.return_value = decision
+    handler, calls = _handler(
+        runtime=runtime,
+        suspend_start=time.monotonic() - 0.45,
+        eot_model=_eot_model(max_suspend_sec=2.0),
+        max_suspend_sec=0.8,
+    )
+
+    await handler.run(0.45)
+
+    rearmed_coro = calls.create_task.call_args.args[0]
+    assert rearmed_coro.cr_frame is not None
+    assert rearmed_coro.cr_frame.f_locals["timeout_sec"] == pytest.approx(0.35, abs=0.02)
+    rearmed_coro.close()
+
+
+@pytest.mark.asyncio
 async def test_hold_rearms_with_policy_recheck_budget() -> None:
     runtime = MagicMock()
     decision = Decision(
@@ -180,6 +204,33 @@ async def test_vad_idle_can_hold_for_post_speech_evidence_window() -> None:
     applied = calls.apply_decision.call_args.args[0]
     assert applied.action is Action.HOLD
     assert applied.reason == "deadline_wait_for_post_speech_evidence"
+    calls.create_task.call_args.args[0].close()
+
+
+@pytest.mark.asyncio
+async def test_active_speech_backchannel_deadline_cannot_terminally_rollback() -> None:
+    runtime = MagicMock()
+    runtime.deadline_decision.return_value = Decision(
+        action=Action.ROLLBACK,
+        reason="deadline_intent:backchannel",
+        rollback_drop_buffered=False,
+        intent=InterruptIntent.BACKCHANNEL,
+    )
+    handler, calls = _handler(
+        runtime=runtime,
+        suspend_start=time.monotonic(),
+        latest_asr_text="好",
+        vad_active=True,
+        should_hold_for_evidence=True,
+        max_suspend_sec=6.0,
+    )
+
+    await handler.run(0.45)
+
+    applied = calls.apply_decision.call_args.args[0]
+    assert applied.action is Action.HOLD
+    assert applied.reason == "deadline_wait_for_active_speech_evidence"
+    assert applied.intent is InterruptIntent.BACKCHANNEL
     calls.create_task.call_args.args[0].close()
 
 

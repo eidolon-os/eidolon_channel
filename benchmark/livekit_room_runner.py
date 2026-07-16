@@ -318,17 +318,24 @@ async def _run_room_case(
 
     @room.on("transcription_received")
     def _on_transcription_received(segments, participant_obj, publication) -> None:
-        state.mark("transcript_first_at")
+        source_identity = str(getattr(participant_obj, "identity", "") or "")
+        role = _transcription_role(
+            source_identity=source_identity,
+            benchmark_identity=participant,
+        )
+        if role == "user":
+            state.mark("transcript_first_at")
         for segment in segments:
             text = getattr(segment, "text", "")
             is_final = bool(getattr(segment, "final", False))
-            if is_final:
+            if role == "user" and is_final:
                 state.mark("transcript_final_at")
             events.append(
                 {
                     "type": "transcription",
                     "timestamp_ms": _elapsed_ms(started),
-                    "participant": getattr(participant_obj, "identity", ""),
+                    "participant": source_identity,
+                    "role": role,
                     "text": text,
                     "final": is_final,
                     "track_sid": getattr(publication, "sid", ""),
@@ -465,7 +472,7 @@ async def _feed_case_audio(
                 raise RuntimeError(
                     "timed out waiting for active agent audio before "
                     f"user step {step.text!r}"
-            )
+                )
             playback_state = _step_playback_state(step, default="agent_speaking")
             if publish_client_state:
                 cursor_ms += await _prime_agent_speaking_client_state(
@@ -894,6 +901,14 @@ def _participant_metadata(options: LiveKitRoomOptions) -> dict[str, Any]:
     if kind:
         metadata["kind"] = kind
     return metadata
+
+
+def _transcription_role(*, source_identity: str, benchmark_identity: str) -> str:
+    """Attribute synchronized transcripts without counting agent TTS as STT."""
+
+    if source_identity and source_identity == benchmark_identity:
+        return "user"
+    return "agent"
 
 
 @dataclass

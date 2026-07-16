@@ -30,8 +30,16 @@ def _fake_admin() -> AsyncMock:
     return AsyncMock(spec=AdminResolveClient)
 
 
-def _participant(identity: str, metadata: str = "") -> SimpleNamespace:
-    return SimpleNamespace(identity=identity, metadata=metadata)
+def _participant(
+    identity: str,
+    metadata: str = "",
+    *,
+    can_publish: bool | None = None,
+) -> SimpleNamespace:
+    participant = SimpleNamespace(identity=identity, metadata=metadata)
+    if can_publish is not None:
+        participant.permissions = SimpleNamespace(can_publish=can_publish)
+    return participant
 
 
 def _room_with(*participants) -> SimpleNamespace:
@@ -78,6 +86,30 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["realizer_version"] == "eidolon.persona_realizer"
     assert payload["device_id"] == "esp32-007"
     assert payload["actor_kind"] == "device"
+    assert payload["actor_id"] == "esp32-007"
+    admin.resolve_device.assert_awaited_once_with("esp32-007")
+
+
+async def test_resolver_ignores_non_publishing_system_participant_before_device():
+    admin = _fake_admin()
+    admin.resolve_device.return_value = _ctx(device_id="esp32-007")
+    room = _room_with(
+        _participant("eidolon-hub-control-test", can_publish=False),
+        _participant(
+            "esp32-007",
+            '{"kind": "device", "device_id": "esp32-007"}',
+            can_publish=True,
+        ),
+    )
+    resolve = make_device_token_resolver(
+        room=room,
+        admin=admin,
+        jwt_secret=SECRET,
+    )
+
+    token = await resolve()
+
+    payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["actor_id"] == "esp32-007"
     admin.resolve_device.assert_awaited_once_with("esp32-007")
 

@@ -1,42 +1,28 @@
-"""Unit tests for G8: no-ASR no-commit guard.
+"""Product-turn completion invariants for the full-duplex runtime.
 
-When VAD detects speech but STT produces no text (AEC warmup window,
-brief noise, or STT hiccup), we must NOT call ``session.commit_user_turn``.
-The framework would otherwise wait ``transcript_timeout`` for a FINAL
-that never arrives, then promote whatever INTERIM is currently in its
-global ``_audio_interim_transcript`` — often from the NEXT user
-utterance — producing a ghost LLM call with cross-segment-contaminated
-text.
+LiveKit owns automatic acoustic endpointing.  VAD boundaries only record
+evidence; the framework-completed hook is the single normal product boundary
+that may admit or reject a turn before the LLM.
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
-from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from eidolon_sdk.biz.contracts import PLAYBACK_STATE_AGENT_SPEAKING
+from livekit.agents.llm import ChatMessage
 
-from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
+from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
 from eidolon.livekit.common.speaker_verification import SpeakerSignal
-from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, TurnPolicyRuntime
-from eidolon.livekit.common.config import EotPolicyConfig, TurnPolicyConfig
 
 
-def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
-    """Build a minimally-initialised StreamingPipeline ready to receive a
-    ``user_state: speaking → listening`` transition.
-
-    We bypass full __init__ because ``_on_user_state_changed`` only consults
-    the small slice of state set up below.
-    """
+def _make_pipeline_with_session(*, latest_asr_text: str = "") -> Any:
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
@@ -46,33 +32,31 @@ def _make_pipeline_with_session(*, latest_asr_text: str) -> Any:
     pipeline._callbacks = MagicMock()
     pipeline._room = None
     pipeline._allow_interruptions = False
-    pipeline._stt_commit_transcript_timeout = 5.0
     pipeline._latest_asr_text = latest_asr_text
-    pipeline._filler = None
     pipeline._ducking = OutputDuckingController()
     pipeline._ducking.mixer = None
     pipeline._ducking.timeout_task = None
     pipeline._ducking.suspend_start = 0.0
-    pipeline._user_speaking_start_time = None
     pipeline._ducking.last_unduck_time = 0.0
+    pipeline._user_speaking_start_time = None
     pipeline._skip_commit_after_interrupt_cancel = False
     pipeline._suppress_commit_after_interrupt_until = 0.0
 
-    # Stub EOT model — its methods are called regardless of guard branch.
     eot = MagicMock()
-    eot.reset = MagicMock()
-    eot.record_turn = MagicMock()
     eot._current_eot_score = 1.0
     eot.current_eot_score = 1.0
     pipeline._get_eot_model = MagicMock(return_value=eot)
 
-    # Stub interrupted context ledger path.
-    pipeline._context_ledger = MagicMock()
     effects = MagicMock()
     effects._ducking = pipeline._ducking
     effects.soft_interrupt_active.return_value = False
     pipeline._interruption_effects = effects
+    pipeline._context_ledger = MagicMock()
 
+    llm = SimpleNamespace(
+        set_turn_control_metadata=MagicMock(),
+    )
+    pipeline._factory = SimpleNamespace(llm=SimpleNamespace(llm=llm))
     return pipeline
 
 
@@ -80,1358 +64,355 @@ def _user_state_event(old: str, new: str) -> SimpleNamespace:
     return SimpleNamespace(old_state=old, new_state=new)
 
 
-def _transcript_event(text: str, *, final: bool = True) -> SimpleNamespace:
-    return SimpleNamespace(transcript=text, is_final=final, speaker_id="manson")
+def _transcript_event(text: str, *, is_final: bool) -> SimpleNamespace:
+    return SimpleNamespace(transcript=text, is_final=is_final, speaker_id="owner")
 
 
-def test_commit_skipped_when_asr_text_empty() -> None:
-    """G8: VAD-end with empty ASR text → no commit_user_turn call."""
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
+def _voiceprint_result(*, allowed: bool, reason: str) -> VoiceprintTurnResult:
+    return VoiceprintTurnResult(
+        signal=SpeakerSignal(
+            provider="test",
+            model="test",
+            known=allowed,
+            score=0.9 if allowed else None,
+            audio_ms=1600,
+            latency_ms=1.0,
+            profile_id="owner",
+            error=(reason if reason in {"audio_too_short", "insufficient_audio"} else ""),
+        ),
+        cached=False,
+        commit_allowed=allowed,
+        commit_reason=reason,
+    )
+
+
+@pytest.mark.parametrize("text", ["", "你好世界"])
+def test_vad_stop_never_commits_or_clears_product_turn(text: str) -> None:
+    pipeline = _make_pipeline_with_session(latest_asr_text=text)
 
     pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
 
     pipeline._session.commit_user_turn.assert_not_called()
-    pipeline._session.clear_user_turn.assert_called_once()
-    # record_turn also gated on text — should not fire either
-    eot = pipeline._get_eot_model.return_value
-    eot.record_turn.assert_not_called()
-    # But reset SHOULD fire — clean per-turn state regardless of branch
-    eot.reset.assert_called_once()
-
-
-
-def test_commit_called_when_asr_text_present() -> None:
-    """Sanity: normal path (non-empty ASR text) still commits."""
-    pipeline = _make_pipeline_with_session(latest_asr_text="你好世界")
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    eot = pipeline._get_eot_model.return_value
-    eot.record_turn.assert_called_once()
-
-
-
-def test_asr_text_cleared_after_either_branch() -> None:
-    """``_latest_asr_text`` is wiped after the VAD-end handler regardless of
-    which branch fired, so the next turn starts clean."""
-    pipeline = _make_pipeline_with_session(latest_asr_text="你好")
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    assert pipeline._latest_asr_text == ""
-
-    pipeline2 = _make_pipeline_with_session(latest_asr_text="")
-    pipeline2._on_user_state_changed(_user_state_event("speaking", "listening"))
-    assert pipeline2._latest_asr_text == ""
-
-
-def test_interrupt_cancel_no_longer_drops_owner_transcript() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="换个话题")
-    pipeline._skip_commit_after_interrupt_cancel = True
-    pipeline._timeline = TurnTimeline("turn-after-cancel")
-    pipeline._timeline_debug_flushed = False
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
     pipeline._session.clear_user_turn.assert_not_called()
-    eot = pipeline._get_eot_model.return_value
-    eot.record_turn.assert_called_once()
-    assert pipeline._skip_commit_after_interrupt_cancel is False
-    assert pipeline._latest_asr_text == ""
-
-
-def test_post_interrupt_suppression_does_not_drop_owner_transcript() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="这是一段迟到的识别")
-    pipeline._suppress_commit_after_interrupt_until = time.monotonic() + 1.0
-    pipeline._timeline = TurnTimeline("late-stt-after-cancel")
-    pipeline._timeline_debug_flushed = False
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    pipeline._session.clear_user_turn.assert_not_called()
-    eot = pipeline._get_eot_model.return_value
-    eot.record_turn.assert_called_once()
-    assert pipeline._skip_commit_after_interrupt_cancel is False
-    assert pipeline._latest_asr_text == ""
-
-
-def test_late_final_transcript_is_dropped_after_voiceprint_block() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._suppress_transcripts_until_next_speech = True
-
-    pipeline._on_user_transcribed(_transcript_event("迟到的噪音字幕", final=True))
-
-    pipeline._callbacks.on_user_message.assert_not_called()
-    pipeline._get_eot_model.return_value.update_asr.assert_not_called()
-    assert pipeline._latest_asr_text == ""
-
-
-def test_committed_final_before_framework_completed_is_not_absorbed() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("committed-final-duplicate")
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("那你现在能帮我做什么", is_final=True)
-    decision = pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
-    pipeline._user_turns.mark_committed(
-        transcript=decision.transcript,
-        reason="framework_commit_user_turn",
-    )
-
-    pipeline._on_user_transcribed(
-        _transcript_event("那你现在能帮我做什么。", final=True)
-    )
-
-    assert pipeline._timeline.attrs["transcript_admission_last_event"]["accepted"] is True
-
-
-def test_duplicate_committed_final_transcript_is_absorbed_after_completed_turn() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("committed-final-duplicate-after-completed")
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("那你现在能帮我做什么", is_final=True)
-    decision = pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
-    pipeline._user_turns.mark_committed(
-        transcript=decision.transcript,
-        reason="framework_commit_user_turn",
-    )
-    pipeline._user_turns.mark_framework_completed(
-        transcript="那你现在能帮我做什么。",
-        reason="framework_completed_turn",
-        timeline=pipeline._timeline,
-    )
-
-    pipeline._on_user_transcribed(
-        _transcript_event("那你现在能帮我做什么。", final=True)
-    )
-
-    pipeline._callbacks.on_user_message.assert_not_called()
-    assert pipeline._user_turns.selected_text == "那你现在能帮我做什么。"
-    assert (
-        pipeline._timeline.attrs["transcript_admission_last_event"]["reason"]
-        == "committed_turn_revision"
-    )
-
-
-def test_new_speech_reopens_transcript_admission() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._suppress_transcripts_until_next_speech = True
-
-    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
-
-    assert pipeline._suppress_transcripts_until_next_speech is False
-
-
-def test_agent_echo_rejection_suppresses_remaining_segment_transcripts() -> None:
-    from eidolon.livekit.agent.full_duplex import StreamingPipeline
-
-    pipeline = StreamingPipeline.__new__(StreamingPipeline)
-    pipeline._suppress_transcripts_until_next_speech = False
-    pipeline._timeline = TurnTimeline("echo-turn")
-    effects = MagicMock()
-    pipeline._ensure_interruption_effects = MagicMock(return_value=effects)
-
-    pipeline._reject_agent_echo_transcript("我是你的 AI 助手")
-
-    assert pipeline._suppress_transcripts_until_next_speech is True
-    assert pipeline._timeline.attrs["agent_echo_suppressed"]["text_preview"] == (
-        "我是你的 AI 助手"
-    )
-    effects.rollback_if_suspended.assert_called_once_with(
-        reason="agent_echo",
-        drop_buffered=False,
-    )
+    assert pipeline._latest_asr_text == text
+    pipeline._get_eot_model.return_value.update_vad.assert_called_once_with(False)
 
 
 @pytest.mark.asyncio
-async def test_completed_turn_hook_skips_committed_duplicate_revision() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("completed-final-duplicate")
-    clear_next = MagicMock()
-    set_next = MagicMock()
-    pipeline._factory = SimpleNamespace(
-        llm=SimpleNamespace(
-            llm=SimpleNamespace(
-                clear_next_user_text=clear_next,
-                set_next_user_text=set_next,
-            )
-        )
-    )
+async def test_framework_completed_is_the_single_normal_commit_boundary() -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("framework-owner")
+    pipeline._timeline = timeline
     pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("那你现在能帮我做什么", is_final=True)
-    decision = pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
-    pipeline._user_turns.mark_committed(
-        transcript=decision.transcript,
-        reason="framework_commit_user_turn",
-    )
-    pipeline._user_turns.mark_framework_completed(
-        transcript="那你现在能帮我做什么。",
-        reason="framework_completed_turn",
-        timeline=pipeline._timeline,
-    )
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("你好世界", is_final=True)
 
+    message = ChatMessage(role="user", content=["你好世界"])
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="那你现在能帮我做什么。")
-    )
-
-    assert allowed is False
-    pipeline._session.clear_user_turn.assert_called_once()
-    clear_next.assert_not_called()
-    set_next.assert_not_called()
-    assert pipeline._timeline.attrs["framework_completed_duplicate"]["reason"] == (
-        "committed_turn_revision"
-    )
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_blocks_while_interruption_owner_waits() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="我想问一下")
-    pipeline._timeline = TurnTimeline("active-interruption-owner")
-    clear_next = MagicMock()
-    set_next = MagicMock()
-    pipeline._factory = SimpleNamespace(
-        llm=SimpleNamespace(
-            llm=SimpleNamespace(
-                clear_next_user_text=clear_next,
-                set_next_user_text=set_next,
-            )
-        )
-    )
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("我想问一下", is_final=True)
-    pipeline._interruption_orchestrator.start_candidate(timeline=pipeline._timeline)
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="我想问一下")
-    )
-
-    assert allowed is False
-    pipeline._session.clear_user_turn.assert_called_once()
-    clear_next.assert_called_once_with(reason="interruption_owner_waiting_for_evidence")
-    set_next.assert_not_called()
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "open"
-    assert (
-        pipeline._timeline.attrs[
-            "framework_completed_blocked_by_interruption_owner"
-        ]["reason"]
-        == "interruption_owner_waiting_for_evidence"
-    )
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_resolves_backchannel_interruption_candidate() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("backchannel-completed-owner")
-    clear_next = MagicMock()
-    pipeline._factory = SimpleNamespace(
-        llm=SimpleNamespace(llm=SimpleNamespace(clear_next_user_text=clear_next))
-    )
-    pipeline._ensure_runtime_defaults()
-    pipeline._interruption_orchestrator.start_candidate(timeline=pipeline._timeline)
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="好。")
-    )
-
-    assert allowed is False
-    pipeline._interruption_effects.rollback_if_suspended.assert_called_once()
-    rollback_call = pipeline._interruption_effects.rollback_if_suspended.call_args
-    assert rollback_call.kwargs["reason"] == (
-        "framework_completed_interruption_evidence"
-    )
-    assert pipeline._timeline.attrs["decision"]["action"] == "rollback"
-    assert pipeline._timeline.attrs["decision"]["intent"] == "backchannel"
-    assert (
-        pipeline._timeline.attrs["framework_completed_interruption_evidence"][
-            "intent"
-        ]
-        == "backchannel"
-    )
-    pipeline._session.clear_user_turn.assert_called_once()
-    clear_next.assert_called_once_with(reason="interruption_owner_resolved:rollback")
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_preempts_playback_topic_switch_without_active_owner() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("late-topic-completed-turn")
-    set_next = MagicMock()
-    clear_next = MagicMock()
-    pipeline._factory = SimpleNamespace(
-        llm=SimpleNamespace(
-            llm=SimpleNamespace(
-                clear_next_user_text=clear_next,
-                set_next_user_text=set_next,
-                set_turn_control_metadata=MagicMock(),
-            )
-        )
-    )
-    pipeline._turn_policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(
-            TurnPolicyConfig().interrupt,
-            fast_lexical_intents=True,
-        ),
-    )
-    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
-    pipeline._ensure_runtime_defaults()
-    pipeline._room_data.client_audio_states["bench-user"] = ClientAudioState(
-        participant_identity="bench-user",
-        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
-        received_at=time.monotonic(),
-    )
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="换个话题，我们聊点别的。")
+        new_message=message
     )
 
     assert allowed is True
-    pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
-    pipeline._session.clear_user_turn.assert_called_once()
-    clear_next.assert_not_called()
-    set_next.assert_called_once()
-    assert pipeline._timeline.attrs["decision"]["action"] == "cancel"
-    assert pipeline._timeline.attrs["decision"]["intent"] == "normal_interrupt"
-    assert pipeline._timeline.attrs["framework_completed_playback_evidence"] == {
-        "action": "cancel",
-        "continue_to_llm": True,
-        "intent": "normal_interrupt",
-        "reason": "intent:topic_switch",
-        "text_length": 12,
-        "text_preview": "换个话题，我们聊点别的。",
-    }
-    timestamps = pipeline._timeline.timestamps
-    assert "framework_completed_turn_at" in timestamps
-    assert "framework_completed_playback_evidence_at" in timestamps
-    events = pipeline._timeline.attrs["framework_completed_gate_events"]
-    assert events[0]["stage"] == "received"
-    assert events[0]["action"] == "observe"
-    assert events[1]["stage"] == "playback_check"
-    assert events[1]["reason"] == "playback_active"
-    assert events[-1]["stage"] == "framework_completed_playback_evidence"
-    assert events[-1]["action"] == "cancel"
-    assert events[-1]["reason"] == "intent:topic_switch"
-    assert events[-1]["continue_to_llm"] is True
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_respects_mic_muted_playback_state() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("late-muted-hard-stop")
-    pipeline._ensure_runtime_defaults()
-    pipeline._room_data.client_audio_states["bench-user"] = ClientAudioState(
-        participant_identity="bench-user",
-        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
-        mic_muted=True,
-        received_at=time.monotonic(),
-    )
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("停一下。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.0, should_defer=True)
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="停一下。")
-    )
-
-    assert allowed is False
-    pipeline._interruption_effects.cancel_and_interrupt.assert_not_called()
-    pipeline._session.commit_user_turn.assert_not_called()
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert "decision" not in pipeline._timeline.attrs
-    assert pipeline._timeline.attrs["framework_completed_playback_evidence"] == {
-        "action": "ignore",
-        "continue_to_llm": False,
-        "intent": None,
-        "reason": "client_mic_muted",
-        "text_length": 4,
-        "text_preview": "停一下。",
-    }
-    assert (
-        pipeline._timeline.attrs["framework_completed_playback_evidence_ignored"][
-            "reason"
-        ]
-        == "client_mic_muted"
-    )
-    events = pipeline._timeline.attrs["framework_completed_gate_events"]
-    assert events[-1]["stage"] == "framework_completed_playback_evidence"
-    assert events[-1]["action"] == "ignore"
-    assert events[-1]["reason"] == "client_mic_muted"
-    assert events[-1]["continue_to_llm"] is False
-
-
-def test_short_statement_fragment_defers_even_when_eot_is_high() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._get_eot_model.return_value.current_eot_score = 0.99
-
-    assert pipeline._ensure_turn_completion().should_defer_low_eot_commit(
-        transcript="给医生做的系统。",
-        eot_model=pipeline._get_eot_model.return_value,
-    )
-    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
-        transcript="你觉得这个系统怎么定价？",
-        eot_model=pipeline._get_eot_model.return_value,
-    )
-    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
-        transcript="今天我想聊一下一个新的医疗项目。",
-        eot_model=pipeline._get_eot_model.return_value,
-    )
-    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
-        transcript="帮我详细介绍一下这个方案。",
-        eot_model=pipeline._get_eot_model.return_value,
-    )
-    assert not pipeline._ensure_turn_completion().should_defer_low_eot_commit(
-        transcript="换个话题，我们聊一下定价。",
-        eot_model=pipeline._get_eot_model.return_value,
-    )
-
-
-@pytest.mark.asyncio
-async def test_low_eot_commit_is_deferred_until_grace_expires() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="看你能不能")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=10)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-
-    pipeline._session.commit_user_turn.assert_not_called()
-    await asyncio.sleep(0.05)
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-
-
-@pytest.mark.asyncio
-async def test_low_eot_deferred_commit_merges_short_continuation() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="看你能不能")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    task = pipeline._deferred_low_eot_commit_task
-    assert task is not None
-
-    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
-    await asyncio.sleep(0)
-    assert task.cancelled()
-    pipeline._on_user_transcribed(_transcript_event("帮我", final=True))
-    pipeline._get_eot_model.return_value.current_eot_score = 1.0
-    await asyncio.sleep(0.12)
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    eot = pipeline._get_eot_model.return_value
-    eot.record_turn.assert_called_once()
-    assert eot.record_turn.call_args.args[0] == "看你能不能帮我"
-
-
-@pytest.mark.asyncio
-async def test_low_eot_merged_turn_requires_all_voiceprint_segments_allowed() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="看你能不能")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-
-    blocked = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=False,
-            score=0.22,
-            audio_ms=900,
-            latency_ms=20.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=False,
-        commit_reason="speaker_not_owner",
-    )
-    allowed = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=900,
-            latency_ms=20.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    pipeline._voiceprint_turns = SimpleNamespace(
-        start_turn=MagicMock(),
-        finish_turn=MagicMock(
-            side_effect=[
-                asyncio.create_task(asyncio.sleep(0, result=blocked)),
-                asyncio.create_task(asyncio.sleep(0, result=allowed)),
-            ]
-        ),
-    )
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    task = pipeline._deferred_low_eot_commit_task
-    assert task is not None
-
-    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
-    await asyncio.sleep(0)
-    assert task.cancelled()
-    pipeline._on_user_transcribed(_transcript_event("帮我", final=True))
-    pipeline._get_eot_model.return_value.current_eot_score = 1.0
-    await asyncio.sleep(0.12)
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
-
-    pipeline._session.commit_user_turn.assert_not_called()
-    pipeline._session.clear_user_turn.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_merged_turn_ignores_inconclusive_short_voiceprint_segment() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="私立医院的")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-
-    short = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=False,
-            score=0.0,
-            audio_ms=400,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=False,
-        commit_reason="audio_too_short",
-    )
-    allowed = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=1800,
-            latency_ms=20.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    pipeline._voiceprint_turns = SimpleNamespace(
-        start_turn=MagicMock(),
-        finish_turn=MagicMock(
-            side_effect=[
-                asyncio.create_task(asyncio.sleep(0, result=short)),
-                asyncio.create_task(asyncio.sleep(0, result=allowed)),
-            ]
-        ),
-    )
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    task = pipeline._deferred_low_eot_commit_task
-    assert task is not None
-
-    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
-    await asyncio.sleep(0)
-    assert task.cancelled()
-    pipeline._on_user_transcribed(_transcript_event("给医生做的系统", final=True))
-    pipeline._get_eot_model.return_value.current_eot_score = 1.0
-    await asyncio.sleep(0.12)
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
-
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    eot = pipeline._get_eot_model.return_value
-    assert eot.record_turn.call_args.args[0] == "私立医院的给医生做的系统"
-
-
-@pytest.mark.asyncio
-async def test_short_voiceprint_result_waits_for_continuation_before_reject() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="私立医院的。")
-    pipeline._timeline = TurnTimeline("short-audio-waits")
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
-    short = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=False,
-            score=0.0,
-            audio_ms=700,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=False,
-        commit_reason="audio_too_short",
-    )
-    verify_task = asyncio.create_task(asyncio.sleep(0, result=short))
-    pipeline._ensure_turn_completion().schedule_voiceprint_gated_commit(
-        verify_task=verify_task,
-        eot_model=pipeline._get_eot_model.return_value,
-        transcript="私立医院的。",
-        timeline=pipeline._timeline,
-    )
-
-    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
-
-    pipeline._session.commit_user_turn.assert_not_called()
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "waiting_merge"
-    assert pipeline._timeline.attrs["voiceprint_deferred"]["state"] == "waiting_merge"
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_allows_owner_voiceprint() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("owner-hook-turn")
-    signal = SpeakerSignal(
-        provider="3d_speaker",
-        model="campplus_zh_16k_common",
-        known=True,
-        score=0.66,
-        audio_ms=2400,
-        latency_ms=20.0,
-        profile_id="vp_manson_default",
-    )
-    result = VoiceprintTurnResult(
-        signal=signal,
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="主人正常说话")
-    )
-
-    assert allowed is True
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_stops_hard_stop_without_voiceprint_task() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("hard-stop-completed-turn")
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._timeline.record_decision(
-        action=Action.CANCEL.value,
-        reason="intent:hard_stop",
-        rollback_drop_buffered=False,
-        intent=InterruptIntent.HARD_STOP.value,
-        source="strong_intent",
-        transcript_preview="别说了。",
-        vad_active=True,
-    )
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="别说了。")
-    )
-
-    assert allowed is False
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "rejected"
-    assert pipeline._user_turns.active.reject_reason == (
-        "non_semantic_completed_turn:hard_stop"
-    )
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_aligns_waiting_candidate_and_cancels_deferred_commit() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("owner-hook-waiting-turn")
-    setter = MagicMock()
-    pipeline._factory = SimpleNamespace(
-        llm=SimpleNamespace(llm=SimpleNamespace(set_next_user_text=setter))
-    )
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("换个话题。", is_final=True)
-    pipeline._user_turns.add_transcript("我们聊一下定价。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.1, should_defer=True)
-    deferred = asyncio.create_task(asyncio.sleep(10))
-    pipeline._deferred_low_eot_commit_task = deferred
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=2400,
-            latency_ms=20.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=True,
-        commit_allowed=True,
-        commit_reason="cached_owner_context",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="我们聊一下定价。")
-    )
-    await asyncio.sleep(0)
-
-    assert allowed is True
-    assert deferred.cancelled()
     assert pipeline._user_turns.snapshot()["state"] == "committed"
-    assert (
-        pipeline._timeline.attrs["canonical_user_text"]["text_preview"]
-        == "换个话题。我们聊一下定价。"
-    )
-    assert pipeline._timeline.attrs["full_duplex_state"]["phase"] == (
-        "user_turn_committed"
-    )
-    assert pipeline._timeline.attrs["full_duplex_state"]["last"]["event"] == (
-        "framework_completed_turn"
-    )
-    setter.assert_called_once_with(
-        "换个话题。我们聊一下定价。",
-        source="framework_completed_turn",
-    )
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._timeline.attrs["framework_completed_audio_turn_cleared"] == {
-        "reason": "framework_completed_turn_committed"
-    }
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_rejects_non_actionable_meta_owner() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    timeline = TurnTimeline("owner-hook-meta-turn")
-    pipeline._timeline = timeline
-    setter = MagicMock()
-    pipeline._factory = SimpleNamespace(
-        llm=SimpleNamespace(llm=SimpleNamespace(set_next_user_text=setter))
-    )
-    pipeline._ensure_runtime_defaults()
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="那我再说了。")
-    )
-
-    assert allowed is False
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._user_turns.snapshot()["state"] == "rejected"
-    assert pipeline._user_turns.snapshot()["reject_reason"] == "non_actionable_meta_turn"
-    assert "canonical_user_text" not in timeline.attrs
-    assert timeline.attrs["full_duplex_state"]["phase"] == "user_turn_rejected"
-    assert timeline.attrs["full_duplex_state"]["last"]["event"] == (
-        "framework_completed_rejected"
-    )
-    setter.assert_called_once_with("", source="clear:non_actionable_meta_turn")
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_keeps_waiting_merge_on_short_voiceprint() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._turn_policy = TurnPolicyConfig()
-    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
-    timeline = TurnTimeline("waiting-short-voiceprint")
-    pipeline._timeline = timeline
-    pipeline._ensure_user_turn_coordinator()
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=False,
-            score=0.0,
-            audio_ms=400,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=False,
-        commit_reason="audio_too_short",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="私立医院的。")
-    )
-
-    assert allowed is False
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "waiting_merge"
-    assert timeline.attrs["voiceprint_deferred"]["state"] == "waiting_merge"
-    pipeline._session.clear_user_turn.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_defers_short_statement_for_continuation() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    timeline = TurnTimeline("statement-fragment-hook")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    # EOT is unsure here (low score), so the short-statement hedge still applies
-    # and the framework-completed turn defers for continuation.
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
-    deferred = asyncio.create_task(asyncio.sleep(10))
-    pipeline._deferred_low_eot_commit_task = deferred
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=1600,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._completed_turn_voiceprint_task = voiceprint_task
-    pipeline._candidate_voiceprint_tasks = [voiceprint_task]
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="私立医院的。 给医生做的系统。")
-    )
-    await asyncio.sleep(0)
-
-    assert allowed is False
-    assert deferred.cancelled()
-    assert pipeline._deferred_low_eot_commit_task is not None
-    assert pipeline._session.commit_user_turn.call_count == 0
-    pipeline._session.clear_user_turn.assert_called_once_with()
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "waiting_merge"
-    assert timeline.attrs["framework_completed_deferred"]["state"] == "waiting_merge"
-    assert (
-        timeline.attrs["user_turn_coordinator"]["selected_text_preview"]
-        == "私立医院的。 给医生做的系统。"
-    )
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_does_not_defer_when_eot_confident() -> None:
-    # SOTA alignment: when the framework AND the EOT model both consider the turn
-    # complete, do not re-hold it on the short-statement text heuristic (which a
-    # dropped 「吗？」 would defeat). The turn takes the normal reply path instead of
-    # the fragile return-False + re-commit defer path. Mirrors the production bug
-    # where "你的笑话已经讲完了吗？" (EOT=1.0) was wrongly deferred and never answered.
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    timeline = TurnTimeline("statement-fragment-confident")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    # EOT is confident the turn is complete -> trust it, don't defer.
-    pipeline._get_eot_model.return_value.current_eot_score = 1.0
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=1600,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._completed_turn_voiceprint_task = voiceprint_task
-    pipeline._candidate_voiceprint_tasks = [voiceprint_task]
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="私立医院的。")
-    )
-
-    # Not deferred -> framework proceeds to reply (allowed True), no waiting_merge.
-    assert allowed is True
-    assert pipeline._user_turns.active is None or (
-        pipeline._user_turns.active.state != "waiting_merge"
-    )
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_respects_voiceprint_deferred_merge_window() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    timeline = TurnTimeline("voiceprint-merge-window-hook")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=1.0, should_defer=False)
-    pipeline._user_turns.defer_voiceprint_inconclusive(
-        transcript="私立医院的。",
-        reason="voiceprint_inconclusive:audio_too_short",
-        timeline=timeline,
-    )
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("主要给医生做的系统。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
-    deferred = asyncio.create_task(asyncio.sleep(10))
-    pipeline._deferred_low_eot_commit_task = deferred
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.78,
-            audio_ms=1900,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(
-            text_content="私立医院的。主要给医生做的系统。"
-        )
-    )
-    await asyncio.sleep(0)
-    new_deferred = pipeline._deferred_low_eot_commit_task
-
-    assert allowed is False
-    assert deferred.cancelled()
-    assert new_deferred is not None
-    assert new_deferred is not deferred
-    assert pipeline._session.commit_user_turn.call_count == 0
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "waiting_merge"
-    assert pipeline._user_turns.active.voiceprint_reason == (
-        "voiceprint_inconclusive:audio_too_short"
-    )
-    assert (
-        timeline.attrs["framework_completed_deferred"]["text_preview"]
-        == "私立医院的。主要给医生做的系统。"
-    )
-
-    new_deferred.cancel()
-    try:
-        await new_deferred
-    except asyncio.CancelledError:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_respects_statement_sequence_merge_window() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=100)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    timeline = TurnTimeline("statement-sequence-window-hook")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("主要给医生做的系统。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.55, should_defer=True)
-    deferred = asyncio.create_task(asyncio.sleep(10))
-    pipeline._deferred_low_eot_commit_task = deferred
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.78,
-            audio_ms=1900,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(
-            text_content="私立医院的。主要给医生做的系统。"
-        )
-    )
-    await asyncio.sleep(0)
-    new_deferred = pipeline._deferred_low_eot_commit_task
-
-    assert allowed is False
-    assert deferred.cancelled()
-    assert new_deferred is not None
-    assert pipeline._session.commit_user_turn.call_count == 0
-    assert pipeline._user_turns.active is not None
-    assert pipeline._user_turns.active.state == "waiting_merge"
-    assert pipeline._user_turns.active.merge_reason == "low_eot_wait_for_continuation"
-    assert timeline.attrs["framework_completed_deferred"]["state"] == "waiting_merge"
-
-    new_deferred.cancel()
-    try:
-        await new_deferred
-    except asyncio.CancelledError:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_deferred_framework_completed_commits_after_grace() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    policy = TurnPolicyConfig(
-        eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=10)
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    timeline = TurnTimeline("statement-fragment-grace")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    # EOT unsure (low score) -> short-statement hedge applies -> defers.
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("私立医院的。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=1600,
-            latency_ms=10.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._completed_turn_voiceprint_task = voiceprint_task
-    pipeline._candidate_voiceprint_tasks = [voiceprint_task]
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="私立医院的。 给医生做的系统。")
-    )
-    assert allowed is False
-    await asyncio.sleep(0.05)
-    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
-
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    eot = pipeline._get_eot_model.return_value
-    assert eot.record_turn.call_args.args[0] == "私立医院的。 给医生做的系统。"
-
-
-@pytest.mark.asyncio
-async def test_deferred_framework_completed_rechecks_playback_redirect_before_commit() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("deferred-topic-playback")
-    policy = replace(
-        TurnPolicyConfig(
-            eot=EotPolicyConfig(eot_unlikely_threshold=0.5, tail_hang_silence_ms=10)
-        ),
-        interrupt=replace(
-            TurnPolicyConfig().interrupt,
-            fast_lexical_intents=True,
-        ),
-    )
-    pipeline._turn_policy = policy
-    pipeline._turn_runtime = TurnPolicyRuntime(policy)
-    timeline = pipeline._timeline
-    pipeline._ensure_runtime_defaults()
-    pipeline._get_eot_model.return_value.current_eot_score = 0.01
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("我们聊点别的", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.01, should_defer=True)
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="换个话 换个话题。")
-    )
-    assert allowed is False
-    pipeline._room_data.client_audio_states["bench-user"] = ClientAudioState(
-        participant_identity="bench-user",
-        playback_state=PLAYBACK_STATE_AGENT_SPEAKING,
-        received_at=time.monotonic(),
-    )
-
-    await asyncio.sleep(0.05)
-
-    pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    assert timeline.attrs["decision"]["action"] == "cancel"
-    assert timeline.attrs["decision"]["intent"] == "normal_interrupt"
-    assert timeline.attrs["deferred_low_eot_playback_evidence"] == {
-        "action": "cancel",
-        "continue_to_llm": True,
-        "intent": "normal_interrupt",
-        "reason": "intent:topic_switch",
-        "text_length": 15,
-        "text_preview": "我们聊点别的换个话 换个话题。",
-    }
-    events = timeline.attrs["framework_completed_gate_events"]
-    assert any(
-        event["stage"] == "playback_check" and event["reason"] == "playback_active"
-        for event in events
-    )
-    assert events[-1]["stage"] == "deferred_low_eot_playback_evidence"
-    assert events[-1]["action"] == "cancel"
-    assert events[-1]["reason"] == "intent:topic_switch"
-    eot = pipeline._get_eot_model.return_value
-    assert eot.record_turn.call_args.args[0] == "我们聊点别的换个话 换个话题。"
-
-
-def test_deferred_playback_evidence_uses_turn_scoped_client_state() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    timeline = TurnTimeline("deferred-topic-turn-scoped-playback")
-    timeline.set_attr(
-        "client_audio_state",
-        {
-            "participant_identity": "bench-user",
-            "playback_state": PLAYBACK_STATE_AGENT_SPEAKING,
-            "mic_muted": False,
-        },
-    )
-    pipeline._timeline = timeline
-    pipeline._turn_policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(
-            TurnPolicyConfig().interrupt,
-            fast_lexical_intents=True,
-        ),
-    )
-    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
-    pipeline._ensure_runtime_defaults()
-    pipeline._room_data.client_audio_states.clear()
-
-    resolved = (
-        pipeline._ensure_turn_completion()
-        ._framework_completed_turn.resolve_deferred_playback_commit_evidence(
-            "我们聊点别的换个话 换个话题。",
-            timeline=timeline,
-        )
-    )
-
-    assert resolved is True
-    pipeline._interruption_effects.cancel_and_interrupt.assert_called_once()
-    assert timeline.attrs["decision"]["action"] == "cancel"
-    assert timeline.attrs["decision"]["intent"] == "normal_interrupt"
-    assert timeline.attrs["deferred_low_eot_playback_evidence"] == {
-        "action": "cancel",
-        "continue_to_llm": True,
-        "intent": "normal_interrupt",
-        "reason": "intent:topic_switch",
-        "text_length": 15,
-        "text_preview": "我们聊点别的换个话 换个话题。",
-    }
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_blocks_backchannel_response_even_when_voiceprint_allows() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("owner-hook-backchannel")
-    timeline = pipeline._timeline
-    timeline.set_attr(
-        "decision",
-        {
-            "action": "rollback",
-            "intent": "backchannel",
-            "reason": "intent:backchannel",
-        },
-    )
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
-    pipeline._user_turns.add_transcript("对呀。", is_final=True)
-    pipeline._user_turns.finish_speech(eot_score=0.0, should_defer=True)
-    deferred = asyncio.create_task(asyncio.sleep(10))
-    pipeline._deferred_low_eot_commit_task = deferred
-    result = VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="3d_speaker",
-            model="campplus_zh_16k_common",
-            known=True,
-            score=0.66,
-            audio_ms=900,
-            latency_ms=0.0,
-            profile_id="vp_manson_default",
-        ),
-        cached=True,
-        commit_allowed=True,
-        commit_reason="cached_owner_context",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="对呀。")
-    )
-    await asyncio.sleep(0)
-
-    assert allowed is False
-    assert deferred.cancelled()
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._user_turns.snapshot()["state"] == "rejected"
-    assert "canonical_user_text" not in timeline.attrs
-    assert timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
-    assert pipeline._timeline is None
-
-
-@pytest.mark.asyncio
-async def test_completed_turn_hook_blocks_late_noise_final() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="")
-    pipeline._timeline = TurnTimeline("noise-hook-turn")
-    signal = SpeakerSignal(
-        provider="3d_speaker",
-        model="campplus_zh_16k_common",
-        known=False,
-        score=0.22,
-        audio_ms=3200,
-        latency_ms=20.0,
-        profile_id="vp_manson_default",
-    )
-    result = VoiceprintTurnResult(
-        signal=signal,
-        cached=False,
-        commit_allowed=False,
-        commit_reason="speaker_not_owner",
-    )
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(
-        asyncio.sleep(0, result=result)
-    )
-    pipeline._completed_turn_voiceprint_timeline = pipeline._timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="迟到的噪音字幕")
-    )
-
-    assert allowed is False
-    pipeline._session.clear_user_turn.assert_called_once()
-    assert pipeline._suppress_transcripts_until_next_speech is True
-    assert pipeline._timeline is None
-
-
-@pytest.mark.asyncio
-async def test_voiceprint_gate_allows_high_confidence_owner_commit() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="你好世界")
-    pipeline._timeline = TurnTimeline("owner-turn")
-    signal = SpeakerSignal(
-        provider="3d_speaker",
-        model="campplus_zh_16k_common",
-        known=True,
-        score=0.66,
-        audio_ms=2400,
-        latency_ms=20.0,
-        profile_id="vp_manson_default",
-    )
-    result = VoiceprintTurnResult(
-        signal=signal,
-        cached=False,
-        commit_allowed=True,
-        commit_reason="owner_high_confidence",
-    )
-    verify_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._voiceprint_turns = SimpleNamespace(finish_turn=MagicMock(return_value=verify_task))
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
-
-    pipeline._session.commit_user_turn.assert_called_once_with(transcript_timeout=5.0)
-    pipeline._session.clear_user_turn.assert_not_called()
-    assert pipeline._timeline.attrs["voiceprint_commit_gate"]["allowed"] is True
-
-
-@pytest.mark.asyncio
-async def test_voiceprint_gate_blocks_low_score_commit() -> None:
-    pipeline = _make_pipeline_with_session(latest_asr_text="视频里的声音")
-    pipeline._timeline = TurnTimeline("noise-turn")
-    signal = SpeakerSignal(
-        provider="3d_speaker",
-        model="campplus_zh_16k_common",
-        known=False,
-        score=0.22,
-        audio_ms=3200,
-        latency_ms=20.0,
-        profile_id="vp_manson_default",
-    )
-    result = VoiceprintTurnResult(
-        signal=signal,
-        cached=False,
-        commit_allowed=False,
-        commit_reason="speaker_not_owner",
-    )
-    verify_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._voiceprint_turns = SimpleNamespace(finish_turn=MagicMock(return_value=verify_task))
-
-    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
-    await asyncio.gather(*pipeline._pending_voiceprint_commit_tasks)
-
     pipeline._session.commit_user_turn.assert_not_called()
-    pipeline._session.clear_user_turn.assert_called_once()
-    eot = pipeline._get_eot_model.return_value
-    eot.reset.assert_called_once()
-    assert pipeline._timeline is None
+    pipeline._session.clear_user_turn.assert_not_called()
+    assert message.content == ["你好世界"]
+
+
+@pytest.mark.asyncio
+async def test_completion_covering_latest_interim_commits_complete_candidate() -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("final-then-interim")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("好啊。", is_final=True)
+    pipeline._user_turns.add_transcript(
+        "那你记下来吧，这是我们约定。",
+        is_final=False,
+    )
+
+    message = ChatMessage(
+        role="user",
+        content=["那你记下来吧，这是我们约定。"],
+    )
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=message
+    )
+
+    assert allowed is True
+    canonical = "好啊。那你记下来吧，这是我们约定。"
+    assert pipeline._user_turns.selected_text == canonical
+    assert message.content == [canonical]
+    pipeline._session.clear_user_turn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_framework_gate_defers_stale_final_until_assembled_candidate_is_closed() -> None:
+    """Replay the event order observed in the 13-turn Box-3 timeline.
+
+    LiveKit can complete the earlier short FINAL after a new VAD segment has
+    already contributed a substantive INTERIM.  Admission must evaluate the
+    assembled product-turn candidate; evaluating only the stale framework text
+    recreates the observed low-evidence rejection and drops the follow-up.
+    """
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._get_eot_model.return_value.current_eot_score = 0.0
+    pipeline._get_eot_model.return_value._current_eot_score = 0.0
+    pipeline._ensure_runtime_defaults()
+    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
+    timeline = pipeline._timeline
+    assert timeline is not None
+    timeline.set_attr(
+        "attention_admission_events",
+        [
+            {
+                "action": "observe",
+                "reason": "playback_low_evidence_transcript",
+            }
+        ],
+    )
+    pipeline._on_user_transcribed(_transcript_event("好啊。", is_final=True))
+    pipeline._on_user_state_changed(_user_state_event("speaking", "listening"))
+    pipeline._on_user_state_changed(_user_state_event("listening", "speaking"))
+    pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=False))
+
+    message = ChatMessage(role="user", content=["好啊。"])
+    first_allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=message
+    )
+
+    assert first_allowed is False
+    assert pipeline._user_turns.snapshot()["state"] == "open"
+
+    pipeline._on_user_transcribed(
+        _transcript_event("那你记下来吧，这是我们约定。", is_final=True)
+    )
+    final_message = ChatMessage(
+        role="user",
+        content=["那你记下来吧，这是我们约定。"],
+    )
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=final_message
+    )
+
+    canonical = "好啊。那你记下来吧，这是我们约定。"
+    assert allowed is True
+    assert pipeline._user_turns.selected_text == canonical
+    assert final_message.content == [canonical]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("framework_final", "later_interim", "canonical"),
+    [
+        ("好的。", "那太好", "好的。那太好"),
+        ("OK呀。", "到时候我还可以带几个朋友", "OK呀。到时候我还可以带几个朋友"),
+    ],
+)
+async def test_stale_final_waits_for_later_interim_to_become_final(
+    framework_final: str,
+    later_interim: str,
+    canonical: str,
+) -> None:
+    """Replay the other stale-final patterns from Box-3 turns 10 and 11."""
+
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("box3-stale-final-variants")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._on_user_transcribed(_transcript_event(framework_final, is_final=True))
+    pipeline._on_user_transcribed(_transcript_event(later_interim, is_final=False))
+
+    message = ChatMessage(role="user", content=[framework_final])
+    first_allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=message
+    )
+
+    assert first_allowed is False
+    pipeline._on_user_transcribed(_transcript_event(later_interim, is_final=True))
+    final_message = ChatMessage(role="user", content=[later_interim])
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=final_message
+    )
+
+    assert allowed is True
+    assert pipeline._user_turns.selected_text == canonical
+    assert final_message.text_content == canonical
+
+
+@pytest.mark.asyncio
+async def test_correction_multi_final_starts_one_generation_with_complete_canonical_turn() -> None:
+    """A late sentence FINAL must close the same physical speech before commit."""
+
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("correction-multi-final")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._on_user_transcribed(_transcript_event("不是。", is_final=True))
+    pipeline._on_user_transcribed(_transcript_event("我刚才说", is_final=False))
+
+    stale = ChatMessage(role="user", content=["不是。"])
+    assert (
+        await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            new_message=stale
+        )
+        is False
+    )
+
+    pipeline._on_user_transcribed(_transcript_event("我刚才说错了。", is_final=True))
+    completed = ChatMessage(role="user", content=["我刚才说错了。"])
+    assert (
+        await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            new_message=completed
+        )
+        is True
+    )
+    assert completed.text_content == "不是。我刚才说错了。"
+
+
+@pytest.mark.asyncio
+async def test_interim_only_candidate_replaces_empty_framework_message() -> None:
+    """A VAD/EOT completion may arrive before the STT provider emits FINAL."""
+
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("box3-interim-only-framework-completion")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=False))
+
+    message = ChatMessage(role="user", content=[""])
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=message
+    )
+
+    assert allowed is True
+    assert message.text_content == "那你记下来吧，这是我们约定。"
+
+
+@pytest.mark.asyncio
+async def test_wrong_speaker_is_explicitly_rejected_without_clearing_next_audio() -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("wrong-speaker")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("视频里的声音", is_final=True)
+    result = _voiceprint_result(allowed=False, reason="speaker_not_owner")
+    pipeline._completed_turn_voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
+    pipeline._completed_turn_voiceprint_timeline = timeline
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="视频里的声音")
+    )
+
+    assert allowed is False
+    assert pipeline._user_turns.snapshot()["state"] == "rejected"
+    assert pipeline._user_turns.snapshot()["reject_reason"] == (
+        "voiceprint_blocked:speaker_not_owner"
+    )
+    pipeline._session.clear_user_turn.assert_not_called()
+    assert pipeline._suppress_transcripts_until_next_speech is True
+
+
+@pytest.mark.asyncio
+async def test_framework_respects_observer_inconclusive_voiceprint_decision() -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("short-owner-sample")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("好的", is_final=True)
+    result = _voiceprint_result(allowed=False, reason="audio_too_short")
+    pipeline._completed_turn_voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
+    pipeline._completed_turn_voiceprint_timeline = timeline
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="好的")
+    )
+
+    assert allowed is False
+    assert pipeline._user_turns.snapshot()["state"] == "rejected"
+    assert not hasattr(pipeline, "_deferred_low_eot_commit_task")
+    pipeline._session.commit_user_turn.assert_not_called()
+    pipeline._session.clear_user_turn.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["所", "OK", "我再说一下", "等下我再说吧"])
+async def test_framework_terminal_boundary_is_text_agnostic(text: str) -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline(f"text-agnostic-{text}")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript(text, is_final=True)
+    timeline.set_attr(
+        "attention_admission_events",
+        [{"action": "observe", "reason": "playback_low_evidence_transcript"}],
+    )
+
+    message = ChatMessage(role="user", content=[text])
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=message
+    )
+
+    assert allowed is True
+    assert message.text_content == text
+
+
+@pytest.mark.asyncio
+async def test_non_semantic_completed_turn_is_rejected_only_at_product_boundary() -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("cough")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._interruption_orchestrator.start_candidate(timeline=timeline)
+    pipeline._interruption_orchestrator.note_turn_policy_decision(
+        Decision(
+            action=Action.ROLLBACK,
+            intent=InterruptIntent.NOISE,
+            reason="intent:noise",
+        ),
+        transcript="咳咳。",
+        vad_active=False,
+    )
+    pipeline._interruption_orchestrator.resolve(
+        action="rollback",
+        reason="intent:noise",
+    )
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("咳咳。", is_final=True)
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="咳咳。")
+    )
+
+    assert allowed is False
+    assert pipeline._user_turns.snapshot()["state"] == "rejected"
+    pipeline._session.clear_user_turn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_framework_completion_is_noop_without_audio_clear() -> None:
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("duplicate")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("记住了。", is_final=True)
+
+    first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="记住了。")
+    )
+    second = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        new_message=SimpleNamespace(text_content="记住了。")
+    )
+
+    assert first is True
+    assert second is False
+    pipeline._session.clear_user_turn.assert_not_called()

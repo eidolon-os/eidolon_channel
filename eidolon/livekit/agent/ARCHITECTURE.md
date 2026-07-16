@@ -1,6 +1,6 @@
 # LiveKit Agent Server 架构分析
 
-> 最近更新: 2026-07-08
+> 最近更新: 2026-07-16
 > 代码路径: `eidolon/livekit/agent/`
 
 ---
@@ -109,14 +109,15 @@ eidolon/livekit/agent/
 │   ├── client_audio.py      # FullDuplexClientAudioStateView / RoomDataBridge
 │   ├── client_preempt.py     # ExplicitClientPreemptHandler: full-duplex explicit client preempt
 │   ├── context_ledger.py     # FullDuplexContextLedger: interrupted context runtime wiring
-│   ├── deferred_commit_state.py # deferred low-EOT commit task state adapter
+│   ├── framework_completed_turn.py # LiveKit completed-turn 唯一产品终态门禁
 │   ├── interruption_effects.py # FullDuplexInterruptionEffects: output/framework effects
 │   ├── lifecycle.py          # FullDuplexSessionLifecycle: AgentSession run/start/shutdown
 │   ├── output_flow.py        # FullDuplexOutputFlow: duck mixer install + VAD duck arming
 │   ├── playback_turn_evidence.py # playback-overlap completed-turn pure decision contract
 │   ├── semantic_interrupt_gate.py # SemanticInterruptGate: transcript-triggered semantic interrupt gate
-│   ├── turn_completion.py    # FullDuplexTurnCompletion: user-turn completion + voiceprint commit gate
-│   ├── turn_completion_policy.py # pure low-EOT / voiceprint merge completion contract
+│   ├── session_turn_boundary.py # canonical user text / context-error boundary effects
+│   ├── turn_completion.py    # completed-turn 与 voiceprint 状态编排入口
+│   ├── turn_completion_policy.py # pure voiceprint result selection contract
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
 │   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
 │   ├── transcript_handler.py # FullDuplexTranscriptHandler: STT transcript entry routing
@@ -141,8 +142,7 @@ eidolon/livekit/agent/
 │   ├── semantic_interrupt.py # SemanticInterruptHandler: STT/EOT 打断热路径副作用
 │   ├── signals.py            # SessionSignalBridge: VAD/STT provider 信号桥接
 │   ├── transcript_echo.py    # TranscriptEchoGate: full-duplex TTS echo content gate
-│   ├── user_turn_coordinator.py # UserTurnCoordinator: 用户 turn 候选、合并、提交/拒绝决策
-│   └── turn_commit.py        # UserTurnCommitter: VAD-end commit guard
+│   └── user_turn_coordinator.py # transcript revision assembler + product terminal ledger
 ├── context/
 │   └── interrupted.py        # InterruptedContextManager: 被打断回复注入上下文
 ├── runtime/
@@ -169,7 +169,7 @@ eidolon/livekit/agent/
 
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
-`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`ProviderEventObserver` 是 LLM/brain/STT/TTS provider event 的观测 owner，负责 observer install、pending STT replay、STT turn-audio observe 与 timeline recording；pending STT provider event 的保留窗口、speech-start 前置归因窗口和最大缓存条数由 `observability.stt_pending_provider_event_window_ms` / `observability.stt_pending_provider_event_preroll_ms` / `observability.stt_pending_provider_event_max_count` 配置，不再硬编码在 observer 内。`StreamingPipeline` 不再保留 provider event 代理方法。`UserTurnCoordinator` 也位于这里：它是用户 turn 候选的纯决策层，负责 transcript revision、短停顿合并、低 EOT 等待、voiceprint commit/reject 和去重状态；`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；`AssistantSpeechLedger` 只是在 TTS in-flight text 暂不可读时提供短窗口 fixed-speech 兜底，窗口由 `turn_policy.attention.assistant_speech_recent_max_age_ms` 配置，过期后不返回最近助手文本，避免 stale context 污染。它们都不直接调用 LiveKit API，副作用由 full-duplex runtime owners 执行。session helpers 可以调用 `StreamingPipeline` 注入的回调，但不应反向拥有主流程。
+`session/` 负责 LiveKit 会话事件的局部处理，例如 provider event、room data packet、idle watchdog、软打断 fallback。`ProviderEventObserver` 是 LLM/brain/STT/TTS provider event 的观测 owner，负责 observer install、pending STT replay、STT turn-audio observe 与 timeline recording；pending STT provider event 的保留窗口、speech-start 前置归因窗口和最大缓存条数由 `observability.stt_pending_provider_event_window_ms` / `observability.stt_pending_provider_event_preroll_ms` / `observability.stt_pending_provider_event_max_count` 配置，不再硬编码在 observer 内。`StreamingPipeline` 不再保留 provider event 代理方法。`UserTurnCoordinator` 也位于这里：它只组装 transcript revision、记录 VAD segment、去重 framework completion，并维护 `open / committed / rejected` 三态；它不根据本地 timer、EOT 分数或 voiceprint callback 直接提交。`TranscriptEchoGate` 负责 full-duplex 播放中 transcript 与当前 TTS 文本的内容回声判定；`AssistantSpeechLedger` 只是在 TTS in-flight text 暂不可读时提供短窗口 fixed-speech 兜底。它们都不直接调用 LiveKit API，副作用由 full-duplex runtime owners 执行。
 
 `full_duplex/transcript_admission.py` 是 full-duplex STT transcript 进入 turn/evidence 逻辑前的入口门禁。当前只拥有两类无副作用裁决：voiceprint ownership 后的 post-turn residual transcript 抑制，以及播放中 agent 自身 TTS echo transcript 抑制。它不负责 EOT、commit、cancel/resume，也不处理 half-duplex PTT。
 
@@ -183,23 +183,21 @@ eidolon/livekit/agent/
 
 `full_duplex/user_state_handler.py` 是 full-duplex `user_state_changed` 的入口路由。它负责 companion UI 状态映射、STT presence 信号和 speaking start/stop 分发；它不拥有 VAD start/end 后续的 turn commit、voiceprint、EOT 或 interruption terminal decision。
 
-`full_duplex/speech_lifecycle.py` 是 full-duplex VAD speech segment 生命周期 owner。它在 speech start 时打开/合并用户 turn 候选、建立 timeline、同步 EOT/VAD、启动 voiceprint 采集并触发快速 duck/candidate；在 speech stop 时关闭 voiceprint 采集、处理 post-speech interruption candidate、confirmed semantic cancel 后继续收集的用户 speech、低证据 reject、低 EOT defer 和 voiceprint-gated commit 调度。它不取代 `TurnPolicyRuntime`、`InterruptionOrchestrator`、`UserTurnCoordinator` 或 context ledger 的 terminal decision owner。
+`full_duplex/speech_lifecycle.py` 是 full-duplex VAD speech segment 生命周期 owner。它在 speech start 时打开或续接候选、建立 timeline、同步 EOT/VAD、启动 voiceprint 采集并触发快速 duck/candidate；speech stop 只记录 acoustic boundary、结束本段 voiceprint 和处理输出侧 interruption evidence。它不 commit、reject、clear 用户输入，也不启动低 EOT deferred timer。
 
 `full_duplex/interruption_effects.py` 是 full-duplex interruption output side-effect adapter。它承接 cancel / rollback / hold / explicit preempt 后对 LiveKit `AgentSession.interrupt()`、ducking output、soft interrupt timer、stable-signal recheck、`playback.stop` control 和 interrupted-context snapshot 的副作用；当 `InterruptionOrchestrator` 判定 semantic cancel 需要继续收集用户 speech 时，它只停止/取消输出并把候选切到 collecting 状态，真正的用户 turn commit 仍在 speech stop 后完成。它不做 turn policy、semantic classification、user-turn commit 或 context ledger 裁决。
 
 `full_duplex/output_flow.py` 是 full-duplex output ducking flow owner。它只负责在 `AgentSession.start()` 后安装 `OutputDuckingController`，以及在 attention/VAD speech-start 触发时执行 `duck -> mark interrupt_started -> arm duck deadline`。cancel、rollback、hold、explicit preempt 的 terminal output effect 仍由 `FullDuplexInterruptionEffects` 执行。
 
-`full_duplex/turn_completion.py` 是 full-duplex 用户 turn 完成和提交门禁 owner。它承接低 EOT 延迟提交、voiceprint-gated commit、session user turn boundary 调度，以及 post-speech interruption candidate 的 commit/reject。它不负责 VAD speech start/end、STT transcript admission、semantic intent 分类、输出 cancel/resume、LiveKit framework completed-turn hook 细节或 interrupted context capture 算法。
+`full_duplex/turn_completion.py` 是 full-duplex completed-turn 编排入口。它只管理 candidate/completed voiceprint task/result，并把 `on_user_turn_completed` 委托给 `FullDuplexFrameworkCompletedTurnGate`；不再拥有 VAD-end commit、低 EOT timer、post-speech direct commit 或 `clear_user_turn()`。
 
-`full_duplex/turn_completion_policy.py` 是 full-duplex completion 的纯机制 contract。它只判断低 EOT commit 是否应等待、短 CJK 片段是否像续接、多个 voiceprint candidate 结果如何合并，以及 inconclusive voiceprint 是否应继续等待 merge；不创建 task、不读写 `AgentSession`、不清理 user turn，也不写 timeline。runtime owner 只能消费它的结构化结果再执行副作用。
+`full_duplex/turn_completion_policy.py` 是 voiceprint completion 的纯 contract，只负责从多个 candidate voiceprint 结果中选择有效结果；可信设备、provider error、wrong-speaker 和 fail-open/fail-closed 已由 `VoiceprintTurnObserver` 输出为 `commit_allowed / commit_reason`，framework 不再二次改写该结论。旧 low-EOT/short-statement defer policy 已删除。
 
-`full_duplex/deferred_commit_state.py` 是低 EOT deferred commit task 的 runtime state adapter。它只管理当前 deferred task 的 replace/cancel/clear-if-current 生命周期，继续使用 pipeline 上的底层字段以兼容现有构造和测试；它不判断是否应 defer，也不执行 commit。
+`full_duplex/voiceprint_commit_state.py` 是 full-duplex voiceprint task/result/timeline 的 runtime state adapter。它只管理 candidate tasks 和 completed-turn task/result；不再存在 pending direct-commit task 集合。
 
-`full_duplex/voiceprint_commit_state.py` 是 full-duplex voiceprint commit task/result/timeline 的 runtime state adapter。它集中管理 candidate voiceprint tasks、pending voiceprint commit tasks、completed-turn voiceprint task/result/timeline 的读写和取消；它不是决策层，不判断 owner 身份或 commit 结果，只把历史散落在 speech lifecycle、framework completed-turn hook、post-speech interruption owner 内的 pipeline 私有字段访问收回到一个状态边界。
+`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
 
-`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的门禁 owner。它负责裁决 framework completed-turn 是否允许进入 LLM、是否等待短句/声纹合并、是否因 active interruption owner 或非语义 backchannel/noise/hard-stop 阻断，并把允许通过的 framework transcript 对齐到 canonical user text。它可以执行 LiveKit/session/user-turn 副作用，但 playback-overlap completed-turn 的“哪些 decision 可终结、哪些 semantic redirect 应继续进 LLM”必须委托给纯 contract，不在 hook owner 内重复手写。
-
-`full_duplex/playback_turn_evidence.py` 是 playback-overlap completed-turn evidence 的纯决策 contract。它只消费 `turn_policy.Decision` 或 timeline 中已结构化的 decision dict，输出 `should_apply / continue_to_llm / reason`；不读取 LiveKit、Room、AgentSession、timeline clock 或 pipeline 私有状态，也不发布 control packet。topic/correction redirect 可以 `cancel` 后继续进入 LLM；hard-stop/backchannel/noise/rollback 只能终结当前 turn；没有 semantic hint 的普通 cancel 不允许被 completed-turn 兜底误当成 redirect。
+`full_duplex/playback_turn_evidence.py` 是 active interruption candidate 在 framework-final evidence 到达时使用的纯决策 contract。它只消费 typed `turn_policy.Decision`，输出 `should_apply / continue_to_llm / reason`；不读取 timeline dict、LiveKit、Room、AgentSession 或 pipeline 私有状态。任何已经由 policy 确认的 `NORMAL_INTERRUPT/CANCEL` 都成为用户 turn，不依赖 topic/correction 关键词；hard-stop 与 rollback 只终结 interruption，不进入 LLM。
 
 `full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/injection 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context snapshot/inject 细节。
 
@@ -209,7 +207,7 @@ eidolon/livekit/agent/
 
 `full_duplex/state_machine.py` 是 full-duplex turn contract 的无副作用可观测状态机。它把 timeline 统一标注为 `idle`、`user_speech_open`、`provisional_duck`、`evidence_arbitration`、`accepted_interruption`、`rejected_interruption`、`user_turn_pending`、`user_turn_committed`、`user_turn_rejected` 等阶段，并为每次 transition 标出 `side_effect=none|reversible|irreversible`。当前 contract 原则是：VAD 后的 duck/suspend 属于可回滚阶段；`AgentSession.interrupt()`、`playback.stop`、framework completed-turn 放行、用户 turn commit 属于不可逆或高副作用阶段，必须由 evidence/artifact gate 或 explicit client preempt 后的 terminal owner 触发。
 
-`session/user_turn_coordinator.py` 的 owner ledger 是 full-duplex 用户 turn ownership 的纯状态边界。每个 candidate 会在 timeline 的 `user_turn_owner_ledger` 中记录 provisional、accepted、rejected、merged、dropped、superseded 等 owner transition；当连续插话中新 speech 不能与旧 pending candidate 合并时，旧 candidate 进入 `superseded_user_turn`，如果替换 speech 后续被 reject 可恢复旧 pending candidate，如果替换 speech 被 accept/commit/defer 则记录 `superseded_finalized` 并清空可恢复槽。这个 ledger 不直接发布 `playback.stop`，也不直接写 LiveKit chat context。
+`session/user_turn_coordinator.py` 的 owner ledger 是 full-duplex 用户 turn ownership 的纯状态边界。每个 candidate 只经历 `open / committed / rejected`，并记录 provisional、accepted、rejected、merged transition。它不分类语义、不包含中文短语表，也不删除已经 admission 的 transcript segment。在 framework completed 前出现的新 VAD speech续接同一 open candidate，轮次边界不再由 0.8s/3.5s/4s 本地 timer 猜测。STT `FINAL` 关闭一个 revision stream；其后的 `INTERIM` 新建 sentence segment，避免旧 `final_text` 永久遮蔽后续文本。
 
 #### 2.1.1 产品交互模式边界
 
@@ -235,22 +233,49 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
    - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
 
-#### 2.1.2 Full-duplex contract 收敛状态（2026-07-08）
+#### 2.1.2 Full-duplex contract 收敛状态（2026-07-16）
 
-当前已落地并已提交的收敛点：
+本轮已完成产品输入终态 owner 切换：
 
-- `23f9d2c refactor(channel): formalize full duplex turn contract`：新增 `FullDuplexStateMachine`，把 full-duplex timeline transition 与 side-effect 等级统一记录；短 latin hard-stop artifact 不再走早期 hard cancel fast lane；non-actionable meta turn 不进入 canonical user turn；framework completed-turn hook 会尊重 coordinator reject。
-- `86fd159 refactor(channel): preserve superseded turn owner`：连续插话不能合并时，旧 pending candidate 不再被静默覆盖；替换 speech 被 reject 时可以恢复旧 candidate 并重新进入 commit gate。
+- 保留 LiveKit automatic turn lifecycle 和 Eidolon 自有 EOT/semantic interruption 策略，不切换 manual mode。
+- `FINAL -> 后续 INTERIM` 按新 sentence segment 组装，framework completion 使用 coordinator canonical text。
+- VAD-stop、output interruption、voiceprint callback、timer 都不能 commit/reject/clear 用户 turn；正常 commit 只来自 framework-completed gate。
+- 删除 `turn_commit.py`、`deferred_commit_state.py`、`post_speech_interruption.py` 及对应测试；删除 6 个仅服务旧 defer/statement merge 的配置字段。
+- framework 严格尊重 `VoiceprintTurnObserver` 已输出的 `commit_allowed / commit_reason`：可信配对设备与 provider error 的 fail-open、wrong-speaker 的 reject 都只在 observer policy 产生一次；framework 不再对 inconclusive 结果二次 fail-open。
+- interruption deadline 只返回 provisional decision，`DecisionEffectApplier` 是唯一的最终决策记录点；无 transcript 候选使用 owner 的短 timeout 上限，不再被通用 duck buffer 延长或出现 `rollback -> hold -> rollback` 重复翻转。
+- `InterruptionOrchestrator.resolve()` 生成并按 turn-id 保存 `confirmed_cancel / rejected_resume / expired_resume / rejected_candidate` typed verdict；framework terminal gate 只消费 verdict，已删除 playback artifact 字符启发式、timeline dict fallback 和对应旧 latency 字段。
+- 已删除 coordinator 中“我再说/重新说”等短语表与 meta-tail drop。参数化回归用中文单字、英文短词和 meta language 证明 terminal boundary 对文本内容无感。
+- 从真机十三轮轨迹提取的精确事件序列已固定为回归：`好啊。 -> 那你记下来吧，这是我们约定`、`好的。 -> 那太好`、`OK呀。 -> 到时候我还可以带几个朋友`，以及 interim-only 和重复 framework completion。
+- 当前 agent 回归 `779 passed`，benchmark 回归 `137 passed`；Ruff 与 diff check 通过。
 
-当前未提交的同线小改动只增加可观测性：当替换 speech 被 accept/commit/defer 后，旧 superseded candidate 会记录 `superseded_finalized` 和 timeline attr `user_turn_superseded_finalized`。这不改变 turn 裁决，只让“旧 candidate 不再可恢复”的时机可复盘。
+当前结论不是“体验 gate 只差真机验证”，而是“轮次完成 owner 已纯化，Box-3 自动化仍准确暴露独立的 interruption-confidence 红项”。`box3-terminal-purity-20260716-r8` 实房间为 `1/2`，功能 outcome `2/2`，两例均 `real_call_verified=true`：
 
-截至本记录，代码层 contract 已有 focused tests 覆盖：state-machine timeline 写入、短 latin artifact hold、non-actionable meta turn reject、framework completed-turn reject、superseded candidate restore/finalize。尚未完成的是新的真实 Box-3 dogfood 复测；因此只能说架构 contract 与单测已收敛，不能宣称 full-duplex UX 已稳定。
+- backchannel 无 transcript 候选在 `800.7ms` rollback，功能与 `<=900ms` 体验门禁通过；
+- 主人完整追问通过 `interruption_verdict:continue` 正确进入 LLM，没有被短文本/播放 artifact gate 拒绝；可行动转写约 `539.0ms`，但仍到 final 才在 `1954.3ms` cancel，用户音频结束到新 agent 音频为 `2637ms`。
 
-下一步按 contract 顺序验证，而不是先调阈值：
+因此现在不开始 Box-3 硬件 dogfood。不重新引入“只要看到实质 CJK interim 就 cancel”的已证伪快速通道；下一步是将 EOT（用户是否说完）与 interruption confidence（当前声音是否真在抢话）作为两条独立证据轴。Eidolon 继续拥有 terminal policy，LiveKit 或学习型打断模型只能作为结构化 evidence，不接管轮次 owner。
 
-- 用真实 worker timeline/log 复查 `full_duplex_state_transitions`、`user_turn_owner_ledger`、`user_turn_superseded_finalized`、`playback.stop` publish/ack、canonical user text 是否同属一个 terminal owner。
-- 先验证 13:06:28 类短 latin artifact：rejected candidate 不应伴随 natural-language path 的不可逆 `playback.stop`。
-- 再验证 13:04:50 类连续插话：旧真实请求被新 speech supersede 后，替换 speech 若被 reject 应恢复旧 request；若替换 speech 被 accept，应有 `superseded_finalized` 证据。
+#### 2.1.3 自动化链路与真机 dogfood 的一致性
+
+| 链路 | 真实组件 | 未覆盖部分 | 用途 |
+| --- | --- | --- | --- |
+| `policy` | Eidolon policy / evidence 纯函数 | RTC、provider、设备 | 穷举决策矩阵，不作 dogfood gate |
+| `headless` | Channel session 编排与 effect contract | 真实 RTC/provider/设备 | 验证 owner 和副作用顺序 |
+| `component` | 真实 VAD/STT/TTS provider 直调 | LiveKit room、worker 调度、设备 | provider 可用性与分段延迟 |
+| `livekit_room` | 真实 LiveKit room/音轨、持久 worker、VAD/STT、Eidolon turn policy/owner、identity resolver、brain、TTS、timeline | ESP32 I2S/AEC/AFE、真实 Wi-Fi/时钟抖动、物理扬声器回馈；`client.audio_state` 与 `playback.stop ACK` 为模拟 | dogfood 必要前置 gate，但不等于 dogfood |
+| Box-3 dogfood | 以上全部 + 真设备采集/AEC/上行/播放/控制执行 | 不具备自动可重放性 | 只在 `livekit_room` 体验 gate 通过后做短程验证 |
+
+自动化必须用已注册的真实 user/device identity 做 preflight，并要求 `real_call_verified=true`。转写归因只把 benchmark participant 的 transcript 计为 user，agent 同步的 TTS/welcome transcript 不得冒充用户 STT；timeline 路径必须展开 `~`，否则会产生“实际 worker 有记录，报告说无 timeline”的假阴性。
+
+Dogfood 诊断必须把设备与服务端串成同一条证据链。每个 full-duplex timeline 固定记录
+`room_name`、runtime `participant_identity`、Channel `turn_id`，并由 brain provider
+event 继续关联 brain `turn_id/request_id`。设备现有 `client.audio_state.seq` 不参与策略，
+但 Channel 会保留最近 16 个状态事件，并累计 `client_audio_state_gap_count` /
+`client_audio_state_reordered_count`；这用于区分“设备未发或链路丢包”和“包已到达但
+STT/EOT/Brain/TTS 未继续”。原始证据保存在 `~/eidolon/logs/channel/worker.log` 与
+`~/eidolon/logs/channel/turn-timeline.jsonl`，真机串口日志用于补充 I2S/AEC、采集 RMS、
+播放 RMS 和本地 `playback.stop` 执行结果。上述字段均为 observe-only，不得反向成为
+terminal owner 或语义启发式。
 
 `StreamingPipeline` 的实现位于 `full_duplex/pipeline.py`，是 full-duplex realtime path，不承载 half-duplex PTT 状态机，也不再保留 half-duplex direct-construction fallback。新增产品体验时，优先判断它属于 explicit client control、natural full-duplex evidence、turn ledger，还是 output side-effect，再放入对应模块；half-duplex PTT 上层逻辑放入 `half_duplex/`。
 

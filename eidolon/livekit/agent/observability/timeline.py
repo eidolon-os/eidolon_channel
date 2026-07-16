@@ -23,7 +23,6 @@ TIMELINE_FIELDS = (
     "transcript_actionable_first_at",
     "transcript_final_at",
     "framework_completed_turn_at",
-    "framework_completed_playback_evidence_at",
     "turn_committed_at",
     "llm_started_at",
     "llm_first_delta_at",
@@ -120,13 +119,6 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         label="Framework: completed turn -> cancel resolved",
         stage="interrupt",
         start="framework_completed_turn_at",
-        end="interrupt_cancel_resolved_at",
-    ),
-    ProviderLatencySegment(
-        name="framework_playback_evidence_to_cancel_resolved",
-        label="Framework: playback evidence -> cancel resolved",
-        stage="interrupt",
-        start="framework_completed_playback_evidence_at",
         end="interrupt_cancel_resolved_at",
     ),
     ProviderLatencySegment(
@@ -508,10 +500,6 @@ class TurnTimeline:
             "framework_completed_to_cancel_resolved_ms": self.duration_ms(
                 "framework_completed_turn_at", "interrupt_cancel_resolved_at"
             ),
-            "framework_playback_evidence_to_cancel_resolved_ms": self.duration_ms(
-                "framework_completed_playback_evidence_at",
-                "interrupt_cancel_resolved_at",
-            ),
             "tts_playback_duration_ms": self.duration_ms(
                 "tts_first_audio_at", "agent_audio_playback_done_at"
             ),
@@ -655,10 +643,6 @@ class TurnTimeline:
                 ),
                 "framework_completed_to_cancel_resolved": self.duration_ms(
                     "framework_completed_turn_at", "interrupt_cancel_resolved_at"
-                ),
-                "framework_playback_evidence_to_cancel_resolved": self.duration_ms(
-                    "framework_completed_playback_evidence_at",
-                    "interrupt_cancel_resolved_at",
                 ),
                 "interrupt_first_transcript_to_resolved": self.duration_from_first_ms(
                     ("transcript_interim_first_at", "transcript_final_at"),

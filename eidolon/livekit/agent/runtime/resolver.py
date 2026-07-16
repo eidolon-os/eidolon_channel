@@ -18,6 +18,7 @@ If metadata is missing or admin says no, the resolver raises a clear error.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Awaitable, Callable
@@ -29,6 +30,7 @@ _log = logging.getLogger(__name__)
 
 DeviceTokenResolver = Callable[[], Awaitable[str]]
 RuntimeTokenResolver = DeviceTokenResolver
+RUNTIME_PARTICIPANT_KINDS = frozenset({"device", "owner", "user"})
 
 
 class DeviceTokenResolverError(Exception):
@@ -39,12 +41,14 @@ class DeviceTokenResolverError(Exception):
 def _participant_identity_and_metadata(
     room: Any,
 ) -> tuple[str, dict[str, Any]] | None:
-    """Read the first remote participant's identity + metadata dict.
+    """Select the runtime actor rather than the first room participant.
 
-    Returns ``None`` if no participant is connected yet or metadata is
-    unparseable; the caller decides how to handle (fallback / retry /
-    raise). Robust to LiveKit Room/RemoteParticipant API differences
-    (sync vs async, dict vs list).
+    Non-publishing infrastructure participants (for example the Hub control
+    bridge) are not voice-session actors and must never own RoomIO, identity,
+    memory, or runtime-token resolution.  Explicit actor metadata wins even if
+    a system participant joined the room first.  A publishing participant with
+    invalid metadata remains visible so the strict configuration error is not
+    silently hidden.
     """
     if room is None:
         return None
@@ -52,22 +56,57 @@ def _participant_identity_and_metadata(
         participants = list(getattr(room, "remote_participants", {}).values())
     except Exception:  # noqa: BLE001 — defensive
         return None
-    if not participants:
-        return None
-    p = participants[0]
-    identity = (getattr(p, "identity", "") or "").strip()
-    if not identity:
-        return None
-    raw_meta = getattr(p, "metadata", "") or ""
+    invalid_actor: tuple[str, dict[str, Any]] | None = None
+    for participant in participants:
+        identity = (getattr(participant, "identity", "") or "").strip()
+        if not identity:
+            continue
+        metadata = _participant_metadata(participant)
+        kind = str(metadata.get("kind") or "").strip().lower()
+        if kind in RUNTIME_PARTICIPANT_KINDS:
+            return identity, metadata
+        permissions = getattr(participant, "permissions", None)
+        if getattr(permissions, "can_publish", None) is False:
+            continue
+        if invalid_actor is None:
+            invalid_actor = (identity, metadata)
+    return invalid_actor
+
+
+def _participant_metadata(participant: Any) -> dict[str, Any]:
+    raw_meta = getattr(participant, "metadata", "") or ""
     if not raw_meta:
-        return identity, {}
+        return {}
     try:
         parsed = json.loads(raw_meta)
-        if isinstance(parsed, dict):
-            return identity, parsed
     except (ValueError, TypeError):
-        pass
-    return identity, {}
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def wait_for_runtime_participant_identity(
+    room: Any,
+    *,
+    timeout_sec: float = 10.0,
+    poll_interval_sec: float = 0.05,
+) -> str:
+    """Wait until an explicitly typed voice-session actor is in the room."""
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_sec)
+    while True:
+        participant = _participant_identity_and_metadata(room)
+        if participant is not None:
+            identity, metadata = participant
+            kind = str(metadata.get("kind") or "").strip().lower()
+            if kind in RUNTIME_PARTICIPANT_KINDS:
+                return identity
+        if loop.time() >= deadline:
+            raise DeviceTokenResolverError(
+                "no remote participant with runtime actor metadata "
+                "(kind=device/owner/user) became available"
+            )
+        await asyncio.sleep(max(0.0, poll_interval_sec))
 
 
 async def _resolve_context(

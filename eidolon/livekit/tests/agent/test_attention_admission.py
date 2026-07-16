@@ -782,7 +782,7 @@ def test_pipeline_attention_records_decision_history() -> None:
     assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
 
 
-def test_pipeline_rejects_playback_low_evidence_artifact_before_commit() -> None:
+def test_terminal_boundary_does_not_reclassify_short_transcript_by_character_count() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
     pipeline._timeline.set_attr(
         "attention_admission_events",
@@ -796,20 +796,12 @@ def test_pipeline_rejects_playback_low_evidence_artifact_before_commit() -> None
             }
         ],
     )
-    eot = MagicMock()
-    eot.current_eot_score = 0.0
+    gate = pipeline._ensure_turn_completion()._framework_completed_turn
 
-    reason = pipeline._ensure_turn_completion().playback_low_evidence_reject_reason(
-        transcript="所",
-        eot_model=eot,
-    )
-
-    assert reason == (
-        "playback_low_evidence_artifact:insufficient_transcript_evidence"
-    )
+    assert not hasattr(gate, "_playback_low_evidence_reject_reason")
 
 
-def test_confirmed_redirect_bypasses_playback_low_evidence_reject() -> None:
+def test_terminal_boundary_does_not_reclassify_confirmed_redirect_text() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
     pipeline._timeline.set_attr(
         "decision",
@@ -833,15 +825,9 @@ def test_confirmed_redirect_bypasses_playback_low_evidence_reject() -> None:
             }
         ],
     )
-    eot = MagicMock()
-    eot.current_eot_score = 0.0
+    gate = pipeline._ensure_turn_completion()._framework_completed_turn
 
-    reason = pipeline._ensure_turn_completion().playback_low_evidence_reject_reason(
-        transcript="不是",
-        eot_model=eot,
-    )
-
-    assert reason == ""
+    assert not hasattr(gate, "_playback_low_evidence_reject_reason")
 
 
 def test_pipeline_attention_prefers_speaker_client_state() -> None:

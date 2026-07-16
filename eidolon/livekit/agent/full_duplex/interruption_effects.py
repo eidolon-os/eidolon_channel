@@ -23,9 +23,9 @@ logger = logging.getLogger("agent.full_duplex.interruption_effects")
 class FullDuplexInterruptionEffects:
     """Apply full-duplex interruption effects to output and AgentSession.
 
-    Turn policy, semantic classification, and user-turn commit remain separate
-    owners. This component owns the immediate output/framework effects after a
-    decision says cancel, rollback, hold, or force-preempt.
+    This component owns only immediate output effects after a decision says
+    cancel, rollback, hold, or force-preempt. It never commits, rejects, or
+    clears user input.
     """
 
     def __init__(
@@ -42,8 +42,6 @@ class FullDuplexInterruptionEffects:
         get_interruption_orchestrator: Callable[[], Any],
         publish_playback_stop: Callable[[str], None],
         snapshot_interrupted_context: Callable[[], None],
-        commit_post_speech_interruption_candidate: Callable[[str, str], bool],
-        reject_post_speech_interruption_candidate: Callable[[str], None],
         cancel_residual_commit_suppress_sec: Callable[[], float],
         semantic_interrupt_run: Callable[[str], None],
         correction_topic_stability_window_ms: Callable[[], int],
@@ -64,23 +62,15 @@ class FullDuplexInterruptionEffects:
         self._get_interruption_orchestrator = get_interruption_orchestrator
         self._publish_playback_stop = publish_playback_stop
         self._snapshot_context = snapshot_interrupted_context
-        self._commit_post_speech_interruption_candidate = (
-            commit_post_speech_interruption_candidate
-        )
-        self._reject_post_speech_interruption_candidate = (
-            reject_post_speech_interruption_candidate
-        )
         self._cancel_residual_commit_suppress_sec = cancel_residual_commit_suppress_sec
         self._semantic_interrupt_run = semantic_interrupt_run
-        self._correction_topic_stability_window_ms = (
-            correction_topic_stability_window_ms
-        )
+        self._correction_topic_stability_window_ms = correction_topic_stability_window_ms
         self._set_interrupt_cancel_suppression = set_interrupt_cancel_suppression
         self._soft_interrupt_timeout_sec = soft_interrupt_timeout_sec
         self._playback_evidence_active = playback_evidence_active or (lambda: False)
         self._record_full_duplex_transition = record_full_duplex_transition
-        self._claim_irreversible_side_effect = (
-            claim_irreversible_side_effect or (lambda **_kwargs: True)
+        self._claim_irreversible_side_effect = claim_irreversible_side_effect or (
+            lambda **_kwargs: True
         )
         self._soft_interrupt = SoftInterruptController(
             timeout_sec=self._soft_interrupt_timeout_sec(),
@@ -172,11 +162,7 @@ class FullDuplexInterruptionEffects:
         enabled = self._ducking.enable_suspended_passthrough(volume=volume)
         if not enabled:
             return
-        stats = (
-            self._ducking.stats()
-            if hasattr(self._ducking, "stats")
-            else DuckingStats()
-        )
+        stats = self._ducking.stats() if hasattr(self._ducking, "stats") else DuckingStats()
         logger.info(
             "[FullDuplexInterruptionEffects] suspended passthrough enabled "
             "for hold reason=%s volume=%.2f suspend_ms=%.0f",
@@ -235,9 +221,7 @@ class FullDuplexInterruptionEffects:
             )
             return
         orchestrator = self._get_interruption_orchestrator()
-        collect_confirmed_cancel_turn = (
-            orchestrator.should_collect_after_confirmed_cancel()
-        )
+        collect_confirmed_cancel_turn = orchestrator.should_collect_after_confirmed_cancel()
         commit_post_speech_candidate = (
             False
             if collect_confirmed_cancel_turn
@@ -353,13 +337,6 @@ class FullDuplexInterruptionEffects:
             force=force,
             allow_cancelled_output=True,
         )
-        if commit_post_speech_candidate:
-            committed = self._commit_post_speech_interruption_candidate(
-                "post_speech_confirmed_cancel",
-                post_speech_transcript,
-            )
-            if committed:
-                self._set_interrupt_cancel_suppression(False, 0.0)
 
     def rollback_if_suspended(
         self,
@@ -375,7 +352,6 @@ class FullDuplexInterruptionEffects:
             return
 
         orchestrator = self._get_interruption_orchestrator()
-        waiting_post_speech_evidence = orchestrator.awaiting_post_speech_evidence
         stats = self._ducking.stats()
         logger.info(
             "[FullDuplexInterruptionEffects] duck resolved reason=%s "
@@ -439,13 +415,6 @@ class FullDuplexInterruptionEffects:
             timeline.set_attr("interrupt_action", "rollback")
             timeline.set_attr("rollback_drop_buffered", drop_buffered)
             timeline.set_attr("rollback_reason", reason)
-        if waiting_post_speech_evidence:
-            reject_reason = (
-                "post_speech_evidence_timeout"
-                if reason == "timeout"
-                else f"post_speech_false_interruption:{reason}"
-            )
-            self._reject_post_speech_interruption_candidate(reject_reason)
 
     def cancel_silent_generation_for_explicit_preempt(self) -> None:
         """Cancel a non-audible active agent generation for explicit client control."""

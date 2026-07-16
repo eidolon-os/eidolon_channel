@@ -110,12 +110,6 @@ class VadPolicyConfig:
 class EotPolicyConfig:
     eot_unlikely_threshold: float = 0.50
     tail_hang_silence_ms: int = 2_000
-    low_eot_commit_grace_max_ms: int = 2_000
-    statement_deferred_merge_grace_ms: int = 3_500
-    voiceprint_deferred_merge_grace_ms: int = 4_000
-    short_statement_defer_max_cjk_chars: int = 12
-    statement_sequence_merge_max_cjk_chars: int = 28
-    statement_sequence_fragment_max_cjk_chars: int = 14
     transcript_revision_min_normalized_chars: int = 4
 
 

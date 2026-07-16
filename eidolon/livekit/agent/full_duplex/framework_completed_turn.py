@@ -12,14 +12,7 @@ from ..session.voiceprint_reasons import (
     voiceprint_blocked_reason,
     voiceprint_error_reason,
 )
-from .playback_turn_evidence import (
-    non_semantic_completed_turn_reason,
-    resolve_playback_turn_decision,
-)
-from .turn_completion_policy import (
-    eot_thinks_turn_complete,
-    looks_like_short_statement_continuation,
-)
+from .playback_turn_evidence import resolve_playback_turn_decision
 from .state_machine import FullDuplexPhase
 
 if TYPE_CHECKING:
@@ -74,17 +67,10 @@ class FullDuplexFrameworkCompletedTurnGate:
         if task is None and result is None:
             return self._route_allowed_framework_completed_turn(
                 completed_transcript=completed_transcript,
+                new_message=new_message,
                 timeline=timeline,
                 voiceprint_reason="",
             )
-
-        interruption_allowed = self._resolve_completed_turn_interruption_evidence(
-            completed_transcript=completed_transcript,
-            timeline=timeline,
-            voiceprint_reason="",
-        )
-        if interruption_allowed is not None:
-            return interruption_allowed
 
         if result is None and task is not None:
             try:
@@ -92,13 +78,17 @@ class FullDuplexFrameworkCompletedTurnGate:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                reject_reason = voiceprint_error_reason(type(exc).__name__)
                 completion._record_voiceprint_commit_gate(
                     timeline,
                     allowed=False,
-                    reason=voiceprint_error_reason(type(exc).__name__),
+                    reason=reject_reason,
                 )
-                completion.clear_session_user_turn(
-                    voiceprint_error_reason(type(exc).__name__)
+                self._reject_framework_completed_candidate(
+                    reject_reason,
+                    transcript=completed_transcript,
+                    timeline=timeline,
+                    event="voiceprint_gate_error",
                 )
                 owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
                 logger.exception("[StreamingPipeline] voiceprint gate failed in turn hook")
@@ -115,25 +105,20 @@ class FullDuplexFrameworkCompletedTurnGate:
         if allowed:
             return self._route_allowed_framework_completed_turn(
                 completed_transcript=completed_transcript,
+                new_message=new_message,
                 timeline=timeline,
                 voiceprint_reason=reason,
             )
 
-        if completion._should_keep_waiting_merge_after_inconclusive_voiceprint(
-            result,
+        if "context_error" in reason:
+            self._session_turns.notify_context_error_once(reason)
+        self._reject_framework_completed_candidate(
+            voiceprint_blocked_reason(reason),
             transcript=completed_transcript,
-        ):
-            completion._defer_inconclusive_voiceprint_result(
-                transcript=completed_transcript,
-                timeline=timeline,
-                reason=reason,
-            )
-            return False
-
-        owner._set_suppress_transcripts_until_next_speech(
-            True, reason="voiceprint_commit_blocked"
+            timeline=timeline,
+            event="voiceprint_gate_rejected",
         )
-        completion.clear_session_user_turn(voiceprint_blocked_reason(reason))
+        owner._set_suppress_transcripts_until_next_speech(True, reason="voiceprint_commit_blocked")
         owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
         logger.info(
             "[StreamingPipeline] voiceprint gate stopped completed turn reason=%s transcript=%r",
@@ -142,34 +127,97 @@ class FullDuplexFrameworkCompletedTurnGate:
         )
         return False
 
+    def _reject_framework_completed_candidate(
+        self,
+        reason: str,
+        *,
+        transcript: str,
+        timeline: TurnTimeline | None,
+        event: str,
+    ) -> None:
+        owner = self._pipeline
+        owner._ensure_user_turn_coordinator()
+        owner._user_turns.reject_active(reason)
+        _record_contract_transition(
+            owner,
+            FullDuplexPhase.USER_TURN_REJECTED,
+            event=event,
+            reason=reason,
+            transcript=transcript,
+            timeline=timeline,
+        )
+
     def _route_allowed_framework_completed_turn(
         self,
         *,
         completed_transcript: str,
+        new_message: Any,
         timeline: TurnTimeline | None,
         voiceprint_reason: str,
     ) -> bool:
-        interruption_allowed = self._resolve_completed_turn_interruption_evidence(
-            completed_transcript=completed_transcript,
-            timeline=timeline,
-            voiceprint_reason=voiceprint_reason,
+        owner = self._pipeline
+        owner._ensure_user_turn_coordinator()
+        readiness = owner._user_turns.framework_completion_readiness(
+            completed_transcript
         )
-        if interruption_allowed is not None:
-            return interruption_allowed
-        if self._stop_non_semantic_framework_completed_turn(
-            completed_transcript,
-            timeline=timeline,
-        ):
-            return False
-        if self._should_defer_framework_completed_turn(completed_transcript):
-            self._defer_framework_completed_turn(
-                completed_transcript=completed_transcript,
-                timeline=timeline,
-                voiceprint_reason=voiceprint_reason,
+        if not readiness.ready:
+            if timeline is not None:
+                timeline.set_attr(
+                    "framework_completed_deferred",
+                    {
+                        "reason": readiness.reason,
+                        "framework_text_preview": completed_transcript[:120],
+                        "pending_text_preview": readiness.pending_transcript[:120],
+                    },
+                )
+                self._record_completed_gate_event(
+                    timeline,
+                    stage="candidate_readiness",
+                    action="defer",
+                    reason=readiness.reason,
+                    transcript=completed_transcript,
+                    pending_text_preview=readiness.pending_transcript[:120],
+                )
+            logger.info(
+                "[StreamingPipeline] deferred stale framework completion "
+                "reason=%s framework=%r pending=%r",
+                readiness.reason,
+                completed_transcript[:80],
+                readiness.pending_transcript[:80],
             )
+            return False
+        candidate_transcript = owner._user_turns.prepare_framework_completed(
+            transcript=completed_transcript,
+            timeline=timeline,
+        )
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_candidate",
+                {
+                    "framework_text_preview": completed_transcript[:120],
+                    "framework_text_length": len(completed_transcript),
+                    "canonical_text_preview": candidate_transcript[:120],
+                    "canonical_text_length": len(candidate_transcript),
+                },
+            )
+            self._record_completed_gate_event(
+                timeline,
+                stage="candidate_assembled",
+                action="evaluate",
+                reason="canonical_user_turn_candidate",
+                transcript=candidate_transcript,
+                framework_text_preview=completed_transcript[:120],
+                framework_text_length=len(completed_transcript),
+            )
+        interruption_allowed = self._resolve_completed_turn_interruption_evidence(
+            completed_transcript=candidate_transcript,
+            timeline=timeline,
+        )
+        if interruption_allowed is False:
             return False
         return self._align_framework_completed_turn(
             completed_transcript,
+            new_message=new_message,
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
         )
@@ -179,365 +227,59 @@ class FullDuplexFrameworkCompletedTurnGate:
         *,
         completed_transcript: str,
         timeline: TurnTimeline | None,
-        voiceprint_reason: str,
     ) -> bool | None:
-        if self._stop_active_interruption_framework_completed_turn(
+        active_resolution = self._resolve_active_interruption_framework_completed_turn(
             completed_transcript,
             timeline=timeline,
-        ):
-            return False
-        return self._resolve_playback_completed_turn_evidence(
-            completed_transcript,
-            timeline=timeline,
-            voiceprint_reason=voiceprint_reason,
         )
+        if active_resolution is not None:
+            return active_resolution
+        return self._resolve_recorded_interruption_verdict(timeline=timeline)
 
-    def _resolve_playback_completed_turn_evidence(
+    def _resolve_recorded_interruption_verdict(
         self,
-        completed_transcript: str,
-        *,
-        timeline: TurnTimeline | None,
-        voiceprint_reason: str,
-    ) -> bool | None:
-        """Resolve late playback-overlap evidence from LiveKit completed-turn.
-
-        Some real-room paths produce only an early interim transcript before
-        client playback state reaches Channel. When the final framework turn
-        arrives, the user may still be interrupting audible assistant playback.
-        In that case the completed turn itself is valid evidence: redirect
-        intents should cancel current playback and continue to the LLM, while
-        non-semantic intents should stop before they become a user turn.
-        """
-
-        continue_to_llm = self._apply_playback_turn_evidence(
-            completed_transcript,
-            timeline=timeline,
-            resolved_reason="framework_completed_playback_evidence",
-            timeline_attr="framework_completed_playback_evidence",
-            cancel_deferred=True,
-        )
-        if continue_to_llm is None:
-            return None
-
-        if continue_to_llm:
-            return self._align_framework_completed_turn(
-                completed_transcript,
-                timeline=timeline,
-                voiceprint_reason=voiceprint_reason,
-            )
-
-        return False
-
-    def resolve_deferred_playback_commit_evidence(
-        self,
-        transcript: str,
         *,
         timeline: TurnTimeline | None,
     ) -> bool | None:
-        """Resolve playback-overlap evidence before a low-EOT deferred commit.
+        """Consume only the interruption owner's typed terminal result."""
 
-        Real room timing can deliver client playback state after LiveKit's
-        completed-turn hook has already deferred a low-EOT fragment. This gate
-        keeps the delayed commit path under the same interruption owner.
-        """
-
-        return self._apply_playback_turn_evidence(
-            transcript,
-            timeline=timeline,
-            resolved_reason="deferred_low_eot_playback_evidence",
-            timeline_attr="deferred_low_eot_playback_evidence",
-            cancel_deferred=False,
-        )
-
-    def _apply_playback_turn_evidence(
-        self,
-        transcript: str,
-        *,
-        timeline: TurnTimeline | None,
-        resolved_reason: str,
-        timeline_attr: str,
-        cancel_deferred: bool,
-    ) -> bool | None:
-        playback_active = self._playback_active_for_completed_turn(timeline=timeline)
-        if timeline is not None:
-            self._record_completed_gate_event(
-                timeline,
-                stage="playback_check",
-                action="continue" if playback_active else "skip",
-                reason="playback_active" if playback_active else "no_playback_evidence",
-                transcript=transcript,
-                playback_active=playback_active,
-            )
-        if not playback_active:
+        if timeline is None:
             return None
-        if self._client_state_blocks_playback_evidence(timeline=timeline):
-            if timeline is not None:
-                timeline.set_attr(
-                    timeline_attr,
-                    {
-                        "action": "ignore",
-                        "continue_to_llm": False,
-                        "intent": None,
-                        "reason": "client_mic_muted",
-                        "text_preview": transcript[:120],
-                        "text_length": len(transcript),
-                    },
-                )
-                self._record_completed_gate_event(
-                    timeline,
-                    stage=timeline_attr,
-                    action="ignore",
-                    reason="client_mic_muted",
-                    transcript=transcript,
-                    playback_active=True,
-                    continue_to_llm=False,
-                )
-            owner = self._pipeline
-            owner._ensure_user_turn_coordinator()
-            owner._user_turns.reject_active("client_mic_muted")
-            self._completion.clear_session_user_turn("client_mic_muted")
-            return False
-        decision = self._decide_from_completed_turn_evidence(
-            transcript,
-            timeline=timeline,
-        )
-        resolution = resolve_playback_turn_decision(decision)
-        if not resolution.should_apply:
-            if timeline is not None:
-                self._record_completed_gate_event(
-                    timeline,
-                    stage=timeline_attr,
-                    action="skip",
-                    reason=resolution.reason,
-                    transcript=transcript,
-                    playback_active=True,
-                    intent=(
-                        decision.intent.value
-                        if decision is not None and decision.intent is not None
-                        else None
-                    ),
-                    decision_reason=decision.reason if decision is not None else None,
-                )
-            return None
-
         owner = self._pipeline
-        completion = self._completion
-        continue_to_llm = resolution.continue_to_llm
-        if timeline is not None:
-            timeline.mark("framework_completed_playback_evidence_at")
-            timeline.set_attr(
-                timeline_attr,
-                {
-                    "action": decision.action.value,
-                    "continue_to_llm": continue_to_llm,
-                    "intent": (
-                        decision.intent.value if decision.intent is not None else None
-                    ),
-                    "reason": decision.reason,
-                    "text_preview": transcript[:120],
-                    "text_length": len(transcript),
-                },
-            )
-            self._record_completed_gate_event(
-                timeline,
-                stage=timeline_attr,
-                action=decision.action.value,
-                reason=decision.reason,
-                transcript=transcript,
-                playback_active=True,
-                continue_to_llm=continue_to_llm,
-                intent=decision.intent.value if decision.intent is not None else None,
-                topic_switch_hint=decision.topic_switch_hint,
-                correction_hint=decision.correction_hint,
-            )
-        owner._ensure_decision_effect_applier()
-        owner._decision_effects.apply(
-            decision,
-            resolved_reason=resolved_reason,
-            eot_score=self._current_eot_score(),
-            transcript=transcript,
-            vad_active=False,
+        interruption_owner = getattr(owner, "_interruption_orchestrator", None)
+        if interruption_owner is None:
+            return None
+        verdict = interruption_owner.verdict_for(timeline.turn_id)
+        if verdict is None:
+            return None
+        self._record_completed_gate_event(
+            timeline,
+            stage="interruption_verdict",
+            action="continue" if verdict.continue_to_llm else "reject",
+            reason=verdict.reason,
+            transcript=verdict.transcript,
+            verdict=verdict.action.value,
+            intent=verdict.intent,
+            turn_policy_action=verdict.turn_policy_action,
         )
-        if cancel_deferred:
-            completion.cancel_deferred_low_eot_commit(resolved_reason)
-        if continue_to_llm:
+        if verdict.continue_to_llm:
             return True
-
         owner._ensure_user_turn_coordinator()
         owner._user_turns.reject_active(
-            f"interruption_owner_resolved:{decision.action.value}"
+            f"interruption_verdict:{verdict.action.value}:{verdict.reason}"
         )
-        completion.clear_session_user_turn(
-            f"interruption_owner_resolved:{decision.action.value}"
-        )
+        owner._flush_turn_timeline(timeline, "interruption_verdict_rejected")
         return False
-
-    def _client_state_blocks_playback_evidence(
-        self,
-        *,
-        timeline: TurnTimeline | None,
-    ) -> bool:
-        owner = self._pipeline
-        try:
-            client = owner._ensure_client_audio_state_view().latest_state()
-        except Exception:  # noqa: BLE001 - completed-turn gate must fail closed
-            logger.debug(
-                "[StreamingPipeline] completed-turn client-state check failed",
-                exc_info=True,
-            )
-            return False
-        timeline_client = _timeline_client_audio_state(timeline)
-        mic_muted = bool(getattr(client, "mic_muted", False)) or bool(
-            timeline_client.get("mic_muted")
-        )
-        if not owner._turn_policy.attention.ignore_when_mic_muted or not mic_muted:
-            return False
-        if timeline is not None:
-            timeline.set_attr(
-                "framework_completed_playback_evidence_ignored",
-                {
-                    "reason": "client_mic_muted",
-                    "participant_identity": (
-                        getattr(client, "participant_identity", "")
-                        or str(timeline_client.get("participant_identity") or "")
-                    ),
-                    "playback_state": (
-                        getattr(client, "playback_state", "")
-                        or str(timeline_client.get("playback_state") or "")
-                    ),
-                },
-            )
-        return True
-
-    def _playback_active_for_completed_turn(
-        self,
-        *,
-        timeline: TurnTimeline | None,
-    ) -> bool:
-        owner = self._pipeline
-        try:
-            active = bool(
-                owner._ensure_client_audio_state_view().agent_output_active_for_interrupts()
-            )
-        except Exception:  # noqa: BLE001 - completed-turn gate must fail closed
-            logger.debug(
-                "[StreamingPipeline] completed-turn playback activity check failed",
-                exc_info=True,
-            )
-            active = False
-        if active:
-            return True
-        timeline_client = _timeline_client_audio_state(timeline)
-        return timeline_client.get("playback_state") == "agent_speaking"
-
-    def _eot_thinks_turn_complete(self) -> bool:
-        owner = self._pipeline
-        return eot_thinks_turn_complete(
-            owner._get_eot_model(),
-            unlikely_threshold=float(owner._turn_policy.eot.eot_unlikely_threshold),
-        )
-
-    def _should_defer_framework_completed_turn(self, transcript: str) -> bool:
-        owner = self._pipeline
-        owner._ensure_user_turn_coordinator()
-        candidate = owner._user_turns.active
-        if candidate is None:
-            return False
-        if candidate.state in {"committed", "rejected"}:
-            return False
-        if owner._user_turns.should_wait_for_deferred_voiceprint_merge():
-            return True
-        if owner._user_turns.should_wait_for_statement_sequence_merge():
-            return True
-        if self._eot_thinks_turn_complete():
-            return False
-        selected = candidate.selected_text or transcript
-        return looks_like_short_statement_continuation(
-            selected,
-            max_cjk_chars=owner._turn_policy.eot.short_statement_defer_max_cjk_chars,
-        )
-
-    def _defer_framework_completed_turn(
-        self,
-        *,
-        completed_transcript: str,
-        timeline: TurnTimeline | None,
-        voiceprint_reason: str,
-    ) -> None:
-        owner = self._pipeline
-        completion = self._completion
-        completion.clear_session_user_turn("framework_completed_wait_for_continuation")
-        owner._ensure_user_turn_coordinator()
-        decision = owner._user_turns.defer_framework_completed(
-            transcript=completed_transcript,
-            reason="framework_completed_wait_for_continuation",
-            timeline=timeline,
-            voiceprint_reason=voiceprint_reason,
-        )
-        if decision.action == "reject":
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_REJECTED,
-                event="framework_completed_rejected",
-                reason=decision.reason,
-                transcript=decision.transcript or completed_transcript,
-                timeline=timeline,
-            )
-            completion.clear_session_user_turn(decision.reason)
-            owner._flush_turn_timeline(timeline, decision.reason)
-            logger.info(
-                "[StreamingPipeline] rejected framework completed turn "
-                "reason=%s transcript=%r",
-                decision.reason,
-                completed_transcript[:80],
-            )
-            return
-        if timeline is not None:
-            timeline.set_attr(
-                "framework_completed_deferred",
-                {
-                    "reason": decision.reason,
-                    "state": "waiting_merge",
-                    "text_preview": decision.transcript[:120],
-                    "text_length": len(decision.transcript),
-                },
-            )
-            owner._append_turn_timeline_snapshot(
-                timeline,
-                "framework_completed_waiting_merge",
-            )
-        _record_contract_transition(
-            owner,
-            FullDuplexPhase.USER_TURN_PENDING,
-            event="framework_completed_deferred",
-            reason=decision.reason,
-            transcript=decision.transcript or completed_transcript,
-            timeline=timeline,
-        )
-        completion.schedule_deferred_low_eot_commit(
-            verify_task=None,
-            eot_model=owner._get_eot_model(),
-            transcript=decision.transcript or completed_transcript,
-            timeline=timeline,
-            delay_sec=decision.delay_sec,
-        )
-        completion.clear_completed_voiceprint_turn()
-        logger.info(
-            "[StreamingPipeline] deferred framework completed turn "
-            "for continuation transcript=%r voiceprint_reason=%s",
-            completed_transcript[:80],
-            voiceprint_reason,
-        )
 
     def _align_framework_completed_turn(
         self,
         completed_transcript: str,
         *,
+        new_message: Any,
         timeline: TurnTimeline | None,
         voiceprint_reason: str,
     ) -> bool:
         owner = self._pipeline
-        self._completion.cancel_deferred_low_eot_commit("framework_completed_turn")
         owner._ensure_user_turn_coordinator()
         decision = owner._user_turns.mark_framework_completed(
             transcript=completed_transcript,
@@ -546,7 +288,6 @@ class FullDuplexFrameworkCompletedTurnGate:
             voiceprint_reason=voiceprint_reason,
         )
         if decision.action == "none":
-            self._session_turns.clear_residual_audio_user_turn(decision.reason)
             if timeline is not None:
                 timeline.set_attr(
                     "framework_completed_duplicate",
@@ -579,17 +320,16 @@ class FullDuplexFrameworkCompletedTurnGate:
                 transcript=decision.transcript or completed_transcript,
                 timeline=timeline,
             )
-            self._completion.clear_session_user_turn(decision.reason)
             owner._flush_turn_timeline(timeline, decision.reason)
             logger.info(
-                "[StreamingPipeline] rejected framework completed turn "
-                "reason=%s transcript=%r",
+                "[StreamingPipeline] rejected framework completed turn reason=%s transcript=%r",
                 decision.reason,
                 completed_transcript[:80],
             )
             return False
         canonical = decision.transcript or completed_transcript
         self._session_turns.publish_canonical_user_text(
+            new_message,
             canonical,
             source="framework_completed_turn",
             timeline=timeline,
@@ -603,64 +343,18 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript=canonical,
             timeline=timeline,
         )
-        self._session_turns.clear_residual_audio_user_turn(
-            "framework_completed_turn_committed"
-        )
-        if timeline is not None:
-            timeline.set_attr(
-                "framework_completed_audio_turn_cleared",
-                {"reason": "framework_completed_turn_committed"},
-            )
         return True
 
-    @staticmethod
-    def _non_semantic_completed_turn_reason(
-        timeline: TurnTimeline | None,
-    ) -> str:
-        if timeline is None:
-            return ""
-        decision = timeline.attrs.get("decision")
-        if not isinstance(decision, dict):
-            return ""
-        return non_semantic_completed_turn_reason(decision)
-
-    def _stop_non_semantic_framework_completed_turn(
+    def _resolve_active_interruption_framework_completed_turn(
         self,
         completed_transcript: str,
         *,
         timeline: TurnTimeline | None,
-    ) -> bool:
+    ) -> bool | None:
         owner = self._pipeline
-        completion = self._completion
-        stop_reason = self._non_semantic_completed_turn_reason(timeline)
-        if not stop_reason:
-            return False
-        completion.cancel_deferred_low_eot_commit(stop_reason)
-        owner._ensure_user_turn_coordinator()
-        owner._user_turns.reject_active(stop_reason)
-        completion.clear_session_user_turn(stop_reason)
-        owner._flush_turn_timeline(timeline, stop_reason)
-        logger.info(
-            "[StreamingPipeline] stopped framework completed turn reason=%s transcript=%r",
-            stop_reason,
-            completed_transcript[:80],
-        )
-        return True
-
-    def _stop_active_interruption_framework_completed_turn(
-        self,
-        completed_transcript: str,
-        *,
-        timeline: TurnTimeline | None,
-    ) -> bool:
-        owner = self._pipeline
-        completion = self._completion
         interruption_owner = getattr(owner, "_interruption_orchestrator", None)
-        if (
-            interruption_owner is None
-            or not interruption_owner.blocks_framework_completed_turn()
-        ):
-            return False
+        if interruption_owner is None or not interruption_owner.blocks_framework_completed_turn():
+            return None
         decision = self._decide_from_completed_turn_evidence(
             completed_transcript,
             timeline=timeline,
@@ -675,13 +369,18 @@ class FullDuplexFrameworkCompletedTurnGate:
                 transcript=completed_transcript,
                 vad_active=False,
             )
-            completion.clear_session_user_turn(
-                f"interruption_owner_resolved:{decision.action.value}"
+            verdict_resolution = self._resolve_recorded_interruption_verdict(
+                timeline=timeline
             )
-            return True
+            if verdict_resolution is not None:
+                return verdict_resolution
+            if interruption_owner.active:
+                interruption_owner.resolve(
+                    action=decision.action.value,
+                    reason="framework_completed_interruption_evidence",
+                )
+            return self._resolve_recorded_interruption_verdict(timeline=timeline)
         reason = "interruption_owner_waiting_for_evidence"
-        completion.cancel_deferred_low_eot_commit(reason)
-        completion.clear_session_user_turn(reason)
         if timeline is not None:
             timeline.set_attr(
                 "framework_completed_blocked_by_interruption_owner",
@@ -700,7 +399,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             interruption_owner.state.value,
             completed_transcript[:80],
         )
-        return True
+        return False
 
     def _decide_from_completed_turn_evidence(
         self,
@@ -729,9 +428,7 @@ class FullDuplexFrameworkCompletedTurnGate:
                 {
                     "action": decision.action.value,
                     "reason": decision.reason,
-                    "intent": (
-                        decision.intent.value if decision.intent is not None else None
-                    ),
+                    "intent": (decision.intent.value if decision.intent is not None else None),
                     "text_preview": text[:120],
                     "text_length": len(text),
                 },
@@ -773,13 +470,6 @@ class FullDuplexFrameworkCompletedTurnGate:
         events = events[-16:]
         timeline.set_attr("framework_completed_gate_events", events)
         timeline.set_attr("framework_completed_gate_last_event", payload)
-
-
-def _timeline_client_audio_state(timeline: TurnTimeline | None) -> dict[str, Any]:
-    if timeline is None:
-        return {}
-    value = timeline.attrs.get("client_audio_state")
-    return value if isinstance(value, dict) else {}
 
 
 def _record_contract_transition(

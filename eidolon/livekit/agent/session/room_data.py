@@ -41,6 +41,9 @@ class RoomDataHandler:
         self.client_audio_states: dict[str, ClientAudioState] = {}
         self.room_data_packet_count = 0
         self.client_audio_state_packet_count = 0
+        self.client_audio_state_gap_count = 0
+        self.client_audio_state_reordered_count = 0
+        self._last_client_audio_seq: dict[str, int] = {}
 
     def install(
         self,
@@ -106,6 +109,7 @@ class RoomDataHandler:
         self.client_audio_states[identity] = state
         self.client_audio_state_packet_count += 1
         client_packet_count = self.client_audio_state_packet_count
+        sequence_diagnostic = self._observe_client_audio_sequence(state)
         if timeline is not None:
             timeline.set_attr(
                 "client_audio_state",
@@ -115,11 +119,27 @@ class RoomDataHandler:
                 "client_audio_state_packet_count",
                 client_packet_count,
             )
+            events = list(timeline.attrs.get("client_audio_state_events") or ())
+            event = state.as_timeline_attr()
+            event.update(sequence_diagnostic)
+            events.append(event)
+            timeline.set_attr("client_audio_state_events", events[-16:])
+            timeline.set_attr(
+                "client_audio_state_gap_count",
+                self.client_audio_state_gap_count,
+            )
+            timeline.set_attr(
+                "client_audio_state_reordered_count",
+                self.client_audio_state_reordered_count,
+            )
         logger.info(
             "[RoomDataHandler] client.audio_state received identity=%s "
-            "playback=%s mic_muted=%s manual_interrupt=%s ptt=%s rms=%s "
-            "snr_hint=%s count=%d",
+            "seq=%s seq_status=%s seq_gap=%d playback=%s mic_muted=%s "
+            "manual_interrupt=%s ptt=%s rms=%s snr_hint=%s count=%d",
             state.participant_identity,
+            state.seq if state.seq is not None else "n/a",
+            sequence_diagnostic["seq_status"],
+            sequence_diagnostic["seq_gap"],
             state.playback_state,
             state.mic_muted,
             state.manual_interrupt,
@@ -128,6 +148,29 @@ class RoomDataHandler:
             _optional_float_log(state.snr_hint),
             client_packet_count,
         )
+
+    def _observe_client_audio_sequence(self, state: ClientAudioState) -> dict[str, object]:
+        """Record transport evidence without influencing turn-policy behavior."""
+
+        seq = state.seq
+        if seq is None:
+            return {"seq_status": "missing", "seq_gap": 0}
+        previous = self._last_client_audio_seq.get(state.participant_identity)
+        self._last_client_audio_seq[state.participant_identity] = seq
+        if previous is None:
+            return {"seq_status": "first", "seq_gap": 0}
+        if seq <= previous:
+            self.client_audio_state_reordered_count += 1
+            return {
+                "seq_status": "reordered_or_reset",
+                "seq_gap": 0,
+                "previous_seq": previous,
+            }
+        gap = max(seq - previous - 1, 0)
+        if gap:
+            self.client_audio_state_gap_count += gap
+            return {"seq_status": "gap", "seq_gap": gap, "previous_seq": previous}
+        return {"seq_status": "contiguous", "seq_gap": 0, "previous_seq": previous}
 
     def latest_client_audio_state(
         self,

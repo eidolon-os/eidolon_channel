@@ -17,9 +17,10 @@ logger = logging.getLogger("agent")
 class FullDuplexSpeechLifecycle:
     """Own VAD start/stop lifecycle for full-duplex streaming turns.
 
-    This component coordinates one open-mic speech segment. Terminal decisions
-    still belong to the interruption owner, turn runtime, user-turn coordinator,
-    and voiceprint commit path on the pipeline.
+    This component coordinates one open-mic speech segment. It records acoustic
+    boundaries and interruption evidence, but never commits, rejects, or clears
+    a product user turn. Product completion belongs to the framework-completed
+    turn gate.
     """
 
     def __init__(self, owner: Any) -> None:
@@ -32,20 +33,15 @@ class FullDuplexSpeechLifecycle:
         merge_continuation = owner._user_turns.can_merge_new_speech()
         owner._set_interrupt_cancel_suppression(False, 0.0, reason="new_speech_started")
         owner._set_suppress_transcripts_until_next_speech(False, reason="new_speech_started")
-        turn_completion.cancel_deferred_low_eot_commit("new_speech_started")
         if not merge_continuation:
-            turn_completion.cancel_pending_voiceprint_commits("new_speech_started")
-            turn_completion.clear_completed_voiceprint_turn()
+            turn_completion.cancel_completed_voiceprint_turn()
             turn_completion.reset_candidate_voiceprint_tasks()
         replaced_unmerged_timeline = owner._timeline if not merge_continuation else None
-        replaced_candidate = (
-            owner._user_turns.active if not merge_continuation else None
-        )
+        replaced_candidate = owner._user_turns.active if not merge_continuation else None
         superseding_pending_candidate = (
             replaced_unmerged_timeline is not None
             and replaced_candidate is not None
-            and getattr(replaced_candidate, "state", None)
-            not in {"committed", "rejected"}
+            and getattr(replaced_candidate, "state", None) not in {"committed", "rejected"}
         )
 
         owner._callbacks.on_user_started_speaking()
@@ -55,6 +51,10 @@ class FullDuplexSpeechLifecycle:
             owner._timeline_debug_flushed = False
             if owner._room is not None:
                 owner._timeline.set_attr("room_name", owner._room.name or "")
+            owner._timeline.set_attr(
+                "participant_identity",
+                getattr(owner, "_runtime_participant_identity", "") or "",
+            )
 
         owner._user_turns.start_speech(timeline=owner._timeline)
         if replaced_unmerged_timeline is not None:
@@ -111,200 +111,37 @@ class FullDuplexSpeechLifecycle:
 
         eot_model = owner._get_eot_model()
         eot_model.update_vad(False)
-
-        committed_confirmed_cancel = self._commit_confirmed_cancel_on_stop(
-            voiceprint_task
-        )
-        defer_post_speech_evidence = (
-            False
-            if committed_confirmed_cancel
-            else self._resolve_interruption_candidate_on_stop()
-        )
-        owner._callbacks.on_user_ended_speaking()
-        # Clear only the skip flag; leave the residual-commit-suppress window.
-        owner._set_interrupt_cancel_suppression(False, reason="speech_stopped")
-        if committed_confirmed_cancel:
-            owner._latest_asr_text = ""
-            return
-        if defer_post_speech_evidence:
-            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
-            return
-        if owner._session is None:
-            owner._latest_asr_text = ""
-            return
-
-        transcript = owner._user_turns.selected_text or owner._latest_asr_text
-        attention_reject_reason = turn_completion.attention_admission_reject_reason(
-            transcript=transcript
-        )
-        if attention_reject_reason:
-            logger.info(
-                "[StreamingPipeline] rejecting attention-ignored turn reason=%s "
-                "transcript=%r",
-                attention_reject_reason,
-                transcript[:80],
-            )
-            if owner._user_turns.active is not None:
-                owner._user_turns.reject_active(attention_reject_reason)
-            if _restore_superseded_candidate_after_reject(
-                owner,
-                turn_completion,
-                eot_model,
-                attention_reject_reason,
-            ):
-                owner._latest_asr_text = ""
-                return
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_REJECTED,
-                event="attention_admission_rejected",
-                reason=attention_reject_reason,
-                transcript=transcript,
-            )
-            eot_model.reset()
-            turn_completion.clear_session_user_turn(attention_reject_reason)
-            turn_completion.reset_candidate_voiceprint_tasks()
-            owner._latest_asr_text = ""
-            return
-        if transcript:
-            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
-        if owner._user_turns.active is None and transcript:
-            if owner._timeline is None:
-                owner._timeline = TurnTimeline(generate_turn_id())
-                owner._timeline_debug_flushed = False
-            owner._user_turns.start_speech(timeline=owner._timeline)
-            owner._apply_pending_explicit_client_preempt(owner._timeline)
-            owner._apply_pending_client_control_events(owner._timeline)
-            owner._user_turns.add_transcript(transcript, is_final=True)
-
-        low_evidence_reason = turn_completion.playback_low_evidence_reject_reason(
-            transcript=transcript,
-            eot_model=eot_model,
-        )
-        if low_evidence_reason:
-            logger.info(
-                "[StreamingPipeline] rejecting playback low-evidence turn reason=%s "
-                "transcript=%r",
-                low_evidence_reason,
-                transcript[:80],
-            )
-            owner._user_turns.reject_active(low_evidence_reason)
-            if _restore_superseded_candidate_after_reject(
-                owner,
-                turn_completion,
-                eot_model,
-                low_evidence_reason,
-            ):
-                owner._latest_asr_text = ""
-                return
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_REJECTED,
-                event="playback_low_evidence_rejected",
-                reason=low_evidence_reason,
-                transcript=transcript,
-            )
-            eot_model.reset()
-            turn_completion.clear_session_user_turn(low_evidence_reason)
-            turn_completion.reset_candidate_voiceprint_tasks()
-            owner._latest_asr_text = ""
-            return
-
-        non_semantic_reason = turn_completion.non_semantic_turn_reject_reason()
-        if non_semantic_reason:
-            logger.info(
-                "[StreamingPipeline] rejecting non-semantic turn reason=%s "
-                "transcript=%r",
-                non_semantic_reason,
-                transcript[:80],
-            )
-            if owner._user_turns.active is not None:
-                owner._user_turns.reject_active(non_semantic_reason)
-            if _restore_superseded_candidate_after_reject(
-                owner,
-                turn_completion,
-                eot_model,
-                non_semantic_reason,
-            ):
-                owner._latest_asr_text = ""
-                return
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_REJECTED,
-                event="non_semantic_turn_rejected",
-                reason=non_semantic_reason,
-                transcript=transcript,
-            )
-            eot_model.reset()
-            turn_completion.clear_session_user_turn(non_semantic_reason)
-            turn_completion.reset_candidate_voiceprint_tasks()
-            owner._latest_asr_text = ""
-            return
-
-        should_defer = turn_completion.should_defer_low_eot_commit(
-            transcript=transcript,
-            eot_model=eot_model,
-        )
-        decision = owner._user_turns.finish_speech(
+        owner._ensure_user_turn_coordinator()
+        owner._user_turns.note_speech_stopped(
             eot_score=getattr(
                 eot_model,
                 "current_eot_score",
                 getattr(eot_model, "_current_eot_score", None),
-            ),
-            should_defer=should_defer,
+            )
         )
-        if decision.action == "reject":
-            if _restore_superseded_candidate_after_reject(
-                owner,
-                turn_completion,
-                eot_model,
-                decision.reason,
-            ):
-                owner._latest_asr_text = ""
-                return
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_REJECTED,
-                event="user_turn_rejected",
-                reason=decision.reason,
-                transcript=decision.transcript or transcript,
-            )
-            eot_model.reset()
-            turn_completion.clear_session_user_turn(decision.reason)
-            turn_completion.reset_candidate_voiceprint_tasks()
-            owner._latest_asr_text = ""
-        elif decision.action == "defer":
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_PENDING,
-                event="user_turn_deferred",
-                reason=decision.reason,
-                transcript=decision.transcript,
-            )
-            turn_completion.schedule_deferred_low_eot_commit(
-                verify_task=None,
-                eot_model=eot_model,
-                transcript=decision.transcript,
-                timeline=owner._timeline,
-                delay_sec=decision.delay_sec,
-            )
-        else:
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_PENDING,
-                event="user_turn_voiceprint_pending",
-                reason=decision.reason,
-                transcript=decision.transcript or transcript,
-            )
-            turn_completion.schedule_voiceprint_gated_commit(
-                verify_task=turn_completion.candidate_voiceprint_gate_task(),
-                eot_model=eot_model,
-                transcript=decision.transcript or transcript,
-                timeline=owner._timeline,
-            )
-            owner._latest_asr_text = ""
 
-    def _commit_confirmed_cancel_on_stop(self, voiceprint_task: Any) -> bool:
+        confirmed_cancel_stopped = self._finish_confirmed_cancel_on_stop()
+        defer_post_speech_evidence = (
+            False if confirmed_cancel_stopped else self._resolve_interruption_candidate_on_stop()
+        )
+        owner._callbacks.on_user_ended_speaking()
+        # Clear only the skip flag; leave the residual-commit-suppress window.
+        owner._set_interrupt_cancel_suppression(False, reason="speech_stopped")
+        if defer_post_speech_evidence or confirmed_cancel_stopped:
+            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
+        elif owner._user_turns.selected_text or owner._latest_asr_text:
+            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
+        transcript = owner._user_turns.selected_text or owner._latest_asr_text
+        if transcript:
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_PENDING,
+                event="speech_stopped_waiting_framework",
+                reason="automatic_turn_lifecycle",
+                transcript=transcript,
+            )
+
+    def _finish_confirmed_cancel_on_stop(self) -> bool:
         owner = self._owner
         interruption_owner = getattr(owner, "_interruption_orchestrator", None)
         if interruption_owner is None:
@@ -312,19 +149,7 @@ class FullDuplexSpeechLifecycle:
         transcript = owner._user_turns.selected_text or owner._latest_asr_text
         if interruption_owner.finish_confirmed_cancel_speech(transcript) is not True:
             return False
-        turn_completion = owner._ensure_turn_completion()
-        turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
-        committed = turn_completion.commit_post_speech_interruption_candidate(
-            "confirmed_cancel_speech_end",
-            transcript_override=transcript,
-        )
-        if committed:
-            interruption_owner.resolve(
-                action="cancel",
-                reason="confirmed_cancel_turn_committed",
-            )
-            owner._set_interrupt_cancel_suppression(False, 0.0)
-        return committed
+        return True
 
     def _resolve_interruption_candidate_on_stop(self) -> bool:
         owner = self._owner
@@ -336,20 +161,13 @@ class FullDuplexSpeechLifecycle:
             )
             interruption_effects.cancel_soft_interrupt()
 
-        if (
-            owner._ducking.is_suspended
-            and not owner._uses_livekit_native_adaptive_interruption()
-        ):
-            should_defer = (
-                owner._interruption_orchestrator.defer_false_resume_after_speech_end(
-                    transcript=owner._latest_asr_text,
-                    duck_suspended=True,
-                )
+        if owner._ducking.is_suspended and not owner._uses_livekit_native_adaptive_interruption():
+            should_defer = owner._interruption_orchestrator.defer_false_resume_after_speech_end(
+                transcript=owner._latest_asr_text,
+                duck_suspended=True,
             )
             if not should_defer:
-                decision = owner._turn_runtime.user_silent_decision(
-                    owner._latest_asr_text
-                )
+                decision = owner._turn_runtime.user_silent_decision(owner._latest_asr_text)
                 owner._decision_effects.apply(
                     decision,
                     resolved_reason="user_silent",
@@ -358,38 +176,6 @@ class FullDuplexSpeechLifecycle:
                 )
             return should_defer
         return False
-
-
-def _restore_superseded_candidate_after_reject(
-    owner: Any,
-    turn_completion: Any,
-    eot_model: Any,
-    reject_reason: str,
-) -> bool:
-    restore = owner._user_turns.restore_superseded_candidate_if_replacement_rejected(
-        reject_reason
-    )
-    if restore.action != "commit":
-        return False
-    restored_candidate = owner._user_turns.active
-    restored_timeline = getattr(restored_candidate, "timeline", None)
-    _record_contract_transition(
-        owner,
-        FullDuplexPhase.USER_TURN_PENDING,
-        event="superseded_candidate_restored",
-        reason=restore.reason,
-        transcript=restore.transcript,
-        timeline=restored_timeline,
-    )
-    turn_completion.clear_session_user_turn(reject_reason)
-    turn_completion.reset_candidate_voiceprint_tasks()
-    turn_completion.schedule_voiceprint_gated_commit(
-        verify_task=None,
-        eot_model=eot_model,
-        transcript=restore.transcript,
-        timeline=restored_timeline,
-    )
-    return True
 
 
 def _record_contract_transition(

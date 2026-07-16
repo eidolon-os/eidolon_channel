@@ -92,12 +92,6 @@ turn_policy:
   eot:
     eot_unlikely_threshold: 0.50
     tail_hang_silence_ms: 2000
-    low_eot_commit_grace_max_ms: 2000
-    statement_deferred_merge_grace_ms: 3500
-    voiceprint_deferred_merge_grace_ms: 4000
-    short_statement_defer_max_cjk_chars: 12
-    statement_sequence_merge_max_cjk_chars: 28
-    statement_sequence_fragment_max_cjk_chars: 14
     transcript_revision_min_normalized_chars: 4
   interrupt:
     decision_timeout_ms: 450

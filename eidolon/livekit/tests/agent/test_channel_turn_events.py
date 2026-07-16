@@ -72,6 +72,31 @@ def test_terminal_projection_is_deduped_and_classifies_rejection() -> None:
     assert "turn_committed" in pending.payload["missing_milestones"]
 
 
+def test_terminal_projection_distinguishes_interrupted_response_from_failed_tts() -> None:
+    sink = _enabled_sink()
+    interrupted = TurnTimeline("channel-turn-interrupted")
+    interrupted.mark("turn_committed_at")
+    interrupted.mark("tts_first_audio_at")
+    failed = TurnTimeline("channel-turn-tts-failed")
+    failed.mark("turn_committed_at")
+    failed.mark("tts_first_audio_at")
+    failed.mark("tts_error_at")
+
+    sink.terminal(interrupted, "interrupted_by_user")
+    sink.terminal(failed, "nonrecoverable_tts_error")
+
+    interrupted_event = sink._queue.get_nowait()  # type: ignore[attr-defined]
+    failed_event = sink._queue.get_nowait()  # type: ignore[attr-defined]
+    assert interrupted_event is not None
+    assert interrupted_event.event_type == "channel.turn.completed"
+    assert interrupted_event.payload["status"] == "interrupted"
+    assert interrupted_event.payload["terminal_reason"] == "interrupted_by_user"
+    assert failed_event is not None
+    assert failed_event.event_type == "channel.turn.failed"
+    assert failed_event.outcome == "failure"
+    assert failed_event.payload["status"] == "failed"
+
+
 def test_queue_pressure_drops_observability_not_voice_work() -> None:
     sink = _enabled_sink(queue_max=1)
     first = TurnTimeline("turn-1")

@@ -148,6 +148,9 @@ class FullDuplexSessionLifecycle:
                 "[StreamingPipeline] session duck metrics: %s",
                 duck_metrics,
             )
+        pipeline._finish_agent_output(
+            "session_error_during_output" if error else "session_closed_during_output"
+        )
         pipeline._append_timeline_debug("session_closed")
         pipeline._session_closed_event.set()
 
@@ -263,6 +266,8 @@ class FullDuplexSessionLifecycle:
             except Exception:
                 logger.exception("[StreamingPipeline] error shutting down session")
             pipeline._session = None
+        pipeline._finish_agent_output("session_shutdown_during_output")
+        pipeline._append_timeline_debug("session_shutdown")
         await pipeline._ensure_turn_event_sink().close(
             reason="session_error" if getattr(pipeline, "_close_error", None) else "session_ended"
         )

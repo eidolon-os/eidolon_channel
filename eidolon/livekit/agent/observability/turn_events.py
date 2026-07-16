@@ -213,8 +213,16 @@ class ChannelTurnEventSink:
                 subject_type="turn",
                 subject_id=turn_id,
                 trace_id=turn_id,
-                severity="error" if milestone in {"brain_error", "llm_error"} else None,
-                outcome="failure" if milestone in {"brain_error", "llm_error"} else None,
+                severity=(
+                    "error"
+                    if milestone in {"brain_error", "llm_error", "tts_error", "session_error"}
+                    else None
+                ),
+                outcome=(
+                    "failure"
+                    if milestone in {"brain_error", "llm_error", "tts_error", "session_error"}
+                    else None
+                ),
                 reason=reason or milestone,
                 payload=payload,
                 event_id=f"evt_ch_mark_{turn_id}_{seq}",
@@ -377,6 +385,8 @@ def _terminal_classification(
 ) -> tuple[str, str, str | None, str | None]:
     if phase == "user_turn_rejected":
         return "rejected", "channel.turn.rejected", "warn", "denied"
+    if reason.startswith("interrupted_"):
+        return "interrupted", "channel.turn.completed", None, None
     if "llm_error_at" in timeline.timestamps or "brain_error_at" in timeline.timestamps:
         return "failed", "channel.turn.failed", "error", "failure"
     lowered = reason.lower()

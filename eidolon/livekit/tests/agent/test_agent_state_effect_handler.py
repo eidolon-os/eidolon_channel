@@ -10,6 +10,7 @@ from eidolon.livekit.agent.session.agent_state import (
     AgentStateEffectHandler,
     AgentStateTransition,
 )
+from eidolon.livekit.agent.session.agent_output_coordinator import AgentOutputCoordinator
 
 
 class _Ducking:
@@ -140,3 +141,18 @@ def test_thinking_and_speaking_mark_timeline() -> None:
 
     assert "llm_started_at" in timeline.timestamps
     assert "tts_first_audio_at" in timeline.timestamps
+
+
+def test_agent_output_coordinator_keeps_response_identity_across_new_candidate() -> None:
+    coordinator = AgentOutputCoordinator()
+    response = TurnTimeline("response-turn")
+    candidate = TurnTimeline("interrupt-candidate")
+
+    assert coordinator.claim(response) is None
+    assert coordinator.active_timeline is response
+    # Merely opening a new speech candidate does not transfer output ownership.
+    assert candidate is not coordinator.active_timeline
+    assert coordinator.release(candidate) is False
+    assert coordinator.active_timeline is response
+    assert coordinator.release(response) is True
+    assert coordinator.active_timeline is None

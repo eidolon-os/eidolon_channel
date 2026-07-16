@@ -14,6 +14,7 @@ from eidolon.livekit.common.config import (
 
 from ..shared.types import PipelineCallbacks, PipelineState
 from ..observability import ChannelTurnEventSink
+from ..session.agent_output_coordinator import AgentOutputCoordinator
 from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
 from ..session.voiceprint import VoiceprintTurnObserver
 from ..turn_policy import TurnPolicyRuntime
@@ -47,6 +48,10 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._timeline = None
     if not hasattr(pipeline, "_timeline_debug_flushed"):
         pipeline._timeline_debug_flushed = False
+    if not hasattr(pipeline, "_flushed_timeline_ids"):
+        pipeline._flushed_timeline_ids = set()
+    if not hasattr(pipeline, "_agent_output"):
+        pipeline._agent_output = AgentOutputCoordinator()
     if not hasattr(pipeline, "_pending_client_control_events"):
         pipeline._pending_client_control_events = []
     if not hasattr(pipeline, "_full_duplex_irreversible_side_effects"):

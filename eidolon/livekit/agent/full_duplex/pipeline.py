@@ -76,6 +76,7 @@ from ..output import FillerManager, OutputDuckingController
 from ..shared.pipeline import BasePipeline
 from ..shared.types import PipelineCallbacks, PipelineState, generate_turn_id
 from ..session.agent_state import AgentStateEffectHandler
+from ..session.agent_output_coordinator import AgentOutputCoordinator
 from ..session.assistant_speech import AssistantSpeechLedger
 from ..session.attention_effects import AttentionEffectHandler
 from .client_preempt import (
@@ -181,6 +182,8 @@ class StreamingPipeline(BasePipeline):
         self._voiceprint_config = voiceprint_config or VoiceprintConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
+        self._flushed_timeline_ids: set[str] = set()
+        self._agent_output = AgentOutputCoordinator()
         self._explicit_preempt_control_timeline: TurnTimeline | None = None
         self._assistant_speech = AssistantSpeechLedger()
         self._pending_client_control_events: list[dict[str, Any]] = []
@@ -466,7 +469,10 @@ class StreamingPipeline(BasePipeline):
                 None,
             ),
             get_config=lambda: self._get_eot_model()._config,
-            get_timeline=lambda: getattr(self, "_timeline", None),
+            get_timeline=lambda: (
+                self._active_agent_output_timeline()
+                or getattr(self, "_timeline", None)
+            ),
             get_assistant_text=self._current_assistant_speech_text,
         )
 
@@ -490,6 +496,7 @@ class StreamingPipeline(BasePipeline):
                 CONTROL_OP_PLAYBACK_STOP,
                 reason=reason,
             ),
+            finish_agent_output=self._finish_agent_output,
             snapshot_interrupted_context=lambda: self._ensure_context_ledger().snapshot(),
             cancel_residual_commit_suppress_sec=self._cancel_residual_commit_suppress_sec,
             semantic_interrupt_run=lambda text: self._semantic_interrupts.run(
@@ -971,11 +978,18 @@ class StreamingPipeline(BasePipeline):
         timeline: TurnTimeline | None,
         reason: str,
     ) -> None:
-        if timeline is None or getattr(self, "_timeline_debug_flushed", False):
+        if timeline is None:
             return
+        flushed_ids = getattr(self, "_flushed_timeline_ids", None)
+        if flushed_ids is None:
+            flushed_ids = self._flushed_timeline_ids = set()
+        if timeline.turn_id in flushed_ids:
+            return
+        flushed_ids.add(timeline.turn_id)
         timeline.set_attr("timeline_flush_reason", reason)
         self._ensure_turn_event_sink().terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        self._ensure_agent_output_coordinator().release(timeline)
         if timeline is self._timeline:
             self._timeline_debug_flushed = True
             self._timeline = None
@@ -999,17 +1013,15 @@ class StreamingPipeline(BasePipeline):
     def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
         interruption_effects = self._ensure_interruption_effects()
         return AgentStateEffectHandler(
-            get_timeline=lambda: self._timeline,
+            get_timeline=self._active_agent_output_timeline,
             mark_activity=lambda: self._mark_activity(),
             cancel_soft_interrupt=lambda: interruption_effects.cancel_soft_interrupt(),
             soft_interrupt_active=lambda: interruption_effects.soft_interrupt_active(),
             ducking=self._ducking,
             get_filler=lambda: self._filler,
-            flush_timeline_debug=lambda reason, clear: self._append_timeline_debug(
-                reason,
-                clear=clear,
-            ),
+            flush_timeline_debug=lambda reason, clear: self._finish_agent_output(reason),
             should_flush_on_playback_done=self._timeline_turn_terminal_for_playback_flush,
+            agent_output=self._ensure_agent_output_coordinator(),
         )
 
     def _ensure_agent_state_effect_handler(self) -> None:
@@ -1018,13 +1030,28 @@ class StreamingPipeline(BasePipeline):
             self._agent_state_effects = self._build_agent_state_effect_handler()
 
     def _timeline_turn_terminal_for_playback_flush(self) -> bool:
-        turns = getattr(self, "_user_turns", None)
-        if turns is None:
-            return True
-        active = getattr(turns, "active", None)
-        if active is None:
-            return True
-        return getattr(active, "state", "") in {"committed", "rejected"}
+        return self._active_agent_output_timeline() is not None
+
+    def _ensure_agent_output_coordinator(self) -> AgentOutputCoordinator:
+        coordinator = getattr(self, "_agent_output", None)
+        if coordinator is None:
+            coordinator = self._agent_output = AgentOutputCoordinator()
+        return coordinator
+
+    def _active_agent_output_timeline(self) -> TurnTimeline | None:
+        return self._ensure_agent_output_coordinator().active_timeline
+
+    def _claim_agent_output_timeline(self, timeline: TurnTimeline | None) -> None:
+        if timeline is None:
+            return
+        displaced = self._ensure_agent_output_coordinator().claim(timeline)
+        if displaced is not None:
+            self._flush_turn_timeline(displaced, "agent_output_superseded")
+
+    def _finish_agent_output(self, reason: str) -> None:
+        timeline = self._active_agent_output_timeline()
+        if timeline is not None:
+            self._flush_turn_timeline(timeline, reason)
 
     def _build_semantic_interrupt_handler(self) -> SemanticInterruptHandler:
         interruption_effects = self._ensure_interruption_effects()
@@ -1096,6 +1123,8 @@ class StreamingPipeline(BasePipeline):
         return ProviderEventObserver(
             factory=self._factory,
             get_timeline=lambda: self._timeline,
+            get_output_timeline=self._active_agent_output_timeline,
+            agent_output=self._ensure_agent_output_coordinator(),
             flush_timeline=lambda timeline, reason: self._flush_turn_timeline(
                 timeline,
                 reason,
@@ -1360,7 +1389,7 @@ class StreamingPipeline(BasePipeline):
     def _on_agent_state_changed(self, event: Any) -> None:
         """Forward agent state changes through BasePipeline and session effects."""
         self._ensure_runtime_defaults()
-        timeline = self._timeline
+        timeline = self._active_agent_output_timeline()
         super()._on_agent_state_changed(event)
         self._ensure_agent_state_effect_handler()
         self._agent_state_effects.handle(event)
@@ -1380,6 +1409,36 @@ class StreamingPipeline(BasePipeline):
             )
         if new:
             self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(new)
+
+    def _on_session_error(self, event: Any) -> None:
+        """Close the response turn on a non-recoverable framework/provider error."""
+
+        self._ensure_runtime_defaults()
+        super()._on_session_error(event)
+        timeline = self._active_agent_output_timeline()
+        if timeline is None:
+            return
+        error_type = str(getattr(event, "type", "") or "session_error")
+        recoverable = bool(getattr(event, "recoverable", False))
+        error = getattr(event, "error", event)
+        mark = "tts_error_at" if error_type == "tts_error" else "session_error_at"
+        timeline.mark(mark)
+        timeline.set_attr(
+            "output_error",
+            {
+                "type": error_type,
+                "label": str(getattr(event, "label", "") or ""),
+                "recoverable": recoverable,
+                "error": str(error or "")[:240],
+            },
+        )
+        self._ensure_turn_event_sink().milestone(
+            timeline,
+            error_type,
+            reason=f"livekit_{error_type}",
+        )
+        if not recoverable:
+            self._finish_agent_output(f"nonrecoverable_{error_type}")
 
     def _on_user_state_changed(self, event: Any) -> None:
         self._ensure_runtime_defaults()
@@ -1445,11 +1504,9 @@ class StreamingPipeline(BasePipeline):
         self._ensure_interruption_effects().cancel_silent_generation_for_explicit_preempt()
 
     def _append_timeline_debug(self, reason: str, *, clear: bool = False) -> None:
-        if self._timeline is None or self._timeline_debug_flushed:
+        if self._timeline is None:
             return
-        self._timeline.set_attr("timeline_flush_reason", reason)
-        self._ensure_turn_event_sink().terminal(self._timeline, reason)
-        self._timeline.append_debug_jsonl(self._observability.timeline_debug_path)
-        self._timeline_debug_flushed = True
-        if clear:
-            self._timeline = None
+        timeline = self._timeline
+        self._flush_turn_timeline(timeline, reason)
+        if not clear and self._timeline is None:
+            self._timeline = timeline

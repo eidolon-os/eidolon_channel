@@ -13,7 +13,37 @@ from eidolon.livekit.agent.observability import TurnTimeline
 
 
 class AgentOutputCoordinator:
-    """Track brain/TTS/audio progress as a small state machine."""
+    """Track brain/TTS/audio progress and own the active response timeline.
+
+    A full-duplex session can have two turns alive at once: the committed turn
+    whose response is still playing, and a new user candidate attempting to
+    interrupt it.  Provider and playback events must remain attached to the
+    former until that response reaches a terminal outcome.  Keeping that
+    ownership here avoids coupling output identity to the mutable speech
+    candidate pointer.
+    """
+
+    def __init__(self) -> None:
+        self._active_timeline: TurnTimeline | None = None
+
+    @property
+    def active_timeline(self) -> TurnTimeline | None:
+        return self._active_timeline
+
+    def claim(self, timeline: TurnTimeline) -> TurnTimeline | None:
+        """Bind output events to ``timeline`` and return any displaced owner."""
+
+        previous = self._active_timeline
+        self._active_timeline = timeline
+        return previous if previous is not timeline else None
+
+    def release(self, timeline: TurnTimeline) -> bool:
+        """Release ``timeline`` iff it still owns the response lifecycle."""
+
+        if self._active_timeline is not timeline:
+            return False
+        self._active_timeline = None
+        return True
 
     def record_brain_event(
         self,

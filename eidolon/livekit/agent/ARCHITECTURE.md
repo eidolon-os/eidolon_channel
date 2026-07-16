@@ -274,6 +274,12 @@ event 继续关联 brain `turn_id/request_id`。Channel `turn_id` 同时作为�
 `StartTurn.trace_id`，retry 不换 trace；Agent 持久化后由 Mission Control 按 trace 合并。
 `observability/turn_events.py` 只用有界 `put_nowait` 投影 safe phase/milestone/terminal
 事实，专用 writer 才接触 SQLite；队列满只累计 dropped count，不阻塞语音热路径。
+候选用户轮次与正在生成/播放的响应允许在 full-duplex 打断窗口内并存，不能再共享
+一个可替换的 timeline 指针。`session/agent_output_coordinator.py` 是响应 timeline 的
+唯一所有者：STT/VAD/EOT 继续写当前候选，Brain/LLM/TTS/agent playback 只写已 commit
+的响应。接受打断时先以 `interrupted_by_user` 关闭被打断响应，再独立关闭 hard-stop /
+redirect 候选；非可恢复 LLM/TTS/session error 直接关闭它所绑定的响应为 failed。
+session close 必须分别清算仍存活的响应和候选，任何一个都不得依靠下一轮覆盖来结束。
 设备现有 `client.audio_state.seq` 不参与策略，
 但 Channel 会保留最近 16 个状态事件，并累计 `client_audio_state_gap_count` /
 `client_audio_state_reordered_count`；这用于区分“设备未发或链路丢包”和“包已到达但

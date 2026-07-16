@@ -458,6 +458,7 @@ def test_streaming_pipeline_records_llm_metrics_into_timeline() -> None:
     pipeline._timeline = TurnTimeline("turn-llm")
     pipeline._timeline.mark("turn_committed_at")
     pipeline._timeline.mark("llm_started_at")
+    pipeline._claim_agent_output_timeline(pipeline._timeline)
 
     pipeline._ensure_provider_event_observer()
     pipeline._provider_events.install_llm_metrics_observer()
@@ -494,6 +495,7 @@ def test_streaming_pipeline_records_brain_provider_events_into_timeline() -> Non
     pipeline._factory = SimpleNamespace(llm=SimpleNamespace(llm=fake_llm))
     pipeline._timeline = TurnTimeline("turn-brain")
     pipeline._timeline.mark("turn_committed_at")
+    pipeline._claim_agent_output_timeline(pipeline._timeline)
 
     pipeline._ensure_provider_event_observer()
     pipeline._provider_events.install_brain_provider_event_observer()
@@ -696,6 +698,7 @@ def test_streaming_pipeline_flushes_timeline_on_agent_playback_done(tmp_path) ->
     pipeline._timeline = TurnTimeline("turn-normal")
     pipeline._timeline_debug_flushed = False
     pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
+    pipeline._claim_agent_output_timeline(pipeline._timeline)
 
     pipeline._on_agent_state_changed(
         SimpleNamespace(old_state="speaking", new_state="listening")
@@ -706,6 +709,41 @@ def test_streaming_pipeline_flushes_timeline_on_agent_playback_done(tmp_path) ->
     assert "agent_audio_playback_done_at" in rows[0]["timestamps"]
     assert rows[0]["attrs"]["timeline_flush_reason"] == "agent_audio_playback_done"
     assert pipeline._timeline is None
+
+
+def test_nonrecoverable_tts_error_closes_response_not_new_speech_candidate(tmp_path) -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    debug_path = tmp_path / "timeline.jsonl"
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._state = PipelineState.SPEAKING
+    pipeline._callbacks = MagicMock()
+    pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
+    response = TurnTimeline("turn-response")
+    response.mark("turn_committed_at")
+    response.mark("tts_first_audio_at")
+    pipeline._timeline = response
+    pipeline._claim_agent_output_timeline(response)
+
+    candidate = TurnTimeline("turn-hard-stop")
+    candidate.mark("speech_started_at")
+    pipeline._timeline = candidate
+    pipeline._timeline_debug_flushed = False
+    pipeline._on_session_error(
+        SimpleNamespace(
+            type="tts_error",
+            label="bailian",
+            error=RuntimeError("provider 427"),
+            recoverable=False,
+        )
+    )
+
+    rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
+    assert [row["turn_id"] for row in rows] == ["turn-response"]
+    assert rows[0]["attrs"]["timeline_flush_reason"] == "nonrecoverable_tts_error"
+    assert rows[0]["attrs"]["output_error"]["type"] == "tts_error"
+    assert pipeline._active_agent_output_timeline() is None
+    assert pipeline._timeline is candidate
 
 
 def test_streaming_pipeline_snapshot_does_not_clear_timeline(tmp_path) -> None:
@@ -1004,6 +1042,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
         resolve=MagicMock(),
     )
     snapshot_interrupted_context = MagicMock()
+    finish_agent_output = MagicMock()
     pipeline._callbacks = MagicMock()
     pipeline._cancel_residual_commit_suppress_sec = lambda: 2.0
     effects = FullDuplexInterruptionEffects(
@@ -1020,6 +1059,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
             "playback.stop",
             reason=reason,
         ),
+        finish_agent_output=finish_agent_output,
         snapshot_interrupted_context=snapshot_interrupted_context,
         cancel_residual_commit_suppress_sec=(
             pipeline._cancel_residual_commit_suppress_sec
@@ -1033,6 +1073,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
     effects.cancel_and_interrupt(force=True)
     await asyncio.sleep(0)
 
+    finish_agent_output.assert_called_once_with("interrupted_by_user")
     pipeline._room.local_participant.publish_data.assert_awaited_once()
     payload = json.loads(pipeline._room.local_participant.publish_data.await_args.args[0])
     assert payload["op"] == "playback.stop"

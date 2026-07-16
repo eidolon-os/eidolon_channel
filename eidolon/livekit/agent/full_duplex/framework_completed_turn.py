@@ -268,7 +268,10 @@ class FullDuplexFrameworkCompletedTurnGate:
         owner._user_turns.reject_active(
             f"interruption_verdict:{verdict.action.value}:{verdict.reason}"
         )
-        owner._flush_turn_timeline(timeline, "interruption_verdict_rejected")
+        owner._flush_turn_timeline(
+            timeline,
+            f"interruption_{verdict.action.value}",
+        )
         return False
 
     def _align_framework_completed_turn(
@@ -343,6 +346,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript=canonical,
             timeline=timeline,
         )
+        owner._claim_agent_output_timeline(timeline)
         return True
 
     def _resolve_active_interruption_framework_completed_turn(

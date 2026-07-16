@@ -47,6 +47,7 @@ class FullDuplexInterruptionEffects:
         correction_topic_stability_window_ms: Callable[[], int],
         set_interrupt_cancel_suppression: Callable[[bool, float], None],
         soft_interrupt_timeout_sec: Callable[[], float],
+        finish_agent_output: Callable[[str], None] | None = None,
         playback_evidence_active: Callable[[], bool] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
         claim_irreversible_side_effect: Callable[..., bool] | None = None,
@@ -61,6 +62,7 @@ class FullDuplexInterruptionEffects:
         self._get_state_label = get_state_label
         self._get_interruption_orchestrator = get_interruption_orchestrator
         self._publish_playback_stop = publish_playback_stop
+        self._finish_agent_output = finish_agent_output or (lambda _reason: None)
         self._snapshot_context = snapshot_interrupted_context
         self._cancel_residual_commit_suppress_sec = cancel_residual_commit_suppress_sec
         self._semantic_interrupt_run = semantic_interrupt_run
@@ -286,6 +288,7 @@ class FullDuplexInterruptionEffects:
         )
         self._publish_playback_stop("interrupt_cancel")
         self._ducking.cancel_output()
+        self._finish_agent_output("interrupted_by_user")
         if collect_confirmed_cancel_turn:
             orchestrator.mark_confirmed_cancel_collecting_turn()
         else:

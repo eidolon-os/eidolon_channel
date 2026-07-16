@@ -25,6 +25,8 @@ class ProviderEventObserver:
         flush_timeline: Callable[[TurnTimeline, str], None] | None = None,
         append_timeline_snapshot: Callable[[TurnTimeline, str], None] | None = None,
         publish_milestone: Callable[[TurnTimeline, str, str], None] | None = None,
+        get_output_timeline: Callable[[], TurnTimeline | None] | None = None,
+        agent_output: AgentOutputCoordinator | None = None,
         first_delta_timeout_sec: float | None = None,
         stt_pending_event_window_sec: float | None = None,
         stt_pending_event_preroll_sec: float | None = None,
@@ -32,6 +34,7 @@ class ProviderEventObserver:
     ) -> None:
         self._factory = factory
         self._get_timeline = get_timeline
+        self._get_output_timeline = get_output_timeline or get_timeline
         self._flush_timeline = flush_timeline
         self._append_timeline_snapshot = append_timeline_snapshot
         self._publish_milestone = publish_milestone
@@ -60,7 +63,7 @@ class ProviderEventObserver:
         self.stt_provider_observer_installed = False
         self.tts_provider_observer_installed = False
         self.pending_stt_provider_events: list[dict[str, Any]] = []
-        self.agent_output = AgentOutputCoordinator()
+        self.agent_output = agent_output or AgentOutputCoordinator()
 
     def cancel_output_watchdog(self) -> None:
         self._cancel_first_delta_watchdog()
@@ -80,7 +83,7 @@ class ProviderEventObserver:
             return
 
         def _on_metrics_collected(metrics: Any) -> None:
-            timeline = self._get_timeline()
+            timeline = self._get_output_timeline()
             if timeline is None:
                 return
             if not self._should_record_llm_metrics(timeline, metrics):
@@ -114,7 +117,7 @@ class ProviderEventObserver:
         self.llm_metrics_observer_installed = True
 
     def _on_llm_error(self, event: Any) -> None:
-        timeline = self._get_timeline()
+        timeline = self._get_output_timeline()
         if timeline is None:
             return
         if not self._timeline_has_reply_context(timeline):
@@ -161,7 +164,7 @@ class ProviderEventObserver:
         }
 
         def _on_provider_event(event: Any) -> None:
-            timeline = self._get_timeline()
+            timeline = self._get_output_timeline()
             if timeline is None or not isinstance(event, dict):
                 return
             mark = mark_by_event.get(str(event.get("event") or ""))
@@ -258,7 +261,7 @@ class ProviderEventObserver:
         }
 
         def _on_provider_event(event: Any) -> None:
-            timeline = self._get_timeline()
+            timeline = self._get_output_timeline()
             if timeline is None or not isinstance(event, dict):
                 return
             mark = mark_by_event.get(str(event.get("event") or ""))
@@ -449,7 +452,7 @@ class ProviderEventObserver:
             await asyncio.sleep(timeout_sec)
         except asyncio.CancelledError:
             return
-        timeline = self._get_timeline()
+        timeline = self._get_output_timeline()
         if timeline is None or timeline.turn_id != turn_id:
             return
         if "brain_first_delta_at" in timeline.timestamps:

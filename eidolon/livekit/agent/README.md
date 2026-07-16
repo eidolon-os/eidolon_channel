@@ -66,6 +66,10 @@ entrypoints; implementation code lives under named boundary packages.
   The sink projects safe session/turn phase, milestone, and terminal facts to
   `eidolon_data.events` through a bounded non-blocking queue. It is an observer,
   never a turn owner, and never publishes transcript/audio.
+- `session/agent_output_coordinator.py` owns the one committed response timeline.
+  A new STT/VAD candidate may coexist with it during barge-in, while Brain/TTS/
+  playback events and non-recoverable output errors remain bound to the response
+  until it completes, fails, or is interrupted.
 - `eidolon_agent_rpc/` contains the remote Eidolon Agent LLM/proactive bridge.
 - `speaker_verification/` contains voiceprint service/store orchestration.
   Model providers and model resources live under `eidolon.livekit.plugins`.

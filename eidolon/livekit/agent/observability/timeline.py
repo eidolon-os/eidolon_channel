@@ -42,6 +42,8 @@ TIMELINE_FIELDS = (
     "tts_first_text_sent_at",
     "tts_provider_first_audio_at",
     "tts_first_audio_at",
+    "tts_error_at",
+    "session_error_at",
     "agent_audio_playback_done_at",
     "interrupt_started_at",
     "interrupt_intent_admitted_at",

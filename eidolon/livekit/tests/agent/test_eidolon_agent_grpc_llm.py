@@ -288,11 +288,15 @@ async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
             self.starts: list[str] = []
             self.conversations: list[str] = []
             self.metadata: list[dict | None] = []
+            self.trace_ids: list[str | None] = []
 
-        async def start_turn(self, *, text: str, conversation_id: str, metadata=None):
+        async def start_turn(
+            self, *, text: str, conversation_id: str, metadata=None, trace_id=None
+        ):
             self.starts.append(text)
             self.conversations.append(conversation_id)
             self.metadata.append(metadata)
+            self.trace_ids.append(trace_id)
             if len(self.starts) == 1:
                 raise APIConnectionError("transient start failure", retryable=True)
 
@@ -320,6 +324,7 @@ async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
 
     adapter._get_session = _get_session  # type: ignore[method-assign]
     adapter.set_turn_control_metadata({"action": "cancel", "reason": "interrupt"})
+    adapter.set_turn_trace_id("channel-turn-trace")
 
     stream = adapter.chat(
         chat_ctx=_ctx("第一轮 canonical"),
@@ -338,6 +343,7 @@ async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
         {"turn_control": {"action": "cancel", "reason": "interrupt"}},
         {"turn_control": {"action": "cancel", "reason": "interrupt"}},
     ]
+    assert session.trace_ids == ["channel-turn-trace", "channel-turn-trace"]
 
 
 @pytest.mark.asyncio
@@ -390,7 +396,9 @@ async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
             self.cancels: list[str] = []
             self._tasks: set[asyncio.Task] = set()
 
-        async def start_turn(self, *, text: str, conversation_id: str, metadata=None):
+        async def start_turn(
+            self, *, text: str, conversation_id: str, metadata=None, trace_id=None
+        ):
             self.starts.append(text)
             turn_id = f"turn-{len(self.starts)}"
             self.turn_ids.append(turn_id)

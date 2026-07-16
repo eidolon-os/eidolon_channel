@@ -70,7 +70,7 @@ from eidolon.livekit.common.config import (
 from .agent_builder import build_full_duplex_agent, welcome_on_enter_text
 from ..runtime.interaction_mode import resolve_idle_policy
 from ..turn_policy import TurnPolicyRuntime
-from ..observability import TurnTimeline
+from ..observability import ChannelTurnEventSink, TurnTimeline
 from ..factory import SharedStageFactory
 from ..output import FillerManager, OutputDuckingController
 from ..shared.pipeline import BasePipeline
@@ -177,6 +177,7 @@ class StreamingPipeline(BasePipeline):
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
+        self._turn_events = ChannelTurnEventSink()
         self._voiceprint_config = voiceprint_config or VoiceprintConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
@@ -612,14 +613,26 @@ class StreamingPipeline(BasePipeline):
         timeline: TurnTimeline | None = None,
     ) -> None:
         self._ensure_full_duplex_state_machine()
-        self._full_duplex_state.transition(
+        previous_phase = self._full_duplex_state.phase.value
+        target_timeline = self._timeline if timeline is None else timeline
+        transition = self._full_duplex_state.transition(
             phase,
             event=event,
             reason=reason,
             side_effect=side_effect,
             transcript=transcript,
             details=details,
-            timeline=self._timeline if timeline is None else timeline,
+            timeline=target_timeline,
+        )
+        self._turn_events.phase_changed(
+            timeline=target_timeline,
+            previous_phase=previous_phase,
+            phase=phase.value,
+            event=event,
+            reason=reason,
+            side_effect=side_effect,
+            occurred_at=transition.at,
+            details=details,
         )
 
     def _record_policy_decision_transition(
@@ -961,6 +974,7 @@ class StreamingPipeline(BasePipeline):
         if timeline is None or getattr(self, "_timeline_debug_flushed", False):
             return
         timeline.set_attr("timeline_flush_reason", reason)
+        self._turn_events.terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
         if timeline is self._timeline:
             self._timeline_debug_flushed = True
@@ -975,6 +989,11 @@ class StreamingPipeline(BasePipeline):
             return
         timeline.set_attr("timeline_snapshot_reason", reason)
         timeline.set_attr("timeline_flush_reason", reason)
+        phase = str(
+            ((timeline.attrs.get("full_duplex_state") or {}).get("phase")) or ""
+        )
+        if phase == FullDuplexPhase.USER_TURN_REJECTED.value:
+            self._turn_events.terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
 
     def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
@@ -1083,6 +1102,9 @@ class StreamingPipeline(BasePipeline):
             ),
             append_timeline_snapshot=lambda timeline, reason: self._append_turn_timeline_snapshot(
                 timeline, reason
+            ),
+            publish_milestone=lambda timeline, milestone, reason: self._turn_events.milestone(
+                timeline, milestone, reason=reason
             ),
             first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
             stt_pending_event_window_sec=(
@@ -1331,10 +1353,18 @@ class StreamingPipeline(BasePipeline):
     def _on_agent_state_changed(self, event: Any) -> None:
         """Forward agent state changes through BasePipeline and session effects."""
         self._ensure_runtime_defaults()
+        timeline = self._timeline
         super()._on_agent_state_changed(event)
         self._ensure_agent_state_effect_handler()
         self._agent_state_effects.handle(event)
         new = getattr(event, "new_state", "")
+        old = getattr(event, "old_state", "")
+        if new == "thinking":
+            self._turn_events.milestone(timeline, "generating", reason="agent_thinking")
+        elif new == "speaking":
+            self._turn_events.milestone(timeline, "first_audio", reason="agent_speaking")
+        elif old == "speaking" and new in {"idle", "listening"}:
+            self._turn_events.milestone(timeline, "playback_done", reason="agent_playback_done")
         if new:
             self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(new)
 
@@ -1405,6 +1435,7 @@ class StreamingPipeline(BasePipeline):
         if self._timeline is None or self._timeline_debug_flushed:
             return
         self._timeline.set_attr("timeline_flush_reason", reason)
+        self._turn_events.terminal(self._timeline, reason)
         self._timeline.append_debug_jsonl(self._observability.timeline_debug_path)
         self._timeline_debug_flushed = True
         if clear:

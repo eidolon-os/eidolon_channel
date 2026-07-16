@@ -24,6 +24,7 @@ class ProviderEventObserver:
         get_timeline: Callable[[], TurnTimeline | None],
         flush_timeline: Callable[[TurnTimeline, str], None] | None = None,
         append_timeline_snapshot: Callable[[TurnTimeline, str], None] | None = None,
+        publish_milestone: Callable[[TurnTimeline, str, str], None] | None = None,
         first_delta_timeout_sec: float | None = None,
         stt_pending_event_window_sec: float | None = None,
         stt_pending_event_preroll_sec: float | None = None,
@@ -33,6 +34,7 @@ class ProviderEventObserver:
         self._get_timeline = get_timeline
         self._flush_timeline = flush_timeline
         self._append_timeline_snapshot = append_timeline_snapshot
+        self._publish_milestone = publish_milestone
         observability_defaults = ObservabilityConfig()
         if first_delta_timeout_sec is None:
             first_delta_timeout_sec = observability_defaults.llm_first_delta_timeout_ms / 1000.0
@@ -135,6 +137,7 @@ class ProviderEventObserver:
             },
         )
         output = self.agent_output.record_llm_error(timeline, event)
+        self._emit_milestone(timeline, "llm_error", "livekit_llm_error")
         self._cancel_first_delta_watchdog()
         if bool(output.get("silent_failure")):
             self._flush_silent_output_if_terminal(timeline, output)
@@ -221,6 +224,14 @@ class ProviderEventObserver:
                 brain_rpc["attempt"] = event.get("attempt")
             timeline.set_attr("brain_rpc", brain_rpc)
             output = self.agent_output.record_brain_event(timeline, event)
+            if event_name in {
+                "brain_request_sent",
+                "brain_first_delta",
+                "brain_done",
+                "brain_cancelled",
+                "brain_error",
+            }:
+                self._emit_milestone(timeline, event_name, event_name)
             if event_name == "brain_request_sent":
                 self._arm_first_delta_watchdog(timeline)
             elif event_name in {"brain_done", "brain_cancelled", "brain_error"}:
@@ -276,11 +287,21 @@ class ProviderEventObserver:
             )
             timeline.set_attr("tts_stream", tts_stream)
             self.agent_output.record_tts_event(timeline, event)
+            if mark == "tts_provider_first_audio_at":
+                self._emit_milestone(
+                    timeline,
+                    "tts_provider_first_audio",
+                    "tts_provider_first_audio",
+                )
             if mark in {"tts_first_text_sent_at", "tts_provider_first_audio_at"}:
                 self._cancel_first_delta_watchdog()
 
         tts_plugin.on("provider_event", _on_provider_event)
         self.tts_provider_observer_installed = True
+
+    def _emit_milestone(self, timeline: TurnTimeline, milestone: str, reason: str) -> None:
+        if self._publish_milestone is not None:
+            self._publish_milestone(timeline, milestone, reason)
 
     def _should_record_llm_metrics(self, timeline: TurnTimeline, metrics: Any) -> bool:
         request_id = str(getattr(metrics, "request_id", "") or "")

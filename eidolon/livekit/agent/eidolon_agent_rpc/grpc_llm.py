@@ -160,6 +160,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
         self._pending_turn_control_metadata: dict[str, Any] | None = None
+        self._pending_trace_id: str | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
 
     def emit_provider_event(self, name: str, **payload: Any) -> None:
@@ -215,6 +216,16 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._pending_turn_control_metadata = None
         return metadata
 
+    def set_turn_trace_id(self, trace_id: str) -> None:
+        """Use the Channel turn id as the next brain turn's cross-hop trace."""
+
+        self._pending_trace_id = trace_id.strip() or None
+
+    def pop_turn_trace_id(self) -> str | None:
+        trace_id = self._pending_trace_id
+        self._pending_trace_id = None
+        return trace_id
+
     def _resolve_conversation_id_for_chat(self) -> str:
         # Resolve once per logical chat stream. LiveKit may retry _run() for
         # transient provider errors; retries must not silently move the turn to
@@ -251,6 +262,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             turn_control_metadata=self.pop_turn_control_metadata(),
+            trace_id=self.pop_turn_trace_id(),
             user_text=user_text,
             conversation_id=self._resolve_conversation_id_for_chat(),
         )
@@ -323,10 +335,12 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         turn_control_metadata: dict[str, Any] | None,
+        trace_id: str | None,
         user_text: str,
         conversation_id: str,
     ) -> None:
         self._turn_control_metadata = turn_control_metadata
+        self._trace_id = trace_id
         self._user_text = user_text
         self._conversation_id = conversation_id
         self._attempt_index = 0
@@ -366,6 +380,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     metadata={"turn_control": self._turn_control_metadata}
                     if self._turn_control_metadata
                     else None,
+                    trace_id=self._trace_id,
                 ),
                 timeout=timeout,
             )
@@ -381,6 +396,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             turn_id=turn_id,
             request_id=req_id,
             attempt=attempt,
+            trace_id=self._trace_id,
         )
         first_delta_seen = False
         # Roles of non-answer status deltas already spoken this turn, so a

@@ -48,6 +48,14 @@ class FullDuplexSpeechLifecycle:
         owner._user_speaking_start_time = time.monotonic()
         if not merge_continuation or owner._timeline is None:
             owner._timeline = TurnTimeline(generate_turn_id())
+            llm_plugin = getattr(
+                getattr(getattr(owner, "_factory", None), "llm", None),
+                "llm",
+                None,
+            )
+            set_trace_id = getattr(llm_plugin, "set_turn_trace_id", None)
+            if set_trace_id is not None:
+                set_trace_id(owner._timeline.turn_id)
             owner._timeline_debug_flushed = False
             if owner._room is not None:
                 owner._timeline.set_attr("room_name", owner._room.name or "")

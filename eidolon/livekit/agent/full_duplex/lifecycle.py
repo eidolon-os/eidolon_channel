@@ -42,6 +42,7 @@ class FullDuplexSessionLifecycle:
 
         participant_identity = await wait_for_runtime_participant_identity(room)
         pipeline._runtime_participant_identity = participant_identity
+        await pipeline._turn_events.start(room)
         logger.info(
             "[StreamingPipeline] binding RoomIO to runtime participant=%s",
             participant_identity,
@@ -262,5 +263,8 @@ class FullDuplexSessionLifecycle:
             except Exception:
                 logger.exception("[StreamingPipeline] error shutting down session")
             pipeline._session = None
+        await pipeline._turn_events.close(
+            reason="session_error" if getattr(pipeline, "_close_error", None) else "session_ended"
+        )
         await pipeline._shutdown_stages()
         await BasePipeline.shutdown(pipeline)

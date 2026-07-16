@@ -286,6 +286,35 @@ class WorkerConfig:
 
 
 @dataclass(frozen=True)
+class AvatarConfig:
+    """Digital-human (talking-head) video avatar.
+
+    ``enabled`` is a global availability/kill-switch; whether a given session
+    actually shows a video avatar is decided per-connection at runtime from the
+    joining participant's metadata (``resolve_avatar_requested``). Both default
+    off, so audio-only sessions are unaffected.
+
+    ``fps`` is the constant rate the decoder retimes video to (and the rate we
+    request from the service); the service's *actual* emitted rate varies, so we
+    resample to this fixed target to keep lip-sync under ``AVSynchronizer``.
+    """
+
+    enabled: bool = False
+    service_url: str = ""
+    width: int = 448
+    height: int = 448
+    fps: float = 25.0
+    format: str = "mp4"
+    output_sample_rate: int = 24000
+    request_timeout_sec: float = 30.0
+    connect_timeout_sec: float = 5.0
+    first_frame_timeout_sec: float = 8.0
+    fallback_to_audio_on_failure: bool = True
+    avatar_agent_name: str = "eidolon-avatar"
+    worker_identity_prefix: str = "avatar"
+
+
+@dataclass(frozen=True)
 class EffectiveAgentConfig:
     core: CoreConfig = field(default_factory=CoreConfig)
     behavior: AgentBehaviorConfig = field(default_factory=AgentBehaviorConfig)
@@ -297,6 +326,7 @@ class EffectiveAgentConfig:
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     voiceprint: VoiceprintConfig = field(default_factory=VoiceprintConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
+    avatar: AvatarConfig = field(default_factory=AvatarConfig)
 
     bailian_stt: BailianSTTConfig = field(default_factory=BailianSTTConfig)
     sensetime_stt: SenseTimeSTTConfig = field(default_factory=SenseTimeSTTConfig)

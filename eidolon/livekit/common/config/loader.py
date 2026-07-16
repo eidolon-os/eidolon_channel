@@ -13,6 +13,7 @@ import yaml
 from .profiles import profile_defaults
 from .schema import (
     AgentBehaviorConfig,
+    AvatarConfig,
     BailianSTTConfig,
     BailianTTSConfig,
     CoreConfig,
@@ -210,6 +211,7 @@ def load_effective_config() -> EffectiveAgentConfig:
     obs_y = _section(y, "observability")
     voiceprint_y = _section(y, "voiceprint")
     worker_y = _section(y, "worker")
+    avatar_y = _section(y, "avatar")
     bailian_stt_y = _section(y, "bailian_stt")
     bailian_tts_y = _section(y, "bailian_tts")
     sensetime_stt_y = _section(y, "sensetime_stt")
@@ -321,6 +323,7 @@ def load_effective_config() -> EffectiveAgentConfig:
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),
         voiceprint=_merge_dataclass(VoiceprintConfig(), voiceprint_y),
         worker=_merge_dataclass(WorkerConfig(), worker_y),
+        avatar=_merge_dataclass(AvatarConfig(), avatar_y),
         # Non-secret Bailian STT/TTS config lives in settings.yaml; the API key
         # stays in .env (the BailianSTTConfig()/BailianTTSConfig() base reads it
         # from env via default_factory, and the YAML section — which must omit

@@ -17,6 +17,17 @@ behavior:
   welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
   audio_sample_rate: 16000
 
+# Digital-human video avatar. Global availability/kill-switch; whether a given
+# session shows a video avatar is decided per-connection from participant
+# metadata (client sends avatar=1 → hub stamps → resolve_avatar_requested).
+avatar:
+  enabled: true
+  service_url: http://111.2.199.31:61320
+  width: 448
+  height: 448
+  fps: 25.0
+  fallback_to_audio_on_failure: true
+
 llm:
   base_url: https://api.deepseek.com
   model: deepseek-v4-flash

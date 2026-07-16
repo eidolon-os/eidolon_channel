@@ -140,6 +140,49 @@ def resolve_device_id(
     return device_id or None
 
 
+# Participant-metadata key by which a display-capable client (web/app) declares
+# it wants the digital-human video avatar for this session. Same join-metadata
+# bus as interaction_mode/session_intent; read once, per participant. Absent /
+# false → audio-only (the safe default, so existing sessions are unaffected).
+AVATAR_METADATA_KEY = "avatar"
+
+
+def _coerce_metadata_dict(raw_metadata: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    """Parse participant.metadata (JSON string or dict) into a dict, or None."""
+    if isinstance(raw_metadata, dict):
+        return raw_metadata
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def resolve_avatar_requested(
+    raw_metadata: str | dict[str, Any] | None,
+    *,
+    default: bool = False,
+) -> bool:
+    """Whether the joining client requested a video avatar for this session.
+
+    Accepts a bool or a truthy string (``"true"/"1"/"yes"/"on"``). Same source +
+    parsing contract as the other join-metadata resolvers. Anything missing /
+    unparseable degrades to ``default`` (audio-only).
+    """
+    meta = _coerce_metadata_dict(raw_metadata)
+    if not meta:
+        return default
+    value = meta.get(AVATAR_METADATA_KEY)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
 def apply_interaction_mode(
     *,
     turn_policy: TurnPolicyConfig,

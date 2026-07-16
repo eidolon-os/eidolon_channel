@@ -156,7 +156,8 @@ eidolon/livekit/agent/
 │   └── store.py              # voiceprint metadata store; model providers live in plugins/
 └── observability/
     ├── metrics.py            # 指标聚合
-    └── timeline.py           # timeline event 记录
+    ├── timeline.py           # timeline event 记录
+    └── turn_events.py        # bounded Channel session/turn event projection
 ```
 
 ### 2.1 边界原则
@@ -269,7 +270,11 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 
 Dogfood 诊断必须把设备与服务端串成同一条证据链。每个 full-duplex timeline 固定记录
 `room_name`、runtime `participant_identity`、Channel `turn_id`，并由 brain provider
-event 继续关联 brain `turn_id/request_id`。设备现有 `client.audio_state.seq` 不参与策略，
+event 继续关联 brain `turn_id/request_id`。Channel `turn_id` 同时作为下一次 Brain
+`StartTurn.trace_id`，retry 不换 trace；Agent 持久化后由 Mission Control 按 trace 合并。
+`observability/turn_events.py` 只用有界 `put_nowait` 投影 safe phase/milestone/terminal
+事实，专用 writer 才接触 SQLite；队列满只累计 dropped count，不阻塞语音热路径。
+设备现有 `client.audio_state.seq` 不参与策略，
 但 Channel 会保留最近 16 个状态事件，并累计 `client_audio_state_gap_count` /
 `client_audio_state_reordered_count`；这用于区分“设备未发或链路丢包”和“包已到达但
 STT/EOT/Brain/TTS 未继续”。原始证据保存在 `~/eidolon/logs/channel/worker.log` 与

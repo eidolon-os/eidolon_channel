@@ -62,7 +62,10 @@ entrypoints; implementation code lives under named boundary packages.
 - `runtime/` contains worker runtime resolution: metadata parsing and admin
   resolve helpers.
 - `context/` contains conversation-context ledger helpers.
-- `observability/` contains timeline and metrics helpers.
+- `observability/` contains timeline/metrics helpers and `ChannelTurnEventSink`.
+  The sink projects safe session/turn phase, milestone, and terminal facts to
+  `eidolon_data.events` through a bounded non-blocking queue. It is an observer,
+  never a turn owner, and never publishes transcript/audio.
 - `eidolon_agent_rpc/` contains the remote Eidolon Agent LLM/proactive bridge.
 - `speaker_verification/` contains voiceprint service/store orchestration.
   Model providers and model resources live under `eidolon.livekit.plugins`.

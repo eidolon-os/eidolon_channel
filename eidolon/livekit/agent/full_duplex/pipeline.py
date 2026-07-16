@@ -624,7 +624,7 @@ class StreamingPipeline(BasePipeline):
             details=details,
             timeline=target_timeline,
         )
-        self._turn_events.phase_changed(
+        self._ensure_turn_event_sink().phase_changed(
             timeline=target_timeline,
             previous_phase=previous_phase,
             phase=phase.value,
@@ -974,7 +974,7 @@ class StreamingPipeline(BasePipeline):
         if timeline is None or getattr(self, "_timeline_debug_flushed", False):
             return
         timeline.set_attr("timeline_flush_reason", reason)
-        self._turn_events.terminal(timeline, reason)
+        self._ensure_turn_event_sink().terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
         if timeline is self._timeline:
             self._timeline_debug_flushed = True
@@ -993,7 +993,7 @@ class StreamingPipeline(BasePipeline):
             ((timeline.attrs.get("full_duplex_state") or {}).get("phase")) or ""
         )
         if phase == FullDuplexPhase.USER_TURN_REJECTED.value:
-            self._turn_events.terminal(timeline, reason)
+            self._ensure_turn_event_sink().terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
 
     def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
@@ -1103,7 +1103,7 @@ class StreamingPipeline(BasePipeline):
             append_timeline_snapshot=lambda timeline, reason: self._append_turn_timeline_snapshot(
                 timeline, reason
             ),
-            publish_milestone=lambda timeline, milestone, reason: self._turn_events.milestone(
+            publish_milestone=lambda timeline, milestone, reason: self._ensure_turn_event_sink().milestone(
                 timeline, milestone, reason=reason
             ),
             first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
@@ -1123,6 +1123,13 @@ class StreamingPipeline(BasePipeline):
             if not hasattr(self, "_timeline"):
                 self._timeline = None
             self._provider_events = self._build_provider_event_observer()
+
+    def _ensure_turn_event_sink(self) -> ChannelTurnEventSink:
+        """Return the observer, including for focused tests that skip __init__."""
+
+        if not hasattr(self, "_turn_events"):
+            self._turn_events = ChannelTurnEventSink()
+        return self._turn_events
 
     def _ensure_runtime_defaults(self) -> None:
         ensure_full_duplex_runtime_defaults(self)
@@ -1360,11 +1367,17 @@ class StreamingPipeline(BasePipeline):
         new = getattr(event, "new_state", "")
         old = getattr(event, "old_state", "")
         if new == "thinking":
-            self._turn_events.milestone(timeline, "generating", reason="agent_thinking")
+            self._ensure_turn_event_sink().milestone(
+                timeline, "generating", reason="agent_thinking"
+            )
         elif new == "speaking":
-            self._turn_events.milestone(timeline, "first_audio", reason="agent_speaking")
+            self._ensure_turn_event_sink().milestone(
+                timeline, "first_audio", reason="agent_speaking"
+            )
         elif old == "speaking" and new in {"idle", "listening"}:
-            self._turn_events.milestone(timeline, "playback_done", reason="agent_playback_done")
+            self._ensure_turn_event_sink().milestone(
+                timeline, "playback_done", reason="agent_playback_done"
+            )
         if new:
             self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(new)
 
@@ -1435,7 +1448,7 @@ class StreamingPipeline(BasePipeline):
         if self._timeline is None or self._timeline_debug_flushed:
             return
         self._timeline.set_attr("timeline_flush_reason", reason)
-        self._turn_events.terminal(self._timeline, reason)
+        self._ensure_turn_event_sink().terminal(self._timeline, reason)
         self._timeline.append_debug_jsonl(self._observability.timeline_debug_path)
         self._timeline_debug_flushed = True
         if clear:

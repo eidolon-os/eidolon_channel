@@ -7,6 +7,7 @@ so silent-output failures are visible without grepping three logs.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
@@ -44,6 +45,26 @@ class AgentOutputCoordinator:
             return False
         self._active_timeline = None
         return True
+
+    def link_interruption_candidate(self, timeline: TurnTimeline) -> str | None:
+        """Link a user candidate to the response it can actually interrupt.
+
+        Candidate and response timelines deliberately have different owners.
+        This relation lets diagnostics join them without inferring ownership
+        from transcript text, timestamps, or stale client playback samples.
+        """
+
+        response = self._active_timeline
+        if response is None or response is timeline:
+            return None
+        timeline.set_attr(
+            "interruption_target",
+            {
+                "response_turn_id": response.turn_id,
+                "linked_at": time.monotonic(),
+            },
+        )
+        return response.turn_id
 
     def record_brain_event(
         self,
@@ -94,8 +115,7 @@ class AgentOutputCoordinator:
                     if "brain_first_delta_at" not in timeline.timestamps
                     else "brain_error_after_delta",
                     "outcome": "brain_error",
-                    "silent_failure": "brain_first_delta_at"
-                    not in timeline.timestamps,
+                    "silent_failure": "brain_first_delta_at" not in timeline.timestamps,
                     "error_code": event.get("code", ""),
                     "error_message": event.get("message", ""),
                 }

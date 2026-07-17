@@ -37,7 +37,12 @@ class FullDuplexFrameworkCompletedTurnGate:
         self._completion = completion
         self._session_turns = session_turns
 
-    async def allows_completed_turn(self, *, new_message: Any) -> bool:
+    async def allows_completed_turn(
+        self,
+        *,
+        turn_ctx: Any,
+        new_message: Any,
+    ) -> bool:
         owner = self._pipeline
         completion = self._completion
         owner._ensure_runtime_defaults()
@@ -66,6 +71,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             )
         if task is None and result is None:
             return self._route_allowed_framework_completed_turn(
+                turn_ctx=turn_ctx,
                 completed_transcript=completed_transcript,
                 new_message=new_message,
                 timeline=timeline,
@@ -89,8 +95,8 @@ class FullDuplexFrameworkCompletedTurnGate:
                     transcript=completed_transcript,
                     timeline=timeline,
                     event="voiceprint_gate_error",
+                    flush_reason="voiceprint_commit_blocked",
                 )
-                owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
                 logger.exception("[StreamingPipeline] voiceprint gate failed in turn hook")
                 return False
             completion.remember_completed_voiceprint_result(result)
@@ -104,6 +110,7 @@ class FullDuplexFrameworkCompletedTurnGate:
         )
         if allowed:
             return self._route_allowed_framework_completed_turn(
+                turn_ctx=turn_ctx,
                 completed_transcript=completed_transcript,
                 new_message=new_message,
                 timeline=timeline,
@@ -112,14 +119,14 @@ class FullDuplexFrameworkCompletedTurnGate:
 
         if "context_error" in reason:
             self._session_turns.notify_context_error_once(reason)
+        owner._set_suppress_transcripts_until_next_speech(True, reason="voiceprint_commit_blocked")
         self._reject_framework_completed_candidate(
             voiceprint_blocked_reason(reason),
             transcript=completed_transcript,
             timeline=timeline,
             event="voiceprint_gate_rejected",
+            flush_reason="voiceprint_commit_blocked",
         )
-        owner._set_suppress_transcripts_until_next_speech(True, reason="voiceprint_commit_blocked")
-        owner._flush_turn_timeline(timeline, "voiceprint_commit_blocked")
         logger.info(
             "[StreamingPipeline] voiceprint gate stopped completed turn reason=%s transcript=%r",
             reason,
@@ -134,22 +141,24 @@ class FullDuplexFrameworkCompletedTurnGate:
         transcript: str,
         timeline: TurnTimeline | None,
         event: str,
+        flush_reason: str,
     ) -> None:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
-        owner._user_turns.reject_active(reason)
-        _record_contract_transition(
-            owner,
-            FullDuplexPhase.USER_TURN_REJECTED,
-            event=event,
+        decision = owner._user_turns.reject_active(reason)
+        self._finish_rejected_turn(
+            decision=decision,
             reason=reason,
             transcript=transcript,
             timeline=timeline,
+            event=event,
+            flush_reason=flush_reason,
         )
 
     def _route_allowed_framework_completed_turn(
         self,
         *,
+        turn_ctx: Any,
         completed_transcript: str,
         new_message: Any,
         timeline: TurnTimeline | None,
@@ -157,9 +166,7 @@ class FullDuplexFrameworkCompletedTurnGate:
     ) -> bool:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
-        readiness = owner._user_turns.framework_completion_readiness(
-            completed_transcript
-        )
+        readiness = owner._user_turns.framework_completion_readiness(completed_transcript)
         if not readiness.ready:
             if timeline is not None:
                 timeline.set_attr(
@@ -216,7 +223,8 @@ class FullDuplexFrameworkCompletedTurnGate:
         if interruption_allowed is False:
             return False
         return self._align_framework_completed_turn(
-            completed_transcript,
+            turn_ctx=turn_ctx,
+            completed_transcript=completed_transcript,
             new_message=new_message,
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
@@ -265,12 +273,15 @@ class FullDuplexFrameworkCompletedTurnGate:
         if verdict.continue_to_llm:
             return True
         owner._ensure_user_turn_coordinator()
-        owner._user_turns.reject_active(
-            f"interruption_verdict:{verdict.action.value}:{verdict.reason}"
-        )
-        owner._flush_turn_timeline(
-            timeline,
-            f"interruption_{verdict.action.value}",
+        reason = f"interruption_verdict:{verdict.action.value}:{verdict.reason}"
+        decision = owner._user_turns.reject_active(reason)
+        self._finish_rejected_turn(
+            decision=decision,
+            reason=reason,
+            transcript=verdict.transcript,
+            timeline=timeline,
+            event="interruption_verdict_rejected",
+            flush_reason=f"interruption_{verdict.action.value}",
         )
         return False
 
@@ -278,6 +289,7 @@ class FullDuplexFrameworkCompletedTurnGate:
         self,
         completed_transcript: str,
         *,
+        turn_ctx: Any,
         new_message: Any,
         timeline: TurnTimeline | None,
         voiceprint_reason: str,
@@ -315,15 +327,14 @@ class FullDuplexFrameworkCompletedTurnGate:
             )
             return False
         if decision.action == "reject":
-            _record_contract_transition(
-                owner,
-                FullDuplexPhase.USER_TURN_REJECTED,
-                event="framework_completed_rejected",
+            self._finish_rejected_turn(
+                decision=decision,
                 reason=decision.reason,
                 transcript=decision.transcript or completed_transcript,
                 timeline=timeline,
+                event="framework_completed_rejected",
+                flush_reason=decision.reason,
             )
-            owner._flush_turn_timeline(timeline, decision.reason)
             logger.info(
                 "[StreamingPipeline] rejected framework completed turn reason=%s transcript=%r",
                 decision.reason,
@@ -337,6 +348,10 @@ class FullDuplexFrameworkCompletedTurnGate:
             source="framework_completed_turn",
             timeline=timeline,
         )
+        self._session_turns.consume_interrupted_context(
+            turn_ctx,
+            timeline=timeline,
+        )
         _record_contract_transition(
             owner,
             FullDuplexPhase.USER_TURN_COMMITTED,
@@ -348,6 +363,31 @@ class FullDuplexFrameworkCompletedTurnGate:
         )
         owner._claim_agent_output_timeline(timeline)
         return True
+
+    def _finish_rejected_turn(
+        self,
+        *,
+        decision: Any,
+        reason: str,
+        transcript: str,
+        timeline: TurnTimeline | None,
+        event: str,
+        flush_reason: str,
+    ) -> None:
+        """Close every rejected product turn through one terminal boundary."""
+
+        owner = self._pipeline
+        if decision.action == "reject":
+            _record_contract_transition(
+                owner,
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event=event,
+                reason=reason,
+                side_effect="irreversible",
+                transcript=decision.transcript or transcript,
+                timeline=timeline,
+            )
+        owner._flush_turn_timeline(timeline, flush_reason)
 
     def _resolve_active_interruption_framework_completed_turn(
         self,
@@ -373,9 +413,7 @@ class FullDuplexFrameworkCompletedTurnGate:
                 transcript=completed_transcript,
                 vad_active=False,
             )
-            verdict_resolution = self._resolve_recorded_interruption_verdict(
-                timeline=timeline
-            )
+            verdict_resolution = self._resolve_recorded_interruption_verdict(timeline=timeline)
             if verdict_resolution is not None:
                 return verdict_resolution
             if interruption_owner.active:

@@ -3662,12 +3662,15 @@ def test_hil_barge_in_analyzer_passes_cancel_chain(tmp_path) -> None:
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
         (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room",'
+            '"timeline_flush_reason":"interrupted_by_user",'
+            '"interrupted_context":{"played_seconds":1.2}}}\n'
             '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
             '"attention_admission":{"action":"duck_and_decide",'
             '"reason":"playback_speech_start_soft_duck"},'
             '"interrupt_action":"cancel",'
             '"client_control_events":[{"op":"playback.stop"}],'
-            '"interrupted_context":{"played_seconds":1.2},'
             '"duck_events":[{"event":"duck_started","vad_to_duck_ms":45},'
             '{"event":"duck_cancelled"}]},'
             '"timestamps":{"speech_started_at":10.0,'
@@ -3680,12 +3683,14 @@ def test_hil_barge_in_analyzer_passes_cancel_chain(tmp_path) -> None:
     report = analyze_hil_barge_in(
         timeline_path,
         room_contains="box3",
+        latest=2,
         require_cancel=True,
     )
 
     assert report.passed is True
     assert report.evidence["speech_start_to_suspend_ms"] == pytest.approx(40.0)
     assert report.evidence["speech_start_to_cancel_ms"] == pytest.approx(320.0)
+    assert report.evidence["target_response_turn_ids"] == ["r1"]
     assert not report.findings
 
 
@@ -3693,7 +3698,9 @@ def test_hil_barge_in_analyzer_fails_observe_only_path(tmp_path) -> None:
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
         (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room"}}\n'
             '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
             '"attention_admission":{"action":"observe",'
             '"reason":"client_playback_active_without_direct_signal"}},'
             '"timestamps":{"speech_started_at":10.0}}\n'
@@ -3712,7 +3719,9 @@ def test_hil_barge_in_analyzer_passes_resume_chain(tmp_path) -> None:
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
         (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room"}}\n'
             '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
             '"attention_admission":{"action":"duck_and_decide",'
             '"reason":"playback_speech_start_soft_duck"},'
             '"rollback_reason":"backchannel",'
@@ -3733,6 +3742,42 @@ def test_hil_barge_in_analyzer_passes_resume_chain(tmp_path) -> None:
 
     assert report.passed is True
     assert report.evidence["speech_start_to_resume_ms"] == pytest.approx(580.0)
+
+
+def test_hil_barge_in_ignores_unscoped_stop_after_response_completion(tmp_path) -> None:
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room",'
+            '"timeline_flush_reason":"interrupted_by_user",'
+            '"interrupted_context":{"played_seconds":1.2}}}\n'
+            '{"turn_id":"cancel-in-playback","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
+            '"attention_admission":{"reason":"playback_speech_start_soft_duck"},'
+            '"interrupt_action":"cancel",'
+            '"client_control_events":[{"op":"playback.stop"}],'
+            '"duck_events":[{"event":"duck_started"}]},'
+            '"durations_ms":{"vad_start_to_interrupt_cancel_resolved":240}}\n'
+            '{"turn_id":"post-playback-stop","attrs":{"room_name":"real-box3-room",'
+            '"interrupt_action":"cancel",'
+            '"client_control_events":[{"op":"playback.stop"}],'
+            '"duck_events":[{"event":"duck_started"}]},'
+            '"durations_ms":{"vad_start_to_interrupt_cancel_resolved":550}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(
+        timeline_path,
+        room_contains="box3",
+        latest=2,
+        require_cancel=True,
+    )
+
+    assert report.passed is True
+    assert report.evidence["speech_start_to_cancel_ms"] == pytest.approx(240.0)
+    assert report.evidence["qualified_interrupt_count"] == 1
+    assert report.evidence["unscoped_cancel_count"] == 1
 
 
 def test_load_conversation_turn_taking_suite() -> None:

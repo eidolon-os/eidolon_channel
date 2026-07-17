@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from eidolon.livekit.agent.context import InterruptedContextManager
+from eidolon.livekit.agent.context.interrupted import InterruptedContextConsumption
 from eidolon.livekit.agent.observability import TurnTimeline
 
 
@@ -43,29 +44,43 @@ class FullDuplexContextLedger:
     def snapshot(self) -> None:
         """Capture interrupted assistant context and annotate the timeline."""
 
-        self._manager.snapshot(
+        captured = self._manager.snapshot(
             session=self._get_session(),
             factory=self._get_factory(),
             duck_mixer=self._get_duck_mixer(),
             config=self._get_config(),
             assistant_text=self._get_assistant_text(),
         )
-        context = self._manager.last_context
         timeline = self._get_timeline()
-        if timeline is not None and context is not None:
+        if timeline is not None and captured is not None:
             timeline.set_attr(
                 "interrupted_context",
                 {
-                    "source": context.get("source"),
-                    "played_seconds": context.get("played_seconds"),
-                    "text_preview": str(context.get("text") or "")[:120],
+                    "source": captured.get("source"),
+                    "played_seconds": captured.get("played_seconds"),
+                    "text_preview": str(captured.get("text") or "")[:120],
                 },
             )
 
-    def inject(self) -> None:
-        """Inject captured interrupted context before committing the next turn."""
+    def consume_for_turn(
+        self,
+        *,
+        turn_context: Any,
+        timeline: TurnTimeline | None,
+    ) -> InterruptedContextConsumption:
+        """Consume pending context at the accepted framework turn boundary."""
 
-        self._manager.inject(
-            session=self._get_session(),
+        result = self._manager.consume_into(
+            turn_context=turn_context,
             config=self._get_config(),
         )
+        if timeline is not None and result.outcome != "none":
+            timeline.set_attr(
+                "interrupted_context_consumption",
+                {
+                    "outcome": result.outcome,
+                    "source": result.source,
+                    "age_ms": result.age_ms,
+                },
+            )
+        return result

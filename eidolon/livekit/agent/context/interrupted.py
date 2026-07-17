@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
@@ -14,8 +15,17 @@ _CONTEXT_EXCERPT_MIN_PLAYED_SEC = 0.8
 _CONTEXT_EXCERPT_MAX_CHARS = 120
 
 
+@dataclass(frozen=True)
+class InterruptedContextConsumption:
+    """One-shot result of applying interrupted output to a new LLM turn."""
+
+    outcome: str
+    source: str = ""
+    age_ms: float | None = None
+
+
 class InterruptedContextManager:
-    """Capture interrupted assistant text and inject a one-turn system hint."""
+    """Capture interrupted assistant text and consume it for one LLM turn."""
 
     def __init__(self) -> None:
         self.last_context: dict[str, Any] | None = None
@@ -28,18 +38,12 @@ class InterruptedContextManager:
         duck_mixer: Any | None,
         config: Any,
         assistant_text: str = "",
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Capture the agent's response text at the point of interruption."""
         if not getattr(config, "interrupted_context_enabled", False):
-            return
-        if session is None:
-            return
+            return None
         try:
-            played_sec = (
-                duck_mixer.played_seconds
-                if duck_mixer is not None
-                else None
-            )
+            played_sec = duck_mixer.played_seconds if duck_mixer is not None else None
 
             in_flight_text = self._current_tts_text(factory)
             if in_flight_text and in_flight_text.strip():
@@ -55,7 +59,7 @@ class InterruptedContextManager:
                     in_flight_text[:80],
                     played_sec or 0.0,
                 )
-                return
+                return self.last_context
 
             recent_assistant_text = assistant_text.strip()
             if recent_assistant_text:
@@ -71,14 +75,20 @@ class InterruptedContextManager:
                     recent_assistant_text[:80],
                     played_sec or 0.0,
                 )
-                return
+                return self.last_context
 
             if not getattr(config, "interrupted_context_history_fallback_enabled", False):
                 logger.info(
                     "[InterruptedContextManager] skipped history fallback: "
                     "no current TTS in-flight text"
                 )
-                return
+                return None
+
+            if session is None:
+                logger.info(
+                    "[InterruptedContextManager] skipped history fallback: session unavailable"
+                )
+                return None
 
             messages = session.history.messages()
             for msg in reversed(messages):
@@ -95,59 +105,80 @@ class InterruptedContextManager:
                         msg.text_content[:80],
                         played_sec or 0.0,
                     )
-                    return
+                    return self.last_context
         except Exception:
             logger.warning(
                 "[InterruptedContextManager] failed to capture context",
                 exc_info=True,
             )
+        return None
 
-    def inject(
+    def consume_into(
         self,
         *,
-        session: Any | None,
+        turn_context: Any,
         config: Any,
-    ) -> None:
-        """Inject interrupted context into conversation history for the next turn."""
-        if self.last_context is None:
-            return
-        if session is None:
-            return
-        age = time.monotonic() - self.last_context["timestamp"]
+    ) -> InterruptedContextConsumption:
+        """Apply pending context to exactly one accepted LLM turn.
+
+        LiveKit passes a temporary ``ChatContext`` to
+        ``on_user_turn_completed``. Mutating that object affects only the
+        generation being admitted, which is the intended product contract: an
+        interrupted reply is background for the next accepted user turn, not a
+        permanent system message in conversation history.
+        """
+
+        context = self.last_context
+        if context is None:
+            return InterruptedContextConsumption(outcome="none")
+
+        # Claim before touching the framework object. A failed application must
+        # not leak stale context into a later, unrelated user turn.
+        self.last_context = None
+        source = str(context.get("source") or "")
+        age = time.monotonic() - context["timestamp"]
         if age > getattr(config, "interrupted_context_max_age_sec", 0.0):
             logger.info(
                 "[InterruptedContextManager] context expired (age=%.1fs)",
                 age,
             )
-            self.last_context = None
-            return
+            return InterruptedContextConsumption(
+                outcome="expired",
+                source=source,
+                age_ms=age * 1000.0,
+            )
 
-        interrupted_text = self.last_context["text"]
-        played_sec = self.last_context.get("played_seconds")
-        self.last_context = None
+        interrupted_text = context["text"]
+        played_sec = context.get("played_seconds")
 
         try:
-            from livekit.agents.llm import ChatMessage
-
             hint_text = self._build_hint_text(
                 interrupted_text=interrupted_text,
                 played_sec=played_sec,
             )
-            hint = ChatMessage(
+            turn_context.add_message(
                 role="system",
-                content=[hint_text],
+                content=hint_text,
             )
-            session.history.insert(hint)
             logger.info(
-                "[InterruptedContextManager] injected context hint "
-                "(%d chars, played=%s)",
+                "[InterruptedContextManager] consumed context hint (%d chars, played=%s)",
                 len(interrupted_text),
                 f"{played_sec:.1f}s" if played_sec is not None else "n/a",
             )
+            return InterruptedContextConsumption(
+                outcome="applied",
+                source=source,
+                age_ms=age * 1000.0,
+            )
         except Exception:
             logger.warning(
-                "[InterruptedContextManager] failed to inject context",
+                "[InterruptedContextManager] failed to consume context",
                 exc_info=True,
+            )
+            return InterruptedContextConsumption(
+                outcome="failed",
+                source=source,
+                age_ms=age * 1000.0,
             )
 
     @staticmethod

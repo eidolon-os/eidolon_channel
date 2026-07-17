@@ -49,6 +49,8 @@ def _owner() -> SimpleNamespace:
     owner._ducking = SimpleNamespace(is_suspended=True)
     owner._interruption_orchestrator = MagicMock()
     owner._record_full_duplex_transition = MagicMock()
+    owner._agent_output = MagicMock()
+    owner._ensure_agent_output_coordinator = MagicMock(return_value=owner._agent_output)
 
     def set_interrupt_cancel_suppression(
         active: bool, until: float | None = None, *, reason: str = ""
@@ -85,6 +87,7 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._timeline.attrs["room_name"] == "room-a"
     assert owner._timeline.attrs["participant_identity"] == "device-a"
     owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
+    owner._agent_output.link_interruption_candidate.assert_called_once_with(owner._timeline)
     owner._append_turn_timeline_snapshot.assert_not_called()
     owner._attach_transcript_ingress_recent_events.assert_called_once_with("speech_started")
     owner._voiceprint_turns.start_turn.assert_called_once_with(timeline=owner._timeline)

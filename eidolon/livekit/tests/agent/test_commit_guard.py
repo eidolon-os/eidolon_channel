@@ -8,15 +8,19 @@ that may admit or reject a turn before the LLM.
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from livekit.agents.llm import ChatMessage
+from livekit.agents.llm import ChatContext, ChatMessage
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
+from eidolon.livekit.agent.context import InterruptedContextManager
+from eidolon.livekit.agent.full_duplex.context_ledger import FullDuplexContextLedger
+from eidolon.livekit.agent.full_duplex.state_machine import FullDuplexPhase
 from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
 from eidolon.livekit.common.speaker_verification import SpeakerSignal
@@ -109,7 +113,7 @@ async def test_framework_completed_is_the_single_normal_commit_boundary() -> Non
 
     message = ChatMessage(role="user", content=["你好世界"])
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=message
+        turn_ctx=ChatContext.empty(), new_message=message
     )
 
     assert allowed is True
@@ -137,7 +141,7 @@ async def test_completion_covering_latest_interim_commits_complete_candidate() -
         content=["那你记下来吧，这是我们约定。"],
     )
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=message
+        turn_ctx=ChatContext.empty(), new_message=message
     )
 
     assert allowed is True
@@ -180,21 +184,19 @@ async def test_framework_gate_defers_stale_final_until_assembled_candidate_is_cl
 
     message = ChatMessage(role="user", content=["好啊。"])
     first_allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=message
+        turn_ctx=ChatContext.empty(), new_message=message
     )
 
     assert first_allowed is False
     assert pipeline._user_turns.snapshot()["state"] == "open"
 
-    pipeline._on_user_transcribed(
-        _transcript_event("那你记下来吧，这是我们约定。", is_final=True)
-    )
+    pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=True))
     final_message = ChatMessage(
         role="user",
         content=["那你记下来吧，这是我们约定。"],
     )
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=final_message
+        turn_ctx=ChatContext.empty(), new_message=final_message
     )
 
     canonical = "好啊。那你记下来吧，这是我们约定。"
@@ -228,14 +230,14 @@ async def test_stale_final_waits_for_later_interim_to_become_final(
 
     message = ChatMessage(role="user", content=[framework_final])
     first_allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=message
+        turn_ctx=ChatContext.empty(), new_message=message
     )
 
     assert first_allowed is False
     pipeline._on_user_transcribed(_transcript_event(later_interim, is_final=True))
     final_message = ChatMessage(role="user", content=[later_interim])
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=final_message
+        turn_ctx=ChatContext.empty(), new_message=final_message
     )
 
     assert allowed is True
@@ -258,7 +260,7 @@ async def test_correction_multi_final_starts_one_generation_with_complete_canoni
     stale = ChatMessage(role="user", content=["不是。"])
     assert (
         await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-            new_message=stale
+            turn_ctx=ChatContext.empty(), new_message=stale
         )
         is False
     )
@@ -267,7 +269,7 @@ async def test_correction_multi_final_starts_one_generation_with_complete_canoni
     completed = ChatMessage(role="user", content=["我刚才说错了。"])
     assert (
         await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-            new_message=completed
+            turn_ctx=ChatContext.empty(), new_message=completed
         )
         is True
     )
@@ -287,7 +289,7 @@ async def test_interim_only_candidate_replaces_empty_framework_message() -> None
 
     message = ChatMessage(role="user", content=[""])
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=message
+        turn_ctx=ChatContext.empty(), new_message=message
     )
 
     assert allowed is True
@@ -307,7 +309,7 @@ async def test_wrong_speaker_is_explicitly_rejected_without_clearing_next_audio(
     pipeline._completed_turn_voiceprint_timeline = timeline
 
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="视频里的声音")
+        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="视频里的声音")
     )
 
     assert allowed is False
@@ -332,7 +334,7 @@ async def test_framework_respects_observer_inconclusive_voiceprint_decision() ->
     pipeline._completed_turn_voiceprint_timeline = timeline
 
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="好的")
+        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="好的")
     )
 
     assert allowed is False
@@ -358,7 +360,7 @@ async def test_framework_terminal_boundary_is_text_agnostic(text: str) -> None:
 
     message = ChatMessage(role="user", content=[text])
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=message
+        turn_ctx=ChatContext.empty(), new_message=message
     )
 
     assert allowed is True
@@ -389,7 +391,7 @@ async def test_non_semantic_completed_turn_is_rejected_only_at_product_boundary(
     pipeline._user_turns.add_transcript("咳咳。", is_final=True)
 
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="咳咳。")
+        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="咳咳。")
     )
 
     assert allowed is False
@@ -407,12 +409,113 @@ async def test_duplicate_framework_completion_is_noop_without_audio_clear() -> N
     pipeline._user_turns.add_transcript("记住了。", is_final=True)
 
     first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="记住了。")
+        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="记住了。")
     )
     second = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        new_message=SimpleNamespace(text_content="记住了。")
+        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="记住了。")
     )
 
     assert first is True
     assert second is False
     pipeline._session.clear_user_turn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_terminal_closes_before_next_turn_consumes_context() -> None:
+    """Replay the Box-3 stop -> new question sequence across both owners."""
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    manager = InterruptedContextManager()
+    manager.last_context = {
+        "text": "上一轮被打断的回答",
+        "timestamp": time.monotonic(),
+        "played_seconds": 1.2,
+        "source": "tts_in_flight",
+    }
+    config = SimpleNamespace(interrupted_context_max_age_sec=60.0)
+    pipeline._context_ledger = FullDuplexContextLedger(
+        get_session=lambda: pipeline._session,
+        get_factory=lambda: pipeline._factory,
+        get_duck_mixer=lambda: None,
+        get_config=lambda: config,
+        get_timeline=lambda: pipeline._timeline,
+        manager=manager,
+    )
+
+    stop_timeline = TurnTimeline("box3-hard-stop")
+    pipeline._timeline = stop_timeline
+    pipeline._user_turns.start_speech(timeline=stop_timeline)
+    pipeline._user_turns.add_transcript("停，不要说了。", is_final=True)
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.USER_SPEECH_OPEN,
+        event="speech_started",
+        reason="new_speech_started",
+        timeline=stop_timeline,
+    )
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.PROVISIONAL_DUCK,
+        event="duck_started",
+        reason="vad_started",
+        timeline=stop_timeline,
+    )
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.ACCEPTED_INTERRUPTION,
+        event="turn_policy_cancel_accepted",
+        reason="intent:hard_stop",
+        timeline=stop_timeline,
+    )
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.USER_TURN_PENDING,
+        event="speech_stopped_waiting_framework",
+        reason="automatic_turn_lifecycle",
+        timeline=stop_timeline,
+    )
+    pipeline._interruption_orchestrator.start_candidate(timeline=stop_timeline)
+    pipeline._interruption_orchestrator.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            intent=InterruptIntent.HARD_STOP,
+            reason="intent:hard_stop",
+        ),
+        transcript="停，不要说了。",
+        vad_active=False,
+    )
+    pipeline._interruption_orchestrator.resolve(action="cancel", reason="eot_cancel")
+
+    rejected = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(),
+        new_message=ChatMessage(role="user", content=["停，不要说了。"]),
+    )
+
+    assert rejected is False
+    assert pipeline._user_turns.snapshot()["state"] == "rejected"
+    assert stop_timeline.attrs["full_duplex_state"]["phase"] == "user_turn_rejected"
+    assert stop_timeline.attrs["timeline_flush_reason"] == ("interruption_confirmed_cancel")
+    assert manager.last_context is not None
+
+    next_timeline = TurnTimeline("box3-next-question")
+    pipeline._timeline = next_timeline
+    pipeline._user_turns.start_speech(timeline=next_timeline)
+    pipeline._user_turns.add_transcript("你还能听到我吗。", is_final=True)
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.USER_SPEECH_OPEN,
+        event="speech_started",
+        reason="new_speech_started",
+        timeline=next_timeline,
+    )
+    next_context = ChatContext.empty()
+
+    accepted = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=next_context,
+        new_message=ChatMessage(role="user", content=["你还能听到我吗。"]),
+    )
+
+    assert accepted is True
+    assert pipeline._user_turns.snapshot()["state"] == "committed"
+    assert next_timeline.attrs["full_duplex_state"]["phase"] == "user_turn_committed"
+    assert next_timeline.attrs["interrupted_context_consumption"]["outcome"] == ("applied")
+    assert len(next_context.messages()) == 1
+    assert next_context.messages()[0].role == "system"
+    assert manager.last_context is None
+    assert pipeline._full_duplex_state.unexpected_transition_count == 0

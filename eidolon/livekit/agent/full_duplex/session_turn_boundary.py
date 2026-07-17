@@ -52,6 +52,19 @@ class FullDuplexSessionTurnBoundary:
                 exc_info=True,
             )
 
+    def consume_interrupted_context(
+        self,
+        turn_ctx: Any,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> None:
+        """Apply one-shot interrupted output context to this generation only."""
+
+        self._pipeline._ensure_context_ledger().consume_for_turn(
+            turn_context=turn_ctx,
+            timeline=timeline,
+        )
+
     def notify_context_error_once(self, reason: str) -> None:
         pipeline = self._pipeline
         if getattr(pipeline, "_context_error_notified", False):

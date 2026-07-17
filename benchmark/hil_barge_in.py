@@ -85,6 +85,8 @@ def analyze_hil_barge_in(
             findings.append("missing playback.stop client control")
         if not evidence["interrupted_context"]:
             findings.append("missing interrupted_context for cancelled reply")
+        if not evidence["interrupted_response_closed"]:
+            findings.append("cancelled reply did not close as interrupted_by_user")
 
     if require_resume or evidence["resumed"]:
         if not evidence["resumed"]:
@@ -102,9 +104,7 @@ def analyze_hil_barge_in(
                 )
 
     if evidence["observe_without_duck"]:
-        findings.append(
-            "saw observe-only playback speech; this reproduces the old blocked path"
-        )
+        findings.append("saw observe-only playback speech; this reproduces the old blocked path")
 
     return HilBargeInReport(
         passed=not findings,
@@ -122,55 +122,73 @@ def _filter_records(
     latest: int,
 ) -> list[dict[str, Any]]:
     if room_contains:
-        records = [
+        records = [record for record in records if room_contains in _room_name(record)]
+    if latest > 0:
+        selected = records[-latest:]
+        target_ids = {
+            target
+            for record in selected
+            if (target := _target_response_turn_id(record))
+        }
+        referenced_responses = [
             record
             for record in records
-            if room_contains in _room_name(record)
+            if _turn_id(record) in target_ids and record not in selected
         ]
-    if latest > 0:
-        records = records[-latest:]
+        records = [*referenced_responses, *selected]
     return records
 
 
 def _collect_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
-    soft_duck_admitted = False
-    observe_without_duck = False
-    duck_started = False
-    cancelled = False
-    resumed = False
-    playback_stop_sent = False
-    interrupted_context = False
+    records_by_turn: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        turn_id = _turn_id(record)
+        if turn_id:
+            records_by_turn.setdefault(turn_id, []).append(record)
+
+    cancel_records = [record for record in records if _is_cancel(record)]
+    resume_records = [record for record in records if _is_resume(record)]
+    linked_cancel_records = [
+        record for record in cancel_records if _target_response_turn_id(record)
+    ]
+    linked_resume_records = [
+        record for record in resume_records if _target_response_turn_id(record)
+    ]
+    scoped_records = [record for record in records if _target_response_turn_id(record)]
+
+    soft_duck_admitted = bool(scoped_records) and all(
+        _has_soft_duck_admission(record) for record in scoped_records
+    )
+    observe_without_duck = any(_has_observe_without_duck(record) for record in scoped_records)
+    duck_started = bool(scoped_records) and all(
+        _has_duck_started(record) for record in scoped_records
+    )
+    cancelled = bool(linked_cancel_records)
+    resumed = bool(linked_resume_records)
+    playback_stop_sent = bool(linked_cancel_records) and all(
+        _client_control_sent(_mapping(record.get("attrs")), "playback.stop")
+        for record in linked_cancel_records
+    )
+    interrupted_context = bool(linked_cancel_records) and all(
+        _target_response_has_attr(record, records_by_turn, "interrupted_context")
+        for record in linked_cancel_records
+    )
+    interrupted_response_closed = bool(linked_cancel_records) and all(
+        _target_response_closed(record, records_by_turn) for record in linked_cancel_records
+    )
     suspend_samples: list[float] = []
     cancel_samples: list[float] = []
     resume_samples: list[float] = []
 
-    for record in records:
-        attrs = _mapping(record.get("attrs"))
-        for admission in _attention_admissions(attrs):
-            if admission.get("reason") == "playback_speech_start_soft_duck":
-                soft_duck_admitted = True
-            if admission.get("reason") == "client_playback_active_without_direct_signal":
-                observe_without_duck = True
-
-        if _has_duck_started(record):
-            duck_started = True
-        if _is_cancel(record):
-            cancelled = True
-        if _is_resume(record):
-            resumed = True
-        if _client_control_sent(attrs, "playback.stop"):
-            playback_stop_sent = True
-        if _mapping(attrs.get("interrupted_context")):
-            interrupted_context = True
-
+    for record in scoped_records:
         suspend_ms = _speech_start_to_suspend_ms(record)
         if suspend_ms is not None:
             suspend_samples.append(suspend_ms)
-        if _is_cancel(record):
+        if record in linked_cancel_records:
             cancel_ms = _speech_start_to_resolved_ms(record, action="cancel")
             if cancel_ms is not None:
                 cancel_samples.append(cancel_ms)
-        if _is_resume(record):
+        if record in linked_resume_records:
             resume_ms = _speech_start_to_resolved_ms(record, action="rollback")
             if resume_ms is not None:
                 resume_samples.append(resume_ms)
@@ -183,10 +201,65 @@ def _collect_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
         "resumed": resumed,
         "playback_stop_sent": playback_stop_sent,
         "interrupted_context": interrupted_context,
+        "interrupted_response_closed": interrupted_response_closed,
+        "qualified_interrupt_count": len(scoped_records),
+        "unscoped_cancel_count": len(cancel_records) - len(linked_cancel_records),
+        "unscoped_resume_count": len(resume_records) - len(linked_resume_records),
+        "target_response_turn_ids": sorted(
+            {turn_id for record in scoped_records if (turn_id := _target_response_turn_id(record))}
+        ),
         "speech_start_to_suspend_ms": max(suspend_samples) if suspend_samples else None,
         "speech_start_to_cancel_ms": max(cancel_samples) if cancel_samples else None,
         "speech_start_to_resume_ms": max(resume_samples) if resume_samples else None,
     }
+
+
+def _has_soft_duck_admission(record: dict[str, Any]) -> bool:
+    return any(
+        admission.get("reason") == "playback_speech_start_soft_duck"
+        for admission in _attention_admissions(_mapping(record.get("attrs")))
+    )
+
+
+def _has_observe_without_duck(record: dict[str, Any]) -> bool:
+    return any(
+        admission.get("reason") == "client_playback_active_without_direct_signal"
+        for admission in _attention_admissions(_mapping(record.get("attrs")))
+    )
+
+
+def _target_response_has_attr(
+    record: dict[str, Any],
+    records_by_turn: dict[str, list[dict[str, Any]]],
+    attr: str,
+) -> bool:
+    target = _target_response_turn_id(record)
+    return bool(target) and any(
+        _mapping(_mapping(response.get("attrs")).get(attr))
+        for response in records_by_turn.get(target, ())
+    )
+
+
+def _target_response_closed(
+    record: dict[str, Any],
+    records_by_turn: dict[str, list[dict[str, Any]]],
+) -> bool:
+    target = _target_response_turn_id(record)
+    return bool(target) and any(
+        _mapping(response.get("attrs")).get("timeline_flush_reason") == "interrupted_by_user"
+        for response in records_by_turn.get(target, ())
+    )
+
+
+def _target_response_turn_id(record: dict[str, Any]) -> str:
+    target = _mapping(_mapping(record.get("attrs")).get("interruption_target"))
+    value = target.get("response_turn_id")
+    return value if isinstance(value, str) else ""
+
+
+def _turn_id(record: dict[str, Any]) -> str:
+    value = record.get("turn_id")
+    return value if isinstance(value, str) else ""
 
 
 def _attention_admissions(attrs: dict[str, Any]) -> list[dict[str, Any]]:

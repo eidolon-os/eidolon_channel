@@ -65,6 +65,7 @@ class FullDuplexSpeechLifecycle:
             )
 
         owner._user_turns.start_speech(timeline=owner._timeline)
+        owner._ensure_agent_output_coordinator().link_interruption_candidate(owner._timeline)
         if replaced_unmerged_timeline is not None:
             if superseding_pending_candidate:
                 _record_contract_transition(

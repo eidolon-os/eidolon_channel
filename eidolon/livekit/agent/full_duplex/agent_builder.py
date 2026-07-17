@@ -64,11 +64,9 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             turn_ctx: Any,
             new_message: Any,
         ) -> None:
-            del turn_ctx
-            allowed = (
-                await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-                    new_message=new_message
-                )
+            allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+                turn_ctx=turn_ctx,
+                new_message=new_message,
             )
             if not allowed:
                 raise StopResponse()

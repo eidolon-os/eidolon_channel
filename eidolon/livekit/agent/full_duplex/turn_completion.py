@@ -82,8 +82,16 @@ class FullDuplexTurnCompletion:
     def cancel_completed_voiceprint_turn(self) -> None:
         self._voiceprint_state.cancel_completed_turn()
 
-    async def voiceprint_allows_completed_turn(self, *, new_message: Any) -> bool:
-        return await self._framework_completed_turn.allows_completed_turn(new_message=new_message)
+    async def voiceprint_allows_completed_turn(
+        self,
+        *,
+        turn_ctx: Any,
+        new_message: Any,
+    ) -> bool:
+        return await self._framework_completed_turn.allows_completed_turn(
+            turn_ctx=turn_ctx,
+            new_message=new_message,
+        )
 
     def _record_voiceprint_commit_gate(
         self,

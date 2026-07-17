@@ -196,11 +196,11 @@ eidolon/livekit/agent/
 
 `full_duplex/voiceprint_commit_state.py` 是 full-duplex voiceprint task/result/timeline 的 runtime state adapter。它只管理 candidate tasks 和 completed-turn task/result；不再存在 pending direct-commit task 集合。
 
-`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
+`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。这个边界原子收口同一个产品结果的三种投影：`UserTurnCoordinator` 的 `committed/rejected`、`FullDuplexStateMachine` 的 terminal transition，以及 timeline terminal flush；任何 reject 都不能只关闭其中一层。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
 
 `full_duplex/playback_turn_evidence.py` 是 active interruption candidate 在 framework-final evidence 到达时使用的纯决策 contract。它只消费 typed `turn_policy.Decision`，输出 `should_apply / continue_to_llm / reason`；不读取 timeline dict、LiveKit、Room、AgentSession 或 pipeline 私有状态。任何已经由 policy 确认的 `NORMAL_INTERRUPT/CANCEL` 都成为用户 turn，不依赖 topic/correction 关键词；hard-stop 与 rollback 只终结 interruption，不进入 LLM。
 
-`full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/injection 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context snapshot/inject 细节。
+`full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/consume 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context ledger 细节。ledger 只标注本次 output cancel 新捕获的上下文，不会用旧 pending context 重标后续候选；上下文跨 rejected control turn 保留，只在 framework gate 接受下一条真实用户 turn 时 claim 一次并写入 LiveKit 为该次生成提供的临时 `turn_ctx`。它不写持久 `session.history`，因此只帮助当前续答，不会污染长期对话历史，也不会被 hard-stop、wrong-speaker、noise 或重复 completion 消费。
 
 `full_duplex/lifecycle.py` 是 full-duplex AgentSession 生命周期 owner。它负责 `AgentSession` 创建、event handler 绑定、stage warmup、RoomData/Voiceprint bridge 安装、`session.start()`、framework auto-interrupt patch、duck mixer/filler 输出准备、EOT session start、idle watchdog/proactive consumer 启停、session close prompt room teardown，以及 shutdown 顺序。`StreamingPipeline` 保留 `run()` / `shutdown()` 公共入口，但不再承载这些生命周期私有步骤。
 
@@ -234,7 +234,7 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
    - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
    - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
 
-#### 2.1.2 Full-duplex contract 收敛状态（2026-07-16）
+#### 2.1.2 Full-duplex contract 收敛状态（2026-07-17）
 
 本轮已完成产品输入终态 owner 切换：
 
@@ -247,14 +247,19 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 - `InterruptionOrchestrator.resolve()` 生成并按 turn-id 保存 `confirmed_cancel / rejected_resume / expired_resume / rejected_candidate` typed verdict；framework terminal gate 只消费 verdict，已删除 playback artifact 字符启发式、timeline dict fallback 和对应旧 latency 字段。
 - 已删除 coordinator 中“我再说/重新说”等短语表与 meta-tail drop。参数化回归用中文单字、英文短词和 meta language 证明 terminal boundary 对文本内容无感。
 - 从真机十三轮轨迹提取的精确事件序列已固定为回归：`好啊。 -> 那你记下来吧，这是我们约定`、`好的。 -> 那太好`、`OK呀。 -> 到时候我还可以带几个朋友`，以及 interim-only 和重复 framework completion。
-- 当前 agent 回归 `779 passed`，benchmark 回归 `137 passed`；Ruff 与 diff check 通过。
+- candidate timeline 在 speech open 时显式记录 `interruption_target.response_turn_id`；candidate 侧的 duck/cancel/ACK 与 response 侧的 interrupted context/terminal outcome 通过该关系 join，不再按时间邻近猜测。播放已经结束后的无 target hard-stop 只算 unscoped control turn，不能污染响应打断延迟。
+- 当前完整 agent 回归 `808 passed`，完整 benchmark 回归 `138 passed`；本次 context/turn/HIL 涉及的组合回归 `169 passed`；Ruff 与 diff check 通过。
 
-当前结论不是“体验 gate 只差真机验证”，而是“轮次完成 owner 已纯化，Box-3 自动化仍准确暴露独立的 interruption-confidence 红项”。`box3-terminal-purity-20260716-r8` 实房间为 `1/2`，功能 outcome `2/2`，两例均 `real_call_verified=true`：
+2026-07-17 Box-3 dogfood 已验证正常欢迎、普通提问、播放中 hard-stop、打断后继续提问和 session 正常结束。首个“停，不要说了”在播放中触发 cancel（约 `244.9ms`）与设备 `playback.stop`（约 `242.1ms`），没有进入 Brain；随后“你还能听到我吗”正常 commit 并回复。最后一个“不要说了”发生在播放接近完成后，没有 response target，也没有进入 Brain；设备最终 `idle_normal_end` 并回到待命态。
+
+该轨迹同时暴露并由架构约束修复了两个问题：framework gate 虽拒绝 hard-stop，但此前没有同步投影 FSM `user_turn_rejected`，会让下一轮从残留 `user_turn_pending` 开始；interrupted context 此前只有 capture 没有消费入口，而且旧 pending context 会被后续无输出控制轮重复标注。现在 reject terminal 在同一边界完成三层收口，context 在下一条 accepted turn 的临时 `turn_ctx` 中 exactly-once 消费。
+
+此前 `box3-terminal-purity-20260716-r8` 的实房间结果仍作为 interruption-confidence 基线，两例均 `real_call_verified=true`：
 
 - backchannel 无 transcript 候选在 `800.7ms` rollback，功能与 `<=900ms` 体验门禁通过；
 - 主人完整追问通过 `interruption_verdict:continue` 正确进入 LLM，没有被短文本/播放 artifact gate 拒绝；可行动转写约 `539.0ms`，但仍到 final 才在 `1954.3ms` cancel，用户音频结束到新 agent 音频为 `2637ms`。
 
-因此现在不开始 Box-3 硬件 dogfood。不重新引入“只要看到实质 CJK interim 就 cancel”的已证伪快速通道；下一步是将 EOT（用户是否说完）与 interruption confidence（当前声音是否真在抢话）作为两条独立证据轴。Eidolon 继续拥有 terminal policy，LiveKit 或学习型打断模型只能作为结构化 evidence，不接管轮次 owner。
+因此不重新引入“只要看到实质 CJK interim 就 cancel”的已证伪快速通道；EOT（用户是否说完）与 interruption confidence（当前声音是否真在抢话）继续作为两条独立证据轴。Eidolon 继续拥有 terminal policy，LiveKit 或学习型打断模型只能作为结构化 evidence，不接管轮次 owner。下一次真机验证应在加载本次 Channel 改动的 worker 上复查上述完整序列，而不是只复测某个短语。
 
 #### 2.1.3 自动化链路与真机 dogfood 的一致性
 

@@ -259,7 +259,9 @@ Eidolon Channel 当前有两条一等体验路径，代码上必须分开表达�
 - backchannel 无 transcript 候选在 `800.7ms` rollback，功能与 `<=900ms` 体验门禁通过；
 - 主人完整追问通过 `interruption_verdict:continue` 正确进入 LLM，没有被短文本/播放 artifact gate 拒绝；可行动转写约 `539.0ms`，但仍到 final 才在 `1954.3ms` cancel，用户音频结束到新 agent 音频为 `2637ms`。
 
-因此不重新引入“只要看到实质 CJK interim 就 cancel”的已证伪快速通道；EOT（用户是否说完）与 interruption confidence（当前声音是否真在抢话）继续作为两条独立证据轴。Eidolon 继续拥有 terminal policy，LiveKit 或学习型打断模型只能作为结构化 evidence，不接管轮次 owner。下一次真机验证应在加载本次 Channel 改动的 worker 上复查上述完整序列，而不是只复测某个短语。
+加载本次实现的新 worker 已于 2026-07-17 完成第二轮 Box-3 复核。两次播放中 hard-stop 均显式关联目标 response，candidate 最终同时落为 coordinator `rejected`、FSM `user_turn_rejected` 和 `channel.turn.rejected`，`unexpected_transition_count=0`，且没有 Brain turn。后续 accepted turn 分别在约 `6.0s`、`7.7s` 后 exactly-once 消费 interrupted context；“你继续说”正确续接被打断的“没吃饭”回复，持久消息表没有 system hint。session 最终 `idle_normal_end`。
+
+本里程碑按功能与架构正确性收口。两次 hard-stop 的 speech-start -> confirmed-cancel 为 `495.9ms`、`573.8ms`；soft duck 约 `0.37ms`。第二个样本超过 HIL 单样本严格门禁 `500ms`，但低于 live-room P95 acceptable `800ms`。该结果作为后续性能采样项保留，不重新打开 terminal ownership，也不引入短语 fast-path。EOT（用户是否说完）与 interruption confidence（当前声音是否真在抢话）继续作为两条独立证据轴；Eidolon 继续拥有 terminal policy，LiveKit 或学习型打断模型只能作为结构化 evidence，不接管轮次 owner。
 
 #### 2.1.3 自动化链路与真机 dogfood 的一致性
 

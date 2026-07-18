@@ -62,6 +62,8 @@ from eidolon_sdk.biz.contracts import (
     SESSION_INTENT_USER_INITIATED,
 )
 from eidolon.livekit.common.config import (
+    AvatarConfig,
+    CoreConfig,
     ObservabilityConfig,
     TurnPolicyConfig,
     VoiceprintConfig,
@@ -163,6 +165,9 @@ class StreamingPipeline(BasePipeline):
         on_session_closed: Callable[[], Awaitable[None]] | None = None,
         interaction_mode: str = INTERACTION_MODE_FULL_DUPLEX,
         session_intent: str = SESSION_INTENT_USER_INITIATED,
+        avatar_enabled: bool = False,
+        avatar_config: AvatarConfig | None = None,
+        core_config: CoreConfig | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         if interaction_mode != INTERACTION_MODE_FULL_DUPLEX:
@@ -175,6 +180,14 @@ class StreamingPipeline(BasePipeline):
         # drives only idle window + teardown reason in the full-duplex pipeline.
         self._session_intent = session_intent
         self._is_proactive = session_intent == SESSION_INTENT_PROACTIVE
+        # Digital-human video avatar (per-session, resolved at connect time). When
+        # enabled, TTS audio is routed to an avatar worker via DataStreamAudioOutput
+        # instead of the room; the barge-in machine is reused unchanged. Default off
+        # → audio path is byte-for-byte the current behaviour.
+        self._avatar_enabled = avatar_enabled
+        self._avatar_config = avatar_config or AvatarConfig()
+        self._core_config = core_config or CoreConfig()
+        self._avatar_worker: Any | None = None
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
@@ -1197,6 +1210,7 @@ class StreamingPipeline(BasePipeline):
             turn_policy=self._turn_policy,
             allow_interruptions=self._allow_interruptions,
             false_interruption_timeout=self._false_interruption_timeout,
+            avatar_mode=self._avatar_enabled,
         )
 
     def _uses_livekit_native_adaptive_interruption(self) -> bool:

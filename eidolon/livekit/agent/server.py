@@ -206,17 +206,18 @@ def _prewarm(proc) -> None:
         logger.warning("[Agent] prewarm: voiceprint load failed: %s", e)
 
 
-async def _resolve_session_metadata(ctx) -> tuple[str, str]:
-    """Resolve ``(interaction_mode, session_intent)`` from the joined participant.
+async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
+    """Resolve ``(interaction_mode, session_intent, avatar_requested)`` from the participant.
 
-    Single resolution point for the session-metadata bus (plan §3.2): hub stamps
-    both into the LiveKit token's ``participant_metadata``;
+    Single resolution point for the session-metadata bus (plan §3.2): hub / web
+    client stamps these into the LiveKit token's ``participant_metadata``;
     ``wait_for_participant`` returns once the device/web client is present, so we
     read the authoritative values — from ONE metadata read — before building the
-    pipeline (both are AgentSession-construction inputs). Any failure degrades to
-    the safe defaults (``half_duplex`` / ``user_initiated``).
+    pipeline (all are AgentSession-construction inputs). Any failure degrades to
+    the safe defaults (``half_duplex`` / ``user_initiated`` / avatar off).
     """
     from eidolon.livekit.agent.runtime import (
+        resolve_avatar_requested,
         resolve_interaction_mode,
         resolve_session_intent,
     )
@@ -229,11 +230,12 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str]:
             INTERACTION_MODE_HALF_DUPLEX,
             SESSION_INTENT_USER_INITIATED,
         )
-        return INTERACTION_MODE_HALF_DUPLEX, SESSION_INTENT_USER_INITIATED
+        return INTERACTION_MODE_HALF_DUPLEX, SESSION_INTENT_USER_INITIATED, False
     metadata = getattr(participant, "metadata", None)
     return (
         resolve_interaction_mode(metadata),
         resolve_session_intent(metadata),
+        resolve_avatar_requested(metadata),
     )
 
 
@@ -361,19 +363,24 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     # turn policy. The old process-wide "batch/streaming" pipeline mode was
     # retired; the Channel worker now always chooses half/full duplex at the
     # session boundary.
-    interaction_mode, session_intent = await _resolve_session_metadata(ctx)
+    interaction_mode, session_intent, avatar_requested = await _resolve_session_metadata(ctx)
     session_turn_policy, allow_interruptions = apply_interaction_mode(
         turn_policy=cfg.turn_policy,
         allow_interruptions=True,
         interaction_mode=interaction_mode,
     )
+    # Video avatar is enabled for this session only if globally available AND the
+    # client declared it (full-duplex path for M1). Default off → audio-only.
+    avatar_enabled = bool(cfg.avatar.enabled and avatar_requested)
     logger.info(
         "[Agent] interaction_mode=%s session_intent=%s allow_interruptions=%s "
-        "attention_enabled=%s",
+        "attention_enabled=%s avatar_requested=%s avatar_enabled=%s",
         interaction_mode,
         session_intent,
         allow_interruptions,
         session_turn_policy.attention.enabled,
+        avatar_requested,
+        avatar_enabled,
     )
     if _use_half_duplex_ptt_pipeline(interaction_mode):
         pipeline = HalfDuplexPttPipeline(
@@ -412,6 +419,10 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             session_intent=session_intent,
             observability=cfg.observability,
             voiceprint_config=cfg.voiceprint,
+            # Video avatar (per-session; audio routed to the avatar worker when on).
+            avatar_enabled=avatar_enabled,
+            avatar_config=cfg.avatar,
+            core_config=cfg.core,
             # Idle watchdog disconnect: delete the room so the still-connected
             # client is actively kicked (ROOM_DELETED) and the job's
             # shutdown_fut resolves — session.aclose() alone leaves the client

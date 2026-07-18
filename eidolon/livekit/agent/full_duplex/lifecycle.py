@@ -70,13 +70,25 @@ class FullDuplexSessionLifecycle:
         logger.info("[StreamingPipeline] calling session.start()...")
         pipeline._ensure_room_data_bridge().install(room)
         pipeline._voiceprint_turns.install(room)
+
+        # Digital-human video avatar (per-session). When enabled, start the avatar
+        # worker and route TTS audio to it via DataStreamAudioOutput instead of the
+        # room; the framework then leaves our pre-set output.audio in place
+        # (agent_session sets room audio_output=False when output.audio is set) and
+        # the barge-in duck mixer wraps the DataStream sink unchanged. On failure we
+        # fall back to audio-only so a flaky avatar service never drops the call.
+        room_audio_output: AudioOutputOptions | bool = AudioOutputOptions(
+            sample_rate=pipeline._audio_sample_rate,
+        )
+        if pipeline._avatar_enabled:
+            if await self._start_avatar_worker(room, session):
+                room_audio_output = False
+
         await session.start(
             agent=agent,
             room=room,
             room_options=RoomOptions(
-                audio_output=AudioOutputOptions(
-                    sample_rate=pipeline._audio_sample_rate,
-                ),
+                audio_output=room_audio_output,
                 participant_identity=participant_identity,
             ),
         )
@@ -113,6 +125,51 @@ class FullDuplexSessionLifecycle:
             raise
         finally:
             await self.shutdown()
+
+    async def _start_avatar_worker(self, room: Room, session: Any) -> bool:
+        """Start the avatar worker and route session audio to it.
+
+        Returns True if the worker joined and ``session.output.audio`` was set to
+        a DataStreamAudioOutput; False (fall back to audio-only) on failure.
+        """
+        from livekit.agents.voice.avatar import DataStreamAudioOutput
+
+        from eidolon.livekit.avatar import AvatarWorker
+
+        pipeline = self._pipeline
+        cfg = pipeline._avatar_config
+        core = pipeline._core_config
+        agent_identity = room.local_participant.identity
+        worker = AvatarWorker(
+            cfg,
+            livekit_url=core.livekit_url,
+            api_key=core.api_key,
+            api_secret=core.api_secret,
+            room_name=room.name,
+            agent_identity=agent_identity,
+        )
+        try:
+            avatar_identity = await worker.start()
+        except Exception:
+            logger.exception("[StreamingPipeline] avatar worker start failed")
+            await worker.aclose()
+            if not cfg.fallback_to_audio_on_failure:
+                raise
+            logger.warning("[StreamingPipeline] avatar unavailable; audio-only fallback")
+            return False
+
+        session.output.audio = DataStreamAudioOutput(
+            room,
+            destination_identity=avatar_identity,
+            wait_playback_start=True,
+            sample_rate=pipeline._audio_sample_rate,
+        )
+        pipeline._avatar_worker = worker
+        logger.info(
+            "[StreamingPipeline] avatar routing enabled → %s (audio to worker)",
+            avatar_identity,
+        )
+        return True
 
     def _on_session_close(self, event: Any) -> None:
         """Wake run() so shutdown fires immediately on session close.
@@ -258,6 +315,13 @@ class FullDuplexSessionLifecycle:
             pipeline._provider_events.cancel_output_watchdog()
         pipeline._ducking.cancel_timeout()
         pipeline._stop_idle_watchdog()
+        avatar_worker = getattr(pipeline, "_avatar_worker", None)
+        if avatar_worker is not None:
+            try:
+                await avatar_worker.aclose()
+            except Exception:
+                logger.exception("[StreamingPipeline] error closing avatar worker")
+            pipeline._avatar_worker = None
         if hasattr(pipeline, "_voiceprint_turns"):
             await pipeline._voiceprint_turns.aclose()
         if pipeline._session is not None:

@@ -96,6 +96,7 @@ def test_livekit_native_profile_sets_adaptive_turn_handling() -> None:
     pipeline._turn_policy = _policy("livekit_native_adaptive")
     pipeline._allow_interruptions = True
     pipeline._false_interruption_timeout = 6.0
+    pipeline._avatar_enabled = False
 
     interruption = pipeline._build_turn_handling()["interruption"]
 
@@ -110,6 +111,7 @@ def test_native_profile_not_enabled_when_interruptions_disabled() -> None:
     pipeline._turn_policy = _policy("livekit_native_adaptive")
     pipeline._allow_interruptions = False
     pipeline._false_interruption_timeout = 6.0
+    pipeline._avatar_enabled = False
 
     interruption = pipeline._build_turn_handling()["interruption"]
 

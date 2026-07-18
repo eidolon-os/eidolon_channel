@@ -15,6 +15,7 @@ def _pipe(*, allow_interruptions: bool) -> StreamingPipeline:
     p._allow_interruptions = allow_interruptions
     p._false_interruption_timeout = 6.0
     p._turn_policy = TurnPolicyConfig()
+    p._avatar_enabled = False
     return p
 
 

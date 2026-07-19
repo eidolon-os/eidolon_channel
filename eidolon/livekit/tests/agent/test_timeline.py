@@ -746,6 +746,42 @@ def test_nonrecoverable_tts_error_closes_response_not_new_speech_candidate(tmp_p
     assert pipeline._timeline is candidate
 
 
+def test_nonrecoverable_llm_error_without_delta_announces_before_closing(tmp_path) -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    debug_path = tmp_path / "timeline.jsonl"
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._state = PipelineState.GENERATING
+    pipeline._callbacks = MagicMock()
+    pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
+    pipeline._session = SimpleNamespace(user_state="listening", say=MagicMock())
+    pipeline._mark_activity = MagicMock()
+    response = TurnTimeline("turn-silent-llm-error")
+    response.mark("turn_committed_at")
+    pipeline._timeline = response
+    pipeline._claim_agent_output_timeline(response)
+
+    pipeline._on_session_error(
+        SimpleNamespace(
+            type="llm_error",
+            label="eidolon_agent",
+            error=RuntimeError("first delta timed out"),
+            recoverable=False,
+        )
+    )
+
+    pipeline._session.say.assert_called_once_with(
+        "刚才卡了一下，请再说一遍好吗？",
+        allow_interruptions=True,
+        add_to_chat_ctx=False,
+    )
+    rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
+    assert [row["turn_id"] for row in rows] == ["turn-silent-llm-error"]
+    assert rows[0]["attrs"]["timeline_flush_reason"] == "nonrecoverable_llm_error"
+    assert rows[0]["attrs"]["silent_failure_fallback"]["spoken"] is True
+    assert pipeline._active_agent_output_timeline() is None
+
+
 def test_streaming_pipeline_snapshot_does_not_clear_timeline(tmp_path) -> None:
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 

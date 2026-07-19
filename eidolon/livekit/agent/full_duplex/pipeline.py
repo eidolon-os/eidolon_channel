@@ -1452,6 +1452,10 @@ class StreamingPipeline(BasePipeline):
             reason=f"livekit_{error_type}",
         )
         if not recoverable:
+            self._ensure_turn_completion().notify_silent_output_failure_once(
+                timeline=timeline,
+                error_type=error_type,
+            )
             self._finish_agent_output(f"nonrecoverable_{error_type}")
 
     def _on_user_state_changed(self, event: Any) -> None:

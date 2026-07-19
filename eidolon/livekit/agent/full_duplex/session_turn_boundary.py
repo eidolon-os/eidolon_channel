@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("agent")
 
+_SILENT_OUTPUT_FALLBACK_TEXT = "刚才卡了一下，请再说一遍好吗？"
+
 
 class FullDuplexSessionTurnBoundary:
     """Apply user-turn side effects at the AgentSession / LLM boundary."""
@@ -95,3 +97,77 @@ class FullDuplexSessionTurnBoundary:
                 "[StreamingPipeline] mark_activity after context-error say failed",
                 exc_info=True,
             )
+
+    def notify_silent_output_failure_once(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+        error_type: str,
+    ) -> bool:
+        """Speak one local fallback for a terminal LLM failure with no answer.
+
+        The fallback is deliberately outside the LLM and conversation context:
+        it communicates product state without becoming assistant memory. It is
+        interruptible, and is suppressed if the user has already started the
+        next utterance or if any brain answer delta was observed.
+        """
+
+        if timeline is None or error_type != "llm_error":
+            return False
+        if "brain_first_answer_delta_at" in timeline.timestamps:
+            return False
+
+        fallback = dict(timeline.attrs.get("silent_failure_fallback") or {})
+        if fallback.get("attempted"):
+            return False
+
+        session = getattr(self._pipeline, "_session", None)
+        if session is None:
+            timeline.set_attr(
+                "silent_failure_fallback",
+                {"attempted": True, "spoken": False, "reason": "session_unavailable"},
+            )
+            return False
+        if str(getattr(session, "user_state", "") or "") == "speaking":
+            timeline.set_attr(
+                "silent_failure_fallback",
+                {"attempted": True, "spoken": False, "reason": "user_speaking"},
+            )
+            return False
+
+        say = getattr(session, "say", None)
+        if not callable(say):
+            timeline.set_attr(
+                "silent_failure_fallback",
+                {"attempted": True, "spoken": False, "reason": "say_unavailable"},
+            )
+            return False
+
+        # Claim before calling into LiveKit so duplicate terminal events cannot
+        # enqueue the same fallback twice even if say() raises.
+        timeline.set_attr(
+            "silent_failure_fallback",
+            {"attempted": True, "spoken": False, "reason": "llm_error_without_delta"},
+        )
+        try:
+            say(
+                _SILENT_OUTPUT_FALLBACK_TEXT,
+                allow_interruptions=True,
+                add_to_chat_ctx=False,
+            )
+        except Exception:
+            logger.exception("[StreamingPipeline] silent-output fallback announcement failed")
+            return False
+
+        timeline.set_attr(
+            "silent_failure_fallback",
+            {"attempted": True, "spoken": True, "reason": "llm_error_without_delta"},
+        )
+        try:
+            self._pipeline._mark_activity()
+        except Exception:
+            logger.debug(
+                "[StreamingPipeline] mark_activity after silent-output fallback failed",
+                exc_info=True,
+            )
+        return True

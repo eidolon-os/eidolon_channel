@@ -87,6 +87,15 @@ class AgentOutputCoordinator:
                     output["risk"] = "awaiting_first_delta"
                 else:
                     output["phase"] = "brain_speaking"
+        elif name == "brain_first_model_activity":
+            output.update(
+                {
+                    "phase": "model_activity",
+                    "first_model_activity_seen": True,
+                    "first_model_activity_kind": str(event.get("kind") or ""),
+                    "risk": "",
+                }
+            )
         elif name == "brain_first_delta":
             output.update(
                 {
@@ -97,13 +106,22 @@ class AgentOutputCoordinator:
             )
         elif name == "brain_done":
             if "brain_first_delta_at" not in timeline.timestamps:
-                output.update(
-                    {
-                        "phase": "silent_failure",
-                        "outcome": "brain_done_without_delta",
-                        "silent_failure": True,
-                    }
-                )
+                if "brain_first_model_activity_at" in timeline.timestamps:
+                    output.update(
+                        {
+                            "phase": "model_activity_complete",
+                            "outcome": "brain_done_after_model_activity",
+                            "silent_failure": False,
+                        }
+                    )
+                else:
+                    output.update(
+                        {
+                            "phase": "silent_failure",
+                            "outcome": "brain_done_without_delta",
+                            "silent_failure": True,
+                        }
+                    )
             else:
                 output.update({"outcome": "brain_done"})
         elif name == "brain_cancelled":

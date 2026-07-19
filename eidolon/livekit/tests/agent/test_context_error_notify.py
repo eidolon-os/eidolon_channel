@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
+from eidolon.livekit.agent.observability import TurnTimeline
 
 _CONTEXT_REASON = "voiceprint_blocked:context_error:AdminResolveNotFound"
 
@@ -52,3 +53,65 @@ def test_say_failure_is_swallowed():
     p._session = SimpleNamespace(say=Mock(side_effect=RuntimeError("boom")))
     p._ensure_turn_completion()._session_turns.notify_context_error_once(_CONTEXT_REASON)
     assert p._context_error_notified is True
+
+
+def test_terminal_llm_failure_without_delta_announces_once_outside_chat_context():
+    p = _pipeline_with_session()
+    p._mark_activity = Mock()
+    timeline = TurnTimeline("silent-turn")
+    completion = p._ensure_turn_completion()
+
+    assert completion.notify_silent_output_failure_once(
+        timeline=timeline,
+        error_type="llm_error",
+    ) is True
+    assert completion.notify_silent_output_failure_once(
+        timeline=timeline,
+        error_type="llm_error",
+    ) is False
+
+    p._session.say.assert_called_once_with(
+        "刚才卡了一下，请再说一遍好吗？",
+        allow_interruptions=True,
+        add_to_chat_ctx=False,
+    )
+    p._mark_activity.assert_called_once_with()
+    assert timeline.attrs["silent_failure_fallback"]["spoken"] is True
+
+
+def test_silent_failure_fallback_is_suppressed_after_answer_delta():
+    p = _pipeline_with_session()
+    timeline = TurnTimeline("answered-turn")
+    timeline.mark("brain_first_answer_delta_at")
+
+    assert p._ensure_turn_completion().notify_silent_output_failure_once(
+        timeline=timeline,
+        error_type="llm_error",
+    ) is False
+    p._session.say.assert_not_called()
+
+
+def test_wait_hint_does_not_suppress_terminal_failure_fallback():
+    p = _pipeline_with_session()
+    p._mark_activity = Mock()
+    timeline = TurnTimeline("hint-then-failed-turn")
+    timeline.mark("brain_first_delta_at")
+
+    assert p._ensure_turn_completion().notify_silent_output_failure_once(
+        timeline=timeline,
+        error_type="llm_error",
+    ) is True
+    p._session.say.assert_called_once()
+
+
+def test_silent_failure_fallback_is_suppressed_while_user_is_speaking():
+    p = StreamingPipeline.__new__(StreamingPipeline)
+    p._session = SimpleNamespace(user_state="speaking", say=Mock())
+    timeline = TurnTimeline("barge-in-turn")
+
+    assert p._ensure_turn_completion().notify_silent_output_failure_once(
+        timeline=timeline,
+        error_type="llm_error",
+    ) is False
+    p._session.say.assert_not_called()
+    assert timeline.attrs["silent_failure_fallback"]["reason"] == "user_speaking"

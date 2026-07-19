@@ -247,7 +247,7 @@ def test_provider_event_observer_accepts_retry_attempt_after_brain_error() -> No
     assert snap["attrs"]["brain_rpc"]["attempt"] == 2
 
 
-def test_provider_event_observer_flushes_terminal_llm_error_without_delta() -> None:
+def test_provider_event_observer_records_terminal_llm_error_for_pipeline_owner() -> None:
     fake_llm = _FakeProvider()
     timeline = TurnTimeline("turn-llm-error")
     timeline.mark("turn_committed_at")
@@ -273,7 +273,56 @@ def test_provider_event_observer_flushes_terminal_llm_error_without_delta() -> N
     assert snap["attrs"]["llm_error"]["recoverable"] is False
     assert snap["attrs"]["agent_output"]["phase"] == "silent_failure"
     assert snap["attrs"]["agent_output"]["outcome"] == "llm_error_without_delta"
-    assert flushes == ["agent_output_llm_error_without_delta"]
+    assert flushes == []
+
+
+def test_provider_event_observer_records_tool_call_as_effective_model_activity() -> None:
+    fake_llm = _FakeProvider()
+    timeline = TurnTimeline("turn-tool-only")
+    timeline.mark("turn_committed_at")
+    flushes: list[str] = []
+    observer = ProviderEventObserver(
+        factory=SimpleNamespace(llm=SimpleNamespace(llm=fake_llm)),
+        get_timeline=lambda: timeline,
+        flush_timeline=lambda _timeline, reason: flushes.append(reason),
+    )
+
+    observer.install_brain_provider_event_observer()
+    fake_llm.handlers["provider_event"](
+        {
+            "provider": "eidolon_agent_rpc",
+            "event": "brain_request_sent",
+            "timestamp": 10.0,
+            "turn_id": "brain-tool-turn",
+            "request_id": "eidolon-brain-tool-turn",
+        }
+    )
+    fake_llm.handlers["provider_event"](
+        {
+            "provider": "eidolon_agent_rpc",
+            "event": "brain_first_model_activity",
+            "timestamp": 10.2,
+            "turn_id": "brain-tool-turn",
+            "request_id": "eidolon-brain-tool-turn",
+            "kind": "tool_call",
+        }
+    )
+    fake_llm.handlers["provider_event"](
+        {
+            "provider": "eidolon_agent_rpc",
+            "event": "brain_done",
+            "timestamp": 10.4,
+            "turn_id": "brain-tool-turn",
+            "request_id": "eidolon-brain-tool-turn",
+        }
+    )
+
+    snap = timeline.snapshot()
+    assert snap["timestamps"]["brain_first_model_activity_at"] == 10.2
+    assert snap["attrs"]["agent_output"]["first_model_activity_kind"] == "tool_call"
+    assert snap["attrs"]["agent_output"]["outcome"] == "brain_done_after_model_activity"
+    assert snap["attrs"]["agent_output"]["silent_failure"] is False
+    assert flushes == []
 
 
 def test_provider_event_observer_snapshots_first_delta_timeout() -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from unittest.mock import AsyncMock
 
 import grpc
 import grpc.aio
@@ -266,7 +267,9 @@ async def test_forwards_deltas_then_finishes() -> None:
             assert [event["event"] for event in provider_events] == [
                 "brain_request_started",
                 "brain_request_sent",
+                "brain_first_model_activity",
                 "brain_first_delta",
+                "brain_first_answer_delta",
                 "brain_done",
             ]
             assert provider_events[-1]["request_id"].startswith("eidolon-")
@@ -381,7 +384,8 @@ async def test_session_open_uses_connect_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
+async def test_first_delta_timeout_cancels_without_replaying_logical_turn() -> None:
+    from livekit.agents._exceptions import APIConnectionError
     from livekit.agents.types import APIConnectOptions
 
     from eidolon.livekit.agent.eidolon_agent_rpc.session import (
@@ -408,9 +412,6 @@ async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
                     yield StatePayload("speaking")
                     await asyncio.sleep(10.0)
                     yield DeltaPayload("late")
-                else:
-                    yield DeltaPayload("ok")
-
             return turn_id, _payloads()
 
         async def cancel_turn(self, turn_id: str) -> None:
@@ -444,24 +445,144 @@ async def test_first_delta_timeout_cancels_attempt_and_retries() -> None:
                 timeout=0.05,
             ),
         )
-        collected: list[str] = []
-        async for chunk in stream:
-            if chunk.delta and chunk.delta.content:
-                collected.append(chunk.delta.content)
+        with pytest.raises(APIConnectionError, match="first delta timed out") as exc_info:
+            async for _ in stream:
+                pass
 
         await asyncio.wait_for(
             _wait_until(lambda: session.cancels == ["turn-1"]),
             timeout=1.0,
         )
-        assert collected == ["ok"]
-        assert session.turn_ids == ["turn-1", "turn-2"]
+        assert exc_info.value.retryable is False
+        assert session.turn_ids == ["turn-1"]
         request_events = [
             event for event in provider_events if event.get("event") == "brain_request_sent"
         ]
-        assert [event.get("attempt") for event in request_events] == [1, 2]
+        assert [event.get("attempt") for event in request_events] == [1]
         timeout_errors = [event for event in provider_events if event.get("event") == "brain_error"]
         assert timeout_errors[0]["code"] == "first_delta_timeout"
         assert timeout_errors[0]["turn_id"] == "turn-1"
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tool_call_releases_first_output_deadline_without_becoming_answer_delta() -> None:
+    from livekit.agents.types import APIConnectOptions
+
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import (
+        DeltaPayload,
+        ToolCallPayload,
+    )
+
+    class _ToolThenAnswerSession:
+        def __init__(self) -> None:
+            self.turn_ids: list[str] = []
+            self.cancels: list[str] = []
+
+        async def start_turn(self, **_kwargs):
+            turn_id = "tool-turn"
+            self.turn_ids.append(turn_id)
+
+            async def _payloads():
+                yield ToolCallPayload(name="play", args={})
+                # Longer than the first-output timeout: once a complete tool
+                # call arrives, the tool loop owns its remaining runtime.
+                await asyncio.sleep(0.08)
+                yield DeltaPayload("播放完成")
+
+            return turn_id, _payloads()
+
+        async def cancel_turn(self, turn_id: str) -> None:
+            self.cancels.append(turn_id)
+
+        def spawn(self, coro, *, name: str):
+            return asyncio.create_task(coro, name=name)
+
+    session = _ToolThenAnswerSession()
+    adapter = EidolonAgentGrpcLlm(
+        target="unused",
+        device_token=lambda: "test-token",
+        conversation_id="livekit:tool-deadline",
+    )
+    adapter._get_session = AsyncMock(return_value=session)
+    adapter.discard_warm = AsyncMock()
+    provider_events: list[dict] = []
+    adapter.on("provider_event", provider_events.append)
+    try:
+        stream = adapter.chat(
+            chat_ctx=_ctx("播放音乐"),
+            conn_options=APIConnectOptions(max_retry=3, timeout=0.05),
+        )
+        spoken = [
+            chunk.delta.content
+            async for chunk in stream
+            if chunk.delta and chunk.delta.content
+        ]
+
+        assert spoken == ["播放完成"]
+        assert session.turn_ids == ["tool-turn"]
+        assert session.cancels == []
+        activity = [
+            event
+            for event in provider_events
+            if event.get("event") == "brain_first_model_activity"
+        ]
+        assert [event.get("kind") for event in activity] == ["tool_call"]
+        assert sum(event.get("event") == "brain_first_delta" for event in provider_events) == 1
+        assert (
+            sum(
+                event.get("event") == "brain_first_answer_delta"
+                for event in provider_events
+            )
+            == 1
+        )
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_without_answer_or_tool_is_terminal_not_retried() -> None:
+    from livekit.agents._exceptions import APIConnectionError
+    from livekit.agents.types import APIConnectOptions
+
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import StatePayload
+
+    class _EmptySession:
+        def __init__(self) -> None:
+            self.turn_ids: list[str] = []
+
+        async def start_turn(self, **_kwargs):
+            self.turn_ids.append("empty-turn")
+
+            async def _payloads():
+                yield StatePayload("thinking")
+
+            return "empty-turn", _payloads()
+
+    session = _EmptySession()
+    adapter = EidolonAgentGrpcLlm(
+        target="unused",
+        device_token=lambda: "test-token",
+        conversation_id="livekit:empty",
+    )
+    adapter._get_session = AsyncMock(return_value=session)
+    adapter.discard_warm = AsyncMock()
+    provider_events: list[dict] = []
+    adapter.on("provider_event", provider_events.append)
+    try:
+        stream = adapter.chat(
+            chat_ctx=_ctx("在吗"),
+            conn_options=APIConnectOptions(max_retry=3, timeout=0.05),
+        )
+        with pytest.raises(APIConnectionError, match="without answer or tool") as exc_info:
+            async for _ in stream:
+                pass
+
+        assert exc_info.value.retryable is False
+        assert session.turn_ids == ["empty-turn"]
+        errors = [event for event in provider_events if event.get("event") == "brain_error"]
+        assert [event.get("code") for event in errors] == ["no_usable_output"]
     finally:
         await adapter.aclose()
 

@@ -82,6 +82,17 @@ class FullDuplexTurnCompletion:
     def cancel_completed_voiceprint_turn(self) -> None:
         self._voiceprint_state.cancel_completed_turn()
 
+    def notify_silent_output_failure_once(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+        error_type: str,
+    ) -> bool:
+        return self._session_turns.notify_silent_output_failure_once(
+            timeline=timeline,
+            error_type=error_type,
+        )
+
     async def voiceprint_allows_completed_turn(
         self,
         *,

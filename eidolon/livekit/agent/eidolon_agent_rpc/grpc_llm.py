@@ -398,7 +398,14 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             attempt=attempt,
             trace_id=self._trace_id,
         )
+        # A complete tool call is valid model activity and must release the
+        # first-output deadline, but it is not an audible answer delta. Keep
+        # these states separate so long-running tools are not cancelled after
+        # 10s and silent-answer fallback still remains accurate.
+        first_model_activity_seen = False
         first_delta_seen = False
+        first_answer_delta_seen = False
+        tool_call_seen = False
         # Roles of non-answer status deltas already spoken this turn, so a
         # preamble is rendered at most once even if the brain repeats it.
         spoken_preamble_roles: set[str] = set()
@@ -407,7 +414,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             first_delta_deadline = asyncio.get_running_loop().time() + timeout
             while True:
                 try:
-                    if first_delta_seen:
+                    if first_model_activity_seen:
                         payload = await payload_iter.__anext__()
                     else:
                         remaining = first_delta_deadline - asyncio.get_running_loop().time()
@@ -435,7 +442,14 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                         session.cancel_turn(turn_id),
                         name=f"eidolon-first-delta-timeout-cancel-{turn_id}",
                     )
-                    raise APIConnectionError(message, retryable=True) from exc
+                    # The brain has already accepted this logical turn and may
+                    # have compiled context or started provider work. Retrying
+                    # at LiveKit's LLMStream layer would create a second Agent
+                    # turn for the same user utterance, duplicating persistence
+                    # and potentially replaying tools. Transport failures before
+                    # StartTurn is accepted remain retryable; an accepted turn
+                    # that never produces a usable delta is terminal here.
+                    raise APIConnectionError(message, retryable=False) from exc
 
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
@@ -459,9 +473,31 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                         if payload.role != DeltaRole.SLOW_TOOL_HINT.value:
                             continue
                     if not first_delta_seen:
+                        if not first_model_activity_seen:
+                            first_model_activity_seen = True
+                            llm_v.emit_provider_event(
+                                "brain_first_model_activity",
+                                conversation_id=conversation_id,
+                                turn_id=turn_id,
+                                request_id=req_id,
+                                attempt=attempt,
+                                kind="answer_delta",
+                            )
                         first_delta_seen = True
                         llm_v.emit_provider_event(
                             "brain_first_delta",
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            request_id=req_id,
+                            attempt=attempt,
+                        )
+                    if (
+                        payload.role == DeltaRole.ANSWER.value
+                        and not first_answer_delta_seen
+                    ):
+                        first_answer_delta_seen = True
+                        llm_v.emit_provider_event(
+                            "brain_first_answer_delta",
                             conversation_id=conversation_id,
                             turn_id=turn_id,
                             request_id=req_id,
@@ -505,6 +541,17 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     # The channel neither forwards nor executes tools — the
                     # brain runs its own tool loop. Surface at INFO so the tool
                     # name/args are visible alongside the matching TOOL_RESULT.
+                    tool_call_seen = True
+                    if not first_model_activity_seen:
+                        first_model_activity_seen = True
+                        llm_v.emit_provider_event(
+                            "brain_first_model_activity",
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            request_id=req_id,
+                            attempt=attempt,
+                            kind="tool_call",
+                        )
                     logger.info(
                         "[EidolonAgentGrpcLlmStream] tool_call name=%s turn=%s",
                         payload.name,
@@ -553,6 +600,19 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     )
                 # else: unknown payload type — ignore (forward-compat with new
                 # session.py additions).
+            if not first_answer_delta_seen and not tool_call_seen:
+                message = "eidolon_agent completed without answer or tool call"
+                llm_v.emit_provider_event(
+                    "brain_error",
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    request_id=req_id,
+                    attempt=attempt,
+                    code="no_usable_output",
+                    message=message,
+                    fatal=False,
+                )
+                raise APIConnectionError(message, retryable=False)
             llm_v.emit_provider_event(
                 "brain_done",
                 conversation_id=conversation_id,

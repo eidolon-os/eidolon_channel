@@ -139,11 +139,12 @@ class ProviderEventObserver:
                 "error": str(getattr(event, "error", "") or ""),
             },
         )
-        output = self.agent_output.record_llm_error(timeline, event)
+        self.agent_output.record_llm_error(timeline, event)
         self._emit_milestone(timeline, "llm_error", "livekit_llm_error")
         self._cancel_first_delta_watchdog()
-        if bool(output.get("silent_failure")):
-            self._flush_silent_output_if_terminal(timeline, output)
+        # Session/pipeline error handling owns terminal UX and timeline flush.
+        # Flushing here races ahead of the session error event and can discard
+        # the turn before an interruptible local fallback is scheduled.
 
     def install_brain_provider_event_observer(self) -> None:
         """Bridge provider-native brain RPC timing events into the timeline."""
@@ -156,7 +157,9 @@ class ProviderEventObserver:
         mark_by_event = {
             "brain_request_started": "brain_request_started_at",
             "brain_request_sent": "brain_request_sent_at",
+            "brain_first_model_activity": "brain_first_model_activity_at",
             "brain_first_delta": "brain_first_delta_at",
+            "brain_first_answer_delta": "brain_first_answer_delta_at",
             "brain_done": "brain_done_at",
             "brain_cancelled": "brain_cancelled_at",
             "brain_state": None,
@@ -194,10 +197,14 @@ class ProviderEventObserver:
                     if mark == "brain_first_delta_at":
                         timeline.mark_at("llm_first_delta_at", float(timestamp))
                         self._cancel_first_delta_watchdog()
+                    elif mark == "brain_first_model_activity_at":
+                        self._cancel_first_delta_watchdog()
                 else:
                     timeline.mark(mark)
                     if mark == "brain_first_delta_at":
                         timeline.mark("llm_first_delta_at")
+                        self._cancel_first_delta_watchdog()
+                    elif mark == "brain_first_model_activity_at":
                         self._cancel_first_delta_watchdog()
             brain_rpc = dict(timeline.attrs.get("brain_rpc") or {})
             brain_rpc.update(
@@ -229,7 +236,9 @@ class ProviderEventObserver:
             output = self.agent_output.record_brain_event(timeline, event)
             if event_name in {
                 "brain_request_sent",
+                "brain_first_model_activity",
                 "brain_first_delta",
+                "brain_first_answer_delta",
                 "brain_done",
                 "brain_cancelled",
                 "brain_error",
@@ -427,7 +436,7 @@ class ProviderEventObserver:
             return
         if self._first_delta_timeout_sec <= 0:
             return
-        if "brain_first_delta_at" in timeline.timestamps:
+        if "brain_first_model_activity_at" in timeline.timestamps:
             return
         if self._first_delta_watchdog is not None and not self._first_delta_watchdog.done():
             return
@@ -455,7 +464,7 @@ class ProviderEventObserver:
         timeline = self._get_output_timeline()
         if timeline is None or timeline.turn_id != turn_id:
             return
-        if "brain_first_delta_at" in timeline.timestamps:
+        if "brain_first_model_activity_at" in timeline.timestamps:
             return
         if any(
             mark in timeline.timestamps

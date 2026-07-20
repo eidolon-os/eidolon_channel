@@ -134,12 +134,27 @@ class FullDuplexSessionLifecycle:
         """
         from livekit.agents.voice.avatar import DataStreamAudioOutput
 
-        from eidolon.livekit.avatar import AvatarWorker
+        from eidolon.livekit.avatar import AvatarWorker, resolve_session_face_image
 
         pipeline = self._pipeline
         cfg = pipeline._avatar_config
         core = pipeline._core_config
         agent_identity = room.local_participant.identity
+
+        # Seed the digital-human service with this companion's configured display
+        # face (Ditto ``cond_image``). Best-effort and gated: unconfigured or
+        # unresolvable → None → the service's own default avatar, so audio-only
+        # and legacy sessions are unaffected.
+        face_image: bytes | None = None
+        if getattr(cfg, "cond_image_enabled", True):
+            runtime_admin = getattr(pipeline._factory, "runtime_admin", None)
+            try:
+                face_image = await resolve_session_face_image(room, runtime_admin=runtime_admin)
+            except Exception:
+                logger.exception(
+                    "[StreamingPipeline] avatar face resolution failed; using default avatar"
+                )
+
         worker = AvatarWorker(
             cfg,
             livekit_url=core.livekit_url,
@@ -147,6 +162,7 @@ class FullDuplexSessionLifecycle:
             api_secret=core.api_secret,
             room_name=room.name,
             agent_identity=agent_identity,
+            face_image=face_image,
         )
         try:
             avatar_identity = await worker.start()

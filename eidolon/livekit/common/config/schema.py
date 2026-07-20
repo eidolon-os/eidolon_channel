@@ -312,6 +312,11 @@ class AvatarConfig:
     fallback_to_audio_on_failure: bool = True
     avatar_agent_name: str = "eidolon-avatar"
     worker_identity_prefix: str = "avatar"
+    # When true, seed the service with the session companion's configured
+    # display face (``cond_image``) resolved from Eidolon Data. Falls back to
+    # the service's own default avatar when unconfigured/unresolvable. Turn off
+    # to always use the default avatar regardless of per-companion config.
+    cond_image_enabled: bool = True
 
 
 @dataclass(frozen=True)

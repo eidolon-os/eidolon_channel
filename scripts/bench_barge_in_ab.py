@@ -24,7 +24,7 @@ from typing import Any
 from eidolon_sdk.biz.contracts import INTERACTION_MODE_HALF_DUPLEX
 
 from eidolon.livekit.agent.runtime import apply_interaction_mode
-from eidolon.livekit.agent.server import _use_half_duplex_ptt_pipeline
+from eidolon.livekit.agent.server import _use_ptt_pipeline
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from benchmark.policy_runner import (
     run_policy_suite,
@@ -139,11 +139,11 @@ def _native_contract() -> dict[str, Any]:
         interaction_mode=INTERACTION_MODE_HALF_DUPLEX,
     )
     add(
-        "half_duplex_uses_dedicated_pipeline",
-        _use_half_duplex_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX)
+        "half_duplex_streaming_no_barge_in",
+        _use_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX) is False
         and half_allow_interruptions is False
         and half_policy.attention.enabled is False,
-        "half_duplex routes to HalfDuplexPttPipeline and disables streaming interruption owner",
+        "half_duplex runs the streaming (EOT) pipeline with barge-in disabled",
     )
 
     detector_ready = _livekit_inference_ready_detail()

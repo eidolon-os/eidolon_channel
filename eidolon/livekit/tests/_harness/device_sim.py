@@ -34,6 +34,7 @@ from eidolon_sdk.biz.contracts import (
     INPUT_MODE_AUTO,
     INPUT_MODE_PTT,
     INTERACTION_MODE_HALF_DUPLEX,
+    INTERACTION_MODE_PTT,
     PLAYBACK_STATE_IDLE,
     SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
@@ -75,9 +76,11 @@ class SimulatedDevice:
         self.device_id = device_id
         self.interaction_mode = interaction_mode
         self.session_intent = session_intent
+        # input_mode "ptt" only for the push-to-talk mode; half_duplex and
+        # full_duplex both auto-record (input_mode "auto").
         self._input_mode = (
             INPUT_MODE_PTT
-            if interaction_mode == INTERACTION_MODE_HALF_DUPLEX
+            if interaction_mode == INTERACTION_MODE_PTT
             else INPUT_MODE_AUTO
         )
         self._seq = 0

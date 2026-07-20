@@ -35,6 +35,7 @@ from typing import Any
 from eidolon.livekit.common.config.schema import IdlePolicyConfig, TurnPolicyConfig
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
+    INTERACTION_MODE_PTT,
     SESSION_END_IDLE_NORMAL,
     SESSION_END_PROACTIVE_DONE,
     SESSION_INTENT_PROACTIVE,
@@ -191,18 +192,18 @@ def apply_interaction_mode(
 ) -> tuple[TurnPolicyConfig, bool]:
     """Derive the per-session ``(turn_policy, allow_interruptions)`` for a mode.
 
-    ``full_duplex`` leaves the configured policy untouched. ``half_duplex``
-    disables barge-in entirely: framework interruption off + attention
-    admission off (no evidence-gate / interrupt guessing). Returns fresh
-    values via ``dataclasses.replace``; never mutates the shared global config
-    (the dataclasses are frozen anyway).
+    ``full_duplex`` leaves the configured policy untouched. ``half_duplex`` and
+    ``ptt`` both disable barge-in entirely: framework interruption off +
+    attention admission off (no evidence-gate / interrupt guessing). Returns
+    fresh values via ``dataclasses.replace``; never mutates the shared global
+    config (the dataclasses are frozen anyway).
     """
-    if interaction_mode == INTERACTION_MODE_HALF_DUPLEX:
-        half_policy = dataclasses.replace(
+    if interaction_mode in (INTERACTION_MODE_HALF_DUPLEX, INTERACTION_MODE_PTT):
+        no_barge_in_policy = dataclasses.replace(
             turn_policy,
             attention=dataclasses.replace(turn_policy.attention, enabled=False),
         )
-        return half_policy, False
+        return no_barge_in_policy, False
     return turn_policy, allow_interruptions
 
 

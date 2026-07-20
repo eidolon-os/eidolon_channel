@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
+    INTERACTION_MODE_PTT,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
@@ -382,7 +383,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         avatar_requested,
         avatar_enabled,
     )
-    if _use_half_duplex_ptt_pipeline(interaction_mode):
+    if _use_ptt_pipeline(interaction_mode):
         pipeline = HalfDuplexPttPipeline(
             factory,
             instructions=cfg.behavior.instructions,
@@ -457,8 +458,11 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     await pipeline.run(room)
 
 
-def _use_half_duplex_ptt_pipeline(interaction_mode: str) -> bool:
-    return interaction_mode == INTERACTION_MODE_HALF_DUPLEX
+def _use_ptt_pipeline(interaction_mode: str) -> bool:
+    # Only push-to-talk uses the button-driven segment pipeline. full_duplex AND
+    # half_duplex both run the streaming (EOT-commit) pipeline — they differ only
+    # in barge-in (allow_interruptions), not in turn detection.
+    return interaction_mode == INTERACTION_MODE_PTT
 
 
 # Module-level config shared between main process and spawned workers

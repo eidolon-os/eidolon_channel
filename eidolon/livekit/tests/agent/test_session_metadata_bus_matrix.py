@@ -20,6 +20,7 @@ import pytest
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
+    INTERACTION_MODE_PTT,
     INPUT_MODE_AUTO,
     INPUT_MODE_PTT,
     SESSION_INTENT_PROACTIVE,
@@ -78,15 +79,16 @@ def test_device_audio_state_packet_parses_clean(mode: str) -> None:
     # proving the wire body (schema_v / type / enum values) matches the contract.
     device = SimulatedDevice(interaction_mode=mode)
     state = parse_client_audio_state(
-        device.ptt_press() if mode == INTERACTION_MODE_HALF_DUPLEX else device.audio_state_bytes(),
+        device.ptt_press() if mode == INTERACTION_MODE_PTT else device.audio_state_bytes(),
         participant_identity="device-abc",
         strict=True,
     )
+    # Only ptt reports input_mode "ptt"; half_duplex and full_duplex auto-record.
     expected_input_mode = (
-        INPUT_MODE_PTT if mode == INTERACTION_MODE_HALF_DUPLEX else INPUT_MODE_AUTO
+        INPUT_MODE_PTT if mode == INTERACTION_MODE_PTT else INPUT_MODE_AUTO
     )
     assert state.input_mode == expected_input_mode
-    if mode == INTERACTION_MODE_HALF_DUPLEX:
+    if mode == INTERACTION_MODE_PTT:
         assert state.ptt is True
 
 

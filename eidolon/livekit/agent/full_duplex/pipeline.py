@@ -58,6 +58,7 @@ if TYPE_CHECKING:
 from eidolon_sdk.biz.contracts import (
     CONTROL_OP_PLAYBACK_STOP,
     INTERACTION_MODE_FULL_DUPLEX,
+    INTERACTION_MODE_HALF_DUPLEX,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
 )
@@ -170,12 +171,19 @@ class StreamingPipeline(BasePipeline):
         core_config: CoreConfig | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
-        if interaction_mode != INTERACTION_MODE_FULL_DUPLEX:
+        # StreamingPipeline serves BOTH full_duplex and half_duplex: both do
+        # streaming STT + EOT-based turn commit. The difference is barge-in, which
+        # is carried by allow_interruptions (False for half_duplex) — not by a
+        # separate pipeline. Only ptt uses HalfDuplexPttPipeline (button turns).
+        if interaction_mode not in (
+            INTERACTION_MODE_FULL_DUPLEX,
+            INTERACTION_MODE_HALF_DUPLEX,
+        ):
             raise ValueError(
-                "StreamingPipeline is full-duplex only; use HalfDuplexPttPipeline "
-                f"for interaction_mode={interaction_mode!r}"
+                "StreamingPipeline serves full_duplex/half_duplex; use "
+                f"HalfDuplexPttPipeline for interaction_mode={interaction_mode!r}"
             )
-        self._interaction_mode = INTERACTION_MODE_FULL_DUPLEX
+        self._interaction_mode = interaction_mode
         # Session intent (plan §3.2/§3.3) is orthogonal to interaction_mode and
         # drives only idle window + teardown reason in the full-duplex pipeline.
         self._session_intent = session_intent

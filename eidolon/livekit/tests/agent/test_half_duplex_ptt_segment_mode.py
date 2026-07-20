@@ -208,12 +208,19 @@ def test_livekit_transcription_topic_matches_sdk_contract() -> None:
     assert TOPIC_TRANSCRIPTION == LIVEKIT_TRANSCRIPTION_TOPIC
 
 
-def test_server_uses_half_duplex_pipeline_for_half_duplex_mode() -> None:
-    from eidolon.livekit.agent.server import _use_half_duplex_ptt_pipeline
-    from eidolon_sdk.biz.contracts import INTERACTION_MODE_FULL_DUPLEX, INTERACTION_MODE_HALF_DUPLEX
+def test_server_uses_ptt_pipeline_only_for_ptt_mode() -> None:
+    from eidolon.livekit.agent.server import _use_ptt_pipeline
+    from eidolon_sdk.biz.contracts import (
+        INTERACTION_MODE_FULL_DUPLEX,
+        INTERACTION_MODE_HALF_DUPLEX,
+        INTERACTION_MODE_PTT,
+    )
 
-    assert _use_half_duplex_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX) is True
-    assert _use_half_duplex_ptt_pipeline(INTERACTION_MODE_FULL_DUPLEX) is False
+    # Only ptt uses the button-driven segment pipeline; half_duplex and
+    # full_duplex both run the streaming (EOT-commit) pipeline.
+    assert _use_ptt_pipeline(INTERACTION_MODE_PTT) is True
+    assert _use_ptt_pipeline(INTERACTION_MODE_HALF_DUPLEX) is False
+    assert _use_ptt_pipeline(INTERACTION_MODE_FULL_DUPLEX) is False
 
 
 def test_half_duplex_idle_policy_uses_session_intent() -> None:

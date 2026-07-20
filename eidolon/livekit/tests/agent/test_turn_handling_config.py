@@ -37,7 +37,19 @@ def test_preemptive_passthrough() -> None:
     )
 
 
-def test_streaming_pipeline_rejects_half_duplex_mode() -> None:
+def test_streaming_pipeline_accepts_half_duplex_rejects_ptt() -> None:
+    from eidolon_sdk.biz.contracts import INTERACTION_MODE_PTT
+
     factory = SharedStageFactory.__new__(SharedStageFactory)
-    with pytest.raises(ValueError, match="full-duplex only"):
+    # ptt is served by the button-driven segment pipeline, not StreamingPipeline.
+    with pytest.raises(ValueError, match="HalfDuplexPttPipeline"):
+        StreamingPipeline(factory, interaction_mode=INTERACTION_MODE_PTT)
+    # half_duplex IS served by StreamingPipeline (streaming EOT commit, no
+    # barge-in). The mode guard must not reject it; deeper __init__ may fail on
+    # the bare test factory, but never with the guard's ValueError.
+    try:
         StreamingPipeline(factory, interaction_mode=INTERACTION_MODE_HALF_DUPLEX)
+    except ValueError as exc:
+        assert "HalfDuplexPttPipeline" not in str(exc)
+    except Exception:
+        pass

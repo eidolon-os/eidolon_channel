@@ -21,7 +21,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
+import wave
 from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
@@ -57,6 +59,40 @@ _CHUNK_SAMPLES = 1600
 # without the speedup for that turn.
 _PREFLIGHT_STABLE_MS = 320
 _PREFLIGHT_MIN_CHARS = 2
+
+
+def _maybe_open_wav_dump(stream_id: str, sample_rate: int):
+    """Debug tap (default OFF). When env EIDOLON_STT_DUMP_WAV is truthy, record the
+    exact PCM this STT stream receives — post-network, post-resample, i.e. what the
+    recognizer actually hears — to a WAV under EIDOLON_STT_DUMP_DIR (default
+    ~/eidolon/debug). One file per stream run. Lets us listen to a device's uplink
+    audio to tell clean speech from echo/noise. No effect unless the env var is set."""
+    if os.environ.get("EIDOLON_STT_DUMP_WAV", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return None
+    try:
+        out_dir = os.path.expanduser(
+            os.environ.get("EIDOLON_STT_DUMP_DIR", "~/eidolon/debug")
+        )
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, f"stt_{stream_id}_{int(time.time() * 1000)}.wav")
+        wav = wave.open(path, "wb")
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        logger.info(
+            "[Bailian STT] audio dump ENABLED -> %s (%d Hz mono 16-bit)",
+            path,
+            sample_rate,
+        )
+        return wav
+    except Exception as e:  # noqa: BLE001 - diagnostic path must never break STT
+        logger.warning("[Bailian STT] audio dump open failed: %s", e)
+        return None
 
 
 class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
@@ -136,6 +172,9 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         # mechanism kick in. Without this, an unexpected WS close exits
         # both loops silently and the whole session loses STT for good.
         self._recv_error: Exception | None = None
+        # Debug: optional WAV dump of received audio (opened per _run when
+        # EIDOLON_STT_DUMP_WAV is set; None otherwise).
+        self._dump_wav = None
         # G16 (2026-05-17): VAD-gated audio forwarding for cost reduction.
         # Only constructed if config.gate_enabled. None when disabled means
         # send_loop falls back to the pre-G16 passthrough path.
@@ -173,6 +212,9 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             max_sentence_silence_ms=self._stt_ref.max_sentence_silence_ms,
         )
         self._conn = conn
+
+        # Debug: open a per-run WAV dump of received audio if enabled (no-op off).
+        self._dump_wav = _maybe_open_wav_dump(self._stream_id, self._sample_rate)
 
         # _FlushSentinel is a nested class of RecognizeStream.
         # Get the type so we can use isinstance() in send_loop.
@@ -318,6 +360,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
 
                     frame: rtc.AudioFrame = item
                     pcm = frame.data.tobytes()
+                    if self._dump_wav is not None:
+                        try:
+                            self._dump_wav.writeframes(pcm)
+                        except Exception:  # noqa: BLE001 - never break STT for a dump
+                            pass
                     chunks = self._audio_buf.push(pcm)
                     for chunk in chunks:
                         chunk_bytes = bytes(chunk.data.tobytes())
@@ -479,6 +526,14 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                 await conn.close()
             except Exception:
                 pass
+            # Debug: close the WAV dump for this run (if any).
+            if self._dump_wav is not None:
+                try:
+                    self._dump_wav.close()
+                    logger.info("[Bailian STT] audio dump closed")
+                except Exception:  # noqa: BLE001
+                    pass
+                self._dump_wav = None
             # G16: cleanup gate's keepalive task (idempotent / safe if absent).
             if self._gate is not None:
                 try:

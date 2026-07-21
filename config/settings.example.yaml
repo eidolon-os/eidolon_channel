@@ -202,6 +202,13 @@ bailian_stt:
   gate_vad_high_threshold: 0.6
   gate_vad_low_threshold: 0.3
   gate_rms_threshold: 500.0
+  # Diagnostic: dump the exact PCM the recognizer receives (post-resample, 16 kHz
+  # mono) to one WAV per stream run under dump_dir — used to tell clean speech from
+  # echo/noise on a device's uplink. Currently ON for stackchan half_duplex
+  # debugging; set false in production. (Env EIDOLON_STT_DUMP_WAV /
+  # EIDOLON_STT_DUMP_DIR still work as a fallback default.)
+  dump_wav: true
+  dump_dir: "~/eidolon/debug"
 
 bailian_tts:
   api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference

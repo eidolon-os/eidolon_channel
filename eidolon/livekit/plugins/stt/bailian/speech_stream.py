@@ -61,22 +61,18 @@ _PREFLIGHT_STABLE_MS = 320
 _PREFLIGHT_MIN_CHARS = 2
 
 
-def _maybe_open_wav_dump(stream_id: str, sample_rate: int):
-    """Debug tap (default OFF). When env EIDOLON_STT_DUMP_WAV is truthy, record the
-    exact PCM this STT stream receives — post-network, post-resample, i.e. what the
-    recognizer actually hears — to a WAV under EIDOLON_STT_DUMP_DIR (default
-    ~/eidolon/debug). One file per stream run. Lets us listen to a device's uplink
-    audio to tell clean speech from echo/noise. No effect unless the env var is set."""
-    if os.environ.get("EIDOLON_STT_DUMP_WAV", "").strip().lower() not in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    ):
+def _maybe_open_wav_dump(stream_id: str, sample_rate: int, config):
+    """Debug tap (default OFF). When ``bailian_stt.dump_wav`` is enabled (via
+    settings.yaml, or the EIDOLON_STT_DUMP_WAV env fallback baked into the config
+    default), record the exact PCM this STT stream receives — post-network,
+    post-resample, i.e. what the recognizer actually hears — to a WAV under
+    ``bailian_stt.dump_dir`` (default ~/eidolon/debug). One file per stream run.
+    Lets us listen to a device's uplink audio to tell clean speech from echo/noise."""
+    if not getattr(config, "dump_wav", False):
         return None
     try:
         out_dir = os.path.expanduser(
-            os.environ.get("EIDOLON_STT_DUMP_DIR", "~/eidolon/debug")
+            getattr(config, "dump_dir", None) or "~/eidolon/debug"
         )
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"stt_{stream_id}_{int(time.time() * 1000)}.wav")
@@ -214,7 +210,9 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._conn = conn
 
         # Debug: open a per-run WAV dump of received audio if enabled (no-op off).
-        self._dump_wav = _maybe_open_wav_dump(self._stream_id, self._sample_rate)
+        self._dump_wav = _maybe_open_wav_dump(
+            self._stream_id, self._sample_rate, getattr(self._stt_ref, "_config", None)
+        )
 
         # _FlushSentinel is a nested class of RecognizeStream.
         # Get the type so we can use isinstance() in send_loop.

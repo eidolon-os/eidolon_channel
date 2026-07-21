@@ -4,25 +4,42 @@ The device declares its capability to hub via the ``X-Device-Interaction-Mode``
 header; hub stamps the resolved mode into the LiveKit token's
 ``participant_metadata`` (see ``eidolon_hub`` ``.../system/config.py``). Channel
 reads it here — once per session, from the joined participant — and derives a
-per-session turn policy:
+per-session turn policy. ``interaction_mode`` is one of three mutually-exclusive
+modes (authoritative descriptions in ``eidolon_sdk.biz.contracts``):
 
-  - ``half_duplex`` → push-to-talk appliance: the mic is closed during playback
-    and the turn boundary is explicit (button release / tap-to-stop). The agent
-    must NOT barge in or run attention/evidence interrupt guessing, so we force
-    ``allow_interruptions=False`` + ``attention.enabled=False``.
-  - ``full_duplex`` → open mic with hardware AEC: the current behaviour
-    (``allow_interruptions=True`` + attention soft-interrupt + content echo gate).
+  - ``full_duplex`` → open mic + device hardware AEC + barge-in: the user can
+    interrupt the agent. Leaves the configured policy untouched
+    (``allow_interruptions=True`` + attention soft-interrupt + content echo
+    gate). For devices with a validated AEC reference (e.g. esp-box-3).
+  - ``half_duplex`` → auto-record after session start (no button), NO device
+    AEC. The mic is closed while the agent speaks, so the turn is not
+    interruptible; STT is committed via the SAME end-of-turn (EOT) judgment as
+    ``full_duplex``. Barge-in is off, so we force ``allow_interruptions=False``
+    + ``attention.enabled=False``. For boards without a clean AEC reference
+    (e.g. m5stack-stackchan). NOTE: ``half_duplex`` is NOT push-to-talk — that
+    is now the separate ``ptt`` mode.
+  - ``ptt`` → push-to-talk: the mic is open only while the device button is
+    held; button release is the explicit end-of-turn (mic closed otherwise).
+    Same no-barge-in knobs as ``half_duplex`` (``allow_interruptions=False`` +
+    ``attention.enabled=False``). For wearables / button devices
+    (e.g. waveshare 2.06).
+
+``apply_interaction_mode`` (below) derives only the ``(turn_policy,
+allow_interruptions)`` knobs above; pipeline routing lives in ``server.py``
+(``_use_ptt_pipeline``): ``ptt`` → ``HalfDuplexPttPipeline`` (button segment
+turns), while ``half_duplex`` and ``full_duplex`` both run the streaming
+``StreamingPipeline`` and differ only in barge-in.
 
 Defense default (plan §1): missing / unparseable / unknown metadata degrades to
-``half_duplex`` — the safe mode that never barges in. This lets channel run the
+``half_duplex`` — a safe mode that never barges in. This lets channel run the
 contract end-to-end before the device + hub halves ship.
 
-Relationship to the packet-level ``client_audio_state.input_mode == "ptt"``
-signal (commit 9642a0c): token metadata is the SESSION-LEVEL authority for the
-two config knobs above; the packet signal remains the RUNTIME signal for the
-    fine-grained PTT behaviours. For a half_duplex device the two agree — it
-    sends ``ptt`` packets — and they act on orthogonal concerns, so they never
-    fight.
+Relationship to the packet-level ``client_audio_state.input_mode`` signal
+(commit 9642a0c): token metadata is the SESSION-LEVEL authority for the config
+knobs above; the packet signal remains the RUNTIME signal for the fine-grained
+PTT behaviours. A ``ptt`` device sends ``input_mode="ptt"`` packets and the two
+agree; ``half_duplex`` / ``full_duplex`` devices auto-record and report
+``input_mode="auto"``. They act on orthogonal concerns, so they never fight.
 """
 
 from __future__ import annotations

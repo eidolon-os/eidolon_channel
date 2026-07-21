@@ -63,7 +63,8 @@ class SimulatedDevice:
     """A minimal contract-correct device for tests.
 
     ``interaction_mode`` selects the ``input_mode`` the device reports
-    (``ptt`` for half-duplex, ``auto`` for full-duplex), matching real firmware.
+    (``ptt`` for push-to-talk; ``auto`` for half_duplex and full_duplex, which
+    both auto-record), matching real firmware.
     """
 
     def __init__(

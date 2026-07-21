@@ -192,7 +192,7 @@ def test_load_offline_policy_regression_suite() -> None:
     }
 
     idle_tap = cases["opr_waveshare_ptt_idle_tap_no_policy_decision_001"]
-    assert idle_tap.device_envelope.device.mode == "half_duplex"
+    assert idle_tap.device_envelope.device.mode == "ptt"
     assert idle_tap.user_steps[0].client_ptt is True
     assert idle_tap.user_steps[0].agent_speaking is False
     assert idle_tap.expectations.decision_action == "none"
@@ -290,14 +290,22 @@ def test_device_envelope_mic_render_adds_echo_and_noise() -> None:
 def test_livekit_room_device_envelope_input_mode_tracks_device_mode() -> None:
     from benchmark.livekit_room_runner import _case_input_mode, _step_input_mode
 
+    # full_duplex auto-records: input_mode "auto" (NOT ptt) after the 3-mode split.
     suite = load_suite("benchmark/cases/dogfood_box3_audio_first_enforced.yaml")
-
     assert _case_input_mode(suite.cases[0]) == "auto"
+
+    # A ptt-mode device reports input_mode "ptt" at the case level.
+    ptt_mode_suite = load_suite("benchmark/cases/half_duplex_ptt_phase_a_enforced.yaml")
+    assert _case_input_mode(ptt_mode_suite.cases[0]) == "ptt"
+
+    # A full_duplex case still reports "ptt" per-step when the step is an
+    # explicit client PTT preempt (driven by client_ptt, not device.mode).
     ptt_suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
     ptt_case = {
         case.case_id: case
         for case in ptt_suite.cases
     }["fd_explicit_ptt_preempts_without_speech_001"]
+    assert _case_input_mode(ptt_case) == "auto"
     assert _step_input_mode(ptt_case, ptt_case.user_steps[0]) == "ptt"
 
 
@@ -305,14 +313,17 @@ def test_half_duplex_ptt_phase_a_suite_is_mode_specific() -> None:
     suite = load_suite("benchmark/cases/half_duplex_ptt_phase_a_enforced.yaml")
     cases = {case.case_id: case for case in suite.cases}
 
+    # push-to-talk is its own interaction_mode; the suite must route to it.
+    assert suite.suite_mode == "ptt"
+
     normal = cases["phase_a_ptt_normal_release_commits_001"]
     assert normal.device_envelope.device.model == "waveshare_esp32_s3_touch_amoled_2_06"
-    assert normal.device_envelope.device.mode == "half_duplex"
+    assert normal.device_envelope.device.mode == "ptt"
     assert normal.user_steps[0].client_ptt is True
     assert normal.expectations.agent_audio_response == "after_user_done"
 
     tap_to_stop = cases["phase_a_ptt_tap_to_stop_cancels_001"]
-    assert tap_to_stop.device_envelope.device.mode == "half_duplex"
+    assert tap_to_stop.device_envelope.device.mode == "ptt"
     assert tap_to_stop.expectations.decision_action == "cancel"
     assert tap_to_stop.expectations.playback_stop_sent is True
     assert tap_to_stop.expectations.agent_audio_response == "none"

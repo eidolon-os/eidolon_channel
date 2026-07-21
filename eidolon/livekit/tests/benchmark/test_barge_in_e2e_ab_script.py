@@ -103,6 +103,14 @@ def test_participant_metadata_allows_half_duplex_override() -> None:
     assert _participant_metadata(Args()) == {"interaction_mode": "half_duplex"}
 
 
+def test_participant_metadata_allows_ptt_override() -> None:
+    class Args:
+        livekit_interaction_mode = "ptt"
+        livekit_session_intent = ""
+
+    assert _participant_metadata(Args()) == {"interaction_mode": "ptt"}
+
+
 def test_default_suite_set_is_full_duplex_gate_without_legacy() -> None:
     assert DEFAULT_SUITE_SET == "full_duplex_gate"
     assert list(DEFAULT_CASES) == [
@@ -150,6 +158,22 @@ def test_all_suite_set_can_filter_to_requested_mode() -> None:
     )
 
     assert [suite.suite_id for suite in selected] == ["half", "shared"]
+
+
+def test_livekit_mode_ptt_selects_ptt_suite() -> None:
+    suites = [
+        BenchmarkSuite("full", "full_duplex", ()),
+        BenchmarkSuite("ptt", "ptt", ()),
+        BenchmarkSuite("shared", "shared", ()),
+    ]
+
+    selected = _suites_for_livekit_mode(
+        suites,
+        interaction_mode="ptt",
+        allow_suite_set_filter=True,
+    )
+
+    assert [suite.suite_id for suite in selected] == ["ptt", "shared"]
 
 
 def test_case_id_filter_selects_cases_without_copying_yaml() -> None:

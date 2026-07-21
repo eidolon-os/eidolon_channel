@@ -274,7 +274,7 @@ def _participant_metadata(
     suite_modes = {
         str(suite.suite_mode)
         for suite in suites
-        if str(suite.suite_mode) in {"full_duplex", "half_duplex"}
+        if str(suite.suite_mode) in {"full_duplex", "half_duplex", "ptt"}
     }
     if requested_mode:
         metadata["interaction_mode"] = requested_mode
@@ -386,7 +386,7 @@ async def _main() -> int:
     )
     parser.add_argument(
         "--livekit-interaction-mode",
-        choices=["full_duplex", "half_duplex"],
+        choices=["full_duplex", "half_duplex", "ptt"],
         default=os.getenv("EIDOLON_BENCH_LIVEKIT_INTERACTION_MODE"),
         help=(
             "Participant interaction_mode metadata. When omitted, a mode-specific "

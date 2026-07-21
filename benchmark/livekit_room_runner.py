@@ -648,7 +648,10 @@ def _step_playback_state(step: Any, *, default: str) -> str:
 
 
 def _case_input_mode(case: BenchmarkCase) -> str:
-    if case.device_envelope.enabled and case.device_envelope.device.mode == "half_duplex":
+    # Only a push-to-talk device reports input_mode "ptt". half_duplex and
+    # full_duplex both auto-record (input_mode "auto"), matching real firmware
+    # and device_sim after the 3-mode split (ptt is its own interaction_mode).
+    if case.device_envelope.enabled and case.device_envelope.device.mode == "ptt":
         return INPUT_MODE_PTT
     return INPUT_MODE_AUTO
 

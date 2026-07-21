@@ -931,12 +931,16 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--livekit-interaction-mode",
-        choices=["full_duplex", "half_duplex"],
+        choices=["full_duplex", "half_duplex", "ptt"],
         default=os.environ.get(
             "EIDOLON_BENCH_LIVEKIT_INTERACTION_MODE",
             "full_duplex",
         ),
-        help="Participant interaction_mode metadata. Barge-in A/B defaults to full_duplex.",
+        help=(
+            "Participant interaction_mode metadata. Barge-in A/B defaults to "
+            "full_duplex; use ptt for the button-segment (HalfDuplexPttPipeline) "
+            "suite and half_duplex for the no-barge-in streaming pipeline."
+        ),
     )
     parser.add_argument(
         "--livekit-session-intent",

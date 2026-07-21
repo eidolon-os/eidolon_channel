@@ -424,7 +424,7 @@ client ptt_pressed → HalfDuplexPttTurnController 打开 hold 窗口
 `benchmark/cases/` 也按产品模式拆分：
 
 - `full_duplex/`：open-mic natural conversation、barge-in/backchannel/false-start/ambient guard，以及 full-duplex explicit client control。
-- `half_duplex/`：PTT segment owner；目前仍用 `interaction_mode=half_duplex` 跑。注意：此 benchmark 目录名与运行开关沿用 3-mode 拆分前的旧约定，`bench_barge_in_e2e_ab.py` 的 `--livekit-interaction-mode` 目前只接受 `full_duplex`/`half_duplex`；PTT 段落轮次现在由 `ptt` 模式路由到 `HalfDuplexPttPipeline`，把该 suite 迁到 `interaction_mode=ptt` 是单独的待办（本次仅同步 runtime 文档）。
+- `half_duplex/`：push-to-talk（PTT）segment owner；必须用 `--livekit-interaction-mode ptt` 跑（只有 `ptt` 路由到 `HalfDuplexPttPipeline`）。目录名与 suite-set key 沿用旧的 `half_duplex` 标签（与 `HalfDuplexPttPipeline` 类 / `half_duplex/` 包一致），但交互模式是 `ptt`。
 - `shared/`：不绑定单一 room mode 的 deterministic/shared regression。
 - `legacy/`：历史 suite；默认 E2E gate 不运行。
 

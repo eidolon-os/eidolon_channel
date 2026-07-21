@@ -240,8 +240,11 @@ Benchmark cases are mode-scoped under:
 - `benchmark/cases/full_duplex/`: open-mic natural conversation, barge-in,
   backchannel, false-start, ambient/echo guard, and explicit full-duplex client
   controls.
-- `benchmark/cases/half_duplex/`: PTT segment owner cases. These must run with
-  `--livekit-interaction-mode half_duplex`.
+- `benchmark/cases/half_duplex/`: push-to-talk (PTT) segment owner cases. These
+  must run with `--livekit-interaction-mode ptt` — only `ptt` routes to
+  `HalfDuplexPttPipeline`. (The directory keeps the legacy `half_duplex` name,
+  matching the `HalfDuplexPttPipeline` class / `half_duplex/` package; the
+  interaction mode is `ptt` after the 3-mode split in commit 6c2316e.)
 - `benchmark/cases/shared/`: deterministic policy or reusable cases that are
   not tied to one room interaction mode.
 - `benchmark/cases/legacy/`: historical compatibility suites. Default E2E
@@ -264,7 +267,7 @@ Useful E2E invocations:
 
 ./.venv/bin/python scripts/bench_barge_in_e2e_ab.py \
   --suite-set half_duplex_ptt_phase_a \
-  --livekit-interaction-mode half_duplex
+  --livekit-interaction-mode ptt
 ```
 
 Room cases in these gate suites must declare `agent_audio_response` explicitly:

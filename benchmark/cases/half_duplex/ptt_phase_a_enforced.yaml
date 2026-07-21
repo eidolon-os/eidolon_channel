@@ -1,20 +1,23 @@
 suite_id: half_duplex_ptt_phase_a_enforced
-suite_mode: half_duplex
-# Phase A dogfood gate for Waveshare 2.06 / ESP32 half-duplex PTT.
-# This suite is intentionally small and mode-specific: it should be run with
-# participant metadata interaction_mode=half_duplex, not mixed into the default
-# full-duplex barge-in matrix.
+suite_mode: ptt
+# Phase A dogfood gate for the Waveshare 2.06 / ESP32 push-to-talk device.
+# This suite is intentionally small and mode-specific: it must be run with
+# participant metadata interaction_mode=ptt (the button-segment
+# HalfDuplexPttPipeline), not mixed into the default full-duplex barge-in matrix.
+# NOTE: the suite_id / suite-set key / directory keep the legacy "half_duplex"
+# label (same as the HalfDuplexPttPipeline class and half_duplex/ package);
+# push-to-talk is now the `ptt` interaction_mode after commit 6c2316e.
 cases:
   - case_id: phase_a_ptt_normal_release_commits_001
     suite: half_duplex_ptt_phase_a
-    description: 半双工 PTT：按住说一句正常请求，音频结束后 release edge 应提交 turn 并触发 agent 回复。
+    description: PTT：按住说一句正常请求，音频结束后 release edge 应提交 turn 并触发 agent 回复。
     timeout_sec: 60
-    tags: ["phase_a", "ptt", "half_duplex", "normal_turn", "waveshare_2_06"]
+    tags: ["phase_a", "ptt", "normal_turn", "waveshare_2_06"]
     device_envelope:
       enabled: true
       device:
         model: waveshare_esp32_s3_touch_amoled_2_06
-        mode: half_duplex
+        mode: ptt
         audio_state_hz: 12
         playback_ack: simulated
     audio_clips:
@@ -42,14 +45,14 @@ cases:
 
   - case_id: phase_a_ptt_tap_to_stop_cancels_001
     suite: half_duplex_ptt_phase_a
-    description: 半双工 PTT：agent 播放中按下 PTT 是显式 tap-to-stop，应立即取消播放；release 不应提交空 turn。
+    description: PTT：agent 播放中按下 PTT 是显式 tap-to-stop，应立即取消播放；release 不应提交空 turn。
     timeout_sec: 45
-    tags: ["phase_a", "ptt", "half_duplex", "tap_to_stop", "waveshare_2_06"]
+    tags: ["phase_a", "ptt", "tap_to_stop", "waveshare_2_06"]
     device_envelope:
       enabled: true
       device:
         model: waveshare_esp32_s3_touch_amoled_2_06
-        mode: half_duplex
+        mode: ptt
         audio_state_hz: 12
         playback_ack: simulated
       agent:

@@ -11,7 +11,7 @@ import yaml
 
 
 RunnerName = Literal["policy", "headless", "component", "livekit_room"]
-SuiteMode = Literal["half_duplex", "full_duplex", "shared", "legacy"]
+SuiteMode = Literal["full_duplex", "half_duplex", "ptt", "shared", "legacy"]
 
 # Room names are "{prefix}-{case_id}-{8-hex}". The livekit_room runner builds
 # them and timeline_expectations parses them back, so both sides share this.
@@ -258,7 +258,7 @@ def _resolve_suite_path(path: str | Path) -> Path:
 
 def _suite_mode(raw: dict[str, Any]) -> SuiteMode:
     value = str(raw.get("suite_mode") or "shared")
-    allowed = {"half_duplex", "full_duplex", "shared", "legacy"}
+    allowed = {"full_duplex", "half_duplex", "ptt", "shared", "legacy"}
     if value not in allowed:
         raise ValueError(
             f"suite_mode must be one of {sorted(allowed)}, got {value!r}"

@@ -102,6 +102,17 @@ class FullDuplexSpeechLifecycle:
                 owner._timeline.set_attr("interruption_owner", "livekit_native_adaptive")
             return
 
+        if not owner._barge_in_enabled:
+            # half_duplex: no barge-in. VAD-start must NOT arm a duck window or an
+            # interruption candidate — the mic is closed while the agent speaks, so
+            # there is no barge-in to detect, and the user turn commits through the
+            # framework's normal endpointing path. Arming it here (the pre-fix
+            # behaviour) routed every idle-turn utterance into the interruption
+            # evidence window, which then rolled back on timeout and never committed.
+            if owner._timeline is not None:
+                owner._timeline.set_attr("interruption_owner", "disabled_no_barge_in")
+            return
+
         interrupt_window_started = owner._attention_effects.handle_speaking_started()
         if interrupt_window_started:
             owner._interruption_orchestrator.start_candidate(timeline=owner._timeline)
@@ -152,6 +163,8 @@ class FullDuplexSpeechLifecycle:
 
     def _finish_confirmed_cancel_on_stop(self) -> bool:
         owner = self._owner
+        if not owner._barge_in_enabled:
+            return False
         interruption_owner = getattr(owner, "_interruption_orchestrator", None)
         if interruption_owner is None:
             return False
@@ -162,6 +175,8 @@ class FullDuplexSpeechLifecycle:
 
     def _resolve_interruption_candidate_on_stop(self) -> bool:
         owner = self._owner
+        if not owner._barge_in_enabled:
+            return False
         interruption_effects = owner._ensure_interruption_effects()
         if interruption_effects.soft_interrupt_active():
             logger.info(

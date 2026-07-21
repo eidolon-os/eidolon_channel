@@ -834,10 +834,15 @@ class StreamingPipeline(BasePipeline):
                     "text_length": len(transcript),
                 },
             )
-        self._ensure_interruption_effects().rollback_if_suspended(
-            reason="agent_echo",
-            drop_buffered=False,
-        )
+        # The suppress flag above is shared (echo protection applies to any
+        # open-mic-during-playback session). The duck rollback below is barge-in
+        # only; half_duplex never ducks, so it is a no-op there anyway — gate it
+        # on the single barge-in authority so no future path revives it.
+        if self._barge_in_enabled:
+            self._ensure_interruption_effects().rollback_if_suspended(
+                reason="agent_echo",
+                drop_buffered=False,
+            )
 
     def _absorb_committed_turn_transcript_revision(
         self,
@@ -1220,6 +1225,21 @@ class StreamingPipeline(BasePipeline):
             false_interruption_timeout=self._false_interruption_timeout,
             avatar_mode=self._avatar_enabled,
         )
+
+    @property
+    def _barge_in_enabled(self) -> bool:
+        """Single authority for whether this session runs barge-in.
+
+        ``full_duplex`` → True; ``half_duplex`` → False (carried by
+        ``allow_interruptions``, the ONLY runtime signal that distinguishes the
+        two modes). Every barge-in touch point must consult THIS — never
+        ``attention.enabled`` / ``attention.enforce`` /
+        ``_uses_livekit_native_adaptive_interruption`` (none of which separate
+        the modes: enforce is identical in both, and the native-adaptive gate is
+        False in both). ``ptt`` never reaches StreamingPipeline (server routes it
+        to HalfDuplexPttPipeline), so only full/half are in scope here.
+        """
+        return bool(getattr(self, "_allow_interruptions", True))
 
     def _uses_livekit_native_adaptive_interruption(self) -> bool:
         return uses_livekit_native_adaptive_interruption(

@@ -43,6 +43,9 @@ def _owner() -> SimpleNamespace:
     owner._latest_asr_text = "stale"
     owner._get_eot_model = MagicMock(return_value=MagicMock())
     owner._uses_livekit_native_adaptive_interruption = MagicMock(return_value=False)
+    # full_duplex: barge-in is ON (the single authority the lifecycle now consults
+    # before arming/resolving an interruption candidate).
+    owner._barge_in_enabled = True
     owner._attention_effects = MagicMock()
     owner._attention_effects.handle_speaking_started.return_value = True
     owner._attach_transcript_ingress_recent_events = MagicMock()
@@ -118,6 +121,40 @@ def test_speech_lifecycle_start_does_not_open_candidate_without_interrupt_window
 
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_not_called()
+
+
+def test_speech_lifecycle_start_skips_barge_in_when_half_duplex() -> None:
+    # Regression: half_duplex has no barge-in, so VAD-start must NOT arm a duck
+    # window or an interruption candidate. The pre-fix behaviour routed every
+    # idle-turn utterance into the interruption evidence window, which rolled
+    # back on timeout and never committed ("一直收音中, agent 从不回复").
+    owner = _owner()
+    owner._barge_in_enabled = False
+
+    FullDuplexSpeechLifecycle(owner).handle_started()
+
+    # No barge-in machinery is touched on VAD-start.
+    owner._attention_effects.handle_speaking_started.assert_not_called()
+    owner._interruption_orchestrator.start_candidate.assert_not_called()
+    assert owner._timeline.attrs["interruption_owner"] == "disabled_no_barge_in"
+    # Shared turn setup still runs — the user turn must proceed to the framework's
+    # normal endpointing/commit path.
+    owner._callbacks.on_user_started_speaking.assert_called_once_with()
+    owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
+    owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)
+
+
+def test_speech_lifecycle_stop_skips_interruption_resolve_when_half_duplex() -> None:
+    # half_duplex stop-side symmetry: no confirmed-cancel / candidate resolution.
+    owner = _owner()
+    owner._barge_in_enabled = False
+
+    lifecycle = FullDuplexSpeechLifecycle(owner)
+    lifecycle.handle_started()
+    lifecycle.handle_stopped()
+
+    owner._interruption_orchestrator.finish_confirmed_cancel_speech.assert_not_called()
+    owner._get_eot_model.return_value.update_vad.assert_called_with(False)
 
 
 def test_speech_lifecycle_snapshots_replaced_unmerged_timeline() -> None:

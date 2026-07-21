@@ -30,7 +30,11 @@ class FullDuplexTranscriptRecorder:
         pipeline._mark_activity()
         pipeline._latest_asr_text = transcript_event.transcript
         orchestrator = getattr(pipeline, "_interruption_orchestrator", None)
-        if orchestrator is not None and not pipeline._uses_livekit_native_adaptive_interruption():
+        if (
+            orchestrator is not None
+            and pipeline._barge_in_enabled
+            and not pipeline._uses_livekit_native_adaptive_interruption()
+        ):
             orchestrator.note_transcript(
                 transcript_event.transcript,
                 is_final=transcript_event.is_final,

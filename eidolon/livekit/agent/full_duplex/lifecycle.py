@@ -101,7 +101,11 @@ class FullDuplexSessionLifecycle:
         else:
             framework_patches.disable_audio_activity_interruption(session)
 
-        pipeline._ensure_output_flow().install_duck_mixer(session)
+        # Barge-in only: the ducking mixer is a removable interposer over the
+        # output sink. half_duplex never barges in, so it is not installed there;
+        # normal TTS then flows straight through session.output.audio unchanged.
+        if pipeline._barge_in_enabled:
+            pipeline._ensure_output_flow().install_duck_mixer(session)
         if pipeline._filler is not None and session.output.audio is not None:
             target_sr = session.output.audio.sample_rate
             logger.info(

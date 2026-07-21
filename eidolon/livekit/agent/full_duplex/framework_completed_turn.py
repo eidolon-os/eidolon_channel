@@ -397,7 +397,11 @@ class FullDuplexFrameworkCompletedTurnGate:
     ) -> bool | None:
         owner = self._pipeline
         interruption_owner = getattr(owner, "_interruption_orchestrator", None)
-        if interruption_owner is None or not interruption_owner.blocks_framework_completed_turn():
+        if (
+            interruption_owner is None
+            or not owner._barge_in_enabled
+            or not interruption_owner.blocks_framework_completed_turn()
+        ):
             return None
         decision = self._decide_from_completed_turn_evidence(
             completed_transcript,

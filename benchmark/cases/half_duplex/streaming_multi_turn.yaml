@@ -1,0 +1,85 @@
+suite_id: half_duplex_streaming_multi_turn
+suite_mode: half_duplex
+# Streaming half_duplex dogfood — NOT push-to-talk. Streaming half_duplex runs the
+# SAME StreamingPipeline as full_duplex (streaming STT + EOT turn commit); it only
+# disables barge-in (allow_interruptions=False), because the device auto-records and
+# closes its mic while the agent speaks (no clean AEC reference, e.g. m5stack-stackchan).
+#
+# This suite is the multi-turn dogfood gate for that mode: three real-audio rounds
+# (Q1->A1->Q2->A2->Q3->A3) must each reach the brain and produce speech. The user
+# always speaks while the agent is idle (agent_speaking:false, playback idle) — which
+# is the only time a half_duplex mic is open — so a correct pipeline commits every
+# turn via EOT and NEVER arms a duck / interruption candidate (barge-in stays off).
+# Regression intent: the pre-fix bug routed every idle-turn utterance into the
+# interruption evidence window, which rolled back on timeout so no turn committed.
+#
+# Run (needs LiveKit server + agent worker + admin resolver + Bailian key):
+#   python -m scripts.bench_voice --runner livekit_room \
+#     --cases benchmark/cases/half_duplex/streaming_multi_turn.yaml \
+#     --livekit-interaction-mode half_duplex \
+#     --livekit-participant-identity <registered-device-identity>
+cases:
+  - case_id: streaming_three_rounds_commit_each_001
+    suite: half_duplex_streaming
+    description: 半双工流式三轮问答（Q1→A1→Q2→A2→Q3→A3）。用户每轮都在 agent 空闲时说话，每轮都应经 EOT 提交、到达 brain 并出声；全程无 barge-in。
+    timeout_sec: 150
+    tags: ["half_duplex", "streaming", "multi_turn", "dogfood", "m5stack_stackchan"]
+    device_envelope:
+      enabled: true
+      device:
+        model: m5stack_stackchan
+        mode: half_duplex
+        audio_state_hz: 12
+        playback_ack: simulated
+    audio_clips:
+      - id: ask_intro
+        text: 帮我详细介绍一下这个方案。
+        path: benchmark/audio/generated/normal_ask_intro.wav
+        intent: normal
+      - id: followup_risk
+        text: 那它的主要风险是什么？
+        path: benchmark/audio/generated/normal_followup.wav
+        intent: normal
+      - id: followup_deadline
+        text: 那大概多久能做完？
+        path: benchmark/audio/generated/normal_followup_deadline.wav
+        intent: normal
+    user_steps:
+      - text: 帮我详细介绍一下这个方案
+        audio: ask_intro
+        start_ms: 80
+        duration_ms: 2980
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+        client_mic_muted: false
+      - text: 那它的主要风险是什么
+        audio: followup_risk
+        start_ms: 6000
+        duration_ms: 2860
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+        client_mic_muted: false
+      - text: 那大概多久能做完
+        audio: followup_deadline
+        start_ms: 12000
+        duration_ms: 2580
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+        client_mic_muted: false
+    agent_replies:
+      - when: 详细介绍
+        reply: 这个方案分为接入、识别和合成三层。
+      - when: 风险
+        reply: 主要风险是打断延迟和识别准确率。
+      - when: 多久
+        reply: 大概需要六周左右。
+    expect:
+      action: none
+      brain: required
+      min_brain_requests: 3
+      agent_audio_response: after_user_done
+      min_user_finals: 3
+      min_agent_messages: 3

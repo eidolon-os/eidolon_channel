@@ -45,6 +45,7 @@ from eidolon.livekit.plugins.stt.bailian import (
 )
 from eidolon.livekit.plugins.stt.bailian.connection_manager import (
     BailianConnectionError,
+    _build_run_task_payload,
 )
 from livekit.agents.utils.aio.channel import ChanClosed
 
@@ -333,6 +334,20 @@ def audio_chunks():
 # ---------------------------------------------------------------------------
 # Connection Manager Tests
 # ---------------------------------------------------------------------------
+
+
+def test_run_task_payload_declares_explicit_pcm_format() -> None:
+    # Regression: DashScope FunASR infers the codec from the first audio chunk
+    # unless run-task declares an explicit ``format``. A silence-first stream
+    # (e.g. a half_duplex welcome while the device keeps its mic muted, so STT
+    # opens on silence) then dies with UNSUPPORTED_FORMAT "format is empty" and
+    # STT never recovers for the whole session. The stream always sends 16-bit
+    # mono PCM, so run-task must declare it.
+    payload = _build_run_task_payload(
+        model="fun-asr-realtime-2026-02-28", task_id="task-1"
+    )
+    assert payload["payload"]["parameters"]["format"] == "pcm"
+
 
 @pytest.mark.asyncio
 async def test_connection_manager_basic(mock_server):

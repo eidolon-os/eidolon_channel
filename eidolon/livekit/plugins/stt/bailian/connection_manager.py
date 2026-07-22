@@ -77,6 +77,14 @@ def _build_run_task_payload(
     # protocol expects ``language_hints`` as a list of language codes
     # (e.g. ``["zh"]`` to force Chinese; ``["zh","en"]`` for code-switching).
     parameters: dict[str, Any] = {
+        # DashScope FunASR requires an explicit audio ``format``. Without it the
+        # server infers the codec from the FIRST audio chunk — and a silence-first
+        # stream (e.g. a half_duplex session whose device keeps its mic muted while
+        # the welcome plays, so STT opens on silence) has no inferable codec, so
+        # run-task dies immediately with ``UNSUPPORTED_FORMAT: format is empty`` and
+        # STT never recovers for the whole session. The STT stream always forwards
+        # 16-bit mono PCM, so declare it explicitly.
+        "format": "pcm",
         "sample_rate": sample_rate,
         "itn": str(itn).lower(),
         # G7-A (2026-05-17): protocol-level keepalive flag. Per FunASR docs:

@@ -27,7 +27,10 @@ from livekit.agents.voice.avatar import (
 
 from eidolon.livekit.common.config import AvatarConfig
 
+from ._video_gen_base import DHVideoGeneratorBase
+from .ditto_streaming_client import DittoStreamClient
 from .service_client import DigitalHumanServiceClient, StreamVideoParams
+from .streaming_video_generator import StreamingDHVideoGenerator
 from .video_generator import EidolonDHVideoGenerator
 
 logger = logging.getLogger("agent.avatar.worker")
@@ -68,7 +71,7 @@ class AvatarWorker:
         self._room: rtc.Room | None = None
         self._runner: AvatarRunner | None = None
         self._service: DigitalHumanServiceClient | None = None
-        self._video_gen: EidolonDHVideoGenerator | None = None
+        self._video_gen: DHVideoGeneratorBase | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -106,26 +109,44 @@ class AvatarWorker:
         await room.connect(self._url, token)
         self._room = room
 
-        params = StreamVideoParams(
-            width=self._cfg.width,
-            height=self._cfg.height,
-            fps=self._cfg.fps,
-            fmt=self._cfg.format,
-        )
-        self._service = DigitalHumanServiceClient(
-            self._cfg.service_url,
-            params=params,
-            request_timeout_sec=self._cfg.request_timeout_sec,
-            connect_timeout_sec=self._cfg.connect_timeout_sec,
-        )
-        self._video_gen = EidolonDHVideoGenerator(
-            self._service,
-            width=self._cfg.width,
-            height=self._cfg.height,
-            target_fps=self._cfg.fps,
-            output_sample_rate=self._cfg.output_sample_rate,
-            face_image=self._face_image,
-        )
+        if self._cfg.streaming:
+            # Streaming ingestion: feed TTS live over /ws/audio_stream and
+            # progressively decode. No persistent service client — the generator
+            # opens a session per turn.
+            self._video_gen = StreamingDHVideoGenerator(
+                DittoStreamClient(
+                    self._cfg.service_url,
+                    connect_timeout_sec=self._cfg.connect_timeout_sec,
+                ),
+                width=self._cfg.width,
+                height=self._cfg.height,
+                target_fps=self._cfg.fps,
+                output_sample_rate=self._cfg.output_sample_rate,
+                face_image=self._face_image,
+                opus_frame_ms=self._cfg.stream_opus_frame_ms,
+                fast_start_samples=self._cfg.stream_fast_start_samples,
+            )
+        else:
+            params = StreamVideoParams(
+                width=self._cfg.width,
+                height=self._cfg.height,
+                fps=self._cfg.fps,
+                fmt=self._cfg.format,
+            )
+            self._service = DigitalHumanServiceClient(
+                self._cfg.service_url,
+                params=params,
+                request_timeout_sec=self._cfg.request_timeout_sec,
+                connect_timeout_sec=self._cfg.connect_timeout_sec,
+            )
+            self._video_gen = EidolonDHVideoGenerator(
+                self._service,
+                width=self._cfg.width,
+                height=self._cfg.height,
+                target_fps=self._cfg.fps,
+                output_sample_rate=self._cfg.output_sample_rate,
+                face_image=self._face_image,
+            )
         await self._video_gen.warmup()
 
         audio_recv = DataStreamAudioReceiver(room, sender_identity=self._agent_identity)

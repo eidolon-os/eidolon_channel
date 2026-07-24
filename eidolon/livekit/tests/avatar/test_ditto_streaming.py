@@ -1,0 +1,169 @@
+"""Hermetic tests for the streaming ingestion path (no real Ditto service).
+
+Covers the WS URL scheme mapping, the segment/end framing of
+``DittoStreamSession``, and an end-to-end run of ``StreamingDHVideoGenerator``
+against a fake client that replays a synthesized fragmented MP4.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+from collections.abc import AsyncIterator
+
+import aiohttp
+import av
+import numpy as np
+from livekit import rtc
+from livekit.agents.voice.avatar import AudioSegmentEnd
+
+from eidolon.livekit.avatar.ditto_streaming_client import DittoStreamSession, _ws_url
+from eidolon.livekit.avatar.streaming_video_generator import StreamingDHVideoGenerator
+
+WIDTH, HEIGHT, FPS, N_FRAMES = 64, 48, 25, 10
+
+
+def _make_fragmented_mp4() -> bytes:
+    buf = io.BytesIO()
+    container = av.open(
+        buf, mode="w", format="mp4",
+        options={"movflags": "frag_keyframe+empty_moov+default_base_moof"},
+    )
+    try:
+        stream = container.add_stream("libx264", rate=FPS)
+        stream.width, stream.height, stream.pix_fmt = WIDTH, HEIGHT, "yuv420p"
+        for i in range(N_FRAMES):
+            arr = np.full((HEIGHT, WIDTH, 3), (i * 23) % 256, dtype=np.uint8)
+            for packet in stream.encode(av.VideoFrame.from_ndarray(arr, format="rgb24")):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    finally:
+        container.close()
+    return buf.getvalue()
+
+
+def test_ws_url_maps_scheme() -> None:
+    assert _ws_url("https://host:61320/") == "wss://host:61320/ws/audio_stream"
+    assert _ws_url("http://host:52320") == "ws://host:52320/ws/audio_stream"
+
+
+class _Msg:
+    def __init__(self, type_, data):
+        self.type = type_
+        self.data = data
+
+
+class _FakeWS:
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self.sent_str: list[str] = []
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._messages:
+            raise StopAsyncIteration
+        return self._messages.pop(0)
+
+    async def send_str(self, s):
+        self.sent_str.append(s)
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeHTTPSession:
+    def __init__(self):
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
+
+
+async def test_session_segments_yields_binary_until_end() -> None:
+    ws = _FakeWS([
+        _Msg(aiohttp.WSMsgType.BINARY, b"seg-1"),
+        _Msg(aiohttp.WSMsgType.TEXT, '{"type":"ping","ts":1}'),
+        _Msg(aiohttp.WSMsgType.BINARY, b"seg-2"),
+        _Msg(aiohttp.WSMsgType.TEXT, '{"type":"end","total_segments":2}'),
+        _Msg(aiohttp.WSMsgType.BINARY, b"after-end-ignored"),
+    ])
+    session = DittoStreamSession(_FakeHTTPSession(), ws, {})
+    segs = [s async for s in session.segments()]
+    assert segs == [b"seg-1", b"seg-2"]  # stops at end, ignores trailing
+    assert any('"cmd": "pong"' in s or '"cmd":"pong"' in s for s in ws.sent_str)
+
+
+class _FakeStreamSession:
+    def __init__(self, fmp4: bytes):
+        self._fmp4 = fmp4
+        self.sent = 0
+        self.stopped = False
+        self.closed = False
+
+    async def send_audio(self, b: bytes) -> None:
+        self.sent += 1
+
+    async def request_stop(self) -> None:
+        self.stopped = True
+
+    async def segments(self) -> AsyncIterator[bytes]:
+        for i in range(0, len(self._fmp4), 2048):
+            yield self._fmp4[i : i + 2048]
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _FakeStreamClient:
+    def __init__(self, fmp4: bytes):
+        self._fmp4 = fmp4
+        self.sessions: list[_FakeStreamSession] = []
+        self.open_kwargs: list[dict] = []
+
+    async def open(self, **kwargs) -> _FakeStreamSession:
+        self.open_kwargs.append(kwargs)
+        s = _FakeStreamSession(self._fmp4)
+        self.sessions.append(s)
+        return s
+
+
+def _audio_frame(ms: int = 20, sr: int = 24000) -> rtc.AudioFrame:
+    n = sr * ms // 1000
+    data = np.zeros(n, dtype=np.int16).tobytes()
+    return rtc.AudioFrame(data=data, sample_rate=sr, num_channels=1, samples_per_channel=n)
+
+
+async def test_streaming_generator_decodes_a_turn_end_to_end() -> None:
+    client = _FakeStreamClient(_make_fragmented_mp4())
+    gen = StreamingDHVideoGenerator(
+        client,  # type: ignore[arg-type]
+        width=WIDTH,
+        height=HEIGHT,
+        target_fps=FPS,
+        output_sample_rate=24000,
+        face_image=b"\xff\xd8jpeg",
+    )
+    await gen.warmup()  # no-op in streaming mode
+    for _ in range(3):
+        await gen.push_audio(_audio_frame())
+    await gen.push_audio(AudioSegmentEnd())
+
+    videos = 0
+    saw_segment_end = False
+    for _ in range(N_FRAMES + 50):  # bounded drain
+        item = await asyncio.wait_for(gen._out_queue.get(), timeout=5.0)
+        if isinstance(item, AudioSegmentEnd):
+            saw_segment_end = True
+            break
+        if isinstance(item, rtc.VideoFrame):
+            videos += 1
+    assert saw_segment_end
+    assert videos == N_FRAMES
+    # the configured face was passed to the service as cond_image
+    assert client.open_kwargs[0]["image_bytes"] == b"\xff\xd8jpeg"
+    assert client.sessions[0].stopped is True
+    await gen.aclose()

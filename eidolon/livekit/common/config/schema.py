@@ -317,6 +317,19 @@ class AvatarConfig:
     # the service's own default avatar when unconfigured/unresolvable. Turn off
     # to always use the default avatar regardless of per-companion config.
     cond_image_enabled: bool = True
+    # Streaming ingestion (``/ws/audio_stream``): feed TTS audio as it is produced
+    # and progressively decode the returned fMP4 so the face starts within one
+    # first-frame latency of the first audio chunk, instead of waiting for the
+    # whole utterance (the batch ``/api/stream_video`` path). Default off keeps
+    # the verified batch path; deployments opt in. The service emits consistent-
+    # fps frames with PTS, so the progressive decoder needs no manual retiming.
+    streaming: bool = False
+    # OPUS output frame length the service aligns fps to (2.5/5/10/20/40/60).
+    stream_opus_frame_ms: float = 20.0
+    # Pre-pad this many 16 kHz silence samples before the first real audio so the
+    # service reaches its first-frame inference length sooner (faster first frame;
+    # the first frame may be a brief silence-driven still). 0 disables.
+    stream_fast_start_samples: int = 8000
 
 
 @dataclass(frozen=True)

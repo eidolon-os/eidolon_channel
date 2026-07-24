@@ -22,7 +22,9 @@ behavior:
 # metadata (client sends avatar=1 → hub stamps → resolve_avatar_requested).
 avatar:
   enabled: true
-  service_url: http://111.2.199.31:61320
+  # Ditto is HTTPS-only (self-signed) on 61320 — http:// fails; the client skips
+  # cert verification for this server-to-server call.
+  service_url: https://111.2.199.31:61320
   width: 448
   height: 448
   fps: 25.0

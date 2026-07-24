@@ -320,10 +320,13 @@ class AvatarConfig:
     # Streaming ingestion (``/ws/audio_stream``): feed TTS audio as it is produced
     # and progressively decode the returned fMP4 so the face starts within one
     # first-frame latency of the first audio chunk, instead of waiting for the
-    # whole utterance (the batch ``/api/stream_video`` path). Default off keeps
-    # the verified batch path; deployments opt in. The service emits consistent-
-    # fps frames with PTS, so the progressive decoder needs no manual retiming.
-    streaming: bool = False
+    # whole utterance (the batch ``/api/stream_video`` path). This is the default
+    # ingestion mode for avatar sessions (best latency); only affects sessions
+    # that already have the avatar on (gated by ``enabled`` + per-request
+    # ``avatar``), so audio-only sessions are untouched. Set false to fall back
+    # to the batch path. The service emits consistent-fps frames with PTS, so the
+    # progressive decoder needs no manual retiming.
+    streaming: bool = True
     # OPUS output frame length the service aligns fps to (2.5/5/10/20/40/60).
     stream_opus_frame_ms: float = 20.0
     # Pre-pad this many 16 kHz silence samples before the first real audio so the

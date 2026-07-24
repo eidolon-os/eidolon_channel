@@ -72,6 +72,9 @@ def test_avatar_config_defaults_off():
     default = AvatarConfig()
     assert default.enabled is False  # global kill-switch defaults off
     assert default.output_sample_rate == 24000
+    # Streaming is the default ingestion mode for avatar sessions (best latency);
+    # it only matters once avatar is enabled, so audio-only stays unaffected.
+    assert default.streaming is True
     # load path stays intact regardless of the enabled value
     assert isinstance(load_agent_config().avatar, AvatarConfig)
 

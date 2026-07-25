@@ -35,6 +35,11 @@ logger = logging.getLogger("agent.avatar.progressive_decoder")
 # still be emitted ahead of its audio.
 INTERLEAVE_WINDOW_S = 0.3
 
+# If nothing new arrives for this long, release whatever the interleave window is
+# holding: the service renders in bursts, and a held frame during a burst gap is
+# a frame the consumer is starving for.
+IDLE_FLUSH_S = 0.1
+
 
 class _BlockingStreamReader:
     """A file-like whose ``read`` blocks until fed bytes arrive or EOF.
@@ -187,7 +192,16 @@ async def progressive_decode(
     seq = 0
     try:
         while True:
-            item = await out_queue.get()
+            try:
+                item = await asyncio.wait_for(out_queue.get(), timeout=IDLE_FLUSH_S)
+            except asyncio.TimeoutError:
+                # The service went quiet mid-turn (it renders in bursts). Nothing
+                # more will arrive to interleave with, and these are exactly the
+                # frames the consumer needs to ride out the gap — release them
+                # instead of holding them for a timestamp that may never come.
+                while pending:
+                    yield pending.pop(0)[3]
+                continue
             if item is sentinel:
                 break
             time_s, kind, frame = item  # type: ignore[misc]

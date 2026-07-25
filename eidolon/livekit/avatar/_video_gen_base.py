@@ -73,6 +73,34 @@ class DHVideoGeneratorBase(VideoGenerator):
         )
         self._idle_frame: rtc.VideoFrame | None = None
         self._closed = False
+        self._av_sync: rtc.AVSynchronizer | None = None
+
+    def attach_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
+        """Let barge-in flush the synchronizer the runner publishes through.
+
+        ``AvatarRunner`` clears *our* queue on barge-in but leaves its
+        ``AVSynchronizer`` (and the audio source) holding already-paired frames,
+        so audio and video drain independently after a hard stop and the two
+        tracks end at different moments — visible as A/V desync at the cut. The
+        worker hands us the synchronizer after starting the runner so
+        :meth:`_flush_output` can cut both legs at the same point.
+        """
+        self._av_sync = av_sync
+
+    async def _flush_output(self) -> None:
+        """Drop everything still queued for publication (ours + the runner's).
+
+        Order matters: clear our queue first, then the synchronizer, so a frame
+        in flight can't slip into the synchronizer after it was flushed.
+        """
+        drain(self._out_queue)
+        av_sync = self._av_sync
+        if av_sync is None:
+            return
+        try:
+            await av_sync.clear_queue()
+        except Exception:
+            logger.debug("[video_gen] av_sync flush failed", exc_info=True)
 
     async def _prepare_idle_frame(self, img: bytes | None) -> None:
         """Decode the still shown between generated frames (same face the service

@@ -100,13 +100,17 @@ class EidolonDHVideoGenerator(DHVideoGeneratorBase):
         await self._seg_queue.put(wav)
 
     async def clear_buffer(self) -> None:
-        """Barge-in: drop pending input, in-flight request, and buffered output."""
+        """Barge-in: drop pending input, in-flight request, and buffered output.
+
+        Flushing reaches the runner's synchronizer too, so audio and video stop
+        at the same point instead of each draining its own residue.
+        """
         self._seg_buf.clear()
         drain(self._seg_queue)
         if self._seg_task is not None and not self._seg_task.done():
             self._seg_task.cancel()
             await asyncio.gather(self._seg_task, return_exceptions=True)
-        drain(self._out_queue)
+        await self._flush_output()
 
     # -------------------------------------------------------------- processor
     async def _run_processor(self) -> None:

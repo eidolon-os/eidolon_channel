@@ -24,7 +24,7 @@ import numpy as np
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd
 
-from ._video_gen_base import DHVideoGeneratorBase, drain
+from ._video_gen_base import DHVideoGeneratorBase
 from .ditto_streaming_client import DittoStreamClient, DittoStreamSession
 from .progressive_decoder import progressive_decode
 
@@ -84,11 +84,15 @@ class StreamingDHVideoGenerator(DHVideoGeneratorBase):
         turn.feed(frame)
 
     async def clear_buffer(self) -> None:
-        """Barge-in: abort the in-flight turn and flush buffered output."""
+        """Barge-in: abort the in-flight turn and flush buffered output.
+
+        Flushing reaches the runner's synchronizer too, so audio and video stop
+        at the same point instead of each draining its own residue.
+        """
         if self._turn is not None:
             await self._turn.abort()
             self._turn = None
-        drain(self._out_queue)
+        await self._flush_output()
 
     async def aclose(self) -> None:
         self._closed = True

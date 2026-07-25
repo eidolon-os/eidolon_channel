@@ -160,6 +160,10 @@ class AvatarWorker:
         self._runner = AvatarRunner(
             room, audio_recv=audio_recv, video_gen=self._video_gen, options=options
         )
+        # Barge-in must cut audio and video at the same point: the runner clears
+        # the generator's queue but not its own AVSynchronizer, so hand the
+        # synchronizer over for the generator to flush alongside its own buffers.
+        self._video_gen.attach_av_sync(self._runner.av_sync)
         await self._runner.start()
         logger.info(
             "[avatar.worker] started identity=%s room=%s sender=%s %dx%d@%.1f",

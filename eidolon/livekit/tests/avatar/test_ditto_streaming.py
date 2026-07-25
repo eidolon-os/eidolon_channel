@@ -137,6 +137,53 @@ def _audio_frame(ms: int = 20, sr: int = 24000) -> rtc.AudioFrame:
     return rtc.AudioFrame(data=data, sample_rate=sr, num_channels=1, samples_per_channel=n)
 
 
+class _FakeAvSync:
+    """Stands in for rtc.AVSynchronizer to observe the barge-in flush."""
+
+    def __init__(self) -> None:
+        self.cleared = 0
+
+    async def clear_queue(self) -> None:
+        self.cleared += 1
+
+
+async def test_barge_in_flushes_generator_and_synchronizer() -> None:
+    """A hard stop must clear the runner's synchronizer too — otherwise audio and
+    video each drain their own residue and end at different moments (A/V desync)."""
+    gen = StreamingDHVideoGenerator(
+        _FakeStreamClient(_make_fragmented_mp4()),  # type: ignore[arg-type]
+        width=WIDTH,
+        height=HEIGHT,
+        target_fps=FPS,
+        output_sample_rate=24000,
+    )
+    av_sync = _FakeAvSync()
+    gen.attach_av_sync(av_sync)  # type: ignore[arg-type]
+    # Something already queued for publication when the barge-in lands.
+    gen._out_queue.put_nowait(_audio_frame())
+
+    await gen.clear_buffer()
+
+    assert gen._out_queue.empty()  # our buffered output is dropped
+    assert av_sync.cleared == 1  # and so is the synchronizer's
+    await gen.aclose()
+
+
+async def test_barge_in_without_av_sync_is_safe() -> None:
+    """No synchronizer attached (e.g. before the runner starts) → still clean."""
+    gen = StreamingDHVideoGenerator(
+        _FakeStreamClient(b""),  # type: ignore[arg-type]
+        width=WIDTH,
+        height=HEIGHT,
+        target_fps=FPS,
+        output_sample_rate=24000,
+    )
+    gen._out_queue.put_nowait(_audio_frame())
+    await gen.clear_buffer()
+    assert gen._out_queue.empty()
+    await gen.aclose()
+
+
 async def test_streaming_generator_decodes_a_turn_end_to_end() -> None:
     client = _FakeStreamClient(_make_fragmented_mp4())
     gen = StreamingDHVideoGenerator(

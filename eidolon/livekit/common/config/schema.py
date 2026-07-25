@@ -329,10 +329,15 @@ class AvatarConfig:
     streaming: bool = True
     # OPUS output frame length the service aligns fps to (2.5/5/10/20/40/60).
     stream_opus_frame_ms: float = 20.0
-    # Pre-pad this many 16 kHz silence samples before the first real audio so the
-    # service reaches its first-frame inference length sooner (faster first frame;
-    # the first frame may be a brief silence-driven still). 0 disables.
-    stream_fast_start_samples: int = 8000
+    # Pre-pad this many 16 kHz silence samples before the first real audio. The
+    # service then reaches its first inference window sooner — but it pays for
+    # that by emitting one early chunk and then *waiting*, punching a silence
+    # hole into the middle of the speech. Measured against the live service with
+    # a continuous tone: 8000 → first segment 1.83 s but a 0.75 s hole; 4000 →
+    # 1.64 s / 1.00 s hole; 2000 → 1.44 s / 1.15 s hole; 0 → 2.67 s and no hole
+    # at all. A gap inside a word is far worse than starting a beat later, so
+    # this defaults off; raise it only if a deployment prefers the trade.
+    stream_fast_start_samples: int = 0
 
 
 @dataclass(frozen=True)

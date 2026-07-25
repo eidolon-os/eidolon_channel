@@ -55,10 +55,11 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
     SESSION_END_IDLE_NORMAL,
     SESSION_END_PROACTIVE_DONE,
+    SESSION_INTENT_FIELD,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
     VALID_INTERACTION_MODES,
-    VALID_SESSION_INTENTS,
+    normalize_session_intent,
 )
 
 logger = logging.getLogger("agent.interaction_mode")
@@ -127,8 +128,10 @@ def resolve_session_intent(
             meta = parsed
     if not meta:
         return default
-    candidate = str(meta.get("session_intent") or "").strip().lower()
-    return candidate if candidate in VALID_SESSION_INTENTS else default
+    return normalize_session_intent(
+        str(meta.get(SESSION_INTENT_FIELD) or ""),
+        default=default,
+    )
 
 
 def resolve_device_id(

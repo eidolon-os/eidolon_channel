@@ -30,10 +30,11 @@ from .decoder import _audio_to_rtc, _video_to_rtc
 logger = logging.getLogger("agent.avatar.progressive_decoder")
 
 # How long to hold decoded frames before emitting, so audio and video can be
-# re-interleaved by timestamp. Must exceed one fragment's span (measured: ~240 ms
-# of video per fragment from the live service) or a fragment's video run would
-# still be emitted ahead of its audio.
-INTERLEAVE_WINDOW_S = 0.3
+# re-interleaved by timestamp. This is the one place the avatar path adds latency
+# of its own, so it is tuned to the smallest value that still interleaves: replayed
+# against live output, the longest single-track run is 6 at 0 ms, 4 at 100 ms,
+# 3 at 150 ms, and 2 from 200 ms on — going beyond 200 ms buys nothing.
+INTERLEAVE_WINDOW_S = 0.2
 
 # If nothing new arrives for this long, release whatever the interleave window is
 # holding: the service renders in bursts, and a held frame during a burst gap is

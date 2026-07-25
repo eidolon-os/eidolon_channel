@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 
 import av
 from livekit import rtc
@@ -131,11 +132,26 @@ class DHVideoGeneratorBase(VideoGenerator):
 
     async def _iter(self):
         idle_period = 1.0 / self._target_fps
+        starved_since: float | None = None
         while not self._closed:
             try:
                 item = await asyncio.wait_for(self._out_queue.get(), timeout=idle_period)
             except asyncio.TimeoutError:
+                # Buffer empty while the consumer wants a frame — this is the
+                # stall the listener hears. Time it so the log distinguishes
+                # "buffer too small" from "source stopped producing".
+                if starved_since is None:
+                    starved_since = time.monotonic()
                 if self._idle_frame is not None:
                     yield self._idle_frame
                 continue
+            if starved_since is not None:
+                stalled = time.monotonic() - starved_since
+                starved_since = None
+                if stalled > 0.2:
+                    logger.warning(
+                        "[video_gen] output starved %.2fs (buffer empty, cap=%d)",
+                        stalled,
+                        self._out_queue.maxsize,
+                    )
             yield item

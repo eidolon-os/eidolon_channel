@@ -14,11 +14,16 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 
 import aiohttp
 
 logger = logging.getLogger("agent.avatar.streaming")
+
+# Report a delivery gap this long or longer — under the smallest gap that can
+# outlast the jitter buffer, so the log shows the profile, not just the failures.
+_GAP_LOG_S = 0.4
 
 
 def _ws_url(base_url: str) -> str:
@@ -59,9 +64,24 @@ class DittoStreamSession:
             logger.debug("[streaming] stop send failed", exc_info=True)
 
     async def segments(self) -> AsyncIterator[bytes]:
-        """Yield fMP4 fragments as they arrive; stop on the ``end`` message."""
+        """Yield fMP4 fragments as they arrive; stop on the ``end`` message.
+
+        Logs long delivery gaps: the service renders in bursts, and a gap longer
+        than the downstream jitter buffer is what the listener hears as a stall,
+        so the gap profile is the ground truth for sizing that buffer.
+        """
+        prev = time.monotonic()
+        first = True
         async for msg in self._ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
+                now = time.monotonic()
+                gap = now - prev
+                if first:
+                    logger.info("[streaming] first segment after %.2fs", gap)
+                    first = False
+                elif gap > _GAP_LOG_S:
+                    logger.warning("[streaming] source gap %.2fs between segments", gap)
+                prev = now
                 yield msg.data
             elif msg.type == aiohttp.WSMsgType.TEXT:
                 try:

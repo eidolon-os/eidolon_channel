@@ -20,10 +20,6 @@ from livekit.agents.voice.avatar import AudioSegmentEnd, VideoGenerator
 
 logger = logging.getLogger("agent.avatar.video_gen")
 
-# Seconds of media to hold between the service and the synchronizer. Must exceed
-# the service's inter-burst gap (measured ~0.8 s) with headroom; at 0.83 s of
-# buffer the queue drained to empty ~half the time and speech stuttered.
-BUFFER_SECONDS = 2.5
 
 
 def image_to_i420(jpeg_or_png: bytes, width: int, height: int) -> rtc.VideoFrame:
@@ -74,15 +70,14 @@ class DHVideoGeneratorBase(VideoGenerator):
         self._target_fps = target_fps
         self._out_sr = output_sample_rate
         self._face_image = face_image
-        # Jitter buffer between the service and the synchronizer. The service
-        # generates in bursts — measured: ~1.4 s of media delivered at once, then
-        # ~0.8 s of silence while the next batch renders — and the synchronizer
-        # holds only ~100 ms itself, so this queue is what bridges those gaps.
-        # Entries are mixed audio+video, so a frame is worth roughly
-        # 1/(fps * 1.65) s of media; BUFFER_SECONDS of headroom over the observed
-        # gap keeps audio from underrunning (a starved queue = an audible stall).
+        # Jitter buffer between the service and the synchronizer, which holds
+        # only ~100 ms itself. Entries are mixed audio+video, so this is worth
+        # roughly 0.8 s of media — comfortably over the inter-segment gaps real
+        # sessions show (< 0.4 s). Deepening it further was tried and measured
+        # to change nothing; ``output starved`` in the log is the signal to
+        # revisit if a deployment's service delivers less evenly.
         self._out_queue: asyncio.Queue[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd] = (
-            asyncio.Queue(maxsize=max(2, int(target_fps * 1.65 * BUFFER_SECONDS)))
+            asyncio.Queue(maxsize=max(2, int(target_fps * 2)))
         )
         self._idle_frame: rtc.VideoFrame | None = None
         self._closed = False

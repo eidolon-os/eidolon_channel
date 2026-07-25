@@ -212,5 +212,46 @@ async def test_streaming_generator_decodes_a_turn_end_to_end() -> None:
     assert videos == N_FRAMES
     # the configured face was passed to the service as cond_image
     assert client.open_kwargs[0]["image_bytes"] == b"\xff\xd8jpeg"
+    # End-of-audio must NOT send `stop`: that aborts generation and the service
+    # returns end/0-segments, leaving nothing to decode and no audio published.
+    assert client.sessions[0].stopped is False
+    await gen.aclose()
+
+
+async def test_failed_turn_does_not_signal_playback_end() -> None:
+    """A turn that produced no frames must not emit AudioSegmentEnd, or the
+    runner reports playback finished for audio that was never captured."""
+
+    class _DeadClient:
+        async def open(self, **kwargs):
+            raise RuntimeError("service unreachable")
+
+    gen = StreamingDHVideoGenerator(
+        _DeadClient(),  # type: ignore[arg-type]
+        width=WIDTH,
+        height=HEIGHT,
+        target_fps=FPS,
+        output_sample_rate=24000,
+    )
+    await gen.push_audio(_audio_frame())
+    await gen.push_audio(AudioSegmentEnd())
+    await asyncio.sleep(0.05)  # let the turn fail
+    assert gen._out_queue.empty()
+    await gen.aclose()
+
+
+async def test_barge_in_stops_generation_upstream() -> None:
+    """Barge-in *is* a cancel — it must tell the service to stop generating."""
+    client = _FakeStreamClient(_make_fragmented_mp4())
+    gen = StreamingDHVideoGenerator(
+        client,  # type: ignore[arg-type]
+        width=WIDTH,
+        height=HEIGHT,
+        target_fps=FPS,
+        output_sample_rate=24000,
+    )
+    await gen.push_audio(_audio_frame())
+    await asyncio.sleep(0.05)  # let the session open
+    await gen.clear_buffer()
     assert client.sessions[0].stopped is True
     await gen.aclose()

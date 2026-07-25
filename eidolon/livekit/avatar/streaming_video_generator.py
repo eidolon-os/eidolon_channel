@@ -110,6 +110,7 @@ class _StreamTurn:
         self._audio_in: asyncio.Queue[object] = asyncio.Queue()
         self._resampler = av.AudioResampler(format="flt", layout="mono", rate=_STREAM_SAMPLE_RATE)
         self.finished = False
+        self._session: DittoStreamSession | None = None
         self._task = asyncio.create_task(self._run())
 
     def feed(self, frame: rtc.AudioFrame) -> None:
@@ -123,7 +124,18 @@ class _StreamTurn:
         self._audio_in.put_nowait(_END)
 
     async def abort(self) -> None:
+        """Barge-in: tell the service to stop generating, then drop the turn.
+
+        This is where ``stop`` belongs — cancelling is the intent, and it keeps
+        the service from generating for speech the user already interrupted.
+        """
         self.finished = True
+        session = self._session
+        if session is not None:
+            try:
+                await session.request_stop()
+            except Exception:
+                logger.debug("[streaming_gen] stop on abort failed", exc_info=True)
         if not self._task.done():
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
@@ -141,6 +153,7 @@ class _StreamTurn:
     async def _run(self) -> None:
         session: DittoStreamSession | None = None
         sender: asyncio.Task | None = None
+        frames = 0
         try:
             session = await self._gen._client.open(
                 image_bytes=self._gen._face_image,
@@ -151,11 +164,14 @@ class _StreamTurn:
                 jpeg_quality=self._gen._jpeg_quality,
                 fast_start_samples=self._gen._fast_start_samples,
             )
+            self._session = session
             sender = asyncio.create_task(self._send(session))
             async for frame in progressive_decode(
                 session.segments(), output_sample_rate=self._gen._out_sr
             ):
+                frames += 1
                 await self._gen._out_queue.put(frame)
+            logger.info("[streaming_gen] turn done frames=%d", frames)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -167,15 +183,27 @@ class _StreamTurn:
                 await asyncio.gather(sender, return_exceptions=True)
             if session is not None:
                 await session.aclose()
-            try:
-                self._gen._out_queue.put_nowait(AudioSegmentEnd())
-            except asyncio.QueueFull:
-                await self._gen._out_queue.put(AudioSegmentEnd())
+            # Only close a segment we actually published. Signalling the end of a
+            # turn that produced nothing makes the runner report playback finished
+            # for audio that was never captured ("playback_finished called more
+            # times than playback segments were captured").
+            if frames:
+                try:
+                    self._gen._out_queue.put_nowait(AudioSegmentEnd())
+                except asyncio.QueueFull:
+                    await self._gen._out_queue.put(AudioSegmentEnd())
 
     async def _send(self, session: DittoStreamSession) -> None:
+        """Stream this turn's audio, then simply stop sending.
+
+        End-of-audio must NOT send ``stop``: that asks the service to *abort*
+        generation, which returns ``end`` with zero segments (nothing to decode,
+        so the worker publishes no audio or video at all). The service flushes
+        and sends ``end`` on its own once the audio it was given is consumed —
+        ``stop`` stays reserved for barge-in, where cancelling is the point.
+        """
         while True:
             item = await self._audio_in.get()
             if item is _END:
-                await session.request_stop()
                 return
             await session.send_audio(item)  # type: ignore[arg-type]

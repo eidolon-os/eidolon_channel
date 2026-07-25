@@ -25,13 +25,18 @@ from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd
 
 from ._video_gen_base import DHVideoGeneratorBase
-from .ditto_streaming_client import DittoStreamClient, DittoStreamSession
+from .ditto_streaming_client import DittoStreamClient, DittoStreamSession, encode_cond_image
 from .progressive_decoder import progressive_decode
 
 logger = logging.getLogger("agent.avatar.streaming_gen")
 
 _STREAM_SAMPLE_RATE = 16000  # /ws/audio_stream requires 16 kHz mono float32
 _END = object()
+
+# Silence fed after an utterance so the service can render the tail of the real
+# speech at its normal pace. Measured: 1 s is enough for the whole utterance to
+# land before the service's input-idle timeout would hold it back.
+_FLUSH_TAIL_S = 1.0
 
 
 class StreamingDHVideoGenerator(DHVideoGeneratorBase):
@@ -62,6 +67,9 @@ class StreamingDHVideoGenerator(DHVideoGeneratorBase):
         self._jpeg_quality = jpeg_quality
         self._fast_start_samples = fast_start_samples
         self._turn: _StreamTurn | None = None
+        # The face never changes for a session, so encode it once instead of
+        # base64-ing ~100 KB on every utterance.
+        self._cond_image_b64 = encode_cond_image(face_image) if face_image else None
 
     async def warmup(self) -> None:
         # No idle frame in streaming mode: the worker publishes generated frames
@@ -76,9 +84,12 @@ class StreamingDHVideoGenerator(DHVideoGeneratorBase):
         if self._closed:
             return
         turn = self._turn
-        if turn is None or turn.finished:
+        # Audio after a turn's input closed belongs to a *new* utterance. Feeding
+        # it to the old turn would drop it silently — its sender has stopped —
+        # so supersede the turn even while it is still draining its tail.
+        if turn is None or turn.finished or turn.input_done:
             if turn is not None:
-                await turn.abort()  # new speech supersedes a stale turn
+                await turn.abort()
             turn = _StreamTurn(self)
             self._turn = turn
         turn.feed(frame)
@@ -99,6 +110,7 @@ class StreamingDHVideoGenerator(DHVideoGeneratorBase):
         if self._turn is not None:
             await self._turn.abort()
             self._turn = None
+        await self._client.aclose()
 
 
 class _StreamTurn:
@@ -110,6 +122,7 @@ class _StreamTurn:
         self._audio_in: asyncio.Queue[object] = asyncio.Queue()
         self._resampler = av.AudioResampler(format="flt", layout="mono", rate=_STREAM_SAMPLE_RATE)
         self.finished = False
+        self.input_done = False
         self._session: DittoStreamSession | None = None
         self._task = asyncio.create_task(self._run())
 
@@ -121,6 +134,8 @@ class _StreamTurn:
             logger.debug("[streaming_gen] resample failed", exc_info=True)
 
     def end(self) -> None:
+        """End of this utterance's audio."""
+        self.input_done = True
         self._audio_in.put_nowait(_END)
 
     async def abort(self) -> None:
@@ -156,7 +171,7 @@ class _StreamTurn:
         frames = 0
         try:
             session = await self._gen._client.open(
-                image_bytes=self._gen._face_image,
+                cond_image_b64=self._gen._cond_image_b64,
                 prefer_fps=self._gen._target_fps,
                 screen_width=self._gen._width,
                 screen_height=self._gen._height,
@@ -194,16 +209,23 @@ class _StreamTurn:
                     await self._gen._out_queue.put(AudioSegmentEnd())
 
     async def _send(self, session: DittoStreamSession) -> None:
-        """Stream this turn's audio, then simply stop sending.
+        """Stream this utterance's audio, then flush its tail.
 
-        End-of-audio must NOT send ``stop``: that asks the service to *abort*
-        generation, which returns ``end`` with zero segments (nothing to decode,
-        so the worker publishes no audio or video at all). The service flushes
-        and sends ``end`` on its own once the audio it was given is consumed —
-        ``stop`` stays reserved for barge-in, where cancelling is the point.
+        The service is audio-driven and always lags its input, so when the audio
+        simply stops it has no way to render the last of the utterance: it holds
+        that remainder until a ~5 s input-idle timeout, which the listener hears
+        as a stall mid-sentence. ``stop`` is not the answer either — it aborts,
+        discarding the undelivered remainder. Feeding a second of silence gives
+        the service the lookahead to finish the real speech at its normal pace
+        (measured: the full utterance lands before the idle timeout would even
+        begin), after which the socket can close on the quiet.
         """
         while True:
             item = await self._audio_in.get()
             if item is _END:
-                return
+                break
             await session.send_audio(item)  # type: ignore[arg-type]
+        silence = np.zeros(_STREAM_SAMPLE_RATE // 10, dtype=np.float32).tobytes()
+        for _ in range(int(_FLUSH_TAIL_S * 10)):
+            await session.send_audio(silence)
+        session.mark_input_complete()

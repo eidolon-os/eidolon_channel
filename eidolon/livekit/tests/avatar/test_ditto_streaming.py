@@ -60,24 +60,13 @@ class _FakeWS:
         self.sent_str: list[str] = []
         self.closed = False
 
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
+    async def receive(self):
         if not self._messages:
-            raise StopAsyncIteration
+            return _Msg(aiohttp.WSMsgType.CLOSED, None)
         return self._messages.pop(0)
 
     async def send_str(self, s):
         self.sent_str.append(s)
-
-    async def close(self):
-        self.closed = True
-
-
-class _FakeHTTPSession:
-    def __init__(self):
-        self.closed = False
 
     async def close(self):
         self.closed = True
@@ -91,7 +80,7 @@ async def test_session_segments_yields_binary_until_end() -> None:
         _Msg(aiohttp.WSMsgType.TEXT, '{"type":"end","total_segments":2}'),
         _Msg(aiohttp.WSMsgType.BINARY, b"after-end-ignored"),
     ])
-    session = DittoStreamSession(_FakeHTTPSession(), ws, {})
+    session = DittoStreamSession(ws, {})
     segs = [s async for s in session.segments()]
     assert segs == [b"seg-1", b"seg-2"]  # stops at end, ignores trailing
     assert any('"cmd": "pong"' in s or '"cmd":"pong"' in s for s in ws.sent_str)
@@ -101,11 +90,17 @@ class _FakeStreamSession:
     def __init__(self, fmp4: bytes):
         self._fmp4 = fmp4
         self.sent = 0
+        self.audio_bytes = 0
         self.stopped = False
         self.closed = False
+        self.input_complete = False
 
     async def send_audio(self, b: bytes) -> None:
         self.sent += 1
+        self.audio_bytes += len(b)
+
+    def mark_input_complete(self) -> None:
+        self.input_complete = True
 
     async def request_stop(self) -> None:
         self.stopped = True
@@ -129,6 +124,9 @@ class _FakeStreamClient:
         s = _FakeStreamSession(self._fmp4)
         self.sessions.append(s)
         return s
+
+    async def aclose(self) -> None:
+        pass
 
 
 def _audio_frame(ms: int = 20, sr: int = 24000) -> rtc.AudioFrame:
@@ -211,10 +209,34 @@ async def test_streaming_generator_decodes_a_turn_end_to_end() -> None:
     assert saw_segment_end
     assert videos == N_FRAMES
     # the configured face was passed to the service as cond_image
-    assert client.open_kwargs[0]["image_bytes"] == b"\xff\xd8jpeg"
+    assert client.open_kwargs[0]["cond_image_b64"].startswith("data:image/jpeg;base64,")
     # End-of-audio must NOT send `stop`: that aborts generation and the service
     # returns end/0-segments, leaving nothing to decode and no audio published.
     assert client.sessions[0].stopped is False
+    # Instead it feeds a silence tail and declares the input complete, so the
+    # service renders the tail of the utterance instead of holding it.
+    assert client.sessions[0].input_complete is True
+    assert client.sessions[0].audio_bytes > 0
+    await gen.aclose()
+
+
+async def test_new_utterance_supersedes_a_draining_turn() -> None:
+    """Audio arriving after a turn's input closed is a new utterance. The old
+    turn's sender has stopped, so feeding it there would drop the audio."""
+    client = _FakeStreamClient(_make_fragmented_mp4())
+    gen = StreamingDHVideoGenerator(
+        client,  # type: ignore[arg-type]
+        width=WIDTH,
+        height=HEIGHT,
+        target_fps=FPS,
+        output_sample_rate=24000,
+    )
+    await gen.push_audio(_audio_frame())
+    await gen.push_audio(AudioSegmentEnd())
+    await asyncio.sleep(0.05)
+    await gen.push_audio(_audio_frame())  # next utterance
+    await asyncio.sleep(0.05)
+    assert len(client.sessions) == 2, "a second utterance must open its own session"
     await gen.aclose()
 
 
@@ -225,6 +247,9 @@ async def test_failed_turn_does_not_signal_playback_end() -> None:
     class _DeadClient:
         async def open(self, **kwargs):
             raise RuntimeError("service unreachable")
+
+        async def aclose(self):
+            pass
 
     gen = StreamingDHVideoGenerator(
         _DeadClient(),  # type: ignore[arg-type]

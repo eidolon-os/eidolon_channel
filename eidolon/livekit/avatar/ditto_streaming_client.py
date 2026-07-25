@@ -25,6 +25,12 @@ logger = logging.getLogger("agent.avatar.streaming")
 # outlast the jitter buffer, so the log shows the profile, not just the failures.
 _GAP_LOG_S = 0.4
 
+# Once the input is complete, treat this much silence from the service as "the
+# utterance is fully delivered". Comfortably above its normal inter-burst rhythm
+# (measured 0.7–1.0 s) and far below its ~5 s input-idle timeout, which is the
+# stall we are avoiding.
+_TAIL_QUIET_S = 1.5
+
 
 def _ws_url(base_url: str) -> str:
     b = base_url.rstrip("/")
@@ -40,22 +46,32 @@ class DittoStreamSession:
 
     def __init__(
         self,
-        session: aiohttp.ClientSession,
         ws: aiohttp.ClientWebSocketResponse,
         negotiated: dict,
     ) -> None:
-        self._session = session
         self._ws = ws
         self.negotiated = negotiated
         self._closed = False
+        self._input_complete = False
 
     async def send_audio(self, pcm_f32le: bytes) -> None:
         if self._closed or not pcm_f32le:
             return
         await self._ws.send_bytes(pcm_f32le)
 
+    def mark_input_complete(self) -> None:
+        """Declare that no more audio is coming for this utterance.
+
+        The service only finalizes after ~5 s of input silence, holding the last
+        of the utterance until then; there is no "flush now" command (``stop``
+        discards what it hasn't sent). So once the caller has fed its trailing
+        silence, :meth:`segments` stops waiting as soon as the service goes quiet
+        rather than sitting through that timeout.
+        """
+        self._input_complete = True
+
     async def request_stop(self) -> None:
-        """Signal end-of-audio so the service flushes and sends ``end``."""
+        """Abort generation (barge-in). Discards anything not yet sent."""
         if self._closed:
             return
         try:
@@ -64,15 +80,22 @@ class DittoStreamSession:
             logger.debug("[streaming] stop send failed", exc_info=True)
 
     async def segments(self) -> AsyncIterator[bytes]:
-        """Yield fMP4 fragments as they arrive; stop on the ``end`` message.
+        """Yield fMP4 fragments as they arrive.
 
-        Logs long delivery gaps: the service renders in bursts, and a gap longer
-        than the downstream jitter buffer is what the listener hears as a stall,
-        so the gap profile is the ground truth for sizing that buffer.
+        Ends on the service's ``end``, or — once the caller has declared the
+        input complete — as soon as the service goes quiet for longer than its
+        normal inter-burst rhythm, which means the utterance has been fully
+        delivered and only the idle timeout remains.
         """
         prev = time.monotonic()
         first = True
-        async for msg in self._ws:
+        while True:
+            timeout = _TAIL_QUIET_S if self._input_complete else None
+            try:
+                msg = await asyncio.wait_for(self._ws.receive(), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.info("[streaming] utterance delivered; not waiting out the idle timeout")
+                return
             if msg.type == aiohttp.WSMsgType.BINARY:
                 now = time.monotonic()
                 gap = now - prev
@@ -90,21 +113,18 @@ class DittoStreamSession:
                     continue
                 kind = data.get("type")
                 if kind == "end":
-                    break
+                    return
                 if kind == "ping":
                     try:
                         await self._ws.send_str(json.dumps({"cmd": "pong"}))
                     except Exception:
                         pass
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.ERROR,
-            ):
-                break
+            else:
+                return
 
     async def aclose(self) -> None:
+        """Close this utterance's socket. The client's HTTP session lives on so
+        the next utterance reuses the connection pool (no fresh TLS handshake)."""
         if self._closed:
             return
         self._closed = True
@@ -112,12 +132,21 @@ class DittoStreamSession:
             await self._ws.close()
         except Exception:
             logger.debug("[streaming] ws close failed", exc_info=True)
-        finally:
-            await self._session.close()
+
+
+def encode_cond_image(image_bytes: bytes) -> str:
+    """The ``cond_image_base64`` data URI for a face. Encode once and reuse: the
+    face is fixed for a session while a new socket is opened per utterance."""
+    return "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
 
 
 class DittoStreamClient:
-    """Opens :class:`DittoStreamSession`s against a digital-human service."""
+    """Opens :class:`DittoStreamSession`s against a digital-human service.
+
+    One socket per utterance (so an idle conversation never holds the service,
+    which handles a single session at a time), but one HTTP session for the
+    client's lifetime, so consecutive utterances reuse the pooled TLS connection.
+    """
 
     def __init__(
         self,
@@ -131,11 +160,17 @@ class DittoStreamClient:
         self._verify_ssl = verify_ssl
         self._connect_timeout = connect_timeout_sec
         self._ready_timeout = ready_timeout_sec
+        self._http: aiohttp.ClientSession | None = None
+
+    def _ensure_http(self) -> aiohttp.ClientSession:
+        if self._http is None or self._http.closed:
+            self._http = aiohttp.ClientSession()
+        return self._http
 
     async def open(
         self,
         *,
-        image_bytes: bytes | None,
+        cond_image_b64: str | None,
         prefer_fps: float,
         screen_width: int,
         screen_height: int,
@@ -143,15 +178,11 @@ class DittoStreamClient:
         jpeg_quality: int = 60,
         fast_start_samples: int = 0,
     ) -> DittoStreamSession:
-        session = aiohttp.ClientSession()
-        try:
-            ws = await asyncio.wait_for(
-                session.ws_connect(self._url, ssl=None if self._verify_ssl else False),
-                timeout=self._connect_timeout,
-            )
-        except Exception:
-            await session.close()
-            raise
+        http = self._ensure_http()
+        ws = await asyncio.wait_for(
+            http.ws_connect(self._url, ssl=None if self._verify_ssl else False),
+            timeout=self._connect_timeout,
+        )
 
         start: dict = {
             "cmd": "start",
@@ -163,10 +194,8 @@ class DittoStreamClient:
         }
         if fast_start_samples > 0:
             start["fast_start_samples"] = fast_start_samples
-        if image_bytes:
-            start["cond_image_base64"] = (
-                "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
-            )
+        if cond_image_b64:
+            start["cond_image_base64"] = cond_image_b64
         try:
             await ws.send_str(json.dumps(start))
             negotiated = await asyncio.wait_for(
@@ -174,9 +203,13 @@ class DittoStreamClient:
             )
         except Exception:
             await ws.close()
-            await session.close()
             raise
-        return DittoStreamSession(session, ws, negotiated)
+        return DittoStreamSession(ws, negotiated)
+
+    async def aclose(self) -> None:
+        if self._http is not None and not self._http.closed:
+            await self._http.close()
+        self._http = None
 
     async def _await_ready(self, ws: aiohttp.ClientWebSocketResponse) -> dict:
         async for msg in ws:

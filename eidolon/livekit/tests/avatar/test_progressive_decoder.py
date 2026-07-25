@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import AsyncIterator
+from itertools import groupby
 
 import av
 import numpy as np
@@ -45,6 +46,40 @@ def _make_fragmented_mp4() -> bytes:
     return buf.getvalue()
 
 
+def _make_av_fragmented_mp4() -> bytes:
+    """A streamable fMP4 with BOTH tracks, muxed track-grouped like the service:
+    a run of video frames, then that span's audio."""
+    buf = io.BytesIO()
+    container = av.open(
+        buf,
+        mode="w",
+        format="mp4",
+        options={"movflags": "frag_keyframe+empty_moov+default_base_moof"},
+    )
+    try:
+        vs = container.add_stream("libx264", rate=FPS)
+        vs.width, vs.height, vs.pix_fmt = WIDTH, HEIGHT, "yuv420p"
+        aud = container.add_stream("aac", rate=24000)
+        aud.layout = "mono"
+        packets: list = []
+        samples = 0
+        for i in range(N_FRAMES):
+            arr = np.full((HEIGHT, WIDTH, 3), (i * 17) % 256, dtype=np.uint8)
+            packets += list(vs.encode(av.VideoFrame.from_ndarray(arr, format="rgb24")))
+            a = np.zeros((1, 1024), dtype=np.int16)
+            af = av.AudioFrame.from_ndarray(a, format="s16", layout="mono")
+            af.sample_rate = 24000
+            af.pts = samples
+            samples += 1024
+            packets += list(aud.encode(af))
+        packets += list(vs.encode()) + list(aud.encode())
+        for p in packets:
+            container.mux(p)
+    finally:
+        container.close()
+    return buf.getvalue()
+
+
 async def _chunks(data: bytes, size: int = 2048) -> AsyncIterator[bytes]:
     for i in range(0, len(data), size):
         yield data[i : i + size]
@@ -70,6 +105,22 @@ async def test_progressive_decode_aborts_without_hanging() -> None:
     first = await agen.__anext__()
     assert isinstance(first, rtc.VideoFrame)
     await agen.aclose()  # returns → reader.close() unblocked the decode thread
+
+
+async def test_progressive_decode_interleaves_audio_and_video() -> None:
+    """The service groups each fragment's packets by track (VVVVVVAAAAA). Emitting
+    that order starves the synchronizer's audio source (choppy audio), so frames
+    must come out interleaved by timestamp instead of in demux order."""
+    body = _make_av_fragmented_mp4()
+    kinds = [
+        "A" if isinstance(f, rtc.AudioFrame) else "V"
+        async for f in progressive_decode(_chunks(body), output_sample_rate=24000)
+    ]
+    assert "A" in kinds and "V" in kinds
+    # No long single-track run: a burst longer than a fragment means the
+    # timestamp interleave did not happen.
+    longest = max(len(list(g)) for _, g in groupby(kinds))
+    assert longest <= 4, f"un-interleaved run of {longest}: {''.join(kinds[:40])}"
 
 
 async def test_progressive_decode_empty_stream_is_clean() -> None:

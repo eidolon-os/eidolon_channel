@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from bisect import insort
 from collections.abc import AsyncIterator
 
 import av
@@ -27,6 +28,12 @@ from livekit import rtc
 from .decoder import _audio_to_rtc, _video_to_rtc
 
 logger = logging.getLogger("agent.avatar.progressive_decoder")
+
+# How long to hold decoded frames before emitting, so audio and video can be
+# re-interleaved by timestamp. Must exceed one fragment's span (measured: ~240 ms
+# of video per fragment from the live service) or a fragment's video run would
+# still be emitted ahead of its audio.
+INTERLEAVE_WINDOW_S = 0.3
 
 
 class _BlockingStreamReader:
@@ -89,19 +96,34 @@ def _decode_into(
     *,
     output_sample_rate: int,
 ) -> None:
-    """Blocking PyAV decode loop (worker thread): push rtc frames to ``out_queue``."""
+    """Blocking PyAV decode loop (worker thread).
+
+    Pushes ``(presentation_time, kind, rtc_frame)`` — the timestamp lets the
+    consumer re-interleave audio and video, which the demux order does not do
+    (see :func:`progressive_decode`). ``kind`` 0 = audio, 1 = video, so audio
+    leads on ties (same rule as the batch decoder).
+    """
     container = None
     try:
         container = av.open(reader, mode="r", format="mp4")
         resampler = av.AudioResampler(format="s16", layout="mono", rate=output_sample_rate)
+        audio_samples = 0
         for frame in container.decode():
             if isinstance(frame, av.VideoFrame):
-                loop.call_soon_threadsafe(out_queue.put_nowait, _video_to_rtc(frame))
+                t = float(frame.time) if frame.time is not None else 0.0
+                loop.call_soon_threadsafe(
+                    out_queue.put_nowait, (t, 1, _video_to_rtc(frame))
+                )
             elif isinstance(frame, av.AudioFrame):
                 for rf in resampler.resample(frame):
-                    loop.call_soon_threadsafe(
-                        out_queue.put_nowait, _audio_to_rtc(rf, output_sample_rate)
+                    rtc_a = _audio_to_rtc(rf, output_sample_rate)
+                    t = (
+                        float(rf.time)
+                        if rf.time is not None
+                        else audio_samples / output_sample_rate
                     )
+                    audio_samples += rtc_a.samples_per_channel
+                    loop.call_soon_threadsafe(out_queue.put_nowait, (t, 0, rtc_a))
     except Exception:
         # A closed reader (barge-in) or a truncated stream surfaces here; the
         # sentinel below still ends the async iterator cleanly.
@@ -119,8 +141,18 @@ async def progressive_decode(
     segments: AsyncIterator[bytes],
     *,
     output_sample_rate: int = 24000,
+    interleave_window_s: float = INTERLEAVE_WINDOW_S,
 ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame]:
-    """Yield rtc frames as ``segments`` (fMP4 fragments) arrive.
+    """Yield rtc frames, re-interleaved by presentation time, as fragments arrive.
+
+    The service emits each fragment's packets grouped by track (``VVVVVVAAAAA``),
+    not interleaved by time. Forwarding that order starves the synchronizer: a
+    run of video frames fills its small video queue and blocks, so no audio is
+    captured meanwhile and the audio source underruns — choppy audio, and
+    "frame capture was behind schedule" warnings. So we hold a short window and
+    emit in timestamp order (audio first on ties, like the batch decoder), which
+    restores the natural per-frame backpressure. The window is the only added
+    latency, and it must exceed one fragment's span to fully interleave it.
 
     Cancelling the iterator (barge-in) unblocks the decode thread and stops the
     feed promptly.
@@ -148,12 +180,24 @@ async def progressive_decode(
             output_sample_rate=output_sample_rate,
         )
     )
+    # (presentation_time, kind, seq, frame) held until the window has passed.
+    # ``kind`` puts audio before video at the same timestamp; ``seq`` keeps ties
+    # deterministic and stops the sort from ever comparing frames themselves.
+    pending: list[tuple[float, int, int, rtc.VideoFrame | rtc.AudioFrame]] = []
+    seq = 0
     try:
         while True:
             item = await out_queue.get()
             if item is sentinel:
                 break
-            yield item  # type: ignore[misc]
+            time_s, kind, frame = item  # type: ignore[misc]
+            insort(pending, (time_s, kind, seq, frame))
+            seq += 1
+            cutoff = pending[-1][0] - interleave_window_s
+            while pending and pending[0][0] <= cutoff:
+                yield pending.pop(0)[3]
+        for _, _, _, frame in pending:  # drain what the window still holds
+            yield frame
     finally:
         reader.close()
         feed_task.cancel()

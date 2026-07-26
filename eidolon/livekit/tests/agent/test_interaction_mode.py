@@ -20,6 +20,7 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     SESSION_END_IDLE_NORMAL,
     SESSION_END_PROACTIVE_DONE,
+    SESSION_INTENT_PRESENCE,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
 )
@@ -79,6 +80,11 @@ def test_resolve_explicit_default_override():
 def test_resolve_intent_from_metadata():
     raw = json.dumps({"interaction_mode": "half_duplex", "session_intent": "proactive_initiated"})
     assert resolve_session_intent(raw) == SESSION_INTENT_PROACTIVE
+
+
+def test_resolve_presence_intent_from_metadata():
+    raw = json.dumps({"session_intent": "presence_initiated"})
+    assert resolve_session_intent(raw) == SESSION_INTENT_PRESENCE
 
 
 @pytest.mark.parametrize(
@@ -170,6 +176,16 @@ def test_idle_policy_proactive_is_short():
     assert (
         idle.proactive_disconnect_after_idle_ms < idle.disconnect_after_idle_ms
     )
+
+
+def test_idle_policy_presence_is_bounded_and_returns_to_normal_standby():
+    idle = TurnPolicyConfig().idle
+    policy = resolve_idle_policy(
+        session_intent=SESSION_INTENT_PRESENCE, idle_config=idle
+    )
+    assert policy.timeout_sec == idle.presence_disconnect_after_idle_ms / 1000.0
+    assert policy.end_reason == SESSION_END_IDLE_NORMAL
+    assert idle.presence_disconnect_after_idle_ms < idle.disconnect_after_idle_ms
 
 
 def test_idle_policy_unknown_intent_defaults_user_like():

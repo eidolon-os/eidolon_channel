@@ -6,6 +6,7 @@ from eidolon.livekit.agent.runtime.interaction_mode import (
     resolve_device_id,
     resolve_interaction_mode,
     resolve_session_intent,
+    resolve_welcome_text,
 )
 from eidolon.livekit.agent.runtime.resolver import (
     DeviceTokenResolverError,
@@ -20,4 +21,5 @@ __all__ = [
     "resolve_device_id",
     "resolve_interaction_mode",
     "resolve_session_intent",
+    "resolve_welcome_text",
 ]

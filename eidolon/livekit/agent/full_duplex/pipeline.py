@@ -70,8 +70,8 @@ from eidolon.livekit.common.config import (
     VoiceprintConfig,
 )
 
-from .agent_builder import build_full_duplex_agent, welcome_on_enter_text
-from ..runtime.interaction_mode import resolve_idle_policy
+from .agent_builder import build_full_duplex_agent
+from ..runtime.interaction_mode import resolve_idle_policy, resolve_welcome_text
 from ..turn_policy import TurnPolicyRuntime
 from ..observability import ChannelTurnEventSink, TurnTimeline
 from ..factory import SharedStageFactory
@@ -1338,14 +1338,13 @@ class StreamingPipeline(BasePipeline):
     def _welcome_on_enter_text(self) -> str | None:
         """Welcome line to speak on session start, or None to stay silent.
 
-        Plan §4.3.1 / §5.1: a proactive_initiated session was woken to deliver a
-        report — the report (spoken by the proactive consumer) IS the opening, so
-        the canned welcome is suppressed (otherwise the device would say "你好…"
-        and then the report). A user_initiated session keeps its welcome (None
-        when unconfigured → wait for the user to speak first).
+        A proactive_initiated session was woken to deliver a report — that
+        report IS the opening, so the canned welcome is suppressed. User and
+        verified-presence sessions keep their welcome (None when unconfigured
+        means wait for the user to speak first).
         """
-        return welcome_on_enter_text(
-            is_proactive=self._is_proactive,
+        return resolve_welcome_text(
+            session_intent=self._session_intent,
             welcome_message=self._welcome_message,
         )
 

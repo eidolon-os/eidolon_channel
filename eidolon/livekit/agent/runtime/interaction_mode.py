@@ -56,6 +56,7 @@ from eidolon_sdk.biz.contracts import (
     SESSION_END_IDLE_NORMAL,
     SESSION_END_PROACTIVE_DONE,
     SESSION_INTENT_FIELD,
+    SESSION_INTENT_PRESENCE,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
     VALID_INTERACTION_MODES,
@@ -67,12 +68,11 @@ logger = logging.getLogger("agent.interaction_mode")
 # Session intent (plan §3.2) — why this voice session exists. Rides the SAME
 # join-metadata bus as interaction_mode (resolved once, from the same
 # participant.metadata, passed as an explicit param), and is orthogonal to it:
-#   - user_initiated   : the user tapped JOIN / is driving the conversation.
-#   - proactive_initiated : the session was woken to deliver a proactive report
-#     (Phase 3). Drives a shorter idle window + proactive_done teardown so a
-#     report nobody answers is reclaimed quickly (I2/I6).
-# Default user_initiated: today nothing stamps proactive intent (Phase 3 wires
-# the wake path), so every current session is correctly user_initiated.
+#   - user_initiated: explicit JOIN, canned welcome, normal idle window.
+#   - presence_initiated: verified owner-presence wake, canned welcome, bounded
+#     no-response idle window.
+#   - proactive_initiated: a report opens the session, so the canned welcome is
+#     suppressed and an unanswered report uses proactive_done teardown.
 # The INTENT_* / INTERACTION_MODE_* names + validity sets are sourced from
 # ``eidolon_sdk.biz.contracts`` (single source) and re-exported above.
 
@@ -235,16 +235,34 @@ class IdlePolicy:
     end_reason: str
 
 
+def resolve_welcome_text(
+    *, session_intent: str, welcome_message: str | None
+) -> str | None:
+    """Map session origin to its canned opening.
+
+    Proactive report sessions already have opening content. Explicit user and
+    verified-presence sessions use the configured welcome.
+    """
+    if session_intent == SESSION_INTENT_PROACTIVE:
+        return None
+    return welcome_message or None
+
+
 def resolve_idle_policy(
     *, session_intent: str, idle_config: IdlePolicyConfig
 ) -> IdlePolicy:
     """Map ``session_intent`` → idle window + teardown reason.
 
-    Single source for the intent→idle decision that used to be inlined in the
-    pipeline constructor. A proactive wake-up nobody answers is reclaimed on a
-    SHORT window with ``reason=proactive_done``; a user session keeps the long
-    window and ``idle_normal_end``.
+    Single source for the intent→idle decision. A presence wake gets a bounded
+    answer window but ends like a normal idle conversation. A proactive report
+    gets its own short window and proactive_done reason. Explicit user sessions
+    retain the normal long window.
     """
+    if session_intent == SESSION_INTENT_PRESENCE:
+        return IdlePolicy(
+            timeout_sec=idle_config.presence_disconnect_after_idle_ms / 1000.0,
+            end_reason=SESSION_END_IDLE_NORMAL,
+        )
     if session_intent == SESSION_INTENT_PROACTIVE:
         return IdlePolicy(
             timeout_sec=idle_config.proactive_disconnect_after_idle_ms / 1000.0,

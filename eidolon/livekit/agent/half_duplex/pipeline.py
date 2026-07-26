@@ -31,7 +31,10 @@ from eidolon_sdk.biz.contracts import (
 )
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.runtime.interaction_mode import resolve_idle_policy
+from eidolon.livekit.agent.runtime.interaction_mode import (
+    resolve_idle_policy,
+    resolve_welcome_text,
+)
 from eidolon.livekit.agent.shared.pipeline import BasePipeline
 from eidolon.livekit.agent.shared.types import (
     PipelineCallbacks,
@@ -89,6 +92,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._welcome_message = welcome_message
         self._audio_sample_rate = audio_sample_rate
         self._turn_policy = turn_policy or TurnPolicyConfig()
+        self._session_intent = session_intent
         self._observability = observability or ObservabilityConfig()
         self._on_session_end = on_session_end
         self._on_idle_disconnect = on_idle_disconnect
@@ -118,6 +122,12 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._idle_disconnect_started = False
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
+    def _welcome_on_enter_text(self) -> str | None:
+        return resolve_welcome_text(
+            session_intent=self._session_intent,
+            welcome_message=self._welcome_message,
+        )
+
     async def run(self, room: Room) -> None:
         from livekit.agents.voice import Agent, AgentSession
         from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
@@ -132,9 +142,12 @@ class HalfDuplexPttPipeline(BasePipeline):
 
         class PttAgent(Agent):
             async def on_enter(self) -> None:
-                welcome = pipeline._welcome_message
-                if not welcome:
-                    logger.info("[HalfDuplexPttPipeline] welcome suppressed")
+                welcome = pipeline._welcome_on_enter_text()
+                if welcome is None:
+                    logger.info(
+                        "[HalfDuplexPttPipeline] welcome suppressed intent=%s",
+                        pipeline._session_intent,
+                    )
                     return
                 logger.info(
                     "[HalfDuplexPttPipeline] welcome on_enter room=%s",

@@ -14,6 +14,7 @@ from eidolon_sdk.biz.contracts import (
     LIVEKIT_TRANSCRIPTION_TOPIC,
     SESSION_END_IDLE_NORMAL,
     SESSION_END_PROACTIVE_DONE,
+    SESSION_INTENT_PRESENCE,
     SESSION_INTENT_PROACTIVE,
     WIRE_SCHEMA_VERSION,
 )
@@ -235,6 +236,22 @@ def test_half_duplex_idle_policy_uses_session_intent() -> None:
         policy.idle.proactive_disconnect_after_idle_ms / 1000.0
     )
     assert pipeline._idle_end_reason == SESSION_END_PROACTIVE_DONE
+
+
+def test_half_duplex_uses_shared_session_opening_policy() -> None:
+    proactive = HalfDuplexPttPipeline(
+        _FakeFactory(_FakeSttStage()),
+        welcome_message="Welcome",
+        session_intent=SESSION_INTENT_PROACTIVE,
+    )
+    presence = HalfDuplexPttPipeline(
+        _FakeFactory(_FakeSttStage()),
+        welcome_message="Welcome",
+        session_intent=SESSION_INTENT_PRESENCE,
+    )
+
+    assert proactive._welcome_on_enter_text() is None
+    assert presence._welcome_on_enter_text() == "Welcome"
 
 
 @pytest.mark.asyncio

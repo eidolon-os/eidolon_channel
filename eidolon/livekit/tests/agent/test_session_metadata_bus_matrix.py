@@ -1,10 +1,10 @@
-"""2×2 session-metadata-bus handshake (plan Track C1).
+"""Interaction-mode × session-intent metadata-bus handshake.
 
 The device⇄server contract has two halves that must agree:
   hub stamps ``participant_metadata`` into the voice token  →  channel resolves
   it into a per-session policy. This test drives a contract-correct
   ``SimulatedDevice`` (the same packet/metadata builder a real client uses)
-  through channel's resolve + apply for ALL FOUR combinations of
+  through channel's resolve + apply for every combination of
   (interaction_mode × session_intent), and round-trips the device's
   ``client.audio_state`` packet through the channel parser.
 
@@ -23,6 +23,7 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
     INPUT_MODE_AUTO,
     INPUT_MODE_PTT,
+    SESSION_INTENT_PRESENCE,
     SESSION_INTENT_PROACTIVE,
     SESSION_INTENT_USER_INITIATED,
 )
@@ -37,7 +38,11 @@ from eidolon.livekit.common.config.schema import TurnPolicyConfig
 from eidolon.livekit.tests._harness.device_sim import SimulatedDevice
 
 _MODES = [INTERACTION_MODE_HALF_DUPLEX, INTERACTION_MODE_FULL_DUPLEX]
-_INTENTS = [SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PROACTIVE]
+_INTENTS = [
+    SESSION_INTENT_USER_INITIATED,
+    SESSION_INTENT_PRESENCE,
+    SESSION_INTENT_PROACTIVE,
+]
 
 
 @pytest.mark.parametrize("mode", _MODES)
@@ -66,11 +71,9 @@ def test_metadata_bus_roundtrip_per_cell(mode: str, intent: str) -> None:
         assert allow is True
         assert policy is base
 
-    # Proactive intent is what suppresses the welcome + picks the short idle
-    # window downstream; assert the bus carries the discriminator faithfully.
-    assert (intent == SESSION_INTENT_PROACTIVE) is (
-        resolve_session_intent(meta) == SESSION_INTENT_PROACTIVE
-    )
+    # Exact intent drives opening + idle behavior downstream; no cell may
+    # silently degrade to another valid intent.
+    assert resolve_session_intent(meta) == intent
 
 
 @pytest.mark.parametrize("mode", _MODES)

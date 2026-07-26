@@ -191,6 +191,10 @@ class IdlePolicyConfig:
     # whole connection even while silent. 0 (or negative) disables the
     # watchdog entirely. Default 60s. Applies to user_initiated sessions.
     disconnect_after_idle_ms: int = 60_000
+    # A verified presence wake opens with the normal welcome, then returns to
+    # standby quickly if the owner does not engage. Kept separate from the
+    # proactive report window because their opening behavior is different.
+    presence_disconnect_after_idle_ms: int = 15_000
     # Idle window for a proactive_initiated session (plan §3.3): a wake-up nobody
     # answers must be reclaimed quickly (I2/I6) rather than lingering on the
     # user_initiated 60s / half_duplex keep-alive. After this much silence a

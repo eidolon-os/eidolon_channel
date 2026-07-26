@@ -100,6 +100,7 @@ turn_policy:
     silence_lead_in_ms: 160
   idle:
     disconnect_after_idle_ms: 45000
+    presence_disconnect_after_idle_ms: 11000
     proactive_disconnect_after_idle_ms: 9000
     disconnect_grace_ms: 450
 observability:
@@ -140,6 +141,7 @@ voiceprint:
     assert cfg.turn_policy.filler.fade_out_ms == 90
     assert cfg.turn_policy.filler.silence_lead_in_ms == 160
     assert cfg.turn_policy.idle.disconnect_after_idle_ms == 45000
+    assert cfg.turn_policy.idle.presence_disconnect_after_idle_ms == 11000
     assert cfg.turn_policy.idle.proactive_disconnect_after_idle_ms == 9000
     assert cfg.turn_policy.idle.disconnect_grace_ms == 450
     assert cfg.turn_policy.interrupt.aec_warmup_ms == 750

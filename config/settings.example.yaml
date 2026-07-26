@@ -148,7 +148,9 @@ turn_policy:
     # Disconnect a session idle (no recognized speech / no agent activity)
     # for this long, so a forgotten-open client stops streaming STT. 0 disables.
     disconnect_after_idle_ms: 60000
-    # Proactive sessions are reclaimed faster when nobody answers.
+    # Verified presence wakes say hello, then return to standby if unanswered.
+    presence_disconnect_after_idle_ms: 15000
+    # Proactive reports provide their own opening and are reclaimed quickly.
     proactive_disconnect_after_idle_ms: 12000
     # Delay room deletion briefly after session_end so the client receives it.
     disconnect_grace_ms: 300

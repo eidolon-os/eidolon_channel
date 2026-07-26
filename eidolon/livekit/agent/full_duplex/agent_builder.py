@@ -13,18 +13,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent")
 
 
-def welcome_on_enter_text(
-    *,
-    is_proactive: bool,
-    welcome_message: str,
-) -> str | None:
-    """Welcome line to speak on session start, or None to stay silent."""
-
-    if is_proactive:
-        return None
-    return welcome_message or None
-
-
 def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
     """Build the LiveKit Agent used by the full-duplex pipeline."""
 

@@ -165,6 +165,10 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     idle = cfg.turn_policy.idle
     if not 0 <= idle.disconnect_after_idle_ms <= 3_600_000:
         errors.append("turn_policy.idle.disconnect_after_idle_ms must be in [0, 3600000]")
+    if not 0 <= idle.presence_disconnect_after_idle_ms <= 3_600_000:
+        errors.append(
+            "turn_policy.idle.presence_disconnect_after_idle_ms must be in [0, 3600000]"
+        )
     if not 0 <= idle.proactive_disconnect_after_idle_ms <= 3_600_000:
         errors.append(
             "turn_policy.idle.proactive_disconnect_after_idle_ms must be in [0, 3600000]"

@@ -46,6 +46,16 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
+# Load the session-contract resolver with the worker, not lazily per job.
+# LiveKit job processes inherit the worker's module snapshot; eager loading
+# prevents a hot-updated Channel module from mixing with a stale SDK contract
+# already resident in the parent process.
+from eidolon.livekit.agent.runtime import (
+    apply_interaction_mode,
+    resolve_avatar_requested,
+    resolve_interaction_mode,
+    resolve_session_intent,
+)
 from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
 
 logger = logging.getLogger("agent_server")
@@ -217,12 +227,6 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
     pipeline (all are AgentSession-construction inputs). Any failure degrades to
     the safe defaults (``half_duplex`` / ``user_initiated`` / avatar off).
     """
-    from eidolon.livekit.agent.runtime import (
-        resolve_avatar_requested,
-        resolve_interaction_mode,
-        resolve_session_intent,
-    )
-
     try:
         participant = await ctx.wait_for_participant()
     except Exception:
@@ -244,7 +248,6 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
     from eidolon.livekit.agent.factory import SharedStageFactory
     from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
-    from eidolon.livekit.agent.runtime import apply_interaction_mode
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
     logger.info(

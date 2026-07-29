@@ -178,14 +178,13 @@ def test_idle_policy_proactive_is_short():
     )
 
 
-def test_idle_policy_presence_is_bounded_and_returns_to_normal_standby():
+def test_idle_policy_presence_is_governed_by_external_owner_lease():
     idle = TurnPolicyConfig().idle
     policy = resolve_idle_policy(
         session_intent=SESSION_INTENT_PRESENCE, idle_config=idle
     )
-    assert policy.timeout_sec == idle.presence_disconnect_after_idle_ms / 1000.0
+    assert policy.timeout_sec == 0
     assert policy.end_reason == SESSION_END_IDLE_NORMAL
-    assert idle.presence_disconnect_after_idle_ms < idle.disconnect_after_idle_ms
 
 
 def test_idle_policy_unknown_intent_defaults_user_like():

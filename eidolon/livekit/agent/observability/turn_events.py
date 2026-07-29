@@ -17,6 +17,10 @@ from typing import Any
 
 from eidolon_data import DataStore
 from eidolon_data import load_settings as load_data_settings
+from eidolon_sdk.biz.contracts import (
+    SESSION_FLOW_ID_FIELD,
+    normalize_session_flow_id,
+)
 
 from ..runtime.resolver import _participant_identity_and_metadata
 from .timeline import TurnTimeline
@@ -42,6 +46,7 @@ class ChannelEventContext:
     companion_id: str
     device_id: str | None
     room_name: str
+    session_flow_id: str | None
 
 
 @dataclass(frozen=True)
@@ -105,7 +110,7 @@ class ChannelTurnEventSink:
                 event_type="channel.session.started",
                 subject_type="device" if context.device_id else "companion",
                 subject_id=context.device_id or context.companion_id,
-                trace_id=None,
+                trace_id=context.session_flow_id,
                 severity=None,
                 outcome=None,
                 reason="session_started",
@@ -124,7 +129,7 @@ class ChannelTurnEventSink:
                 event_type="channel.session.failed" if session_failed else "channel.session.ended",
                 subject_type="device" if context.device_id else "companion",
                 subject_id=context.device_id or context.companion_id,
-                trace_id=None,
+                trace_id=context.session_flow_id,
                 severity="error" if session_failed else None,
                 outcome="failure" if session_failed else None,
                 reason=reason,
@@ -357,6 +362,9 @@ async def _resolve_event_context(store: DataStore, room: Any) -> ChannelEventCon
         companion_id=companion_id,
         device_id=device_id,
         room_name=str(getattr(room, "name", "") or ""),
+        session_flow_id=normalize_session_flow_id(
+            str(metadata.get(SESSION_FLOW_ID_FIELD) or "")
+        ),
     )
 
 

@@ -20,6 +20,7 @@ def _enabled_sink(*, queue_max: int = 16) -> ChannelTurnEventSink:
         companion_id="companion-1",
         device_id="device-1",
         room_name="room-1",
+        session_flow_id=None,
     )
     sink._writer = object()  # type: ignore[assignment,attr-defined]
     return sink

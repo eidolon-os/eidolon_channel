@@ -91,6 +91,26 @@ async def wait_for_runtime_participant_identity(
     poll_interval_sec: float = 0.05,
 ) -> str:
     """Wait until an explicitly typed voice-session actor is in the room."""
+    identity, _ = await wait_for_runtime_participant_metadata(
+        room,
+        timeout_sec=timeout_sec,
+        poll_interval_sec=poll_interval_sec,
+    )
+    return identity
+
+
+async def wait_for_runtime_participant_metadata(
+    room: Any,
+    *,
+    timeout_sec: float = 10.0,
+    poll_interval_sec: float = 0.05,
+) -> tuple[str, dict[str, Any]]:
+    """Wait for and return the explicitly typed voice-session actor.
+
+    Infrastructure participants may join first.  Returning identity and
+    metadata from the same selection pass prevents session construction from
+    accidentally reading metadata from the Hub control bridge.
+    """
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.0, timeout_sec)
@@ -100,7 +120,7 @@ async def wait_for_runtime_participant_identity(
             identity, metadata = participant
             kind = str(metadata.get("kind") or "").strip().lower()
             if kind in RUNTIME_PARTICIPANT_KINDS:
-                return identity
+                return identity, metadata
         if loop.time() >= deadline:
             raise DeviceTokenResolverError(
                 "no remote participant with runtime actor metadata "

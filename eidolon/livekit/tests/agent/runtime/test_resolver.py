@@ -23,6 +23,7 @@ from eidolon_sdk.biz.admin import (
 from eidolon.livekit.agent.runtime.resolver import (
     DeviceTokenResolverError,
     make_device_token_resolver,
+    wait_for_runtime_participant_metadata,
 )
 
 
@@ -112,6 +113,30 @@ async def test_resolver_ignores_non_publishing_system_participant_before_device(
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["actor_id"] == "esp32-007"
     admin.resolve_device.assert_awaited_once_with("esp32-007")
+
+
+async def test_wait_for_runtime_participant_returns_device_metadata_not_hub():
+    room = _room_with(
+        _participant("eidolon-hub-control-test", can_publish=False),
+        _participant(
+            "esp32-007",
+            (
+                '{"kind":"device","device_id":"esp32-007",'
+                '"interaction_mode":"full_duplex",'
+                '"session_intent":"presence_initiated"}'
+            ),
+            can_publish=True,
+        ),
+    )
+
+    identity, metadata = await wait_for_runtime_participant_metadata(
+        room,
+        timeout_sec=0,
+    )
+
+    assert identity == "esp32-007"
+    assert metadata["interaction_mode"] == "full_duplex"
+    assert metadata["session_intent"] == "presence_initiated"
 
 
 async def test_resolver_dispatches_to_owner_for_kind_owner():

@@ -69,8 +69,8 @@ logger = logging.getLogger("agent.interaction_mode")
 # join-metadata bus as interaction_mode (resolved once, from the same
 # participant.metadata, passed as an explicit param), and is orthogonal to it:
 #   - user_initiated: explicit JOIN, canned welcome, normal idle window.
-#   - presence_initiated: verified owner-presence wake, canned welcome, bounded
-#     no-response idle window.
+#   - presence_initiated: verified owner-presence wake, canned welcome, and an
+#     externally governed renewable owner lease.
 #   - proactive_initiated: a report opens the session, so the canned welcome is
 #     suppressed and an unanswered report uses proactive_done teardown.
 # The INTENT_* / INTERACTION_MODE_* names + validity sets are sourced from
@@ -253,14 +253,14 @@ def resolve_idle_policy(
 ) -> IdlePolicy:
     """Map ``session_intent`` → idle window + teardown reason.
 
-    Single source for the intent→idle decision. A presence wake gets a bounded
-    answer window but ends like a normal idle conversation. A proactive report
-    gets its own short window and proactive_done reason. Explicit user sessions
-    retain the normal long window.
+    Single source for the intent→idle decision. A verified-presence session is
+    governed by the renewable owner lease on the companion device, not speech
+    activity: a stationary/silent owner must not be disconnected. A proactive
+    report keeps its short window; explicit user sessions keep normal idle.
     """
     if session_intent == SESSION_INTENT_PRESENCE:
         return IdlePolicy(
-            timeout_sec=idle_config.presence_disconnect_after_idle_ms / 1000.0,
+            timeout_sec=0,
             end_reason=SESSION_END_IDLE_NORMAL,
         )
     if session_intent == SESSION_INTENT_PROACTIVE:

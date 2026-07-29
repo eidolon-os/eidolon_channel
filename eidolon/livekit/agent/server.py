@@ -56,6 +56,9 @@ from eidolon.livekit.agent.runtime import (
     resolve_interaction_mode,
     resolve_session_intent,
 )
+from eidolon.livekit.agent.runtime.resolver import (
+    wait_for_runtime_participant_metadata,
+)
 from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
 
 logger = logging.getLogger("agent_server")
@@ -221,22 +224,21 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
     """Resolve ``(interaction_mode, session_intent, avatar_requested)`` from the participant.
 
     Single resolution point for the session-metadata bus (plan §3.2): hub / web
-    client stamps these into the LiveKit token's ``participant_metadata``;
-    ``wait_for_participant`` returns once the device/web client is present, so we
-    read the authoritative values — from ONE metadata read — before building the
-    pipeline (all are AgentSession-construction inputs). Any failure degrades to
+    client stamps these into the LiveKit token's ``participant_metadata``.
+    Infrastructure participants such as the Hub control bridge may join first,
+    so select the explicitly typed runtime actor and read all values from that
+    ONE metadata snapshot before building the pipeline. Any failure degrades to
     the safe defaults (``half_duplex`` / ``user_initiated`` / avatar off).
     """
     try:
-        participant = await ctx.wait_for_participant()
+        _, metadata = await wait_for_runtime_participant_metadata(ctx.room)
     except Exception:
         logger.exception(
-            "[Agent] wait_for_participant failed; defaulting mode=%s intent=%s",
+            "[Agent] runtime participant unavailable; defaulting mode=%s intent=%s",
             INTERACTION_MODE_HALF_DUPLEX,
             SESSION_INTENT_USER_INITIATED,
         )
         return INTERACTION_MODE_HALF_DUPLEX, SESSION_INTENT_USER_INITIATED, False
-    metadata = getattr(participant, "metadata", None)
     return (
         resolve_interaction_mode(metadata),
         resolve_session_intent(metadata),

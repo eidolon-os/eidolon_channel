@@ -22,6 +22,7 @@ from eidolon_sdk.biz.admin import (
 )
 from eidolon.livekit.agent.runtime.resolver import (
     DeviceTokenResolverError,
+    RoomNotConnectedError,
     make_device_token_resolver,
     wait_for_runtime_participant_metadata,
 )
@@ -43,11 +44,12 @@ def _participant(
     return participant
 
 
-def _room_with(*participants) -> SimpleNamespace:
+def _room_with(*participants, connected: bool = True) -> SimpleNamespace:
     # LiveKit Room exposes ``remote_participants`` as a dict keyed by
     # identity. Match that shape so the resolver's defensive code works.
     return SimpleNamespace(
         remote_participants={p.identity: p for p in participants},
+        isconnected=lambda: connected,
     )
 
 
@@ -137,6 +139,13 @@ async def test_wait_for_runtime_participant_returns_device_metadata_not_hub():
     assert identity == "esp32-007"
     assert metadata["interaction_mode"] == "full_duplex"
     assert metadata["session_intent"] == "presence_initiated"
+
+
+async def test_wait_for_runtime_participant_rejects_unconnected_room():
+    room = _room_with(connected=False)
+
+    with pytest.raises(RoomNotConnectedError, match="unconnected room"):
+        await wait_for_runtime_participant_metadata(room, timeout_sec=60)
 
 
 async def test_resolver_dispatches_to_owner_for_kind_owner():

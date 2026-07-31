@@ -38,6 +38,10 @@ class DeviceTokenResolverError(Exception):
     raise to the participant or fall back to a static token."""
 
 
+class RoomNotConnectedError(DeviceTokenResolverError):
+    """Runtime participant resolution requires an active room connection."""
+
+
 def _participant_identity_and_metadata(
     room: Any,
 ) -> tuple[str, dict[str, Any]] | None:
@@ -111,6 +115,13 @@ async def wait_for_runtime_participant_metadata(
     metadata from the same selection pass prevents session construction from
     accidentally reading metadata from the Hub control bridge.
     """
+
+    if room is None or not room.isconnected():
+        raise RoomNotConnectedError(
+            "wait_for_runtime_participant_metadata() called on an unconnected "
+            "room; connect the job (JobContext.connect()) before resolving the "
+            "runtime actor"
+        )
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.0, timeout_sec)

@@ -36,13 +36,11 @@ if TYPE_CHECKING:
     from livekit.agents import AgentServer
 
 from eidolon_sdk.biz.contracts import (
-    INTERACTION_MODE_HALF_DUPLEX,
     INTERACTION_MODE_PTT,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
     SESSION_END_USER_LEFT,
-    SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
@@ -57,6 +55,7 @@ from eidolon.livekit.agent.runtime import (
     resolve_session_intent,
 )
 from eidolon.livekit.agent.runtime.resolver import (
+    DeviceTokenResolverError,
     wait_for_runtime_participant_metadata,
 )
 from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
@@ -227,18 +226,17 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
     client stamps these into the LiveKit token's ``participant_metadata``.
     Infrastructure participants such as the Hub control bridge may join first,
     so select the explicitly typed runtime actor and read all values from that
-    ONE metadata snapshot before building the pipeline. Any failure degrades to
-    the safe defaults (``half_duplex`` / ``user_initiated`` / avatar off).
+    ONE metadata snapshot before building the pipeline. Connection and actor
+    resolution failures are fatal; optional metadata fields retain their safe
+    defaults.
     """
+    # Remote participants are synchronized only after the job joins the room.
+    await ctx.connect()
     try:
         _, metadata = await wait_for_runtime_participant_metadata(ctx.room)
-    except Exception:
-        logger.exception(
-            "[Agent] runtime participant unavailable; defaulting mode=%s intent=%s",
-            INTERACTION_MODE_HALF_DUPLEX,
-            SESSION_INTENT_USER_INITIATED,
-        )
-        return INTERACTION_MODE_HALF_DUPLEX, SESSION_INTENT_USER_INITIATED, False
+    except DeviceTokenResolverError:
+        logger.exception("[Agent] runtime participant unavailable")
+        raise
     return (
         resolve_interaction_mode(metadata),
         resolve_session_intent(metadata),

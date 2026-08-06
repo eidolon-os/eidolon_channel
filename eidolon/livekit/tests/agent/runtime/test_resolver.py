@@ -88,8 +88,9 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["genome_hash"] == "pg_resolver"
     assert payload["realizer_version"] == "eidolon.persona_realizer"
     assert payload["device_id"] == "esp32-007"
-    assert payload["actor_kind"] == "device"
-    assert payload["actor_id"] == "esp32-007"
+    assert payload["runtime_token_version"] == 4
+    assert "actor_kind" not in payload
+    assert "actor_id" not in payload
     admin.resolve_device.assert_awaited_once_with("esp32-007")
 
 
@@ -113,7 +114,7 @@ async def test_resolver_ignores_non_publishing_system_participant_before_device(
     token = await resolve()
 
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
-    assert payload["actor_id"] == "esp32-007"
+    assert payload["device_id"] == "esp32-007"
     admin.resolve_device.assert_awaited_once_with("esp32-007")
 
 
@@ -165,8 +166,8 @@ async def test_resolver_dispatches_to_owner_for_kind_owner():
     assert payload["genome_id"] == "genome-1"
     assert payload["genome_hash"] == "pg_resolver"
     assert payload["realizer_version"] == "eidolon.persona_realizer"
-    assert payload["actor_kind"] == "owner"
-    assert payload["actor_id"] == "owner-1"
+    assert "actor_kind" not in payload
+    assert "actor_id" not in payload
     assert "device_id" not in payload
     admin.resolve_owner.assert_awaited_once_with("owner-1")
     admin.resolve_device.assert_not_called()

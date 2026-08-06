@@ -49,6 +49,10 @@ remote_agent_rpc:
 # (env PAIRING_JWT_SECRET, fallback ~/eidolon/run/jwt-secret).
 runtime_admin:
   enabled: true
+  # Enable only after the local product composition starts eidolon_kernel and
+  # the Channel Provider stamps trusted owner_id into Device participant metadata.
+  kernel_mount_enabled: false
+  kernel_api_url: http://127.0.0.1:8083/api/kernel/v1
   data_resolve_enabled: true
   admin_fallback_enabled: true
   admin_api_url: http://127.0.0.1:9000
@@ -69,8 +73,8 @@ voiceprint:
   threshold: 0.31
   min_audio_ms: 1500
   prewarm: true
-  # Paired ESP32 devices are already approved and user-bound in admin.
-  # Keep voiceprint as telemetry, but don't hard-block those device turns by default.
+  # Keep voiceprint as telemetry for explicitly resolved Companion interactions;
+  # it is not Device admission, Mount, Attachment, or Owner authorization.
   trust_paired_devices: true
   turn_max_audio_ms: 12000
   accept_cache_ttl_ms: 180000

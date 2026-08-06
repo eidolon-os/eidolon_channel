@@ -1,22 +1,18 @@
-"""Non-blocking projection of Channel turn facts into ``eidolon_data.events``.
+"""In-process Channel turn telemetry.
 
-The voice hot path owns decisions; this sink only observes them.  Producers use
-``put_nowait`` and never await SQLite/NATS/network I/O.  A bounded background
-writer persists a small semantic vocabulary that Mission Control can replay.
+The voice hot path owns decisions. These observations never open a system
+database or publish global audit; Agent runtime rows hold durable turn results,
+while a metrics/tracing adapter may observe this bounded semantic vocabulary.
 Raw transcript/audio never leaves the local per-turn timeline.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from eidolon_data import DataStore
-from eidolon_data import load_settings as load_data_settings
 from eidolon_sdk.biz.contracts import (
     SESSION_FLOW_ID_FIELD,
     normalize_session_flow_id,
@@ -27,7 +23,6 @@ from .timeline import TurnTimeline
 
 logger = logging.getLogger("agent.observability.turn_events")
 
-_QUEUE_MAX = 256
 _MILESTONE_MARKS = {
     "speech_started": "speech_started_at",
     "speech_stopped": "speech_stopped_at",
@@ -63,48 +58,44 @@ class _PendingEvent:
 
 
 class ChannelTurnEventSink:
-    """Best-effort Channel event writer with bounded, non-blocking producers."""
+    """Best-effort, non-persistent telemetry observer."""
 
-    def __init__(self, *, queue_max: int = _QUEUE_MAX) -> None:
-        self._queue: asyncio.Queue[_PendingEvent | None] = asyncio.Queue(maxsize=queue_max)
-        self._store: DataStore | None = None
+    def __init__(
+        self,
+        *,
+        observer: Callable[[_PendingEvent], None] | None = None,
+    ) -> None:
+        self._observer = observer
         self._context: ChannelEventContext | None = None
-        self._writer: asyncio.Task[None] | None = None
         self._phase_seq: dict[str, int] = {}
         self._milestone_seq: dict[str, int] = {}
         self._terminal_turns: set[str] = set()
         self._dropped = 0
+        self._telemetry_observed = 0
 
     @property
     def enabled(self) -> bool:
-        return self._context is not None and self._writer is not None
+        return self._context is not None
 
     @property
     def dropped_count(self) -> int:
         return self._dropped
 
-    async def start(self, room: Any) -> None:
-        """Resolve the room identity once and start the dedicated DB writer."""
+    @property
+    def telemetry_observed_count(self) -> int:
+        return self._telemetry_observed
 
-        if self._writer is not None:
+    async def start(self, room: Any) -> None:
+        """Capture the already-resolved room identity without storage I/O."""
+
+        if self._context is not None:
             return
-        store: DataStore | None = None
         try:
-            settings = load_data_settings()
-            sqlite_path = Path(settings.sqlite_path).expanduser()
-            if not sqlite_path.exists():
-                logger.warning("Channel turn events disabled: data DB missing at %s", sqlite_path)
-                return
-            store = DataStore.open(settings)
-            context = await _resolve_event_context(store, room)
+            context = await _resolve_event_context(room)
         except Exception as exc:  # noqa: BLE001 - observability must not break voice
-            if store is not None:
-                await store.close()
             logger.warning("Channel turn events disabled: %s", exc)
             return
-        self._store = store
         self._context = context
-        self._writer = asyncio.create_task(self._run_writer(), name="channel-turn-events")
         self._enqueue(
             _PendingEvent(
                 event_type="channel.session.started",
@@ -119,9 +110,8 @@ class ChannelTurnEventSink:
         )
 
     async def close(self, *, reason: str = "session_ended") -> None:
-        writer = self._writer
         context = self._context
-        if writer is None or context is None:
+        if context is None:
             return
         session_failed = reason == "session_error"
         self._enqueue(
@@ -136,20 +126,6 @@ class ChannelTurnEventSink:
                 payload={**self._base_payload(), "dropped_event_count": self._dropped},
             )
         )
-        try:
-            await asyncio.wait_for(self._queue.join(), timeout=2.0)
-        except asyncio.TimeoutError:
-            logger.warning("Channel turn event drain timed out pending=%s", self._queue.qsize())
-        try:
-            await asyncio.wait_for(self._queue.put(None), timeout=1.0)
-            await asyncio.wait_for(writer, timeout=1.0)
-        except asyncio.TimeoutError:
-            writer.cancel()
-            await asyncio.gather(writer, return_exceptions=True)
-        if self._store is not None:
-            await self._store.close()
-        self._writer = None
-        self._store = None
         self._context = None
 
     def phase_changed(
@@ -283,49 +259,18 @@ class ChannelTurnEventSink:
         }
 
     def _enqueue(self, event: _PendingEvent) -> None:
-        try:
-            self._queue.put_nowait(event)
-        except asyncio.QueueFull:
-            self._dropped += 1
-            logger.warning("Dropped Channel turn event type=%s dropped=%s", event.event_type, self._dropped)
-
-    async def _run_writer(self) -> None:
-        while True:
-            pending = await self._queue.get()
-            try:
-                if pending is None:
-                    return
-                await self._write(pending)
-            except Exception:  # noqa: BLE001 - persistence cannot affect the session
-                logger.exception("Failed to persist Channel event type=%s", getattr(pending, "event_type", ""))
-            finally:
-                self._queue.task_done()
-
-    async def _write(self, pending: _PendingEvent) -> None:
-        store = self._store
-        context = self._context
-        if store is None or context is None:
+        self._telemetry_observed += 1
+        observer = self._observer
+        if observer is None:
             return
-        await store.events.record_event(
-            event_type=pending.event_type,
-            event_id=pending.event_id,
-            owner_id=context.owner_id,
-            companion_id=context.companion_id,
-            subject_type=pending.subject_type,
-            subject_id=pending.subject_id,
-            actor_type="service",
-            actor_id="eidolon-channel",
-            trace_id=pending.trace_id,
-            severity=pending.severity,
-            outcome=pending.outcome,
-            reason=pending.reason,
-            data_classification="safe",
-            schema_version=1,
-            payload_json=pending.payload,
-        )
+        try:
+            observer(event)
+        except Exception:  # noqa: BLE001 - telemetry cannot affect voice
+            self._dropped += 1
+            logger.exception("Channel telemetry observer failed type=%s", event.event_type)
 
 
-async def _resolve_event_context(store: DataStore, room: Any) -> ChannelEventContext:
+async def _resolve_event_context(room: Any) -> ChannelEventContext:
     participant = _participant_identity_and_metadata(room)
     if participant is None:
         raise RuntimeError("runtime participant missing")
@@ -334,27 +279,24 @@ async def _resolve_event_context(store: DataStore, room: Any) -> ChannelEventCon
     device_id: str | None = None
     if kind == "device":
         device_id = str(metadata.get("device_id") or identity).strip()
-        device = await store.devices.get_device(device_id)
-        if device is None or not device.owner_id or not device.bound_companion_id:
-            raise RuntimeError(f"device {device_id!r} is not claimed and bound")
-        owner_id = device.owner_id
-        companion_id = device.bound_companion_id
+        owner_id = str(metadata.get("owner_id") or "").strip()
+        companion_id = str(metadata.get("companion_id") or "").strip()
+        if not device_id or not owner_id or not companion_id:
+            raise RuntimeError(
+                "device event context requires the owner/companion selected at ingress"
+            )
+    elif kind == "companion":
+        owner_id = str(metadata.get("owner_id") or "").strip()
+        companion_id = str(metadata.get("companion_id") or identity).strip()
+        if not owner_id or not companion_id:
+            raise RuntimeError("companion event context requires owner_id and companion_id")
     elif kind in {"owner", "user"}:
         owner_id = str(
             metadata.get("owner_id") or metadata.get("user_id") or identity
         ).strip()
-        companions = [
-            row
-            for row in await store.companions.list_for_owner(owner_id)
-            if row.status == "active"
-            and row.default_memory_realm_id
-            and row.current_genome_id
-        ]
-        if not companions:
-            raise RuntimeError(
-                f"owner {owner_id!r} has no active companion with memory/genome"
-            )
-        companion_id = companions[0].companion_id
+        companion_id = str(metadata.get("companion_id") or "").strip()
+        if not owner_id or not companion_id:
+            raise RuntimeError("owner event context requires an explicitly selected companion")
     else:
         raise RuntimeError(f"unsupported runtime participant kind {kind!r}")
     return ChannelEventContext(
@@ -366,8 +308,6 @@ async def _resolve_event_context(store: DataStore, room: Any) -> ChannelEventCon
             str(metadata.get(SESSION_FLOW_ID_FIELD) or "")
         ),
     )
-
-
 def _elapsed_ms(timeline: TurnTimeline, at: float) -> float:
     start = timeline.timestamps.get("speech_started_at")
     if not isinstance(start, (int, float)):

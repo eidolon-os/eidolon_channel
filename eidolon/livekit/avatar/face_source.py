@@ -108,7 +108,7 @@ async def _resolve_companion_id(room: Any, store: Any) -> str | None:
         return None
     identity, metadata = peek
     client = _DataStoreRuntimeResolveClient(store)
-    _, _, ctx = await _resolve_context(admin=client, identity=identity, metadata=metadata)
+    ctx = await _resolve_context(admin=client, identity=identity, metadata=metadata)
     return ctx.companion_id
 
 

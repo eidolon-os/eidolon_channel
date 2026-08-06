@@ -51,13 +51,16 @@ remote_agent_rpc:
   # loader 会记录 deprecated warning 后忽略它(不是错误,只是死字段)。
   conversation_id_prefix: livekit
 
-# Per-session runtime token signing. participant 进 LiveKit 后，channel 优先
-# 从 Eidolon Data 本地解析 (tenant, user, companion/template)，再用
-# jwt_secret 现签 device JWT 接 agent gRPC；admin HTTP 只作为跨进程 fallback。
+# Per-session runtime token signing. participant 进 LiveKit 后，Channel 优先
+# 从 Eidolon Data 本地解析明确选择的 Owner/Companion runtime，再用
+# jwt_secret 现签 runtime JWT 接 Agent gRPC；Admin HTTP 只作为跨进程 fallback。
 # secret 跟 eidolon-agent 共享 — placeholder PAIRING_JWT_SECRET 是 env 名；
 # 空时会 fallback 到 ~/eidolon/run/jwt-secret 文件 (agent auto-persist)。
 runtime_admin:
   enabled: true
+  # Staged rollout: current run_all composition does not start eidolon_kernel yet.
+  kernel_mount_enabled: false
+  kernel_api_url: http://127.0.0.1:8083/api/kernel/v1
   data_resolve_enabled: true
   admin_fallback_enabled: true
   admin_api_url: http://127.0.0.1:9000
@@ -68,9 +71,9 @@ runtime_admin:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
-  # 正常设备链路要求 Hub approved + Admin claimed + bound companion。
-  # Channel 会在 eidolon_agent 路径解析 runtime context；未绑定设备不会进入
-  # voice room，因此 voiceprint 只负责已绑定会话内的说话人校验/遥测策略。
+  # Voiceprint 只负责已选择 Companion 的语音 interaction 内说话人校验/遥测。
+  # Device Mount/Attachment 与无 Device 的虚拟 Companion 入口由 Channel ingress
+  # 在进入 audio pipeline 前解析，不能由 voiceprint 推导。
   enabled: false
   provider: 3d_speaker
   model: campplus_zh_16k_common
@@ -81,8 +84,8 @@ voiceprint:
   threshold: 0.31
   min_audio_ms: 1500
   prewarm: true
-  # Paired ESP32 devices are already approved and user-bound in admin.
-  # Keep voiceprint as telemetry, but don't hard-block those device turns by default.
+  # Keep voiceprint as telemetry for explicitly resolved Companion interactions;
+  # it is not Device admission, Mount, Attachment, or Owner authorization.
   trust_paired_devices: true
   turn_max_audio_ms: 12000
   accept_cache_ttl_ms: 180000

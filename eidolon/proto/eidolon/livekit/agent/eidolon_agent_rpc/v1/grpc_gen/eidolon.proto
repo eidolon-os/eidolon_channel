@@ -6,8 +6,8 @@ import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 // The EidolonAgent service is the companion runtime that LiveKit voice agents
-// and other authenticated callers invoke instead of a raw LLM. Identity,
-// device binding, and token issuance live outside this service.
+// and other authenticated clients invoke instead of a raw LLM. Owner
+// authentication, device binding, and token issuance live outside this service.
 service EidolonAgent {
   // Primary: bidirectional streaming chat. The client sends ChatRequest
   // frames (initial + optional cancels + optional signals); the server emits
@@ -16,7 +16,7 @@ service EidolonAgent {
   rpc Chat(stream ChatRequest) returns (stream TurnEvent);
 
   // Push realtime signals (emotion, prosody, vision tags) OUT OF BAND — i.e.
-  // when no Chat stream is open, or from a caller that isn't the one driving
+  // when no Chat stream is open, or from a producer that isn't driving
   // the turn. Requires session_id to route. Prefer the inline
   // ChatRequest.signal frame whenever a Chat stream is already open for the
   // session: it shares the connection, needs no session_id, and is fused into
@@ -48,23 +48,24 @@ message StartTurn {
   string conversation_id = 2;
   string text = 3;
   google.protobuf.Struct realtime = 4; // optional pre-fused digest
-  // Open key/value bag. Identity (caller_kind, actor_id, runtime_caller_id,
-  // runtime_session_id, caller_display_name) is normally carried by the
-  // runtime JWT and derived server-side; when present here it overrides the
-  // derivation. Left as a Struct deliberately: these are optional overrides,
-  // not a required schema. See eidolon_sdk.biz.chat_stream for the well-known
+  // Open key/value bag for turn-specific policy/diagnostic values. Owner and
+  // runtime binding come only from the verified runtime token. See
+  // eidolon_sdk.biz.chat_stream for the well-known
   // TurnEvent.data string enums (DeltaRole / TerminationCause / TurnDoneStatus).
   google.protobuf.Struct metadata = 5;
-  // Correlation id for this turn, minted by the caller (channel), propagated
+  // Correlation id for this turn, minted by the transport client (channel), propagated
   // channel -> agent -> memory so one exchange can be traced across hops.
   // Empty = the server derives one (call metadata x-trace-id, else a uuid).
   string trace_id = 6;
-  // Speculative (preemptive) turn: the caller started this on a partial ASR
+  // Speculative (preemptive) turn: the client started this on a partial ASR
   // transcript to warm the LLM. The server streams a reply but MUST NOT
   // persist or fan out to memory until the turn is confirmed (a subsequent
   // non-speculative StartTurn for the same conversation promotes it; a cancel
   // or a superseding turn discards it with no persistence).
   bool speculative = 7;
+  // Existing Agent behavior only distinguishes spoken from typed input. This
+  // is an input fact, not another principal or product-entrypoint taxonomy.
+  string input_modality = 8; // voice | text
 }
 
 // Cancel an in-flight turn. ``played_chars``/``played_ms`` report how much of
@@ -166,7 +167,7 @@ message Ack { bool accepted = 1; string note = 2; }
 // ---------------------------------------------------------------------------
 
 message SubscribeRequest {
-  string instance_id = 1; // optional; empty = subscribe to all instances for the caller's user
+  string instance_id = 1; // optional; empty = subscribe to all instances in the Owner scope
 }
 
 message ProactiveEvent {

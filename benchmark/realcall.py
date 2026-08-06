@@ -441,16 +441,16 @@ async def preflight_runtime_identity(
     provider health preflight so a failure is attributed to its actual cause.
     """
 
-    actor_id = identity.strip()
-    actor_kind = kind.strip().lower()
-    if not actor_id:
-        return {"ok": False, "kind": actor_kind, "error": "identity is empty"}
-    if actor_kind not in {"device", "user", "owner"}:
+    participant_id = identity.strip()
+    participant_kind = kind.strip().lower()
+    if not participant_id:
+        return {"ok": False, "kind": participant_kind, "error": "identity is empty"}
+    if participant_kind not in {"device", "user", "owner"}:
         return {
             "ok": False,
-            "kind": actor_kind,
-            "identity": actor_id,
-            "error": f"unsupported participant kind {actor_kind!r}",
+            "kind": participant_kind,
+            "identity": participant_id,
+            "error": f"unsupported participant kind {participant_kind!r}",
         }
 
     owned_http = None
@@ -465,14 +465,14 @@ async def preflight_runtime_identity(
                 trust_env=False,
             )
             resolver = AdminResolveClient(owned_http, admin_api_url)
-        if actor_kind == "device":
-            context = await resolver.resolve_device(actor_id)
+        if participant_kind == "device":
+            context = await resolver.resolve_device(participant_id)
         else:
-            context = await resolver.resolve_owner(actor_id)
+            context = await resolver.resolve_owner(participant_id)
         return {
             "ok": True,
-            "kind": actor_kind,
-            "identity": actor_id,
+            "kind": participant_kind,
+            "identity": participant_id,
             "owner_id": context.owner_id,
             "companion_id": context.companion_id,
             "device_id": context.device_id,
@@ -480,8 +480,8 @@ async def preflight_runtime_identity(
     except Exception as exc:  # noqa: BLE001 - serialize the preflight failure
         return {
             "ok": False,
-            "kind": actor_kind,
-            "identity": actor_id,
+            "kind": participant_kind,
+            "identity": participant_id,
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:

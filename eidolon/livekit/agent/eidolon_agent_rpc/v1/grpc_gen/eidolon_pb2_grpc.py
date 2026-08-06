@@ -27,8 +27,8 @@ if _version_not_supported:
 
 class EidolonAgentStub(object):
     """The EidolonAgent service is the companion runtime that LiveKit voice agents
-    and other authenticated callers invoke instead of a raw LLM. Identity,
-    device binding, and token issuance live outside this service.
+    and other authenticated clients invoke instead of a raw LLM. Owner
+    authentication, device binding, and token issuance live outside this service.
     """
 
     def __init__(self, channel):
@@ -56,8 +56,8 @@ class EidolonAgentStub(object):
 
 class EidolonAgentServicer(object):
     """The EidolonAgent service is the companion runtime that LiveKit voice agents
-    and other authenticated callers invoke instead of a raw LLM. Identity,
-    device binding, and token issuance live outside this service.
+    and other authenticated clients invoke instead of a raw LLM. Owner
+    authentication, device binding, and token issuance live outside this service.
     """
 
     def Chat(self, request_iterator, context):
@@ -72,7 +72,7 @@ class EidolonAgentServicer(object):
 
     def PushSignal(self, request, context):
         """Push realtime signals (emotion, prosody, vision tags) OUT OF BAND — i.e.
-        when no Chat stream is open, or from a caller that isn't the one driving
+        when no Chat stream is open, or from a producer that isn't driving
         the turn. Requires session_id to route. Prefer the inline
         ChatRequest.signal frame whenever a Chat stream is already open for the
         session: it shares the connection, needs no session_id, and is fused into
@@ -119,8 +119,8 @@ def add_EidolonAgentServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class EidolonAgent(object):
     """The EidolonAgent service is the companion runtime that LiveKit voice agents
-    and other authenticated callers invoke instead of a raw LLM. Identity,
-    device binding, and token issuance live outside this service.
+    and other authenticated clients invoke instead of a raw LLM. Owner
+    authentication, device binding, and token issuance live outside this service.
     """
 
     @staticmethod

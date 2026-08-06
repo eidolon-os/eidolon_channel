@@ -44,6 +44,13 @@ async def test_runtime_resolve_client_prefers_eidolon_data(tmp_path, monkeypatch
         assert device_ctx.genome_id == "genome-a"
         assert device_ctx.device_id == "esp32-a"
 
+        companion_ctx = await client.resolve_companion(
+            "companion-a", device_id=None
+        )
+        assert companion_ctx.owner_id == "owner-a"
+        assert companion_ctx.companion_id == "companion-a"
+        assert companion_ctx.device_id is None
+
         owner_ctx = await client.resolve_owner("owner-a")
         assert owner_ctx.owner_id == "owner-a"
         assert owner_ctx.companion_id == "companion-a"

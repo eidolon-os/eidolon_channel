@@ -261,6 +261,8 @@ def load_effective_config() -> EffectiveAgentConfig:
         rt_admin_y,
         allowed={
             "enabled",
+            "kernel_mount_enabled",
+            "kernel_api_url",
             "data_resolve_enabled",
             "admin_fallback_enabled",
             "admin_api_url",
@@ -310,6 +312,11 @@ def load_effective_config() -> EffectiveAgentConfig:
         ),
         runtime_admin=RuntimeAdminConfig(
             enabled=bool(rt_admin_y.get("enabled", True)),
+            kernel_mount_enabled=bool(rt_admin_y.get("kernel_mount_enabled", False)),
+            kernel_api_url=str(
+                rt_admin_y.get("kernel_api_url")
+                or "http://127.0.0.1:8083/api/kernel/v1"
+            ).strip(),
             data_resolve_enabled=bool(rt_admin_y.get("data_resolve_enabled", True)),
             admin_fallback_enabled=bool(rt_admin_y.get("admin_fallback_enabled", True)),
             admin_api_url=str(rt_admin_y.get("admin_api_url") or "http://127.0.0.1:9000").strip(),

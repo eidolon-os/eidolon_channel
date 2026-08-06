@@ -103,11 +103,20 @@ def _build_device_token_source(
         )
 
     resolve_client = _build_runtime_resolve_client(rt)
+    mounts = None
+    if getattr(rt, "kernel_mount_enabled", False):
+        from eidolon.livekit.agent.runtime.kernel_mounts import KernelMountHttpClient
+
+        mounts = KernelMountHttpClient(
+            base_url=str(getattr(rt, "kernel_api_url", "") or "").strip(),
+            timeout_sec=float(getattr(rt, "http_timeout_sec", 5.0)),
+        )
     from eidolon.livekit.agent.runtime import make_device_token_resolver
 
     return make_device_token_resolver(
         room=livekit_room,
         admin=resolve_client,
+        mounts=mounts,
         jwt_secret=secret,
         jwt_algorithm=rt.jwt_algorithm,
         ttl_seconds=rt.device_token_ttl_seconds,
@@ -190,6 +199,16 @@ class _FallbackResolveClient:
     async def resolve_owner(self, owner_id: str):
         return await self._resolve("resolve_owner", owner_id)
 
+    async def resolve_companion(self, companion_id: str, *, device_id: str | None):
+        """Resolve exact Companion locally during the staged Kernel rollout.
+
+        The legacy Admin fallback has no exact Companion endpoint, so it must
+        not silently substitute owner-first selection.
+        """
+        return await self._primary.resolve_companion(
+            companion_id, device_id=device_id
+        )
+
     async def _resolve(self, method: str, value: str):
         from eidolon_sdk.biz.admin import AdminResolveNotFound, AdminResolveUnreachable
 
@@ -261,6 +280,14 @@ class _DataStoreRuntimeResolveClient:
                 f"device {device_id!r} is bound outside owner {device.owner_id!r}",
             )
         return await self._context_for_companion(companion, device_id=device.device_id)
+
+    async def resolve_companion(self, companion_id: str, *, device_id: str | None):
+        from eidolon_sdk.biz.admin import AdminResolveNotFound
+
+        companion = await self._store.companions.get(companion_id)
+        if companion is None:
+            raise AdminResolveNotFound(f"companion {companion_id!r} not found")
+        return await self._context_for_companion(companion, device_id=device_id)
 
     async def _context_for_companion(self, companion: "Any", *, device_id: str | None):
         from eidolon_sdk.biz.admin import (

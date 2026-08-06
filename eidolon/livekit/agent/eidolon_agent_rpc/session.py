@@ -298,6 +298,7 @@ class EidolonAgentSession:
                         text=text,
                         trace_id=trace_id,
                         speculative=speculative,
+                        input_modality="voice",
                         metadata=md,
                     )
                 )

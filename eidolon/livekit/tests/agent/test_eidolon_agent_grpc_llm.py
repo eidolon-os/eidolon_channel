@@ -264,6 +264,7 @@ async def test_forwards_deltas_then_finishes() -> None:
             assert servicer.starts[0].text == "打个招呼"
             assert servicer.starts[0].conversation_id == "livekit:room-abc"
             assert servicer.starts[0].turn_id  # non-empty uuid hex
+            assert servicer.starts[0].input_modality == "voice"
             assert [event["event"] for event in provider_events] == [
                 "brain_request_started",
                 "brain_request_sent",

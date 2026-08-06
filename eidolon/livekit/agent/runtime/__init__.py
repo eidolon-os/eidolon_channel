@@ -9,13 +9,19 @@ from eidolon.livekit.agent.runtime.interaction_mode import (
     resolve_welcome_text,
 )
 from eidolon.livekit.agent.runtime.resolver import (
+    CompanionInteractionContext,
+    DeviceConnectionContext,
     DeviceTokenResolverError,
     make_device_token_resolver,
+    resolve_channel_context,
 )
 
 __all__ = [
+    "CompanionInteractionContext",
+    "DeviceConnectionContext",
     "DeviceTokenResolverError",
     "make_device_token_resolver",
+    "resolve_channel_context",
     "apply_interaction_mode",
     "resolve_avatar_requested",
     "resolve_device_id",

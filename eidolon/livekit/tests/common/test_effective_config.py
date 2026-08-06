@@ -60,6 +60,8 @@ behavior:
 worker:
   num_idle_processes: 1
 runtime_admin:
+  kernel_mount_enabled: true
+  kernel_api_url: http://kernel.local/api/kernel/v1
   data_resolve_enabled: false
   admin_fallback_enabled: true
   http_timeout_sec: 8.5
@@ -167,6 +169,8 @@ voiceprint:
     assert cfg.worker.num_idle_processes == 1
     assert cfg.runtime_admin.data_resolve_enabled is False
     assert cfg.runtime_admin.admin_fallback_enabled is True
+    assert cfg.runtime_admin.kernel_mount_enabled is True
+    assert cfg.runtime_admin.kernel_api_url == "http://kernel.local/api/kernel/v1"
     assert cfg.runtime_admin.http_timeout_sec == 8.5
     assert cfg.runtime_admin.http_connect_timeout_sec == 1.5
 

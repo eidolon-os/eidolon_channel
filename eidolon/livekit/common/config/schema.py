@@ -87,6 +87,8 @@ class RuntimeAdminConfig:
     """
 
     enabled: bool = True
+    kernel_mount_enabled: bool = False
+    kernel_api_url: str = "http://127.0.0.1:8083/api/kernel/v1"
     data_resolve_enabled: bool = True
     admin_fallback_enabled: bool = True
     admin_api_url: str = "http://127.0.0.1:9000"

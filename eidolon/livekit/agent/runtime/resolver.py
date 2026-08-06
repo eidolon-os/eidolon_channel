@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from eidolon_sdk.biz.admin import AdminResolveError, ResolvedContext
@@ -30,7 +31,7 @@ _log = logging.getLogger(__name__)
 
 DeviceTokenResolver = Callable[[], Awaitable[str]]
 RuntimeTokenResolver = DeviceTokenResolver
-RUNTIME_PARTICIPANT_KINDS = frozenset({"device", "owner", "user"})
+RUNTIME_PARTICIPANT_KINDS = frozenset({"device", "companion", "owner", "user"})
 
 
 class DeviceTokenResolverError(Exception):
@@ -42,14 +43,36 @@ class RoomNotConnectedError(DeviceTokenResolverError):
     """Runtime participant resolution requires an active room connection."""
 
 
+@dataclass(frozen=True, slots=True)
+class DeviceConnectionContext:
+    """Owner-scoped mounted Device; Companion attachment is optional.
+
+    This context is sufficient for a Channel Provider data connection, but not
+    for constructing an Agent/audio runtime token.
+    """
+
+    owner_id: str
+    device_id: str
+    mount_revision: int
+    attached_companion_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompanionInteractionContext:
+    """Complete Companion runtime selected before entering the audio pipeline."""
+
+    runtime: ResolvedContext
+    mount_revision: int | None = None
+
+
 def _participant_identity_and_metadata(
     room: Any,
 ) -> tuple[str, dict[str, Any]] | None:
-    """Select the runtime actor rather than the first room participant.
+    """Select the runtime participant rather than the first room participant.
 
     Non-publishing infrastructure participants (for example the Hub control
-    bridge) are not voice-session actors and must never own RoomIO, identity,
-    memory, or runtime-token resolution.  Explicit actor metadata wins even if
+    bridge) are not voice-session entrants and must never own RoomIO, identity,
+    memory, or runtime-token resolution. Explicit participant metadata wins even if
     a system participant joined the room first.  A publishing participant with
     invalid metadata remains visible so the strict configuration error is not
     silently hidden.
@@ -60,7 +83,7 @@ def _participant_identity_and_metadata(
         participants = list(getattr(room, "remote_participants", {}).values())
     except Exception:  # noqa: BLE001 — defensive
         return None
-    invalid_actor: tuple[str, dict[str, Any]] | None = None
+    invalid_participant: tuple[str, dict[str, Any]] | None = None
     for participant in participants:
         identity = (getattr(participant, "identity", "") or "").strip()
         if not identity:
@@ -72,9 +95,9 @@ def _participant_identity_and_metadata(
         permissions = getattr(participant, "permissions", None)
         if getattr(permissions, "can_publish", None) is False:
             continue
-        if invalid_actor is None:
-            invalid_actor = (identity, metadata)
-    return invalid_actor
+        if invalid_participant is None:
+            invalid_participant = (identity, metadata)
+    return invalid_participant
 
 
 def _participant_metadata(participant: Any) -> dict[str, Any]:
@@ -94,7 +117,7 @@ async def wait_for_runtime_participant_identity(
     timeout_sec: float = 10.0,
     poll_interval_sec: float = 0.05,
 ) -> str:
-    """Wait until an explicitly typed voice-session actor is in the room."""
+    """Wait until an explicitly typed voice-session participant is in the room."""
     identity, _ = await wait_for_runtime_participant_metadata(
         room,
         timeout_sec=timeout_sec,
@@ -109,7 +132,7 @@ async def wait_for_runtime_participant_metadata(
     timeout_sec: float = 10.0,
     poll_interval_sec: float = 0.05,
 ) -> tuple[str, dict[str, Any]]:
-    """Wait for and return the explicitly typed voice-session actor.
+    """Wait for and return the explicitly typed voice-session participant.
 
     Infrastructure participants may join first.  Returning identity and
     metadata from the same selection pass prevents session construction from
@@ -120,7 +143,7 @@ async def wait_for_runtime_participant_metadata(
         raise RoomNotConnectedError(
             "wait_for_runtime_participant_metadata() called on an unconnected "
             "room; connect the job (JobContext.connect()) before resolving the "
-            "runtime actor"
+            "runtime participant"
         )
 
     loop = asyncio.get_running_loop()
@@ -134,8 +157,8 @@ async def wait_for_runtime_participant_metadata(
                 return identity, metadata
         if loop.time() >= deadline:
             raise DeviceTokenResolverError(
-                "no remote participant with runtime actor metadata "
-                "(kind=device/owner/user) became available"
+                "no remote participant with runtime participant metadata "
+                "(kind=device/companion/owner/user) became available"
             )
         await asyncio.sleep(max(0.0, poll_interval_sec))
 
@@ -145,28 +168,99 @@ async def _resolve_context(
     admin: Any,
     identity: str,
     metadata: dict[str, Any],
-) -> tuple[str, str, ResolvedContext]:
-    """Resolve a participant into ``(actor_kind, actor_id, context)``."""
+) -> ResolvedContext:
+    """Resolve a participant to its complete Companion runtime context."""
+    resolved = await resolve_channel_context(
+        runtime=admin,
+        mounts=None,
+        identity=identity,
+        metadata=metadata,
+    )
+    if isinstance(resolved, DeviceConnectionContext):
+        raise DeviceTokenResolverError(
+            f"device {resolved.device_id!r} has no companion target"
+        )
+    return resolved.runtime
+
+
+async def resolve_channel_context(
+    *,
+    runtime: Any,
+    mounts: Any | None,
+    identity: str,
+    metadata: dict[str, Any],
+) -> DeviceConnectionContext | CompanionInteractionContext:
+    """Resolve ingress before choosing a Channel processing path.
+
+    With a Mount resolver, an unattached Device remains a valid Device
+    connection. A complete Companion runtime is only requested when a default
+    attachment or explicit same-Owner target exists. Without a Mount resolver,
+    the legacy runtime aggregator remains available during staged rollout.
+    """
     kind = str(metadata.get("kind") or "").strip().lower()
     if kind == "device":
         device_id = str(metadata.get("device_id") or identity).strip()
         if not device_id:
             raise DeviceTokenResolverError("device participant missing device_id")
-        return "device", device_id, await admin.resolve_device(device_id)
+        if mounts is None:
+            context = await runtime.resolve_device(device_id)
+            return CompanionInteractionContext(context)
+
+        owner_id = str(metadata.get("owner_id") or "").strip()
+        if not owner_id:
+            raise DeviceTokenResolverError(
+                "device participant missing trusted owner_id for Kernel scope"
+            )
+        connection = await mounts.resolve(owner_id=owner_id, device_id=device_id)
+        if connection.owner_id != owner_id or connection.device_id != device_id:
+            raise DeviceTokenResolverError("Kernel Device Mount owner/device mismatch")
+
+        companion_id = str(
+            metadata.get("companion_id")
+            or connection.attached_companion_id
+            or ""
+        ).strip()
+        if not companion_id:
+            return connection
+        context = await runtime.resolve_companion(
+            companion_id, device_id=device_id
+        )
+        if (
+            context.owner_id != owner_id
+            or context.companion_id != companion_id
+            or context.device_id != device_id
+        ):
+            raise DeviceTokenResolverError(
+                "Companion runtime does not match mounted Device owner/target"
+            )
+        return CompanionInteractionContext(context, connection.mount_revision)
+    if kind == "companion":
+        companion_id = str(metadata.get("companion_id") or identity).strip()
+        owner_id = str(metadata.get("owner_id") or "").strip()
+        if not companion_id or not owner_id:
+            raise DeviceTokenResolverError(
+                "companion participant missing companion_id or trusted owner_id"
+            )
+        context = await runtime.resolve_companion(companion_id, device_id=None)
+        if context.owner_id != owner_id or context.companion_id != companion_id:
+            raise DeviceTokenResolverError("Companion runtime owner/identity mismatch")
+        if context.device_id is not None:
+            raise DeviceTokenResolverError("virtual Companion runtime unexpectedly has device")
+        return CompanionInteractionContext(context)
     if kind == "owner":
         owner_id = str(metadata.get("owner_id") or identity).strip()
         if not owner_id:
             raise DeviceTokenResolverError("owner participant missing owner_id")
-        return "owner", owner_id, await admin.resolve_owner(owner_id)
+        return CompanionInteractionContext(await runtime.resolve_owner(owner_id))
     if kind == "user":
         owner_id = str(
             metadata.get("owner_id") or metadata.get("user_id") or identity
         ).strip()
         if not owner_id:
             raise DeviceTokenResolverError("user participant missing owner_id/user_id")
-        return "owner", owner_id, await admin.resolve_owner(owner_id)
+        return CompanionInteractionContext(await runtime.resolve_owner(owner_id))
     raise DeviceTokenResolverError(
-        f"participant.metadata.kind must be one of 'device' or 'owner' for "
+        f"participant.metadata.kind must be device/companion/owner/user for "
         f"identity={identity!r}; got {kind!r}."
     )
 
@@ -175,6 +269,7 @@ def make_device_token_resolver(
     *,
     room: Any,
     admin: Any,
+    mounts: Any | None = None,
     jwt_secret: str,
     jwt_algorithm: str = "HS256",
     ttl_seconds: int = 24 * 3600,
@@ -206,21 +301,28 @@ def make_device_token_resolver(
         identity, metadata = peek
 
         try:
-            actor_kind, actor_id, ctx = await _resolve_context(
-                admin=admin, identity=identity, metadata=metadata
+            context = await resolve_channel_context(
+                runtime=admin,
+                mounts=mounts,
+                identity=identity,
+                metadata=metadata,
             )
         except AdminResolveError as exc:
             raise DeviceTokenResolverError(
                 f"admin resolve failed for identity={identity!r} "
                 f"kind={metadata.get('kind')!r}: {exc}"
             ) from exc
+        if isinstance(context, DeviceConnectionContext):
+            raise DeviceTokenResolverError(
+                f"device {context.device_id!r} is mounted but has no companion target; "
+                "keep it on the Device/data path or select an explicit same-Owner Companion"
+            )
+        ctx = context.runtime
 
         try:
             token, exp = sign_runtime_token(
                 secret=jwt_secret,
                 algorithm=jwt_algorithm,
-                actor_kind=actor_kind,
-                actor_id=actor_id,
                 device_id=ctx.device_id,
                 owner_id=ctx.owner_id,
                 companion_id=ctx.companion_id,
@@ -236,9 +338,7 @@ def make_device_token_resolver(
 
         cache["token"] = token
         _log.info(
-            "resolved runtime token actor=%s:%s owner=%s companion=%s device=%s genome=%s exp=%s",
-            actor_kind,
-            actor_id,
+            "resolved runtime token owner=%s companion=%s device=%s genome=%s exp=%s",
             ctx.owner_id,
             ctx.companion_id,
             ctx.device_id,

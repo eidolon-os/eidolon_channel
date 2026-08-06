@@ -2,6 +2,13 @@
 
 独立仓库：Eidolon **LiveKit 语音 Channel**（`eidolon.livekit`）—— Agent worker、STT/TTS/VAD/EOT 插件与测试。
 
+Channel 的接入边界区分 Owner-scoped `DeviceConnectionContext` 与完整
+`CompanionInteractionContext`：Device 可以只建立 data connection 而不选择
+Companion；Companion 也可以通过 Web/小程序等虚拟 endpoint 建立无物理 Device 的
+interaction。现有语音 pipeline 只接收完整 Companion context，不在 VAD/STT/EOT/LLM/TTS
+内部传播 optional Companion。Kernel Mount consumer 目前为显式 feature flag，待本机产品
+composition 启动 Kernel 且 Provider 能提供受信 `owner_id` 后启用。
+
 ## 本地开发
 
 ```bash

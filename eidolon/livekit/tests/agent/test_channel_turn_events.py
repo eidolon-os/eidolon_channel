@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from eidolon_data import DataSettings, DataStore
-
 from eidolon.livekit.agent.observability import turn_events
 from eidolon.livekit.agent.observability import (
     ChannelEventContext,
@@ -13,8 +11,10 @@ from eidolon.livekit.agent.observability import (
 )
 
 
-def _enabled_sink(*, queue_max: int = 16) -> ChannelTurnEventSink:
-    sink = ChannelTurnEventSink(queue_max=queue_max)
+def _enabled_sink() -> ChannelTurnEventSink:
+    observed = []
+    sink = ChannelTurnEventSink(observer=observed.append)
+    sink._test_observed = observed  # type: ignore[attr-defined]
     sink._context = ChannelEventContext(  # type: ignore[attr-defined]
         owner_id="owner-1",
         companion_id="companion-1",
@@ -22,11 +22,10 @@ def _enabled_sink(*, queue_max: int = 16) -> ChannelTurnEventSink:
         room_name="room-1",
         session_flow_id=None,
     )
-    sink._writer = object()  # type: ignore[assignment,attr-defined]
     return sink
 
 
-def test_phase_projection_is_non_blocking_safe_and_ordered() -> None:
+def test_phase_projection_stays_in_the_telemetry_lane() -> None:
     sink = _enabled_sink()
     timeline = TurnTimeline("channel-turn-1")
     timeline.mark_at("speech_started_at", 10.0)
@@ -42,14 +41,8 @@ def test_phase_projection_is_non_blocking_safe_and_ordered() -> None:
         details={"eot_score": 0.7, "transcript": "must not leave Channel"},
     )
 
-    pending = sink._queue.get_nowait()  # type: ignore[attr-defined]
-    assert pending is not None
-    assert pending.event_type == "channel.turn.phase_changed"
-    assert pending.trace_id == "channel-turn-1"
-    assert pending.payload["transition_seq"] == 1
-    assert pending.payload["elapsed_ms"] == 125.0
-    assert pending.payload["details"] == {"eot_score": 0.7}
-    assert "transcript" not in str(pending.payload)
+    assert len(sink._test_observed) == 1  # type: ignore[attr-defined]
+    assert sink.telemetry_observed_count == 1
 
 
 def test_terminal_projection_is_deduped_and_classifies_rejection() -> None:
@@ -64,9 +57,8 @@ def test_terminal_projection_is_deduped_and_classifies_rejection() -> None:
     sink.terminal(timeline, "voiceprint_commit_blocked")
     sink.terminal(timeline, "duplicate_flush")
 
-    assert sink._queue.qsize() == 1  # type: ignore[attr-defined]
-    pending = sink._queue.get_nowait()  # type: ignore[attr-defined]
-    assert pending is not None
+    assert len(sink._test_observed) == 1  # type: ignore[attr-defined]
+    pending = sink._test_observed[0]  # type: ignore[attr-defined]
     assert pending.event_type == "channel.turn.rejected"
     assert pending.outcome == "denied"
     assert pending.payload["status"] == "rejected"
@@ -86,8 +78,7 @@ def test_terminal_projection_distinguishes_interrupted_response_from_failed_tts(
     sink.terminal(interrupted, "interrupted_by_user")
     sink.terminal(failed, "nonrecoverable_tts_error")
 
-    interrupted_event = sink._queue.get_nowait()  # type: ignore[attr-defined]
-    failed_event = sink._queue.get_nowait()  # type: ignore[attr-defined]
+    interrupted_event, failed_event = sink._test_observed  # type: ignore[attr-defined]
     assert interrupted_event is not None
     assert interrupted_event.event_type == "channel.turn.completed"
     assert interrupted_event.payload["status"] == "interrupted"
@@ -98,49 +89,82 @@ def test_terminal_projection_distinguishes_interrupted_response_from_failed_tts(
     assert failed_event.payload["status"] == "failed"
 
 
-def test_queue_pressure_drops_observability_not_voice_work() -> None:
-    sink = _enabled_sink(queue_max=1)
-    first = TurnTimeline("turn-1")
-    second = TurnTimeline("turn-2")
+def test_telemetry_adapter_failure_does_not_escape_into_voice_work() -> None:
+    def _fail(_event) -> None:
+        raise RuntimeError("metrics backend unavailable")
 
-    sink.milestone(first, "generating")
-    sink.milestone(second, "generating")
+    sink = ChannelTurnEventSink(observer=_fail)
+    sink._context = ChannelEventContext(  # type: ignore[attr-defined]
+        owner_id="owner-1",
+        companion_id="companion-1",
+        device_id=None,
+        room_name="room-1",
+        session_flow_id=None,
+    )
+    sink.terminal(TurnTimeline("turn-1"), "agent_playback_done")
 
-    assert sink._queue.qsize() == 1  # type: ignore[attr-defined]
     assert sink.dropped_count == 1
 
 
-async def test_sink_persists_replayable_session_and_turn_chain(tmp_path, monkeypatch) -> None:
-    settings = DataSettings(
-        sqlite_path=str(tmp_path / "eidolon.sqlite3"),
-        object_store_path=str(tmp_path / "objects"),
+async def test_event_context_supports_companion_without_device() -> None:
+    participant = SimpleNamespace(
+        identity="companion-1",
+        metadata=json.dumps(
+            {
+                "kind": "companion",
+                "owner_id": "owner-1",
+                "companion_id": "companion-1",
+            }
+        ),
     )
-    bootstrap = DataStore.open(settings)
-    await bootstrap.init_schema()
-    await bootstrap.owners.create(owner_id="owner-1", display_name="Owner")
-    await bootstrap.companions.create(
-        companion_id="companion-1",
-        owner_id="owner-1",
-        display_name="Companion",
+    room = SimpleNamespace(
+        name="room-virtual",
+        remote_participants={"companion-1": participant},
     )
-    await bootstrap.devices.create_device(
-        device_id="device-1",
-        owner_id="owner-1",
-        bound_companion_id="companion-1",
-        kind="voice_body",
-    )
-    await bootstrap.close()
 
-    monkeypatch.setattr(turn_events, "load_data_settings", lambda: settings)
+    context = await turn_events._resolve_event_context(room)
+
+    assert context.owner_id == "owner-1"
+    assert context.companion_id == "companion-1"
+    assert context.device_id is None
+
+
+async def test_owner_event_context_requires_explicit_companion_selection() -> None:
+    participant = SimpleNamespace(
+        identity="owner-a",
+        metadata=json.dumps({"kind": "owner", "owner_id": "owner-a"}),
+    )
+    room = SimpleNamespace(
+        name="room-owner",
+        remote_participants={"owner-a": participant},
+    )
+
+    try:
+        await turn_events._resolve_event_context(room)
+    except RuntimeError as exc:
+        assert "explicitly selected companion" in str(exc)
+    else:
+        raise AssertionError("Channel must not guess a Companion from Owner scope")
+
+
+async def test_sink_keeps_session_and_turn_chain_in_telemetry_lane() -> None:
     participant = SimpleNamespace(
         identity="device-1",
-        metadata=json.dumps({"kind": "device", "device_id": "device-1"}),
+        metadata=json.dumps(
+            {
+                "kind": "device",
+                "device_id": "device-1",
+                "owner_id": "owner-1",
+                "companion_id": "companion-1",
+            }
+        ),
     )
     room = SimpleNamespace(
         name="room-1",
         remote_participants={"device-1": participant},
     )
-    sink = ChannelTurnEventSink()
+    observed = []
+    sink = ChannelTurnEventSink(observer=observed.append)
     await sink.start(room)
     assert sink.enabled
 
@@ -160,13 +184,7 @@ async def test_sink_persists_replayable_session_and_turn_chain(tmp_path, monkeyp
     sink.terminal(timeline, "agent_playback_done")
     await sink.close()
 
-    reader = DataStore.open(settings)
-    try:
-        events = await reader.events.list_for_owner("owner-1", limit=20)
-    finally:
-        await reader.close()
-
-    event_types = [event.event_type for event in reversed(events)]
+    event_types = [event.event_type for event in observed]
     assert event_types == [
         "channel.session.started",
         "channel.turn.phase_changed",
@@ -174,7 +192,12 @@ async def test_sink_persists_replayable_session_and_turn_chain(tmp_path, monkeyp
         "channel.turn.completed",
         "channel.session.ended",
     ]
-    turn_events_by_trace = [event for event in events if event.trace_id == "channel-turn-1"]
+    turn_events_by_trace = [event for event in observed if event.trace_id == "channel-turn-1"]
     assert len(turn_events_by_trace) == 3
-    assert all(event.companion_id == "companion-1" for event in events)
-    assert all(event.payload_json.get("device_id") == "device-1" for event in events)
+    assert all(event.payload.get("device_id") == "device-1" for event in observed)
+
+
+def test_channel_telemetry_has_no_eidolon_data_dependency() -> None:
+    source = turn_events.__file__
+    assert source is not None
+    assert "eidolon_data" not in open(source, encoding="utf-8").read()

@@ -102,6 +102,13 @@ def _build_device_token_source(
             "the agent entrypoint."
         )
 
+    session_id = str(getattr(livekit_room, "name", "") or "").strip()
+    if not session_id:
+        raise RuntimeError(
+            "[device_token] livekit_room.name is empty — required to bind "
+            "the Agent credential to this LiveKit session."
+        )
+
     from eidolon.livekit.agent.runtime import make_device_token_resolver
 
     return make_device_token_resolver(
@@ -109,6 +116,7 @@ def _build_device_token_source(
         runtime=runtime_services.runtime,
         mounts=runtime_services.mounts,
         context_resolver=runtime_services.resolve_room,
+        session_id=session_id,
         jwt_secret=secret,
         jwt_algorithm=rt.jwt_algorithm,
         ttl_seconds=rt.device_token_ttl_seconds,

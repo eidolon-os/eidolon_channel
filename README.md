@@ -16,8 +16,11 @@ interaction。现有语音 pipeline 只接收完整 Companion context，不在 V
   Persona Genome 和可选头像；Channel 不直读 Data SQLite。
 - Channel 为一次 LiveKit 会话解析并缓存完整 runtime context。Agent token、Voiceprint 与
   Avatar 复用该结果，不存在 Admin Resolve 旁路。
-- Channel→Agent 使用 V5 窄 runtime token，只携带 `owner_id`、`companion_id`、可选
-  `device_id/session_id/scopes`。Genome/Realm 由 Agent 向 System Data 重新解析和校验。
+- Channel→Agent 使用 V5 窄 runtime token，只携带 `owner_id`、`companion_id`、必需
+  `session_id` 与可选 `device_id/scopes`。`session_id` 固定为当前 LiveKit room；
+  Genome/Realm/运行策略由 Agent 向 System Data 重新解析和校验。
+- Proactive 订阅不再发送 wildcard/instance selector；Agent 只允许订阅 token 中
+  Companion 的事件。`conversation_id` 仍是历史上下文键，不承担会话授权。
 - LiveKit JWT 仍只属于 Channel/LiveKit 链路；上述 OS 边界不进入 VAD/STT/EOT/TTS
   算法，也不改变 full/half/PTT pipeline。
 
@@ -50,8 +53,8 @@ pytest -m integration
 
 ## gRPC 桩
 
-修改 `eidolon/proto/.../remote_agent_rpc.proto` 后在仓库根执行：
+修改 `eidolon/proto/.../eidolon_agent_rpc/v1/grpc_gen/eidolon.proto` 后在仓库根执行：
 
 ```bash
-./scripts/gen_remote_agent_rpc.sh
+./scripts/gen_eidolon_agent_rpc.sh
 ```

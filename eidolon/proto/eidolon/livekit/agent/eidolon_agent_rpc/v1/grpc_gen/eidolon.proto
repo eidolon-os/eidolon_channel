@@ -156,7 +156,9 @@ message TurnEvent {
 // ---------------------------------------------------------------------------
 
 message SignalRequest {
-  string session_id = 1;
+  reserved 1;
+  reserved "session_id";
+  // The target session comes exclusively from the authenticated runtime token.
   PushSignalInline signal = 2;
 }
 
@@ -166,8 +168,10 @@ message Ack { bool accepted = 1; string note = 2; }
 // Proactive
 // ---------------------------------------------------------------------------
 
+// The target Companion comes exclusively from the authenticated runtime token.
 message SubscribeRequest {
-  string instance_id = 1; // optional; empty = subscribe to all instances in the Owner scope
+  reserved 1;
+  reserved "instance_id";
 }
 
 message ProactiveEvent {

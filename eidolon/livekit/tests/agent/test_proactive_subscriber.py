@@ -81,7 +81,6 @@ async def test_subscriber_forwards_events_to_handler() -> None:
         target=target,
         device_token="test-token",
         on_event=_on_event,
-        instance_id="inst_abc",
     )
     try:
         # _consume_once returns when the server ends the stream (both events
@@ -99,7 +98,7 @@ async def test_subscriber_forwards_events_to_handler() -> None:
     assert received[0].intent == "long_task_done"
     assert received[0].style_hint == "report"
     assert len(servicer.requests) == 1
-    assert servicer.requests[0].instance_id == "inst_abc"
+    assert servicer.requests[0] == pb.SubscribeRequest()
 
 
 @pytest.mark.asyncio

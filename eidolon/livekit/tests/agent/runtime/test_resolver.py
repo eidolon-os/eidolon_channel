@@ -80,6 +80,16 @@ def _ctx(*, device_id: str | None = "dev-1") -> ResolvedContext:
     )
 
 
+async def test_token_resolver_requires_explicit_session_binding() -> None:
+    with pytest.raises(ValueError, match="session_id is required"):
+        make_device_token_resolver(
+            room=_room_with(),
+            runtime=_fake_admin(),
+            session_id="  ",
+            jwt_secret=SECRET,
+        )
+
+
 async def test_resolver_dispatches_to_device_for_kind_device():
     admin = _fake_admin()
     admin.resolve_companion.return_value = _ctx(device_id="esp32-007")
@@ -94,12 +104,14 @@ async def test_resolver_dispatches_to_device_for_kind_device():
         room=room,
         runtime=admin,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     token = await resolve()
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["owner_id"] == "owner-1"
     assert payload["companion_id"] == "companion-1"
+    assert payload["session_id"] == "room-1"
     assert "memory_realm_id" not in payload
     assert "genome_id" not in payload
     assert payload["device_id"] == "esp32-007"
@@ -126,6 +138,7 @@ async def test_resolver_ignores_non_publishing_system_participant_before_device(
         room=room,
         runtime=admin,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
 
@@ -174,6 +187,7 @@ async def test_resolver_dispatches_to_owner_for_kind_owner():
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     token = await resolve()
@@ -200,6 +214,7 @@ async def test_resolver_raises_when_metadata_missing_kind():
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError) as exc_info:
@@ -217,6 +232,7 @@ async def test_resolver_raises_when_kind_unknown():
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError):
@@ -235,6 +251,7 @@ async def test_resolver_caches_token_across_calls():
         room=room,
         runtime=admin,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     t1 = await resolve()
@@ -257,6 +274,7 @@ async def test_resolver_coalesces_concurrent_first_calls():
         room=room,
         runtime=admin,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
 
@@ -279,6 +297,7 @@ async def test_resolver_propagates_system_data_404_as_resolver_error():
         room=room,
         runtime=admin,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError, match="ghost"):
@@ -294,6 +313,7 @@ async def test_resolver_no_participant_raises():
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError, match="no remote participant"):
@@ -314,6 +334,7 @@ async def test_resolver_failure_does_not_cache():
         room=room,
         runtime=admin,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError):

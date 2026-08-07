@@ -131,6 +131,7 @@ async def test_audio_token_resolver_rejects_unattached_device_before_signing():
         room=room('{"kind":"device","owner_id":"owner-1"}'),
         runtime=runtime,
         mounts=mounts,
+        session_id="room-1",
         jwt_secret="secret-with-enough-entropy",
     )
 

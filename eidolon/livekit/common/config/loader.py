@@ -272,6 +272,8 @@ def load_effective_config() -> EffectiveAgentConfig:
         },
     )
 
+    token_ttl = runtime_authority_y.get("device_token_ttl_seconds")
+
     cfg = EffectiveAgentConfig(
         core=CoreConfig(
             livekit_url=str(core_y.get("livekit_url") or "ws://localhost:7880"),
@@ -326,9 +328,7 @@ def load_effective_config() -> EffectiveAgentConfig:
                 "PAIRING_JWT_SECRET",
             ),
             jwt_algorithm=str(runtime_authority_y.get("jwt_algorithm") or "HS256").strip(),
-            device_token_ttl_seconds=int(
-                runtime_authority_y.get("device_token_ttl_seconds") or 24 * 3600
-            ),
+            device_token_ttl_seconds=int(24 * 3600 if token_ttl is None else token_ttl),
             http_timeout_sec=float(runtime_authority_y.get("http_timeout_sec") or 10.0),
             http_connect_timeout_sec=float(
                 runtime_authority_y.get("http_connect_timeout_sec") or 3.0

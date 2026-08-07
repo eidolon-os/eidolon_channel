@@ -269,6 +269,37 @@ voiceprint:
         load_effective_config()
 
 
+def test_non_positive_runtime_token_ttl_fails_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        """
+core:
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+providers:
+  stt_provider: sensetime
+  tts_provider: sensetime
+  vad_provider: firered
+  brain_provider: direct_llm
+runtime_authority:
+  device_token_ttl_seconds: 0
+llm:
+  base_url: https://llm.example/v1
+  model: test-model
+  api_key: OPENAI_LLM_API_KEY
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    with pytest.raises(ValueError, match="device_token_ttl_seconds must be positive"):
+        load_effective_config()
+
+
 def test_invalid_worker_num_idle_processes_fails_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

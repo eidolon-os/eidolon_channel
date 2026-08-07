@@ -271,7 +271,6 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self,
         *,
         on_event: "ProactiveHandler",
-        instance_id: str = "",
     ) -> "ProactiveSubscriber":
         """Build a proactive-report subscriber sharing this LLM's connection config.
 
@@ -290,7 +289,6 @@ class EidolonAgentGrpcLlm(llm.LLM):
             device_token=token,
             on_event=on_event,
             tls=self._tls,
-            instance_id=instance_id,
         )
 
     async def warm(self, text: str) -> None:

@@ -69,7 +69,6 @@ class ProactiveSubscriber:
         device_token: str,
         on_event: ProactiveHandler,
         tls: GrpcTlsConfig | None = None,
-        instance_id: str = "",
     ) -> None:
         self._target = target.strip()
         if not self._target:
@@ -78,11 +77,6 @@ class ProactiveSubscriber:
         self._tls = tls or GrpcTlsConfig()
         self._credentials = build_channel_credentials(self._tls)
         self._on_event = on_event
-        # The channel never learns the brain-side instance id (it speaks to the
-        # agent by conversation_id + device token), so it subscribes with an
-        # empty instance_id = wildcard fan-out. Fine for the single-user demo;
-        # per-identity scoping of that wildcard is a server-side follow-up.
-        self._instance_id = instance_id
         self._channel: grpc.aio.Channel | None = None
         self._closed = False
 
@@ -116,14 +110,10 @@ class ProactiveSubscriber:
         channel = await self._ensure_channel()
         stub = pbg.EidolonAgentStub(channel)
         call = stub.SubscribeProactive(
-            pb.SubscribeRequest(instance_id=self._instance_id),
+            pb.SubscribeRequest(),
             metadata=self._metadata,
         )
-        logger.info(
-            "[ProactiveSubscriber] subscribed target=%s instance_id=%r",
-            self._target,
-            self._instance_id or "<all>",
-        )
+        logger.info("[ProactiveSubscriber] subscribed target=%s", self._target)
         async for event in call:
             if self._closed:
                 break

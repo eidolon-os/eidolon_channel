@@ -53,6 +53,8 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
             "runtime_authority HTTP timeouts must satisfy "
             "0.1 <= http_connect_timeout_sec <= http_timeout_sec <= 60.0"
         )
+    if cfg.runtime_authority.device_token_ttl_seconds <= 0:
+        errors.append("runtime_authority.device_token_ttl_seconds must be positive")
 
     vad = cfg.turn_policy.vad
     if not 0.0 < vad.activation_threshold < 1.0:

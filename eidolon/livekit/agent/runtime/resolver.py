@@ -8,7 +8,7 @@ bearer. The resolver here is what that callable does:
   2. Dispatch by ``participant.metadata.kind``.
   3. Resolve the entrance through Kernel Mount + System Data into the explicit
      owner/companion/runtime identity envelope.
-  4. Sign a narrow runtime JWT with Owner, Companion, and optional Device.
+  4. Sign a narrow runtime JWT with Owner, Companion, LiveKit session, and optional Device.
   5. Cache the result for the lifetime of this resolver instance —
      subsequent invocations within the session return the same token.
 
@@ -264,6 +264,7 @@ def make_device_token_resolver(
     runtime: Any,
     mounts: Any | None = None,
     context_resolver: Callable[[Any], Awaitable[ResolvedContext]] | None = None,
+    session_id: str,
     jwt_secret: str,
     jwt_algorithm: str = "HS256",
     ttl_seconds: int = 24 * 3600,
@@ -279,6 +280,9 @@ def make_device_token_resolver(
     changes require a new LiveKit session so conversation history and memory
     stay inside one companion boundary.
     """
+    bound_session_id = session_id.strip()
+    if not bound_session_id:
+        raise ValueError("make_device_token_resolver: session_id is required")
     cache: dict[str, str] = {}
     lock = asyncio.Lock()
 
@@ -321,6 +325,7 @@ def make_device_token_resolver(
                 device_id=ctx.device_id,
                 owner_id=ctx.owner_id,
                 companion_id=ctx.companion_id,
+                session_id=bound_session_id,
                 ttl_seconds=ttl_seconds,
             )
         except ValueError as exc:
@@ -328,10 +333,11 @@ def make_device_token_resolver(
 
         cache["token"] = token
         _log.info(
-            "resolved runtime token owner=%s companion=%s device=%s exp=%s",
+            "resolved runtime token owner=%s companion=%s device=%s session=%s exp=%s",
             ctx.owner_id,
             ctx.companion_id,
             ctx.device_id,
+            bound_session_id,
             exp.isoformat(),
         )
         return token

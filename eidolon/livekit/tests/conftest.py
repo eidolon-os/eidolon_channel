@@ -19,10 +19,7 @@ if not os.environ.get("EIDOLON_CHANNEL_LIVEKIT_ENV", "").strip():
 
 if _env.is_file():
     load_dotenv(_env, override=True)
-    print(
-        f"[conftest] Loaded env from {_env}, "
-        f"SENSETIME_TTS_API_KEY={os.environ.get('SENSETIME_TTS_API_KEY', 'NOT SET')[:20]}"
-    )
+    print(f"[conftest] Loaded env from {_env}")
 else:
     print(
         f"[conftest] No env file at {_local_env} or {_fixture_env}; set "

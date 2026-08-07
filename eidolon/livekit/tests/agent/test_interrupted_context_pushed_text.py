@@ -14,8 +14,8 @@ Production manifestation: 4-turn test log showed welcome message
 captured as interrupted context for round-3 cancel, because the
 in-progress round-3 reply hadn't reached history yet.
 
-G21 fix: prefer ``tts_plugin.current_pushed_text`` (BailianTTS /
-SenseTimeTTS both expose this via weakref to the active synth stream,
+G21 fix: prefer ``tts_plugin.current_pushed_text`` (BailianTTS exposes
+this via weakref to the active synth stream,
 reading the framework's accumulator on ``SynthesizeStream._pushed_text``).
 History fallback is opt-in only because real-room logs showed it can capture
 the previous assistant turn when the active speech handle has not reached
@@ -264,7 +264,7 @@ def test_played_seconds_recorded_on_fallback_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Plugin-side: BailianTTS / SenseTimeTTS expose the property correctly
+# Plugin-side: the configured Bailian TTS exposes the property correctly
 # ---------------------------------------------------------------------------
 
 
@@ -281,19 +281,4 @@ def test_bailian_tts_current_pushed_text_empty_when_no_stream() -> None:
         voice="test-voice",
     )
     tts = BailianTTS(config=cfg)
-    assert tts.current_pushed_text == ""
-
-
-def test_sensetime_tts_current_pushed_text_empty_when_no_stream() -> None:
-    """A fresh SenseTimeTTS instance with no active stream returns empty."""
-    from eidolon.livekit.plugins.tts.sensetime.tts import SenseTimeTTS
-    from eidolon.livekit.plugins.tts.sensetime.config import SenseTimeTTSConfig
-
-    cfg = SenseTimeTTSConfig(
-        api_url="wss://test.example.com",
-        api_key="test-key",
-        model="senseaudio-test",
-        voice="test-voice",
-    )
-    tts = SenseTimeTTS(config=cfg)
     assert tts.current_pushed_text == ""

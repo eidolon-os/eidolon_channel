@@ -52,7 +52,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 behavior:
@@ -185,7 +185,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: eidolon_agent
 runtime_authority:
@@ -249,7 +249,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:
@@ -280,7 +280,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 runtime_authority:
@@ -312,7 +312,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:
@@ -344,7 +344,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:
@@ -377,7 +377,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:
@@ -440,7 +440,7 @@ core:
   api_secret: LIVEKIT_API_SECRET
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: eidolon_agent
 remote_agent_rpc:
@@ -473,7 +473,7 @@ behavior:
   typo_mode: streaming
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:
@@ -504,7 +504,7 @@ behavior:
   pipeline_mode: batch
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:
@@ -533,7 +533,7 @@ behavior:
   agent_mode: batch
 providers:
   stt_provider: sensetime
-  tts_provider: sensetime
+  tts_provider: bailian
   vad_provider: firered
   brain_provider: direct_llm
 llm:

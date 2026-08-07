@@ -145,22 +145,14 @@ class TestSharedStageFactoryInit:
         assert isinstance(shared_stage_factory.llm.llm, lk_llm.LLM)
         logger.info("[PASS] LLM is livekit LLM")
 
-    def test_tts_is_sensetime_instance(self, shared_stage_factory):
+    def test_tts_is_bailian_instance(self, shared_stage_factory):
         from eidolon.livekit.common.config import load_agent_config
+        from eidolon.livekit.plugins.tts.bailian import BailianTTS
 
         cfg = load_agent_config()
-        provider = cfg.providers.tts_provider
-        if provider == "sensetime":
-            from eidolon.livekit.plugins.tts.sensetime import SenseTimeTTS
-
-            assert isinstance(shared_stage_factory.tts.tts, SenseTimeTTS)
-        elif provider == "bailian":
-            from eidolon.livekit.plugins.tts.bailian import BailianTTS
-
-            assert isinstance(shared_stage_factory.tts.tts, BailianTTS)
-        else:
-            pytest.fail(f"unexpected TTS provider in integration config: {provider!r}")
-        logger.info("[PASS] TTS matches configured provider=%s", provider)
+        assert cfg.providers.tts_provider == "bailian"
+        assert isinstance(shared_stage_factory.tts.tts, BailianTTS)
+        logger.info("[PASS] TTS uses configured Bailian provider")
 
 
 # ---------------------------------------------------------------------------

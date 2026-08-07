@@ -151,9 +151,19 @@ class FullDuplexSessionLifecycle:
         # and legacy sessions are unaffected.
         face_image: bytes | None = None
         if getattr(cfg, "cond_image_enabled", True):
-            runtime_admin = getattr(pipeline._factory, "runtime_admin", None)
+            runtime_services = getattr(pipeline._factory, "runtime_services", None)
             try:
-                face_image = await resolve_session_face_image(room, runtime_admin=runtime_admin)
+                face_image = await resolve_session_face_image(
+                    room,
+                    context_resolver=getattr(
+                        pipeline._factory,
+                        "runtime_context_resolver",
+                        None,
+                    ),
+                    runtime_client=(
+                        runtime_services.runtime if runtime_services is not None else None
+                    ),
+                )
             except Exception:
                 logger.exception(
                     "[StreamingPipeline] avatar face resolution failed; using default avatar"
@@ -356,4 +366,7 @@ class FullDuplexSessionLifecycle:
             reason="session_error" if getattr(pipeline, "_close_error", None) else "session_ended"
         )
         await pipeline._shutdown_stages()
+        close_factory = getattr(pipeline._factory, "aclose", None)
+        if callable(close_factory):
+            await close_factory()
         await BasePipeline.shutdown(pipeline)

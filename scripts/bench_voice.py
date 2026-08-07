@@ -188,9 +188,7 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
     cfg = load_effective_config()
     _isolate_loopback_proxy(cfg.core.livekit_url)
     preflight_checks = (
-        ("stt", "tts")
-        if cfg.providers.brain_provider == "eidolon_agent"
-        else ("llm", "stt", "tts")
+        ("stt", "tts") if cfg.providers.brain_provider == "eidolon_agent" else ("llm", "stt", "tts")
     )
     requires_identity = _suite_requires_runtime_identity(suites)
     if requires_identity and not args.livekit_participant_identity:
@@ -198,14 +196,15 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
             "livekit_room cases expecting agent replies require "
             "--livekit-participant-identity (or "
             "EIDOLON_BENCH_LIVEKIT_PARTICIPANT_IDENTITY). The identity must "
-            "resolve through admin /api/resolve/{kind}/{identity}."
+            "resolve through Kernel Mount + System Data runtime authority."
         )
     await _preflight_gate(args, output_dir, checks=preflight_checks)
     if requires_identity:
         identity_result = await preflight_runtime_identity(
             identity=args.livekit_participant_identity,
             kind=args.livekit_participant_kind,
-            admin_api_url=cfg.runtime_admin.admin_api_url,
+            owner_id=args.livekit_owner_id,
+            runtime_authority=cfg.runtime_authority,
         )
         identity_path = output_dir / "identity_preflight.json"
         identity_path.write_text(
@@ -256,11 +255,7 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
 
 
 def _suite_requires_runtime_identity(suites) -> bool:
-    return any(
-        case.expectations.min_agent_messages > 0
-        for suite in suites
-        for case in suite.cases
-    )
+    return any(case.expectations.min_agent_messages > 0 for suite in suites for case in suite.cases)
 
 
 def _participant_metadata(
@@ -283,6 +278,9 @@ def _participant_metadata(
     session_intent = str(getattr(args, "livekit_session_intent", "") or "").strip()
     if session_intent:
         metadata["session_intent"] = session_intent
+    owner_id = str(getattr(args, "livekit_owner_id", "") or "").strip()
+    if owner_id:
+        metadata["owner_id"] = owner_id
     return metadata
 
 
@@ -383,6 +381,11 @@ async def _main() -> int:
         choices=["user", "device"],
         default=os.getenv("EIDOLON_BENCH_LIVEKIT_PARTICIPANT_KIND", "user"),
         help="LiveKit participant metadata.kind used by channel runtime resolver.",
+    )
+    parser.add_argument(
+        "--livekit-owner-id",
+        default=os.getenv("EIDOLON_BENCH_LIVEKIT_OWNER_ID", ""),
+        help="Required Owner namespace for device participants; defaults to identity for users.",
     )
     parser.add_argument(
         "--livekit-interaction-mode",

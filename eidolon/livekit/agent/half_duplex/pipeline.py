@@ -116,9 +116,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         )
         self._idle_timeout_sec: float = idle_policy.timeout_sec
         self._idle_end_reason = idle_policy.end_reason
-        self._idle_disconnect_grace_sec: float = (
-            self._turn_policy.idle.disconnect_grace_ms / 1000.0
-        )
+        self._idle_disconnect_grace_sec: float = self._turn_policy.idle.disconnect_grace_ms / 1000.0
         self._idle_disconnect_started = False
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
@@ -215,6 +213,9 @@ class HalfDuplexPttPipeline(BasePipeline):
             if callable(close):
                 await close()
         await self._shutdown_stages()
+        close_factory = getattr(self._factory, "aclose", None)
+        if callable(close_factory):
+            await close_factory()
         await super().shutdown()
 
     def _build_ptt_controller(self) -> HalfDuplexPttTurnController:
@@ -390,8 +391,7 @@ class HalfDuplexPttPipeline(BasePipeline):
                     result.reason,
                 )
                 logger.info(
-                    "[HalfDuplexPttPipeline] PTT press rejected reason=%s "
-                    "state=%s",
+                    "[HalfDuplexPttPipeline] PTT press rejected reason=%s state=%s",
                     result.reason,
                     result.state,
                 )

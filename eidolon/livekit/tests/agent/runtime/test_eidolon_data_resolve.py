@@ -1,55 +1,75 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from pathlib import Path
 
+import httpx
 import pytest
+from eidolon_sdk.biz.system_data import SystemDataRuntimeClient
 
-from eidolon.livekit.agent.factory import _build_runtime_resolve_client
-from eidolon_data import DataSettings, DataStore
+from eidolon.livekit.agent.runtime.system_data import (
+    SystemDataRuntimeResolver,
+    build_system_data_runtime,
+)
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_runtime_resolve_client_prefers_eidolon_data(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "eidolon.sqlite3"
-    monkeypatch.setenv("EIDOLON_DATA_SQLITE_PATH", str(db_path))
-    store = DataStore.open(DataSettings(sqlite_path=str(db_path)))
-    try:
-        await store.init_schema()
-        await store.owner_service.create_owner(owner_id="owner-a", display_name="Owner A")
-        workspace = await store.workspace_provisioning.provision_workspace(
-            owner_id="owner-a",
-            companion_id="companion-a",
-            genome_id="genome-a",
-            realm_id="realm-a",
-        )
-        await store.devices.create_device(
-            device_id="esp32-a",
-            owner_id="owner-a",
-            status="approved",
-            bound_companion_id=workspace.companion.companion_id,
+async def test_channel_runtime_has_no_system_data_package_dependency() -> None:
+    root = Path(__file__).resolve().parents[5]
+    violations = []
+    for path in (root / "eidolon").rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        if "eidolon_data" in path.read_text(encoding="utf-8"):
+            violations.append(str(path.relative_to(root)))
+
+    assert violations == []
+    assert '"eidolon-data"' not in (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert "eidolon-data =" not in (root / "pyproject.toml").read_text(encoding="utf-8")
+
+
+async def test_runtime_resolve_client_consumes_system_data_authority() -> None:
+    token = "channel-system-data-contract-token-001"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == f"Bearer {token}"
+        return httpx.Response(
+            200,
+            json={
+                "contract_version": "1",
+                "operation": "companion.runtime-snapshot",
+                "owner_id": "owner-a",
+                "companion_id": "companion-a",
+                "lifecycle_state": "active",
+                "runtime_config": {},
+                "memory_realm": {"realm_id": "realm-a", "lifecycle_state": "active"},
+                "persona_genome": {
+                    "genome_id": "genome-a",
+                    "version": 1,
+                    "lifecycle_state": "committed",
+                    "schema_version": "eidolon.persona_genome",
+                    "genome_hash": "pg_hash",
+                    "realizer_version": "eidolon.persona_realizer",
+                    "genome": {},
+                },
+            },
         )
 
-        client = _build_runtime_resolve_client(
-            SimpleNamespace(
-                data_resolve_enabled=True,
-                admin_fallback_enabled=False,
-                admin_api_url="http://admin.invalid",
-            )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = SystemDataRuntimeResolver(
+            SystemDataRuntimeClient(http, "http://data.test", service_token=token)
         )
-        device_ctx = await client.resolve_device("esp32-a")
-        assert device_ctx.owner_id == "owner-a"
-        assert device_ctx.companion_id == "companion-a"
-        assert device_ctx.memory_realm_id == "realm-a"
-        assert device_ctx.genome_id == "genome-a"
-        assert device_ctx.device_id == "esp32-a"
 
-        companion_ctx = await client.resolve_companion(
-            "companion-a", device_id=None
-        )
+        companion_ctx = await client.resolve_companion("companion-a", device_id=None)
         assert companion_ctx.owner_id == "owner-a"
         assert companion_ctx.companion_id == "companion-a"
+        assert companion_ctx.memory_realm_id == "realm-a"
+        assert companion_ctx.genome_id == "genome-a"
         assert companion_ctx.device_id is None
+
+        device_ctx = await client.resolve_companion("companion-a", device_id="esp32-a")
+        assert device_ctx.owner_id == "owner-a"
+        assert device_ctx.device_id == "esp32-a"
 
         owner_ctx = await client.resolve_owner("owner-a")
         assert owner_ctx.owner_id == "owner-a"
@@ -57,5 +77,26 @@ async def test_runtime_resolve_client_prefers_eidolon_data(tmp_path, monkeypatch
         assert owner_ctx.memory_realm_id == "realm-a"
         assert owner_ctx.genome_id == "genome-a"
         assert owner_ctx.device_id is None
-    finally:
-        await store.close()
+
+
+async def test_deferred_runtime_does_not_require_credentials_until_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_env = "EIDOLON_TEST_DATA_AUTHORITY_TOKEN"
+    monkeypatch.delenv(token_env, raising=False)
+    settings = type(
+        "Settings",
+        (),
+        {
+            "data_service_token_env": token_env,
+            "data_api_url": "http://data.test",
+            "http_timeout_sec": 1.0,
+            "http_connect_timeout_sec": 0.5,
+        },
+    )()
+
+    client = build_system_data_runtime(settings)
+
+    with pytest.raises(RuntimeError, match=token_env):
+        await client.resolve_owner("owner-a")
+    await client.aclose()

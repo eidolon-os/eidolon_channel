@@ -84,7 +84,7 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         factory = getattr(pipeline, "_factory", None)
         pipeline._voiceprint_turns = VoiceprintTurnObserver(
             service=getattr(factory, "voiceprint_service", None),
-            runtime_admin=getattr(factory, "runtime_admin", None),
+            context_resolver=getattr(factory, "runtime_context_resolver", None),
             sample_rate=getattr(pipeline, "_audio_sample_rate", 16000),
             max_audio_ms=pipeline._voiceprint_config.turn_max_audio_ms,
             accept_cache_ttl_sec=(pipeline._voiceprint_config.accept_cache_ttl_ms / 1000.0),

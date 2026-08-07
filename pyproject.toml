@@ -29,7 +29,6 @@ dependencies = [
     "python-socks>=2.4",
     "python-dotenv>=1.0",
     "eidolon-sdk",
-    "eidolon-data",
     "modelscope>=1.37.1",
     "addict>=2.4",
     "datasets>=4.0",
@@ -91,4 +90,3 @@ required-environments = [
 
 [tool.uv.sources]
 eidolon-sdk = { path = "../eidolon_sdk", editable = true }
-eidolon-data = { path = "../eidolon_data", editable = true }

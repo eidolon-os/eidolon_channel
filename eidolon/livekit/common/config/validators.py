@@ -39,18 +39,18 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         if not cfg.remote_agent_rpc.target:
             errors.append("remote_agent_rpc.target is required for eidolon_agent")
         # Phase 32.D: device_token check moved out — token signing
-        # belongs to runtime_admin now. server.run() does the
+        # belongs to runtime_authority now. server.run() does the
         # PAIRING_JWT_SECRET-or-file check at startup; here we only
         # require the gRPC target so this validator stays infrastructure-
         # focused (vs runtime-secret-focused).
     if (
         not 0.1
-        <= cfg.runtime_admin.http_connect_timeout_sec
-        <= cfg.runtime_admin.http_timeout_sec
+        <= cfg.runtime_authority.http_connect_timeout_sec
+        <= cfg.runtime_authority.http_timeout_sec
         <= 60.0
     ):
         errors.append(
-            "runtime_admin HTTP timeouts must satisfy "
+            "runtime_authority HTTP timeouts must satisfy "
             "0.1 <= http_connect_timeout_sec <= http_timeout_sec <= 60.0"
         )
 
@@ -73,8 +73,7 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.interrupt.decision_timeout_ms must be in [200, 1000]")
     if not 0 <= intr.framework_false_interruption_timeout_ms <= 30_000:
         errors.append(
-            "turn_policy.interrupt.framework_false_interruption_timeout_ms "
-            "must be in [0, 30000]"
+            "turn_policy.interrupt.framework_false_interruption_timeout_ms must be in [0, 30000]"
         )
     if not 0 <= intr.stt_commit_transcript_timeout_ms <= 30_000:
         errors.append(
@@ -130,15 +129,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 1_000 <= ptt.segment_max_audio_ms <= 120_000:
         errors.append("turn_policy.ptt.segment_max_audio_ms must be in [1000, 120000]")
     if ptt.segment_min_audio_ms > ptt.segment_max_audio_ms:
-        errors.append(
-            "turn_policy.ptt.segment_min_audio_ms must be <= segment_max_audio_ms"
-        )
+        errors.append("turn_policy.ptt.segment_min_audio_ms must be <= segment_max_audio_ms")
     if not 0 <= ptt.segment_min_rms_ppm <= 1_000_000:
         errors.append("turn_policy.ptt.segment_min_rms_ppm must be in [0, 1000000]")
     if not 0 <= ptt.segment_tap_to_stop_max_audio_ms <= 5_000:
-        errors.append(
-            "turn_policy.ptt.segment_tap_to_stop_max_audio_ms must be in [0, 5000]"
-        )
+        errors.append("turn_policy.ptt.segment_tap_to_stop_max_audio_ms must be in [0, 5000]")
 
     duck = cfg.turn_policy.ducking
     if not 1 <= duck.fade_out_ms <= 500:
@@ -148,9 +143,7 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 0.0 <= duck.suspend_volume <= 1.0:
         errors.append("turn_policy.ducking.suspend_volume must be in [0, 1]")
     if not 0.0 <= duck.suspended_passthrough_volume <= 1.0:
-        errors.append(
-            "turn_policy.ducking.suspended_passthrough_volume must be in [0, 1]"
-        )
+        errors.append("turn_policy.ducking.suspended_passthrough_volume must be in [0, 1]")
 
     filler = cfg.turn_policy.filler
     if not 0 <= filler.fade_in_ms <= 500:
@@ -166,13 +159,9 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 0 <= idle.disconnect_after_idle_ms <= 3_600_000:
         errors.append("turn_policy.idle.disconnect_after_idle_ms must be in [0, 3600000]")
     if not 0 <= idle.presence_disconnect_after_idle_ms <= 3_600_000:
-        errors.append(
-            "turn_policy.idle.presence_disconnect_after_idle_ms must be in [0, 3600000]"
-        )
+        errors.append("turn_policy.idle.presence_disconnect_after_idle_ms must be in [0, 3600000]")
     if not 0 <= idle.proactive_disconnect_after_idle_ms <= 3_600_000:
-        errors.append(
-            "turn_policy.idle.proactive_disconnect_after_idle_ms must be in [0, 3600000]"
-        )
+        errors.append("turn_policy.idle.proactive_disconnect_after_idle_ms must be in [0, 3600000]")
     if not 0 <= idle.disconnect_grace_ms <= 10_000:
         errors.append("turn_policy.idle.disconnect_grace_ms must be in [0, 10000]")
 
@@ -190,17 +179,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 0 <= obs.llm_first_delta_timeout_ms <= 60_000:
         errors.append("observability.llm_first_delta_timeout_ms must be in [0, 60000]")
     if not 0 <= obs.stt_pending_provider_event_window_ms <= 10_000:
-        errors.append(
-            "observability.stt_pending_provider_event_window_ms must be in [0, 10000]"
-        )
+        errors.append("observability.stt_pending_provider_event_window_ms must be in [0, 10000]")
     if not 0 <= obs.stt_pending_provider_event_preroll_ms <= 5_000:
-        errors.append(
-            "observability.stt_pending_provider_event_preroll_ms must be in [0, 5000]"
-        )
+        errors.append("observability.stt_pending_provider_event_preroll_ms must be in [0, 5000]")
     if not 1 <= obs.stt_pending_provider_event_max_count <= 512:
-        errors.append(
-            "observability.stt_pending_provider_event_max_count must be in [1, 512]"
-        )
+        errors.append("observability.stt_pending_provider_event_max_count must be in [1, 512]")
 
     vp = cfg.voiceprint
     if vp.enabled:

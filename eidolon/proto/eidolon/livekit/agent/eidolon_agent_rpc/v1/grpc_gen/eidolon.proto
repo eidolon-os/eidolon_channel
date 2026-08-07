@@ -71,8 +71,8 @@ message StartTurn {
 // Cancel an in-flight turn. ``played_chars``/``played_ms`` report how much of
 // the assistant reply the user actually heard when the barge-in happened
 // (character offset into the concatenated answer-role DELTA text, and TTS
-// playback milliseconds). The server truncates what it persists to history,
-// eidolon_data messages, and the memory fanout at that boundary so the
+// playback milliseconds). The server truncates what it persists to its
+// Agent-owned history and the memory fanout at that boundary so the
 // model's memory matches the user's real auditory experience. 0 with
 // has_played_chars=false means "unknown — keep full text" for backward
 // compatibility; an explicit 0 means "nothing was heard".

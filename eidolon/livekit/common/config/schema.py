@@ -59,7 +59,7 @@ class LLMConfig:
 class RemoteAgentRpcConfig:
     """Static config for the gRPC channel to eidolon-agent.
 
-    Runtime tokens are resolved from :class:`RuntimeAdminConfig` and the
+    Runtime tokens are resolved from :class:`RuntimeAuthorityConfig` and the
     LiveKit participant identity. This section only describes where the agent
     gRPC service lives and how to connect to it.
     """
@@ -74,9 +74,11 @@ class RemoteAgentRpcConfig:
 
 
 @dataclass(frozen=True)
-class RuntimeAdminConfig:
-    """Channel resolves participant identity, then signs a runtime JWT using
-    the shared HMAC secret. Admin HTTP can remain as a cross-process fallback.
+class RuntimeAuthorityConfig:
+    """OS runtime authorities used before entering the Agent/audio path.
+
+    Kernel owns Device Mount/Attachment. System Data owns Companion runtime
+    facts. Channel signs only the selected Owner/Companion session context.
 
     ``enabled`` must remain True for ``eidolon_agent``.
 
@@ -87,11 +89,9 @@ class RuntimeAdminConfig:
     """
 
     enabled: bool = True
-    kernel_mount_enabled: bool = False
     kernel_api_url: str = "http://127.0.0.1:8083/api/kernel/v1"
-    data_resolve_enabled: bool = True
-    admin_fallback_enabled: bool = True
-    admin_api_url: str = "http://127.0.0.1:9000"
+    data_api_url: str = "http://127.0.0.1:8084"
+    data_service_token_env: str = "EIDOLON_DATA_COMPANION_AUTHORITY_TOKEN"
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     device_token_ttl_seconds: int = 24 * 3600
@@ -353,7 +353,7 @@ class EffectiveAgentConfig:
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     remote_agent_rpc: RemoteAgentRpcConfig = field(default_factory=RemoteAgentRpcConfig)
-    runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
+    runtime_authority: RuntimeAuthorityConfig = field(default_factory=RuntimeAuthorityConfig)
     turn_policy: TurnPolicyConfig = field(default_factory=TurnPolicyConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     voiceprint: VoiceprintConfig = field(default_factory=VoiceprintConfig)

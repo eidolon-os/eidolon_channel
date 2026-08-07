@@ -59,11 +59,10 @@ behavior:
   instructions: test instructions
 worker:
   num_idle_processes: 1
-runtime_admin:
-  kernel_mount_enabled: true
+runtime_authority:
   kernel_api_url: http://kernel.local/api/kernel/v1
-  data_resolve_enabled: false
-  admin_fallback_enabled: true
+  data_api_url: http://data.local
+  data_service_token_env: TEST_DATA_TOKEN
   http_timeout_sec: 8.5
   http_connect_timeout_sec: 1.5
 llm:
@@ -167,12 +166,11 @@ voiceprint:
     assert cfg.voiceprint.owner_short_audio_bypass_ms == 1200
     assert cfg.behavior.instructions == "test instructions"
     assert cfg.worker.num_idle_processes == 1
-    assert cfg.runtime_admin.data_resolve_enabled is False
-    assert cfg.runtime_admin.admin_fallback_enabled is True
-    assert cfg.runtime_admin.kernel_mount_enabled is True
-    assert cfg.runtime_admin.kernel_api_url == "http://kernel.local/api/kernel/v1"
-    assert cfg.runtime_admin.http_timeout_sec == 8.5
-    assert cfg.runtime_admin.http_connect_timeout_sec == 1.5
+    assert cfg.runtime_authority.kernel_api_url == "http://kernel.local/api/kernel/v1"
+    assert cfg.runtime_authority.data_api_url == "http://data.local"
+    assert cfg.runtime_authority.data_service_token_env == "TEST_DATA_TOKEN"
+    assert cfg.runtime_authority.http_timeout_sec == 8.5
+    assert cfg.runtime_authority.http_connect_timeout_sec == 1.5
 
 
 def test_load_effective_config_applies_settings_overlay(
@@ -190,8 +188,8 @@ providers:
   tts_provider: sensetime
   vad_provider: firered
   brain_provider: eidolon_agent
-runtime_admin:
-  data_resolve_enabled: false
+runtime_authority:
+  data_api_url: http://data.local
 llm:
   base_url: http://llm.local/v1
   model: test-model

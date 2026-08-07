@@ -94,17 +94,13 @@ def test_load_attention_admission_benchmark_suite() -> None:
     assert ambient_case.expectations.action == "cancel"
     assert "known_gap" in ambient_case.tags
     cough_case = next(
-        case
-        for case in suite.cases
-        if case.case_id == "cough_noise_then_ambient_speech_holds_001"
+        case for case in suite.cases if case.case_id == "cough_noise_then_ambient_speech_holds_001"
     )
     assert cough_case.expectations.action == "any"
     assert "cancel" in cough_case.expectations.forbid_actions
     assert "known_gap" not in cough_case.tags
     backchannel_case = next(
-        case
-        for case in suite.cases
-        if case.case_id == "short_backchannel_rolls_back_001"
+        case for case in suite.cases if case.case_id == "short_backchannel_rolls_back_001"
     )
     # fast_lexical_intents defaults off after the interrupt_mode axis was retired,
     # so a short backchannel is held (evidence gate) rather than fast-rolled-back.
@@ -301,10 +297,9 @@ def test_livekit_room_device_envelope_input_mode_tracks_device_mode() -> None:
     # A full_duplex case still reports "ptt" per-step when the step is an
     # explicit client PTT preempt (driven by client_ptt, not device.mode).
     ptt_suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
-    ptt_case = {
-        case.case_id: case
-        for case in ptt_suite.cases
-    }["fd_explicit_ptt_preempts_without_speech_001"]
+    ptt_case = {case.case_id: case for case in ptt_suite.cases}[
+        "fd_explicit_ptt_preempts_without_speech_001"
+    ]
     assert _case_input_mode(ptt_case) == "auto"
     assert _step_input_mode(ptt_case, ptt_case.user_steps[0]) == "ptt"
 
@@ -330,14 +325,15 @@ def test_half_duplex_ptt_phase_a_suite_is_mode_specific() -> None:
 
 
 @pytest.mark.asyncio
-async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_livekit_room_ptt_step_publishes_release_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from benchmark import livekit_room_runner as runner
 
     suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
-    case = {
-        item.case_id: item
-        for item in suite.cases
-    }["fd_explicit_ptt_preempts_without_speech_001"]
+    case = {item.case_id: item for item in suite.cases}[
+        "fd_explicit_ptt_preempts_without_speech_001"
+    ]
     local_participant = AsyncMock()
     events: list[dict] = []
 
@@ -350,7 +346,9 @@ async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.
     monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
     monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
     monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
-    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+    monkeypatch.setattr(
+        runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm
+    )
 
     await runner._feed_case_audio(
         object(),
@@ -363,10 +361,7 @@ async def test_livekit_room_ptt_step_publishes_release_edge(monkeypatch: pytest.
         local_participant=local_participant,
     )
 
-    payloads = [
-        json.loads(call.args[0])
-        for call in local_participant.publish_data.await_args_list
-    ]
+    payloads = [json.loads(call.args[0]) for call in local_participant.publish_data.await_args_list]
     assert payloads[0]["input_mode"] == "ptt"
     assert payloads[0]["ptt"] is True
     assert payloads[-1]["input_mode"] == "ptt"
@@ -381,10 +376,9 @@ async def test_livekit_room_agent_speaking_primes_client_state_before_audio(
     from benchmark import livekit_room_runner as runner
 
     suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
-    case = {
-        item.case_id: item
-        for item in suite.cases
-    }["fd_explicit_ptt_preempts_without_speech_001"]
+    case = {item.case_id: item for item in suite.cases}[
+        "fd_explicit_ptt_preempts_without_speech_001"
+    ]
     local_participant = AsyncMock()
     events: list[dict] = []
 
@@ -397,7 +391,9 @@ async def test_livekit_room_agent_speaking_primes_client_state_before_audio(
     monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
     monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
     monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
-    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+    monkeypatch.setattr(
+        runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm
+    )
 
     await runner._feed_case_audio(
         object(),
@@ -430,10 +426,9 @@ async def test_livekit_room_agent_speaking_step_fails_fast_when_no_agent_audio(
     from benchmark import livekit_room_runner as runner
 
     suite = load_suite("benchmark/cases/full_duplex/explicit_control_enforced.yaml")
-    case = {
-        item.case_id: item
-        for item in suite.cases
-    }["fd_explicit_ptt_preempts_without_speech_001"]
+    case = {item.case_id: item for item in suite.cases}[
+        "fd_explicit_ptt_preempts_without_speech_001"
+    ]
     local_participant = AsyncMock()
     events: list[dict] = []
 
@@ -446,7 +441,9 @@ async def test_livekit_room_agent_speaking_step_fails_fast_when_no_agent_audio(
     monkeypatch.setattr(runner, "_wait_for_agent_speaking", fake_wait_for_agent_speaking)
     monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
     monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
-    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm)
+    monkeypatch.setattr(
+        runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm
+    )
 
     with pytest.raises(RuntimeError, match="active agent audio"):
         await runner._feed_case_audio(
@@ -470,37 +467,23 @@ def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> N
     cases = {case.case_id: case for case in suite.cases}
 
     assert (
-        cases["synthetic_default_owner_normal_001"]
-        .expectations.agent_audio_response
+        cases["synthetic_default_owner_normal_001"].expectations.agent_audio_response
         == "after_user_done"
     )
     assert (
-        cases["synthetic_default_topic_switch_001"]
-        .expectations.agent_audio_response
+        cases["synthetic_default_topic_switch_001"].expectations.agent_audio_response
         == "after_user_done"
     )
     assert cases["synthetic_default_backchannel_001"].expectations.brain == "any"
     assert (
-        cases["synthetic_default_backchannel_001"].expectations.rejected_turn_brain
-        == "forbidden"
+        cases["synthetic_default_backchannel_001"].expectations.rejected_turn_brain == "forbidden"
     )
     assert cases["synthetic_default_backchannel_001"].expectations.action == "any"
+    assert cases["synthetic_default_backchannel_001"].expectations.decision_action == "rollback"
+    assert cases["synthetic_default_backchannel_001"].expectations.decision_intent == "backchannel"
+    assert cases["synthetic_default_backchannel_001"].expectations.agent_audio_response == "first"
     assert (
-        cases["synthetic_default_backchannel_001"].expectations.decision_action
-        == "rollback"
-    )
-    assert (
-        cases["synthetic_default_backchannel_001"].expectations.decision_intent
-        == "backchannel"
-    )
-    assert (
-        cases["synthetic_default_backchannel_001"]
-        .expectations.agent_audio_response
-        == "first"
-    )
-    assert (
-        cases["synthetic_default_non_owner_rejected_001"]
-        .expectations.agent_audio_response
+        cases["synthetic_default_non_owner_rejected_001"].expectations.agent_audio_response
         == "none"
     )
 
@@ -509,29 +492,18 @@ def test_livekit_room_audio_wait_mode_uses_explicit_expectation() -> None:
     suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     cases = {case.case_id: case for case in suite.cases}
 
-    assert (
-        _agent_audio_wait_mode(cases["synthetic_default_topic_switch_001"])
-        == "after_user_done"
-    )
+    assert _agent_audio_wait_mode(cases["synthetic_default_topic_switch_001"]) == "after_user_done"
     assert _agent_audio_wait_mode(cases["synthetic_default_backchannel_001"]) == "first"
-    assert (
-        _agent_audio_wait_mode(cases["synthetic_default_non_owner_rejected_001"])
-        == "none"
-    )
+    assert _agent_audio_wait_mode(cases["synthetic_default_non_owner_rejected_001"]) == "none"
 
 
 def test_livekit_room_audio_wait_timeout_respects_long_case_timeout() -> None:
     suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
     case = next(
-        case
-        for case in suite.cases
-        if case.case_id == "synthetic_default_topic_switch_001"
+        case for case in suite.cases if case.case_id == "synthetic_default_topic_switch_001"
     )
 
-    assert (
-        _agent_audio_wait_timeout_sec(case, LiveKitRoomOptions(timeout_sec=45.0))
-        == 90.0
-    )
+    assert _agent_audio_wait_timeout_sec(case, LiveKitRoomOptions(timeout_sec=45.0)) == 90.0
 
 
 def test_policy_runner_attention_enforced_suite() -> None:
@@ -599,9 +571,7 @@ def test_load_v1_interrupt_tiers_enforced_suite() -> None:
         "tier4_ambient_speech_enforced_observes_001",
     }
     ambient = next(
-        case
-        for case in suite.cases
-        if case.case_id == "tier4_ambient_speech_enforced_observes_001"
+        case for case in suite.cases if case.case_id == "tier4_ambient_speech_enforced_observes_001"
     )
     assert ambient.user_steps[0].client_playback_state == "agent_speaking"
     assert ambient.expectations.action == "any"
@@ -656,9 +626,7 @@ def test_load_v1_realistic_interaction_flows_enforced_suite() -> None:
         "flow_mic_muted_hard_stop_is_ignored_001",
     }
     multi_step = [
-        case
-        for case in suite.cases
-        if case.case_id != "flow_normal_question_then_agent_reply_001"
+        case for case in suite.cases if case.case_id != "flow_normal_question_then_agent_reply_001"
     ]
     assert all(len(case.user_steps) == 2 for case in multi_step)
     assert all(case.user_steps[0].agent_speaking is False for case in multi_step)
@@ -724,9 +692,7 @@ def test_policy_runner_v1_realistic_interaction_flows_enforced_suite() -> None:
     assert ambient.metrics["actual_action"] in {"hold", "none"}
     assert ambient.metrics["actual_action"] != "cancel"
     muted = next(
-        case
-        for case in run.cases
-        if case.case_id == "flow_mic_muted_hard_stop_is_ignored_001"
+        case for case in run.cases if case.case_id == "flow_mic_muted_hard_stop_is_ignored_001"
     )
     assert muted.metrics["actual_action"] == "none"
     assert muted.decisions[-1]["attention_admission"]["action"] == "ignore"
@@ -777,9 +743,7 @@ def test_policy_runner_v1_realistic_extended_suite() -> None:
         "extended_late_ambient_followup_observed_001": True,
     }
     topic = next(
-        case
-        for case in run.cases
-        if case.case_id == "extended_topic_switch_prefix_confusion_001"
+        case for case in run.cases if case.case_id == "extended_topic_switch_prefix_confusion_001"
     )
     assert topic.metrics["actual_action"] == "cancel"
     assert topic.metrics["actual_intent"] == "normal_interrupt"
@@ -808,9 +772,7 @@ def test_load_barge_in_ab_matrix_suite() -> None:
         "ab_mic_muted_hard_stop_is_ignored_001",
     }
     backchannel = next(
-        case
-        for case in suite.cases
-        if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
+        case for case in suite.cases if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
     )
     assert backchannel.expectations.decision_action == "rollback"
     false_start = next(
@@ -820,9 +782,7 @@ def test_load_barge_in_ab_matrix_suite() -> None:
     )
     assert false_start.expectations.decision_action == "hold"
     muted = next(
-        case
-        for case in suite.cases
-        if case.case_id == "ab_mic_muted_hard_stop_is_ignored_001"
+        case for case in suite.cases if case.case_id == "ab_mic_muted_hard_stop_is_ignored_001"
     )
     assert muted.expectations.decision_action == "none"
 
@@ -851,15 +811,11 @@ def test_policy_runner_barge_in_ab_matrix_suite() -> None:
     assert false_start.metrics["actual_action"] != "cancel"
     assert false_start.metrics["actual_decision_action"] == "hold"
     backchannel = next(
-        case
-        for case in run.cases
-        if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
+        case for case in run.cases if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
     )
     assert backchannel.metrics["actual_decision_action"] == "rollback"
     normal_interrupt = next(
-        case
-        for case in run.cases
-        if case.case_id == "ab_normal_interrupt_high_eot_cancels_001"
+        case for case in run.cases if case.case_id == "ab_normal_interrupt_high_eot_cancels_001"
     )
     assert normal_interrupt.metrics["actual_action"] == "cancel"
     assert normal_interrupt.metrics["actual_decision_action"] == "cancel"
@@ -1028,20 +984,16 @@ def test_verify_provider_config_rejects_mock() -> None:
 
 def test_verify_real_call_component_tts_bytes() -> None:
     cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
-    low = CaseResult(
-        "c:tts", "s:tts", "component", True, metrics={"tts_audio_bytes": 10}
-    )
+    low = CaseResult("c:tts", "s:tts", "component", True, metrics={"tts_audio_bytes": 10})
     assert verify_real_call(low, runner="component", provider_config=cfg)
-    ok = CaseResult(
-        "c:tts", "s:tts", "component", True, metrics={"tts_audio_bytes": 50_000}
-    )
+    ok = CaseResult("c:tts", "s:tts", "component", True, metrics={"tts_audio_bytes": 50_000})
     assert verify_real_call(ok, runner="component", provider_config=cfg) == []
 
 
 @pytest.mark.asyncio
 async def test_runtime_identity_preflight_resolves_device_boundary() -> None:
     resolver = AsyncMock()
-    resolver.resolve_device.return_value = SimpleNamespace(
+    resolver.resolve_room.return_value = SimpleNamespace(
         owner_id="owner-1",
         companion_id="companion-1",
         device_id="device-1",
@@ -1050,7 +1002,7 @@ async def test_runtime_identity_preflight_resolves_device_boundary() -> None:
     result = await preflight_runtime_identity(
         identity="device-1",
         kind="device",
-        admin_api_url="http://unused",
+        owner_id="owner-1",
         resolver=resolver,
     )
 
@@ -1062,19 +1014,18 @@ async def test_runtime_identity_preflight_resolves_device_boundary() -> None:
         "companion_id": "companion-1",
         "device_id": "device-1",
     }
-    resolver.resolve_device.assert_awaited_once_with("device-1")
-    resolver.resolve_owner.assert_not_awaited()
+    resolver.resolve_room.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_runtime_identity_preflight_surfaces_unregistered_identity() -> None:
     resolver = AsyncMock()
-    resolver.resolve_device.side_effect = RuntimeError("device not found")
+    resolver.resolve_room.side_effect = RuntimeError("device not found")
 
     result = await preflight_runtime_identity(
         identity="bench-device",
         kind="device",
-        admin_api_url="http://unused",
+        owner_id="owner-1",
         resolver=resolver,
     )
 
@@ -1085,9 +1036,7 @@ async def test_runtime_identity_preflight_surfaces_unregistered_identity() -> No
 
 def test_verify_real_call_component_stt_empty_allowed_only_for_noise() -> None:
     cfg = {"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian", "vad": "firered"}
-    normal_empty = CaseResult(
-        "c:stt", "s:stt", "component", True, metrics={"stt_nonempty": False}
-    )
+    normal_empty = CaseResult("c:stt", "s:stt", "component", True, metrics={"stt_nonempty": False})
     assert verify_real_call(normal_empty, runner="component", provider_config=cfg)
 
     noise_empty = CaseResult(
@@ -1113,7 +1062,9 @@ def test_verify_real_call_room_per_case_checks_stt_and_audio() -> None:
     }
     ok = CaseResult("x", "s", "livekit_room", True, metrics={"agent_audio_bytes": 40_000})
     # per-case no longer requires brain marks (those are run-level)
-    assert verify_real_call(ok, runner="livekit_room", provider_config=cfg, case_records=[rec]) == []
+    assert (
+        verify_real_call(ok, runner="livekit_room", provider_config=cfg, case_records=[rec]) == []
+    )
     # low audio fails per-case
     low = CaseResult("x", "s", "livekit_room", True, metrics={"agent_audio_bytes": 10})
     assert verify_real_call(low, runner="livekit_room", provider_config=cfg, case_records=[rec])
@@ -1234,10 +1185,17 @@ def test_apply_real_call_verification_run_level_brain(tmp_path) -> None:
 
     def make_run() -> RunResult:
         return RunResult(
-            run_id="r", git_sha="s", runner="livekit_room", profile="p",
+            run_id="r",
+            git_sha="s",
+            runner="livekit_room",
+            profile="p",
             cases=[
-                CaseResult("normal_x", "s", "livekit_room", True, metrics={"agent_audio_bytes": 40_000}),
-                CaseResult("hard_y", "s", "livekit_room", True, metrics={"agent_audio_bytes": 40_000}),
+                CaseResult(
+                    "normal_x", "s", "livekit_room", True, metrics={"agent_audio_bytes": 40_000}
+                ),
+                CaseResult(
+                    "hard_y", "s", "livekit_room", True, metrics={"agent_audio_bytes": 40_000}
+                ),
             ],
             provider_config=cfg,
         )
@@ -1304,9 +1262,7 @@ def test_dashboard_flags_unverified_real_call(tmp_path) -> None:
         git_sha="sha",
         runner="component",
         profile="real_components",
-        cases=[
-            CaseResult("c:tts", "s:tts", "component", True, metrics={"tts_audio_bytes": 5})
-        ],
+        cases=[CaseResult("c:tts", "s:tts", "component", True, metrics={"tts_audio_bytes": 5})],
         provider_config={"brain": "eidolon_agent", "stt": "bailian", "tts": "bailian"},
     )
     apply_real_call_verification(run, strict=True)
@@ -1372,27 +1328,35 @@ def test_livekit_room_state_marks_agent_connected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_livekit_room_wait_for_agent_speaking_requires_audio_after_previous_user_step() -> None:
+async def test_livekit_room_wait_for_agent_speaking_requires_audio_after_previous_user_step() -> (
+    None
+):
     from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_speaking
 
     state = _RoomCaseState(started=0.0, events=[])
     state.last_agent_audio_monotonic = time.monotonic()
     state.agent_audio_frame_timestamps.append(100)
 
-    assert await _wait_for_agent_speaking(
-        state,
-        timeout_sec=0.01,
-        after_elapsed_ms=200,
-    ) is False
+    assert (
+        await _wait_for_agent_speaking(
+            state,
+            timeout_sec=0.01,
+            after_elapsed_ms=200,
+        )
+        is False
+    )
 
     state.agent_audio_frame_timestamps.append(240)
     state.last_agent_audio_monotonic = time.monotonic()
 
-    assert await _wait_for_agent_speaking(
-        state,
-        timeout_sec=0.01,
-        after_elapsed_ms=200,
-    ) is True
+    assert (
+        await _wait_for_agent_speaking(
+            state,
+            timeout_sec=0.01,
+            after_elapsed_ms=200,
+        )
+        is True
+    )
 
 
 def test_livekit_room_retries_only_pre_audio_infrastructure_failures() -> None:
@@ -1882,9 +1846,7 @@ def test_slo_gate_advisory_below_min_samples() -> None:
 
 def test_enforcement_failures_only_required_hard_fails() -> None:
     # The default ratchet enforces the two summary experience ceilings.
-    enforced = {
-        g.name for g in DEFAULT_SLO_GATES if g.required and g.source == "summary"
-    }
+    enforced = {g.name for g in DEFAULT_SLO_GATES if g.required and g.source == "summary"}
     assert "room_user_done_to_next_audio" in enforced
     assert "room_publish_to_first_audio" in enforced
 
@@ -1904,9 +1866,15 @@ def test_enforcement_failures_only_required_hard_fails() -> None:
 
     # an advisory (too few samples) required gate must NOT block
     advisory = evaluate_slo_gates(
-        {"name": "livekit_room", "summary": {"metrics": {}}, "timeline": {"latencies": {
-            "commit_to_tts_first_audio": {"p50": 9999.0, "p95": 9999.0, "count": 3},
-        }}}
+        {
+            "name": "livekit_room",
+            "summary": {"metrics": {}},
+            "timeline": {
+                "latencies": {
+                    "commit_to_tts_first_audio": {"p50": 9999.0, "p95": 9999.0, "count": 3},
+                }
+            },
+        }
     )
     assert enforcement_failures(advisory) == []
 
@@ -2071,10 +2039,7 @@ def test_dashboard_warns_when_livekit_room_timeline_coverage_is_partial(
         run_dir,
     )
     (run_dir / "turn_timeline.jsonl").write_text(
-        (
-            '{"turn_id":"t1","attrs":'
-            '{"room_name":"voice-bench-covered-1234abcd"}}\n'
-        ),
+        ('{"turn_id":"t1","attrs":{"room_name":"voice-bench-covered-1234abcd"}}\n'),
         encoding="utf-8",
     )
 
@@ -2107,14 +2072,14 @@ def test_livekit_room_timeline_expectations_fail_unexpected_cancel(
     )
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
-            (
-                '{"turn_id":"t1","attrs":{"room_name":'
-                '"voice-bench-normal_single_turn_001-1234abcd",'
-                '"interrupt_action":"cancel","decision":{"intent":"normal_interrupt"}},'
-                '"timestamps":{"interrupt_resolved_at":10.2}}\n'
-            ),
-            encoding="utf-8",
-        )
+        (
+            '{"turn_id":"t1","attrs":{"room_name":'
+            '"voice-bench-normal_single_turn_001-1234abcd",'
+            '"interrupt_action":"cancel","decision":{"intent":"normal_interrupt"}},'
+            '"timestamps":{"interrupt_resolved_at":10.2}}\n'
+        ),
+        encoding="utf-8",
+    )
 
     apply_timeline_expectations(run, [suite], timeline_path)
 
@@ -2383,10 +2348,7 @@ def test_livekit_room_topic_switch_fails_when_first_yield_is_slow(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is False
-    assert any(
-        "timeline interrupt decision exceeded" in error
-        for error in run.cases[0].errors
-    )
+    assert any("timeline interrupt decision exceeded" in error for error in run.cases[0].errors)
 
 
 def test_livekit_room_timeline_expectations_fail_wrong_ptt_terminal(
@@ -2514,9 +2476,7 @@ def test_livekit_room_timeline_actions_count_only_resolved_interrupts(
     assert run.cases[0].metrics["timeline_actions"] == "cancel"
     assert run.cases[0].metrics["timeline_intents"] == "topic_switch"
     assert run.cases[0].metrics["timeline_decision_actions"] == "cancel,cancel"
-    assert run.cases[0].metrics["timeline_decision_intents"] == (
-        "topic_switch,topic_switch"
-    )
+    assert run.cases[0].metrics["timeline_decision_intents"] == ("topic_switch,topic_switch")
     assert not run.cases[0].errors
 
 
@@ -2794,9 +2754,7 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     metrics = run.cases[0].metrics
     assert metrics["timeline_interrupt_speech_to_first_transcript_ms"] == 310
     assert metrics["timeline_stt_speech_to_actionable_transcript_ms"] == 360
-    assert (
-        metrics["timeline_stt_first_transcript_to_actionable_transcript_ms"] == 50
-    )
+    assert metrics["timeline_stt_first_transcript_to_actionable_transcript_ms"] == 50
     assert metrics["timeline_interrupt_first_transcript_to_resolved_ms"] == 70
     assert metrics["timeline_interrupt_actionable_transcript_to_resolved_ms"] == 20
     assert metrics["timeline_interrupt_intent_admitted_to_resolved_ms"] == 35
@@ -2829,9 +2787,7 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
     assert metrics["timeline_interrupted_context_preview"] == "上一轮被打断的回答"
     assert metrics["timeline_transcript_ingress_event_count"] == 3
     assert metrics["timeline_transcript_ingress_last_preview"] == "我们聊点别的"
-    assert metrics["timeline_transcript_ingress_last_event_type"] == (
-        "UserInputTranscribedEvent"
-    )
+    assert metrics["timeline_transcript_ingress_last_event_type"] == ("UserInputTranscribedEvent")
     assert metrics["timeline_transcript_ingress_last_final"] is False
     assert metrics["timeline_transcript_ingress_chain"] == (
         "interim:换个话 ; final:换个话题 ; interim:我们聊点别的"
@@ -2841,30 +2797,20 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
         "final:换个话题 ; interim:我们聊点别的"
     )
     assert metrics["timeline_transcript_ingress_pre_timeline_event_count"] == 1
-    assert metrics["timeline_transcript_ingress_pre_timeline_chain"] == (
-        "final:换个话题"
-    )
+    assert metrics["timeline_transcript_ingress_pre_timeline_chain"] == ("final:换个话题")
     assert metrics["timeline_transcript_ingress_recent_cross_turn_event_count"] == 1
-    assert metrics["timeline_transcript_ingress_recent_cross_turn_chain"] == (
-        "interim:换个话"
-    )
+    assert metrics["timeline_transcript_ingress_recent_cross_turn_chain"] == ("interim:换个话")
     assert metrics["timeline_transcript_admission_event_count"] == 3
     assert metrics["timeline_transcript_admission_last_reason"] == "accepted"
     assert metrics["timeline_transcript_admission_last_preview"] == "我们聊点别的"
     assert metrics["timeline_transcript_admission_last_accepted"] is True
-    assert metrics["timeline_transcript_admission_rejected_chain"] == (
-        "agent_echo:助手自己的回声"
-    )
+    assert metrics["timeline_transcript_admission_rejected_chain"] == ("agent_echo:助手自己的回声")
     assert metrics["timeline_attention_admission_event_count"] == 3
-    assert metrics["timeline_attention_admission_last_reason"] == (
-        "transcript_intent:topic_switch"
-    )
+    assert metrics["timeline_attention_admission_last_reason"] == ("transcript_intent:topic_switch")
     assert metrics["timeline_attention_admission_last_preview"] == "换个话题"
     assert metrics["timeline_attention_admission_last_agent_speaking"] is True
     assert metrics["timeline_attention_admission_last_duck_active"] is True
-    assert metrics["timeline_attention_admission_last_playback_state"] == (
-        "agent_speaking"
-    )
+    assert metrics["timeline_attention_admission_last_playback_state"] == ("agent_speaking")
     assert metrics["timeline_attention_admission_last_client_state_age_ms"] == 42
     assert metrics["timeline_attention_admission_last_client_state_fresh"] is True
     assert metrics["timeline_attention_admission_last_eot_score"] == 0.72
@@ -2891,9 +2837,7 @@ def test_livekit_room_timeline_expectations_export_latency_metrics(
         "framework_completed_playback_evidence"
     )
     assert metrics["timeline_framework_completed_gate_last_action"] == "cancel"
-    assert metrics["timeline_framework_completed_gate_last_reason"] == (
-        "intent:topic_switch"
-    )
+    assert metrics["timeline_framework_completed_gate_last_reason"] == ("intent:topic_switch")
     assert metrics["timeline_framework_completed_gate_last_preview"] == "换个话题"
     assert metrics["timeline_framework_completed_gate_chain"] == (
         "received:observe:framework_completed_turn:换个话题 ; "
@@ -3151,22 +3095,10 @@ def test_livekit_room_timeline_expectations_report_suspended_passthrough(
     assert metrics["timeline_duck_suspended_passthrough_buffered_sec"] == 0.02
     assert metrics["timeline_duck_suspended_passthrough_forwarded_frames"] == 3
     assert metrics["timeline_duck_suspended_passthrough_dropped_frames"] == 2
-    assert (
-        metrics["timeline_duck_suspended_passthrough_first_frame_since_duck_ms"]
-        == 455
-    )
-    assert (
-        metrics["timeline_duck_speech_to_suspended_passthrough_first_frame_ms"]
-        == 505
-    )
-    assert (
-        metrics["timeline_duck_suspended_passthrough_enabled_to_first_frame_ms"]
-        == 25
-    )
-    assert (
-        metrics["timeline_duck_suspended_passthrough_last_frame_since_duck_ms"]
-        == 475
-    )
+    assert metrics["timeline_duck_suspended_passthrough_first_frame_since_duck_ms"] == 455
+    assert metrics["timeline_duck_speech_to_suspended_passthrough_first_frame_ms"] == 505
+    assert metrics["timeline_duck_suspended_passthrough_enabled_to_first_frame_ms"] == 25
+    assert metrics["timeline_duck_suspended_passthrough_last_frame_since_duck_ms"] == 475
 
 
 def test_livekit_room_timeline_expectations_skip_backchannel_resume_gap_for_cancel(
@@ -3255,9 +3187,7 @@ def test_livekit_room_timeline_expectations_ignore_stale_retry_room(
                 events=[
                     {
                         "type": "case_retry",
-                        "previous_room_name": (
-                            "voice-bench-hard_interrupt_001-stale123"
-                        ),
+                        "previous_room_name": ("voice-bench-hard_interrupt_001-stale123"),
                     }
                 ],
             )
@@ -3431,10 +3361,7 @@ def test_livekit_room_timeline_expectations_fail_slow_tier1_after_start(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is False
-    assert any(
-        "resolution-after-start exceeded 250" in error
-        for error in run.cases[0].errors
-    )
+    assert any("resolution-after-start exceeded 250" in error for error in run.cases[0].errors)
 
 
 def test_livekit_room_timeline_expectations_use_cancel_specific_resolution(
@@ -3474,10 +3401,7 @@ def test_livekit_room_timeline_expectations_use_cancel_specific_resolution(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is False
-    assert any(
-        "resolution-after-start exceeded 250" in error
-        for error in run.cases[0].errors
-    )
+    assert any("resolution-after-start exceeded 250" in error for error in run.cases[0].errors)
 
 
 def test_livekit_room_timeline_expectations_accept_allowed_attention_observe(
@@ -3805,21 +3729,15 @@ def test_load_conversation_turn_taking_suite() -> None:
         "interrupt_then_new_turn_001",
     }
     pause = next(
-        case
-        for case in suite.cases
-        if case.case_id == "pause_mid_utterance_single_turn_001"
+        case for case in suite.cases if case.case_id == "pause_mid_utterance_single_turn_001"
     )
     assert pause.expectations.max_brain_requests == 1
-    multi = next(
-        case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001"
-    )
+    multi = next(case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001")
     assert multi.expectations.min_brain_requests == 3
     eot = next(case for case in suite.cases if case.case_id == "eot_prompt_commit_001")
     assert eot.expectations.max_speech_stop_to_commit_ms == 1500
     assert eot.expectations.max_user_done_to_agent_audio_ms == 4000
-    resume = next(
-        case for case in suite.cases if case.case_id == "backchannel_resume_001"
-    )
+    resume = next(case for case in suite.cases if case.case_id == "backchannel_resume_001")
     assert resume.expectations.rejected_turn_brain == "forbidden"
     assert resume.expectations.max_user_done_to_agent_audio_ms == 2500
 
@@ -3879,8 +3797,10 @@ def test_timeline_expectations_require_min_brain_requests(tmp_path) -> None:
     run = _expectation_run("multi_turn_three_rounds_001", "conversation_flow")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
-        _committed_turn_record("multi_turn_three_rounds_001", turn_id="t1") + "\n"
-        + _committed_turn_record("multi_turn_three_rounds_001", turn_id="t2") + "\n",
+        _committed_turn_record("multi_turn_three_rounds_001", turn_id="t1")
+        + "\n"
+        + _committed_turn_record("multi_turn_three_rounds_001", turn_id="t2")
+        + "\n",
         encoding="utf-8",
     )
 
@@ -3895,8 +3815,7 @@ def test_timeline_expectations_pass_single_merged_turn(tmp_path) -> None:
     run = _expectation_run("pause_mid_utterance_single_turn_001", "turn_boundary")
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(
-        _committed_turn_record("pause_mid_utterance_single_turn_001", turn_id="t1")
-        + "\n",
+        _committed_turn_record("pause_mid_utterance_single_turn_001", turn_id="t1") + "\n",
         encoding="utf-8",
     )
 
@@ -3928,10 +3847,7 @@ def test_timeline_expectations_fail_slow_speech_stop_to_commit(tmp_path) -> None
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is False
-    assert any(
-        "speech-stop-to-commit exceeded 1500" in error
-        for error in run.cases[0].errors
-    )
+    assert any("speech-stop-to-commit exceeded 1500" in error for error in run.cases[0].errors)
 
 
 def test_timeline_expectations_speech_stop_to_commit_timestamp_fallback(
@@ -3968,9 +3884,7 @@ def test_room_user_done_audio_latency_bound() -> None:
     )
 
     suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
-    case = next(
-        case for case in suite.cases if case.case_id == "backchannel_resume_001"
-    )
+    case = next(case for case in suite.cases if case.case_id == "backchannel_resume_001")
 
     in_bound = {"user_done_to_agent_audio_after_user_done_ms": 1200}
     assert _user_done_audio_latency_errors(case, in_bound) == []
@@ -3980,9 +3894,7 @@ def test_room_user_done_audio_latency_bound() -> None:
 
     assert any("missing" in e for e in _user_done_audio_latency_errors(case, {}))
 
-    unbounded = next(
-        case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001"
-    )
+    unbounded = next(case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001")
     assert _user_done_audio_latency_errors(unbounded, {}) == []
 
 
@@ -3999,9 +3911,7 @@ def test_event_recorder_waits_for_multiple_agent_messages() -> None:
 
     async def scenario() -> None:
         recorder._events.append(assistant_message("first"))
-        wait = asyncio.create_task(
-            recorder.wait_for_agent_messages(2, timeout=2.0, poll_ms=5)
-        )
+        wait = asyncio.create_task(recorder.wait_for_agent_messages(2, timeout=2.0, poll_ms=5))
         await asyncio.sleep(0.05)
         assert not wait.done()
         recorder._events.append(assistant_message("second"))

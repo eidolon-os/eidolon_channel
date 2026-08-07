@@ -1,4 +1,4 @@
-"""Compose runtime identity lookup + JWT signing into one callable.
+"""Compose OS runtime resolution + narrow Agent session authentication.
 
 Phase 32.B: when ``EidolonAgentGrpcLlm`` opens its session (first
 ``chat()`` call), it invokes the device_token callable to get a fresh
@@ -6,14 +6,13 @@ bearer. The resolver here is what that callable does:
 
   1. Inspect the LiveKit room for a remote participant.
   2. Dispatch by ``participant.metadata.kind``.
-  3. Resolve the entrance through Eidolon Data/Admin into the explicit
+  3. Resolve the entrance through Kernel Mount + System Data into the explicit
      owner/companion/runtime identity envelope.
-  4. Sign a runtime JWT with owner/companion/memory_realm/genome so
-     eidolon_agent accepts it.
+  4. Sign a narrow runtime JWT with Owner, Companion, and optional Device.
   5. Cache the result for the lifetime of this resolver instance —
      subsequent invocations within the session return the same token.
 
-If metadata is missing or admin says no, the resolver raises a clear error.
+If metadata is missing or an authority denies the context, the resolver raises a clear error.
 """
 
 from __future__ import annotations
@@ -21,11 +20,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
-from eidolon_sdk.biz.admin import AdminResolveError, ResolvedContext
+from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 from eidolon_sdk.biz.runtime import sign_runtime_token
+from eidolon_sdk.biz.system_data import SystemDataError
 
 _log = logging.getLogger(__name__)
 
@@ -35,8 +36,7 @@ RUNTIME_PARTICIPANT_KINDS = frozenset({"device", "companion", "owner", "user"})
 
 
 class DeviceTokenResolverError(Exception):
-    """Resolver couldn't produce a token — caller decides whether to
-    raise to the participant or fall back to a static token."""
+    """The authoritative session context could not produce an Agent token."""
 
 
 class RoomNotConnectedError(DeviceTokenResolverError):
@@ -165,21 +165,20 @@ async def wait_for_runtime_participant_metadata(
 
 async def _resolve_context(
     *,
-    admin: Any,
+    runtime: Any,
+    mounts: Any | None,
     identity: str,
     metadata: dict[str, Any],
 ) -> ResolvedContext:
     """Resolve a participant to its complete Companion runtime context."""
     resolved = await resolve_channel_context(
-        runtime=admin,
-        mounts=None,
+        runtime=runtime,
+        mounts=mounts,
         identity=identity,
         metadata=metadata,
     )
     if isinstance(resolved, DeviceConnectionContext):
-        raise DeviceTokenResolverError(
-            f"device {resolved.device_id!r} has no companion target"
-        )
+        raise DeviceTokenResolverError(f"device {resolved.device_id!r} has no companion target")
     return resolved.runtime
 
 
@@ -192,10 +191,9 @@ async def resolve_channel_context(
 ) -> DeviceConnectionContext | CompanionInteractionContext:
     """Resolve ingress before choosing a Channel processing path.
 
-    With a Mount resolver, an unattached Device remains a valid Device
-    connection. A complete Companion runtime is only requested when a default
-    attachment or explicit same-Owner target exists. Without a Mount resolver,
-    the legacy runtime aggregator remains available during staged rollout.
+    An unattached Device remains a valid Device connection. A complete
+    Companion runtime is requested only when a Kernel attachment or explicit
+    same-Owner target exists. Physical Device ingress always requires Kernel.
     """
     kind = str(metadata.get("kind") or "").strip().lower()
     if kind == "device":
@@ -203,8 +201,9 @@ async def resolve_channel_context(
         if not device_id:
             raise DeviceTokenResolverError("device participant missing device_id")
         if mounts is None:
-            context = await runtime.resolve_device(device_id)
-            return CompanionInteractionContext(context)
+            raise DeviceTokenResolverError(
+                "device participant requires the Kernel Device Mount resolver"
+            )
 
         owner_id = str(metadata.get("owner_id") or "").strip()
         if not owner_id:
@@ -216,15 +215,11 @@ async def resolve_channel_context(
             raise DeviceTokenResolverError("Kernel Device Mount owner/device mismatch")
 
         companion_id = str(
-            metadata.get("companion_id")
-            or connection.attached_companion_id
-            or ""
+            metadata.get("companion_id") or connection.attached_companion_id or ""
         ).strip()
         if not companion_id:
             return connection
-        context = await runtime.resolve_companion(
-            companion_id, device_id=device_id
-        )
+        context = await runtime.resolve_companion(companion_id, device_id=device_id)
         if (
             context.owner_id != owner_id
             or context.companion_id != companion_id
@@ -253,9 +248,7 @@ async def resolve_channel_context(
             raise DeviceTokenResolverError("owner participant missing owner_id")
         return CompanionInteractionContext(await runtime.resolve_owner(owner_id))
     if kind == "user":
-        owner_id = str(
-            metadata.get("owner_id") or metadata.get("user_id") or identity
-        ).strip()
+        owner_id = str(metadata.get("owner_id") or metadata.get("user_id") or identity).strip()
         if not owner_id:
             raise DeviceTokenResolverError("user participant missing owner_id/user_id")
         return CompanionInteractionContext(await runtime.resolve_owner(owner_id))
@@ -268,8 +261,9 @@ async def resolve_channel_context(
 def make_device_token_resolver(
     *,
     room: Any,
-    admin: Any,
+    runtime: Any,
     mounts: Any | None = None,
+    context_resolver: Callable[[Any], Awaitable[ResolvedContext]] | None = None,
     jwt_secret: str,
     jwt_algorithm: str = "HS256",
     ttl_seconds: int = 24 * 3600,
@@ -277,7 +271,7 @@ def make_device_token_resolver(
     """Build the zero-arg async callable the gRPC LLM invokes lazily.
 
     The closure caches the resolved token after the first successful
-    call — one admin lookup + one signing op per LK session, regardless
+    call — one authority lookup + one signing op per LK session, regardless
     of how many chat() turns happen. If the first call fails, the next
     one retries (we don't cache failures).
 
@@ -286,11 +280,9 @@ def make_device_token_resolver(
     stay inside one companion boundary.
     """
     cache: dict[str, str] = {}
+    lock = asyncio.Lock()
 
-    async def _resolve() -> str:
-        if "token" in cache:
-            return cache["token"]
-
+    async def _resolve_uncached() -> str:
         peek = _participant_identity_and_metadata(room)
         if peek is None:
             raise DeviceTokenResolverError(
@@ -301,15 +293,18 @@ def make_device_token_resolver(
         identity, metadata = peek
 
         try:
-            context = await resolve_channel_context(
-                runtime=admin,
-                mounts=mounts,
-                identity=identity,
-                metadata=metadata,
-            )
-        except AdminResolveError as exc:
+            if context_resolver is not None:
+                context = CompanionInteractionContext(await context_resolver(room))
+            else:
+                context = await resolve_channel_context(
+                    runtime=runtime,
+                    mounts=mounts,
+                    identity=identity,
+                    metadata=metadata,
+                )
+        except SystemDataError as exc:
             raise DeviceTokenResolverError(
-                f"admin resolve failed for identity={identity!r} "
+                f"System Data resolve failed for identity={identity!r} "
                 f"kind={metadata.get('kind')!r}: {exc}"
             ) from exc
         if isinstance(context, DeviceConnectionContext):
@@ -326,11 +321,6 @@ def make_device_token_resolver(
                 device_id=ctx.device_id,
                 owner_id=ctx.owner_id,
                 companion_id=ctx.companion_id,
-                memory_realm_id=ctx.memory_realm_id,
-                genome_id=ctx.genome_id,
-                schema_version=ctx.schema_version,
-                genome_hash=ctx.genome_hash,
-                realizer_version=ctx.realizer_version,
                 ttl_seconds=ttl_seconds,
             )
         except ValueError as exc:
@@ -338,13 +328,22 @@ def make_device_token_resolver(
 
         cache["token"] = token
         _log.info(
-            "resolved runtime token owner=%s companion=%s device=%s genome=%s exp=%s",
+            "resolved runtime token owner=%s companion=%s device=%s exp=%s",
             ctx.owner_id,
             ctx.companion_id,
             ctx.device_id,
-            ctx.genome_hash,
             exp.isoformat(),
         )
         return token
+
+    async def _resolve() -> str:
+        token = cache.get("token")
+        if token is not None:
+            return token
+        async with lock:
+            token = cache.get("token")
+            if token is not None:
+                return token
+            return await _resolve_uncached()
 
     return _resolve

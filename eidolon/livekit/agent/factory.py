@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -51,13 +50,14 @@ def _build_device_token_source(
     *,
     cfg: "AgentConfig",
     livekit_room: "Any | None",
+    runtime_services: "Any",
 ) -> "Any":
     """Build the per-session device-token resolver used by the gRPC LLM.
 
     The only token source is the runtime resolver — which reads
     ``participant.identity`` from the LiveKit room, resolves that explicit
     device binding, and signs a JWT with the shared HMAC secret. If any prerequisite is missing (secret
-    absent, no room, runtime_admin disabled) we raise instead of
+    absent, no room, runtime authority disabled) we raise instead of
     silently using "alice" — the operator must fix the config rather
     than ship the wrong identity.
 
@@ -65,15 +65,15 @@ def _build_device_token_source(
     when prerequisites are missing; the caller surfaces it through
     log + session abort.
     """
-    rt = cfg.runtime_admin
+    rt = cfg.runtime_authority
 
     if not rt.enabled:
         # Pre-32.D, this branch returned a static legacy token. Now we
         # refuse — the only way to disable runtime resolution is to
         # rewrite the call site, which forces a code review.
         raise RuntimeError(
-            "[device_token] runtime_admin.enabled=false but the static "
-            "fallback was removed in Phase 32.D. Set runtime_admin.enabled=true "
+            "[device_token] runtime_authority.enabled=false but the static "
+            "fallback was removed. Set runtime_authority.enabled=true "
             "and ensure PAIRING_JWT_SECRET (or ~/eidolon/run/jwt-secret) "
             "is reachable."
         )
@@ -102,21 +102,13 @@ def _build_device_token_source(
             "the agent entrypoint."
         )
 
-    resolve_client = _build_runtime_resolve_client(rt)
-    mounts = None
-    if getattr(rt, "kernel_mount_enabled", False):
-        from eidolon.livekit.agent.runtime.kernel_mounts import KernelMountHttpClient
-
-        mounts = KernelMountHttpClient(
-            base_url=str(getattr(rt, "kernel_api_url", "") or "").strip(),
-            timeout_sec=float(getattr(rt, "http_timeout_sec", 5.0)),
-        )
     from eidolon.livekit.agent.runtime import make_device_token_resolver
 
     return make_device_token_resolver(
         room=livekit_room,
-        admin=resolve_client,
-        mounts=mounts,
+        runtime=runtime_services.runtime,
+        mounts=runtime_services.mounts,
+        context_resolver=runtime_services.resolve_room,
         jwt_secret=secret,
         jwt_algorithm=rt.jwt_algorithm,
         ttl_seconds=rt.device_token_ttl_seconds,
@@ -124,232 +116,23 @@ def _build_device_token_source(
 
 
 def _build_runtime_resolve_client(rt: "Any") -> "Any":
-    """Build local Eidolon Data resolver with optional admin HTTP fallback."""
-    from eidolon.livekit.common.config import RuntimeAdminConfig
+    """Build the sole runtime resolver: System Data's versioned HTTP authority."""
+    from eidolon.livekit.agent.runtime.system_data import build_system_data_runtime
 
-    runtime_defaults = RuntimeAdminConfig()
-
-    local = None
-    if getattr(rt, "data_resolve_enabled", True):
-        try:
-            from eidolon_data import DataStore
-            from eidolon_data import load_settings as load_data_settings
-
-            data_settings = load_data_settings()
-            sqlite_path = Path(data_settings.sqlite_path).expanduser()
-            if sqlite_path.exists():
-                local_store = DataStore.open(data_settings)
-                local = _DataStoreRuntimeResolveClient(local_store)
-                logger.info("[device_token] using Eidolon Data resolver at %s", sqlite_path)
-            else:
-                logger.warning(
-                    "[device_token] Eidolon Data SQLite not found at %s; "
-                    "runtime resolve will use admin fallback if enabled",
-                    sqlite_path,
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[device_token] Eidolon Data resolver unavailable: %s", exc)
-
-    http = None
-    if getattr(rt, "admin_fallback_enabled", True):
-        import httpx
-        from eidolon_sdk.biz.admin import AdminResolveClient
-
-        http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                float(
-                    getattr(
-                        rt,
-                        "http_timeout_sec",
-                        runtime_defaults.http_timeout_sec,
-                    )
-                ),
-                connect=float(
-                    getattr(
-                        rt,
-                        "http_connect_timeout_sec",
-                        runtime_defaults.http_connect_timeout_sec,
-                    )
-                ),
-            ),
-            trust_env=False,  # avoid macOS Clash :7890 hijacking loopback
-        )
-        http = AdminResolveClient(http_client, rt.admin_api_url)
-
-    if local is None and http is None:
-        raise RuntimeError(
-            "[device_token] no runtime resolve client configured. Enable "
-            "runtime_admin.data_resolve_enabled or runtime_admin.admin_fallback_enabled."
-        )
-    if local is None:
-        return http
-    if http is None:
-        return local
-    return _FallbackResolveClient(primary=local, fallback=http)
+    return build_system_data_runtime(rt)
 
 
-class _FallbackResolveClient:
-    def __init__(self, *, primary: "Any", fallback: "Any") -> None:
-        self._primary = primary
-        self._fallback = fallback
+def _build_runtime_services(rt: "Any") -> "Any":
+    """Compose the two authoritative runtime consumers for one room."""
+    from eidolon.livekit.agent.runtime.kernel_mounts import KernelMountHttpClient
+    from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
 
-    async def resolve_device(self, device_id: str):
-        return await self._resolve("resolve_device", device_id)
-
-    async def resolve_owner(self, owner_id: str):
-        return await self._resolve("resolve_owner", owner_id)
-
-    async def resolve_companion(self, companion_id: str, *, device_id: str | None):
-        """Resolve exact Companion locally during the staged Kernel rollout.
-
-        The legacy Admin fallback has no exact Companion endpoint, so it must
-        not silently substitute owner-first selection.
-        """
-        return await self._primary.resolve_companion(
-            companion_id, device_id=device_id
-        )
-
-    async def _resolve(self, method: str, value: str):
-        from eidolon_sdk.biz.admin import AdminResolveNotFound, AdminResolveUnreachable
-
-        try:
-            return await getattr(self._primary, method)(value)
-        except (AdminResolveNotFound, AdminResolveUnreachable) as exc:
-            logger.warning(
-                "[device_token] Eidolon Data %s(%r) failed (%s); using admin fallback",
-                method,
-                value,
-                exc,
-            )
-            return await getattr(self._fallback, method)(value)
-
-
-class _DataStoreRuntimeResolveClient:
-    """Local eidolon_data implementation of AdminResolveClient's resolve API."""
-
-    def __init__(self, store: "Any") -> None:
-        self._store = store
-
-    async def resolve_owner(self, owner_id: str):
-        from eidolon_sdk.biz.admin import (
-            AdminResolveNotFound,
-            AdminResolvePrecondition,
-        )
-
-        owner = await self._store.owners.get(owner_id)
-        if owner is None:
-            raise AdminResolveNotFound(f"owner {owner_id!r} is not registered in eidolon_data")
-        if owner.status != "active":
-            raise AdminResolvePrecondition(412, f"owner {owner_id!r} is {owner.status}")
-
-        companions = [
-            row
-            for row in await self._store.companions.list_for_owner(owner_id)
-            if row.status == "active"
-        ]
-        ready = [row for row in companions if row.default_memory_realm_id and row.current_genome_id]
-        if not ready:
-            raise AdminResolvePrecondition(
-                412,
-                f"owner {owner_id!r} has no active companion with memory/genome",
-            )
-        return await self._context_for_companion(ready[0], device_id=None)
-
-    async def resolve_device(self, device_id: str):
-        from eidolon_sdk.biz.admin import (
-            AdminResolveNotFound,
-            AdminResolvePrecondition,
-        )
-
-        device = await self._store.devices.get_device(device_id)
-        if device is None:
-            raise AdminResolveNotFound(f"device {device_id!r} is not registered in eidolon_data")
-        if not device.owner_id:
-            raise AdminResolvePrecondition(412, f"device {device_id!r} is not claimed")
-        if device.status in {"disabled", "revoked"}:
-            raise AdminResolvePrecondition(412, f"device {device_id!r} is {device.status}")
-        if not device.bound_companion_id:
-            raise AdminResolvePrecondition(412, f"device {device_id!r} is not bound to a companion")
-
-        companion = await self._store.companions.get(device.bound_companion_id)
-        if companion is None:
-            raise AdminResolveNotFound(f"companion {device.bound_companion_id!r} not found")
-        if companion.owner_id != device.owner_id:
-            raise AdminResolvePrecondition(
-                412,
-                f"device {device_id!r} is bound outside owner {device.owner_id!r}",
-            )
-        return await self._context_for_companion(companion, device_id=device.device_id)
-
-    async def resolve_companion(self, companion_id: str, *, device_id: str | None):
-        from eidolon_sdk.biz.admin import AdminResolveNotFound
-
-        companion = await self._store.companions.get(companion_id)
-        if companion is None:
-            raise AdminResolveNotFound(f"companion {companion_id!r} not found")
-        return await self._context_for_companion(companion, device_id=device_id)
-
-    async def _context_for_companion(self, companion: "Any", *, device_id: str | None):
-        from eidolon_sdk.biz.admin import (
-            AdminResolveNotFound,
-            AdminResolvePrecondition,
-            ResolvedContext,
-        )
-
-        if companion.status != "active":
-            raise AdminResolvePrecondition(
-                412,
-                f"companion {companion.companion_id!r} is {companion.status}",
-            )
-        if not companion.default_memory_realm_id:
-            raise AdminResolvePrecondition(
-                412,
-                f"companion {companion.companion_id!r} has no default memory realm",
-            )
-        if not companion.current_genome_id:
-            raise AdminResolvePrecondition(
-                412,
-                f"companion {companion.companion_id!r} has no current genome",
-            )
-        realm = await self._store.memory_repo.get_realm(companion.default_memory_realm_id)
-        if realm is None:
-            raise AdminResolveNotFound(
-                f"memory realm {companion.default_memory_realm_id!r} not found"
-            )
-        if realm.status != "active":
-            raise AdminResolvePrecondition(
-                412,
-                f"memory realm {companion.default_memory_realm_id!r} is {realm.status}",
-            )
-        genome = await self._store.persona_repo.get_genome(companion.current_genome_id)
-        if genome is None:
-            raise AdminResolveNotFound(f"genome {companion.current_genome_id!r} not found")
-        if genome.companion_id != companion.companion_id:
-            raise AdminResolvePrecondition(
-                412,
-                f"genome {genome.genome_id!r} belongs to companion "
-                f"{genome.companion_id!r}, not {companion.companion_id!r}",
-            )
-        if genome.status != "committed":
-            raise AdminResolvePrecondition(
-                412,
-                f"genome {genome.genome_id!r} is {genome.status}",
-            )
-        if not genome.genome_hash:
-            raise AdminResolvePrecondition(
-                412,
-                f"genome {genome.genome_id!r} has no genome_hash",
-            )
-        return ResolvedContext(
-            owner_id=companion.owner_id,
-            companion_id=companion.companion_id,
-            memory_realm_id=companion.default_memory_realm_id,
-            genome_id=companion.current_genome_id,
-            schema_version=genome.schema_version,
-            genome_hash=genome.genome_hash,
-            realizer_version=genome.realizer_version,
-            device_id=device_id,
-        )
+    runtime = _build_runtime_resolve_client(rt)
+    mounts = KernelMountHttpClient(
+        base_url=str(getattr(rt, "kernel_api_url", "") or "").strip(),
+        timeout_sec=float(getattr(rt, "http_timeout_sec", 5.0)),
+    )
+    return ChannelRuntimeServices(runtime=runtime, mounts=mounts)
 
 
 class SharedStageFactory:
@@ -368,7 +151,8 @@ class SharedStageFactory:
         vad: "lk_vad.VAD | None" = None,
         voiceprint_provider: "Any | None" = None,
         voiceprint_trust_paired_devices: bool = True,
-        runtime_admin: "Any | None" = None,
+        runtime_context_resolver: "Any | None" = None,
+        runtime_services: "Any | None" = None,
         llm_params: LlmParams | None = None,
     ) -> None:
         if llm is None:
@@ -384,7 +168,8 @@ class SharedStageFactory:
         # Wrap raw VAD in VadStage for symmetry with stt / tts. AgentSession
         # still receives the raw VAD via stage.vad property.
         self.vad: VadStage | None = VadStage(vad) if vad is not None else None
-        self.runtime_admin = runtime_admin
+        self.runtime_context_resolver = runtime_context_resolver
+        self.runtime_services = runtime_services
         self.voiceprint_provider = voiceprint_provider
         self.voiceprint_trust_paired_devices = voiceprint_trust_paired_devices
         self.voiceprint_service = None
@@ -413,6 +198,11 @@ class SharedStageFactory:
             type(self.vad).__name__ if self.vad else None,
             type(self.voiceprint_provider).__name__ if self.voiceprint_provider else None,
         )
+
+    async def aclose(self) -> None:
+        """Close session-scoped authority clients owned by this factory."""
+        if self.runtime_services is not None:
+            await self.runtime_services.aclose()
 
     # ------------------------------------------------------------------
     # Production path: build everything from AgentConfig
@@ -464,6 +254,14 @@ class SharedStageFactory:
                 config) — STT/TTS provider mismatches surface from
                 ``cfg._validate()`` at config-load time.
         """
+        runtime_services = None
+        needs_runtime_context = (
+            cfg.providers.brain_provider == "eidolon_agent"
+            or prebuilt_voiceprint_provider is not None
+            or cfg.avatar.enabled
+        )
+        if needs_runtime_context and cfg.runtime_authority.enabled:
+            runtime_services = _build_runtime_services(cfg.runtime_authority)
         if cfg.providers.brain_provider == "eidolon_agent":
             from eidolon.livekit.agent.eidolon_agent_rpc import (
                 EidolonAgentGrpcLlm,
@@ -533,7 +331,13 @@ class SharedStageFactory:
             # (the static fallback was deleted). _build_device_token_source
             # raises RuntimeError if prerequisites are missing — operator
             # sees a clear failure rather than silently chatting as "alice".
-            device_token_source = _build_device_token_source(cfg=cfg, livekit_room=livekit_room)
+            if runtime_services is None:
+                raise RuntimeError("[device_token] runtime authority is required for eidolon_agent")
+            device_token_source = _build_device_token_source(
+                cfg=cfg,
+                livekit_room=livekit_room,
+                runtime_services=runtime_services,
+            )
 
             llm = EidolonAgentGrpcLlm(
                 target=cfg.remote_agent_rpc.target,
@@ -569,7 +373,10 @@ class SharedStageFactory:
             vad=vad,
             voiceprint_provider=prebuilt_voiceprint_provider,
             voiceprint_trust_paired_devices=cfg.voiceprint.trust_paired_devices,
-            runtime_admin=cfg.runtime_admin,
+            runtime_context_resolver=(
+                runtime_services.resolve_room if runtime_services is not None else None
+            ),
+            runtime_services=runtime_services,
             llm_params=LlmParams(
                 model=cfg.llm.model,
                 temperature=cfg.llm.temperature or 0.6,

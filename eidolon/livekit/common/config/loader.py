@@ -22,7 +22,7 @@ from .schema import (
     ObservabilityConfig,
     ProvidersConfig,
     RemoteAgentRpcConfig,
-    RuntimeAdminConfig,
+    RuntimeAuthorityConfig,
     SenseTimeSTTConfig,
     SenseTimeTTSConfig,
     TurnPolicyConfig,
@@ -206,7 +206,7 @@ def load_effective_config() -> EffectiveAgentConfig:
     providers_y = _section(y, "providers")
     llm_y = _section(y, "llm")
     rpc_y = _section(y, "remote_agent_rpc")
-    rt_admin_y = _section(y, "runtime_admin")
+    runtime_authority_y = _section(y, "runtime_authority")
     turn_y = _section(y, "turn_policy")
     obs_y = _section(y, "observability")
     voiceprint_y = _section(y, "voiceprint")
@@ -257,15 +257,13 @@ def load_effective_config() -> EffectiveAgentConfig:
         },
     )
     _reject_unknown_fields(
-        "runtime_admin",
-        rt_admin_y,
+        "runtime_authority",
+        runtime_authority_y,
         allowed={
             "enabled",
-            "kernel_mount_enabled",
             "kernel_api_url",
-            "data_resolve_enabled",
-            "admin_fallback_enabled",
-            "admin_api_url",
+            "data_api_url",
+            "data_service_token_env",
             "jwt_secret",
             "jwt_algorithm",
             "device_token_ttl_seconds",
@@ -310,21 +308,31 @@ def load_effective_config() -> EffectiveAgentConfig:
             tls_client_cert_path=str(rpc_y.get("tls_client_cert_path") or "").strip(),
             tls_client_key_path=str(rpc_y.get("tls_client_key_path") or "").strip(),
         ),
-        runtime_admin=RuntimeAdminConfig(
-            enabled=bool(rt_admin_y.get("enabled", True)),
-            kernel_mount_enabled=bool(rt_admin_y.get("kernel_mount_enabled", False)),
+        runtime_authority=RuntimeAuthorityConfig(
+            enabled=bool(runtime_authority_y.get("enabled", True)),
             kernel_api_url=str(
-                rt_admin_y.get("kernel_api_url")
-                or "http://127.0.0.1:8083/api/kernel/v1"
+                runtime_authority_y.get("kernel_api_url") or "http://127.0.0.1:8083/api/kernel/v1"
             ).strip(),
-            data_resolve_enabled=bool(rt_admin_y.get("data_resolve_enabled", True)),
-            admin_fallback_enabled=bool(rt_admin_y.get("admin_fallback_enabled", True)),
-            admin_api_url=str(rt_admin_y.get("admin_api_url") or "http://127.0.0.1:9000").strip(),
-            jwt_secret=_secret(rt_admin_y, "jwt_secret", "PAIRING_JWT_SECRET"),
-            jwt_algorithm=str(rt_admin_y.get("jwt_algorithm") or "HS256").strip(),
-            device_token_ttl_seconds=int(rt_admin_y.get("device_token_ttl_seconds") or 24 * 3600),
-            http_timeout_sec=float(rt_admin_y.get("http_timeout_sec") or 10.0),
-            http_connect_timeout_sec=float(rt_admin_y.get("http_connect_timeout_sec") or 3.0),
+            data_api_url=str(
+                runtime_authority_y.get("data_api_url") or "http://127.0.0.1:8084"
+            ).strip(),
+            data_service_token_env=str(
+                runtime_authority_y.get("data_service_token_env")
+                or "EIDOLON_DATA_COMPANION_AUTHORITY_TOKEN"
+            ).strip(),
+            jwt_secret=_secret(
+                runtime_authority_y,
+                "jwt_secret",
+                "PAIRING_JWT_SECRET",
+            ),
+            jwt_algorithm=str(runtime_authority_y.get("jwt_algorithm") or "HS256").strip(),
+            device_token_ttl_seconds=int(
+                runtime_authority_y.get("device_token_ttl_seconds") or 24 * 3600
+            ),
+            http_timeout_sec=float(runtime_authority_y.get("http_timeout_sec") or 10.0),
+            http_connect_timeout_sec=float(
+                runtime_authority_y.get("http_connect_timeout_sec") or 3.0
+            ),
         ),
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),

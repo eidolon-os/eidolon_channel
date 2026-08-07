@@ -240,7 +240,7 @@ class StreamingPipeline(BasePipeline):
         self._provider_events = self._build_provider_event_observer()
         self._voiceprint_turns = VoiceprintTurnObserver(
             service=getattr(self._factory, "voiceprint_service", None),
-            runtime_admin=getattr(self._factory, "runtime_admin", None),
+            context_resolver=getattr(self._factory, "runtime_context_resolver", None),
             sample_rate=audio_sample_rate,
             max_audio_ms=self._voiceprint_config.turn_max_audio_ms,
             accept_cache_ttl_sec=(self._voiceprint_config.accept_cache_ttl_ms / 1000.0),
@@ -491,8 +491,7 @@ class StreamingPipeline(BasePipeline):
             ),
             get_config=lambda: self._get_eot_model()._config,
             get_timeline=lambda: (
-                self._active_agent_output_timeline()
-                or getattr(self, "_timeline", None)
+                self._active_agent_output_timeline() or getattr(self, "_timeline", None)
             ),
             get_assistant_text=self._current_assistant_speech_text,
         )
@@ -1029,9 +1028,7 @@ class StreamingPipeline(BasePipeline):
             return
         timeline.set_attr("timeline_snapshot_reason", reason)
         timeline.set_attr("timeline_flush_reason", reason)
-        phase = str(
-            ((timeline.attrs.get("full_duplex_state") or {}).get("phase")) or ""
-        )
+        phase = str(((timeline.attrs.get("full_duplex_state") or {}).get("phase")) or "")
         if phase == FullDuplexPhase.USER_TURN_REJECTED.value:
             self._ensure_turn_event_sink().terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
@@ -1158,8 +1155,8 @@ class StreamingPipeline(BasePipeline):
             append_timeline_snapshot=lambda timeline, reason: self._append_turn_timeline_snapshot(
                 timeline, reason
             ),
-            publish_milestone=lambda timeline, milestone, reason: self._ensure_turn_event_sink().milestone(
-                timeline, milestone, reason=reason
+            publish_milestone=lambda timeline, milestone, reason: (
+                self._ensure_turn_event_sink().milestone(timeline, milestone, reason=reason)
             ),
             first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
             stt_pending_event_window_sec=(

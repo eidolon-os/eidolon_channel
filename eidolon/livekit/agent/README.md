@@ -59,13 +59,15 @@ entrypoints; implementation code lives under named boundary packages.
   `eidolon.livekit.plugins`.
 - `shared/` contains runtime primitives used by both mode pipelines, such as
   `BasePipeline`, `PipelineState`, callbacks, and turn-id generation.
-- `runtime/` contains worker runtime resolution: metadata parsing and admin
-  resolve helpers.
+- `runtime/` contains worker runtime resolution: participant metadata parsing,
+  Kernel Device Mount consumption, System Data Runtime Authority consumption,
+  and the session-scoped Agent token resolver.
 - `context/` contains conversation-context ledger helpers.
 - `observability/` contains timeline/metrics helpers and `ChannelTurnEventSink`.
-  The sink projects safe session/turn phase, milestone, and terminal facts to
-  `eidolon_data.events` through a bounded non-blocking queue. It is an observer,
-  never a turn owner, and never publishes transcript/audio.
+  The sink is a best-effort in-process observer for bounded session/turn phase,
+  milestone, and terminal facts. It never opens System Data, publishes global
+  audit, or exposes transcript/audio; a future metrics/tracing adapter may
+  consume its vocabulary asynchronously.
 - `session/agent_output_coordinator.py` owns the one committed response timeline.
   A new STT/VAD candidate may coexist with it during barge-in, while Brain/TTS/
   playback events and non-recoverable output errors remain bound to the response

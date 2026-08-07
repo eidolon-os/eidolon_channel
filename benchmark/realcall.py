@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import contextlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
@@ -159,9 +160,8 @@ def _has_half_duplex_ptt_segment_evidence(record: dict[str, Any]) -> bool:
     terminal = _mapping(segment.get("terminal"))
     action = str(terminal.get("action") or "")
     if action == "commit":
-        return (
-            str(segment.get("stt_mode") or "") not in {"", "none"}
-            and bool(str(segment.get("transcript_preview") or "").strip())
+        return str(segment.get("stt_mode") or "") not in {"", "none"} and bool(
+            str(segment.get("transcript_preview") or "").strip()
         )
     if action == "reject":
         # tap-to-stop / empty-hold paths deliberately do not call STT; the real
@@ -185,10 +185,7 @@ def _has_transcript_timeline_evidence(record: dict[str, Any]) -> bool:
     """
 
     timestamps = _mapping(record.get("timestamps"))
-    if not (
-        "transcript_interim_first_at" in timestamps
-        or "transcript_final_at" in timestamps
-    ):
+    if not ("transcript_interim_first_at" in timestamps or "transcript_final_at" in timestamps):
         return False
     attrs = _mapping(record.get("attrs"))
     decision = _mapping(attrs.get("decision"))
@@ -213,8 +210,7 @@ def verify_real_call(
             audio_bytes = metrics.get("tts_audio_bytes")
             if not isinstance(audio_bytes, (int, float)) or audio_bytes < MIN_COMPONENT_TTS_BYTES:
                 failures.append(
-                    f"tts_audio_bytes={audio_bytes} < {MIN_COMPONENT_TTS_BYTES} "
-                    "(mock/empty TTS?)"
+                    f"tts_audio_bytes={audio_bytes} < {MIN_COMPONENT_TTS_BYTES} (mock/empty TTS?)"
                 )
         elif component == "stt":
             if not metrics.get("stt_nonempty") and not metrics.get("stt_empty_allowed"):
@@ -225,19 +221,12 @@ def verify_real_call(
                 failures.append("vad emitted no inference events")
     elif runner == "livekit_room":
         audio_bytes = metrics.get("agent_audio_bytes")
-        agent_audio_expected = str(
-            metrics.get("expected_agent_audio_response") or "auto"
-        )
-        if (
-            agent_audio_expected != "none"
-            and (
-                not isinstance(audio_bytes, (int, float))
-                or audio_bytes < MIN_ROOM_AGENT_AUDIO_BYTES
-            )
+        agent_audio_expected = str(metrics.get("expected_agent_audio_response") or "auto")
+        if agent_audio_expected != "none" and (
+            not isinstance(audio_bytes, (int, float)) or audio_bytes < MIN_ROOM_AGENT_AUDIO_BYTES
         ):
             failures.append(
-                f"agent_audio_bytes={audio_bytes} < {MIN_ROOM_AGENT_AUDIO_BYTES} "
-                "(dead/mock agent?)"
+                f"agent_audio_bytes={audio_bytes} < {MIN_ROOM_AGENT_AUDIO_BYTES} (dead/mock agent?)"
             )
         failures.extend(_verify_room_timeline(provider_config, case_records or []))
 
@@ -410,9 +399,7 @@ async def preflight_real_stack(
     finally:
         await factory.stt.shutdown()
         await factory.tts.shutdown()
-        if getattr(factory.llm, "llm", None) is not None and hasattr(
-            factory.llm.llm, "aclose"
-        ):
+        if getattr(factory.llm, "llm", None) is not None and hasattr(factory.llm.llm, "aclose"):
             await factory.llm.llm.aclose()
 
     return {
@@ -431,7 +418,8 @@ async def preflight_runtime_identity(
     *,
     identity: str,
     kind: str,
-    admin_api_url: str,
+    runtime_authority: Any | None = None,
+    owner_id: str = "",
     resolver: Any | None = None,
 ) -> dict[str, Any]:
     """Prove a room participant can resolve before publishing test audio.
@@ -453,22 +441,32 @@ async def preflight_runtime_identity(
             "error": f"unsupported participant kind {participant_kind!r}",
         }
 
-    owned_http = None
+    scoped_owner_id = owner_id.strip()
+    if participant_kind == "device" and not scoped_owner_id:
+        return {
+            "ok": False,
+            "kind": participant_kind,
+            "identity": participant_id,
+            "error": "device preflight requires owner_id for Kernel namespace scope",
+        }
+    if participant_kind in {"user", "owner"} and not scoped_owner_id:
+        scoped_owner_id = participant_id
+
+    owned_services = None
     try:
         if resolver is None:
-            import httpx
+            if runtime_authority is None:
+                raise RuntimeError("runtime_authority config is required")
+            from eidolon.livekit.agent.factory import _build_runtime_services
 
-            from eidolon_sdk.biz.admin import AdminResolveClient
-
-            owned_http = httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, connect=3.0),
-                trust_env=False,
-            )
-            resolver = AdminResolveClient(owned_http, admin_api_url)
-        if participant_kind == "device":
-            context = await resolver.resolve_device(participant_id)
-        else:
-            context = await resolver.resolve_owner(participant_id)
+            owned_services = _build_runtime_services(runtime_authority)
+            resolver = owned_services
+        participant = SimpleNamespace(
+            identity=participant_id,
+            metadata=json.dumps({"kind": participant_kind, "owner_id": scoped_owner_id}),
+        )
+        room = SimpleNamespace(remote_participants={participant_id: participant})
+        context = await resolver.resolve_room(room)
         return {
             "ok": True,
             "kind": participant_kind,
@@ -485,8 +483,8 @@ async def preflight_runtime_identity(
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:
-        if owned_http is not None:
-            await owned_http.aclose()
+        if owned_services is not None:
+            await owned_services.aclose()
 
 
 def provider_config_from_cfg(cfg: Any) -> dict[str, str]:

@@ -6,8 +6,23 @@ Channel 的接入边界区分 Owner-scoped `DeviceConnectionContext` 与完整
 `CompanionInteractionContext`：Device 可以只建立 data connection 而不选择
 Companion；Companion 也可以通过 Web/小程序等虚拟 endpoint 建立无物理 Device 的
 interaction。现有语音 pipeline 只接收完整 Companion context，不在 VAD/STT/EOT/LLM/TTS
-内部传播 optional Companion。Kernel Mount consumer 目前为显式 feature flag，待本机产品
-composition 启动 Kernel 且 Provider 能提供受信 `owner_id` 后启用。
+内部传播 optional Companion。物理 Device 入口必须携带受信 `owner_id` 并经 Kernel Mount；
+没有 Companion target 的 Device 只停留在 Device/data path，不能进入语音 brain。
+
+## Eidolon OS 运行时边界
+
+- Kernel 是 Owner namespace 下 Device Mount/Attachment 的权威。
+- System Data Companion Runtime Authority 提供 active Companion、Memory Realm、已提交
+  Persona Genome 和可选头像；Channel 不直读 Data SQLite。
+- Channel 为一次 LiveKit 会话解析并缓存完整 runtime context。Agent token、Voiceprint 与
+  Avatar 复用该结果，不存在 Admin Resolve 旁路。
+- Channel→Agent 使用 V5 窄 runtime token，只携带 `owner_id`、`companion_id`、可选
+  `device_id/session_id/scopes`。Genome/Realm 由 Agent 向 System Data 重新解析和校验。
+- LiveKit JWT 仍只属于 Channel/LiveKit 链路；上述 OS 边界不进入 VAD/STT/EOT/TTS
+  算法，也不改变 full/half/PTT pipeline。
+
+运行时连接配置位于 `runtime_authority`：Kernel V1 URL、System Data URL 和服务 token
+环境变量名。旧 `runtime_admin`、Admin fallback、Data Device resolve 与 feature flag 已删除。
 
 ## 本地开发
 

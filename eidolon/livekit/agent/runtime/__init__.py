@@ -15,9 +15,11 @@ from eidolon.livekit.agent.runtime.resolver import (
     make_device_token_resolver,
     resolve_channel_context,
 )
+from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
 
 __all__ = [
     "CompanionInteractionContext",
+    "ChannelRuntimeServices",
     "DeviceConnectionContext",
     "DeviceTokenResolverError",
     "make_device_token_resolver",

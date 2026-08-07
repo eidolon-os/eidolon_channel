@@ -316,13 +316,15 @@ and participant metadata are captured together:
   --run-id dogfood-box3-audio-first \
   --livekit-participant-identity "$EIDOLON_BOX3_DEVICE_ID" \
   --livekit-participant-kind device \
+  --livekit-owner-id "$EIDOLON_BENCH_LIVEKIT_OWNER_ID" \
   --livekit-interaction-mode full_duplex
 ```
 
-`EIDOLON_BOX3_DEVICE_ID` must be a claimed, companion-bound device that passes
-admin `/api/resolve/device/{id}`. The runner checks this before opening a room;
-a synthetic name such as `bench-device` does not exercise the runtime
-identity/token boundary used by hardware dogfood.
+`EIDOLON_BOX3_DEVICE_ID` must resolve in the supplied Owner namespace through
+Kernel Mount and must select an active System Data Companion runtime before it
+can enter the audio/Agent path. The runner checks this before opening a room; a
+synthetic name such as `bench-device` does not exercise the hardware runtime
+boundary.
 
 Do not treat the generic full-duplex gate as a substitute for this suite. A
 controlled Box-3 full-duplex dogfood session requires both the owner-follow-up

@@ -44,6 +44,7 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
+
 # Load the session-contract resolver with the worker, not lazily per job.
 # LiveKit job processes inherit the worker's module snapshot; eager loading
 # prevents a hot-updated Channel module from mixing with a stale SDK contract
@@ -407,8 +408,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             welcome_message=cfg.behavior.welcome_message,
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             false_interruption_timeout=(
-                session_turn_policy.interrupt.framework_false_interruption_timeout_ms
-                / 1000.0
+                session_turn_policy.interrupt.framework_false_interruption_timeout_ms / 1000.0
             ),
             stt_commit_transcript_timeout=(
                 session_turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
@@ -508,15 +508,16 @@ def _validate_config(cfg: AgentConfig) -> None:
     else:
         if not cfg.remote_agent_rpc.target:
             errors.append("REMOTE_AGENT_RPC target is not set")
-        # The runtime_admin path is mandatory for eidolon_agent. Channel must
+        # The runtime authority path is mandatory for eidolon_agent. Channel must
         # have a usable HMAC secret at startup; without one, every session
         # would die at first chat().
-        if not cfg.runtime_admin.enabled:
+        if not cfg.runtime_authority.enabled:
             errors.append(
-                "runtime_admin.enabled=false is not valid for eidolon_agent. Set enabled=true."
+                "runtime_authority.enabled=false is not valid for eidolon_agent. Set enabled=true."
             )
         elif not (
-            cfg.runtime_admin.jwt_secret or Path("~/eidolon/run/jwt-secret").expanduser().is_file()
+            cfg.runtime_authority.jwt_secret
+            or Path("~/eidolon/run/jwt-secret").expanduser().is_file()
         ):
             errors.append(
                 "PAIRING_JWT_SECRET empty AND ~/eidolon/run/jwt-secret "

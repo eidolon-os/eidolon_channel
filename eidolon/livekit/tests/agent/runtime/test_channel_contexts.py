@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from eidolon_sdk.biz.admin import ResolvedContext
+from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 from eidolon.livekit.agent.runtime.resolver import (
     CompanionInteractionContext,
     DeviceConnectionContext,
@@ -77,9 +77,7 @@ async def test_attached_device_resolves_complete_companion_interaction_context()
     assert isinstance(context, CompanionInteractionContext)
     assert context.runtime.device_id == "device-1"
     assert context.mount_revision == 7
-    runtime.resolve_companion.assert_awaited_once_with(
-        "companion-1", device_id="device-1"
-    )
+    runtime.resolve_companion.assert_awaited_once_with("companion-1", device_id="device-1")
 
 
 async def test_companion_participant_needs_no_device():
@@ -99,9 +97,7 @@ async def test_companion_participant_needs_no_device():
 
     assert isinstance(context, CompanionInteractionContext)
     assert context.runtime.device_id is None
-    runtime.resolve_companion.assert_awaited_once_with(
-        "companion-1", device_id=None
-    )
+    runtime.resolve_companion.assert_awaited_once_with("companion-1", device_id=None)
 
 
 async def test_device_context_fails_closed_on_owner_mismatch():
@@ -133,7 +129,7 @@ async def test_audio_token_resolver_rejects_unattached_device_before_signing():
     runtime = AsyncMock()
     resolve = make_device_token_resolver(
         room=room('{"kind":"device","owner_id":"owner-1"}'),
-        admin=runtime,
+        runtime=runtime,
         mounts=mounts,
         jwt_secret="secret-with-enough-entropy",
     )

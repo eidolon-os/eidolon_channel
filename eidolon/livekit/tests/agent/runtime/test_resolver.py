@@ -3,24 +3,23 @@
 Verifies the closure correctly:
   - dispatches participant.metadata.kind=device/owner
   - caches the resolved token (one HTTP + one sign per session)
-  - propagates admin errors as DeviceTokenResolverError
+  - propagates System Data errors as DeviceTokenResolverError
   - fails clearly when no participant is connected yet
 """
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import jwt
 import pytest
 
-from eidolon_sdk.biz.admin import (
-    AdminResolveClient,
-    AdminResolveNotFound,
-    ResolvedContext,
-)
+from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
+from eidolon_sdk.biz.system_data import SystemDataNotFound
 from eidolon.livekit.agent.runtime.resolver import (
+    DeviceConnectionContext,
     DeviceTokenResolverError,
     RoomNotConnectedError,
     make_device_token_resolver,
@@ -29,7 +28,18 @@ from eidolon.livekit.agent.runtime.resolver import (
 
 
 def _fake_admin() -> AsyncMock:
-    return AsyncMock(spec=AdminResolveClient)
+    return AsyncMock()
+
+
+def _mounts(*, device_id: str = "esp32-007") -> AsyncMock:
+    mounts = AsyncMock()
+    mounts.resolve.return_value = DeviceConnectionContext(
+        owner_id="owner-1",
+        device_id=device_id,
+        mount_revision=3,
+        attached_companion_id="companion-1",
+    )
+    return mounts
 
 
 def _participant(
@@ -72,42 +82,50 @@ def _ctx(*, device_id: str | None = "dev-1") -> ResolvedContext:
 
 async def test_resolver_dispatches_to_device_for_kind_device():
     admin = _fake_admin()
-    admin.resolve_device.return_value = _ctx(device_id="esp32-007")
+    admin.resolve_companion.return_value = _ctx(device_id="esp32-007")
+    mounts = _mounts()
     room = _room_with(
-        _participant("esp32-007", '{"kind": "device", "device_id": "esp32-007"}')
+        _participant(
+            "esp32-007",
+            '{"kind":"device","device_id":"esp32-007","owner_id":"owner-1"}',
+        )
     )
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        mounts=mounts,
+        jwt_secret=SECRET,
     )
     token = await resolve()
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["owner_id"] == "owner-1"
     assert payload["companion_id"] == "companion-1"
-    assert payload["memory_realm_id"] == "realm-1"
-    assert payload["genome_id"] == "genome-1"
-    assert payload["genome_hash"] == "pg_resolver"
-    assert payload["realizer_version"] == "eidolon.persona_realizer"
+    assert "memory_realm_id" not in payload
+    assert "genome_id" not in payload
     assert payload["device_id"] == "esp32-007"
-    assert payload["runtime_token_version"] == 4
+    assert payload["runtime_token_version"] == 5
     assert "actor_kind" not in payload
     assert "actor_id" not in payload
-    admin.resolve_device.assert_awaited_once_with("esp32-007")
+    mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id="esp32-007")
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="esp32-007")
 
 
 async def test_resolver_ignores_non_publishing_system_participant_before_device():
     admin = _fake_admin()
-    admin.resolve_device.return_value = _ctx(device_id="esp32-007")
+    admin.resolve_companion.return_value = _ctx(device_id="esp32-007")
+    mounts = _mounts()
     room = _room_with(
         _participant("eidolon-hub-control-test", can_publish=False),
         _participant(
             "esp32-007",
-            '{"kind": "device", "device_id": "esp32-007"}',
+            '{"kind":"device","device_id":"esp32-007","owner_id":"owner-1"}',
             can_publish=True,
         ),
     )
     resolve = make_device_token_resolver(
         room=room,
-        admin=admin,
+        runtime=admin,
+        mounts=mounts,
         jwt_secret=SECRET,
     )
 
@@ -115,7 +133,7 @@ async def test_resolver_ignores_non_publishing_system_participant_before_device(
 
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["device_id"] == "esp32-007"
-    admin.resolve_device.assert_awaited_once_with("esp32-007")
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="esp32-007")
 
 
 async def test_wait_for_runtime_participant_returns_device_metadata_not_hub():
@@ -152,25 +170,22 @@ async def test_wait_for_runtime_participant_rejects_unconnected_room():
 async def test_resolver_dispatches_to_owner_for_kind_owner():
     admin = _fake_admin()
     admin.resolve_owner.return_value = _ctx(device_id=None)
-    room = _room_with(
-        _participant("owner-1", '{"kind": "owner", "owner_id": "owner-1"}')
-    )
+    room = _room_with(_participant("owner-1", '{"kind": "owner", "owner_id": "owner-1"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        jwt_secret=SECRET,
     )
     token = await resolve()
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
     assert payload["owner_id"] == "owner-1"
     assert payload["companion_id"] == "companion-1"
-    assert payload["memory_realm_id"] == "realm-1"
-    assert payload["genome_id"] == "genome-1"
-    assert payload["genome_hash"] == "pg_resolver"
-    assert payload["realizer_version"] == "eidolon.persona_realizer"
+    assert "memory_realm_id" not in payload
+    assert "genome_id" not in payload
     assert "actor_kind" not in payload
     assert "actor_id" not in payload
     assert "device_id" not in payload
     admin.resolve_owner.assert_awaited_once_with("owner-1")
-    admin.resolve_device.assert_not_called()
 
 
 async def test_resolver_raises_when_metadata_missing_kind():
@@ -183,13 +198,14 @@ async def test_resolver_raises_when_metadata_missing_kind():
     admin = _fake_admin()
     room = _room_with(_participant("old-esp", metadata=""))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError) as exc_info:
         await resolve()
     # message mentions the missing-kind problem so ops can grep it
     assert "kind" in str(exc_info.value)
-    admin.resolve_device.assert_not_called()
 
 
 async def test_resolver_raises_when_kind_unknown():
@@ -199,11 +215,12 @@ async def test_resolver_raises_when_kind_unknown():
     admin = _fake_admin()
     room = _room_with(_participant("x", '{"kind": "anonymous"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError):
         await resolve()
-    admin.resolve_device.assert_not_called()
 
 
 async def test_resolver_caches_token_across_calls():
@@ -211,26 +228,58 @@ async def test_resolver_caches_token_across_calls():
     token without hitting admin again. One LK session = one HTTP +
     one sign — the whole point of the cache."""
     admin = _fake_admin()
-    admin.resolve_device.return_value = _ctx(device_id="dev-1")
-    room = _room_with(_participant("dev-1", '{"kind": "device"}'))
+    admin.resolve_companion.return_value = _ctx(device_id="dev-1")
+    mounts = _mounts(device_id="dev-1")
+    room = _room_with(_participant("dev-1", '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        mounts=mounts,
+        jwt_secret=SECRET,
     )
     t1 = await resolve()
     t2 = await resolve()
     assert t1 == t2
-    admin.resolve_device.assert_awaited_once_with("dev-1")
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="dev-1")
 
 
-async def test_resolver_propagates_admin_404_as_resolver_error():
+async def test_resolver_coalesces_concurrent_first_calls():
+    admin = _fake_admin()
+
+    async def resolve_companion(_companion_id, *, device_id):
+        await asyncio.sleep(0.01)
+        return _ctx(device_id=device_id)
+
+    admin.resolve_companion.side_effect = resolve_companion
+    mounts = _mounts(device_id="dev-1")
+    room = _room_with(_participant("dev-1", '{"kind":"device","owner_id":"owner-1"}'))
+    resolve = make_device_token_resolver(
+        room=room,
+        runtime=admin,
+        mounts=mounts,
+        jwt_secret=SECRET,
+    )
+
+    tokens = await asyncio.gather(resolve(), resolve(), resolve())
+
+    assert len(set(tokens)) == 1
+    mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id="dev-1")
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="dev-1")
+
+
+async def test_resolver_propagates_system_data_404_as_resolver_error():
     """Chat-time, not session-construction. Closure wraps admin errors
     in DeviceTokenResolverError so the gRPC LLM raises a clean
     APIConnectionError up to the LK pipeline."""
     admin = _fake_admin()
-    admin.resolve_device.side_effect = AdminResolveNotFound("device 'ghost' not found")
-    room = _room_with(_participant("ghost", '{"kind": "device"}'))
+    admin.resolve_companion.side_effect = SystemDataNotFound("companion 'ghost' not found")
+    mounts = _mounts(device_id="ghost")
+    room = _room_with(_participant("ghost", '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        mounts=mounts,
+        jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError, match="ghost"):
         await resolve()
@@ -243,7 +292,9 @@ async def test_resolver_no_participant_raises():
     admin = _fake_admin()
     room = _room_with()  # no participants
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError, match="no remote participant"):
         await resolve()
@@ -253,17 +304,21 @@ async def test_resolver_failure_does_not_cache():
     """If first call fails, second call retries (not cached as None).
     Matters because admin might come back online mid-session."""
     admin = _fake_admin()
-    admin.resolve_device.side_effect = [
-        AdminResolveNotFound("transient"),
+    admin.resolve_companion.side_effect = [
+        SystemDataNotFound("transient"),
         _ctx(device_id="dev-1"),
     ]
-    room = _room_with(_participant("dev-1", '{"kind": "device"}'))
+    mounts = _mounts(device_id="dev-1")
+    room = _room_with(_participant("dev-1", '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
-        room=room, admin=admin, jwt_secret=SECRET,
+        room=room,
+        runtime=admin,
+        mounts=mounts,
+        jwt_secret=SECRET,
     )
     with pytest.raises(DeviceTokenResolverError):
         await resolve()
     # Second call succeeds.
     token = await resolve()
     assert jwt.decode(token, SECRET, algorithms=["HS256"])["owner_id"] == "owner-1"
-    assert admin.resolve_device.await_count == 2
+    assert admin.resolve_companion.await_count == 2

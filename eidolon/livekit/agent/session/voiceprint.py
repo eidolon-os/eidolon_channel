@@ -9,14 +9,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from eidolon_sdk.biz.admin import AdminResolveClient, ResolvedContext
+from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 
 from eidolon.livekit.agent.observability import TurnTimeline
-from eidolon.livekit.agent.runtime.resolver import (
-    DeviceTokenResolverError,
-    _participant_identity_and_metadata,
-    _resolve_context,
-)
+from eidolon.livekit.agent.runtime.resolver import DeviceTokenResolverError
 from eidolon.livekit.agent.session.voiceprint_reasons import (
     VOICEPRINT_CONTEXT_ERROR_PREFIX,
     VOICEPRINT_REASON_CACHED_OWNER_CONTEXT,
@@ -30,7 +26,7 @@ from eidolon.livekit.agent.session.voiceprint_reasons import (
 )
 from eidolon.livekit.agent.speaker_verification import SpeakerVerificationService
 from eidolon.livekit.common.speaker_verification import SpeakerSignal
-from eidolon.livekit.common.config import RuntimeAdminConfig, VoiceprintConfig
+from eidolon.livekit.common.config import VoiceprintConfig
 
 logger = logging.getLogger("agent.session.voiceprint")
 
@@ -92,7 +88,6 @@ class VoiceprintTurnObserver:
         self,
         *,
         service: SpeakerVerificationService | None,
-        runtime_admin: Any | None = None,
         sample_rate: int = 16000,
         max_audio_ms: int | None = None,
         accept_cache_ttl_sec: float | None = None,
@@ -104,7 +99,6 @@ class VoiceprintTurnObserver:
     ) -> None:
         voiceprint_defaults = VoiceprintConfig()
         self._service = service
-        self._runtime_admin = runtime_admin
         self._sample_rate = sample_rate
         self._max_audio_ms = max_audio_ms or voiceprint_defaults.turn_max_audio_ms
         self._accept_cache_ttl_sec = (
@@ -133,7 +127,6 @@ class VoiceprintTurnObserver:
         self._active: _ActiveVoiceprintTurn | None = None
         self._stream_tasks: set[asyncio.Task] = set()
         self._verify_tasks: set[asyncio.Task] = set()
-        self._http_client: Any | None = None
         self._context_cache: ResolvedContext | None = None
         self._accept_cache: dict[tuple[str, str], tuple[float, SpeakerSignal]] = {}
 
@@ -195,9 +188,6 @@ class VoiceprintTurnObserver:
             await asyncio.gather(*self._verify_tasks, return_exceptions=True)
         self._stream_tasks.clear()
         self._verify_tasks.clear()
-        if self._http_client is not None:
-            await self._http_client.aclose()
-            self._http_client = None
 
     def _maybe_start_audio_stream(self, track: Any, participant: Any) -> None:
         try:
@@ -335,50 +325,7 @@ class VoiceprintTurnObserver:
         if self._context_resolver is not None:
             self._context_cache = await self._context_resolver(self._room)
             return self._context_cache
-        if self._room is None:
-            raise DeviceTokenResolverError("room missing")
-        peek = _participant_identity_and_metadata(self._room)
-        if peek is None:
-            raise DeviceTokenResolverError("remote participant missing")
-        identity, metadata = peek
-        admin = self._admin_client()
-        self._context_cache = await _resolve_context(
-            admin=admin,
-            identity=identity,
-            metadata=metadata,
-        )
-        return self._context_cache
-
-    def _admin_client(self) -> AdminResolveClient:
-        if self._runtime_admin is None:
-            raise DeviceTokenResolverError("runtime_admin config missing")
-        import httpx
-
-        if self._http_client is None:
-            runtime_defaults = RuntimeAdminConfig()
-            self._http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    float(
-                        getattr(
-                            self._runtime_admin,
-                            "http_timeout_sec",
-                            runtime_defaults.http_timeout_sec,
-                        )
-                    ),
-                    connect=float(
-                        getattr(
-                            self._runtime_admin,
-                            "http_connect_timeout_sec",
-                            runtime_defaults.http_connect_timeout_sec,
-                        )
-                    ),
-                ),
-                trust_env=False,
-            )
-        return AdminResolveClient(
-            self._http_client,
-            str(getattr(self._runtime_admin, "admin_api_url", "") or ""),
-        )
+        raise DeviceTokenResolverError("runtime context resolver missing")
 
     def _cached_accept(self, key: tuple[str, str]) -> SpeakerSignal | None:
         cached = self._accept_cache.get(key)

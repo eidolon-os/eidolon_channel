@@ -53,12 +53,8 @@ SUITE_SET_CASES = {
         "benchmark/cases/full_duplex/gate_enforced.yaml",
         "benchmark/cases/full_duplex/explicit_control_enforced.yaml",
     ),
-    "full_duplex_probe": (
-        "benchmark/cases/full_duplex/barge_in_probe_enforced.yaml",
-    ),
-    "half_duplex_ptt_phase_a": (
-        "benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml",
-    ),
+    "full_duplex_probe": ("benchmark/cases/full_duplex/barge_in_probe_enforced.yaml",),
+    "half_duplex_ptt_phase_a": ("benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml",),
     "all": (
         "benchmark/cases/full_duplex/gate_enforced.yaml",
         "benchmark/cases/full_duplex/explicit_control_enforced.yaml",
@@ -167,8 +163,7 @@ class ManagedWorker:
             if self._process.poll() is not None:
                 tail = _tail_text(self._log_path)
                 raise RuntimeError(
-                    "managed worker exited before readiness; "
-                    f"see {self._log_path}\n{tail}"
+                    f"managed worker exited before readiness; see {self._log_path}\n{tail}"
                 )
             text = _tail_text(self._log_path)
             if any(marker in text for marker in WORKER_READY_MARKERS):
@@ -296,17 +291,12 @@ async def _preflight_gate(output_dir: Path, *, checks: tuple[str, ...], skip: bo
     if not result["ok"]:
         failed = [r["name"] for r in result["results"] if not r["ok"]]
         raise SystemExit(
-            f"preflight real-call check failed for {failed}; "
-            f"see {output_dir / 'preflight.json'}"
+            f"preflight real-call check failed for {failed}; see {output_dir / 'preflight.json'}"
         )
 
 
 def _suite_requires_runtime_identity(suites: list[BenchmarkSuite]) -> bool:
-    return any(
-        case.expectations.min_agent_messages > 0
-        for suite in suites
-        for case in suite.cases
-    )
+    return any(case.expectations.min_agent_messages > 0 for suite in suites for case in suite.cases)
 
 
 def _case_paths_for_args(args: argparse.Namespace) -> list[str]:
@@ -322,29 +312,15 @@ def _suites_for_livekit_mode(
     allow_suite_set_filter: bool,
 ) -> list[BenchmarkSuite]:
     compatible_modes = {interaction_mode, "shared"}
-    selected = [
-        suite
-        for suite in suites
-        if suite.suite_mode in compatible_modes
-    ]
-    incompatible = [
-        suite
-        for suite in suites
-        if suite.suite_mode not in compatible_modes
-    ]
+    selected = [suite for suite in suites if suite.suite_mode in compatible_modes]
+    incompatible = [suite for suite in suites if suite.suite_mode not in compatible_modes]
     if incompatible and not allow_suite_set_filter:
-        detail = ", ".join(
-            f"{suite.suite_id}:{suite.suite_mode}" for suite in incompatible
-        )
+        detail = ", ".join(f"{suite.suite_id}:{suite.suite_mode}" for suite in incompatible)
         raise SystemExit(
-            "suite_mode does not match --livekit-interaction-mode="
-            f"{interaction_mode}: {detail}"
+            f"suite_mode does not match --livekit-interaction-mode={interaction_mode}: {detail}"
         )
     if not selected:
-        raise SystemExit(
-            "no benchmark suites match --livekit-interaction-mode="
-            f"{interaction_mode}"
-        )
+        raise SystemExit(f"no benchmark suites match --livekit-interaction-mode={interaction_mode}")
     return selected
 
 
@@ -373,8 +349,7 @@ def _filter_suites_by_case_ids(
     if missing:
         available = sorted(case.case_id for suite in suites for case in suite.cases)
         raise SystemExit(
-            "unknown --case-id value(s): "
-            f"{', '.join(missing)}; available: {', '.join(available)}"
+            f"unknown --case-id value(s): {', '.join(missing)}; available: {', '.join(available)}"
         )
     return selected
 
@@ -396,14 +371,11 @@ def _validate_room_case_expectations(suites: list[BenchmarkSuite]) -> None:
         for case in suite.cases:
             value = str(case.expectations.agent_audio_response or "")
             if value not in ROOM_AGENT_AUDIO_RESPONSE_VALUES:
-                missing.append(
-                    f"{suite.suite_id}/{case.case_id}:agent_audio_response={value!r}"
-                )
+                missing.append(f"{suite.suite_id}/{case.case_id}:agent_audio_response={value!r}")
     if missing:
         raise SystemExit(
             "livekit_room cases must explicitly declare agent_audio_response "
-            f"as one of {sorted(ROOM_AGENT_AUDIO_RESPONSE_VALUES)}; "
-            + "; ".join(missing)
+            f"as one of {sorted(ROOM_AGENT_AUDIO_RESPONSE_VALUES)}; " + "; ".join(missing)
         )
 
 
@@ -413,6 +385,9 @@ def _participant_metadata(args: argparse.Namespace) -> dict[str, Any]:
         metadata["interaction_mode"] = args.livekit_interaction_mode
     if args.livekit_session_intent:
         metadata["session_intent"] = args.livekit_session_intent
+    owner_id = str(getattr(args, "livekit_owner_id", "") or "").strip()
+    if owner_id:
+        metadata["owner_id"] = owner_id
     return metadata
 
 
@@ -464,8 +439,7 @@ async def _run_profile(
         if (
             args.manage_worker
             and args.ptt_segment_stt_strategy
-            and str(cfg.turn_policy.ptt.segment_stt_strategy)
-            != args.ptt_segment_stt_strategy
+            and str(cfg.turn_policy.ptt.segment_stt_strategy) != args.ptt_segment_stt_strategy
         ):
             raise SystemExit(
                 "PTT segment STT strategy overlay did not take effect: expected "
@@ -479,8 +453,7 @@ async def _run_profile(
             if (
                 args.suspended_passthrough_volume is not None
                 and abs(
-                    ducking_cfg.suspended_passthrough_volume
-                    - args.suspended_passthrough_volume
+                    ducking_cfg.suspended_passthrough_volume - args.suspended_passthrough_volume
                 )
                 > 1e-9
             ):
@@ -510,7 +483,8 @@ async def _run_profile(
             identity_result = await preflight_runtime_identity(
                 identity=args.livekit_participant_identity,
                 kind=args.livekit_participant_kind,
-                admin_api_url=cfg.runtime_admin.admin_api_url,
+                owner_id=args.livekit_owner_id,
+                runtime_authority=cfg.runtime_authority,
             )
             identity_path = output_dir / "identity_preflight.json"
             identity_path.write_text(
@@ -540,9 +514,7 @@ async def _run_profile(
         runs = []
         with worker_ctx:
             for index in range(args.repeat):
-                timeline_capture = TimelineCapture.start(
-                    cfg.observability.timeline_debug_path
-                )
+                timeline_capture = TimelineCapture.start(cfg.observability.timeline_debug_path)
                 run = await run_livekit_room_suite(
                     suites,
                     root=root,
@@ -610,12 +582,7 @@ def _summary_stat(
     metric: str,
     stat: str = "p95",
 ) -> float | None:
-    value = (
-        payload.get("summary", {})
-        .get("metrics", {})
-        .get(metric, {})
-        .get(stat)
-    )
+    value = payload.get("summary", {}).get("metrics", {}).get(metric, {}).get(stat)
     return float(value) if isinstance(value, (int, float)) else None
 
 
@@ -632,8 +599,7 @@ def _profile_brief(result: ProfileResult) -> dict[str, Any]:
         "flaky": summary.get("flaky"),
         "pass_rate": summary.get("pass_rate"),
         "key_latencies_p95": {
-            metric: _summary_stat(result.metrics, metric, "p95")
-            for metric in KEY_LATENCY_METRICS
+            metric: _summary_stat(result.metrics, metric, "p95") for metric in KEY_LATENCY_METRICS
         },
         "timeline": result.timeline,
         "failed_cases": _failed_case_ids(result.metrics),
@@ -689,10 +655,7 @@ def _recommendation(briefs: list[dict[str, Any]]) -> dict[str, str]:
         }
     return {
         "decision": "keep_channel_owner",
-        "reason": (
-            "channel owner 在保持全绿的同时拥有更低的打断完成 p95，"
-            "继续作为默认 owner。"
-        ),
+        "reason": ("channel owner 在保持全绿的同时拥有更低的打断完成 p95，继续作为默认 owner。"),
     }
 
 
@@ -776,9 +739,7 @@ def _render_ab_report(payload: dict[str, Any]) -> str:
             "| `{metric}` | {channel} | {native} |".format(
                 metric=metric,
                 channel=_fmt_ms(
-                    by_profile.get("channel", {})
-                    .get("key_latencies_p95", {})
-                    .get(metric)
+                    by_profile.get("channel", {}).get("key_latencies_p95", {}).get(metric)
                 ),
                 native=_fmt_ms(
                     by_profile.get("livekit_native_adaptive", {})
@@ -881,17 +842,13 @@ def _parse_args() -> argparse.Namespace:
         "--ptt-segment-stt-strategy",
         choices=["auto", "offline", "streaming"],
         default=os.environ.get("EIDOLON_BENCH_PTT_SEGMENT_STT_STRATEGY") or None,
-        help=(
-            "Optional managed-worker overlay for "
-            "turn_policy.ptt.segment_stt_strategy."
-        ),
+        help=("Optional managed-worker overlay for turn_policy.ptt.segment_stt_strategy."),
     )
     parser.add_argument(
         "--suspended-passthrough-enabled",
         action="store_true",
         help=(
-            "Optional managed-worker overlay for "
-            "turn_policy.ducking.suspended_passthrough_enabled."
+            "Optional managed-worker overlay for turn_policy.ducking.suspended_passthrough_enabled."
         ),
     )
     parser.add_argument(
@@ -899,8 +856,7 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help=(
-            "Optional managed-worker overlay for "
-            "turn_policy.ducking.suspended_passthrough_volume."
+            "Optional managed-worker overlay for turn_policy.ducking.suspended_passthrough_volume."
         ),
     )
     parser.add_argument(
@@ -928,6 +884,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--livekit-participant-kind",
         default=os.environ.get("EIDOLON_BENCH_LIVEKIT_PARTICIPANT_KIND", "user"),
+    )
+    parser.add_argument(
+        "--livekit-owner-id",
+        default=os.environ.get("EIDOLON_BENCH_LIVEKIT_OWNER_ID", ""),
+        help="Required Owner namespace for device participants; defaults to identity for users.",
     )
     parser.add_argument(
         "--livekit-interaction-mode",
@@ -961,14 +922,8 @@ async def _main() -> int:
         raise SystemExit("--ptt-segment-stt-strategy requires --manage-worker")
     if args.suspended_passthrough_enabled and not args.manage_worker:
         raise SystemExit("--suspended-passthrough-enabled requires --manage-worker")
-    if (
-        args.suspended_passthrough_volume is not None
-        and not args.suspended_passthrough_enabled
-    ):
-        raise SystemExit(
-            "--suspended-passthrough-volume requires "
-            "--suspended-passthrough-enabled"
-        )
+    if args.suspended_passthrough_volume is not None and not args.suspended_passthrough_enabled:
+        raise SystemExit("--suspended-passthrough-volume requires --suspended-passthrough-enabled")
     if (
         args.suspended_passthrough_volume is not None
         and not 0.0 < args.suspended_passthrough_volume <= 1.0
@@ -1022,10 +977,7 @@ async def _main() -> int:
         results=results,
     )
     print(f"[barge-in-e2e-ab] wrote {run_root / 'e2e_ab_report.md'}")
-    print(
-        "[barge-in-e2e-ab] recommendation="
-        f"{payload['recommendation']['decision']}"
-    )
+    print(f"[barge-in-e2e-ab] recommendation={payload['recommendation']['decision']}")
     return 0
 
 

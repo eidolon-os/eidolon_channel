@@ -134,8 +134,8 @@ class EidolonAgentGrpcLlm(llm.LLM):
         ``device_token`` must be a zero-arg sync OR async callable returning
         the token. It is resolved once at first ``_get_session`` call (which
         happens on first chat()) and cached. The resolver reads
-        ``participant.metadata`` for kind + identity, queries admin's
-        ``/api/resolve``, then signs a fresh JWT.
+        ``participant.metadata`` for kind + identity, resolves Kernel Mount and
+        System Data runtime facts, then signs a fresh narrow JWT.
 
         D1, plan Phase D.
         """
@@ -491,10 +491,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             request_id=req_id,
                             attempt=attempt,
                         )
-                    if (
-                        payload.role == DeltaRole.ANSWER.value
-                        and not first_answer_delta_seen
-                    ):
+                    if payload.role == DeltaRole.ANSWER.value and not first_answer_delta_seen:
                         first_answer_delta_seen = True
                         llm_v.emit_provider_event(
                             "brain_first_answer_delta",

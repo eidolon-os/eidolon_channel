@@ -46,24 +46,21 @@ providers:
 remote_agent_rpc:
   target: 127.0.0.1:45051
   locale: zh
-  # Phase 32.D 删了 device_token 字段。Token 现在由 runtime_admin 块
+  # device_token 字段已删除。Token 现在由 runtime_authority 块
   # 描述的 per-session 流程签发。如果你 fork 了 .yaml 还带这一行,
   # loader 会记录 deprecated warning 后忽略它(不是错误,只是死字段)。
   conversation_id_prefix: livekit
 
-# Per-session runtime token signing. participant 进 LiveKit 后，Channel 优先
-# 从 Eidolon Data 本地解析明确选择的 Owner/Companion runtime，再用
-# jwt_secret 现签 runtime JWT 接 Agent gRPC；Admin HTTP 只作为跨进程 fallback。
+# Per-session OS runtime resolution. Kernel resolves Device Mount/Attachment;
+# System Data resolves the selected Companion runtime. The JWT carries only
+# Owner/Companion/optional Device context for Agent authentication.
 # secret 跟 eidolon-agent 共享 — placeholder PAIRING_JWT_SECRET 是 env 名；
 # 空时会 fallback 到 ~/eidolon/run/jwt-secret 文件 (agent auto-persist)。
-runtime_admin:
+runtime_authority:
   enabled: true
-  # Staged rollout: current run_all composition does not start eidolon_kernel yet.
-  kernel_mount_enabled: false
   kernel_api_url: http://127.0.0.1:8083/api/kernel/v1
-  data_resolve_enabled: true
-  admin_fallback_enabled: true
-  admin_api_url: http://127.0.0.1:9000
+  data_api_url: http://127.0.0.1:8084
+  data_service_token_env: EIDOLON_DATA_COMPANION_AUTHORITY_TOKEN
   jwt_secret: PAIRING_JWT_SECRET
   jwt_algorithm: HS256
   device_token_ttl_seconds: 86400

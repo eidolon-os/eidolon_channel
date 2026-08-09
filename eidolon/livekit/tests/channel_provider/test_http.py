@@ -14,6 +14,12 @@ from .helpers import livekit_config, provision_payload, revoke_payload
 
 
 class HttpFakeBackend:
+    def __init__(self) -> None:
+        self.health_calls = 0
+
+    async def healthcheck(self) -> None:
+        self.health_calls += 1
+
     async def ensure_rooms(self, active_room: str, control_room: str) -> None:
         pass
 
@@ -38,9 +44,10 @@ class HttpFakeBackend:
 
 async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
     config = livekit_config()
+    backend = HttpFakeBackend()
     service = ChannelProviderService(
         store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
-        backend=HttpFakeBackend(),
+        backend=backend,
         livekit=config,
         now_ms=lambda: 1_700_000_000_000,
     )
@@ -55,6 +62,7 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
             "service": "eidolon-channel-provider",
             "contract_version": "v1",
         }
+        assert backend.health_calls == 1
 
         unauthorized = await client.post(
             "/v1/device-channels/provision", json=provision_payload()

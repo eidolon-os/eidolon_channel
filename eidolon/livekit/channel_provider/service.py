@@ -39,8 +39,9 @@ class ChannelProviderService:
     def initialize(self) -> None:
         self._store.initialize()
 
-    def healthcheck(self) -> None:
+    async def healthcheck(self) -> None:
         self._store.healthcheck()
+        await self._backend.healthcheck()
 
     async def provision(self, request: ProvisionRequest) -> str:
         async with self._lock:

@@ -29,7 +29,7 @@ def create_app(
 
     async def health(_request: web.Request) -> web.Response:
         try:
-            service.healthcheck()
+            await service.healthcheck()
         except Exception:
             logger.exception("Channel Provider health check failed")
             return _json({"status": "unavailable"}, status=503)

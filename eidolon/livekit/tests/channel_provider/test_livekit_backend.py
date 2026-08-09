@@ -14,6 +14,10 @@ class FakeRoomService:
     def __init__(self) -> None:
         self.created: list[str] = []
         self.deleted: list[str] = []
+        self.health_names: list[list[str]] = []
+
+    async def list_rooms(self, request) -> None:
+        self.health_names.append(list(request.names))
 
     async def create_room(self, request) -> None:
         self.created.append(request.name)
@@ -116,10 +120,12 @@ async def test_room_lifecycle_is_explicit_and_not_found_is_idempotent() -> None:
     client = FakeLiveKitApi()
     backend._api = client
 
+    await backend.healthcheck()
     await backend.ensure_rooms("new-voice", "existing-control")
     await backend.revoke_rooms("existing-voice", "missing-control")
     await backend.close()
 
     assert client.room.created == ["new-voice", "existing-control"]
     assert client.room.deleted == ["existing-voice", "missing-control"]
+    assert client.room.health_names == [["__eidolon_channel_provider_healthcheck__"]]
     assert client.closed is True

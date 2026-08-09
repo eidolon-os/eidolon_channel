@@ -27,6 +27,8 @@ class LiveKitBinding:
 
 
 class ChannelBackend(Protocol):
+    async def healthcheck(self) -> None: ...
+
     async def ensure_rooms(self, active_room: str, control_room: str) -> None: ...
 
     async def revoke_rooms(self, active_room: str, control_room: str) -> None: ...
@@ -59,6 +61,14 @@ class LiveKitChannelBackend:
                 api_secret=self._config.api_secret,
             )
         return self._api
+
+    async def healthcheck(self) -> None:
+        try:
+            await self._client().room.list_rooms(
+                api.ListRoomsRequest(names=["__eidolon_channel_provider_healthcheck__"])
+            )
+        except Exception as exc:
+            raise BackendUnavailable("LiveKit health check failed") from exc
 
     async def ensure_rooms(self, active_room: str, control_room: str) -> None:
         for room in (active_room, control_room):

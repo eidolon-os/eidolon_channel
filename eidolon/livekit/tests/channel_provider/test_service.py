@@ -24,7 +24,11 @@ class FakeBackend:
         self.ensure_calls: list[tuple[str, str]] = []
         self.revoke_calls: list[tuple[str, str]] = []
         self.binding_calls = 0
+        self.health_calls = 0
         self.closed = False
+
+    async def healthcheck(self) -> None:
+        self.health_calls += 1
 
     async def ensure_rooms(self, active_room: str, control_room: str) -> None:
         self.ensure_calls.append((active_room, control_room))

@@ -38,8 +38,8 @@ eidolon-channel-provider
 {"status":"ok","service":"eidolon-channel-provider","contract_version":"v1"}
 ```
 
-它只表示 Provider 进程和自身 SQLite 可用，不宣称 LiveKit、Hub onboarding 或 ESP TLS
-端到端可用。
+它同时探测 Provider SQLite 和 LiveKit 管理 API；任一不可用返回 503。它不宣称 Hub
+onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用。
 
 ## 认证与授权边界
 

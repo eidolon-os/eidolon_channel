@@ -60,6 +60,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["eidolon", "benchmark"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"config/channel-provider.yaml" = "config/channel-provider.yaml"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

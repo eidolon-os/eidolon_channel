@@ -17,6 +17,7 @@ import jwt
 import pytest
 
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
+from eidolon_sdk.biz.runtime import RuntimeTokenVerifier
 from eidolon_sdk.biz.system_data import SystemDataNotFound
 from eidolon.livekit.agent.runtime.resolver import (
     DeviceConnectionContext,
@@ -109,6 +110,7 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     )
     token = await resolve()
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
+    identity = await RuntimeTokenVerifier(secret=SECRET).verify(token)
     assert payload["owner_id"] == "owner-1"
     assert payload["companion_id"] == "companion-1"
     assert payload["session_id"] == "room-1"
@@ -118,6 +120,10 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["runtime_token_version"] == 5
     assert "actor_kind" not in payload
     assert "actor_id" not in payload
+    assert identity.owner_id == "owner-1"
+    assert identity.companion_id == "companion-1"
+    assert identity.device_id == "esp32-007"
+    assert identity.session_id == "room-1"
     mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id="esp32-007")
     admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="esp32-007")
 

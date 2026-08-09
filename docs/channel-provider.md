@@ -2,7 +2,7 @@
 
 `eidolon-channel-provider` 是 `eidolon_channel` 自有的正式控制面进程。它只负责把 Hub 已
 批准、已绑定 Owner 的 Device 映射为有时效的 LiveKit room/token；不负责 Wi-Fi 配网、
-Owner pairing proof、Companion 选择或 Pi 部署。Agent worker 与 Provider 是两个独立进程。
+人工审批、Companion 选择或 Pi 部署。Agent worker 与 Provider 是两个独立进程。
 
 ## 运行与配置
 
@@ -46,11 +46,11 @@ onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用
 两个写接口都要求精确的 `Authorization: Bearer <token>` 和
 `Content-Type: application/json`。Provider 只信任通过 bearer 认证的 Hub：
 
-1. Mobile 用实体设备展示的 pairing proof 向 Hub claim；普通 Owner 不能只凭
-   `device_id` 批准设备。
-2. Hub 验证 proof、确定 `owner_id`，并在 admission 后调用 Provider。
+1. 设备 Enrollment 后进入 `pending-approval`，不携带 Owner 认领 secret，也不要求屏幕。
+2. 持有 `hub-admin` 权限的管理员在 Hub 管理面选择 `owner_id` 并人工批准；普通 Owner 或
+   `device-manager` 不能批准尚未绑定 Owner 的 pending 设备。
 3. Provider 把请求中的 `hub_id + device_id + owner_id` 固化到幂等记录和 LiveKit participant
-   metadata。Provider 不重新实现 pairing authorizer，也不接受 Mobile 直连。
+   metadata。Provider 不重新实现 Hub 管理面授权，也不接受 Mobile 直连。
 4. Companion 不在 Channel Provider grant 中绑定。Device 可以先建立 Owner-scoped data
    connection；后续 Companion interaction 必须继续经过 Kernel/System Data runtime authority。
 
@@ -69,7 +69,7 @@ Hub 调用 `POST /v1/device-channels/provision`。`operation_id` 使用 handoff 
   "hub_id": "<hub_id>",
   "device": {
     "device_id": "<stable device id>",
-    "owner_id": "<proof-authorized owner id>",
+    "owner_id": "<administrator-authorized owner id>",
     "display_name": "<display name>",
     "device_kind": "<hardware/product kind>",
     "manifest": {
@@ -148,7 +148,7 @@ metadata。两个 room 都由 Provider 通过 LiveKit 管理 API 显式创建。
 - 相同 `operation_id` 携带不同内容返回 409；同一个 `hub_id + device_id` 在未 revoke 前使用
   另一 `operation_id` 也返回 409，避免并行 authority 覆盖。
 - LiveKit 暂时不可用返回 503；请求没有写入成功幂等记录，Hub 可以用原请求重试。
-- 合同错误返回 422，认证失败 401，错误响应和日志不包含 token 或 pairing secret。
+- 合同错误返回 422，认证失败 401，错误响应和日志不包含 token 或 retrieval token。
 
 当前 Provider 设计为单进程；进程内 lock 与 SQLite 唯一约束共同串行化资源状态。不要用多个
 Provider 实例共享同一个 SQLite 文件。

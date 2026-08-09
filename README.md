@@ -37,6 +37,24 @@ pip install -e ".[dev]"
 初始化配置：`./deploy/dev/init.sh`（生成 `config/.env` 与 `config/settings.yaml`）。  
 全栈本地开发由 [eidolon_admin](https://github.com/eidolon/eidolon_admin) 的 `./deploy/dev/run_all.sh` 拉起 channel worker；env 旋钮见 [`config/.env.example`](config/.env.example)。
 
+## Hub Channel Provider
+
+`eidolon-channel-provider` 是独立于 Agent worker 的正式控制面进程。它在默认
+`127.0.0.1:8767` 上为 Hub 提供认证的 LiveKit room/token provision 与 revoke，使用自己
+的 SQLite 幂等状态，不占用 eidolond 的 8090 端口。
+
+```bash
+export EIDOLON_STATE_ROOT="$PWD/.state"
+export EIDOLON_LIVEKIT_CLIENT_URL="wss://livekit.example.test"
+export LIVEKIT_API_KEY="..."
+export LIVEKIT_API_SECRET="..."
+export EIDOLON_CHANNEL_PROVIDER_TOKEN="至少 32 bytes、与 Hub 配置相同的随机 secret"
+eidolon-channel-provider
+```
+
+配置、wire contract、授权边界、幂等/恢复和 TLS 真机门禁见
+[`docs/channel-provider.md`](docs/channel-provider.md)。
+
 ## 测试
 
 ```bash

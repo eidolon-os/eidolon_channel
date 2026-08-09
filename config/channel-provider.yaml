@@ -1,0 +1,22 @@
+# Dedicated Hub Channel Provider process. Secrets are environment-only:
+# LIVEKIT_API_KEY, LIVEKIT_API_SECRET, EIDOLON_CHANNEL_PROVIDER_TOKEN.
+http:
+  host: 127.0.0.1
+  port: 8767
+
+storage:
+  path: $EIDOLON_STATE_ROOT/channel/provider.sqlite3
+
+livekit:
+  # Internal administrative origin used only by the Provider process.
+  api_url: http://127.0.0.1:7880
+  # Device-reachable origin placed in the opaque binding. Production must use
+  # wss with a certificate the device verifies; insecure ws is loopback-only.
+  client_url: $EIDOLON_LIVEKIT_CLIENT_URL
+  room_prefix: eidolon-device
+  agent_name: eidolon
+  grant_ttl_seconds: 1800
+  refresh_before_expiry_seconds: 120
+  interaction_mode: full_duplex
+  sample_rate: 16000
+  channels: 1

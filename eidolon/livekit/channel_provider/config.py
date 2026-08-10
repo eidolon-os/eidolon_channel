@@ -105,7 +105,13 @@ def _required_secret(name: str, *, minimum: int = 1) -> str:
     return value
 
 
-def _url(value: Any, *, name: str, client: bool) -> str:
+def _url(
+    value: Any,
+    *,
+    name: str,
+    client: bool,
+    allow_insecure_lan: bool = False,
+) -> str:
     text = str(value or "").strip()
     parsed = urlparse(text)
     allowed = {"ws", "wss"} if client else {"http", "https"}
@@ -120,9 +126,20 @@ def _url(value: Any, *, name: str, client: bool) -> str:
         or "$" in text
     ):
         raise ValueError(f"{name} must be a plain {sorted(allowed)} URL")
-    if parsed.scheme in {"http", "ws"} and parsed.hostname not in _LOOPBACK_HOSTS:
+    if (
+        parsed.scheme in {"http", "ws"}
+        and parsed.hostname not in _LOOPBACK_HOSTS
+        and not (client and allow_insecure_lan)
+    ):
         raise ValueError(f"insecure {name} is allowed only on loopback")
     return text.rstrip("/")
+
+
+def _allow_insecure_lan_client() -> bool:
+    raw = os.environ.get("EIDOLON_CHANNEL_PROVIDER_ALLOW_INSECURE_LAN_CLIENT_URL", "0").strip()
+    if raw not in {"0", "1"}:
+        raise ValueError("EIDOLON_CHANNEL_PROVIDER_ALLOW_INSECURE_LAN_CLIENT_URL must be 0 or 1")
+    return raw == "1"
 
 
 def load_provider_config() -> ProviderConfig:
@@ -193,7 +210,10 @@ def load_provider_config() -> ProviderConfig:
         livekit=LiveKitConfig(
             api_url=_url(livekit.get("api_url"), name="livekit.api_url", client=False),
             client_url=_url(
-                livekit.get("client_url"), name="livekit.client_url", client=True
+                livekit.get("client_url"),
+                name="livekit.client_url",
+                client=True,
+                allow_insecure_lan=_allow_insecure_lan_client(),
             ),
             api_key=_required_secret("LIVEKIT_API_KEY"),
             api_secret=_required_secret("LIVEKIT_API_SECRET"),

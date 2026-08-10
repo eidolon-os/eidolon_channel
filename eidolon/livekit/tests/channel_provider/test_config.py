@@ -72,3 +72,38 @@ def test_config_rejects_unsafe_or_unexpanded_origins(
 
     with pytest.raises(ValueError):
         load_provider_config()
+
+
+def test_config_allows_explicit_development_lan_client_url(monkeypatch, tmp_path) -> None:
+    _environment(
+        monkeypatch,
+        tmp_path,
+        """
+        storage:
+          path: $STATE_ROOT_FOR_TEST/provider.sqlite3
+        livekit:
+          api_url: http://127.0.0.1:7880
+          client_url: ws://192.168.1.25:7880
+        """,
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_ALLOW_INSECURE_LAN_CLIENT_URL", "1")
+
+    assert load_provider_config().livekit.client_url == "ws://192.168.1.25:7880"
+
+
+def test_config_rejects_ambiguous_insecure_lan_switch(monkeypatch, tmp_path) -> None:
+    _environment(
+        monkeypatch,
+        tmp_path,
+        """
+        storage:
+          path: $STATE_ROOT_FOR_TEST/provider.sqlite3
+        livekit:
+          api_url: http://127.0.0.1:7880
+          client_url: wss://livekit.example.test
+        """,
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_ALLOW_INSECURE_LAN_CLIENT_URL", "true")
+
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        load_provider_config()

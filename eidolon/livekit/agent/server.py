@@ -27,6 +27,7 @@ import logging.handlers
 import os
 import signal
 import sys
+import time
 import multiprocessing
 from datetime import date
 from pathlib import Path
@@ -79,6 +80,11 @@ def _eidolon_log_root() -> Path:
 
 def _default_log_dir() -> Path:
     return _eidolon_log_root() / "channel"
+
+
+def _runtime_secret_file() -> Path:
+    root = Path(os.getenv("EIDOLON_RUNTIME_ROOT", "~/eidolon/run")).expanduser()
+    return root / "agent/jwt-secret"
 
 
 def _resolve_log_dir() -> Path:
@@ -156,7 +162,20 @@ def _prewarm(proc) -> None:
     This is called by WorkerOptions.prewarm_fnc when a worker process starts,
     before any job is dispatched. Loading models here avoids cold-start latency
     on the first user audio frame.
+
+    The framework kills a process that overruns ``worker.setup_timeout_sec``,
+    so the elapsed time is logged: it is the only place the cost of this hook
+    is observable, and a process that dies here dies silently as far as the
+    unit is concerned.
     """
+    started = time.monotonic()
+    try:
+        _load_prewarm_models(proc)
+    finally:
+        logger.info("[Agent] prewarm: finished in %.1fs", time.monotonic() - started)
+
+
+def _load_prewarm_models(proc) -> None:
     # Validate framework-internal patches are still applicable on this
     # SDK version. Logs WARNING (not fatal) on untested versions —
     # surfaces SDK upgrades that may have broken our patches before
@@ -517,10 +536,10 @@ def _validate_config(cfg: AgentConfig) -> None:
             )
         elif not (
             cfg.runtime_authority.jwt_secret
-            or Path("~/eidolon/run/jwt-secret").expanduser().is_file()
+            or _runtime_secret_file().is_file()
         ):
             errors.append(
-                "PAIRING_JWT_SECRET empty AND ~/eidolon/run/jwt-secret "
+                f"PAIRING_JWT_SECRET empty AND {_runtime_secret_file()} "
                 "missing. Start eidolon-agent once (it persists the secret) "
                 "or set PAIRING_JWT_SECRET in config/.env."
             )
@@ -578,6 +597,8 @@ def _build_server(cfg: AgentConfig) -> "AgentServer":
         job_executor_type=JobExecutorType.PROCESS,
         num_idle_processes=num_idle,
         setup_fnc=_prewarm,
+        # Model loading, not a liveness probe — see WorkerConfig.setup_timeout_sec.
+        initialize_process_timeout=cfg.worker.setup_timeout_sec,
         # Memory guardrails
         job_memory_warn_mb=1024,
         job_memory_limit_mb=2048,

@@ -26,6 +26,8 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     worker = cfg.worker
     if worker.num_idle_processes is not None and not (0 <= worker.num_idle_processes <= 64):
         errors.append("worker.num_idle_processes must be in [0, 64]")
+    if not (1.0 <= worker.setup_timeout_sec <= 600.0):
+        errors.append("worker.setup_timeout_sec must be in [1.0, 600.0]")
 
     if not (1 <= cfg.core.port <= 65535):
         errors.append("core.port must be in [1, 65535]")

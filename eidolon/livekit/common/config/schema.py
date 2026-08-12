@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from eidolon.livekit.plugins.stt.bailian.config import BailianSTTConfig
@@ -84,7 +86,7 @@ class RuntimeAuthorityConfig:
 
     ``jwt_secret`` placeholder convention follows hub: the literal
     string ``PAIRING_JWT_SECRET`` in YAML means "read the env var of
-    that name"; if both env and ~/eidolon/run/jwt-secret are empty,
+    that name"; if both env and the host runtime secret file are empty,
     the resolver fails loud.
     """
 
@@ -271,7 +273,12 @@ class VoiceprintConfig:
     enabled: bool = True
     provider: str = "3d_speaker"
     model: str = "campplus_zh_16k_common"
-    root: str = "~/eidolon/voiceprints"
+    root: str = field(
+        default_factory=lambda: str(
+            Path(os.environ.get("EIDOLON_STATE_ROOT", "~/eidolon/data")).expanduser()
+            / "voiceprints"
+        )
+    )
     model_dir: str = ""
     threshold: float = 0.31
     min_audio_ms: int = 1500
@@ -289,6 +296,14 @@ class WorkerConfig:
     # None preserves the historical runtime default:
     # dev=0, prod=min(cpu_count, 4). Set 1+ to force startup prewarm workers.
     num_idle_processes: int | None = None
+    # How long a worker process may spend in setup (model loading) before the
+    # framework kills it. The framework's own default is 10s, which assumes
+    # cloud hardware; a Raspberry Pi 5 needs ~21s just for the pVAD import and
+    # the EOT tokenizer, so that default puts the worker in a permanent
+    # spawn-kill loop that never registers a single usable process. The budget
+    # is paid once per process, so it should be generous enough to cover slow
+    # hardware under load while still failing a genuinely stuck setup.
+    setup_timeout_sec: float = 120.0
 
 
 @dataclass(frozen=True)

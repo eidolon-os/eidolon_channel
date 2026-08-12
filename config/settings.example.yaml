@@ -63,7 +63,7 @@ voiceprint:
   enabled: true
   provider: 3d_speaker
   model: campplus_zh_16k_common
-  root: ~/eidolon/voiceprints
+  root: $EIDOLON_STATE_ROOT/voiceprints
   # Empty means use the bundled model in
   # eidolon/livekit/plugins/speaker_verification/resources/3dspeaker.
   model_dir: ""
@@ -211,7 +211,7 @@ bailian_stt:
   # debugging; set false in production. (Env EIDOLON_STT_DUMP_WAV /
   # EIDOLON_STT_DUMP_DIR still work as a fallback default.)
   dump_wav: true
-  dump_dir: "~/eidolon/debug"
+  dump_dir: "$EIDOLON_CACHE_ROOT/debug/channel"
 
 bailian_tts:
   api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference

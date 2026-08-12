@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -266,6 +267,18 @@ def _suite_mode(raw: dict[str, Any]) -> SuiteMode:
     return value  # type: ignore[return-value]
 
 
+def _audio_clips(raw: Any) -> tuple[AudioClip, ...]:
+    """Expand Host-profile path variables at the benchmark input boundary."""
+    clips: list[dict[str, Any]] = []
+    for item in raw or ():
+        wire = dict(item)
+        path = wire.get("path")
+        if isinstance(path, str):
+            wire["path"] = os.path.expanduser(os.path.expandvars(path))
+        clips.append(wire)
+    return _tuple_of(AudioClip, clips)
+
+
 def load_suite(path: str | Path) -> BenchmarkSuite:
     p = _resolve_suite_path(path)
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
@@ -280,7 +293,7 @@ def load_suite(path: str | Path) -> BenchmarkSuite:
                 case_id=case_raw["case_id"],
                 suite=case_raw.get("suite") or raw.get("suite_id") or p.stem,
                 description=case_raw.get("description", ""),
-                audio_clips=_tuple_of(AudioClip, case_raw.get("audio_clips")),
+                audio_clips=_audio_clips(case_raw.get("audio_clips")),
                 user_steps=_tuple_of(UserStep, case_raw.get("user_steps")),
                 agent_replies=_tuple_of(AgentReply, case_raw.get("agent_replies")),
                 device_envelope=_device_envelope_spec(case_raw.get("device_envelope")),

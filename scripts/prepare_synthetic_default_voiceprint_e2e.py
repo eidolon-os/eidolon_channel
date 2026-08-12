@@ -26,6 +26,7 @@ from benchmark.audio_assets import (
     write_wav,
 )
 from eidolon.livekit.common.config import load_effective_config
+from eidolon.livekit.common.speaker_verification import default_voiceprint_root
 
 
 SYNTHETIC_CLIPS: dict[str, str] = {
@@ -174,8 +175,7 @@ def _negative_clip(args: argparse.Namespace) -> Path | None:
 
 def _existing_profile(args: argparse.Namespace) -> dict[str, Any] | None:
     profile_path = (
-        Path("~/eidolon/voiceprints")
-        .expanduser()
+        default_voiceprint_root()
         / args.tenant_id
         / args.user_id
         / "profile.json"
@@ -492,10 +492,8 @@ async def _main() -> int:
     )
     parser.add_argument(
         "--negative-sample",
-        default=(
-            "/Users/manson/eidolon/voiceprints/default/manson/enrollments/"
-            "vpe_4b5aca8dd8d0/samples/sample_001.wav"
-        ),
+        default="",
+        help="optional negative-speaker WAV; no developer-specific sample is assumed",
     )
     parser.add_argument("--skip-tts", action="store_true")
     parser.add_argument("--skip-admin", action="store_true")

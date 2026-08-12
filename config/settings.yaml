@@ -55,7 +55,7 @@ remote_agent_rpc:
 # System Data resolves the selected Companion runtime. The JWT carries only
 # Owner/Companion/optional Device context for Agent authentication.
 # secret 跟 eidolon-agent 共享 — placeholder PAIRING_JWT_SECRET 是 env 名；
-# 空时会 fallback 到 ~/eidolon/run/jwt-secret 文件 (agent auto-persist)。
+# 空时会 fallback 到 $EIDOLON_RUNTIME_ROOT/agent/jwt-secret（Agent 自动持久化）。
 runtime_authority:
   enabled: true
   kernel_api_url: http://127.0.0.1:8083/api/kernel/v1
@@ -74,7 +74,7 @@ voiceprint:
   enabled: false
   provider: 3d_speaker
   model: campplus_zh_16k_common
-  root: ~/eidolon/voiceprints
+  root: $EIDOLON_STATE_ROOT/voiceprints
   # Empty means use the bundled model in
   # eidolon/livekit/plugins/speaker_verification/resources/3dspeaker.
   model_dir: ""
@@ -186,7 +186,7 @@ turn_policy:
 observability:
   structured_logs: true
   metrics_enabled: true
-  timeline_debug_path: "~/eidolon/logs/channel/turn-timeline.jsonl"
+  timeline_debug_path: "$EIDOLON_LOG_ROOT/channel/turn-timeline.jsonl"
   llm_first_delta_timeout_ms: 3000
   stt_pending_provider_event_window_ms: 2000
   stt_pending_provider_event_preroll_ms: 500
@@ -217,7 +217,7 @@ bailian_stt:
   # set false in production. (Env EIDOLON_STT_DUMP_WAV / EIDOLON_STT_DUMP_DIR still
   # work as a fallback default.)
   dump_wav: true
-  dump_dir: "~/eidolon/debug"
+  dump_dir: "$EIDOLON_CACHE_ROOT/debug/channel"
 
 bailian_tts:
   api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference

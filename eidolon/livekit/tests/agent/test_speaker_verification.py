@@ -86,7 +86,7 @@ def test_voiceprint_store_loads_admin_embedding_ref(tmp_path) -> None:
 def test_default_voiceprint_root_uses_eidolon_home(monkeypatch) -> None:
     monkeypatch.delenv("EIDOLON_VOICEPRINT_ROOT", raising=False)
     assert default_voiceprint_root().name == "voiceprints"
-    assert default_voiceprint_root().parent.name == "eidolon"
+    assert default_voiceprint_root().parent.name == "data"
 
 
 def test_default_voiceprint_root_honors_shared_env(monkeypatch, tmp_path) -> None:

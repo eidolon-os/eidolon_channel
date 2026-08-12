@@ -141,10 +141,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sample",
         type=Path,
-        default=Path(
-            "/Users/manson/eidolon/voiceprints/default/manson/enrollments/"
-            "vpe_4b5aca8dd8d0/samples/sample_003.wav"
-        ),
+        required=True,
+        help="enrolled WAV to benchmark; pass an explicit Host-local sample",
     )
     parser.add_argument("--durations", type=int, nargs="+", default=[2, 4, 8])
     parser.add_argument("--rounds", type=int, default=12)

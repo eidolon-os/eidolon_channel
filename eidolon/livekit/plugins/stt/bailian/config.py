@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 def _resolve_api_key() -> str:
@@ -138,7 +139,13 @@ class BailianSTTConfig:
         in ("1", "true", "yes", "on")
     )
     dump_dir: str = field(
-        default_factory=lambda: os.environ.get("EIDOLON_STT_DUMP_DIR", "~/eidolon/debug")
+        default_factory=lambda: os.environ.get(
+            "EIDOLON_STT_DUMP_DIR",
+            str(
+                Path(os.environ.get("EIDOLON_CACHE_ROOT", "~/eidolon/cache")).expanduser()
+                / "debug/channel"
+            ),
+        )
     )
     # conn_options is intentionally omitted here — it is a LiveKit runtime
     # object that does not belong in a plain dataclass; the STT class

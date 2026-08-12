@@ -99,11 +99,22 @@ def _load_yaml() -> dict[str, Any]:
         raise ValueError("channel settings.yaml must be a mapping")
     overlay_path = _resolve_settings_overlay_yaml()
     if overlay_path is None:
-        return data
+        return _expand_host_paths(data)
     overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8")) or {}
     if not isinstance(overlay, dict):
         raise ValueError("channel settings overlay YAML must be a mapping")
-    return _deep_merge_dicts(data, overlay)
+    return _expand_host_paths(_deep_merge_dicts(data, overlay))
+
+
+def _expand_host_paths(value: Any) -> Any:
+    """Expand only explicit ``$VARS``/``~`` in configuration strings."""
+    if isinstance(value, dict):
+        return {key: _expand_host_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_host_paths(item) for item in value]
+    if isinstance(value, str) and (value.startswith("~") or "$" in value):
+        return os.path.expanduser(os.path.expandvars(value))
+    return value
 
 
 def _deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:

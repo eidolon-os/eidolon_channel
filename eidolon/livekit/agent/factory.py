@@ -20,7 +20,9 @@ Adding a new STT/TTS provider only requires editing the corresponding
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -74,19 +76,19 @@ def _build_device_token_source(
         raise RuntimeError(
             "[device_token] runtime_authority.enabled=false but the static "
             "fallback was removed. Set runtime_authority.enabled=true "
-            "and ensure PAIRING_JWT_SECRET (or ~/eidolon/run/jwt-secret) "
+            "and ensure PAIRING_JWT_SECRET (or the host runtime secret file) "
             "is reachable."
         )
 
     # Resolve secret: env (loaded via _secret() at config time) →
-    # ~/eidolon/run/jwt-secret (shared with eidolon-agent).
+    # $EIDOLON_RUNTIME_ROOT/agent/jwt-secret (shared with eidolon-agent).
     from eidolon_sdk.biz.runtime import resolve_shared_secret
 
     secret = resolve_shared_secret(rt.jwt_secret)
     if not secret:
         raise RuntimeError(
             "[device_token] PAIRING_JWT_SECRET empty and "
-            "~/eidolon/run/jwt-secret missing. Start eidolon-agent once "
+            "the host runtime secret file is missing. Start eidolon-agent once "
             "so it persists the secret, or set the env var explicitly."
         )
 
@@ -193,7 +195,12 @@ class SharedStageFactory:
                     getattr(
                         voiceprint_provider,
                         "voiceprint_root",
-                        "~/eidolon/voiceprints",
+                        str(
+                            Path(
+                                os.environ.get("EIDOLON_STATE_ROOT", "~/eidolon/data")
+                            ).expanduser()
+                            / "voiceprints"
+                        ),
                     )
                 ),
             )

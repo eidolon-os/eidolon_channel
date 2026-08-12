@@ -24,6 +24,7 @@ import logging
 import os
 import time
 import wave
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
@@ -66,13 +67,18 @@ def _maybe_open_wav_dump(stream_id: str, sample_rate: int, config):
     settings.yaml, or the EIDOLON_STT_DUMP_WAV env fallback baked into the config
     default), record the exact PCM this STT stream receives — post-network,
     post-resample, i.e. what the recognizer actually hears — to a WAV under
-    ``bailian_stt.dump_dir`` (default ~/eidolon/debug). One file per stream run.
+    ``bailian_stt.dump_dir`` (default
+    ``$EIDOLON_CACHE_ROOT/debug/channel``). One file per stream run.
     Lets us listen to a device's uplink audio to tell clean speech from echo/noise."""
     if not getattr(config, "dump_wav", False):
         return None
     try:
-        out_dir = os.path.expanduser(
-            getattr(config, "dump_dir", None) or "~/eidolon/debug"
+        cache_root = os.environ.get("EIDOLON_CACHE_ROOT", "~/eidolon/cache")
+        out_dir = os.path.expandvars(
+            os.path.expanduser(
+                getattr(config, "dump_dir", None)
+                or str(Path(cache_root).expanduser() / "debug/channel")
+            )
         )
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"stt_{stream_id}_{int(time.time() * 1000)}.wav")

@@ -32,7 +32,8 @@ def default_voiceprint_root() -> Path:
     env = os.environ.get("EIDOLON_VOICEPRINT_ROOT", "").strip()
     if env:
         return Path(env).expanduser()
-    return Path.home() / "eidolon" / "voiceprints"
+    state_root = Path(os.environ.get("EIDOLON_STATE_ROOT", "~/eidolon/data")).expanduser()
+    return state_root / "voiceprints"
 
 
 @dataclass(frozen=True)

@@ -212,7 +212,7 @@ cases:
   audio_clips:
   - id: non_owner_sample
     text: non-default speaker sample
-    path: /Users/manson/eidolon/voiceprints/default/manson/enrollments/vpe_4b5aca8dd8d0/samples/sample_001.wav
+    path: $EIDOLON_STATE_ROOT/voiceprints/default/manson/enrollments/vpe_4b5aca8dd8d0/samples/sample_001.wav
     intent: normal
   user_steps:
   - text: non-default speaker sample

@@ -190,7 +190,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             for task in done:
                 task.result()
             if session_wait in done and not self._idle_disconnect_started:
-                await self._delete_room_on_close()
+                await self._end_serving_on_close()
         finally:
             await self.shutdown()
 
@@ -611,7 +611,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         )
         self._session_closed_event.set()
 
-    async def _delete_room_on_close(self) -> None:
+    async def _end_serving_on_close(self) -> None:
         on_end = self._on_session_end
         if on_end is not None:
             reason = SESSION_END_ERROR if self._close_error else SESSION_END_USER_LEFT

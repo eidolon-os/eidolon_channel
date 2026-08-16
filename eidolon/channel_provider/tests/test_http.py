@@ -4,12 +4,19 @@ import json
 
 from aiohttp.test_utils import TestClient, TestServer
 
+from eidolon.channel_provider.contracts import CLOSE_SESSION, OPEN_SESSION
 from eidolon.channel_provider.http import create_app
 from eidolon.channel_provider.selection import AdapterRegistry
 from eidolon.channel_provider.service import ChannelProviderService
 from eidolon.channel_provider.store import ChannelProviderStore
 
-from .helpers import FakeAdapter, livekit_config, provision_payload, revoke_payload
+from .helpers import (
+    FakeAdapter,
+    livekit_config,
+    provision_payload,
+    revoke_payload,
+    session_payload,
+)
 
 
 async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
@@ -55,6 +62,39 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
             "/v1/device-channels/provision", json=invalid, headers=headers
         )
         assert rejected.status == 422
+
+        opened = await client.post(
+            "/v1/device-channels/sessions/open",
+            json=session_payload(operation=OPEN_SESSION),
+            headers=headers,
+        )
+        assert opened.status == 200
+        assert json.loads(await opened.text())["operation"] == "channel.opened-session"
+        assert len(adapter.sessions_opened) == 1
+
+        # Each route accepts only its own operation, so a mis-posted request
+        # cannot end a conversation the caller meant to start.
+        crossed = await client.post(
+            "/v1/device-channels/sessions/close",
+            json=session_payload(operation=OPEN_SESSION),
+            headers=headers,
+        )
+        assert crossed.status == 422
+
+        closed = await client.post(
+            "/v1/device-channels/sessions/close",
+            json=session_payload(operation=CLOSE_SESSION),
+            headers=headers,
+        )
+        assert closed.status == 200
+        assert len(adapter.sessions_closed) == 1
+
+        unknown = await client.post(
+            "/v1/device-channels/sessions/open",
+            json=session_payload(operation=OPEN_SESSION, device_id="nobody"),
+            headers=headers,
+        )
+        assert unknown.status == 404
 
         revoked = await client.post(
             "/v1/device-channels/revoke", json=revoke_payload(), headers=headers

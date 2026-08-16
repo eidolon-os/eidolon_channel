@@ -5,6 +5,13 @@ channel is opened and closed, and what comes back is an opaque grant plus an
 opaque handle. LiveKit's rooms, an MQTT broker's topics and a WebSocket's
 endpoints are all details that live behind this line, including how their
 resources are named.
+
+A channel and a session are two different lifetimes. The channel lasts as long
+as the device is enrolled: it is the device's standing way to reach us, and the
+device sits in it continuously. A session is one stretch of conversation inside
+that channel, and it is the expensive one — it is what an agent, its models and
+its upstream speech services are paid for. Opening a channel therefore must not
+start a session, which is why serving is its own pair of operations here.
 """
 
 from __future__ import annotations
@@ -66,6 +73,24 @@ class ChannelAdapter(Protocol):
 
     async def close(self, handle: dict[str, Any]) -> None:
         """Release whatever `open` provisioned. Must tolerate an absent channel."""
+        ...
+
+    async def open_session(self, handle: dict[str, Any]) -> None:
+        """Bring this channel's agent to it, so a conversation can happen.
+
+        Converges rather than counts: asking twice leaves one session, because
+        the caller is a device that may retry and must never end up served
+        twice. Raises `ChannelNotServable` for a channel whose spec carried no
+        `ServingSpec` — a device that cannot speak has no session to open.
+        """
+        ...
+
+    async def close_session(self, handle: dict[str, Any]) -> None:
+        """Send the agent away. The channel itself stays open.
+
+        The device keeps its place and its credentials; only the served part of
+        the channel ends. Must tolerate there being no session to close.
+        """
         ...
 
     async def shutdown(self) -> None:

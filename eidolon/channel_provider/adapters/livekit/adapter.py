@@ -15,8 +15,9 @@ from typing import Any
 
 from livekit import api
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
+from livekit.protocol.agent import JobStatus
 
-from ...contracts import BackendUnavailable, canonical_json
+from ...contracts import BackendUnavailable, ChannelNotServable, canonical_json
 from ...ports import ChannelGrant
 from ...spec import ChannelSpec
 from .config import LiveKitConfig
@@ -27,6 +28,19 @@ ADAPTER_NAME = "livekit"
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
+_ENDED_JOB_STATUSES = frozenset({JobStatus.JS_SUCCESS, JobStatus.JS_FAILED})
+
+
+def _is_spent(dispatch: Any) -> bool:
+    """Whether this dispatch's work is over rather than under way.
+
+    An empty job list is deliberately *not* spent. LiveKit publishes the job a
+    beat after it starts running, so a dispatch created moments ago reads as
+    having no jobs at all — treating that as finished would tear down the very
+    session that is starting up.
+    """
+    jobs = list(dispatch.state.jobs)
+    return bool(jobs) and all(job.state.status in _ENDED_JOB_STATUSES for job in jobs)
 
 
 class LiveKitChannelAdapter:
@@ -75,7 +89,7 @@ class LiveKitChannelAdapter:
 
     async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
         room = self._room_name(spec)
-        await self._declare_room(room, spec)
+        await self._declare_room(room)
         ttl = self._config.grant_ttl_seconds
         payload = canonical_json(
             {
@@ -92,11 +106,17 @@ class LiveKitChannelAdapter:
                 },
             }
         ).encode()
+        # The handle carries the agent name because opening a session later must
+        # not depend on re-deriving the spec: by then the manifest that produced
+        # it is the Hub's, not ours, and may already have moved on.
+        handle: dict[str, Any] = {"room": room}
+        if spec.serving is not None:
+            handle["agent"] = spec.serving.agent_name
         return ChannelGrant(
             binding_format=BINDING_FORMAT,
             payload=payload,
             expires_at_ms=issued_at_ms + ttl * 1000,
-            handle={"room": room},
+            handle=handle,
         )
 
     async def close(self, handle: dict[str, Any]) -> None:
@@ -119,50 +139,89 @@ class LiveKitChannelAdapter:
 
     # -- internals --------------------------------------------------------
 
-    async def _declare_room(self, room: str, spec: ChannelSpec) -> None:
-        """Create the room together with its full serving contract.
+    async def _declare_room(self, room: str) -> None:
+        """Create the room the device will live in, and deliberately nothing more.
 
-        LiveKit applies a room's agent dispatch when the room is created, and a
-        join token's room configuration only takes effect if that join is what
-        creates the room. Declaring the room here without its dispatch would
-        therefore silently disable it: the token's copy would be ignored for a
-        room that already exists, the automatic publisher dispatch would fall
-        back to the anonymous agent pool, no worker would answer, and the device
-        would sit in a room nobody ever joins. The dispatch is stated once, here,
-        where the room itself is stated.
+        The room is born with no agent dispatch. A dispatch is a standing order:
+        LiveKit acts on it the moment anyone is in the room, so a room born with
+        one would summon an agent — with its speech models and its metered
+        upstream services — the instant the device connected, and keep one for
+        as long as the device stayed. Since the device now stays permanently,
+        that is a session that never ends. Serving is therefore not part of
+        declaring the room; it is `open_session`, asked for when there is
+        actually something to say.
         """
-        request = api.CreateRoomRequest(name=room)
-        if spec.serving is not None:
-            request.agents.append(api.RoomAgentDispatch(agent_name=spec.serving.agent_name))
         try:
-            await self._client().room.create_room(request)
+            await self._client().room.create_room(api.CreateRoomRequest(name=room))
         except TwirpError as exc:
             if exc.code == TwirpErrorCode.ALREADY_EXISTS:
-                await self._ensure_dispatch(room, spec)
                 return
             raise BackendUnavailable("LiveKit room creation failed") from exc
         except Exception as exc:
             raise BackendUnavailable("LiveKit room creation failed") from exc
 
-    async def _ensure_dispatch(self, room: str, spec: ChannelSpec) -> None:
-        """Repair the serving contract of a room this adapter did not create.
+    # -- serving ----------------------------------------------------------
 
-        `create_room` returns the existing room untouched, so a room left over
-        from an earlier provision keeps whatever dispatch it was born with.
-        Declaring the dispatch explicitly is idempotent and converges the room
-        onto the contract this spec asks for.
-        """
-        if spec.serving is None:
-            return
+    async def open_session(self, handle: dict[str, Any]) -> None:
+        room, agent = self._serving(handle)
         try:
-            existing = await self._client().agent_dispatch.list_dispatch(room_name=room)
-            if any(d.agent_name == spec.serving.agent_name for d in existing):
-                return
+            for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
+                if dispatch.agent_name != agent:
+                    continue
+                if not _is_spent(dispatch):
+                    return
+                # A record whose work is over is not a session, and leaving it
+                # here would let it stand in for one forever: every later
+                # request would read it as "already served" and the device would
+                # never be heard again. Clearing it is what makes a teardown
+                # that failed to withdraw its own dispatch recoverable.
+                logger.info("clearing spent dispatch=%s on room=%s", dispatch.id, room)
+                await self._client().agent_dispatch.delete_dispatch(
+                    dispatch_id=dispatch.id, room_name=room
+                )
             await self._client().agent_dispatch.create_dispatch(
-                api.CreateAgentDispatchRequest(room=room, agent_name=spec.serving.agent_name)
+                api.CreateAgentDispatchRequest(room=room, agent_name=agent)
             )
         except Exception as exc:
-            raise BackendUnavailable("LiveKit agent dispatch declaration failed") from exc
+            raise BackendUnavailable("LiveKit agent dispatch failed") from exc
+        logger.info("opened session on room=%s agent=%s", room, agent)
+
+    async def close_session(self, handle: dict[str, Any]) -> None:
+        """Withdraw the standing order, which is what ends the agent's job.
+
+        Deleting the dispatch — rather than deleting the room — is what keeps
+        the device's channel intact across the end of a conversation. LiveKit
+        removes the agent from the room promptly, so the room is clean for the
+        next session even while the old job is still draining.
+
+        Matches on the agent name rather than a remembered dispatch id: LiveKit
+        also keeps dispatch records of its own, and a session that a previous
+        process opened must still be closable by this one.
+        """
+        room, agent = self._serving(handle)
+        try:
+            for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
+                if dispatch.agent_name == agent:
+                    await self._client().agent_dispatch.delete_dispatch(
+                        dispatch_id=dispatch.id, room_name=room
+                    )
+        except TwirpError as exc:
+            if exc.code == TwirpErrorCode.NOT_FOUND:
+                return
+            raise BackendUnavailable("LiveKit agent dispatch withdrawal failed") from exc
+        except Exception as exc:
+            raise BackendUnavailable("LiveKit agent dispatch withdrawal failed") from exc
+        logger.info("closed session on room=%s agent=%s", room, agent)
+
+    @staticmethod
+    def _serving(handle: dict[str, Any]) -> tuple[str, str]:
+        room = handle.get("room")
+        agent = handle.get("agent")
+        if not room:
+            raise ChannelNotServable("channel handle names no room")
+        if not agent:
+            raise ChannelNotServable("this channel was not provisioned to be served")
+        return room, agent
 
     def _token(self, room: str, spec: ChannelSpec, *, ttl_seconds: int) -> str:
         """Mint a credential, and nothing more.

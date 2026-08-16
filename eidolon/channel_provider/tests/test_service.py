@@ -6,15 +6,26 @@ import json
 import pytest
 
 from eidolon.channel_provider.contracts import (
+    CLOSE_SESSION,
+    OPEN_SESSION,
     IdempotencyConflict,
     ProvisionRequest,
     RevokeRequest,
+    SessionRequest,
+    UnknownChannel,
 )
 from eidolon.channel_provider.selection import AdapterRegistry
 from eidolon.channel_provider.service import ChannelProviderService
 from eidolon.channel_provider.store import ChannelProviderStore
 
-from .helpers import FakeAdapter, encoded, livekit_config, provision_payload, revoke_payload
+from .helpers import (
+    FakeAdapter,
+    encoded,
+    livekit_config,
+    provision_payload,
+    revoke_payload,
+    session_payload,
+)
 
 
 def _service(tmp_path, clock: list[int], backend: FakeAdapter | None = None):
@@ -130,3 +141,65 @@ async def test_revoke_unknown_device_is_desired_state_success(tmp_path) -> None:
 
     assert json.loads(response)["device_id"] == "unknown"
     assert backend.closed == []
+
+
+async def test_a_session_runs_on_the_adapter_that_opened_the_channel(tmp_path) -> None:
+    """A session is served by whoever is carrying the device, never re-selected."""
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    opened = await service.open_session(
+        SessionRequest.parse(
+            encoded(session_payload(operation=OPEN_SESSION)), expected=OPEN_SESSION
+        )
+    )
+    closed = await service.close_session(
+        SessionRequest.parse(
+            encoded(session_payload(operation=CLOSE_SESSION)), expected=CLOSE_SESSION
+        )
+    )
+
+    handle = {"resource": "livekit:device-1"}
+    assert backend.sessions_opened == [handle]
+    assert backend.sessions_closed == [handle]
+    assert json.loads(opened) == {
+        "operation": "channel.opened-session",
+        "device_id": "device-1",
+        "channel_id": json.loads(opened)["channel_id"],
+        "serving": True,
+    }
+    assert json.loads(closed)["serving"] is False
+    # A conversation beginning or ending never disturbs the channel itself.
+    assert backend.closed == []
+
+
+async def test_a_device_with_no_channel_cannot_hold_a_session(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+
+    with pytest.raises(UnknownChannel):
+        await service.open_session(
+            SessionRequest.parse(
+                encoded(session_payload(operation=OPEN_SESSION)), expected=OPEN_SESSION
+            )
+        )
+
+    assert backend.sessions_opened == []
+
+
+async def test_a_revoked_device_cannot_hold_a_session(tmp_path) -> None:
+    """Revocation must actually cut the device off, sessions included."""
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload())))
+
+    with pytest.raises(UnknownChannel):
+        await service.open_session(
+            SessionRequest.parse(
+                encoded(session_payload(operation=OPEN_SESSION)), expected=OPEN_SESSION
+            )
+        )
+
+    assert backend.sessions_opened == []

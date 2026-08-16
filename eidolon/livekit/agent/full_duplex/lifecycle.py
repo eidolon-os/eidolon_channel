@@ -123,7 +123,7 @@ class FullDuplexSessionLifecycle:
         try:
             await pipeline._session_closed_event.wait()
             logger.info("[StreamingPipeline] session closed event received, exiting run()")
-            await self._delete_room_on_close()
+            await self._end_serving_on_close()
         except asyncio.CancelledError:
             logger.info("[StreamingPipeline] cancelled")
             raise
@@ -216,7 +216,7 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         reason = getattr(event, "reason", None)
         error = getattr(event, "error", None)
-        # Captured for _delete_room_on_close -> session_end reason: error
+        # Captured for _end_serving_on_close -> session_end reason: error
         # close -> "error", clean close -> "user_left".
         pipeline._close_reason = reason
         pipeline._close_error = error
@@ -241,8 +241,13 @@ class FullDuplexSessionLifecycle:
         pipeline._append_timeline_debug("session_closed")
         pipeline._session_closed_event.set()
 
-    async def _delete_room_on_close(self) -> None:
-        """Prompt room teardown on session close before provider shutdown drain."""
+    async def _end_serving_on_close(self) -> None:
+        """Give up this conversation promptly, before the provider shutdown drain.
+
+        What "giving up" costs the device is the caller's business, not ours —
+        the channel outlives the conversation, so this hook announces the end
+        and hands teardown to whoever owns the serving contract.
+        """
         pipeline = self._pipeline
         on_end = getattr(pipeline, "_on_session_end", None)
         if on_end is not None:
@@ -264,7 +269,7 @@ class FullDuplexSessionLifecycle:
         try:
             await cb()
         except Exception:
-            logger.exception("[StreamingPipeline] on_session_closed (prompt room delete) failed")
+            logger.exception("[StreamingPipeline] on_session_closed (prompt teardown) failed")
 
     def _start_proactive_consumer(self) -> None:
         """Spawn the background proactive-report stream (best-effort)."""

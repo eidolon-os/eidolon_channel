@@ -16,7 +16,14 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-from .contracts import IdempotencyConflict, ProvisionRequest, RevokeRequest, canonical_json
+from .contracts import (
+    IdempotencyConflict,
+    ProvisionRequest,
+    RevokeRequest,
+    SessionRequest,
+    UnknownChannel,
+    canonical_json,
+)
 from .ports import ChannelGrant
 from .selection import AdapterRegistry
 from .spec import ChannelSpec, MediaFlow, derive_spec
@@ -170,6 +177,42 @@ class ChannelProviderService:
             except sqlite3.IntegrityError as exc:
                 raise IdempotencyConflict("revocation operation raced with another request") from exc
             return response
+
+    async def open_session(self, request: SessionRequest) -> str:
+        """Serve the device's channel, because the device asked to talk."""
+        return await self._serve(request, serving=True)
+
+    async def close_session(self, request: SessionRequest) -> str:
+        """Stop serving the device's channel; the channel itself survives."""
+        return await self._serve(request, serving=False)
+
+    async def _serve(self, request: SessionRequest, *, serving: bool) -> str:
+        """Converge the device's channel onto served or unserved.
+
+        Takes the same lock as provision and revocation so that reading the
+        channel and acting on it cannot straddle a revocation — otherwise a
+        device could be granted a conversation on a channel that was withdrawn
+        a moment earlier. Nothing is written: a session is a statement of
+        desired state the adapter converges onto, not an event to record.
+        """
+        async with self._lock:
+            active = self._store.active_device(request.hub_id, request.device_id)
+            if active is None:
+                raise UnknownChannel("device has no active channel")
+            adapter = self._registry.get(active.adapter_name)
+            handle = json.loads(active.handle_json)
+            if serving:
+                await adapter.open_session(handle)
+            else:
+                await adapter.close_session(handle)
+        return canonical_json(
+            {
+                "operation": "channel.opened-session" if serving else "channel.closed-session",
+                "device_id": request.device_id,
+                "channel_id": active.channel_id,
+                "serving": serving,
+            }
+        )
 
     def _response(
         self,

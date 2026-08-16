@@ -64,6 +64,16 @@ def revoke_payload(**overrides: Any) -> dict[str, Any]:
     return value
 
 
+def session_payload(*, operation: str, **overrides: Any) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "operation": operation,
+        "hub_id": "hub-1",
+        "device_id": "device-1",
+    }
+    value.update(overrides)
+    return value
+
+
 def encoded(value: dict[str, Any]) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
 
@@ -77,6 +87,8 @@ class FakeAdapter:
         self.ttl_seconds = ttl_seconds
         self.opened: list[ChannelSpec] = []
         self.closed: list[dict[str, Any]] = []
+        self.sessions_opened: list[dict[str, Any]] = []
+        self.sessions_closed: list[dict[str, Any]] = []
         self.health_calls = 0
         self.shutdown_calls = 0
 
@@ -102,6 +114,12 @@ class FakeAdapter:
 
     async def close(self, handle: dict[str, Any]) -> None:
         self.closed.append(handle)
+
+    async def open_session(self, handle: dict[str, Any]) -> None:
+        self.sessions_opened.append(handle)
+
+    async def close_session(self, handle: dict[str, Any]) -> None:
+        self.sessions_closed.append(handle)
 
     async def shutdown(self) -> None:
         self.shutdown_calls += 1

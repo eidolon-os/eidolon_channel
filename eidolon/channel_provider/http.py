@@ -9,11 +9,16 @@ import logging
 from aiohttp import web
 
 from .contracts import (
+    CLOSE_SESSION,
+    OPEN_SESSION,
     BackendUnavailable,
+    ChannelNotServable,
     ContractError,
     IdempotencyConflict,
     ProvisionRequest,
     RevokeRequest,
+    SessionRequest,
+    UnknownChannel,
 )
 from .service import ChannelProviderService
 
@@ -73,12 +78,43 @@ def create_app(
             logger.warning("LiveKit unavailable during channel revocation")
             return _json({"error": "channel backend unavailable"}, status=503)
 
+    async def session(request: web.Request, *, expected: str) -> web.Response:
+        if not _authorized(request, bearer_token):
+            return _json({"error": "unauthorized"}, status=401)
+        if request.content_type != "application/json":
+            return _json({"error": "content-type must be application/json"}, status=415)
+        try:
+            parsed = SessionRequest.parse(await request.read(), expected=expected)
+            result = (
+                await service.open_session(parsed)
+                if expected == OPEN_SESSION
+                else await service.close_session(parsed)
+            )
+            return web.Response(text=result, content_type="application/json")
+        except ContractError:
+            return _json({"error": "invalid channel session request"}, status=422)
+        except UnknownChannel:
+            return _json({"error": "device has no active channel"}, status=404)
+        except ChannelNotServable:
+            return _json({"error": "channel does not carry a conversation"}, status=409)
+        except BackendUnavailable:
+            logger.warning("LiveKit unavailable during channel session change")
+            return _json({"error": "channel backend unavailable"}, status=503)
+
     async def close(_app: web.Application) -> None:
         await service.shutdown()
 
     app.router.add_get("/health", health)
     app.router.add_post("/v1/device-channels/provision", provision)
     app.router.add_post("/v1/device-channels/revoke", revoke)
+    async def open_session(request: web.Request) -> web.Response:
+        return await session(request, expected=OPEN_SESSION)
+
+    async def close_session(request: web.Request) -> web.Response:
+        return await session(request, expected=CLOSE_SESSION)
+
+    app.router.add_post("/v1/device-channels/sessions/open", open_session)
+    app.router.add_post("/v1/device-channels/sessions/close", close_session)
     app.on_cleanup.append(close)
     return app
 

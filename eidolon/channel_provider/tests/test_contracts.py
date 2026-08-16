@@ -5,12 +5,15 @@ import json
 import pytest
 
 from eidolon.channel_provider.contracts import (
+    CLOSE_SESSION,
+    OPEN_SESSION,
     ContractError,
     ProvisionRequest,
     RevokeRequest,
+    SessionRequest,
 )
 
-from .helpers import encoded, provision_payload, revoke_payload
+from .helpers import encoded, provision_payload, revoke_payload, session_payload
 
 
 def test_provision_request_matches_hub_v1_contract() -> None:
@@ -30,6 +33,34 @@ def test_revoke_request_matches_hub_v1_contract() -> None:
     assert request.operation_id == "revoke-1"
     assert request.device_id == "device-1"
     assert request.reason == "owner-request"
+
+
+def test_session_request_matches_hub_v1_contract() -> None:
+    request = SessionRequest.parse(
+        encoded(session_payload(operation=OPEN_SESSION)), expected=OPEN_SESSION
+    )
+
+    assert request.operation == OPEN_SESSION
+    assert request.hub_id == "hub-1"
+    assert request.device_id == "device-1"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.update({"unexpected": True}),
+        # An operation_id would imply this is a replayable event; it is not.
+        lambda value: value.update({"operation_id": "session-1"}),
+        lambda value: value.update({"operation": CLOSE_SESSION}),
+        lambda value: value.pop("device_id"),
+    ],
+)
+def test_session_rejects_contract_drift(mutation) -> None:
+    value = session_payload(operation=OPEN_SESSION)
+    mutation(value)
+
+    with pytest.raises(ContractError):
+        SessionRequest.parse(encoded(value), expected=OPEN_SESSION)
 
 
 @pytest.mark.parametrize(

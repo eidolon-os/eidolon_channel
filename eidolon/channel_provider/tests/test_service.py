@@ -5,83 +5,27 @@ import json
 
 import pytest
 
-from eidolon.livekit.channel_provider.contracts import (
+from eidolon.channel_provider.contracts import (
     IdempotencyConflict,
     ProvisionRequest,
     RevokeRequest,
-    canonical_json,
 )
-from eidolon.livekit.channel_provider.livekit_backend import LiveKitBinding
-from eidolon.livekit.channel_provider.service import ChannelProviderService
-from eidolon.livekit.channel_provider.store import ChannelProviderStore
+from eidolon.channel_provider.selection import AdapterRegistry
+from eidolon.channel_provider.service import ChannelProviderService
+from eidolon.channel_provider.store import ChannelProviderStore
 
-from .helpers import encoded, livekit_config, provision_payload, revoke_payload
-
-
-class FakeBackend:
-    def __init__(self, ttl_seconds: int = 1800) -> None:
-        self.ttl_seconds = ttl_seconds
-        self.ensure_calls: list[tuple[str, str]] = []
-        self.revoke_calls: list[tuple[str, str]] = []
-        self.binding_calls = 0
-        self.health_calls = 0
-        self.closed = False
-
-    async def healthcheck(self) -> None:
-        self.health_calls += 1
-
-    async def ensure_rooms(self, active_room: str, control_room: str) -> None:
-        self.ensure_calls.append((active_room, control_room))
-
-    async def revoke_rooms(self, active_room: str, control_room: str) -> None:
-        self.revoke_calls.append((active_room, control_room))
-
-    def build_binding(
-        self,
-        *,
-        active_room: str,
-        control_room: str,
-        device_id: str,
-        owner_id: str,
-        issued_at_ms: int,
-    ) -> LiveKitBinding:
-        self.binding_calls += 1
-        payload = canonical_json(
-            {
-                "schema_version": 1,
-                "active": {
-                    "server_url": "wss://livekit.example.test",
-                    "token": f"active-token-{self.binding_calls}",
-                    "identity": device_id,
-                    "room_name": active_room,
-                },
-                "control": {
-                    "server_url": "wss://livekit.example.test",
-                    "token": f"control-token-{self.binding_calls}",
-                    "identity": device_id,
-                    "room_name": control_room,
-                },
-                "audio": {"sample_rate": 16000, "channels": 1},
-                "test_owner": owner_id,
-            }
-        ).encode()
-        return LiveKitBinding(
-            payload=payload,
-            expires_at_ms=issued_at_ms + self.ttl_seconds * 1000,
-        )
-
-    async def close(self) -> None:
-        self.closed = True
+from .helpers import FakeAdapter, encoded, livekit_config, provision_payload, revoke_payload
 
 
-def _service(tmp_path, clock: list[int], backend: FakeBackend | None = None):
+def _service(tmp_path, clock: list[int], backend: FakeAdapter | None = None):
     config = livekit_config()
-    resolved_backend = backend or FakeBackend(config.grant_ttl_seconds)
+    resolved_backend = backend or FakeAdapter(name='livekit', ttl_seconds=config.grant_ttl_seconds)
     store = ChannelProviderStore(tmp_path / "provider.sqlite3")
     service = ChannelProviderService(
         store=store,
-        backend=resolved_backend,
-        livekit=config,
+        registry=AdapterRegistry([resolved_backend], preference=('livekit',)),
+        agent_name='eidolon',
+        refresh_before_expiry_seconds=config.refresh_before_expiry_seconds,
         now_ms=lambda: clock[0],
     )
     service.initialize()
@@ -104,19 +48,18 @@ async def test_provision_is_exactly_idempotent_across_restart(tmp_path) -> None:
     third = await restarted.provision(request)
 
     assert first == second == third
-    assert backend.binding_calls == 1
-    assert len(backend.ensure_calls) == 1
-    assert restarted_backend.binding_calls == 0
+    assert len(backend.opened) == 1
+    assert len(restarted_backend.opened) == 0
     response = json.loads(first)
     assert response["operation"] == "channel.provisioned-device"
     assert response["operation_id"] == "enrollment-1"
     assert response["device_id"] == "device-1"
     assert response["channels"][0]["binding_format"] == (
-        "application/vnd.eidolon.livekit-device+json;v=1"
+        "application/vnd.eidolon.livekit-session+json;v=2"
     )
     binding = _binding(first)
-    assert binding["active"]["room_name"].endswith("-voice")
-    assert binding["control"]["room_name"].endswith("-control")
+    # One device, one channel: the binding names a single session, not a pair.
+    assert set(binding) == {"device", "resource"}
 
 
 async def test_provision_refreshes_only_near_expiry_with_stable_resources(tmp_path) -> None:
@@ -129,9 +72,9 @@ async def test_provision_refreshes_only_near_expiry_with_stable_resources(tmp_pa
     refreshed = await service.provision(request)
 
     assert refreshed != first
-    assert backend.binding_calls == 2
-    assert len(backend.ensure_calls) == 2
-    assert _binding(refreshed)["active"]["room_name"] == _binding(first)["active"]["room_name"]
+    assert len(backend.opened) == 2
+    assert len(backend.opened) == 2
+    assert _binding(refreshed)["resource"] == _binding(first)["resource"]
     assert json.loads(refreshed)["channels"][0]["channel_id"] == (
         json.loads(first)["channels"][0]["channel_id"]
     )
@@ -168,7 +111,7 @@ async def test_revoke_deletes_rooms_scrubs_binding_and_is_idempotent(tmp_path) -
         "operation": "channel.revoked-device",
         "operation_id": "revoke-1",
     }
-    assert len(backend.revoke_calls) == 1
+    assert len(backend.closed) == 1
     stored = store.provision("enrollment-1")
     assert stored is not None
     assert stored.status == "revoked"
@@ -186,4 +129,4 @@ async def test_revoke_unknown_device_is_desired_state_success(tmp_path) -> None:
     response = await service.revoke(request)
 
     assert json.loads(response)["device_id"] == "unknown"
-    assert backend.revoke_calls == []
+    assert backend.closed == []

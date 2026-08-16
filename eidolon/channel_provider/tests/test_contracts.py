@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from eidolon.livekit.channel_provider.contracts import (
+from eidolon.channel_provider.contracts import (
     ContractError,
     ProvisionRequest,
     RevokeRequest,

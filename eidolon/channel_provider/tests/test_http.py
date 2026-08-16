@@ -4,51 +4,22 @@ import json
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from eidolon.livekit.channel_provider.contracts import canonical_json
-from eidolon.livekit.channel_provider.http import create_app
-from eidolon.livekit.channel_provider.livekit_backend import LiveKitBinding
-from eidolon.livekit.channel_provider.service import ChannelProviderService
-from eidolon.livekit.channel_provider.store import ChannelProviderStore
+from eidolon.channel_provider.http import create_app
+from eidolon.channel_provider.selection import AdapterRegistry
+from eidolon.channel_provider.service import ChannelProviderService
+from eidolon.channel_provider.store import ChannelProviderStore
 
-from .helpers import livekit_config, provision_payload, revoke_payload
-
-
-class HttpFakeBackend:
-    def __init__(self) -> None:
-        self.health_calls = 0
-
-    async def healthcheck(self) -> None:
-        self.health_calls += 1
-
-    async def ensure_rooms(self, active_room: str, control_room: str) -> None:
-        pass
-
-    async def revoke_rooms(self, active_room: str, control_room: str) -> None:
-        pass
-
-    def build_binding(self, **values) -> LiveKitBinding:
-        return LiveKitBinding(
-            payload=canonical_json(
-                {
-                    "schema_version": 1,
-                    "active": {"room_name": values["active_room"]},
-                    "control": {"room_name": values["control_room"]},
-                }
-            ).encode(),
-            expires_at_ms=values["issued_at_ms"] + 1_800_000,
-        )
-
-    async def close(self) -> None:
-        pass
+from .helpers import FakeAdapter, livekit_config, provision_payload, revoke_payload
 
 
 async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
     config = livekit_config()
-    backend = HttpFakeBackend()
+    adapter = FakeAdapter(name='livekit')
     service = ChannelProviderService(
         store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
-        backend=backend,
-        livekit=config,
+        registry=AdapterRegistry([adapter], preference=('livekit',)),
+        agent_name='eidolon',
+        refresh_before_expiry_seconds=config.refresh_before_expiry_seconds,
         now_ms=lambda: 1_700_000_000_000,
     )
     service.initialize()
@@ -62,7 +33,7 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
             "service": "eidolon-channel-provider",
             "contract_version": "v1",
         }
-        assert backend.health_calls == 1
+        assert adapter.health_calls == 1
 
         unauthorized = await client.post(
             "/v1/device-channels/provision", json=provision_payload()

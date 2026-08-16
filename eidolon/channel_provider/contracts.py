@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 MAX_REQUEST_BYTES = 256 * 1024
-BINDING_FORMAT = "application/vnd.eidolon.livekit-device+json;v=1"
 
 
 class ContractError(ValueError):
@@ -20,7 +19,7 @@ class IdempotencyConflict(RuntimeError):
 
 
 class BackendUnavailable(RuntimeError):
-    """LiveKit could not satisfy a control-plane operation."""
+    """The selected transport could not satisfy a control-plane operation."""
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

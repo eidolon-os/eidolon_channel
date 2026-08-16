@@ -17,6 +17,15 @@ livekit:
   agent_name: eidolon
   grant_ttl_seconds: 1800
   refresh_before_expiry_seconds: 120
-  interaction_mode: full_duplex
+  # Turn taking is declared by each device in its manifest, not fixed per
+  # deployment: a process-wide value can only ever be wrong for every device
+  # that disagrees with it.
   sample_rate: 16000
   channels: 1
+
+adapters:
+  # Transports this deployment offers, in the order selection prefers them.
+  # Adding one means registering it in the composition root and naming it here;
+  # nothing between the port and the device changes.
+  preference:
+    - livekit

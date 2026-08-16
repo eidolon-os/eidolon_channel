@@ -74,7 +74,7 @@ def create_app(
             return _json({"error": "channel backend unavailable"}, status=503)
 
     async def close(_app: web.Application) -> None:
-        await service.close()
+        await service.shutdown()
 
     app.router.add_get("/health", health)
     app.router.add_post("/v1/device-channels/provision", provision)

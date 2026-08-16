@@ -41,7 +41,7 @@ dependencies = [
 ]
 
 [project.scripts]
-eidolon-channel-provider = "eidolon.livekit.channel_provider.server:main"
+eidolon-channel-provider = "eidolon.channel_provider.server:main"
 
 [project.optional-dependencies]
 dev = [
@@ -77,7 +77,7 @@ disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["eidolon/livekit/tests"]
+testpaths = ["eidolon/livekit/tests", "eidolon/channel_provider/tests"]
 markers = ["integration: tests requiring external services or long runs"]
 addopts = "-m 'not integration'"
 

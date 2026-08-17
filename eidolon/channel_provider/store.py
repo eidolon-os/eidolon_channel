@@ -7,10 +7,13 @@ permissions, and securely clears cached token responses on revocation.
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger("eidolon.channel_provider.store")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +58,9 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version == 1:
+                self._discard_unhonourable_provisions(connection)
+                version = 0
             if version not in {0, 2}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
@@ -88,6 +94,40 @@ class ChannelProviderStore:
                 """
             )
         os.chmod(self._path, 0o600)
+
+    @staticmethod
+    def _discard_unhonourable_provisions(connection: sqlite3.Connection) -> None:
+        """Let go of provisions recorded when a channel meant two rooms.
+
+        Every one of those rows caches the exact response the Hub was given, and
+        that response describes a voice room and a control room. Replaying it —
+        which is precisely what the record exists to do — would hand a device a
+        channel in a shape nothing serves any more. A record that cannot be
+        honoured is worse than no record, because only one of the two is
+        obviously missing.
+
+        Dropping them costs the Hub nothing it cannot redo: the devices they
+        describe re-provision on next contact, which is the same conclusion
+        their firmware reaches on its own when it refuses to read back a stored
+        pair of rooms.
+
+        Revocations are left alone. That table did not change shape, and a
+        device that was cut off should stay cut off through a schema change.
+        """
+        rows = connection.execute("SELECT COUNT(*) FROM provider_provisions").fetchone()[0]
+        logger.warning(
+            "discarding %d Channel Provider provision(s) recorded under the "
+            "two-room schema; their devices will re-provision",
+            rows,
+        )
+        connection.executescript(
+            """
+            DROP INDEX IF EXISTS uq_provider_active_device;
+            DROP TABLE IF EXISTS provider_provisions;
+            PRAGMA user_version = 0;
+            """
+        )
+        connection.commit()
 
     def healthcheck(self) -> None:
         with self._connect() as connection:

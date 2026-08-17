@@ -14,11 +14,7 @@ from eidolon_sdk.biz.contracts import (
 from livekit.protocol.agent import JobStatus
 
 from eidolon.channel_provider.adapters.livekit import LiveKitChannelAdapter
-from eidolon.channel_provider.contracts import (
-    BackendUnavailable,
-    ChannelNotServable,
-    ProvisionRequest,
-)
+from eidolon.channel_provider.contracts import ChannelNotServable, ProvisionRequest
 from eidolon.channel_provider.ports import ServingRequest
 from eidolon.channel_provider.spec import derive_spec
 
@@ -386,33 +382,52 @@ async def test_giving_up_a_channel_is_not_mistaken_for_losing_it(monkeypatch) ->
     assert adapter._listeners == {}
 
 
-async def test_a_channel_that_cannot_be_joined_is_not_left_half_watched(
+async def test_a_channel_that_cannot_be_joined_yet_is_kept_and_retried(
     monkeypatch,
 ) -> None:
-    """A failed start must not look like a channel that is being listened to."""
+    """Found on a real Host: a device provisioned seconds after the transport
+    restarted timed out on its first join, and a final failure left the channel
+    deaf until something provisioned it again — while a connection lost a second
+    later would have been rebuilt."""
+    monkeypatch.setattr(
+        "eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0
+    )
+    refusals = {"count": 2}
 
-    class RefusingRoom(FakeRoom):
+    class SometimesRefusingRoom(FakeRoom):
         async def connect(self, url, token):
-            raise ConnectionError("no route to LiveKit")
+            if refusals["count"] > 0:
+                refusals["count"] -= 1
+                raise ConnectionError("wait_pc_connection timed out")
+            await super().connect(url, token)
 
     adapter, _ = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    FakeRoom.instances.clear()
     monkeypatch.setattr(
-        "eidolon.channel_provider.adapters.livekit.adapter.rtc.Room", RefusingRoom
+        "eidolon.channel_provider.adapters.livekit.adapter.rtc.Room",
+        SometimesRefusingRoom,
     )
 
-    with pytest.raises(BackendUnavailable):
-        await adapter.accept_requests(grant.handle, sink=_unused_sink)
+    await adapter.accept_requests(grant.handle, sink=_unused_sink)
+    assert adapter._listeners != {}, "the undertaking must survive a refused join"
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if any(room.connected for room in FakeRoom.instances):
+            break
 
-    assert adapter._listeners == {}
+    assert any(room.connected for room in FakeRoom.instances)
+    await adapter.stop_accepting(grant.handle)
 
 
 async def test_a_handle_that_cannot_name_its_device_is_not_listened_to() -> None:
-    """Without knowing who the device is, no arrival can be attributed to it."""
+    """The one refusal retrying cannot fix: no arrival could ever be attributed."""
     adapter, _ = _adapter()
 
     with pytest.raises(ChannelNotServable):
         await adapter.accept_requests({"room": "r"}, sink=_unused_sink)
+
+    assert adapter._listeners == {}
 
 
 async def test_listening_reaches_livekit_the_short_way() -> None:

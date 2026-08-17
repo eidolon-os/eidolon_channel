@@ -187,6 +187,9 @@ class LiveKitChannelAdapter:
         room = str(handle.get("room") or "")
         device = str(handle.get("device") or "")
         if not room or not device:
+            # The one refusal: nothing about this channel says who may speak for
+            # it, so no arrival could ever be attributed. Trying harder cannot
+            # change that, and the caller needs to hear so.
             raise ChannelNotServable("channel handle cannot identify its device")
         if room in self._listeners:
             return
@@ -194,9 +197,16 @@ class LiveKitChannelAdapter:
         self._listeners[room] = watch
         try:
             await self._join(room, watch)
-        except Exception:
-            del self._listeners[room]
-            raise
+        except Exception as exc:
+            # Undertaking to carry a channel is not the same as being connected
+            # to it this instant. A device provisioned in the seconds after the
+            # transport restarts found exactly this gap on a real Host: the
+            # first join timed out, and because the failure was final the
+            # channel stayed deaf until something else provisioned it again —
+            # while a connection lost one second later would have been rebuilt.
+            # Same promise, so the same persistence at both ends.
+            self._rejoin_later(room, watch, exc)
+            return
         logger.info("listening to room=%s for device=%s", room, device)
 
     async def _join(self, room: str, watch: _Listening) -> None:

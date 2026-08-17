@@ -307,6 +307,12 @@ class StreamingPipeline(BasePipeline):
         # run() awaits this instead of polling room.isconnected, so shutdown
         # fires within milliseconds of the framework deciding to close.
         self._session_closed_event: asyncio.Event = asyncio.Event()
+        # Set when the channel tells us we are no longer in it. run() races this
+        # against the event above, because the framework decides to close long
+        # after the room does — measured 15s versus 3s after a session was
+        # withdrawn, all of it spent holding a metered speech stream open for a
+        # conversation that had already ended.
+        self._room_disconnected_event: asyncio.Event = asyncio.Event()
         self._lifecycle = FullDuplexSessionLifecycle(self)
 
         # Idle-disconnect watchdog. A client that connects and is never closed

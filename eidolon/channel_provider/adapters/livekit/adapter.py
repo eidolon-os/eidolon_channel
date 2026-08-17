@@ -239,23 +239,26 @@ class LiveKitChannelAdapter:
         if watch.retry is not None and not watch.retry.done():
             return
         watch.connection = None
-        delay = min(_REJOIN_MAX_DELAY, _REJOIN_BASE_DELAY * (2**watch.attempt))
-        watch.attempt += 1
-        logger.warning(
-            "lost room=%s (%s); rejoining in %.0fs (attempt %d)",
-            room, reason, delay, watch.attempt,
-        )
+        logger.warning("lost room=%s (%s); rejoining", room, reason)
 
         async def _rejoin() -> None:
             while self._listeners.get(room) is watch:
+                # Recomputed every time round, because a transport that is down
+                # rather than blinking must be asked less often, not forever at
+                # the same rate. Observed on a real Host holding at the base
+                # delay for minutes while the sandbox denied it a route out.
+                delay = min(_REJOIN_MAX_DELAY, _REJOIN_BASE_DELAY * (2**watch.attempt))
+                watch.attempt += 1
                 await asyncio.sleep(delay)
                 if self._listeners.get(room) is not watch:
                     return
                 try:
                     await self._join(room, watch)
                 except Exception:
-                    logger.warning("room=%s still unreachable; will keep trying", room)
-                    watch.attempt += 1
+                    logger.warning(
+                        "room=%s still unreachable after %.0fs; will keep trying",
+                        room, delay,
+                    )
                     continue
                 logger.info("listening to room=%s again", room)
                 return

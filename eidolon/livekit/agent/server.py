@@ -445,7 +445,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             session_intent=session_intent,
             on_session_end=_publish_session_end,
             on_idle_disconnect=lambda: _end_serving("idle timeout"),
-            on_session_closed=lambda: _end_serving("session closed (device left)"),
+            on_session_closed=lambda: _end_serving("session closed"),
         )
     else:
         pipeline = StreamingPipeline(
@@ -489,7 +489,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             # and its audio track in the room for the whole drain is what used
             # to give a re-entering client "agent_speaking state but NO audio"
             # (real-device confirmed).
-            on_session_closed=lambda: _end_serving("session closed (device left)"),
+            on_session_closed=lambda: _end_serving("session closed"),
         )
 
     async def _end_serving_cb(reason: str) -> None:

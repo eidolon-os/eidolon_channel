@@ -7,18 +7,24 @@ rooms exist.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 from datetime import timedelta
 from typing import Any
 
-from livekit import api
+from eidolon_sdk.biz.contracts import (
+    SESSION_CLOSE_TYPE,
+    SESSION_CONTROL_TOPIC,
+    SESSION_OPEN_TYPE,
+)
+from livekit import api, rtc
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 from livekit.protocol.agent import JobStatus
 
 from ...contracts import BackendUnavailable, ChannelNotServable, canonical_json
-from ...ports import ChannelGrant
+from ...ports import ChannelGrant, ServingRequest, ServingRequestSink
 from ...spec import ChannelSpec
 from .config import LiveKitConfig
 
@@ -29,6 +35,10 @@ BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
 _ENDED_JOB_STATUSES = frozenset({JobStatus.JS_SUCCESS, JobStatus.JS_FAILED})
+_SESSION_REQUESTS = {
+    SESSION_OPEN_TYPE: ServingRequest.START,
+    SESSION_CLOSE_TYPE: ServingRequest.STOP,
+}
 
 
 def _is_spent(dispatch: Any) -> bool:
@@ -49,6 +59,10 @@ class LiveKitChannelAdapter:
     def __init__(self, config: LiveKitConfig) -> None:
         self._config = config
         self._api: api.LiveKitAPI | None = None
+        # One connection per channel we are listening to, keyed by room so that
+        # re-stating a channel converges instead of stacking up connections.
+        self._listeners: dict[str, rtc.Room] = {}
+        self._requests: set[asyncio.Task[None]] = set()
 
     @property
     def name(self) -> str:
@@ -109,7 +123,11 @@ class LiveKitChannelAdapter:
         # The handle carries the agent name because opening a session later must
         # not depend on re-deriving the spec: by then the manifest that produced
         # it is the Hub's, not ours, and may already have moved on.
-        handle: dict[str, Any] = {"room": room}
+        # `device` is the identity the token above was minted for, so a request
+        # arriving here can be checked against the only participant entitled to
+        # make one — the room also holds the agent, which speaks on the same
+        # topic in the other direction.
+        handle: dict[str, Any] = {"room": room, "device": spec.device_id}
         if spec.serving is not None:
             handle["agent"] = spec.serving.agent_name
         return ChannelGrant(
@@ -132,7 +150,141 @@ class LiveKitChannelAdapter:
         except Exception as exc:
             raise BackendUnavailable("LiveKit room revocation failed") from exc
 
+    # -- hearing the device -----------------------------------------------
+
+    async def accept_requests(
+        self, handle: dict[str, Any], *, sink: ServingRequestSink
+    ) -> None:
+        """Sit in the room so the device can say when it wants to be served.
+
+        The device is already connected and already authenticated here, by the
+        very credential this adapter minted for it, so its own channel is the
+        one place it can ask for a conversation without being issued a second
+        identity anywhere else.
+
+        Joins hidden: this participant is infrastructure. The agent selects the
+        runtime actor from who is visibly in the room, and a listener that
+        showed up there would be something for it to reason about.
+        """
+        room = str(handle.get("room") or "")
+        device = str(handle.get("device") or "")
+        if not room or not device:
+            raise ChannelNotServable("channel handle cannot identify its device")
+        if room in self._listeners:
+            return
+        connection = rtc.Room()
+
+        @connection.on("data_received")
+        def _received(packet: Any) -> None:
+            request = self._requested(packet, device=device, room=room)
+            if request is not None:
+                self._dispatch_request(sink, request, room=room)
+
+        try:
+            await connection.connect(self._rtc_url(), self._listener_token(room))
+        except Exception as exc:
+            raise BackendUnavailable("LiveKit channel could not be listened to") from exc
+        self._listeners[room] = connection
+        logger.info("listening to room=%s for device=%s", room, device)
+
+    async def stop_accepting(self, handle: dict[str, Any]) -> None:
+        connection = self._listeners.pop(str(handle.get("room") or ""), None)
+        if connection is None:
+            return
+        try:
+            await connection.disconnect()
+        except Exception:  # pragma: no cover - defensive; the channel is going anyway
+            logger.debug("failed to leave room=%s cleanly", handle.get("room"), exc_info=True)
+
+    def _requested(self, packet: Any, *, device: str, room: str) -> ServingRequest | None:
+        """Read one packet as a request, or decide it is not one.
+
+        Everything here is untrusted input, and the topic carries traffic in
+        both directions, so anything that is not one of exactly two things said
+        by someone entitled to say it is silently not a request.
+
+        Rejects senders known to be someone else, rather than admitting only the
+        sender known to be the device — because for roughly the first three
+        seconds after a device connects, packets arrive attributed to nobody
+        (measured against a real server: delivered immediately, sender resolved
+        at +3s). Admitting only the known device would throw away exactly the
+        requests of a device that connects and immediately wants to talk.
+
+        That leniency is bounded by who can be in this room at all: every
+        credential for it is minted by this adapter, for one device and one
+        agent, and the agent only ever speaks the other direction of this topic
+        — which is not a request type and is rejected below on that ground.
+        """
+        if getattr(packet, "topic", None) != SESSION_CONTROL_TOPIC:
+            return None
+        identity = getattr(getattr(packet, "participant", None), "identity", None)
+        if identity is not None and identity != device:
+            return None
+        try:
+            body = json.loads(bytes(packet.data))
+        except (TypeError, ValueError, UnicodeDecodeError):
+            logger.warning("room=%s sent an unreadable session request", room)
+            return None
+        if not isinstance(body, dict):
+            return None
+        return _SESSION_REQUESTS.get(body.get("type"))
+
+    def _dispatch_request(
+        self, sink: ServingRequestSink, request: ServingRequest, *, room: str
+    ) -> None:
+        """Hand the request on without blocking the room's callback.
+
+        Held in a set until done: a bare task is only weakly referenced, and one
+        collected mid-flight would drop a conversation the device asked for.
+        """
+
+        async def _carry() -> None:
+            try:
+                await sink(request)
+            except Exception:
+                logger.exception("room=%s could not act on %s", room, request.value)
+
+        task = asyncio.create_task(_carry())
+        self._requests.add(task)
+        task.add_done_callback(self._requests.discard)
+
+    def _rtc_url(self) -> str:
+        """Reach LiveKit the short way, not by the address devices are given.
+
+        The client URL is a public name that has to resolve and terminate TLS
+        from wherever a device happens to be; this process sits next to the
+        server and has no reason to go out and come back.
+        """
+        api_url = self._config.api_url
+        for scheme, replacement in (("https://", "wss://"), ("http://", "ws://")):
+            if api_url.startswith(scheme):
+                return replacement + api_url[len(scheme) :]
+        return api_url
+
+    def _listener_token(self, room: str) -> str:
+        return (
+            api.AccessToken(self._config.api_key, self._config.api_secret)
+            .with_identity(f"channel-provider-{room}")
+            .with_grants(
+                api.VideoGrants(
+                    room_join=True,
+                    room=room,
+                    can_publish=False,
+                    can_subscribe=False,
+                    can_publish_data=False,
+                    hidden=True,
+                )
+            )
+            .to_jwt()
+        )
+
     async def shutdown(self) -> None:
+        for room in list(self._listeners):
+            await self.stop_accepting({"room": room})
+        for task in list(self._requests):
+            task.cancel()
+        if self._requests:
+            await asyncio.gather(*self._requests, return_exceptions=True)
         if self._api is not None:
             await self._api.aclose()
             self._api = None

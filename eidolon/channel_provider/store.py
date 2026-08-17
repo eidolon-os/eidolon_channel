@@ -114,6 +114,18 @@ class ChannelProviderStore:
             ).fetchone()
         return self._provision(row)
 
+    def active_provisions(self) -> list[StoredProvision]:
+        """Every channel that is currently open, across all devices.
+
+        The durable answer to "what is this Provider responsible for right now",
+        which is what a restart has to rebuild itself from.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM provider_provisions WHERE status = 'active'"
+            ).fetchall()
+        return [value for value in map(self._provision, rows) if value is not None]
+
     def create_provision(self, value: StoredProvision) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

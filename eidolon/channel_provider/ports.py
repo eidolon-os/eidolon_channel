@@ -16,10 +16,28 @@ start a session, which is why serving is its own pair of operations here.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol
 
 from .spec import ChannelSpec
+
+
+class ServingRequest(Enum):
+    """What a device asked of its own channel.
+
+    Statements of desired state, not events: the same one twice means the same
+    thing once, so a device that retries after a lost reply is safe.
+    """
+
+    START = "start"
+    STOP = "stop"
+
+
+# Called by an adapter when the device on a channel asks. Awaited, so an adapter
+# learns whether the request was actually carried out.
+ServingRequestSink = Callable[[ServingRequest], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +109,26 @@ class ChannelAdapter(Protocol):
         The device keeps its place and its credentials; only the served part of
         the channel ends. Must tolerate there being no session to close.
         """
+        ...
+
+    async def accept_requests(
+        self, handle: dict[str, Any], *, sink: ServingRequestSink
+    ) -> None:
+        """Start carrying this channel's own requests to be served.
+
+        A channel runs both ways, so the device can say "serve me now" over the
+        one connection it already has and is already known on — it needs no
+        second address and no second credential to be heard. How that reaches
+        us is this adapter's business: a message on a topic, a frame, a callback
+        from the transport. What comes back out is only ever a `ServingRequest`.
+
+        Idempotent per handle, because the service re-states what it wants
+        watched on every provision and on every restart.
+        """
+        ...
+
+    async def stop_accepting(self, handle: dict[str, Any]) -> None:
+        """Stop listening to this channel. Must tolerate one never watched."""
         ...
 
     async def shutdown(self) -> None:

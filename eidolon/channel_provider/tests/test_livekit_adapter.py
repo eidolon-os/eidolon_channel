@@ -5,10 +5,16 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from eidolon_sdk.biz.contracts import (
+    SESSION_CLOSE_TYPE,
+    SESSION_CONTROL_TOPIC,
+    SESSION_OPEN_TYPE,
+)
 from livekit.protocol.agent import JobStatus
 
 from eidolon.channel_provider.adapters.livekit import LiveKitChannelAdapter
 from eidolon.channel_provider.contracts import ChannelNotServable, ProvisionRequest
+from eidolon.channel_provider.ports import ServingRequest
 from eidolon.channel_provider.spec import derive_spec
 
 from .helpers import audio_manifest, encoded, livekit_config, provision_payload
@@ -229,6 +235,101 @@ async def test_a_spent_dispatch_cannot_block_the_device_forever(statuses) -> Non
 
     assert client.agent_dispatch.deleted == [(room, "AD_spent")]
     assert client.agent_dispatch.created == [(room, "eidolon")]
+
+
+def _packet(*, topic: str, identity: str, body) -> SimpleNamespace:
+    data = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return SimpleNamespace(
+        topic=topic, data=data, participant=SimpleNamespace(identity=identity)
+    )
+
+
+@pytest.mark.parametrize(
+    ("wire_type", "expected"),
+    [(SESSION_OPEN_TYPE, ServingRequest.START), (SESSION_CLOSE_TYPE, ServingRequest.STOP)],
+)
+async def test_the_device_can_ask_over_its_own_channel(wire_type, expected) -> None:
+    adapter, _ = _adapter()
+    packet = _packet(
+        topic=SESSION_CONTROL_TOPIC,
+        identity="device-1",
+        body={"schema_v": 1, "type": wire_type},
+    )
+
+    assert adapter._requested(packet, device="device-1", room="r") is expected
+
+
+async def test_a_request_from_a_device_not_yet_known_is_still_the_devices() -> None:
+    """The first seconds after a device connects are exactly when it asks.
+
+    Measured against a real server: its packets are delivered at once but are
+    attributed to nobody for ~3s. Requiring a resolved sender would drop the
+    opening request of every device that connects and wants to talk.
+    """
+    adapter, _ = _adapter()
+    packet = _packet(
+        topic=SESSION_CONTROL_TOPIC, identity=None, body={"type": SESSION_OPEN_TYPE}
+    )
+
+    assert adapter._requested(packet, device="device-1", room="r") is ServingRequest.START
+
+
+@pytest.mark.parametrize(
+    "packet",
+    [
+        # The agent shares this topic, speaking the other way.
+        _packet(
+            topic=SESSION_CONTROL_TOPIC,
+            identity="agent-7",
+            body={"type": SESSION_OPEN_TYPE},
+        ),
+        # Right sender, but this topic is not where requests live.
+        _packet(
+            topic="eidolon.audio_state",
+            identity="device-1",
+            body={"type": SESSION_OPEN_TYPE},
+        ),
+        # The other direction of this very topic must never loop back.
+        _packet(
+            topic=SESSION_CONTROL_TOPIC,
+            identity="device-1",
+            body={"type": "session_end", "reason": "user_left"},
+        ),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity="device-1", body=b"not json"),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity="device-1", body=["not", "an", "object"]),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity="device-1", body={}),
+    ],
+)
+async def test_only_this_device_saying_one_of_two_things_is_a_request(packet) -> None:
+    """Untrusted input on a shared topic: anything else is simply not a request."""
+    adapter, _ = _adapter()
+
+    assert adapter._requested(packet, device="device-1", room="r") is None
+
+
+async def test_a_handle_that_cannot_name_its_device_is_not_listened_to() -> None:
+    """Without knowing who the device is, no arrival can be attributed to it."""
+    adapter, _ = _adapter()
+
+    with pytest.raises(ChannelNotServable):
+        await adapter.accept_requests({"room": "r"}, sink=_unused_sink)
+
+
+async def test_listening_reaches_livekit_the_short_way() -> None:
+    """A device's public address is not this process's route to the server."""
+    adapter, _ = _adapter()
+
+    assert adapter._rtc_url() == "ws://127.0.0.1:7880"
+
+
+async def test_stopping_a_channel_never_listened_to_is_success() -> None:
+    adapter, _ = _adapter()
+
+    await adapter.stop_accepting({"room": "never-watched"})
+
+
+async def _unused_sink(request) -> None:  # pragma: no cover - never reached
+    raise AssertionError("no request should have been carried")
 
 
 async def test_a_channel_that_carries_no_conversation_cannot_hold_a_session() -> None:

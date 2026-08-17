@@ -101,9 +101,15 @@ def create_app(
             logger.warning("LiveKit unavailable during channel session change")
             return _json({"error": "channel backend unavailable"}, status=503)
 
+    async def start(_app: web.Application) -> None:
+        # Channels outlive this process, so resuming what we were listening to
+        # is part of coming up, not something a later request can stand in for.
+        await service.start()
+
     async def close(_app: web.Application) -> None:
         await service.shutdown()
 
+    app.on_startup.append(start)
     app.router.add_get("/health", health)
     app.router.add_post("/v1/device-channels/provision", provision)
     app.router.add_post("/v1/device-channels/revoke", revoke)

@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from eidolon.channel_provider.adapters.livekit import LiveKitConfig
-from eidolon.channel_provider.ports import ChannelGrant
+from eidolon.channel_provider.ports import ChannelGrant, ServingRequest, ServingRequestSink
 from eidolon.channel_provider.spec import ChannelSpec
 
 
@@ -89,6 +89,10 @@ class FakeAdapter:
         self.closed: list[dict[str, Any]] = []
         self.sessions_opened: list[dict[str, Any]] = []
         self.sessions_closed: list[dict[str, Any]] = []
+        # Channels currently listened to, keyed the way a real adapter would
+        # have to key them, so re-stating one cannot leave two behind.
+        self.watched: dict[str, ServingRequestSink] = {}
+        self.stopped: list[dict[str, Any]] = []
         self.health_calls = 0
         self.shutdown_calls = 0
 
@@ -120,6 +124,17 @@ class FakeAdapter:
 
     async def close_session(self, handle: dict[str, Any]) -> None:
         self.sessions_closed.append(handle)
+
+    async def accept_requests(self, handle: dict[str, Any], *, sink) -> None:
+        self.watched[handle["resource"]] = sink
+
+    async def stop_accepting(self, handle: dict[str, Any]) -> None:
+        if self.watched.pop(handle.get("resource", ""), None) is not None:
+            self.stopped.append(handle)
+
+    async def device_asks(self, device_id: str, request: ServingRequest) -> None:
+        """Play the device speaking over its own channel."""
+        await self.watched[f"{self._name}:{device_id}"](request)
 
     async def shutdown(self) -> None:
         self.shutdown_calls += 1

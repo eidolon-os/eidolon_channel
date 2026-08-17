@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import sqlite3
 import time
 from collections.abc import Callable
@@ -24,10 +25,12 @@ from .contracts import (
     UnknownChannel,
     canonical_json,
 )
-from .ports import ChannelGrant
+from .ports import ChannelGrant, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
 from .spec import ChannelSpec, MediaFlow, derive_spec
 from .store import ChannelProviderStore, StoredProvision
+
+logger = logging.getLogger("eidolon.channel_provider.service")
 
 
 class ChannelProviderService:
@@ -50,6 +53,24 @@ class ChannelProviderService:
     def initialize(self) -> None:
         self._store.initialize()
 
+    async def start(self) -> None:
+        """Begin listening to every channel that is already open.
+
+        A device's channel outlives this process, and so does its right to ask
+        to be heard. Nothing tells us on restart which devices are mid-silence,
+        so we re-state what we want watched from the only durable record there
+        is. Failing to reach one channel must not cost the others theirs.
+        """
+        for stored in self._store.active_provisions():
+            try:
+                await self._accept_requests(stored)
+            except Exception:
+                logger.exception(
+                    "channel for device=%s could not be watched; it can still be "
+                    "served by request, but the device cannot ask",
+                    stored.device_id,
+                )
+
     async def healthcheck(self) -> None:
         self._store.healthcheck()
         await self._registry.healthcheck()
@@ -58,6 +79,25 @@ class ChannelProviderService:
         await self._registry.shutdown()
 
     async def provision(self, request: ProvisionRequest) -> str:
+        response = await self._provision(request)
+        # Outside the lock: listening opens a connection of the adapter's own,
+        # and a device asking to talk on one channel must not wait behind
+        # another device's enrollment.
+        stored = self._store.active_device(request.hub_id, request.device.device_id)
+        if stored is not None:
+            try:
+                await self._accept_requests(stored)
+            except Exception:
+                # The channel is real and can still be served by request; only
+                # the device's own way of asking is missing. Losing the grant
+                # over that would be the worse trade.
+                logger.exception(
+                    "channel for device=%s provisioned but cannot be watched",
+                    stored.device_id,
+                )
+        return response
+
+    async def _provision(self, request: ProvisionRequest) -> str:
         async with self._lock:
             stored = self._store.provision(request.operation_id)
             if stored is not None:
@@ -158,7 +198,11 @@ class ChannelProviderService:
             active = self._store.active_device(request.hub_id, request.device_id)
             if active is not None:
                 adapter = self._registry.get(active.adapter_name)
-                await adapter.close(json.loads(active.handle_json))
+                handle = json.loads(active.handle_json)
+                # Stop listening before the channel goes: a revoked device has
+                # no standing to ask for anything, least of all on the way out.
+                await adapter.stop_accepting(handle)
+                await adapter.close(handle)
             response = canonical_json(
                 {
                     "operation": "channel.revoked-device",
@@ -187,16 +231,36 @@ class ChannelProviderService:
         return await self._serve(request, serving=False)
 
     async def _serve(self, request: SessionRequest, *, serving: bool) -> str:
-        """Converge the device's channel onto served or unserved.
+        channel = await self._converge_serving(
+            request.hub_id, request.device_id, serving=serving
+        )
+        return canonical_json(
+            {
+                "operation": "channel.opened-session" if serving else "channel.closed-session",
+                "device_id": request.device_id,
+                "channel_id": channel.channel_id,
+                "serving": serving,
+            }
+        )
+
+    async def _converge_serving(
+        self, hub_id: str, device_id: str, *, serving: bool
+    ) -> StoredProvision:
+        """Converge one device's channel onto served or unserved.
+
+        The single place a conversation starts or stops, whether the device
+        asked over its own channel or something else asked on its behalf. Both
+        arrive here saying only which device and which way, because that is all
+        either of them knows.
 
         Takes the same lock as provision and revocation so that reading the
         channel and acting on it cannot straddle a revocation — otherwise a
         device could be granted a conversation on a channel that was withdrawn
-        a moment earlier. Nothing is written: a session is a statement of
-        desired state the adapter converges onto, not an event to record.
+        a moment earlier. Nothing is written: this is a statement of desired
+        state the adapter converges onto, not an event to record.
         """
         async with self._lock:
-            active = self._store.active_device(request.hub_id, request.device_id)
+            active = self._store.active_device(hub_id, device_id)
             if active is None:
                 raise UnknownChannel("device has no active channel")
             adapter = self._registry.get(active.adapter_name)
@@ -205,13 +269,29 @@ class ChannelProviderService:
                 await adapter.open_session(handle)
             else:
                 await adapter.close_session(handle)
-        return canonical_json(
-            {
-                "operation": "channel.opened-session" if serving else "channel.closed-session",
-                "device_id": request.device_id,
-                "channel_id": active.channel_id,
-                "serving": serving,
-            }
+            return active
+
+    def _sink_for(self, hub_id: str, device_id: str) -> ServingRequestSink:
+        """Bind a channel's requests to the device it can only ever speak for.
+
+        The adapter reports what was asked, never who asked it: a request that
+        arrived on this channel is by construction this device's, so identity
+        comes from the channel we chose to listen to rather than from anything
+        the message claims.
+        """
+
+        async def _requested(request: ServingRequest) -> None:
+            await self._converge_serving(
+                hub_id, device_id, serving=request is ServingRequest.START
+            )
+
+        return _requested
+
+    async def _accept_requests(self, stored: StoredProvision) -> None:
+        adapter = self._registry.get(stored.adapter_name)
+        await adapter.accept_requests(
+            json.loads(stored.handle_json),
+            sink=self._sink_for(stored.hub_id, stored.device_id),
         )
 
     def _response(

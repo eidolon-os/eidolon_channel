@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -39,6 +40,23 @@ _SESSION_REQUESTS = {
     SESSION_OPEN_TYPE: ServingRequest.START,
     SESSION_CLOSE_TYPE: ServingRequest.STOP,
 }
+_REJOIN_BASE_DELAY = 1.0
+_REJOIN_MAX_DELAY = 30.0
+
+
+@dataclass
+class _Listening:
+    """One channel this adapter has undertaken to carry requests for.
+
+    Outlives any particular connection to it, which is the point: the promise is
+    to the channel, and a connection is only how it is currently being kept.
+    """
+
+    device: str
+    sink: ServingRequestSink
+    connection: Any = None
+    retry: asyncio.Task[None] | None = None
+    attempt: int = 0
 
 
 def _is_spent(dispatch: Any) -> bool:
@@ -61,7 +79,7 @@ class LiveKitChannelAdapter:
         self._api: api.LiveKitAPI | None = None
         # One connection per channel we are listening to, keyed by room so that
         # re-stating a channel converges instead of stacking up connections.
-        self._listeners: dict[str, rtc.Room] = {}
+        self._listeners: dict[str, _Listening] = {}
         self._requests: set[asyncio.Task[None]] = set()
 
     @property
@@ -172,27 +190,80 @@ class LiveKitChannelAdapter:
             raise ChannelNotServable("channel handle cannot identify its device")
         if room in self._listeners:
             return
+        watch = _Listening(device=device, sink=sink)
+        self._listeners[room] = watch
+        try:
+            await self._join(room, watch)
+        except Exception:
+            del self._listeners[room]
+            raise
+        logger.info("listening to room=%s for device=%s", room, device)
+
+    async def _join(self, room: str, watch: _Listening) -> None:
         connection = rtc.Room()
 
         @connection.on("data_received")
         def _received(packet: Any) -> None:
-            request = self._requested(packet, device=device, room=room)
+            request = self._requested(packet, device=watch.device, room=room)
             if request is not None:
-                self._dispatch_request(sink, request, room=room)
+                self._dispatch_request(watch.sink, request, room=room)
+
+        @connection.on("disconnected")
+        def _dropped(reason: Any = None) -> None:
+            # Losing this connection is silent in the worst way: the device goes
+            # on asking to be heard and nothing anywhere reports that nobody is
+            # listening. Measured against a real server — a listener dropped from
+            # its room does not come back on its own — so getting back in is this
+            # adapter's job for as long as it has said it is carrying the channel.
+            if self._listeners.get(room) is watch:
+                self._rejoin_later(room, watch, reason)
 
         try:
             await connection.connect(self._rtc_url(), self._listener_token(room))
         except Exception as exc:
             raise BackendUnavailable("LiveKit channel could not be listened to") from exc
-        self._listeners[room] = connection
-        logger.info("listening to room=%s for device=%s", room, device)
+        watch.connection = connection
+        watch.attempt = 0
+
+    def _rejoin_later(self, room: str, watch: _Listening, reason: Any) -> None:
+        if watch.retry is not None and not watch.retry.done():
+            return
+        watch.connection = None
+        delay = min(_REJOIN_MAX_DELAY, _REJOIN_BASE_DELAY * (2**watch.attempt))
+        watch.attempt += 1
+        logger.warning(
+            "lost room=%s (%s); rejoining in %.0fs (attempt %d)",
+            room, reason, delay, watch.attempt,
+        )
+
+        async def _rejoin() -> None:
+            while self._listeners.get(room) is watch:
+                await asyncio.sleep(delay)
+                if self._listeners.get(room) is not watch:
+                    return
+                try:
+                    await self._join(room, watch)
+                except Exception:
+                    logger.warning("room=%s still unreachable; will keep trying", room)
+                    watch.attempt += 1
+                    continue
+                logger.info("listening to room=%s again", room)
+                return
+
+        watch.retry = asyncio.create_task(_rejoin())
 
     async def stop_accepting(self, handle: dict[str, Any]) -> None:
-        connection = self._listeners.pop(str(handle.get("room") or ""), None)
-        if connection is None:
+        # Dropped from the registry first: the disconnect below fires the same
+        # event a failure does, and this is what tells them apart.
+        watch = self._listeners.pop(str(handle.get("room") or ""), None)
+        if watch is None:
+            return
+        if watch.retry is not None:
+            watch.retry.cancel()
+        if watch.connection is None:
             return
         try:
-            await connection.disconnect()
+            await watch.connection.disconnect()
         except Exception:  # pragma: no cover - defensive; the channel is going anyway
             logger.debug("failed to leave room=%s cleanly", handle.get("room"), exc_info=True)
 

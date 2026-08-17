@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from types import SimpleNamespace
@@ -13,7 +14,11 @@ from eidolon_sdk.biz.contracts import (
 from livekit.protocol.agent import JobStatus
 
 from eidolon.channel_provider.adapters.livekit import LiveKitChannelAdapter
-from eidolon.channel_provider.contracts import ChannelNotServable, ProvisionRequest
+from eidolon.channel_provider.contracts import (
+    BackendUnavailable,
+    ChannelNotServable,
+    ProvisionRequest,
+)
 from eidolon.channel_provider.ports import ServingRequest
 from eidolon.channel_provider.spec import derive_spec
 
@@ -305,6 +310,101 @@ async def test_only_this_device_saying_one_of_two_things_is_a_request(packet) ->
     adapter, _ = _adapter()
 
     assert adapter._requested(packet, device="device-1", room="r") is None
+
+
+class FakeRoom:
+    """Stands in for a LiveKit room connection, with its event callbacks."""
+
+    instances: list["FakeRoom"] = []
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, object] = {}
+        self.connected = False
+        self.disconnect_calls = 0
+        FakeRoom.instances.append(self)
+
+    def on(self, event: str):
+        def _register(fn):
+            self.handlers[event] = fn
+            return fn
+
+        return _register
+
+    async def connect(self, url, token):
+        self.connected = True
+
+    async def disconnect(self):
+        self.disconnect_calls += 1
+        self.connected = False
+
+    def drop(self, reason="SERVER_SHUTDOWN"):
+        """Play the server dropping this connection."""
+        self.connected = False
+        self.handlers["disconnected"](reason)
+
+
+async def _listening(monkeypatch, adapter, grant):
+    FakeRoom.instances.clear()
+    monkeypatch.setattr(
+        "eidolon.channel_provider.adapters.livekit.adapter.rtc.Room", FakeRoom
+    )
+    await adapter.accept_requests(grant.handle, sink=_unused_sink)
+    return FakeRoom.instances[-1]
+
+
+async def test_a_dropped_listener_gets_back_in(monkeypatch) -> None:
+    """A channel nobody is listening to fails silently — the device just is not heard."""
+    monkeypatch.setattr(
+        "eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0
+    )
+    adapter, _ = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    first = await _listening(monkeypatch, adapter, grant)
+
+    first.drop()
+    await asyncio.sleep(0.05)
+
+    assert len(FakeRoom.instances) == 2
+    assert FakeRoom.instances[-1].connected
+    await adapter.stop_accepting(grant.handle)
+
+
+async def test_giving_up_a_channel_is_not_mistaken_for_losing_it(monkeypatch) -> None:
+    """Leaving fires the same event a failure does; only intent tells them apart."""
+    monkeypatch.setattr(
+        "eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0
+    )
+    adapter, _ = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    connection = await _listening(monkeypatch, adapter, grant)
+
+    await adapter.stop_accepting(grant.handle)
+    connection.drop("CLIENT_INITIATED")
+    await asyncio.sleep(0.05)
+
+    assert len(FakeRoom.instances) == 1
+    assert adapter._listeners == {}
+
+
+async def test_a_channel_that_cannot_be_joined_is_not_left_half_watched(
+    monkeypatch,
+) -> None:
+    """A failed start must not look like a channel that is being listened to."""
+
+    class RefusingRoom(FakeRoom):
+        async def connect(self, url, token):
+            raise ConnectionError("no route to LiveKit")
+
+    adapter, _ = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    monkeypatch.setattr(
+        "eidolon.channel_provider.adapters.livekit.adapter.rtc.Room", RefusingRoom
+    )
+
+    with pytest.raises(BackendUnavailable):
+        await adapter.accept_requests(grant.handle, sink=_unused_sink)
+
+    assert adapter._listeners == {}
 
 
 async def test_a_handle_that_cannot_name_its_device_is_not_listened_to() -> None:

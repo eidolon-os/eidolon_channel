@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 MAX_REQUEST_BYTES = 256 * 1024
-BINDING_FORMAT = "application/vnd.eidolon.livekit-device+json;v=1"
 
 
 class ContractError(ValueError):
@@ -20,7 +19,15 @@ class IdempotencyConflict(RuntimeError):
 
 
 class BackendUnavailable(RuntimeError):
-    """LiveKit could not satisfy a control-plane operation."""
+    """The selected transport could not satisfy a control-plane operation."""
+
+
+class UnknownChannel(RuntimeError):
+    """The device named in the request has no channel to act on."""
+
+
+class ChannelNotServable(RuntimeError):
+    """The channel exists but was never provisioned to carry a conversation."""
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -223,6 +230,43 @@ class ProvisionRequest:
             hub_id=_text(root["hub_id"], name="hub_id", maximum=128),
             device=device,
             fingerprint=request_fingerprint(value),
+        )
+
+
+OPEN_SESSION = "channel.open-session"
+CLOSE_SESSION = "channel.close-session"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRequest:
+    """Start or end one stretch of conversation on an already-open channel.
+
+    Deliberately carries no `operation_id`. Provision and revocation are events
+    whose outcome must be replayable, so they are recorded and keyed. A session
+    request is not an event but a statement of desired state — served, or not —
+    and the adapter converges onto it. Two "open" requests mean one session, and
+    closing a channel nobody is serving is a success, so there is nothing a
+    replay key would protect.
+    """
+
+    operation: str
+    hub_id: str
+    device_id: str
+
+    @classmethod
+    def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
+        value = decode_json_object(raw)
+        root = _exact_object(
+            value,
+            name="session request",
+            required={"operation", "hub_id", "device_id"},
+        )
+        if root["operation"] != expected:
+            raise ContractError(f"operation must be {expected}")
+        return cls(
+            operation=expected,
+            hub_id=_text(root["hub_id"], name="hub_id", maximum=128),
+            device_id=_text(root["device_id"], name="device_id", maximum=128),
         )
 
 

@@ -61,6 +61,8 @@ class FullDuplexSessionLifecycle:
         session.on("error", pipeline._on_session_error)
         session.on("close", self._on_session_close)
 
+        room.on("disconnected", self._on_room_disconnected)
+
         pipeline._session_signals.register_vad_inference_callback()
 
         await pipeline._warmup_stages()
@@ -121,9 +123,14 @@ class FullDuplexSessionLifecycle:
         self._start_proactive_consumer()
 
         try:
-            await pipeline._session_closed_event.wait()
-            logger.info("[StreamingPipeline] session closed event received, exiting run()")
-            await self._delete_room_on_close()
+            if await self._await_conversation_end():
+                logger.info("[StreamingPipeline] session closed event received, exiting run()")
+                await self._end_serving_on_close()
+            else:
+                # Out of the room already: session_end would have nobody to
+                # reach, and the serving contract is withdrawn by the job's
+                # shutdown callback regardless of how the job got here.
+                logger.info("[StreamingPipeline] channel dropped us, exiting run()")
         except asyncio.CancelledError:
             logger.info("[StreamingPipeline] cancelled")
             raise
@@ -201,6 +208,39 @@ class FullDuplexSessionLifecycle:
         )
         return True
 
+    def _on_room_disconnected(self, reason: Any = None) -> None:
+        """Being dropped from the channel is the end of the conversation.
+
+        There is nothing left to listen to or speak into, so waiting for the
+        framework to reach the same conclusion only prolongs a metered speech
+        stream. Distinct from "reconnecting", which LiveKit reports separately —
+        this event means the room session is over, not interrupted.
+        """
+        logger.info("[lifecycle][StreamingPipeline] room disconnected reason=%s", reason)
+        self._pipeline._room_disconnected_event.set()
+
+    async def _await_conversation_end(self) -> bool:
+        """Wait for whichever ends this conversation first.
+
+        Returns True when the AgentSession closed (the device is still reachable,
+        so the close path may still speak to it) and False when the channel
+        dropped us (it cannot).
+        """
+        pipeline = self._pipeline
+        session_wait = asyncio.create_task(pipeline._session_closed_event.wait())
+        room_wait = asyncio.create_task(pipeline._room_disconnected_event.wait())
+        try:
+            done, pending = await asyncio.wait(
+                {session_wait, room_wait}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                task.result()
+            return session_wait in done
+        finally:
+            for task in (session_wait, room_wait):
+                task.cancel()
+            await asyncio.gather(session_wait, room_wait, return_exceptions=True)
+
     def _on_session_close(self, event: Any) -> None:
         """Wake run() so shutdown fires immediately on session close.
 
@@ -216,7 +256,7 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         reason = getattr(event, "reason", None)
         error = getattr(event, "error", None)
-        # Captured for _delete_room_on_close -> session_end reason: error
+        # Captured for _end_serving_on_close -> session_end reason: error
         # close -> "error", clean close -> "user_left".
         pipeline._close_reason = reason
         pipeline._close_error = error
@@ -241,8 +281,13 @@ class FullDuplexSessionLifecycle:
         pipeline._append_timeline_debug("session_closed")
         pipeline._session_closed_event.set()
 
-    async def _delete_room_on_close(self) -> None:
-        """Prompt room teardown on session close before provider shutdown drain."""
+    async def _end_serving_on_close(self) -> None:
+        """Give up this conversation promptly, before the provider shutdown drain.
+
+        What "giving up" costs the device is the caller's business, not ours —
+        the channel outlives the conversation, so this hook announces the end
+        and hands teardown to whoever owns the serving contract.
+        """
         pipeline = self._pipeline
         on_end = getattr(pipeline, "_on_session_end", None)
         if on_end is not None:
@@ -264,7 +309,7 @@ class FullDuplexSessionLifecycle:
         try:
             await cb()
         except Exception:
-            logger.exception("[StreamingPipeline] on_session_closed (prompt room delete) failed")
+            logger.exception("[StreamingPipeline] on_session_closed (prompt teardown) failed")
 
     def _start_proactive_consumer(self) -> None:
         """Spawn the background proactive-report stream (best-effort)."""

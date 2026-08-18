@@ -45,7 +45,7 @@ class IdleWatchdog:
         self._session_closed_event = session_closed_event
         self._on_idle_disconnect = on_idle_disconnect
         # Centralised session_end{reason} publisher (server.py). When provided, the
-        # watchdog routes its "the room is going away" notice through it with
+        # watchdog routes its "this conversation is over" notice through it with
         # ``idle_end_reason``, so every teardown path shares one idempotent
         # session_end emitter and one reason taxonomy. Falls back to a direct
         # publish when absent (keeps the unit-level watchdog usable standalone).
@@ -131,7 +131,7 @@ class IdleWatchdog:
             try:
                 await self._on_idle_disconnect()
             except Exception:
-                logger.exception("[IdleWatchdog] room-delete callback failed")
+                logger.exception("[IdleWatchdog] idle-teardown callback failed")
         else:
             session = self._get_session()
             if session is not None:
@@ -142,7 +142,7 @@ class IdleWatchdog:
         self._session_closed_event.set()
 
     async def notify_client_idle_timeout(self) -> None:
-        """Tell the client the session is ending (idle) before the room is deleted.
+        """Tell the client the session is ending (idle) before we stop serving it.
 
         An idle disconnect is a *normal* end of conversation, not a join failure —
         the client must be able to tell the difference (plan §3.2). We therefore
@@ -177,7 +177,7 @@ class IdleWatchdog:
             )
             logger.info(
                 "[lifecycle][IdleWatchdog] sent session_end reason=%s "
-                "room=%s (grace=%.2fs before delete)",
+                "room=%s (grace=%.2fs before teardown)",
                 reason,
                 self._room_name(),
                 self.disconnect_grace_sec,

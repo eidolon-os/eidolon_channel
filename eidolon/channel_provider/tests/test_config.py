@@ -4,7 +4,7 @@ import textwrap
 
 import pytest
 
-from eidolon.livekit.channel_provider.config import load_provider_config
+from eidolon.channel_provider.config import load_provider_config
 
 
 def _environment(monkeypatch, tmp_path, yaml_text: str) -> None:

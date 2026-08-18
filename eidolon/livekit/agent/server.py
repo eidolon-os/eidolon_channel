@@ -294,12 +294,11 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         livekit_room=room,
     )
 
-    from livekit import api as lk_api
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
-    # session_end{reason} — the room is going away; tell the still-connected
-    # client WHY so it can distinguish a normal end of conversation from a join
-    # failure (plan §3.2). reason ∈ {idle_normal_end, user_left, error,
+    # session_end{reason} — the conversation is ending while the device stays
+    # exactly where it is; tell it WHY so it can distinguish a normal end from a
+    # failure to be served (plan §3.2). reason ∈ {idle_normal_end, user_left, error,
     # superseded, proactive_done}. idle_normal_end is routed here by the idle
     # watchdog; user_left/error come from the job-shutdown path; superseded and
     # proactive_done are reserved for Phase 3. Idempotent: the first reason wins,
@@ -348,39 +347,68 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 exc_info=True,
             )
 
-    async def _delete_room(context: str) -> None:
-        # [lifecycle] is the grep anchor that aligns server room-teardown with the
-        # ESP32 controller's [lifecycle] logs by room_name + timestamp (plan Phase
-        # 0). context distinguishes a normal idle end ("idle timeout") from the
-        # job-shutdown path ("shutdown callback"); the pre-delete snapshot shows
-        # whether anyone was still in the room when we tore it down.
+    async def _end_serving(context: str) -> None:
+        """End this conversation by withdrawing our own dispatch, not the room.
+
+        The room is not ours to delete. It is the device's channel: the device
+        lives in it continuously and would lose its way back if we tore it down
+        at the end of a conversation. What we withdraw is the standing order
+        that put us here — which is also what makes this teardown terminal. A
+        dispatch left behind would have LiveKit hand us straight back a new job,
+        because the device is still sitting in the room, and the conversation we
+        just ended would restart itself.
+
+        [lifecycle] is the grep anchor that aligns server-side teardown with the
+        ESP32 controller's [lifecycle] logs by room_name + timestamp. context
+        distinguishes a normal idle end ("idle timeout") from the job-shutdown
+        path ("shutdown callback").
+        """
+        agent_name = getattr(getattr(ctx, "job", None), "agent_name", "") or ""
         try:
             remote = getattr(room, "remote_participants", {}) or {}
             local = getattr(room, "local_participant", None)
             logger.info(
-                "[lifecycle] deleting room=%s context=%s remote_participants=%d "
-                "remote_identities=%s local_identity=%s",
+                "[lifecycle] ending serving room=%s agent=%s context=%s "
+                "remote_participants=%d remote_identities=%s local_identity=%s",
                 room.name,
+                agent_name,
                 context,
                 len(remote),
                 list(remote.keys()),
                 getattr(local, "identity", None),
             )
         except Exception:  # pragma: no cover - logging must never break teardown
-            logger.debug("[lifecycle] pre-delete snapshot failed", exc_info=True)
+            logger.debug("[lifecycle] pre-teardown snapshot failed", exc_info=True)
+        if not agent_name:
+            # An unnamed job was never dispatched by name, so there is no
+            # standing order to withdraw and nothing here can end it.
+            logger.warning(
+                "[lifecycle] room=%s has no agent name; cannot end serving (context=%s)",
+                room.name,
+                context,
+            )
+            return
         try:
-            await ctx.api.room.delete_room(lk_api.DeleteRoomRequest(room=room.name))
-            logger.info("[lifecycle] room=%s deleted (context=%s)", room.name, context)
+            dispatches = await ctx.api.agent_dispatch.list_dispatch(room_name=room.name)
+            for dispatch in dispatches:
+                if dispatch.agent_name != agent_name:
+                    continue
+                await ctx.api.agent_dispatch.delete_dispatch(
+                    dispatch_id=dispatch.id, room_name=room.name
+                )
+                logger.info(
+                    "[lifecycle] room=%s dispatch=%s withdrawn (context=%s)",
+                    room.name,
+                    dispatch.id,
+                    context,
+                )
         except TwirpError as e:
             if e.code == TwirpErrorCode.NOT_FOUND:
-                logger.debug(
-                    "[Agent] room=%s already deleted by LiveKit auto-cleanup",
-                    room.name,
-                )
+                logger.debug("[Agent] room=%s dispatch already gone", room.name)
                 return
-            logger.exception("[Agent] failed to delete room=%s (%s)", room.name, context)
+            logger.exception("[Agent] failed to end serving room=%s (%s)", room.name, context)
         except Exception:
-            logger.exception("[Agent] failed to delete room=%s (%s)", room.name, context)
+            logger.exception("[Agent] failed to end serving room=%s (%s)", room.name, context)
 
     # Resolve the session-metadata bus (interaction_mode + session_intent) from
     # the device-declared token metadata in one read, then derive a per-session
@@ -416,8 +444,8 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             observability=cfg.observability,
             session_intent=session_intent,
             on_session_end=_publish_session_end,
-            on_idle_disconnect=lambda: _delete_room("idle timeout"),
-            on_session_closed=lambda: _delete_room("session closed (device left)"),
+            on_idle_disconnect=lambda: _end_serving("idle timeout"),
+            on_session_closed=lambda: _end_serving("session closed"),
         )
     else:
         pipeline = StreamingPipeline(
@@ -446,37 +474,38 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             avatar_enabled=avatar_enabled,
             avatar_config=cfg.avatar,
             core_config=cfg.core,
-            # Idle watchdog disconnect: delete the room so the still-connected
-            # client is actively kicked (ROOM_DELETED) and the job's
-            # shutdown_fut resolves — session.aclose() alone leaves the client
-            # in a dead room and the job hanging on shutdown_fut.
-            on_idle_disconnect=lambda: _delete_room("idle timeout"),
+            # Idle watchdog disconnect: withdrawing the dispatch is what makes
+            # the job's shutdown_fut resolve — session.aclose() alone would
+            # leave the job hanging on it. The device is untouched and stays in
+            # its channel, which is the point.
+            on_idle_disconnect=lambda: _end_serving("idle timeout"),
             # The idle watchdog routes its client notice through this as
-            # reason=idle_normal_end (sent before the grace + delete above).
+            # reason=idle_normal_end (sent before the grace + teardown above).
             on_session_end=_publish_session_end,
-            # On session close (device left / error), delete the room PROMPTLY —
-            # before the slow STT/TTS shutdown drain — so this fixed-name room
-            # (device-<id>) is gone before a rapid re-JOIN. Otherwise the old
-            # agent + its audio track linger here for the whole drain; an
-            # auto_subscribe=false client re-joining subscribes to that stale
-            # track and gets "in room + agent_speaking state but NO audio"
-            # (real-device confirmed: JOIN→X→quick JOIN → silent).
-            on_session_closed=lambda: _delete_room("session closed (device left)"),
+            # On session close (device left / error), withdraw PROMPTLY — before
+            # the slow STT/TTS shutdown drain. LiveKit removes us from the room
+            # as soon as the dispatch is gone, so the next session finds a clean
+            # room even while this job is still draining. Leaving a stale agent
+            # and its audio track in the room for the whole drain is what used
+            # to give a re-entering client "agent_speaking state but NO audio"
+            # (real-device confirmed).
+            on_session_closed=lambda: _end_serving("session closed"),
         )
 
-    async def _delete_room_cb(reason: str) -> None:
+    async def _end_serving_cb(reason: str) -> None:
         # The job is shutting down (user left, or an error tore the session down).
-        # Send session_end first so a client that is still connected learns the
-        # reason before ROOM_DELETED arrives. No-op if idle already sent
-        # idle_normal_end (idempotent). Map the framework reason to our taxonomy.
+        # Send session_end first so the device — which is still connected, and
+        # stays connected — learns why the conversation ended. No-op if idle
+        # already sent idle_normal_end (idempotent). Map the framework reason to
+        # our taxonomy.
         text = str(reason or "").lower()
         end_reason = (
             SESSION_END_ERROR if ("error" in text or "fail" in text) else SESSION_END_USER_LEFT
         )
         await _publish_session_end(end_reason)
-        await _delete_room("shutdown callback")
+        await _end_serving("shutdown callback")
 
-    ctx.add_shutdown_callback(_delete_room_cb)
+    ctx.add_shutdown_callback(_end_serving_cb)
     await pipeline.run(room)
 
 

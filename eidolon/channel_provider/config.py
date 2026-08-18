@@ -11,7 +11,9 @@ from urllib.parse import urlparse
 import yaml
 from dotenv import load_dotenv
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+from .adapters.livekit import LiveKitConfig
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SETTINGS = _REPO_ROOT / "config" / "channel-provider.yaml"
 _DEFAULT_ENV = _REPO_ROOT / "config" / ".env"
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -29,26 +31,14 @@ class StorageConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class LiveKitConfig:
-    api_url: str
-    client_url: str
-    api_key: str
-    api_secret: str
-    room_prefix: str = "eidolon-device"
-    agent_name: str = "eidolon"
-    grant_ttl_seconds: int = 1800
-    refresh_before_expiry_seconds: int = 120
-    interaction_mode: str = "full_duplex"
-    sample_rate: int = 16000
-    channels: int = 1
-
-
-@dataclass(frozen=True, slots=True)
 class ProviderConfig:
     http: HttpConfig
     storage: StorageConfig
     livekit: LiveKitConfig
     bearer_token: str
+    # Adapter names in the order this deployment prefers them. Selection walks
+    # this list and takes the first one that can carry the device's spec.
+    adapter_preference: tuple[str, ...] = ("livekit",)
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:
@@ -146,7 +136,9 @@ def load_provider_config() -> ProviderConfig:
     _load_environment()
     source = yaml.safe_load(_settings_path().read_text(encoding="utf-8")) or {}
     root = _mapping(_expand(source), "root")
-    _exact(root, name="root", allowed={"http", "storage", "livekit"})
+    _exact(root, name="root", allowed={"http", "storage", "livekit", "adapters"})
+    adapters = _mapping(root.get("adapters"), "adapters")
+    _exact(adapters, name="adapters", allowed={"preference"})
 
     http = _mapping(root.get("http"), "http")
     storage = _mapping(root.get("storage"), "storage")
@@ -163,7 +155,6 @@ def load_provider_config() -> ProviderConfig:
             "agent_name",
             "grant_ttl_seconds",
             "refresh_before_expiry_seconds",
-            "interaction_mode",
             "sample_rate",
             "channels",
         },
@@ -194,15 +185,22 @@ def load_provider_config() -> ProviderConfig:
 
     room_prefix = str(livekit.get("room_prefix", "eidolon-device")).strip()
     agent_name = str(livekit.get("agent_name", "eidolon")).strip()
-    interaction_mode = str(livekit.get("interaction_mode", "full_duplex")).strip()
     if (
         not room_prefix
         or len(room_prefix) > 48
         or not agent_name
         or len(agent_name) > 64
-        or interaction_mode not in {"full_duplex", "half_duplex"}
     ):
-        raise ValueError("LiveKit room, agent, or interaction-mode policy is invalid")
+        raise ValueError("LiveKit room or agent policy is invalid")
+
+    preference = adapters.get("preference", ["livekit"])
+    if (
+        not isinstance(preference, list)
+        or not preference
+        or not all(isinstance(name, str) and name.strip() for name in preference)
+        or len(set(preference)) != len(preference)
+    ):
+        raise ValueError("adapters.preference must be a non-empty list of distinct adapter names")
 
     return ProviderConfig(
         http=HttpConfig(host=host, port=port),
@@ -221,9 +219,9 @@ def load_provider_config() -> ProviderConfig:
             agent_name=agent_name,
             grant_ttl_seconds=ttl,
             refresh_before_expiry_seconds=refresh,
-            interaction_mode=interaction_mode,
             sample_rate=sample_rate,
             channels=channels,
         ),
         bearer_token=_required_secret("EIDOLON_CHANNEL_PROVIDER_TOKEN", minimum=32),
+        adapter_preference=tuple(name.strip() for name in preference),
     )

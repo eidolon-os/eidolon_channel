@@ -1,0 +1,85 @@
+# How Channel is operated, stated by Channel.
+#
+# Two units with different jobs: the Provider hands out room contracts and is
+# what Hub talks to while admitting a device; the worker is what actually joins
+# a room and speaks. They are separate processes because the Provider must stay
+# answerable while a worker is busy.
+#
+# The schema is eidolon_ops's contracts/component-ops/v1.schema.json;
+# tests/test_operations_contract.py checks these claims against this
+# repository's own configuration.
+
+schema_version = 1
+component_id = "eidolon_channel"
+contract_version = "1"
+
+[[units]]
+id = "eidolon-channel-provider"
+kind = "service"
+exec = ".venv/bin/eidolon-channel-provider"
+user = "eidolon"
+serves = ["channel_provider"]
+requires = ["eidolon-livekit"]
+after = ["local-fs.target", "network-online.target"]
+
+[[units]]
+id = "eidolon-channel"
+kind = "service"
+exec = ".venv/bin/python"
+user = "eidolon"
+serves = ["channel_worker"]
+requires = ["eidolon-livekit", "eidolon-agent"]
+after = ["local-fs.target", "network-online.target", "eidolon-data", "eidolon-kernel"]
+
+[ports.channel_provider]
+default = 8767
+bind = "loopback"
+purpose = "room contract directory"
+
+[ports.channel_worker]
+default = 8766
+bind = "loopback"
+purpose = "worker control and readiness"
+
+[[inputs]]
+name = "channel_env"
+install_path = "/etc/eidolon/channel.env"
+kind = "secret"
+source = "operator"
+owner = "root"
+group = "root"
+mode = "0600"
+required_by = ["eidolon-channel", "eidolon-channel-provider"]
+
+[[inputs]]
+name = "channel_settings"
+install_path = "/etc/eidolon/channel.yaml"
+kind = "settings"
+source = "operator"
+owner = "root"
+group = "eidolon"
+mode = "0640"
+required_by = ["eidolon-channel", "eidolon-channel-provider"]
+
+[[state.authority]]
+path = "/var/lib/eidolon/channel/provider.sqlite3"
+owner = "eidolon"
+group = "eidolon"
+backup = "sqlite-online"
+
+[[state.authority]]
+path = "/var/lib/eidolon/voiceprints"
+owner = "eidolon"
+group = "eidolon"
+backup = "none"
+uncovered_reason = """\
+voiceprint material has no declared snapshot; carrying it would need a decision \
+about whether enrolled voices may be restored onto a different Host at all, \
+which is a question about consent rather than about file copying\
+"""
+
+[state]
+runtime = ["/run/eidolon/channel", "/run/eidolon/channel-provider"]
+
+[reset]
+factory = ["/var/lib/eidolon/channel", "/var/lib/eidolon/voiceprints"]

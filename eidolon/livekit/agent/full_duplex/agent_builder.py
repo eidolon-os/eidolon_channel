@@ -22,7 +22,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
     class VoiceAgent(Agent):
         async def on_enter(self) -> None:
             # [lifecycle] welcome timestamp — anchors "welcome played" so Phase
-            # 0 can measure the gap to a later idle room-delete and confirm
+            # 0 can measure the gap to a later idle teardown and confirm
             # whether "回 JOIN after welcome" is the idle watchdog firing.
             room_name = getattr(getattr(pipeline, "_room", None), "name", None)
             welcome = pipeline._welcome_on_enter_text()

@@ -7,10 +7,13 @@ permissions, and securely clears cached token responses on revocation.
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger("eidolon.channel_provider.store")
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,8 +24,10 @@ class StoredProvision:
     device_id: str
     owner_id: str
     manifest_revision: str
-    active_room: str
-    control_room: str
+    # Which adapter opened this channel, and its own opaque handle for it.
+    # No layer above the adapter may interpret handle_json.
+    adapter_name: str
+    handle_json: str
     channel_id: str
     response_json: str
     expires_at_ms: int
@@ -53,7 +58,10 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1}:
+            if version == 1:
+                self._discard_unhonourable_provisions(connection)
+                version = 0
+            if version not in {0, 2}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
                 )
@@ -66,8 +74,8 @@ class ChannelProviderStore:
                     device_id TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
                     manifest_revision TEXT NOT NULL,
-                    active_room TEXT NOT NULL,
-                    control_room TEXT NOT NULL,
+                    adapter_name TEXT NOT NULL,
+                    handle_json TEXT NOT NULL,
                     channel_id TEXT NOT NULL,
                     response_json TEXT NOT NULL,
                     expires_at_ms INTEGER NOT NULL,
@@ -82,10 +90,44 @@ class ChannelProviderStore:
                     device_id TEXT NOT NULL,
                     response_json TEXT NOT NULL
                 );
-                PRAGMA user_version = 1;
+                PRAGMA user_version = 2;
                 """
             )
         os.chmod(self._path, 0o600)
+
+    @staticmethod
+    def _discard_unhonourable_provisions(connection: sqlite3.Connection) -> None:
+        """Let go of provisions recorded when a channel meant two rooms.
+
+        Every one of those rows caches the exact response the Hub was given, and
+        that response describes a voice room and a control room. Replaying it —
+        which is precisely what the record exists to do — would hand a device a
+        channel in a shape nothing serves any more. A record that cannot be
+        honoured is worse than no record, because only one of the two is
+        obviously missing.
+
+        Dropping them costs the Hub nothing it cannot redo: the devices they
+        describe re-provision on next contact, which is the same conclusion
+        their firmware reaches on its own when it refuses to read back a stored
+        pair of rooms.
+
+        Revocations are left alone. That table did not change shape, and a
+        device that was cut off should stay cut off through a schema change.
+        """
+        rows = connection.execute("SELECT COUNT(*) FROM provider_provisions").fetchone()[0]
+        logger.warning(
+            "discarding %d Channel Provider provision(s) recorded under the "
+            "two-room schema; their devices will re-provision",
+            rows,
+        )
+        connection.executescript(
+            """
+            DROP INDEX IF EXISTS uq_provider_active_device;
+            DROP TABLE IF EXISTS provider_provisions;
+            PRAGMA user_version = 0;
+            """
+        )
+        connection.commit()
 
     def healthcheck(self) -> None:
         with self._connect() as connection:
@@ -112,6 +154,18 @@ class ChannelProviderStore:
             ).fetchone()
         return self._provision(row)
 
+    def active_provisions(self) -> list[StoredProvision]:
+        """Every channel that is currently open, across all devices.
+
+        The durable answer to "what is this Provider responsible for right now",
+        which is what a restart has to rebuild itself from.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM provider_provisions WHERE status = 'active'"
+            ).fetchall()
+        return [value for value in map(self._provision, rows) if value is not None]
+
     def create_provision(self, value: StoredProvision) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -119,7 +173,7 @@ class ChannelProviderStore:
                 """
                 INSERT INTO provider_provisions (
                     operation_id, request_fingerprint, hub_id, device_id, owner_id,
-                    manifest_revision, active_room, control_room, channel_id,
+                    manifest_revision, adapter_name, handle_json, channel_id,
                     response_json, expires_at_ms, status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -130,8 +184,8 @@ class ChannelProviderStore:
                     value.device_id,
                     value.owner_id,
                     value.manifest_revision,
-                    value.active_room,
-                    value.control_room,
+                    value.adapter_name,
+                    value.handle_json,
                     value.channel_id,
                     value.response_json,
                     value.expires_at_ms,
@@ -145,6 +199,7 @@ class ChannelProviderStore:
         *,
         operation_id: str,
         request_fingerprint: str,
+        handle_json: str,
         response_json: str,
         expires_at_ms: int,
     ) -> None:
@@ -153,10 +208,10 @@ class ChannelProviderStore:
             cursor = connection.execute(
                 """
                 UPDATE provider_provisions
-                SET response_json = ?, expires_at_ms = ?
+                SET handle_json = ?, response_json = ?, expires_at_ms = ?
                 WHERE operation_id = ? AND request_fingerprint = ? AND status = 'active'
                 """,
-                (response_json, expires_at_ms, operation_id, request_fingerprint),
+                (handle_json, response_json, expires_at_ms, operation_id, request_fingerprint),
             )
             if cursor.rowcount != 1:
                 connection.rollback()
@@ -228,8 +283,8 @@ class ChannelProviderStore:
             device_id=row["device_id"],
             owner_id=row["owner_id"],
             manifest_revision=row["manifest_revision"],
-            active_room=row["active_room"],
-            control_room=row["control_room"],
+            adapter_name=row["adapter_name"],
+            handle_json=row["handle_json"],
             channel_id=row["channel_id"],
             response_json=row["response_json"],
             expires_at_ms=row["expires_at_ms"],

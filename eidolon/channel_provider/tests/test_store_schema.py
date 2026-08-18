@@ -21,7 +21,7 @@ _TWO_ROOM_SCHEMA = """
 CREATE TABLE provider_provisions (
     operation_id TEXT PRIMARY KEY,
     request_fingerprint TEXT NOT NULL,
-    hub_id TEXT NOT NULL,
+    owner_domain_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
     owner_id TEXT NOT NULL,
     manifest_revision TEXT NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE provider_provisions (
     status TEXT NOT NULL CHECK (status IN ('active', 'revoked'))
 );
 CREATE UNIQUE INDEX uq_provider_active_device
-ON provider_provisions(hub_id, device_id)
+ON provider_provisions(owner_domain_id, device_id)
 WHERE status = 'active';
 CREATE TABLE provider_revocations (
     operation_id TEXT PRIMARY KEY,
@@ -74,7 +74,7 @@ def test_a_two_room_database_does_not_stop_the_provider_starting(tmp_path) -> No
     ChannelProviderStore(path).initialize()
 
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
     columns = {
         row[1] for row in connection.execute("PRAGMA table_info(provider_provisions)")
     }

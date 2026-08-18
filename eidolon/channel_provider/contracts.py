@@ -180,7 +180,7 @@ class ProvisionDevice:
 @dataclass(frozen=True, slots=True)
 class ProvisionRequest:
     operation_id: str
-    hub_id: str
+    owner_domain_id: str
     device: ProvisionDevice
     fingerprint: str
 
@@ -190,7 +190,7 @@ class ProvisionRequest:
         root = _exact_object(
             value,
             name="provision request",
-            required={"operation", "operation_id", "hub_id", "device"},
+            required={"operation", "operation_id", "owner_domain_id", "device"},
         )
         if root["operation"] != "channel.provision-device":
             raise ContractError("operation must be channel.provision-device")
@@ -227,7 +227,7 @@ class ProvisionRequest:
         )
         return cls(
             operation_id=_text(root["operation_id"], name="operation_id", maximum=128),
-            hub_id=_text(root["hub_id"], name="hub_id", maximum=128),
+            owner_domain_id=_text(root["owner_domain_id"], name="owner_domain_id", maximum=128),
             device=device,
             fingerprint=request_fingerprint(value),
         )
@@ -250,7 +250,7 @@ class SessionRequest:
     """
 
     operation: str
-    hub_id: str
+    owner_domain_id: str
     device_id: str
 
     @classmethod
@@ -259,13 +259,13 @@ class SessionRequest:
         root = _exact_object(
             value,
             name="session request",
-            required={"operation", "hub_id", "device_id"},
+            required={"operation", "owner_domain_id", "device_id"},
         )
         if root["operation"] != expected:
             raise ContractError(f"operation must be {expected}")
         return cls(
             operation=expected,
-            hub_id=_text(root["hub_id"], name="hub_id", maximum=128),
+            owner_domain_id=_text(root["owner_domain_id"], name="owner_domain_id", maximum=128),
             device_id=_text(root["device_id"], name="device_id", maximum=128),
         )
 
@@ -273,7 +273,7 @@ class SessionRequest:
 @dataclass(frozen=True, slots=True)
 class RevokeRequest:
     operation_id: str
-    hub_id: str
+    owner_domain_id: str
     device_id: str
     reason: str = field(repr=False)
     fingerprint: str = ""
@@ -284,13 +284,13 @@ class RevokeRequest:
         root = _exact_object(
             value,
             name="revoke request",
-            required={"operation", "operation_id", "hub_id", "device_id", "reason"},
+            required={"operation", "operation_id", "owner_domain_id", "device_id", "reason"},
         )
         if root["operation"] != "channel.revoke-device":
             raise ContractError("operation must be channel.revoke-device")
         return cls(
             operation_id=_text(root["operation_id"], name="operation_id", maximum=128),
-            hub_id=_text(root["hub_id"], name="hub_id", maximum=128),
+            owner_domain_id=_text(root["owner_domain_id"], name="owner_domain_id", maximum=128),
             device_id=_text(root["device_id"], name="device_id", maximum=128),
             reason=_text(root["reason"], name="reason", maximum=256),
             fingerprint=request_fingerprint(value),

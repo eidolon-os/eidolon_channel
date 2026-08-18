@@ -83,7 +83,7 @@ class ChannelProviderService:
         # Outside the lock: listening opens a connection of the adapter's own,
         # and a device asking to talk on one channel must not wait behind
         # another device's enrollment.
-        stored = self._store.active_device(request.hub_id, request.device.device_id)
+        stored = self._store.active_device(request.owner_domain_id, request.device.device_id)
         if stored is not None:
             try:
                 await self._accept_requests(stored)
@@ -113,7 +113,7 @@ class ChannelProviderService:
                     return stored.response_json
                 return await self._refresh(request, stored, now)
 
-            active = self._store.active_device(request.hub_id, request.device.device_id)
+            active = self._store.active_device(request.owner_domain_id, request.device.device_id)
             if active is not None:
                 raise IdempotencyConflict(
                     "device already has an active Channel Provider operation"
@@ -134,7 +134,7 @@ class ChannelProviderService:
             value = StoredProvision(
                 operation_id=request.operation_id,
                 request_fingerprint=request.fingerprint,
-                hub_id=request.hub_id,
+                owner_domain_id=request.owner_domain_id,
                 device_id=request.device.device_id,
                 owner_id=request.device.owner_id,
                 manifest_revision=request.device.manifest_revision,
@@ -195,7 +195,7 @@ class ChannelProviderService:
                     )
                 return prior.response_json
 
-            active = self._store.active_device(request.hub_id, request.device_id)
+            active = self._store.active_device(request.owner_domain_id, request.device_id)
             if active is not None:
                 adapter = self._registry.get(active.adapter_name)
                 handle = json.loads(active.handle_json)
@@ -214,7 +214,7 @@ class ChannelProviderService:
                 self._store.complete_revocation(
                     operation_id=request.operation_id,
                     request_fingerprint=request.fingerprint,
-                    hub_id=request.hub_id,
+                    owner_domain_id=request.owner_domain_id,
                     device_id=request.device_id,
                     response_json=response,
                 )
@@ -232,7 +232,7 @@ class ChannelProviderService:
 
     async def _serve(self, request: SessionRequest, *, serving: bool) -> str:
         channel = await self._converge_serving(
-            request.hub_id, request.device_id, serving=serving
+            request.owner_domain_id, request.device_id, serving=serving
         )
         return canonical_json(
             {
@@ -244,7 +244,7 @@ class ChannelProviderService:
         )
 
     async def _converge_serving(
-        self, hub_id: str, device_id: str, *, serving: bool
+        self, owner_domain_id: str, device_id: str, *, serving: bool
     ) -> StoredProvision:
         """Converge one device's channel onto served or unserved.
 
@@ -260,7 +260,7 @@ class ChannelProviderService:
         state the adapter converges onto, not an event to record.
         """
         async with self._lock:
-            active = self._store.active_device(hub_id, device_id)
+            active = self._store.active_device(owner_domain_id, device_id)
             if active is None:
                 raise UnknownChannel("device has no active channel")
             adapter = self._registry.get(active.adapter_name)
@@ -271,7 +271,7 @@ class ChannelProviderService:
                 await adapter.close_session(handle)
             return active
 
-    def _sink_for(self, hub_id: str, device_id: str) -> ServingRequestSink:
+    def _sink_for(self, owner_domain_id: str, device_id: str) -> ServingRequestSink:
         """Bind a channel's requests to the device it can only ever speak for.
 
         The adapter reports what was asked, never who asked it: a request that
@@ -282,7 +282,7 @@ class ChannelProviderService:
 
         async def _requested(request: ServingRequest) -> None:
             await self._converge_serving(
-                hub_id, device_id, serving=request is ServingRequest.START
+                owner_domain_id, device_id, serving=request is ServingRequest.START
             )
 
         return _requested
@@ -291,7 +291,7 @@ class ChannelProviderService:
         adapter = self._registry.get(stored.adapter_name)
         await adapter.accept_requests(
             json.loads(stored.handle_json),
-            sink=self._sink_for(stored.hub_id, stored.device_id),
+            sink=self._sink_for(stored.owner_domain_id, stored.device_id),
         )
 
     def _response(
@@ -326,7 +326,7 @@ class ChannelProviderService:
     @staticmethod
     def _channel_id(request: ProvisionRequest) -> str:
         digest = hashlib.sha256(
-            f"{request.hub_id}\0{request.device.device_id}".encode()
+            f"{request.owner_domain_id}\0{request.device.device_id}".encode()
         ).hexdigest()[:24]
         return f"chan-{digest}"
 
@@ -334,7 +334,7 @@ class ChannelProviderService:
     def _require_same_provision(stored: StoredProvision, request: ProvisionRequest) -> None:
         if (
             stored.request_fingerprint != request.fingerprint
-            or stored.hub_id != request.hub_id
+            or stored.owner_domain_id != request.owner_domain_id
             or stored.device_id != request.device.device_id
         ):
             raise IdempotencyConflict("provision operation_id was reused with different content")

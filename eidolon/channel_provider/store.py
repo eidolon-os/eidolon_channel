@@ -20,7 +20,7 @@ logger = logging.getLogger("eidolon.channel_provider.store")
 class StoredProvision:
     operation_id: str
     request_fingerprint: str
-    hub_id: str
+    owner_domain_id: str
     device_id: str
     owner_id: str
     manifest_revision: str
@@ -58,10 +58,10 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version == 1:
+            if version in {1, 2}:
                 self._discard_unhonourable_provisions(connection)
                 version = 0
-            if version not in {0, 2}:
+            if version not in {0, 3}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
                 )
@@ -70,7 +70,7 @@ class ChannelProviderStore:
                 CREATE TABLE IF NOT EXISTS provider_provisions (
                     operation_id TEXT PRIMARY KEY,
                     request_fingerprint TEXT NOT NULL,
-                    hub_id TEXT NOT NULL,
+                    owner_domain_id TEXT NOT NULL,
                     device_id TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
                     manifest_revision TEXT NOT NULL,
@@ -82,7 +82,7 @@ class ChannelProviderStore:
                     status TEXT NOT NULL CHECK (status IN ('active', 'revoked'))
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_active_device
-                ON provider_provisions(hub_id, device_id)
+                ON provider_provisions(owner_domain_id, device_id)
                 WHERE status = 'active';
                 CREATE TABLE IF NOT EXISTS provider_revocations (
                     operation_id TEXT PRIMARY KEY,
@@ -90,21 +90,19 @@ class ChannelProviderStore:
                     device_id TEXT NOT NULL,
                     response_json TEXT NOT NULL
                 );
-                PRAGMA user_version = 2;
+                PRAGMA user_version = 3;
                 """
             )
         os.chmod(self._path, 0o600)
 
     @staticmethod
     def _discard_unhonourable_provisions(connection: sqlite3.Connection) -> None:
-        """Let go of provisions recorded when a channel meant two rooms.
+        """Drop rows that cannot satisfy the current authority identity.
 
-        Every one of those rows caches the exact response the Hub was given, and
-        that response describes a voice room and a control room. Replaying it —
-        which is precisely what the record exists to do — would hand a device a
-        channel in a shape nothing serves any more. A record that cannot be
-        honoured is worse than no record, because only one of the two is
-        obviously missing.
+        Version 1 cached the retired two-room response. Version 2 keyed active
+        devices by a replaceable Host. Neither row can be replayed under the V1
+        Owner Domain contract: changing its identity in-place would invent an
+        authority relationship that was never recorded.
 
         Dropping them costs the Hub nothing it cannot redo: the devices they
         describe re-provision on next contact, which is the same conclusion
@@ -117,7 +115,7 @@ class ChannelProviderStore:
         rows = connection.execute("SELECT COUNT(*) FROM provider_provisions").fetchone()[0]
         logger.warning(
             "discarding %d Channel Provider provision(s) recorded under the "
-            "two-room schema; their devices will re-provision",
+            "retired Host-bound schema; their devices will re-provision",
             rows,
         )
         connection.executescript(
@@ -143,14 +141,14 @@ class ChannelProviderStore:
             ).fetchone()
         return self._provision(row)
 
-    def active_device(self, hub_id: str, device_id: str) -> StoredProvision | None:
+    def active_device(self, owner_domain_id: str, device_id: str) -> StoredProvision | None:
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT * FROM provider_provisions
-                WHERE hub_id = ? AND device_id = ? AND status = 'active'
+                WHERE owner_domain_id = ? AND device_id = ? AND status = 'active'
                 """,
-                (hub_id, device_id),
+                (owner_domain_id, device_id),
             ).fetchone()
         return self._provision(row)
 
@@ -172,7 +170,7 @@ class ChannelProviderStore:
             connection.execute(
                 """
                 INSERT INTO provider_provisions (
-                    operation_id, request_fingerprint, hub_id, device_id, owner_id,
+                    operation_id, request_fingerprint, owner_domain_id, device_id, owner_id,
                     manifest_revision, adapter_name, handle_json, channel_id,
                     response_json, expires_at_ms, status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -180,7 +178,7 @@ class ChannelProviderStore:
                 (
                     value.operation_id,
                     value.request_fingerprint,
-                    value.hub_id,
+                    value.owner_domain_id,
                     value.device_id,
                     value.owner_id,
                     value.manifest_revision,
@@ -238,7 +236,7 @@ class ChannelProviderStore:
         *,
         operation_id: str,
         request_fingerprint: str,
-        hub_id: str,
+        owner_domain_id: str,
         device_id: str,
         response_json: str,
     ) -> None:
@@ -248,9 +246,9 @@ class ChannelProviderStore:
                 """
                 UPDATE provider_provisions
                 SET status = 'revoked', response_json = '', expires_at_ms = 0
-                WHERE hub_id = ? AND device_id = ? AND status = 'active'
+                WHERE owner_domain_id = ? AND device_id = ? AND status = 'active'
                 """,
-                (hub_id, device_id),
+                (owner_domain_id, device_id),
             )
             connection.execute(
                 """
@@ -279,7 +277,7 @@ class ChannelProviderStore:
         return StoredProvision(
             operation_id=row["operation_id"],
             request_fingerprint=row["request_fingerprint"],
-            hub_id=row["hub_id"],
+            owner_domain_id=row["owner_domain_id"],
             device_id=row["device_id"],
             owner_id=row["owner_id"],
             manifest_revision=row["manifest_revision"],

@@ -49,7 +49,7 @@ onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用
 1. 设备 Enrollment 后进入 `pending-approval`，不携带 Owner 认领 secret，也不要求屏幕。
 2. 持有 `hub-admin` 权限的管理员在 Hub 管理面选择 `owner_id` 并人工批准；普通 Owner 或
    `device-manager` 不能批准尚未绑定 Owner 的 pending 设备。
-3. Provider 把请求中的 `hub_id + device_id + owner_id` 固化到幂等记录和 LiveKit participant
+3. Provider 把请求中的 `owner_domain_id + device_id + owner_id` 固化到幂等记录和 LiveKit participant
    metadata。Provider 不重新实现 Hub 管理面授权，也不接受 Mobile 直连。
 4. Companion 不在 Channel Provider grant 中绑定。Device 可以先建立 Owner-scoped data
    connection；后续 Companion interaction 必须继续经过 Kernel/System Data runtime authority。
@@ -66,7 +66,7 @@ Hub 调用 `POST /v1/device-channels/provision`。`operation_id` 使用 handoff 
 {
   "operation": "channel.provision-device",
   "operation_id": "<enrollment_id>",
-  "hub_id": "<hub_id>",
+  "owner_domain_id": "<owner_domain_id>",
   "device": {
     "device_id": "<stable device id>",
     "owner_id": "<administrator-authorized owner id>",
@@ -139,13 +139,13 @@ metadata。两个 room 都由 Provider 通过 LiveKit 管理 API 显式创建。
 
 ## 幂等、重试与恢复
 
-- room 名和 `channel_id` 由 `SHA-256(hub_id, device_id)` 稳定派生，不含可猜测的 Owner
+- room 名和 `channel_id` 由 `SHA-256(owner_domain_id, device_id)` 稳定派生，不含可猜测的 Owner
   credential。
 - 相同 `operation_id` 加完全相同请求，在 token 刷新窗口外返回数据库中逐 byte 相同响应；
   Provider 重启后仍成立。
 - 距到期小于等于默认 120 秒时，相同请求在同一个 `operation_id` 下刷新 token；room 和
   `channel_id` 不变。这样 Hub/ESP 可以用稳定 enrollment 恢复，但不会永久复用 JWT。
-- 相同 `operation_id` 携带不同内容返回 409；同一个 `hub_id + device_id` 在未 revoke 前使用
+- 相同 `operation_id` 携带不同内容返回 409；同一个 `owner_domain_id + device_id` 在未 revoke 前使用
   另一 `operation_id` 也返回 409，避免并行 authority 覆盖。
 - LiveKit 暂时不可用返回 503；请求没有写入成功幂等记录，Hub 可以用原请求重试。
 - 合同错误返回 422，认证失败 401，错误响应和日志不包含 token 或 retrieval token。
@@ -161,7 +161,7 @@ Hub 调用 `POST /v1/device-channels/revoke`：
 {
   "operation": "channel.revoke-device",
   "operation_id": "<stable revocation request id>",
-  "hub_id": "<hub_id>",
+  "owner_domain_id": "<owner_domain_id>",
   "device_id": "<device_id>",
   "reason": "<bounded reason>"
 }

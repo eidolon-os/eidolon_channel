@@ -20,7 +20,7 @@ def test_provision_request_matches_hub_v1_contract() -> None:
     request = ProvisionRequest.parse(encoded(provision_payload()))
 
     assert request.operation_id == "enrollment-1"
-    assert request.hub_id == "hub-1"
+    assert request.owner_domain_id == "owner-1"
     assert request.device.device_id == "device-1"
     assert request.device.owner_id == "owner-1"
     assert request.device.manifest["media"][0]["kind"] == "audio"
@@ -41,7 +41,7 @@ def test_session_request_matches_hub_v1_contract() -> None:
     )
 
     assert request.operation == OPEN_SESSION
-    assert request.hub_id == "hub-1"
+    assert request.owner_domain_id == "owner-1"
     assert request.device_id == "device-1"
 
 
@@ -85,7 +85,10 @@ def test_provision_rejects_contract_drift(mutation) -> None:
 
 def test_contract_rejects_duplicate_json_keys() -> None:
     value = json.dumps(provision_payload(), separators=(",", ":"))
-    raw = value.replace('"hub_id":"hub-1"', '"hub_id":"hub-1","hub_id":"other"')
+    raw = value.replace(
+        '"owner_domain_id":"owner-1"',
+        '"owner_domain_id":"owner-1","owner_domain_id":"other"',
+    )
 
     with pytest.raises(ContractError, match="duplicate JSON field"):
         ProvisionRequest.parse(raw.encode())

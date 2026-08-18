@@ -47,7 +47,7 @@ def provision_payload(**device_overrides: Any) -> dict[str, Any]:
     return {
         "operation": "channel.provision-device",
         "operation_id": "enrollment-1",
-        "hub_id": "hub-1",
+        "owner_domain_id": "owner-1",
         "device": device,
     }
 
@@ -56,7 +56,7 @@ def revoke_payload(**overrides: Any) -> dict[str, Any]:
     value: dict[str, Any] = {
         "operation": "channel.revoke-device",
         "operation_id": "revoke-1",
-        "hub_id": "hub-1",
+        "owner_domain_id": "owner-1",
         "device_id": "device-1",
         "reason": "owner-request",
     }
@@ -67,7 +67,7 @@ def revoke_payload(**overrides: Any) -> dict[str, Any]:
 def session_payload(*, operation: str, **overrides: Any) -> dict[str, Any]:
     value: dict[str, Any] = {
         "operation": operation,
-        "hub_id": "hub-1",
+        "owner_domain_id": "owner-1",
         "device_id": "device-1",
     }
     value.update(overrides)

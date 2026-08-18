@@ -76,3 +76,16 @@ pytest -m integration
 ```bash
 ./scripts/gen_eidolon_agent_rpc.sh
 ```
+
+## License
+
+Copyright © 2026 Li Jinsong.
+
+Eidolon-owned material is available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE) for permitted noncommercial
+use. Commercial use requires a separate written license; contact
+[lijinsong@aimanthor.com](mailto:lijinsong@aimanthor.com).
+
+Files carrying their own Apache-2.0 or other third-party notices remain under
+those terms. See [LICENSING.md](LICENSING.md) and [NOTICE](NOTICE) for the
+precise scope and required notices.

@@ -92,6 +92,38 @@ async def test_provision_refreshes_only_near_expiry_with_stable_resources(tmp_pa
     )
 
 
+async def test_characterize_expired_active_operation_blocks_a_new_lifecycle(tmp_path) -> None:
+    """Record the deployed generation-blind lock before replacing its contract.
+
+    The legacy request cannot name a DeviceRef generation.  Once its credential
+    expires, the row remains active: replaying the same operation refreshes it,
+    while a new lifecycle operation for the same device collides with the
+    owner/device unique lock.
+    """
+    clock = [1_700_000_000_000]
+    service, store, backend = _service(tmp_path, clock)
+    legacy = ProvisionRequest.parse(encoded(provision_payload()))
+
+    first = await service.provision(legacy)
+    stored = store.provision(legacy.operation_id)
+    assert stored is not None
+    clock[0] = stored.expires_at_ms + 1
+    assert stored.status == "active"
+    assert stored.expires_at_ms < clock[0]
+
+    replayed = await service.provision(legacy)
+    assert replayed != first
+    assert len(backend.opened) == 2
+
+    new_lifecycle = provision_payload()
+    new_lifecycle["operation_id"] = "enrollment-new-generation"
+    with pytest.raises(
+        IdempotencyConflict,
+        match="device already has an active Channel Provider operation",
+    ):
+        await service.provision(ProvisionRequest.parse(encoded(new_lifecycle)))
+
+
 async def test_provision_rejects_operation_or_device_authority_reuse(tmp_path) -> None:
     clock = [1_700_000_000_000]
     service, _store, _backend = _service(tmp_path, clock)

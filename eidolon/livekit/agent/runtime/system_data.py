@@ -23,7 +23,14 @@ class SystemDataRuntimeResolver:
         self._http_client = http_client
 
     async def resolve_owner(self, owner_id: str):
-        snapshot = await self._client.get_owner_primary_runtime(owner_id)
+        """Who answers when the entrance named an Owner and no Companion.
+
+        The Owner's default, read from the pointer they set. This used to ask
+        for whichever Companion carried ``role='primary'`` — a flag that no
+        longer exists, because "which one is the default" became one field on
+        the Owner instead of a role competed for across Companion rows.
+        """
+        snapshot = await self._client.get_owner_default_runtime(owner_id)
         return snapshot.runtime_identity(device_id=None)
 
     async def resolve_companion(self, companion_id: str, *, device_id: str | None):

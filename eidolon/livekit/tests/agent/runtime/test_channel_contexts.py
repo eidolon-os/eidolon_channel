@@ -138,3 +138,95 @@ async def test_audio_token_resolver_rejects_unattached_device_before_signing():
     with pytest.raises(DeviceTokenResolverError, match="no companion"):
         await resolve()
     runtime.resolve_companion.assert_not_called()
+
+
+async def test_the_owner_entrance_gets_the_owners_default():
+    """Tier three of the resolution order, and the only place it applies.
+
+    "Which Companion answers when nothing named one" is one field on the Owner,
+    and this is the ingress that asks for it: a person talking through the app
+    named no body and no Companion.
+    """
+    runtime = AsyncMock()
+    runtime.resolve_owner.return_value = runtime_context()
+
+    context = await resolve_channel_context(
+        runtime=runtime,
+        mounts=AsyncMock(),
+        identity="owner-1",
+        metadata={"kind": "owner", "owner_id": "owner-1"},
+    )
+
+    assert isinstance(context, CompanionInteractionContext)
+    runtime.resolve_owner.assert_awaited_once_with("owner-1")
+    runtime.resolve_companion.assert_not_called()
+
+
+async def test_an_explicit_companion_outranks_the_devices_attachment():
+    """Tier one over tier two, on the same request.
+
+    The metadata is trusted only as far as the checks below: the resolved
+    Companion has to belong to the same Owner and the same device, so naming
+    one cannot reach across Owners.
+    """
+    mounts = AsyncMock()
+    mounts.resolve.return_value = DeviceConnectionContext(
+        owner_id="owner-1",
+        device_id="device-1",
+        mount_revision=7,
+        attached_companion_id="companion-attached",
+    )
+    runtime = AsyncMock()
+    runtime.resolve_companion.return_value = runtime_context(
+        device_id="device-1", companion_id="companion-asked-for"
+    )
+
+    context = await resolve_channel_context(
+        runtime=runtime,
+        mounts=mounts,
+        identity="device-1",
+        metadata={
+            "kind": "device",
+            "owner_id": "owner-1",
+            "companion_id": "companion-asked-for",
+        },
+    )
+
+    assert isinstance(context, CompanionInteractionContext)
+    runtime.resolve_companion.assert_awaited_once_with(
+        "companion-asked-for", device_id="device-1"
+    )
+
+
+async def test_an_unassigned_device_is_not_given_the_owners_default():
+    """The deliberate *absence* of a fallback, pinned so it stays deliberate.
+
+    A physical device with no attachment is a mounted body carrying nobody. It
+    would be easy to read "the default answers when nothing named a Companion"
+    as covering this too — and that reading is what must not happen: if an
+    unassigned speaker already spoke with the Owner's default, then assigning a
+    Companion to it would change nothing observable, and "which Eidolon is in
+    this device" would have two answers, the assignment and the fallback.
+
+    The Owner's default answers the *app* entrance, where there is no body to
+    assign. A body answers for whoever is assigned to it, or for nobody.
+    """
+    mounts = AsyncMock()
+    mounts.resolve.return_value = DeviceConnectionContext(
+        owner_id="owner-1",
+        device_id="device-1",
+        mount_revision=7,
+        attached_companion_id=None,
+    )
+    runtime = AsyncMock()
+
+    context = await resolve_channel_context(
+        runtime=runtime,
+        mounts=mounts,
+        identity="device-1",
+        metadata={"kind": "device", "owner_id": "owner-1"},
+    )
+
+    assert isinstance(context, DeviceConnectionContext)
+    runtime.resolve_owner.assert_not_called()
+    runtime.resolve_companion.assert_not_called()

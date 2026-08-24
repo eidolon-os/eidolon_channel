@@ -19,6 +19,13 @@ def document(**overrides):
         "operation": "kernel.device-mount",
         "device_id": "device-1",
         "owner_id": "owner-1",
+        "device_ref": {
+            "device_instance_id": "device-1",
+            "owner_domain_id": "owner-domain-1",
+            "owner_domain_generation": 2,
+            "claim_generation": 3,
+            "trust_epoch": 4,
+        },
         "attached_companion_id": None,
         "revision": 3,
         "created_at": "2026-08-05T00:00:00Z",
@@ -47,6 +54,8 @@ async def test_kernel_mount_client_is_owner_scoped_and_accepts_no_attachment():
         await http.aclose()
 
     assert context.device_id == "device-1"
+    assert str(context.device_ref.owner_domain_id) == "owner-domain-1"
+    assert context.owner_id == "owner-1"
     assert context.mount_revision == 3
     assert context.attached_companion_id is None
 
@@ -64,11 +73,28 @@ async def test_kernel_mount_client_rejects_contract_drift():
         await http.aclose()
 
 
+async def test_kernel_mount_client_rejects_device_ref_for_another_device():
+    async def handler(_request):
+        return httpx.Response(
+            200,
+            json=document(
+                device_ref={
+                    **document()["device_ref"],
+                    "device_instance_id": "device-2",
+                }
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = KernelMountHttpClient(base_url="http://kernel.test", http_client=http)
+        with pytest.raises(KernelMountContractError, match="values"):
+            await client.resolve(owner_id="owner-1", device_id="device-1")
+
+
 async def test_consumed_shape_matches_kernel_normative_mount_schema():
     workspace = Path(__file__).resolve().parents[6]
     schema_path = (
-        workspace
-        / "eidolon_kernel/eidolon_kernel/contracts/schemas/device-mount/mount.schema.json"
+        workspace / "eidolon_kernel/eidolon_kernel/contracts/schemas/device-mount/mount.schema.json"
     )
     if not schema_path.is_file():
         pytest.skip("sibling eidolon_kernel checkout is unavailable")

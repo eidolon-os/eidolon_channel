@@ -24,6 +24,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from eidolon_sdk.device_foundation.v1 import DeviceRef
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 from eidolon_sdk.biz.runtime import sign_runtime_token
 from eidolon_sdk.biz.system_data import SystemDataError
@@ -53,6 +54,7 @@ class DeviceConnectionContext:
 
     owner_id: str
     device_id: str
+    device_ref: DeviceRef
     mount_revision: int
     attached_companion_id: str | None = None
 

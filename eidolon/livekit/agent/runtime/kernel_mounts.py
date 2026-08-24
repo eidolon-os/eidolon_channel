@@ -7,6 +7,8 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from eidolon_sdk.device_foundation.v1 import DeviceRef
+from pydantic import ValidationError
 
 from .resolver import DeviceConnectionContext, DeviceTokenResolverError
 
@@ -14,6 +16,7 @@ _FIELDS = {
     "operation",
     "device_id",
     "owner_id",
+    "device_ref",
     "attached_companion_id",
     "revision",
     "created_at",
@@ -43,12 +46,17 @@ class KernelMountContractError(KernelMountError):
 def _connection(document: Any, *, owner_id: str, device_id: str) -> DeviceConnectionContext:
     if not isinstance(document, dict) or set(document) != _FIELDS:
         raise KernelMountContractError("Kernel Mount response fields do not match V1")
+    try:
+        device_ref = DeviceRef.model_validate(document["device_ref"])
+    except ValidationError as exc:
+        raise KernelMountContractError("Kernel Mount DeviceRef is invalid") from exc
     attached = document["attached_companion_id"]
     revision = document["revision"]
     if (
         document["operation"] != "kernel.device-mount"
         or document["owner_id"] != owner_id
         or document["device_id"] != device_id
+        or device_ref.device_instance_id != device_id
         or document["active"] is not True
         or not isinstance(revision, int)
         or isinstance(revision, bool)
@@ -61,6 +69,7 @@ def _connection(document: Any, *, owner_id: str, device_id: str) -> DeviceConnec
     return DeviceConnectionContext(
         owner_id=owner_id,
         device_id=device_id,
+        device_ref=device_ref,
         mount_revision=revision,
         attached_companion_id=attached,
     )
@@ -99,10 +108,7 @@ class KernelMountHttpClient:
         owner_id: str,
         device_id: str,
     ) -> DeviceConnectionContext:
-        path = (
-            f"{self._base_url}/device-mounts/resolve/"
-            f"{quote(device_id, safe='')}"
-        )
+        path = f"{self._base_url}/device-mounts/resolve/{quote(device_id, safe='')}"
         try:
             response = await http.get(
                 path,
@@ -112,13 +118,9 @@ class KernelMountHttpClient:
         except httpx.HTTPError as exc:
             raise KernelMountUnavailable(f"Kernel Mount GET failed: {exc}") from exc
         if response.status_code == 404:
-            raise KernelMountNotFound(
-                f"device {device_id!r} is not mounted for owner {owner_id!r}"
-            )
+            raise KernelMountNotFound(f"device {device_id!r} is not mounted for owner {owner_id!r}")
         if response.status_code != 200:
-            raise KernelMountUnavailable(
-                f"Kernel Mount GET returned HTTP {response.status_code}"
-            )
+            raise KernelMountUnavailable(f"Kernel Mount GET returned HTTP {response.status_code}")
         try:
             document = response.json()
         except ValueError as exc:

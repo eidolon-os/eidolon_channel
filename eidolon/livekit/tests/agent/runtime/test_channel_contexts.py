@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from eidolon_sdk.device_foundation.v1 import DeviceRef
 
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 from eidolon.livekit.agent.runtime.resolver import (
@@ -34,11 +35,22 @@ def room(metadata: str):
 pytestmark = pytest.mark.asyncio
 
 
+def device_ref(device_id: str = "device-1") -> DeviceRef:
+    return DeviceRef(
+        device_instance_id=device_id,
+        owner_domain_id="owner-domain-1",
+        owner_domain_generation=1,
+        claim_generation=1,
+        trust_epoch=1,
+    )
+
+
 async def test_unattached_device_resolves_to_device_connection_without_runtime_lookup():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id="device-1",
+        device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id=None,
     )
@@ -61,6 +73,7 @@ async def test_attached_device_resolves_complete_companion_interaction_context()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id="device-1",
+        device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id="companion-1",
     )
@@ -105,6 +118,7 @@ async def test_device_context_fails_closed_on_owner_mismatch():
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-2",
         device_id="device-1",
+        device_ref=device_ref(),
         mount_revision=1,
         attached_companion_id=None,
     )
@@ -123,6 +137,7 @@ async def test_audio_token_resolver_rejects_unattached_device_before_signing():
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id="device-1",
+        device_ref=device_ref(),
         mount_revision=1,
         attached_companion_id=None,
     )
@@ -173,6 +188,7 @@ async def test_an_explicit_companion_outranks_the_devices_attachment():
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id="device-1",
+        device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id="companion-attached",
     )
@@ -193,9 +209,7 @@ async def test_an_explicit_companion_outranks_the_devices_attachment():
     )
 
     assert isinstance(context, CompanionInteractionContext)
-    runtime.resolve_companion.assert_awaited_once_with(
-        "companion-asked-for", device_id="device-1"
-    )
+    runtime.resolve_companion.assert_awaited_once_with("companion-asked-for", device_id="device-1")
 
 
 async def test_an_unassigned_device_is_not_given_the_owners_default():
@@ -215,6 +229,7 @@ async def test_an_unassigned_device_is_not_given_the_owners_default():
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id="device-1",
+        device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id=None,
     )

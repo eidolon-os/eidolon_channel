@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from eidolon_sdk.device_foundation.v1 import DeviceRef
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity
 
 from eidolon.livekit.agent.runtime.resolver import DeviceConnectionContext
@@ -50,6 +51,13 @@ def _mounts() -> AsyncMock:
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-a",
         device_id="esp32-a",
+        device_ref=DeviceRef(
+            device_instance_id="esp32-a",
+            owner_domain_id="owner-domain-a",
+            owner_domain_generation=1,
+            claim_generation=1,
+            trust_epoch=1,
+        ),
         mount_revision=2,
         attached_companion_id="companion-a",
     )

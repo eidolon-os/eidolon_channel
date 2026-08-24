@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 
 import jwt
 import pytest
+from eidolon_sdk.device_foundation.v1 import DeviceRef
 
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 from eidolon_sdk.biz.runtime import RuntimeTokenVerifier
@@ -37,6 +38,13 @@ def _mounts(*, device_id: str = "esp32-007") -> AsyncMock:
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id=device_id,
+        device_ref=DeviceRef(
+            device_instance_id=device_id,
+            owner_domain_id="owner-domain-1",
+            owner_domain_generation=1,
+            claim_generation=1,
+            trust_epoch=1,
+        ),
         mount_revision=3,
         attached_companion_id="companion-1",
     )

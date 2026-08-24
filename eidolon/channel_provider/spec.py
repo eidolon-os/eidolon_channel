@@ -127,7 +127,9 @@ def _declared_interaction_mode(manifest: dict[str, Any]) -> str:
     return DEFAULT_INTERACTION_MODE
 
 
-def derive_spec(device: ProvisionDevice, *, agent_name: str) -> ChannelSpec:
+def derive_spec(
+    device: ProvisionDevice, *, device_instance_id: str, agent_name: str
+) -> ChannelSpec:
     """Turn one device's declaration into what its channel must provide."""
     manifest = device.manifest
     audio = _media_flow(manifest, "audio")
@@ -141,8 +143,8 @@ def derive_spec(device: ProvisionDevice, *, agent_name: str) -> ChannelSpec:
         else None
     )
     return ChannelSpec(
-        device_id=device.device_id,
-        owner_id=device.owner_id,
+        device_id=device_instance_id,
+        owner_id=str(device.owner_id),
         device_kind=device.device_kind,
         audio=audio,
         video=video,

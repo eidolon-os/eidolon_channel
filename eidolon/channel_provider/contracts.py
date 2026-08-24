@@ -7,6 +7,10 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+import rfc8785
+from eidolon_sdk.device_foundation.v1 import BusinessOwnerId, DeviceRef
+from pydantic import ValidationError
+
 MAX_REQUEST_BYTES = 256 * 1024
 
 
@@ -14,20 +18,70 @@ class ContractError(ValueError):
     """The caller did not send the exact v1 Provider contract."""
 
 
-class IdempotencyConflict(RuntimeError):
-    """An operation or device identity was reused with different authority."""
+class DomainError(RuntimeError):
+    """A stable Channel domain problem, independent of its transport mapping."""
+
+    code = "INTERNAL"
+    category = "internal"
+    retryable = False
+    http_status = 500
 
 
-class BackendUnavailable(RuntimeError):
+class IdempotencyConflict(DomainError):
+    code = "IDEMPOTENCY_CONFLICT"
+    category = "conflict"
+    http_status = 409
+
+
+class StaleGeneration(DomainError):
+    code = "STALE_GENERATION"
+    category = "conflict"
+    http_status = 409
+
+
+class InvalidTransition(DomainError):
+    code = "INVALID_TRANSITION"
+    category = "conflict"
+    http_status = 409
+
+
+class Unauthenticated(DomainError):
+    code = "UNAUTHENTICATED"
+    category = "auth"
+    http_status = 401
+
+
+class Forbidden(DomainError):
+    code = "FORBIDDEN"
+    category = "forbidden"
+    http_status = 403
+
+
+class ProviderUnavailable(DomainError):
+    code = "PROVIDER_UNAVAILABLE"
+    category = "unavailable"
+    retryable = True
+    http_status = 503
+
+
+class BackendUnavailable(ProviderUnavailable):
     """The selected transport could not satisfy a control-plane operation."""
 
 
-class UnknownChannel(RuntimeError):
+class UnknownChannel(DomainError):
     """The device named in the request has no channel to act on."""
 
+    code = "NOT_FOUND"
+    category = "missing"
+    http_status = 404
 
-class ChannelNotServable(RuntimeError):
+
+class ChannelNotServable(DomainError):
     """The channel exists but was never provisioned to carry a conversation."""
+
+    code = "INVALID_TRANSITION"
+    category = "conflict"
+    http_status = 409
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -52,11 +106,11 @@ def decode_json_object(raw: bytes) -> dict[str, Any]:
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return rfc8785.dumps(value).decode("utf-8")
 
 
 def request_fingerprint(value: dict[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(canonical_json(value).encode()).hexdigest()
+    return "sha256:" + hashlib.sha256(rfc8785.dumps(value)).hexdigest()
 
 
 def _exact_object(
@@ -169,8 +223,7 @@ def _manifest(value: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class ProvisionDevice:
-    device_id: str
-    owner_id: str
+    owner_id: BusinessOwnerId
     display_name: str
     device_kind: str
     manifest: dict[str, Any] = field(repr=False)
@@ -179,8 +232,9 @@ class ProvisionDevice:
 
 @dataclass(frozen=True, slots=True)
 class ProvisionRequest:
+    operation: str
     operation_id: str
-    owner_domain_id: str
+    device_ref: DeviceRef
     device: ProvisionDevice
     fingerprint: str
 
@@ -190,15 +244,16 @@ class ProvisionRequest:
         root = _exact_object(
             value,
             name="provision request",
-            required={"operation", "operation_id", "owner_domain_id", "device"},
+            required={"operation", "operation_id", "device_ref", "device"},
         )
-        if root["operation"] != "channel.provision-device":
-            raise ContractError("operation must be channel.provision-device")
+        if root["operation"] not in {"channel.provision-device", "channel.refresh-device"}:
+            raise ContractError(
+                "operation must be channel.provision-device or channel.refresh-device"
+            )
         device_value = _exact_object(
             root["device"],
             name="device",
             required={
-                "device_id",
                 "owner_id",
                 "display_name",
                 "device_kind",
@@ -206,18 +261,20 @@ class ProvisionRequest:
                 "manifest_revision",
             },
         )
+        try:
+            device_ref = DeviceRef.model_validate(root["device_ref"])
+            owner_id = BusinessOwnerId.model_validate(device_value["owner_id"])
+        except ValidationError as exc:
+            raise ContractError("device_ref or business owner id is invalid") from exc
         device = ProvisionDevice(
-            device_id=_text(device_value["device_id"], name="device.device_id", maximum=128),
-            owner_id=_text(device_value["owner_id"], name="device.owner_id", maximum=128),
+            owner_id=owner_id,
             display_name=_text(
                 device_value["display_name"],
                 name="device.display_name",
                 minimum=0,
                 maximum=256,
             ),
-            device_kind=_text(
-                device_value["device_kind"], name="device.device_kind", maximum=96
-            ),
+            device_kind=_text(device_value["device_kind"], name="device.device_kind", maximum=96),
             manifest=_manifest(device_value["manifest"]),
             manifest_revision=_text(
                 device_value["manifest_revision"],
@@ -226,11 +283,20 @@ class ProvisionRequest:
             ),
         )
         return cls(
+            operation=root["operation"],
             operation_id=_text(root["operation_id"], name="operation_id", maximum=128),
-            owner_domain_id=_text(root["owner_domain_id"], name="owner_domain_id", maximum=128),
+            device_ref=device_ref,
             device=device,
             fingerprint=request_fingerprint(value),
         )
+
+    @property
+    def owner_domain_id(self) -> str:
+        return str(self.device_ref.owner_domain_id)
+
+    @property
+    def device_id(self) -> str:
+        return self.device_ref.device_instance_id
 
 
 OPEN_SESSION = "channel.open-session"
@@ -250,8 +316,7 @@ class SessionRequest:
     """
 
     operation: str
-    owner_domain_id: str
-    device_id: str
+    device_ref: DeviceRef
 
     @classmethod
     def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
@@ -259,22 +324,32 @@ class SessionRequest:
         root = _exact_object(
             value,
             name="session request",
-            required={"operation", "owner_domain_id", "device_id"},
+            required={"operation", "device_ref"},
         )
         if root["operation"] != expected:
             raise ContractError(f"operation must be {expected}")
+        try:
+            device_ref = DeviceRef.model_validate(root["device_ref"])
+        except ValidationError as exc:
+            raise ContractError("device_ref is invalid") from exc
         return cls(
             operation=expected,
-            owner_domain_id=_text(root["owner_domain_id"], name="owner_domain_id", maximum=128),
-            device_id=_text(root["device_id"], name="device_id", maximum=128),
+            device_ref=device_ref,
         )
+
+    @property
+    def owner_domain_id(self) -> str:
+        return str(self.device_ref.owner_domain_id)
+
+    @property
+    def device_id(self) -> str:
+        return self.device_ref.device_instance_id
 
 
 @dataclass(frozen=True, slots=True)
 class RevokeRequest:
     operation_id: str
-    owner_domain_id: str
-    device_id: str
+    device_ref: DeviceRef
     reason: str = field(repr=False)
     fingerprint: str = ""
 
@@ -284,14 +359,25 @@ class RevokeRequest:
         root = _exact_object(
             value,
             name="revoke request",
-            required={"operation", "operation_id", "owner_domain_id", "device_id", "reason"},
+            required={"operation", "operation_id", "device_ref", "reason"},
         )
         if root["operation"] != "channel.revoke-device":
             raise ContractError("operation must be channel.revoke-device")
+        try:
+            device_ref = DeviceRef.model_validate(root["device_ref"])
+        except ValidationError as exc:
+            raise ContractError("device_ref is invalid") from exc
         return cls(
             operation_id=_text(root["operation_id"], name="operation_id", maximum=128),
-            owner_domain_id=_text(root["owner_domain_id"], name="owner_domain_id", maximum=128),
-            device_id=_text(root["device_id"], name="device_id", maximum=128),
+            device_ref=device_ref,
             reason=_text(root["reason"], name="reason", maximum=256),
             fingerprint=request_fingerprint(value),
         )
+
+    @property
+    def owner_domain_id(self) -> str:
+        return str(self.device_ref.owner_domain_id)
+
+    @property
+    def device_id(self) -> str:
+        return self.device_ref.device_instance_id

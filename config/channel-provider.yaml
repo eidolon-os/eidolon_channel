@@ -16,7 +16,6 @@ livekit:
   room_prefix: eidolon-device
   agent_name: eidolon
   grant_ttl_seconds: 1800
-  refresh_before_expiry_seconds: 120
   # Turn taking is declared by each device in its manifest, not fixed per
   # deployment: a process-wide value can only ever be wrong for every device
   # that disagrees with it.

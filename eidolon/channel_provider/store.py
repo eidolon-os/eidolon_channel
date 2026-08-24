@@ -1,45 +1,61 @@
-"""Provider-owned idempotency and credential state.
-
-Hub deliberately never persists opaque bindings. This SQLite file is therefore
-owned exclusively by the Channel Provider, created with restrictive filesystem
-permissions, and securely clears cached token responses on revocation.
-"""
+"""Generation-fenced Channel operation ledger and credential state."""
 
 from __future__ import annotations
 
-import logging
+import json
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger("eidolon.channel_provider.store")
+from eidolon_sdk.device_foundation.v1 import DeviceRef
+
+from .contracts import IdempotencyConflict, InvalidTransition, StaleGeneration
+
+SCHEMA_VERSION = 4
+PROVISION = "channel.provision-device"
+REFRESH = "channel.refresh-device"
+REVOKE = "channel.revoke-device"
 
 
 @dataclass(frozen=True, slots=True)
 class StoredProvision:
     operation_id: str
+    operation_kind: str
     request_fingerprint: str
-    owner_domain_id: str
-    device_id: str
+    device_ref: DeviceRef
     owner_id: str
     manifest_revision: str
-    # Which adapter opened this channel, and its own opaque handle for it.
-    # No layer above the adapter may interpret handle_json.
     adapter_name: str
     handle_json: str
     channel_id: str
     response_json: str
     expires_at_ms: int
     status: str
+    terminal_reason: str | None = None
+    created_at_ms: int = 0
+    updated_at_ms: int = 0
+
+    @property
+    def owner_domain_id(self) -> str:
+        return str(self.device_ref.owner_domain_id)
+
+    @property
+    def device_id(self) -> str:
+        return self.device_ref.device_instance_id
 
 
 @dataclass(frozen=True, slots=True)
 class StoredRevocation:
     operation_id: str
     request_fingerprint: str
-    device_id: str
+    device_ref: DeviceRef
     response_json: str
+
+    @property
+    def device_id(self) -> str:
+        return self.device_ref.device_instance_id
 
 
 class ChannelProviderStore:
@@ -58,177 +74,256 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version in {1, 2}:
-                self._discard_unhonourable_provisions(connection)
-                version = 0
-            if version not in {0, 3}:
+            if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
                 )
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS provider_provisions (
-                    operation_id TEXT PRIMARY KEY,
-                    request_fingerprint TEXT NOT NULL,
-                    owner_domain_id TEXT NOT NULL,
-                    device_id TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    manifest_revision TEXT NOT NULL,
-                    adapter_name TEXT NOT NULL,
-                    handle_json TEXT NOT NULL,
-                    channel_id TEXT NOT NULL,
-                    response_json TEXT NOT NULL,
-                    expires_at_ms INTEGER NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('active', 'revoked'))
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_active_device
-                ON provider_provisions(owner_domain_id, device_id)
-                WHERE status = 'active';
-                CREATE TABLE IF NOT EXISTS provider_revocations (
-                    operation_id TEXT PRIMARY KEY,
-                    request_fingerprint TEXT NOT NULL,
-                    device_id TEXT NOT NULL,
-                    response_json TEXT NOT NULL
-                );
-                PRAGMA user_version = 3;
-                """
-            )
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                if version in {1, 2, 3}:
+                    self._migrate_legacy(connection, version)
+                self._create_schema(connection)
+                self._validate_schema(connection)
+                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                connection.commit()
+            except Exception as exc:
+                connection.rollback()
+                raise RuntimeError("Channel Provider schema migration failed closed") from exc
         os.chmod(self._path, 0o600)
 
     @staticmethod
-    def _discard_unhonourable_provisions(connection: sqlite3.Connection) -> None:
-        """Drop rows that cannot satisfy the current authority identity.
-
-        Version 1 cached the retired two-room response. Version 2 keyed active
-        devices by a replaceable Host. Neither row can be replayed under the V1
-        Owner Domain contract: changing its identity in-place would invent an
-        authority relationship that was never recorded.
-
-        Dropping them costs the Hub nothing it cannot redo: the devices they
-        describe re-provision on next contact, which is the same conclusion
-        their firmware reaches on its own when it refuses to read back a stored
-        pair of rooms.
-
-        Revocations are left alone. That table did not change shape, and a
-        device that was cut off should stay cut off through a schema change.
-        """
-        rows = connection.execute("SELECT COUNT(*) FROM provider_provisions").fetchone()[0]
-        logger.warning(
-            "discarding %d Channel Provider provision(s) recorded under the "
-            "retired Host-bound schema; their devices will re-provision",
-            rows,
-        )
-        connection.executescript(
+    def _create_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
             """
-            DROP INDEX IF EXISTS uq_provider_active_device;
-            DROP TABLE IF EXISTS provider_provisions;
-            PRAGMA user_version = 0;
+            CREATE TABLE IF NOT EXISTS provider_operations (
+                operation_id TEXT NOT NULL,
+                operation_kind TEXT NOT NULL CHECK (operation_kind IN (
+                    'channel.provision-device', 'channel.refresh-device',
+                    'channel.revoke-device'
+                )),
+                request_fingerprint TEXT NOT NULL,
+                device_instance_id TEXT NOT NULL,
+                owner_domain_id TEXT NOT NULL,
+                owner_domain_generation INTEGER NOT NULL CHECK (owner_domain_generation >= 1),
+                claim_generation INTEGER NOT NULL CHECK (claim_generation >= 1),
+                trust_epoch INTEGER NOT NULL CHECK (trust_epoch >= 1),
+                owner_id TEXT NOT NULL DEFAULT '', manifest_revision TEXT NOT NULL DEFAULT '',
+                adapter_name TEXT NOT NULL DEFAULT '', handle_json TEXT NOT NULL DEFAULT '',
+                channel_id TEXT NOT NULL DEFAULT '', response_json TEXT NOT NULL,
+                expires_at_ms INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL CHECK (status IN (
+                    'active', 'expired', 'fenced', 'revoked', 'completed'
+                )),
+                terminal_reason TEXT, created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (
+                    device_instance_id, owner_domain_id, owner_domain_generation,
+                    claim_generation, trust_epoch, operation_kind, operation_id
+                )
+            )
             """
         )
-        connection.commit()
+
+    @staticmethod
+    def _validate_schema(connection: sqlite3.Connection) -> None:
+        required = {
+            "operation_id",
+            "operation_kind",
+            "request_fingerprint",
+            "device_instance_id",
+            "owner_domain_id",
+            "owner_domain_generation",
+            "claim_generation",
+            "trust_epoch",
+            "response_json",
+            "status",
+            "terminal_reason",
+        }
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(provider_operations)")
+        }
+        if not required <= columns:
+            missing = ",".join(sorted(required - columns))
+            raise RuntimeError(f"provider_operations is missing canonical columns: {missing}")
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_active_device
+            ON provider_operations(owner_domain_id, device_instance_id)
+            WHERE status = 'active'"""
+        )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS ix_provider_device_generation
+            ON provider_operations(owner_domain_id, device_instance_id,
+            owner_domain_generation, claim_generation, trust_epoch)"""
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS provider_migration_audit (
+                source_schema_version INTEGER NOT NULL, source_table TEXT NOT NULL,
+                source_key TEXT NOT NULL, record_json TEXT NOT NULL,
+                terminal_reason TEXT NOT NULL, migrated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (source_schema_version, source_table, source_key)
+            )
+            """
+        )
+
+    @staticmethod
+    def _migrate_legacy(connection: sqlite3.Connection, version: int) -> None:
+        """Fence generation-blind v1-v3 rows into audit-only storage."""
+        ChannelProviderStore._create_schema(connection)
+        ChannelProviderStore._validate_schema(connection)
+        migrated_at_ms = time.time_ns() // 1_000_000
+        for table in ("provider_provisions", "provider_revocations"):
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if exists is None:
+                raise RuntimeError(f"legacy schema {version} is missing {table}")
+            for index, row in enumerate(connection.execute(f"SELECT * FROM {table}")):
+                record = dict(row)
+                for secret in ("handle_json", "response_json"):
+                    if record.get(secret):
+                        record[secret] = "<redacted>"
+                source_key = str(record.get("operation_id") or index)
+                connection.execute(
+                    """INSERT INTO provider_migration_audit VALUES
+                    (?, ?, ?, ?, 'legacy_generation_unknown_fenced', ?)""",
+                    (
+                        version,
+                        table,
+                        source_key,
+                        json.dumps(record, sort_keys=True, separators=(",", ":")),
+                        migrated_at_ms,
+                    ),
+                )
+        connection.execute("DROP INDEX IF EXISTS uq_provider_active_device")
+        connection.execute("DROP TABLE provider_provisions")
+        connection.execute("DROP TABLE provider_revocations")
 
     def healthcheck(self) -> None:
         with self._connect() as connection:
-            value = connection.execute("SELECT 1").fetchone()[0]
-        if value != 1:
-            raise RuntimeError("Channel Provider database health check failed")
+            if connection.execute("SELECT 1").fetchone()[0] != 1:
+                raise RuntimeError("Channel Provider database health check failed")
 
-    def provision(self, operation_id: str) -> StoredProvision | None:
+    def expire_credentials(self, now_ms: int) -> int:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = self._expire(connection, now_ms)
+            connection.commit()
+            return cursor.rowcount
+
+    def operation(
+        self, device_ref: DeviceRef, operation_kind: str, operation_id: str
+    ) -> StoredProvision | None:
+        with self._connect() as connection:
+            row = self._select_operation(connection, device_ref, operation_kind, operation_id)
+        return self._stored(row)
+
+    def assert_not_stale(self, device_ref: DeviceRef) -> None:
+        with self._connect() as connection:
+            latest = self._latest_generation(connection, device_ref)
+        if latest is not None and self._generation(device_ref) < latest:
+            raise StaleGeneration("operation targets an older DeviceRef generation")
+
+    def active_device(self, device_ref: DeviceRef) -> StoredProvision | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM provider_provisions WHERE operation_id = ?",
-                (operation_id,),
+                """SELECT * FROM provider_operations
+                WHERE device_instance_id=? AND owner_domain_id=?
+                AND owner_domain_generation=? AND claim_generation=? AND trust_epoch=?
+                AND status='active'""",
+                self._ref_values(device_ref),
             ).fetchone()
-        return self._provision(row)
+        return self._stored(row)
 
-    def active_device(self, owner_domain_id: str, device_id: str) -> StoredProvision | None:
+    def current_channel(self, device_ref: DeviceRef) -> StoredProvision | None:
+        """Latest credential-bearing row for this stable device identity."""
         with self._connect() as connection:
             row = connection.execute(
-                """
-                SELECT * FROM provider_provisions
-                WHERE owner_domain_id = ? AND device_id = ? AND status = 'active'
-                """,
-                (owner_domain_id, device_id),
+                """SELECT * FROM provider_operations WHERE owner_domain_id=?
+                AND device_instance_id=? AND operation_kind IN (?,?)
+                AND status IN ('active','expired')
+                ORDER BY owner_domain_generation DESC, claim_generation DESC,
+                trust_epoch DESC, created_at_ms DESC LIMIT 1""",
+                (
+                    str(device_ref.owner_domain_id),
+                    device_ref.device_instance_id,
+                    PROVISION,
+                    REFRESH,
+                ),
             ).fetchone()
-        return self._provision(row)
+        return self._stored(row)
 
     def active_provisions(self) -> list[StoredProvision]:
-        """Every channel that is currently open, across all devices.
-
-        The durable answer to "what is this Provider responsible for right now",
-        which is what a restart has to rebuild itself from.
-        """
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM provider_provisions WHERE status = 'active'"
+                "SELECT * FROM provider_operations WHERE status='active'"
             ).fetchall()
-        return [value for value in map(self._provision, rows) if value is not None]
+        return [item for item in map(self._stored, rows) if item is not None]
 
-    def create_provision(self, value: StoredProvision) -> None:
+    def create_provision(
+        self, value: StoredProvision, *, now_ms: int
+    ) -> tuple[StoredProvision, bool]:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                INSERT INTO provider_provisions (
-                    operation_id, request_fingerprint, owner_domain_id, device_id, owner_id,
-                    manifest_revision, adapter_name, handle_json, channel_id,
-                    response_json, expires_at_ms, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    value.operation_id,
-                    value.request_fingerprint,
-                    value.owner_domain_id,
-                    value.device_id,
-                    value.owner_id,
-                    value.manifest_revision,
-                    value.adapter_name,
-                    value.handle_json,
-                    value.channel_id,
-                    value.response_json,
-                    value.expires_at_ms,
-                    value.status,
-                ),
-            )
-            connection.commit()
-
-    def refresh_provision(
-        self,
-        *,
-        operation_id: str,
-        request_fingerprint: str,
-        handle_json: str,
-        response_json: str,
-        expires_at_ms: int,
-    ) -> None:
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            cursor = connection.execute(
-                """
-                UPDATE provider_provisions
-                SET handle_json = ?, response_json = ?, expires_at_ms = ?
-                WHERE operation_id = ? AND request_fingerprint = ? AND status = 'active'
-                """,
-                (handle_json, response_json, expires_at_ms, operation_id, request_fingerprint),
-            )
-            if cursor.rowcount != 1:
+            self._expire(connection, now_ms)
+            latest = self._latest_generation(connection, value.device_ref)
+            incoming = self._generation(value.device_ref)
+            if latest is not None and incoming < latest:
                 connection.rollback()
-                raise RuntimeError("provision authority changed during refresh")
+                raise StaleGeneration("operation targets an older DeviceRef generation")
+            prior = self._stored(
+                self._select_operation(
+                    connection, value.device_ref, value.operation_kind, value.operation_id
+                )
+            )
+            if prior is not None:
+                if prior.request_fingerprint != value.request_fingerprint:
+                    connection.rollback()
+                    raise IdempotencyConflict(
+                        "operation id was reused with a different canonical payload"
+                    )
+                connection.commit()
+                return prior, True
+            same_generation = self._generation_rows(connection, value.device_ref)
+            if latest == incoming:
+                if value.operation_kind == PROVISION and same_generation:
+                    connection.rollback()
+                    raise InvalidTransition(
+                        "the DeviceRef generation already has a provision lifecycle"
+                    )
+                if value.operation_kind == REFRESH and not any(
+                    row["operation_kind"] in {PROVISION, REFRESH} and row["status"] == "expired"
+                    for row in same_generation
+                ):
+                    connection.rollback()
+                    raise InvalidTransition(
+                        "credential refresh requires an expired current credential"
+                    )
+            elif value.operation_kind != PROVISION:
+                connection.rollback()
+                raise InvalidTransition("a new generation must begin with provision")
+            if latest is not None and incoming > latest:
+                self._fence_older(connection, value.device_ref, now_ms, "generation_advanced")
+            elif value.operation_kind == REFRESH:
+                connection.execute(
+                    """UPDATE provider_operations SET status='fenced',
+                    terminal_reason='credential_refreshed', handle_json='',
+                    expires_at_ms=0, updated_at_ms=?
+                    WHERE device_instance_id=? AND owner_domain_id=?
+                    AND owner_domain_generation=? AND claim_generation=? AND trust_epoch=?
+                    AND status='expired'""",
+                    (now_ms, *self._ref_values(value.device_ref)),
+                )
+            self._insert_operation(connection, value)
             connection.commit()
+            return value, False
 
-    def revocation(self, operation_id: str) -> StoredRevocation | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM provider_revocations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-        if row is None:
+    def revocation(self, device_ref: DeviceRef, operation_id: str) -> StoredRevocation | None:
+        value = self.operation(device_ref, REVOKE, operation_id)
+        if value is None:
             return None
         return StoredRevocation(
-            operation_id=row["operation_id"],
-            request_fingerprint=row["request_fingerprint"],
-            device_id=row["device_id"],
-            response_json=row["response_json"],
+            value.operation_id, value.request_fingerprint, value.device_ref, value.response_json
         )
 
     def complete_revocation(
@@ -236,55 +331,219 @@ class ChannelProviderStore:
         *,
         operation_id: str,
         request_fingerprint: str,
-        owner_domain_id: str,
-        device_id: str,
+        device_ref: DeviceRef,
         response_json: str,
-    ) -> None:
+        now_ms: int,
+    ) -> tuple[StoredRevocation, bool]:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                UPDATE provider_provisions
-                SET status = 'revoked', response_json = '', expires_at_ms = 0
-                WHERE owner_domain_id = ? AND device_id = ? AND status = 'active'
-                """,
-                (owner_domain_id, device_id),
+            self._expire(connection, now_ms)
+            latest = self._latest_generation(connection, device_ref)
+            incoming = self._generation(device_ref)
+            if latest is not None and incoming < latest:
+                connection.rollback()
+                raise StaleGeneration("revocation targets an older DeviceRef generation")
+            prior = self._stored(
+                self._select_operation(connection, device_ref, REVOKE, operation_id)
             )
+            if prior is not None:
+                if prior.request_fingerprint != request_fingerprint:
+                    connection.rollback()
+                    raise IdempotencyConflict(
+                        "revocation id was reused with a different canonical payload"
+                    )
+                connection.commit()
+                return StoredRevocation(
+                    prior.operation_id,
+                    prior.request_fingerprint,
+                    prior.device_ref,
+                    prior.response_json,
+                ), True
+            if latest is not None and incoming > latest:
+                self._fence_older(connection, device_ref, now_ms, "generation_advanced")
             connection.execute(
-                """
-                INSERT INTO provider_revocations (
-                    operation_id, request_fingerprint, device_id, response_json
-                ) VALUES (?, ?, ?, ?)
-                """,
-                (operation_id, request_fingerprint, device_id, response_json),
+                """UPDATE provider_operations SET status='revoked',
+                terminal_reason='claim_revoked', handle_json='', expires_at_ms=0,
+                updated_at_ms=? WHERE device_instance_id=? AND owner_domain_id=?
+                AND owner_domain_generation=? AND claim_generation=? AND trust_epoch=?
+                AND status IN ('active','expired')""",
+                (now_ms, *self._ref_values(device_ref)),
             )
+            stored = StoredProvision(
+                operation_id,
+                REVOKE,
+                request_fingerprint,
+                device_ref,
+                "",
+                "",
+                "",
+                "",
+                "",
+                response_json,
+                0,
+                "completed",
+                "claim_revoked",
+                now_ms,
+                now_ms,
+            )
+            self._insert_operation(connection, stored)
             connection.commit()
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return StoredRevocation(
+                operation_id, request_fingerprint, device_ref, response_json
+            ), False
+
+    @staticmethod
+    def _expire(connection: sqlite3.Connection, now_ms: int) -> sqlite3.Cursor:
+        return connection.execute(
+            """UPDATE provider_operations SET status='expired',
+            terminal_reason='credential_expired', updated_at_ms=?
+            WHERE status='active' AND expires_at_ms<=?""",
+            (now_ms, now_ms),
+        )
+
+    @staticmethod
+    def _fence_older(
+        connection: sqlite3.Connection, device_ref: DeviceRef, now_ms: int, reason: str
+    ) -> None:
+        incoming = ChannelProviderStore._generation(device_ref)
+        rows = connection.execute(
+            """SELECT rowid,* FROM provider_operations WHERE owner_domain_id=?
+            AND device_instance_id=? AND status IN ('active','expired')""",
+            (str(device_ref.owner_domain_id), device_ref.device_instance_id),
+        ).fetchall()
+        for row in rows:
+            generation = (
+                row["owner_domain_generation"],
+                row["claim_generation"],
+                row["trust_epoch"],
+            )
+            if generation < incoming:
+                connection.execute(
+                    """UPDATE provider_operations SET status='fenced', terminal_reason=?,
+                    handle_json='', expires_at_ms=0, updated_at_ms=? WHERE rowid=?""",
+                    (reason, now_ms, row["rowid"]),
+                )
+
+    @staticmethod
+    def _latest_generation(
+        connection: sqlite3.Connection, device_ref: DeviceRef
+    ) -> tuple[int, int, int] | None:
+        row = connection.execute(
+            """SELECT owner_domain_generation,claim_generation,trust_epoch
+            FROM provider_operations WHERE owner_domain_id=? AND device_instance_id=?
+            ORDER BY owner_domain_generation DESC,claim_generation DESC,trust_epoch DESC
+            LIMIT 1""",
+            (str(device_ref.owner_domain_id), device_ref.device_instance_id),
+        ).fetchone()
+        return None if row is None else (row[0], row[1], row[2])
+
+    @staticmethod
+    def _generation_rows(
+        connection: sqlite3.Connection, device_ref: DeviceRef
+    ) -> list[sqlite3.Row]:
+        return connection.execute(
+            """SELECT * FROM provider_operations WHERE device_instance_id=?
+            AND owner_domain_id=? AND owner_domain_generation=?
+            AND claim_generation=? AND trust_epoch=?""",
+            ChannelProviderStore._ref_values(device_ref),
+        ).fetchall()
+
+    @staticmethod
+    def _select_operation(
+        connection: sqlite3.Connection,
+        device_ref: DeviceRef,
+        operation_kind: str,
+        operation_id: str,
+    ) -> sqlite3.Row | None:
+        return connection.execute(
+            """SELECT * FROM provider_operations WHERE device_instance_id=?
+            AND owner_domain_id=? AND owner_domain_generation=? AND claim_generation=?
+            AND trust_epoch=? AND operation_kind=? AND operation_id=?""",
+            (*ChannelProviderStore._ref_values(device_ref), operation_kind, operation_id),
+        ).fetchone()
+
+    @staticmethod
+    def _insert_operation(connection: sqlite3.Connection, value: StoredProvision) -> None:
+        connection.execute(
+            """INSERT INTO provider_operations (
+            operation_id,operation_kind,request_fingerprint,device_instance_id,
+            owner_domain_id,owner_domain_generation,claim_generation,trust_epoch,
+            owner_id,manifest_revision,adapter_name,handle_json,channel_id,response_json,
+            expires_at_ms,status,terminal_reason,created_at_ms,updated_at_ms)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                value.operation_id,
+                value.operation_kind,
+                value.request_fingerprint,
+                *ChannelProviderStore._ref_values(value.device_ref),
+                value.owner_id,
+                value.manifest_revision,
+                value.adapter_name,
+                value.handle_json,
+                value.channel_id,
+                value.response_json,
+                value.expires_at_ms,
+                value.status,
+                value.terminal_reason,
+                value.created_at_ms,
+                value.updated_at_ms,
+            ),
+        )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._path, timeout=5.0)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
-        connection.execute("PRAGMA secure_delete = ON")
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("PRAGMA secure_delete=ON")
         return connection
 
     @staticmethod
-    def _provision(row: sqlite3.Row | None) -> StoredProvision | None:
+    def _ref_values(device_ref: DeviceRef) -> tuple[object, ...]:
+        return (
+            device_ref.device_instance_id,
+            str(device_ref.owner_domain_id),
+            device_ref.owner_domain_generation,
+            device_ref.claim_generation,
+            device_ref.trust_epoch,
+        )
+
+    @staticmethod
+    def _generation(device_ref: DeviceRef) -> tuple[int, int, int]:
+        return (
+            device_ref.owner_domain_generation,
+            device_ref.claim_generation,
+            device_ref.trust_epoch,
+        )
+
+    @staticmethod
+    def _stored(row: sqlite3.Row | None) -> StoredProvision | None:
         if row is None:
             return None
+        device_ref = DeviceRef.model_validate(
+            {
+                "device_instance_id": row["device_instance_id"],
+                "owner_domain_id": row["owner_domain_id"],
+                "owner_domain_generation": row["owner_domain_generation"],
+                "claim_generation": row["claim_generation"],
+                "trust_epoch": row["trust_epoch"],
+            }
+        )
         return StoredProvision(
-            operation_id=row["operation_id"],
-            request_fingerprint=row["request_fingerprint"],
-            owner_domain_id=row["owner_domain_id"],
-            device_id=row["device_id"],
-            owner_id=row["owner_id"],
-            manifest_revision=row["manifest_revision"],
-            adapter_name=row["adapter_name"],
-            handle_json=row["handle_json"],
-            channel_id=row["channel_id"],
-            response_json=row["response_json"],
-            expires_at_ms=row["expires_at_ms"],
-            status=row["status"],
+            row["operation_id"],
+            row["operation_kind"],
+            row["request_fingerprint"],
+            device_ref,
+            row["owner_id"],
+            row["manifest_revision"],
+            row["adapter_name"],
+            row["handle_json"],
+            row["channel_id"],
+            row["response_json"],
+            row["expires_at_ms"],
+            row["status"],
+            row["terminal_reason"],
+            row["created_at_ms"],
+            row["updated_at_ms"],
         )

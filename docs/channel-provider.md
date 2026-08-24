@@ -49,8 +49,8 @@ onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用
 1. 设备 Enrollment 后进入 `pending-approval`，不携带 Owner 认领 secret，也不要求屏幕。
 2. 持有 `hub-admin` 权限的管理员在 Hub 管理面选择 `owner_id` 并人工批准；普通 Owner 或
    `device-manager` 不能批准尚未绑定 Owner 的 pending 设备。
-3. Provider 把请求中的 `owner_domain_id + device_id + owner_id` 固化到幂等记录和 LiveKit participant
-   metadata。Provider 不重新实现 Hub 管理面授权，也不接受 Mobile 直连。
+3. Provider 直接校验并持久化 SDK canonical `DeviceRef` 五元组，再把独立的业务 `owner_id`
+   写入 LiveKit participant metadata。Provider 不重新实现 Hub 管理面授权，也不接受 Mobile 直连。
 4. Companion 不在 Channel Provider grant 中绑定。Device 可以先建立 Owner-scoped data
    connection；后续 Companion interaction 必须继续经过 Kernel/System Data runtime authority。
 
@@ -59,17 +59,23 @@ Provider 的 loopback 默认监听是第二层隔离。
 
 ## Provision wire contract
 
-Hub 调用 `POST /v1/device-channels/provision`。`operation_id` 使用 handoff 的稳定
-`enrollment_id`；相同 enrollment 的重试不得产生另一套资源身份。
+Hub 调用 `POST /v1/device-channels/provision`。请求只能使用 SDK 发布的 canonical
+`DeviceRef(device_instance_id, owner_domain_id, owner_domain_generation, claim_generation,
+trust_epoch)`，Manifest 不进入 DeviceRef。
 
 ```json
 {
   "operation": "channel.provision-device",
-  "operation_id": "<enrollment_id>",
-  "owner_domain_id": "<owner_domain_id>",
+  "operation_id": "<idempotency key>",
+  "device_ref": {
+    "device_instance_id": "<device instance id>",
+    "owner_domain_id": "<owner domain id>",
+    "owner_domain_generation": 1,
+    "claim_generation": 1,
+    "trust_epoch": 1
+  },
   "device": {
-    "device_id": "<stable device id>",
-    "owner_id": "<administrator-authorized owner id>",
+    "owner_id": "<business owner id in owner_ namespace>",
     "display_name": "<display name>",
     "device_kind": "<hardware/product kind>",
     "manifest": {
@@ -85,14 +91,13 @@ Hub 调用 `POST /v1/device-channels/provision`。`operation_id` 使用 handoff 
 }
 ```
 
-输入严格遵循 Hub `provider-provision.schema.json`：拒绝未知字段、重复 JSON key、错误类型和
-超过 256 KiB 的 body。成功响应：
+输入拒绝未知字段、重复 JSON key、错误类型和超过 256 KiB 的 body。成功响应：
 
 ```json
 {
   "operation": "channel.provisioned-device",
-  "operation_id": "<same enrollment_id>",
-  "device_id": "<same device id>",
+  "operation_id": "<same idempotency key>",
+  "device_ref": {"...": "<same canonical DeviceRef>"},
   "manifest_revision": "<same revision>",
   "channels": [{
     "channel_id": "<stable opaque channel id>",
@@ -109,49 +114,40 @@ Hub 调用 `POST /v1/device-channels/provision`。`operation_id` 使用 handoff 
 `issued_at_ms`、`expires_at_ms` 是 Unix epoch milliseconds。Hub 只校验关联关系、时效并将
 opaque binding 交给设备，不解析或持久化其中的 LiveKit secret。
 
-base64 解码后的唯一 v1 binding 是：
+base64 解码后的 binding v2 是单一 session channel：
 
 ```json
 {
-  "schema_version": 1,
-  "active": {
+  "schema_version": 2,
+  "session": {
     "server_url": "wss://<device-reachable-livekit-origin>",
     "token": "<short-lived LiveKit JWT>",
     "identity": "<device_id>",
     "room_name": "<stable voice room>"
   },
-  "control": {
-    "server_url": "wss://<device-reachable-livekit-origin>",
-    "token": "<short-lived LiveKit JWT>",
-    "identity": "<device_id>",
-    "room_name": "<stable control room>"
-  },
   "audio": {"sample_rate": 16000, "channels": 1}
 }
 ```
 
-默认 JWT TTL 为 1800 秒。两枚 token metadata 都包含 `kind=device`、`device_id`、
-`owner_id`、`interaction_mode`、`session_intent=user_initiated`。active grant 可加入固定 voice
-room、publish/subscribe media/data，并 dispatch 配置的 `eidolon` Agent；control grant 只能加入
-固定 control room 并 publish data，不能 publish/subscribe media，也不能创建 room 或 dispatch
-Agent。active 的 publish source 限定为 microphone，两枚 grant 都禁止设备修改受信 participant
-metadata。两个 room 都由 Provider 通过 LiveKit 管理 API 显式创建。
+默认 JWT TTL 为 1800 秒。token metadata 包含 `kind=device`、`device_id`、`owner_id`、
+`device_kind`、`interaction_mode`（适用时）和 `session_intent=user_initiated`。grant 只能加入固定
+room；publish source 按 Manifest 限定为 microphone/camera，禁止创建 room 或修改受信 metadata。
 
 ## 幂等、重试与恢复
 
-- room 名和 `channel_id` 由 `SHA-256(owner_domain_id, device_id)` 稳定派生，不含可猜测的 Owner
+- room 名和 `channel_id` 由 `SHA-256(owner_domain_id, device_instance_id)` 稳定派生，不含 Owner
   credential。
-- 相同 `operation_id` 加完全相同请求，在 token 刷新窗口外返回数据库中逐 byte 相同响应；
-  Provider 重启后仍成立。
-- 距到期小于等于默认 120 秒时，相同请求在同一个 `operation_id` 下刷新 token；room 和
-  `channel_id` 不变。这样 Hub/ESP 可以用稳定 enrollment 恢复，但不会永久复用 JWT。
-- 相同 `operation_id` 携带不同内容返回 409；同一个 `owner_domain_id + device_id` 在未 revoke 前使用
-  另一 `operation_id` 也返回 409，避免并行 authority 覆盖。
-- LiveKit 暂时不可用返回 503；请求没有写入成功幂等记录，Hub 可以用原请求重试。
-- 合同错误返回 422，认证失败 401，错误响应和日志不包含 token 或 retrieval token。
+- 幂等 scope 是完整 DeviceRef + operation kind + operation id；同 scope 同 payload 返回第一次
+  逐 byte 结果，跨进程重启仍成立；同 scope/ID 不同 payload 返回 `IDEMPOTENCY_CONFLICT`。
+- credential 到期后 operation 明确进入 `expired/credential_expired`，不再占 active 唯一锁。
+  刷新必须用新 idempotency key 和 `channel.refresh-device`；原 provision replay 不延长 TTL。
+- 更高 owner-domain/claim/trust generation 到达时，旧 active/expired operation 进入
+  `fenced/generation_advanced`；旧代请求返回 `STALE_GENERATION`，不能关闭或覆盖新代。
+- `INVALID_TRANSITION`、`UNAUTHENTICATED`、`FORBIDDEN`、`PROVIDER_UNAVAILABLE` 保持独立
+  RFC 9457 problem code/category/retryable，不能统一折叠为 409/503。
 
-当前 Provider 设计为单进程；进程内 lock 与 SQLite 唯一约束共同串行化资源状态。不要用多个
-Provider 实例共享同一个 SQLite 文件。
+正式部署仍只有一个 Provider writer；SQLite `BEGIN IMMEDIATE`、五元 scope primary key 和 active
+partial unique index 还保证进程竞态/重启不会提交两个 active operation。
 
 ## Revoke wire contract
 
@@ -161,8 +157,7 @@ Hub 调用 `POST /v1/device-channels/revoke`：
 {
   "operation": "channel.revoke-device",
   "operation_id": "<stable revocation request id>",
-  "owner_domain_id": "<owner_domain_id>",
-  "device_id": "<device_id>",
+  "device_ref": {"...": "<complete canonical DeviceRef>"},
   "reason": "<bounded reason>"
 }
 ```
@@ -173,13 +168,13 @@ Hub 调用 `POST /v1/device-channels/revoke`：
 {
   "operation": "channel.revoked-device",
   "operation_id": "<same revocation request id>",
-  "device_id": "<same device id>"
+  "device_ref": {"...": "<same canonical DeviceRef>"}
 }
 ```
 
-Provider 先删除 voice/control room，再原子标记 provision 已 revoke、清空持久化 opaque response
-和 expiry，并记录可重放的非敏感 revoke response。LiveKit room 已不存在按成功处理；未知设备
-也按目标状态已经满足返回成功。相同 revoke operation 和内容可重复；同 ID 不同内容返回 409。
+Provider 先停止监听并删除当前 channel，再原子标记同一 DeviceRef credential 已 revoke、清空
+adapter handle/expiry，并记录可重放 revoke response。未知 DeviceRef 也可记录目标状态成功；旧代
+revoke 返回 `STALE_GENERATION`，绝不能作用于新代 channel。
 
 LiveKit JWT 没有单 token 主动撤销 API。删除 room 会断开当前参与者；grant 明确禁止
 `roomCreate`，旧 token 还受原 TTL 上限约束。部署仍应把 LiveKit room auto-create 策略纳入审计，

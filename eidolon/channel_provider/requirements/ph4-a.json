@@ -1,0 +1,46 @@
+{
+  "requirements": [
+    {
+      "id": "CH-PH4A-001",
+      "normative_ref": "3.6.2/19.2.2 canonical five-field DeviceRef",
+      "positive_test": "test_contract_consumes_the_canonical_sdk_device_ref",
+      "negative_test": "test_provision_rejects_contract_drift"
+    },
+    {
+      "id": "CH-PH4A-002",
+      "normative_ref": "3.7 scoped idempotent replay and payload conflict",
+      "positive_test": "test_provision_is_exactly_idempotent_across_restart",
+      "negative_test": "test_same_scope_id_different_payload_is_stable_conflict"
+    },
+    {
+      "id": "CH-PH4A-003",
+      "normative_ref": "6.7/19.3.8 generation fencing",
+      "positive_test": "test_new_generation_fences_old_active_and_old_request_is_stale",
+      "negative_test": "test_stale_revocation_cannot_reverse_affect_new_generation"
+    },
+    {
+      "id": "CH-PH4A-004",
+      "normative_ref": "19.3.8 credential expiry terminal and explicit refresh",
+      "positive_test": "test_expired_operation_is_terminal_and_does_not_hold_the_active_lock",
+      "negative_test": "test_refresh_is_invalid_before_expiry_and_explicit_after_expiry"
+    },
+    {
+      "id": "CH-PH4A-005",
+      "normative_ref": "3.10 stable domain problem classification",
+      "positive_test": "test_domain_problems_keep_distinct_transport_mapping",
+      "negative_test": "test_http_preserves_domain_error_codes_from_the_adapter"
+    },
+    {
+      "id": "CH-PH4A-006",
+      "normative_ref": "16.5 physical migration separated from domain compatibility",
+      "positive_test": "test_v3_migration_preserves_audit_but_activates_no_generation_blind_row",
+      "negative_test": "test_broken_v3_migration_fails_closed_and_does_not_advance_version"
+    },
+    {
+      "id": "CH-PH4A-007",
+      "normative_ref": "16.1 restart and concurrency recovery",
+      "positive_test": "test_restart_preserves_generation_high_watermark",
+      "negative_test": "test_two_processes_racing_same_generation_commit_one_operation"
+    }
+  ]
+}

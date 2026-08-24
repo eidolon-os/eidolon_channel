@@ -15,16 +15,29 @@ def livekit_config(**overrides: Any) -> LiveKitConfig:
         "api_key": "test-api-key",
         "api_secret": "test-api-secret-with-at-least-32-bytes",
         "grant_ttl_seconds": 1800,
-        "refresh_before_expiry_seconds": 120,
     }
     values.update(overrides)
     return LiveKitConfig(**values)
 
 
+def device_ref(**overrides: Any) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "device_instance_id": "device-1",
+        "owner_domain_id": "owner-domain-1",
+        "owner_domain_generation": 1,
+        "claim_generation": 1,
+        "trust_epoch": 1,
+    }
+    value.update(overrides)
+    return value
+
+
 def provision_payload(**device_overrides: Any) -> dict[str, Any]:
+    ref = device_ref(**device_overrides.pop("device_ref", {}))
+    if "device_id" in device_overrides:
+        ref["device_instance_id"] = device_overrides.pop("device_id")
     device: dict[str, Any] = {
-        "device_id": "device-1",
-        "owner_id": "owner-1",
+        "owner_id": "owner_1",
         "display_name": "Kitchen Box",
         "device_kind": "waveshare-box3",
         "manifest": {
@@ -47,17 +60,19 @@ def provision_payload(**device_overrides: Any) -> dict[str, Any]:
     return {
         "operation": "channel.provision-device",
         "operation_id": "enrollment-1",
-        "owner_domain_id": "owner-1",
+        "device_ref": ref,
         "device": device,
     }
 
 
 def revoke_payload(**overrides: Any) -> dict[str, Any]:
+    ref = device_ref(**overrides.pop("device_ref", {}))
+    if "device_id" in overrides:
+        ref["device_instance_id"] = overrides.pop("device_id")
     value: dict[str, Any] = {
         "operation": "channel.revoke-device",
         "operation_id": "revoke-1",
-        "owner_domain_id": "owner-1",
-        "device_id": "device-1",
+        "device_ref": ref,
         "reason": "owner-request",
     }
     value.update(overrides)
@@ -65,10 +80,12 @@ def revoke_payload(**overrides: Any) -> dict[str, Any]:
 
 
 def session_payload(*, operation: str, **overrides: Any) -> dict[str, Any]:
+    ref = device_ref(**overrides.pop("device_ref", {}))
+    if "device_id" in overrides:
+        ref["device_instance_id"] = overrides.pop("device_id")
     value: dict[str, Any] = {
         "operation": operation,
-        "owner_domain_id": "owner-1",
-        "device_id": "device-1",
+        "device_ref": ref,
     }
     value.update(overrides)
     return value
@@ -111,7 +128,9 @@ class FakeAdapter:
         self.opened.append(spec)
         return ChannelGrant(
             binding_format=f"application/vnd.eidolon.{self._name}-session+json;v=2",
-            payload=json.dumps({"device": spec.device_id, "resource": f"{self._name}:{spec.device_id}"}).encode(),
+            payload=json.dumps(
+                {"device": spec.device_id, "resource": f"{self._name}:{spec.device_id}"}
+            ).encode(),
             expires_at_ms=issued_at_ms + self.ttl_seconds * 1000,
             handle={"resource": f"{self._name}:{spec.device_id}"},
         )
@@ -140,8 +159,12 @@ class FakeAdapter:
         self.shutdown_calls += 1
 
 
-def audio_manifest(*, direction: str = "bidirectional", interaction_mode: str | None = None,
-                   video: str | None = None) -> dict[str, Any]:
+def audio_manifest(
+    *,
+    direction: str = "bidirectional",
+    interaction_mode: str | None = None,
+    video: str | None = None,
+) -> dict[str, Any]:
     """A manifest that declares what a device can actually do."""
     media: list[dict[str, Any]] = []
     if direction:
@@ -150,12 +173,14 @@ def audio_manifest(*, direction: str = "bidirectional", interaction_mode: str | 
         media.append({"kind": "video", "direction": video, "codecs": ["video/h264"]})
     properties: list[dict[str, Any]] = []
     if interaction_mode:
-        properties.append({
-            "name": "interaction_mode",
-            "schema": {"type": "string", "const": interaction_mode},
-            "observable": False,
-            "writable": False,
-        })
+        properties.append(
+            {
+                "name": "interaction_mode",
+                "schema": {"type": "string", "const": interaction_mode},
+                "observable": False,
+                "writable": False,
+            }
+        )
     return {
         "schema_version": 1,
         "title": "Eidolon Device",

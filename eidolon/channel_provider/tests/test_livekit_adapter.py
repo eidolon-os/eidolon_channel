@@ -101,7 +101,11 @@ def _adapter() -> tuple[LiveKitChannelAdapter, FakeClient]:
 def _spec(**manifest_kwargs):
     payload = provision_payload(manifest=audio_manifest(**manifest_kwargs))
     request = ProvisionRequest.parse(encoded(payload))
-    return derive_spec(request.device, agent_name="eidolon")
+    return derive_spec(
+        request.device,
+        device_instance_id=request.device_ref.device_instance_id,
+        agent_name="eidolon",
+    )
 
 
 async def test_opening_a_channel_summons_no_agent() -> None:
@@ -240,9 +244,7 @@ async def test_a_spent_dispatch_cannot_block_the_device_forever(statuses) -> Non
 
 def _packet(*, topic: str, identity: str, body) -> SimpleNamespace:
     data = body if isinstance(body, bytes) else json.dumps(body).encode()
-    return SimpleNamespace(
-        topic=topic, data=data, participant=SimpleNamespace(identity=identity)
-    )
+    return SimpleNamespace(topic=topic, data=data, participant=SimpleNamespace(identity=identity))
 
 
 @pytest.mark.parametrize(
@@ -268,9 +270,7 @@ async def test_a_request_from_a_device_not_yet_known_is_still_the_devices() -> N
     opening request of every device that connects and wants to talk.
     """
     adapter, _ = _adapter()
-    packet = _packet(
-        topic=SESSION_CONTROL_TOPIC, identity=None, body={"type": SESSION_OPEN_TYPE}
-    )
+    packet = _packet(topic=SESSION_CONTROL_TOPIC, identity=None, body={"type": SESSION_OPEN_TYPE})
 
     assert adapter._requested(packet, device="device-1", room="r") is ServingRequest.START
 
@@ -341,18 +341,14 @@ class FakeRoom:
 
 async def _listening(monkeypatch, adapter, grant):
     FakeRoom.instances.clear()
-    monkeypatch.setattr(
-        "eidolon.channel_provider.adapters.livekit.adapter.rtc.Room", FakeRoom
-    )
+    monkeypatch.setattr("eidolon.channel_provider.adapters.livekit.adapter.rtc.Room", FakeRoom)
     await adapter.accept_requests(grant.handle, sink=_unused_sink)
     return FakeRoom.instances[-1]
 
 
 async def test_a_dropped_listener_gets_back_in(monkeypatch) -> None:
     """A channel nobody is listening to fails silently — the device just is not heard."""
-    monkeypatch.setattr(
-        "eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0
-    )
+    monkeypatch.setattr("eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0)
     adapter, _ = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     first = await _listening(monkeypatch, adapter, grant)
@@ -367,9 +363,7 @@ async def test_a_dropped_listener_gets_back_in(monkeypatch) -> None:
 
 async def test_giving_up_a_channel_is_not_mistaken_for_losing_it(monkeypatch) -> None:
     """Leaving fires the same event a failure does; only intent tells them apart."""
-    monkeypatch.setattr(
-        "eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0
-    )
+    monkeypatch.setattr("eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0)
     adapter, _ = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     connection = await _listening(monkeypatch, adapter, grant)
@@ -389,9 +383,7 @@ async def test_a_channel_that_cannot_be_joined_yet_is_kept_and_retried(
     restarted timed out on its first join, and a final failure left the channel
     deaf until something provisioned it again — while a connection lost a second
     later would have been rebuilt."""
-    monkeypatch.setattr(
-        "eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0
-    )
+    monkeypatch.setattr("eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY", 0.0)
     refusals = {"count": 2}
 
     class SometimesRefusingRoom(FakeRoom):

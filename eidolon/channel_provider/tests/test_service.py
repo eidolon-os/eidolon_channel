@@ -9,6 +9,7 @@ from eidolon.channel_provider.contracts import (
     CLOSE_SESSION,
     OPEN_SESSION,
     IdempotencyConflict,
+    InvalidTransition,
     ProvisionRequest,
     RevokeRequest,
     SessionRequest,
@@ -17,7 +18,7 @@ from eidolon.channel_provider.contracts import (
 from eidolon.channel_provider.ports import ServingRequest
 from eidolon.channel_provider.selection import AdapterRegistry
 from eidolon.channel_provider.service import ChannelProviderService
-from eidolon.channel_provider.store import ChannelProviderStore
+from eidolon.channel_provider.store import PROVISION, ChannelProviderStore
 
 from .helpers import (
     FakeAdapter,
@@ -31,13 +32,12 @@ from .helpers import (
 
 def _service(tmp_path, clock: list[int], backend: FakeAdapter | None = None):
     config = livekit_config()
-    resolved_backend = backend or FakeAdapter(name='livekit', ttl_seconds=config.grant_ttl_seconds)
+    resolved_backend = backend or FakeAdapter(name="livekit", ttl_seconds=config.grant_ttl_seconds)
     store = ChannelProviderStore(tmp_path / "provider.sqlite3")
     service = ChannelProviderService(
         store=store,
-        registry=AdapterRegistry([resolved_backend], preference=('livekit',)),
-        agent_name='eidolon',
-        refresh_before_expiry_seconds=config.refresh_before_expiry_seconds,
+        registry=AdapterRegistry([resolved_backend], preference=("livekit",)),
+        agent_name="eidolon",
         now_ms=lambda: clock[0],
     )
     service.initialize()
@@ -65,7 +65,7 @@ async def test_provision_is_exactly_idempotent_across_restart(tmp_path) -> None:
     response = json.loads(first)
     assert response["operation"] == "channel.provisioned-device"
     assert response["operation_id"] == "enrollment-1"
-    assert response["device_id"] == "device-1"
+    assert response["device_ref"] == provision_payload()["device_ref"]
     assert response["channels"][0]["binding_format"] == (
         "application/vnd.eidolon.livekit-session+json;v=2"
     )
@@ -80,48 +80,46 @@ async def test_provision_refreshes_only_near_expiry_with_stable_resources(tmp_pa
     service, _store, backend = _service(tmp_path, clock)
     first = await service.provision(request)
 
-    clock[0] += (1800 - 119) * 1000
-    refreshed = await service.provision(request)
+    clock[0] += 1800 * 1000 + 1
+    refresh_payload = provision_payload()
+    refresh_payload["operation"] = "channel.refresh-device"
+    refresh_payload["operation_id"] = "refresh-1"
+    refreshed = await service.provision(ProvisionRequest.parse(encoded(refresh_payload)))
 
     assert refreshed != first
     assert len(backend.opened) == 2
     assert len(backend.opened) == 2
     assert _binding(refreshed)["resource"] == _binding(first)["resource"]
-    assert json.loads(refreshed)["channels"][0]["channel_id"] == (
-        json.loads(first)["channels"][0]["channel_id"]
+    assert (
+        json.loads(refreshed)["channels"][0]["channel_id"]
+        == (json.loads(first)["channels"][0]["channel_id"])
     )
 
 
-async def test_characterize_expired_active_operation_blocks_a_new_lifecycle(tmp_path) -> None:
-    """Record the deployed generation-blind lock before replacing its contract.
-
-    The legacy request cannot name a DeviceRef generation.  Once its credential
-    expires, the row remains active: replaying the same operation refreshes it,
-    while a new lifecycle operation for the same device collides with the
-    owner/device unique lock.
-    """
+async def test_expired_operation_is_terminal_and_does_not_hold_the_active_lock(tmp_path) -> None:
     clock = [1_700_000_000_000]
     service, store, backend = _service(tmp_path, clock)
-    legacy = ProvisionRequest.parse(encoded(provision_payload()))
+    provision = ProvisionRequest.parse(encoded(provision_payload()))
 
-    first = await service.provision(legacy)
-    stored = store.provision(legacy.operation_id)
+    first = await service.provision(provision)
+    stored = store.operation(provision.device_ref, PROVISION, provision.operation_id)
     assert stored is not None
     clock[0] = stored.expires_at_ms + 1
-    assert stored.status == "active"
     assert stored.expires_at_ms < clock[0]
 
-    replayed = await service.provision(legacy)
-    assert replayed != first
-    assert len(backend.opened) == 2
+    replayed = await service.provision(provision)
+    assert replayed == first
+    expired = store.operation(provision.device_ref, PROVISION, provision.operation_id)
+    assert expired is not None
+    assert expired.status == "expired"
+    assert expired.terminal_reason == "credential_expired"
+    assert len(backend.opened) == 1
 
-    new_lifecycle = provision_payload()
-    new_lifecycle["operation_id"] = "enrollment-new-generation"
-    with pytest.raises(
-        IdempotencyConflict,
-        match="device already has an active Channel Provider operation",
-    ):
-        await service.provision(ProvisionRequest.parse(encoded(new_lifecycle)))
+    refresh = provision_payload()
+    refresh["operation"] = "channel.refresh-device"
+    refresh["operation_id"] = "refresh-after-expiry"
+    await service.provision(ProvisionRequest.parse(encoded(refresh)))
+    assert len(backend.opened) == 2
 
 
 async def test_provision_rejects_operation_or_device_authority_reuse(tmp_path) -> None:
@@ -129,13 +127,13 @@ async def test_provision_rejects_operation_or_device_authority_reuse(tmp_path) -
     service, _store, _backend = _service(tmp_path, clock)
     await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
 
-    changed = provision_payload(owner_id="owner-2")
+    changed = provision_payload(owner_id="owner_2")
     with pytest.raises(IdempotencyConflict):
         await service.provision(ProvisionRequest.parse(encoded(changed)))
 
     second_operation = provision_payload()
     second_operation["operation_id"] = "enrollment-2"
-    with pytest.raises(IdempotencyConflict):
+    with pytest.raises(InvalidTransition):
         await service.provision(ProvisionRequest.parse(encoded(second_operation)))
 
 
@@ -151,17 +149,17 @@ async def test_revoke_deletes_rooms_scrubs_binding_and_is_idempotent(tmp_path) -
 
     assert first == second
     assert json.loads(first) == {
-        "device_id": "device-1",
+        "device_ref": provision_payload()["device_ref"],
         "operation": "channel.revoked-device",
         "operation_id": "revoke-1",
     }
     assert len(backend.closed) == 1
-    stored = store.provision("enrollment-1")
+    stored = store.operation(provision.device_ref, PROVISION, "enrollment-1")
     assert stored is not None
     assert stored.status == "revoked"
-    assert stored.response_json == ""
+    assert stored.handle_json == ""
     assert stored.expires_at_ms == 0
-    with pytest.raises(IdempotencyConflict):
+    with pytest.raises(InvalidTransition):
         await service.provision(provision)
 
 
@@ -172,7 +170,7 @@ async def test_revoke_unknown_device_is_desired_state_success(tmp_path) -> None:
 
     response = await service.revoke(request)
 
-    assert json.loads(response)["device_id"] == "unknown"
+    assert json.loads(response)["device_ref"]["device_instance_id"] == "unknown"
     assert backend.closed == []
 
 
@@ -198,7 +196,7 @@ async def test_a_session_runs_on_the_adapter_that_opened_the_channel(tmp_path) -
     assert backend.sessions_closed == [handle]
     assert json.loads(opened) == {
         "operation": "channel.opened-session",
-        "device_id": "device-1",
+        "device_ref": provision_payload()["device_ref"],
         "channel_id": json.loads(opened)["channel_id"],
         "serving": True,
     }
@@ -251,10 +249,7 @@ async def test_a_restart_resumes_listening_to_every_open_channel(tmp_path) -> No
     await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
     await service.provision(
         ProvisionRequest.parse(
-            encoded(
-                provision_payload(device_id="device-2")
-                | {"operation_id": "enrollment-2"}
-            )
+            encoded(provision_payload(device_id="device-2") | {"operation_id": "enrollment-2"})
         )
     )
 
@@ -277,9 +272,7 @@ async def test_a_channel_that_cannot_be_watched_is_still_provisioned(tmp_path) -
     backend.accept_requests = _refuse
     service, _store, _ = _service(tmp_path, clock, backend)
 
-    response = await service.provision(
-        ProvisionRequest.parse(encoded(provision_payload()))
-    )
+    response = await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
 
     assert json.loads(response)["operation"] == "channel.provisioned-device"
     assert len(backend.opened) == 1

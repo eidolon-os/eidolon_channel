@@ -13,12 +13,12 @@ import base64
 import hashlib
 import json
 import logging
-import sqlite3
 import time
 from collections.abc import Callable
 
 from .contracts import (
     IdempotencyConflict,
+    InvalidTransition,
     ProvisionRequest,
     RevokeRequest,
     SessionRequest,
@@ -40,13 +40,11 @@ class ChannelProviderService:
         store: ChannelProviderStore,
         registry: AdapterRegistry,
         agent_name: str,
-        refresh_before_expiry_seconds: int,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._agent_name = agent_name
-        self._refresh_before_expiry_seconds = refresh_before_expiry_seconds
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
         self._lock = asyncio.Lock()
 
@@ -61,6 +59,7 @@ class ChannelProviderService:
         so we re-state what we want watched from the only durable record there
         is. Failing to reach one channel must not cost the others theirs.
         """
+        self._store.expire_credentials(self._now_ms())
         for stored in self._store.active_provisions():
             try:
                 await self._accept_requests(stored)
@@ -83,7 +82,7 @@ class ChannelProviderService:
         # Outside the lock: listening opens a connection of the adapter's own,
         # and a device asking to talk on one channel must not wait behind
         # another device's enrollment.
-        stored = self._store.active_device(request.owner_domain_id, request.device.device_id)
+        stored = self._store.active_device(request.device_ref)
         if stored is not None:
             try:
                 await self._accept_requests(stored)
@@ -99,29 +98,29 @@ class ChannelProviderService:
 
     async def _provision(self, request: ProvisionRequest) -> str:
         async with self._lock:
-            stored = self._store.provision(request.operation_id)
+            now = self._now_ms()
+            self._store.expire_credentials(now)
+            self._store.assert_not_stale(request.device_ref)
+            stored = self._store.operation(
+                request.device_ref, request.operation, request.operation_id
+            )
             if stored is not None:
                 self._require_same_provision(stored, request)
-                if stored.status != "active":
-                    raise IdempotencyConflict("provision operation was already revoked")
-                now = self._now_ms()
-                if (
-                    stored.response_json
-                    and stored.expires_at_ms - now
-                    > self._refresh_before_expiry_seconds * 1000
-                ):
-                    return stored.response_json
-                return await self._refresh(request, stored, now)
+                if stored.status in {"fenced", "revoked"}:
+                    raise InvalidTransition("the operation belongs to a terminal fenced lifecycle")
+                return stored.response_json
 
-            active = self._store.active_device(request.owner_domain_id, request.device.device_id)
-            if active is not None:
-                raise IdempotencyConflict(
-                    "device already has an active Channel Provider operation"
-                )
-
-            spec = derive_spec(request.device, agent_name=self._agent_name)
-            adapter = self._registry.select(spec)
-            now = self._now_ms()
+            previous = self._store.current_channel(request.device_ref)
+            spec = derive_spec(
+                request.device,
+                device_instance_id=request.device_ref.device_instance_id,
+                agent_name=self._agent_name,
+            )
+            adapter = (
+                self._registry.get(previous.adapter_name)
+                if request.operation == "channel.refresh-device" and previous is not None
+                else self._registry.select(spec)
+            )
             grant = await adapter.open(spec, issued_at_ms=now)
             channel_id = self._channel_id(request)
             response = self._response(
@@ -133,10 +132,10 @@ class ChannelProviderService:
             )
             value = StoredProvision(
                 operation_id=request.operation_id,
+                operation_kind=request.operation,
                 request_fingerprint=request.fingerprint,
-                owner_domain_id=request.owner_domain_id,
-                device_id=request.device.device_id,
-                owner_id=request.device.owner_id,
+                device_ref=request.device_ref,
+                owner_id=str(request.device.owner_id),
                 manifest_revision=request.device.manifest_revision,
                 adapter_name=adapter.name,
                 handle_json=json.dumps(grant.handle, sort_keys=True, separators=(",", ":")),
@@ -144,47 +143,34 @@ class ChannelProviderService:
                 response_json=response,
                 expires_at_ms=grant.expires_at_ms,
                 status="active",
+                created_at_ms=now,
+                updated_at_ms=now,
             )
             try:
-                self._store.create_provision(value)
-            except sqlite3.IntegrityError as exc:
-                raise IdempotencyConflict("provision operation raced with another authority") from exc
-            return response
-
-    async def _refresh(
-        self,
-        request: ProvisionRequest,
-        stored: StoredProvision,
-        issued_at_ms: int,
-    ) -> str:
-        """Re-open the same channel on the adapter that originally opened it.
-
-        A refresh must not migrate a device between transports mid-life: the
-        device is holding a binding of one format and has no way to be told the
-        ground moved. Selection therefore runs only on a first provision.
-        """
-        spec = derive_spec(request.device, agent_name=self._agent_name)
-        adapter = self._registry.get(stored.adapter_name)
-        grant = await adapter.open(spec, issued_at_ms=issued_at_ms)
-        response = self._response(
-            request=request,
-            spec=spec,
-            grant=grant,
-            channel_id=stored.channel_id,
-            issued_at_ms=issued_at_ms,
-        )
-        self._store.refresh_provision(
-            operation_id=request.operation_id,
-            request_fingerprint=request.fingerprint,
-            handle_json=json.dumps(grant.handle, sort_keys=True, separators=(",", ":")),
-            response_json=response,
-            expires_at_ms=grant.expires_at_ms,
-        )
-        return response
+                committed, replayed = self._store.create_provision(value, now_ms=now)
+            except Exception:
+                await adapter.close(grant.handle)
+                raise
+            if replayed:
+                await adapter.close(grant.handle)
+                return committed.response_json
+            if previous is not None and (
+                previous.device_ref != committed.device_ref
+                or previous.operation_kind != committed.operation_kind
+                or previous.operation_id != committed.operation_id
+            ):
+                previous_adapter = self._registry.get(previous.adapter_name)
+                previous_handle = json.loads(previous.handle_json)
+                await previous_adapter.stop_accepting(previous_handle)
+                await previous_adapter.close(previous_handle)
+            return committed.response_json
 
     async def revoke(self, request: RevokeRequest) -> str:
         async with self._lock:
-            prior = self._store.revocation(request.operation_id)
+            now = self._now_ms()
+            self._store.expire_credentials(now)
+            self._store.assert_not_stale(request.device_ref)
+            prior = self._store.revocation(request.device_ref, request.operation_id)
             if prior is not None:
                 if (
                     prior.request_fingerprint != request.fingerprint
@@ -195,7 +181,7 @@ class ChannelProviderService:
                     )
                 return prior.response_json
 
-            active = self._store.active_device(request.owner_domain_id, request.device_id)
+            active = self._store.active_device(request.device_ref)
             if active is not None:
                 adapter = self._registry.get(active.adapter_name)
                 handle = json.loads(active.handle_json)
@@ -207,20 +193,17 @@ class ChannelProviderService:
                 {
                     "operation": "channel.revoked-device",
                     "operation_id": request.operation_id,
-                    "device_id": request.device_id,
+                    "device_ref": request.device_ref.model_dump(mode="json"),
                 }
             )
-            try:
-                self._store.complete_revocation(
-                    operation_id=request.operation_id,
-                    request_fingerprint=request.fingerprint,
-                    owner_domain_id=request.owner_domain_id,
-                    device_id=request.device_id,
-                    response_json=response,
-                )
-            except sqlite3.IntegrityError as exc:
-                raise IdempotencyConflict("revocation operation raced with another request") from exc
-            return response
+            completed, _replayed = self._store.complete_revocation(
+                operation_id=request.operation_id,
+                request_fingerprint=request.fingerprint,
+                device_ref=request.device_ref,
+                response_json=response,
+                now_ms=now,
+            )
+            return completed.response_json
 
     async def open_session(self, request: SessionRequest) -> str:
         """Serve the device's channel, because the device asked to talk."""
@@ -231,21 +214,17 @@ class ChannelProviderService:
         return await self._serve(request, serving=False)
 
     async def _serve(self, request: SessionRequest, *, serving: bool) -> str:
-        channel = await self._converge_serving(
-            request.owner_domain_id, request.device_id, serving=serving
-        )
+        channel = await self._converge_serving(request.device_ref, serving=serving)
         return canonical_json(
             {
                 "operation": "channel.opened-session" if serving else "channel.closed-session",
-                "device_id": request.device_id,
+                "device_ref": request.device_ref.model_dump(mode="json"),
                 "channel_id": channel.channel_id,
                 "serving": serving,
             }
         )
 
-    async def _converge_serving(
-        self, owner_domain_id: str, device_id: str, *, serving: bool
-    ) -> StoredProvision:
+    async def _converge_serving(self, device_ref, *, serving: bool) -> StoredProvision:
         """Converge one device's channel onto served or unserved.
 
         The single place a conversation starts or stops, whether the device
@@ -260,7 +239,8 @@ class ChannelProviderService:
         state the adapter converges onto, not an event to record.
         """
         async with self._lock:
-            active = self._store.active_device(owner_domain_id, device_id)
+            self._store.expire_credentials(self._now_ms())
+            active = self._store.active_device(device_ref)
             if active is None:
                 raise UnknownChannel("device has no active channel")
             adapter = self._registry.get(active.adapter_name)
@@ -271,7 +251,7 @@ class ChannelProviderService:
                 await adapter.close_session(handle)
             return active
 
-    def _sink_for(self, owner_domain_id: str, device_id: str) -> ServingRequestSink:
+    def _sink_for(self, device_ref) -> ServingRequestSink:
         """Bind a channel's requests to the device it can only ever speak for.
 
         The adapter reports what was asked, never who asked it: a request that
@@ -281,9 +261,7 @@ class ChannelProviderService:
         """
 
         async def _requested(request: ServingRequest) -> None:
-            await self._converge_serving(
-                owner_domain_id, device_id, serving=request is ServingRequest.START
-            )
+            await self._converge_serving(device_ref, serving=request is ServingRequest.START)
 
         return _requested
 
@@ -291,7 +269,7 @@ class ChannelProviderService:
         adapter = self._registry.get(stored.adapter_name)
         await adapter.accept_requests(
             json.loads(stored.handle_json),
-            sink=self._sink_for(stored.owner_domain_id, stored.device_id),
+            sink=self._sink_for(stored.device_ref),
         )
 
     def _response(
@@ -307,7 +285,7 @@ class ChannelProviderService:
             {
                 "operation": "channel.provisioned-device",
                 "operation_id": request.operation_id,
-                "device_id": request.device.device_id,
+                "device_ref": request.device_ref.model_dump(mode="json"),
                 "manifest_revision": request.device.manifest_revision,
                 "channels": [
                     {
@@ -326,7 +304,7 @@ class ChannelProviderService:
     @staticmethod
     def _channel_id(request: ProvisionRequest) -> str:
         digest = hashlib.sha256(
-            f"{request.owner_domain_id}\0{request.device.device_id}".encode()
+            f"{request.owner_domain_id}\0{request.device_id}".encode()
         ).hexdigest()[:24]
         return f"chan-{digest}"
 
@@ -334,8 +312,8 @@ class ChannelProviderService:
     def _require_same_provision(stored: StoredProvision, request: ProvisionRequest) -> None:
         if (
             stored.request_fingerprint != request.fingerprint
-            or stored.owner_domain_id != request.owner_domain_id
-            or stored.device_id != request.device.device_id
+            or stored.device_ref != request.device_ref
+            or stored.operation_kind != request.operation
         ):
             raise IdempotencyConflict("provision operation_id was reused with different content")
 

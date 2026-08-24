@@ -154,7 +154,6 @@ def load_provider_config() -> ProviderConfig:
             "room_prefix",
             "agent_name",
             "grant_ttl_seconds",
-            "refresh_before_expiry_seconds",
             "sample_rate",
             "channels",
         },
@@ -173,11 +172,8 @@ def load_provider_config() -> ProviderConfig:
         state_path = (_REPO_ROOT / state_path).resolve()
 
     ttl = int(livekit.get("grant_ttl_seconds", 1800))
-    refresh = int(livekit.get("refresh_before_expiry_seconds", 120))
     if not 300 <= ttl <= 86400:
         raise ValueError("livekit.grant_ttl_seconds must be in 300..86400")
-    if not 0 <= refresh < ttl // 2:
-        raise ValueError("livekit.refresh_before_expiry_seconds must be less than half TTL")
     sample_rate = int(livekit.get("sample_rate", 16000))
     channels = int(livekit.get("channels", 1))
     if not 8000 <= sample_rate <= 48000 or channels not in {1, 2}:
@@ -185,12 +181,7 @@ def load_provider_config() -> ProviderConfig:
 
     room_prefix = str(livekit.get("room_prefix", "eidolon-device")).strip()
     agent_name = str(livekit.get("agent_name", "eidolon")).strip()
-    if (
-        not room_prefix
-        or len(room_prefix) > 48
-        or not agent_name
-        or len(agent_name) > 64
-    ):
+    if not room_prefix or len(room_prefix) > 48 or not agent_name or len(agent_name) > 64:
         raise ValueError("LiveKit room or agent policy is invalid")
 
     preference = adapters.get("preference", ["livekit"])
@@ -218,7 +209,6 @@ def load_provider_config() -> ProviderConfig:
             room_prefix=room_prefix,
             agent_name=agent_name,
             grant_ttl_seconds=ttl,
-            refresh_before_expiry_seconds=refresh,
             sample_rate=sample_rate,
             channels=channels,
         ),

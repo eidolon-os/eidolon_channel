@@ -33,7 +33,6 @@ def main() -> None:
         store=ChannelProviderStore(config.storage.path),
         registry=registry,
         agent_name=config.livekit.agent_name,
-        refresh_before_expiry_seconds=config.livekit.refresh_before_expiry_seconds,
     )
     service.initialize()
     app = create_app(service=service, bearer_token=config.bearer_token)

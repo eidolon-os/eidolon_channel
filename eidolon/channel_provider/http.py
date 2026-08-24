@@ -11,14 +11,12 @@ from aiohttp import web
 from .contracts import (
     CLOSE_SESSION,
     OPEN_SESSION,
-    BackendUnavailable,
-    ChannelNotServable,
     ContractError,
-    IdempotencyConflict,
+    DomainError,
     ProvisionRequest,
     RevokeRequest,
     SessionRequest,
-    UnknownChannel,
+    Unauthenticated,
 )
 from .service import ChannelProviderService
 
@@ -48,41 +46,35 @@ def create_app(
 
     async def provision(request: web.Request) -> web.Response:
         if not _authorized(request, bearer_token):
-            return _json({"error": "unauthorized"}, status=401)
+            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
-            return _json({"error": "content-type must be application/json"}, status=415)
+            return _contract_problem("content-type must be application/json", status=415)
         try:
             result = await service.provision(ProvisionRequest.parse(await request.read()))
             return web.Response(text=result, content_type="application/json")
-        except ContractError:
-            return _json({"error": "invalid channel provision request"}, status=422)
-        except IdempotencyConflict:
-            return _json({"error": "channel provision conflict"}, status=409)
-        except BackendUnavailable:
-            logger.warning("LiveKit unavailable during channel provision")
-            return _json({"error": "channel backend unavailable"}, status=503)
+        except ContractError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
 
     async def revoke(request: web.Request) -> web.Response:
         if not _authorized(request, bearer_token):
-            return _json({"error": "unauthorized"}, status=401)
+            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
-            return _json({"error": "content-type must be application/json"}, status=415)
+            return _contract_problem("content-type must be application/json", status=415)
         try:
             result = await service.revoke(RevokeRequest.parse(await request.read()))
             return web.Response(text=result, content_type="application/json")
-        except ContractError:
-            return _json({"error": "invalid channel revocation request"}, status=422)
-        except IdempotencyConflict:
-            return _json({"error": "channel revocation conflict"}, status=409)
-        except BackendUnavailable:
-            logger.warning("LiveKit unavailable during channel revocation")
-            return _json({"error": "channel backend unavailable"}, status=503)
+        except ContractError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
 
     async def session(request: web.Request, *, expected: str) -> web.Response:
         if not _authorized(request, bearer_token):
-            return _json({"error": "unauthorized"}, status=401)
+            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
-            return _json({"error": "content-type must be application/json"}, status=415)
+            return _contract_problem("content-type must be application/json", status=415)
         try:
             parsed = SessionRequest.parse(await request.read(), expected=expected)
             result = (
@@ -91,15 +83,10 @@ def create_app(
                 else await service.close_session(parsed)
             )
             return web.Response(text=result, content_type="application/json")
-        except ContractError:
-            return _json({"error": "invalid channel session request"}, status=422)
-        except UnknownChannel:
-            return _json({"error": "device has no active channel"}, status=404)
-        except ChannelNotServable:
-            return _json({"error": "channel does not carry a conversation"}, status=409)
-        except BackendUnavailable:
-            logger.warning("LiveKit unavailable during channel session change")
-            return _json({"error": "channel backend unavailable"}, status=503)
+        except ContractError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
 
     async def start(_app: web.Application) -> None:
         # Channels outlive this process, so resuming what we were listening to
@@ -113,6 +100,7 @@ def create_app(
     app.router.add_get("/health", health)
     app.router.add_post("/v1/device-channels/provision", provision)
     app.router.add_post("/v1/device-channels/revoke", revoke)
+
     async def open_session(request: web.Request) -> web.Response:
         return await session(request, expected=OPEN_SESSION)
 
@@ -136,4 +124,44 @@ def _json(value: dict[str, str], *, status: int = 200) -> web.Response:
         text=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
         status=status,
         content_type="application/json",
+    )
+
+
+def _contract_problem(detail: str, *, status: int) -> web.Response:
+    return _problem_body(
+        code="INVALID_ARGUMENT",
+        category="invalid",
+        retryable=False,
+        status=status,
+        detail=detail,
+    )
+
+
+def _problem(error: DomainError) -> web.Response:
+    return _problem_body(
+        code=error.code,
+        category=error.category,
+        retryable=error.retryable,
+        status=error.http_status,
+        detail=str(error),
+    )
+
+
+def _problem_body(
+    *, code: str, category: str, retryable: bool, status: int, detail: str
+) -> web.Response:
+    value = {
+        "type": f"https://problems.eidolon.live/channel/{code.lower()}",
+        "title": code.replace("_", " ").title(),
+        "status": status,
+        "detail": detail,
+        "code": code,
+        "category": category,
+        "retryable": retryable,
+        "authority": "eidolon-channel-provider",
+    }
+    return web.Response(
+        text=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+        status=status,
+        content_type="application/problem+json",
     )

@@ -20,6 +20,5 @@ class LiveKitConfig:
     room_prefix: str = "eidolon-device"
     agent_name: str = "eidolon"
     grant_ttl_seconds: int = 1800
-    refresh_before_expiry_seconds: int = 120
     sample_rate: int = 16000
     channels: int = 1

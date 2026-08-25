@@ -94,6 +94,8 @@ class FullDuplexSessionLifecycle:
                 participant_identity=participant_identity,
             ),
         )
+        if pipeline._on_session_started is not None:
+            await pipeline._on_session_started()
         pipeline._publish_companion_ui_state("listening", "session_started")
         if pipeline._uses_livekit_native_adaptive_interruption():
             logger.info(

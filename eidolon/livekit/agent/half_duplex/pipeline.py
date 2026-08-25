@@ -83,6 +83,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         observability: ObservabilityConfig | None = None,
         callbacks: PipelineCallbacks | None = None,
         session_intent: str = SESSION_INTENT_USER_INITIATED,
+        on_session_started: Callable[[], Awaitable[None]] | None = None,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_idle_disconnect: Callable[[], Any] | None = None,
         on_session_closed: Callable[[], Any] | None = None,
@@ -94,6 +95,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._session_intent = session_intent
         self._observability = observability or ObservabilityConfig()
+        self._on_session_started = on_session_started
         self._on_session_end = on_session_end
         self._on_idle_disconnect = on_idle_disconnect
         self._on_session_closed = on_session_closed
@@ -172,6 +174,8 @@ class HalfDuplexPttPipeline(BasePipeline):
                 text_output=True,
             ),
         )
+        if self._on_session_started is not None:
+            await self._on_session_started()
         self._publish_companion_ui_state("listening", "session_started")
         logger.info("[HalfDuplexPttPipeline] session started")
         self._start_idle_watchdog()

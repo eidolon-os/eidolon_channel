@@ -98,6 +98,7 @@ def session_payload(*, operation: str, **overrides: Any) -> dict[str, Any]:
     value: dict[str, Any] = {
         "operation": operation,
         "device_ref": ref,
+        "conversation_id": "conversation-1",
     }
     value.update(overrides)
     return value
@@ -116,8 +117,8 @@ class FakeAdapter:
         self.ttl_seconds = ttl_seconds
         self.opened: list[ChannelSpec] = []
         self.closed: list[dict[str, Any]] = []
-        self.sessions_opened: list[dict[str, Any]] = []
-        self.sessions_closed: list[dict[str, Any]] = []
+        self.sessions_opened: list[tuple[dict[str, Any], str]] = []
+        self.sessions_closed: list[tuple[dict[str, Any], str]] = []
         # Channels currently listened to, keyed the way a real adapter would
         # have to key them, so re-stating one cannot leave two behind.
         self.watched: dict[str, ServingRequestSink] = {}
@@ -150,11 +151,11 @@ class FakeAdapter:
     async def close(self, handle: dict[str, Any]) -> None:
         self.closed.append(handle)
 
-    async def open_session(self, handle: dict[str, Any]) -> None:
-        self.sessions_opened.append(handle)
+    async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+        self.sessions_opened.append((handle, conversation_id))
 
-    async def close_session(self, handle: dict[str, Any]) -> None:
-        self.sessions_closed.append(handle)
+    async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+        self.sessions_closed.append((handle, conversation_id))
 
     async def accept_requests(self, handle: dict[str, Any], *, sink) -> None:
         self.watched[handle["resource"]] = sink

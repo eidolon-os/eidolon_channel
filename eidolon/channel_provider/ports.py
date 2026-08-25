@@ -24,15 +24,24 @@ from typing import Any, Protocol
 from .spec import ChannelSpec
 
 
-class ServingRequest(Enum):
-    """What a device asked of its own channel.
-
-    Statements of desired state, not events: the same one twice means the same
-    thing once, so a device that retries after a lost reply is safe.
-    """
+class ServingAction(Enum):
+    """The desired serving direction for a device channel."""
 
     START = "start"
     STOP = "stop"
+
+
+@dataclass(frozen=True, slots=True)
+class ServingRequest:
+    """What a device asked of its own channel.
+
+    Statements of desired state, not events: the same one twice means the same
+    thing once for one ``conversation_id``. The correlation key also fences a
+    late close from a previous conversation.
+    """
+
+    action: ServingAction
+    conversation_id: str
 
 
 # Called by an adapter when the device on a channel asks. Awaited, so an adapter
@@ -93,7 +102,7 @@ class ChannelAdapter(Protocol):
         """Release whatever `open` provisioned. Must tolerate an absent channel."""
         ...
 
-    async def open_session(self, handle: dict[str, Any]) -> None:
+    async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         """Bring this channel's agent to it, so a conversation can happen.
 
         Converges rather than counts: asking twice leaves one session, because
@@ -103,7 +112,7 @@ class ChannelAdapter(Protocol):
         """
         ...
 
-    async def close_session(self, handle: dict[str, Any]) -> None:
+    async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         """Send the agent away. The channel itself stays open.
 
         The device keeps its place and its credentials; only the served part of

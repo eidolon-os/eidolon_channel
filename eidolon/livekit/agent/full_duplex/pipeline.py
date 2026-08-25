@@ -162,6 +162,7 @@ class StreamingPipeline(BasePipeline):
         observability: ObservabilityConfig | None = None,
         voiceprint_config: VoiceprintConfig | None = None,
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
+        on_session_started: Callable[[], Awaitable[None]] | None = None,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_session_closed: Callable[[], Awaitable[None]] | None = None,
         interaction_mode: str = INTERACTION_MODE_FULL_DUPLEX,
@@ -335,6 +336,7 @@ class StreamingPipeline(BasePipeline):
         # Called when the idle timeout fires — deletes the room so the
         # still-connected client is actively disconnected (see server.py).
         self._on_idle_disconnect = on_idle_disconnect
+        self._on_session_started = on_session_started
         # Shared session_end{reason} publisher (server.py owns idempotency + reason
         # taxonomy). The watchdog routes idle_normal_end through it; other teardown
         # paths (user_left/error/superseded) call it directly.

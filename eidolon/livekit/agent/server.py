@@ -22,6 +22,7 @@ Optional override of the env file path::
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import logging.handlers
 import os
@@ -38,11 +39,14 @@ if TYPE_CHECKING:
 
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
+    SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
     SESSION_END_USER_LEFT,
+    SESSION_STARTED_TYPE,
     WIRE_SCHEMA_VERSION,
+    normalize_conversation_id,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
 
@@ -264,6 +268,34 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
     )
 
 
+def _resolve_conversation_id(ctx) -> str:
+    """Read the device conversation correlation from the named dispatch."""
+
+    try:
+        metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("agent dispatch metadata is not valid JSON") from exc
+    if not isinstance(metadata, dict):
+        raise ValueError("agent dispatch metadata must be an object")
+    conversation_id = normalize_conversation_id(metadata.get(SESSION_CONVERSATION_ID_FIELD))
+    if conversation_id is None:
+        raise ValueError("agent dispatch has no valid conversation_id")
+    return conversation_id
+
+
+def _session_lifecycle_payload(
+    message_type: str, conversation_id: str, *, reason: str | None = None
+) -> bytes:
+    payload = {
+        "schema_v": WIRE_SCHEMA_VERSION,
+        "type": message_type,
+        SESSION_CONVERSATION_ID_FIELD: conversation_id,
+    }
+    if reason is not None:
+        payload["reason"] = reason
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
 async def run_agent(ctx, cfg: AgentConfig) -> None:
     """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
     from eidolon.livekit.agent.factory import SharedStageFactory
@@ -281,6 +313,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
     prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
+    conversation_id = _resolve_conversation_id(ctx)
     # session_key still passed as a synchronous fallback (Room.sid is async,
     # Room.name is set pre-connect). D1: also pass the room reference so the
     # remote-agent adapter can lazily build conversation_id="<prefix>:<participant_identity>:<room_name>"
@@ -307,6 +340,21 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     _SESSION_CONTROL_TOPIC = SESSION_CONTROL_TOPIC
     session_end_state: dict[str, str | bool] = {"sent": False, "reason": ""}
 
+    async def _publish_session_started() -> None:
+        local = getattr(room, "local_participant", None)
+        if local is None:
+            raise RuntimeError("cannot confirm session start without a local participant")
+        await local.publish_data(
+            _session_lifecycle_payload(SESSION_STARTED_TYPE, conversation_id),
+            reliable=True,
+            topic=SESSION_CONTROL_TOPIC,
+        )
+        logger.info(
+            "[lifecycle] session_started conversation_id=%s room=%s sent",
+            conversation_id,
+            room.name,
+        )
+
     async def _publish_session_end(reason: str) -> None:
         if session_end_state["sent"]:
             return
@@ -323,17 +371,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 room.name,
             )
             return
-        import json as _json
-
         try:
             await local.publish_data(
-                _json.dumps(
-                    {
-                        "schema_v": WIRE_SCHEMA_VERSION,
-                        "type": SESSION_END_TYPE,
-                        "reason": reason,
-                    }
-                ).encode("utf-8"),
+                _session_lifecycle_payload(
+                    SESSION_END_TYPE,
+                    conversation_id,
+                    reason=reason,
+                ),
                 reliable=True,
                 topic=_SESSION_CONTROL_TOPIC,
             )
@@ -363,7 +407,9 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         distinguishes a normal idle end ("idle timeout") from the job-shutdown
         path ("shutdown callback").
         """
-        agent_name = getattr(getattr(ctx, "job", None), "agent_name", "") or ""
+        job = getattr(ctx, "job", None)
+        agent_name = getattr(job, "agent_name", "") or ""
+        dispatch_id = getattr(job, "dispatch_id", "") or ""
         try:
             remote = getattr(room, "remote_participants", {}) or {}
             local = getattr(room, "local_participant", None)
@@ -379,29 +425,30 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             )
         except Exception:  # pragma: no cover - logging must never break teardown
             logger.debug("[lifecycle] pre-teardown snapshot failed", exc_info=True)
-        if not agent_name:
-            # An unnamed job was never dispatched by name, so there is no
-            # standing order to withdraw and nothing here can end it.
+        if not agent_name or not dispatch_id:
+            # A job without its own dispatch identity cannot safely withdraw a
+            # standing order: matching by agent name could delete a newer
+            # conversation that has already superseded this one.
             logger.warning(
-                "[lifecycle] room=%s has no agent name; cannot end serving (context=%s)",
+                "[lifecycle] room=%s has no dispatch identity; cannot end serving "
+                "(context=%s)",
                 room.name,
                 context,
             )
             return
         try:
-            dispatches = await ctx.api.agent_dispatch.list_dispatch(room_name=room.name)
-            for dispatch in dispatches:
-                if dispatch.agent_name != agent_name:
-                    continue
-                await ctx.api.agent_dispatch.delete_dispatch(
-                    dispatch_id=dispatch.id, room_name=room.name
-                )
-                logger.info(
-                    "[lifecycle] room=%s dispatch=%s withdrawn (context=%s)",
-                    room.name,
-                    dispatch.id,
-                    context,
-                )
+            await ctx.api.agent_dispatch.delete_dispatch(
+                dispatch_id=dispatch_id,
+                room_name=room.name,
+            )
+            logger.info(
+                "[lifecycle] room=%s dispatch=%s conversation_id=%s withdrawn "
+                "(context=%s)",
+                room.name,
+                dispatch_id,
+                conversation_id,
+                context,
+            )
         except TwirpError as e:
             if e.code == TwirpErrorCode.NOT_FOUND:
                 logger.debug("[Agent] room=%s dispatch already gone", room.name)
@@ -443,6 +490,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             turn_policy=session_turn_policy,
             observability=cfg.observability,
             session_intent=session_intent,
+            on_session_started=_publish_session_started,
             on_session_end=_publish_session_end,
             on_idle_disconnect=lambda: _end_serving("idle timeout"),
             on_session_closed=lambda: _end_serving("session closed"),
@@ -468,6 +516,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             turn_policy=session_turn_policy,
             interaction_mode=interaction_mode,
             session_intent=session_intent,
+            on_session_started=_publish_session_started,
             observability=cfg.observability,
             voiceprint_config=cfg.voiceprint,
             # Video avatar (per-session; audio routed to the avatar worker when on).

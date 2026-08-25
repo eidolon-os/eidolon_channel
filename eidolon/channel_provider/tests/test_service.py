@@ -16,7 +16,7 @@ from eidolon.channel_provider.contracts import (
     SessionRequest,
     UnknownChannel,
 )
-from eidolon.channel_provider.ports import ServingRequest
+from eidolon.channel_provider.ports import ServingAction, ServingRequest
 from eidolon.channel_provider.selection import AdapterRegistry
 from eidolon.channel_provider.service import ChannelProviderService
 from eidolon.channel_provider.store import PROVISION, ChannelProviderStore
@@ -194,12 +194,13 @@ async def test_a_session_runs_on_the_adapter_that_opened_the_channel(tmp_path) -
     )
 
     handle = {"resource": "livekit:device-1"}
-    assert backend.sessions_opened == [handle]
-    assert backend.sessions_closed == [handle]
+    assert backend.sessions_opened == [(handle, "conversation-1")]
+    assert backend.sessions_closed == [(handle, "conversation-1")]
     assert json.loads(opened) == {
         "operation": "channel.opened-session",
         "device_ref": provision_payload()["device_ref"],
         "channel_id": json.loads(opened)["channel_id"],
+        "conversation_id": "conversation-1",
         "serving": True,
     }
     assert json.loads(closed)["serving"] is False
@@ -236,12 +237,12 @@ async def test_a_device_can_start_and_stop_its_own_conversation(tmp_path) -> Non
     service, _store, backend = _service(tmp_path, clock)
     await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
 
-    await backend.device_asks("device-1", ServingRequest.START)
-    await backend.device_asks("device-1", ServingRequest.STOP)
+    await backend.device_asks("device-1", ServingRequest(ServingAction.START, "conversation-1"))
+    await backend.device_asks("device-1", ServingRequest(ServingAction.STOP, "conversation-1"))
 
     handle = {"resource": "livekit:device-1"}
-    assert backend.sessions_opened == [handle]
-    assert backend.sessions_closed == [handle]
+    assert backend.sessions_opened == [(handle, "conversation-1")]
+    assert backend.sessions_closed == [(handle, "conversation-1")]
 
 
 async def test_a_restart_resumes_listening_to_every_open_channel(tmp_path) -> None:
@@ -259,8 +260,10 @@ async def test_a_restart_resumes_listening_to_every_open_channel(tmp_path) -> No
     await restarted.start()
 
     assert sorted(fresh_backend.watched) == ["livekit:device-1", "livekit:device-2"]
-    await fresh_backend.device_asks("device-2", ServingRequest.START)
-    assert fresh_backend.sessions_opened == [{"resource": "livekit:device-2"}]
+    await fresh_backend.device_asks(
+        "device-2", ServingRequest(ServingAction.START, "conversation-2")
+    )
+    assert fresh_backend.sessions_opened == [({"resource": "livekit:device-2"}, "conversation-2")]
 
 
 async def test_a_channel_that_cannot_be_watched_is_still_provisioned(tmp_path) -> None:

@@ -9,6 +9,7 @@ from typing import Any
 
 import rfc8785
 from eidolon_sdk.device_foundation.v1 import BusinessOwnerId, DeviceRef
+from eidolon_sdk.biz.contracts import normalize_conversation_id
 from pydantic import ValidationError
 
 MAX_REQUEST_BYTES = 256 * 1024
@@ -317,6 +318,7 @@ class SessionRequest:
 
     operation: str
     device_ref: DeviceRef
+    conversation_id: str
 
     @classmethod
     def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
@@ -324,7 +326,7 @@ class SessionRequest:
         root = _exact_object(
             value,
             name="session request",
-            required={"operation", "device_ref"},
+            required={"operation", "device_ref", "conversation_id"},
         )
         if root["operation"] != expected:
             raise ContractError(f"operation must be {expected}")
@@ -332,9 +334,13 @@ class SessionRequest:
             device_ref = DeviceRef.model_validate(root["device_ref"])
         except ValidationError as exc:
             raise ContractError("device_ref is invalid") from exc
+        conversation_id = normalize_conversation_id(root["conversation_id"])
+        if conversation_id is None:
+            raise ContractError("conversation_id is invalid")
         return cls(
             operation=expected,
             device_ref=device_ref,
+            conversation_id=conversation_id,
         )
 
     @property

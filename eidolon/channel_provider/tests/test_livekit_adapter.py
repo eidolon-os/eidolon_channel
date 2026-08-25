@@ -8,14 +8,16 @@ from types import SimpleNamespace
 import pytest
 from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
+    SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
     SESSION_OPEN_TYPE,
+    WIRE_SCHEMA_VERSION,
 )
 from livekit.protocol.agent import JobStatus
 
 from eidolon.channel_provider.adapters.livekit import LiveKitChannelAdapter
 from eidolon.channel_provider.contracts import ChannelNotServable, ProvisionRequest
-from eidolon.channel_provider.ports import ServingRequest
+from eidolon.channel_provider.ports import ServingAction, ServingRequest
 from eidolon.channel_provider.spec import derive_spec
 
 from .helpers import audio_manifest, encoded, livekit_config, provision_payload
@@ -44,9 +46,16 @@ class FakeJob:
 
 
 class FakeDispatch:
-    def __init__(self, dispatch_id: str, agent_name: str, jobs: list[FakeJob] | None = None):
+    def __init__(
+        self,
+        dispatch_id: str,
+        agent_name: str,
+        jobs: list[FakeJob] | None = None,
+        metadata: str = "",
+    ):
         self.id = dispatch_id
         self.agent_name = agent_name
+        self.metadata = metadata
         # LiveKit publishes a job a beat after it starts, so a just-created
         # dispatch legitimately reports none.
         self.state = SimpleNamespace(jobs=jobs or [])
@@ -61,7 +70,7 @@ class FakeDispatchService:
 
     def __init__(self) -> None:
         self.dispatches: dict[str, list[FakeDispatch]] = {}
-        self.created: list[tuple[str, str]] = []
+        self.created: list[tuple[str, str, str]] = []
         self.deleted: list[tuple[str, str]] = []
         self._next = 0
 
@@ -73,8 +82,10 @@ class FakeDispatchService:
 
     async def create_dispatch(self, request):
         self._next += 1
-        self._room(request.room).append(FakeDispatch(f"AD_{self._next}", request.agent_name))
-        self.created.append((request.room, request.agent_name))
+        self._room(request.room).append(
+            FakeDispatch(f"AD_{self._next}", request.agent_name, metadata=request.metadata)
+        )
+        self.created.append((request.room, request.agent_name, request.metadata))
 
     async def delete_dispatch(self, dispatch_id: str, room_name: str):
         room = self._room(room_name)
@@ -105,6 +116,17 @@ def _spec(**manifest_kwargs):
         request.device,
         device_instance_id=request.device_ref.device_instance_id,
         agent_name="eidolon",
+    )
+
+
+def _metadata(conversation_id: str = "conversation-1") -> str:
+    return json.dumps(
+        {
+            "schema_v": WIRE_SCHEMA_VERSION,
+            SESSION_CONVERSATION_ID_FIELD: conversation_id,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
     )
 
 
@@ -144,10 +166,10 @@ async def test_a_session_brings_the_agent_and_ending_it_keeps_the_channel() -> N
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     room = grant.handle["room"]
 
-    await adapter.open_session(grant.handle)
-    assert client.agent_dispatch.created == [(room, "eidolon")]
+    await adapter.open_session(grant.handle, "conversation-1")
+    assert client.agent_dispatch.created == [(room, "eidolon", _metadata())]
 
-    await adapter.close_session(grant.handle)
+    await adapter.close_session(grant.handle, "conversation-1")
     assert client.agent_dispatch.deleted == [(room, "AD_1")]
     # The device's way back in must survive the end of a conversation.
     assert client.room.deleted == []
@@ -158,17 +180,39 @@ async def test_opening_a_session_twice_leaves_one_session() -> None:
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
 
-    await adapter.open_session(grant.handle)
-    await adapter.open_session(grant.handle)
+    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(grant.handle, "conversation-1")
 
     assert len(client.agent_dispatch.created) == 1
+
+
+async def test_a_late_close_cannot_end_a_newer_conversation() -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+
+    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(grant.handle, "conversation-2")
+
+    assert client.agent_dispatch.deleted == [(room, "AD_1")]
+    assert client.agent_dispatch.created[-1] == (
+        room,
+        "eidolon",
+        _metadata("conversation-2"),
+    )
+
+    await adapter.close_session(grant.handle, "conversation-1")
+    assert client.agent_dispatch.deleted == [(room, "AD_1")]
+
+    await adapter.close_session(grant.handle, "conversation-2")
+    assert client.agent_dispatch.deleted == [(room, "AD_1"), (room, "AD_2")]
 
 
 async def test_closing_a_session_nobody_is_serving_is_success() -> None:
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
 
-    await adapter.close_session(grant.handle)
+    await adapter.close_session(grant.handle, "conversation-1")
 
     assert client.agent_dispatch.deleted == []
 
@@ -179,8 +223,8 @@ async def test_livekits_own_dispatch_records_are_left_alone() -> None:
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     room = grant.handle["room"]
 
-    await adapter.open_session(grant.handle)
-    await adapter.close_session(grant.handle)
+    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.close_session(grant.handle, "conversation-1")
 
     assert [d.agent_name for d in client.agent_dispatch.dispatches[room]] == [""]
 
@@ -189,9 +233,9 @@ async def test_a_session_that_is_still_starting_is_not_restarted() -> None:
     """The job LiveKit has not published yet must not be mistaken for a dead one."""
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
-    await adapter.open_session(grant.handle)
+    await adapter.open_session(grant.handle, "conversation-1")
 
-    await adapter.open_session(grant.handle)
+    await adapter.open_session(grant.handle, "conversation-1")
 
     assert len(client.agent_dispatch.created) == 1
     assert client.agent_dispatch.deleted == []
@@ -211,10 +255,10 @@ async def test_a_live_session_is_left_alone(statuses) -> None:
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     room = grant.handle["room"]
     client.agent_dispatch._room(room).append(
-        FakeDispatch("AD_live", "eidolon", [FakeJob(s) for s in statuses])
+        FakeDispatch("AD_live", "eidolon", [FakeJob(s) for s in statuses], _metadata())
     )
 
-    await adapter.open_session(grant.handle)
+    await adapter.open_session(grant.handle, "conversation-1")
 
     assert client.agent_dispatch.created == []
 
@@ -236,10 +280,10 @@ async def test_a_spent_dispatch_cannot_block_the_device_forever(statuses) -> Non
         FakeDispatch("AD_spent", "eidolon", [FakeJob(s) for s in statuses])
     )
 
-    await adapter.open_session(grant.handle)
+    await adapter.open_session(grant.handle, "conversation-1")
 
     assert client.agent_dispatch.deleted == [(room, "AD_spent")]
-    assert client.agent_dispatch.created == [(room, "eidolon")]
+    assert client.agent_dispatch.created == [(room, "eidolon", _metadata())]
 
 
 def _packet(*, topic: str, identity: str, body) -> SimpleNamespace:
@@ -249,17 +293,24 @@ def _packet(*, topic: str, identity: str, body) -> SimpleNamespace:
 
 @pytest.mark.parametrize(
     ("wire_type", "expected"),
-    [(SESSION_OPEN_TYPE, ServingRequest.START), (SESSION_CLOSE_TYPE, ServingRequest.STOP)],
+    [(SESSION_OPEN_TYPE, ServingAction.START), (SESSION_CLOSE_TYPE, ServingAction.STOP)],
 )
 async def test_the_device_can_ask_over_its_own_channel(wire_type, expected) -> None:
     adapter, _ = _adapter()
     packet = _packet(
         topic=SESSION_CONTROL_TOPIC,
         identity="device-1",
-        body={"schema_v": 1, "type": wire_type},
+        body={
+            "schema_v": WIRE_SCHEMA_VERSION,
+            "type": wire_type,
+            SESSION_CONVERSATION_ID_FIELD: "conversation-1",
+        },
     )
 
-    assert adapter._requested(packet, device="device-1", room="r") is expected
+    assert adapter._requested(packet, device="device-1", room="r") == ServingRequest(
+        action=expected,
+        conversation_id="conversation-1",
+    )
 
 
 async def test_a_request_from_a_device_not_yet_known_is_still_the_devices() -> None:
@@ -270,9 +321,20 @@ async def test_a_request_from_a_device_not_yet_known_is_still_the_devices() -> N
     opening request of every device that connects and wants to talk.
     """
     adapter, _ = _adapter()
-    packet = _packet(topic=SESSION_CONTROL_TOPIC, identity=None, body={"type": SESSION_OPEN_TYPE})
+    packet = _packet(
+        topic=SESSION_CONTROL_TOPIC,
+        identity=None,
+        body={
+            "schema_v": WIRE_SCHEMA_VERSION,
+            "type": SESSION_OPEN_TYPE,
+            SESSION_CONVERSATION_ID_FIELD: "conversation-1",
+        },
+    )
 
-    assert adapter._requested(packet, device="device-1", room="r") is ServingRequest.START
+    assert adapter._requested(packet, device="device-1", room="r") == ServingRequest(
+        action=ServingAction.START,
+        conversation_id="conversation-1",
+    )
 
 
 @pytest.mark.parametrize(
@@ -444,7 +506,7 @@ async def test_a_channel_that_carries_no_conversation_cannot_hold_a_session() ->
     grant = await adapter.open(_spec(direction="", video="publish"), issued_at_ms=1_000)
 
     with pytest.raises(ChannelNotServable):
-        await adapter.open_session(grant.handle)
+        await adapter.open_session(grant.handle, "conversation-1")
 
 
 async def test_interaction_mode_comes_from_the_device_not_the_deployment() -> None:

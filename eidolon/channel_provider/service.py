@@ -26,7 +26,7 @@ from .contracts import (
     UnknownChannel,
     canonical_json,
 )
-from .ports import ChannelGrant, ServingRequest, ServingRequestSink
+from .ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
 from .spec import ChannelSpec, MediaFlow, derive_spec
 from .store import ChannelProviderStore, StoredProvision
@@ -232,17 +232,24 @@ class ChannelProviderService:
         return await self._serve(request, serving=False)
 
     async def _serve(self, request: SessionRequest, *, serving: bool) -> str:
-        channel = await self._converge_serving(request.device_ref, serving=serving)
+        channel = await self._converge_serving(
+            request.device_ref,
+            serving=serving,
+            conversation_id=request.conversation_id,
+        )
         return canonical_json(
             {
                 "operation": "channel.opened-session" if serving else "channel.closed-session",
                 "device_ref": request.device_ref.model_dump(mode="json"),
                 "channel_id": channel.channel_id,
+                "conversation_id": request.conversation_id,
                 "serving": serving,
             }
         )
 
-    async def _converge_serving(self, device_ref, *, serving: bool) -> StoredProvision:
+    async def _converge_serving(
+        self, device_ref, *, serving: bool, conversation_id: str
+    ) -> StoredProvision:
         """Converge one device's channel onto served or unserved.
 
         The single place a conversation starts or stops, whether the device
@@ -264,9 +271,9 @@ class ChannelProviderService:
             adapter = self._registry.get(active.adapter_name)
             handle = json.loads(active.handle_json)
             if serving:
-                await adapter.open_session(handle)
+                await adapter.open_session(handle, conversation_id)
             else:
-                await adapter.close_session(handle)
+                await adapter.close_session(handle, conversation_id)
             return active
 
     def _sink_for(self, device_ref) -> ServingRequestSink:
@@ -279,7 +286,11 @@ class ChannelProviderService:
         """
 
         async def _requested(request: ServingRequest) -> None:
-            await self._converge_serving(device_ref, serving=request is ServingRequest.START)
+            await self._converge_serving(
+                device_ref,
+                serving=request.action is ServingAction.START,
+                conversation_id=request.conversation_id,
+            )
 
         return _requested
 

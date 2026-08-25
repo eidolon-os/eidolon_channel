@@ -17,15 +17,18 @@ from typing import Any
 
 from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
+    SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
     SESSION_OPEN_TYPE,
+    WIRE_SCHEMA_VERSION,
+    normalize_conversation_id,
 )
 from livekit import api, rtc
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 from livekit.protocol.agent import JobStatus
 
 from ...contracts import BackendUnavailable, ChannelNotServable, canonical_json
-from ...ports import ChannelGrant, ServingRequest, ServingRequestSink
+from ...ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from ...spec import ChannelSpec
 from .config import LiveKitConfig
 
@@ -37,8 +40,8 @@ BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
 _ENDED_JOB_STATUSES = frozenset({JobStatus.JS_SUCCESS, JobStatus.JS_FAILED})
 _SESSION_REQUESTS = {
-    SESSION_OPEN_TYPE: ServingRequest.START,
-    SESSION_CLOSE_TYPE: ServingRequest.STOP,
+    SESSION_OPEN_TYPE: ServingAction.START,
+    SESSION_CLOSE_TYPE: ServingAction.STOP,
 }
 _REJOIN_BASE_DELAY = 1.0
 _REJOIN_MAX_DELAY = 30.0
@@ -311,7 +314,13 @@ class LiveKitChannelAdapter:
             return None
         if not isinstance(body, dict):
             return None
-        return _SESSION_REQUESTS.get(body.get("type"))
+        if body.get("schema_v") != WIRE_SCHEMA_VERSION:
+            return None
+        action = _SESSION_REQUESTS.get(body.get("type"))
+        conversation_id = normalize_conversation_id(body.get(SESSION_CONVERSATION_ID_FIELD))
+        if action is None or conversation_id is None:
+            return None
+        return ServingRequest(action=action, conversation_id=conversation_id)
 
     def _dispatch_request(
         self, sink: ServingRequestSink, request: ServingRequest, *, room: str
@@ -398,31 +407,46 @@ class LiveKitChannelAdapter:
 
     # -- serving ----------------------------------------------------------
 
-    async def open_session(self, handle: dict[str, Any]) -> None:
+    async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         room, agent = self._serving(handle)
         try:
             for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
                 if dispatch.agent_name != agent:
                     continue
-                if not _is_spent(dispatch):
+                metadata = self._dispatch_metadata(dispatch)
+                if (
+                    not _is_spent(dispatch)
+                    and metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
+                ):
                     return
-                # A record whose work is over is not a session, and leaving it
-                # here would let it stand in for one forever: every later
-                # request would read it as "already served" and the device would
-                # never be heard again. Clearing it is what makes a teardown
-                # that failed to withdraw its own dispatch recoverable.
-                logger.info("clearing spent dispatch=%s on room=%s", dispatch.id, room)
+                # A spent dispatch or one belonging to a superseded conversation
+                # cannot stand in for the conversation the device is asking for.
+                logger.info(
+                    "clearing dispatch=%s on room=%s previous_conversation=%s",
+                    dispatch.id,
+                    room,
+                    metadata.get(SESSION_CONVERSATION_ID_FIELD, ""),
+                )
                 await self._client().agent_dispatch.delete_dispatch(
                     dispatch_id=dispatch.id, room_name=room
                 )
             await self._client().agent_dispatch.create_dispatch(
-                api.CreateAgentDispatchRequest(room=room, agent_name=agent)
+                api.CreateAgentDispatchRequest(
+                    room=room,
+                    agent_name=agent,
+                    metadata=canonical_json(
+                        {
+                            "schema_v": WIRE_SCHEMA_VERSION,
+                            SESSION_CONVERSATION_ID_FIELD: conversation_id,
+                        }
+                    ),
+                )
             )
         except Exception as exc:
             raise BackendUnavailable("LiveKit agent dispatch failed") from exc
         logger.info("opened session on room=%s agent=%s", room, agent)
 
-    async def close_session(self, handle: dict[str, Any]) -> None:
+    async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         """Withdraw the standing order, which is what ends the agent's job.
 
         Deleting the dispatch — rather than deleting the room — is what keeps
@@ -437,7 +461,11 @@ class LiveKitChannelAdapter:
         room, agent = self._serving(handle)
         try:
             for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
-                if dispatch.agent_name == agent:
+                if (
+                    dispatch.agent_name == agent
+                    and self._dispatch_metadata(dispatch).get(SESSION_CONVERSATION_ID_FIELD)
+                    == conversation_id
+                ):
                     await self._client().agent_dispatch.delete_dispatch(
                         dispatch_id=dispatch.id, room_name=room
                     )
@@ -448,6 +476,14 @@ class LiveKitChannelAdapter:
         except Exception as exc:
             raise BackendUnavailable("LiveKit agent dispatch withdrawal failed") from exc
         logger.info("closed session on room=%s agent=%s", room, agent)
+
+    @staticmethod
+    def _dispatch_metadata(dispatch: Any) -> dict[str, Any]:
+        try:
+            value = json.loads(str(getattr(dispatch, "metadata", "") or "{}"))
+        except (TypeError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
 
     @staticmethod
     def _serving(handle: dict[str, Any]) -> tuple[str, str]:

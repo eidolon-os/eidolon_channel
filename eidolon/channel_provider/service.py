@@ -20,6 +20,7 @@ from .contracts import (
     IdempotencyConflict,
     InvalidTransition,
     ProvisionRequest,
+    CurrentRequest,
     RevokeRequest,
     SessionRequest,
     UnknownChannel,
@@ -164,6 +165,23 @@ class ChannelProviderService:
                 await previous_adapter.stop_accepting(previous_handle)
                 await previous_adapter.close(previous_handle)
             return committed.response_json
+
+    async def current(self, request: CurrentRequest) -> str:
+        """Report the device's current binding. Reads only; issues nothing.
+
+        Expiry is applied first so the answer is about now, not about when the
+        row was written — an Authority deciding whether to advance a generation
+        must not be told a lapsed credential is current.
+        """
+
+        async with self._lock:
+            self._store.expire_credentials(self._now_ms())
+            stored = self._store.current_channel(request.device_ref)
+        binding = json.loads(stored.response_json) if stored is not None else None
+        return json.dumps(
+            {"operation": "channel.current-device", "binding": binding},
+            separators=(",", ":"),
+        )
 
     async def revoke(self, request: RevokeRequest) -> str:
         async with self._lock:

@@ -347,6 +347,44 @@ class SessionRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentRequest:
+    """Ask what binding a device has, without asking for one to change.
+
+    The Authority decides between beginning a generation and advancing one, and
+    that decision needs the Provider's own answer about what exists. Without a
+    read it had to guess by issuing ``provision`` every time — which replays a
+    spent idempotency key once the first refresh has fenced it, and left every
+    device permanently without a channel about two hours after enrolment.
+    """
+
+    device_ref: DeviceRef
+
+    @classmethod
+    def parse(cls, raw: bytes) -> CurrentRequest:
+        value = decode_json_object(raw)
+        root = _exact_object(
+            value,
+            name="current binding request",
+            required={"operation", "device_ref"},
+        )
+        if root["operation"] != "channel.current-device":
+            raise ContractError("operation must be channel.current-device")
+        try:
+            device_ref = DeviceRef.model_validate(root["device_ref"])
+        except ValidationError as exc:
+            raise ContractError("device_ref is invalid") from exc
+        return cls(device_ref=device_ref)
+
+    @property
+    def owner_domain_id(self) -> str:
+        return str(self.device_ref.owner_domain_id)
+
+    @property
+    def device_id(self) -> str:
+        return self.device_ref.device_instance_id
+
+
+@dataclass(frozen=True, slots=True)
 class RevokeRequest:
     operation_id: str
     device_ref: DeviceRef

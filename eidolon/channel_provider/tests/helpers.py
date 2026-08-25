@@ -65,6 +65,18 @@ def provision_payload(**device_overrides: Any) -> dict[str, Any]:
     }
 
 
+def current_payload(**overrides: Any) -> dict[str, Any]:
+    ref = device_ref(**overrides.pop("device_ref", {}))
+    if "device_id" in overrides:
+        ref["device_instance_id"] = overrides.pop("device_id")
+    value: dict[str, Any] = {
+        "operation": "channel.current-device",
+        "device_ref": ref,
+    }
+    value.update(overrides)
+    return value
+
+
 def revoke_payload(**overrides: Any) -> dict[str, Any]:
     ref = device_ref(**overrides.pop("device_ref", {}))
     if "device_id" in overrides:

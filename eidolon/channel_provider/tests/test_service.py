@@ -10,6 +10,7 @@ from eidolon.channel_provider.contracts import (
     OPEN_SESSION,
     IdempotencyConflict,
     InvalidTransition,
+    CurrentRequest,
     ProvisionRequest,
     RevokeRequest,
     SessionRequest,
@@ -22,6 +23,7 @@ from eidolon.channel_provider.store import PROVISION, ChannelProviderStore
 
 from .helpers import (
     FakeAdapter,
+    current_payload,
     encoded,
     livekit_config,
     provision_payload,
@@ -304,3 +306,72 @@ async def test_a_revoked_device_cannot_hold_a_session(tmp_path) -> None:
         )
 
     assert backend.sessions_opened == []
+
+
+async def test_current_reports_the_live_binding_without_issuing_anything(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    provisioned = await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    answer = await service.current(CurrentRequest.parse(encoded(current_payload())))
+
+    document = json.loads(answer)
+    assert document["operation"] == "channel.current-device"
+    assert document["binding"] == json.loads(provisioned)
+    # Reading is not writing: no adapter was opened for the read.
+    assert len(backend.opened) == 1
+
+
+async def test_current_reports_no_binding_for_a_device_that_has_none(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+
+    answer = await service.current(CurrentRequest.parse(encoded(current_payload())))
+
+    assert json.loads(answer)["binding"] is None
+
+
+async def test_current_reports_a_lapsed_credential_as_expired_not_as_live(tmp_path) -> None:
+    """An Authority deciding whether to advance must not be told a lapsed
+    credential is current."""
+
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    clock[0] += 1800 * 1000 + 1
+    answer = await service.current(CurrentRequest.parse(encoded(current_payload())))
+
+    binding = json.loads(answer)["binding"]
+    assert binding is not None
+    assert binding["channels"][0]["expires_at_ms"] <= clock[0]
+
+
+async def test_a_refresh_ends_the_operation_it_advances_past(tmp_path) -> None:
+    """The rule that made a stale idempotency key fatal, stated as a test.
+
+    Replaying the provision after a refresh has landed is refused, which is
+    correct for an idempotency ledger — and is why the Authority must ask what
+    the current binding is instead of re-issuing the first operation.
+    """
+
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+    request = ProvisionRequest.parse(encoded(provision_payload()))
+    await service.provision(request)
+
+    clock[0] += 1800 * 1000 + 1
+    refresh = provision_payload()
+    refresh["operation"] = "channel.refresh-device"
+    refresh["operation_id"] = "refresh-1"
+    await service.provision(ProvisionRequest.parse(encoded(refresh)))
+
+    with pytest.raises(InvalidTransition):
+        await service.provision(request)
+    # But the binding itself is alive and readable, which is the way forward.
+    assert (
+        json.loads(await service.current(CurrentRequest.parse(encoded(current_payload()))))[
+            "binding"
+        ]
+        is not None
+    )

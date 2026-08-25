@@ -14,6 +14,7 @@ from .contracts import (
     ContractError,
     DomainError,
     ProvisionRequest,
+    CurrentRequest,
     RevokeRequest,
     SessionRequest,
     Unauthenticated,
@@ -70,6 +71,19 @@ def create_app(
         except DomainError as exc:
             return _problem(exc)
 
+    async def current(request: web.Request) -> web.Response:
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            result = await service.current(CurrentRequest.parse(await request.read()))
+            return web.Response(text=result, content_type="application/json")
+        except ContractError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
+
     async def session(request: web.Request, *, expected: str) -> web.Response:
         if not _authorized(request, bearer_token):
             return _problem(Unauthenticated("bearer credential was not accepted"))
@@ -100,6 +114,7 @@ def create_app(
     app.router.add_get("/health", health)
     app.router.add_post("/v1/device-channels/provision", provision)
     app.router.add_post("/v1/device-channels/revoke", revoke)
+    app.router.add_post("/v1/device-channels/current", current)
 
     async def open_session(request: web.Request) -> web.Response:
         return await session(request, expected=OPEN_SESSION)

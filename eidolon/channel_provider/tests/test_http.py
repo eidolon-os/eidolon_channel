@@ -23,6 +23,7 @@ from eidolon.channel_provider.store import ChannelProviderStore
 from .helpers import (
     FakeAdapter,
     provision_payload,
+    current_payload,
     revoke_payload,
     session_payload,
 )
@@ -143,6 +144,24 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
             headers=headers,
         )
         assert unknown.status == 404
+
+        unauthenticated_read = await client.post(
+            "/v1/device-channels/current", json=current_payload()
+        )
+        assert unauthenticated_read.status == 401
+
+        read = await client.post(
+            "/v1/device-channels/current", json=current_payload(), headers=headers
+        )
+        assert read.status == 200
+        assert json.loads(await read.text())["binding"] is not None
+
+        crossed_read = await client.post(
+            "/v1/device-channels/current",
+            json=current_payload(operation="channel.revoke-device"),
+            headers=headers,
+        )
+        assert crossed_read.status == 422
 
         revoked = await client.post(
             "/v1/device-channels/revoke", json=revoke_payload(), headers=headers

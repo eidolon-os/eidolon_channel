@@ -54,7 +54,7 @@ def _mounts(*, device_id: str = _ESP32_007) -> AsyncMock:
             trust_epoch=1,
         ),
         mount_revision=3,
-        attached_companion_id="companion-1",
+        answering_companion_id="companion-1",
     )
     return mounts
 

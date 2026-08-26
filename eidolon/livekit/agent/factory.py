@@ -134,11 +134,11 @@ def _build_runtime_resolve_client(rt: "Any") -> "Any":
 
 def _build_runtime_services(rt: "Any") -> "Any":
     """Compose the two authoritative runtime consumers for one room."""
-    from eidolon.livekit.agent.runtime.kernel_mounts import KernelMountHttpClient
+    from eidolon.livekit.agent.runtime.kernel_bodies import KernelBodyHttpClient
     from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
 
     runtime = _build_runtime_resolve_client(rt)
-    mounts = KernelMountHttpClient(
+    mounts = KernelBodyHttpClient(
         base_url=str(getattr(rt, "kernel_api_url", "") or "").strip(),
         timeout_sec=float(getattr(rt, "http_timeout_sec", 5.0)),
     )

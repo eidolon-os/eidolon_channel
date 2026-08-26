@@ -65,7 +65,7 @@ def _mounts() -> AsyncMock:
             trust_epoch=1,
         ),
         mount_revision=2,
-        attached_companion_id="companion-a",
+        answering_companion_id="companion-a",
     )
     return mounts
 

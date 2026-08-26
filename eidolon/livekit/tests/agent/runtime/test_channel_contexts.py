@@ -51,14 +51,14 @@ def device_ref(device_id: str = _DEVICE_1) -> DeviceRef:
     )
 
 
-async def test_unattached_device_resolves_to_device_connection_without_runtime_lookup():
+async def test_a_device_nobody_answers_through_resolves_without_a_runtime_lookup():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
-        attached_companion_id=None,
+        answering_companion_id=None,
     )
     runtime = AsyncMock()
 
@@ -70,18 +70,18 @@ async def test_unattached_device_resolves_to_device_connection_without_runtime_l
     )
 
     assert isinstance(context, DeviceConnectionContext)
-    assert context.attached_companion_id is None
+    assert context.answering_companion_id is None
     runtime.resolve_companion.assert_not_called()
 
 
-async def test_attached_device_resolves_complete_companion_interaction_context():
+async def test_an_assigned_device_resolves_a_complete_companion_interaction_context():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
-        attached_companion_id="companion-1",
+        answering_companion_id="companion-1",
     )
     runtime = AsyncMock()
     runtime.resolve_companion.return_value = runtime_context(device_id=_DEVICE_1)
@@ -126,7 +126,7 @@ async def test_device_context_fails_closed_on_owner_mismatch():
         device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=1,
-        attached_companion_id=None,
+        answering_companion_id=None,
     )
 
     with pytest.raises(DeviceTokenResolverError, match="owner"):
@@ -138,14 +138,14 @@ async def test_device_context_fails_closed_on_owner_mismatch():
         )
 
 
-async def test_audio_token_resolver_rejects_unattached_device_before_signing():
+async def test_audio_token_resolver_rejects_a_device_nobody_answers_through_before_signing():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
         device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=1,
-        attached_companion_id=None,
+        answering_companion_id=None,
     )
     runtime = AsyncMock()
     resolve = make_device_token_resolver(
@@ -183,7 +183,7 @@ async def test_the_owner_entrance_gets_the_owners_default():
     runtime.resolve_companion.assert_not_called()
 
 
-async def test_an_explicit_companion_outranks_the_devices_attachment():
+async def test_an_explicit_companion_outranks_the_bodys_assignment():
     """Tier one over tier two, on the same request.
 
     The metadata is trusted only as far as the checks below: the resolved
@@ -196,7 +196,7 @@ async def test_an_explicit_companion_outranks_the_devices_attachment():
         device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
-        attached_companion_id="companion-attached",
+        answering_companion_id="companion-assigned",
     )
     runtime = AsyncMock()
     runtime.resolve_companion.return_value = runtime_context(
@@ -221,7 +221,7 @@ async def test_an_explicit_companion_outranks_the_devices_attachment():
 async def test_an_unassigned_device_is_not_given_the_owners_default():
     """The deliberate *absence* of a fallback, pinned so it stays deliberate.
 
-    A physical device with no attachment is a mounted body carrying nobody. It
+    A physical device with no assignment is a mounted Body carrying nobody. It
     would be easy to read "the default answers when nothing named a Companion"
     as covering this too — and that reading is what must not happen: if an
     unassigned speaker already spoke with the Owner's default, then assigning a
@@ -237,7 +237,7 @@ async def test_an_unassigned_device_is_not_given_the_owners_default():
         device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
-        attached_companion_id=None,
+        answering_companion_id=None,
     )
     runtime = AsyncMock()
 

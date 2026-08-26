@@ -46,7 +46,7 @@ class RoomNotConnectedError(DeviceTokenResolverError):
 
 @dataclass(frozen=True, slots=True)
 class DeviceConnectionContext:
-    """Owner-scoped mounted Device; Companion attachment is optional.
+    """Owner-scoped mounted Device; a Companion answering through it is optional.
 
     This context is sufficient for a Channel Provider data connection, but not
     for constructing an Agent/audio runtime token.
@@ -56,7 +56,7 @@ class DeviceConnectionContext:
     device_id: str
     device_ref: DeviceRef
     mount_revision: int
-    attached_companion_id: str | None = None
+    answering_companion_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,9 +193,10 @@ async def resolve_channel_context(
 ) -> DeviceConnectionContext | CompanionInteractionContext:
     """Resolve ingress before choosing a Channel processing path.
 
-    An unattached Device remains a valid Device connection. A complete
-    Companion runtime is requested only when a Kernel attachment or explicit
-    same-Owner target exists. Physical Device ingress always requires Kernel.
+    A Device nobody answers through remains a valid Device connection. A
+    complete Companion runtime is requested only when the Kernel Body assignment
+    or an explicit same-Owner target names one. Physical Device ingress always
+    requires Kernel.
     """
     kind = str(metadata.get("kind") or "").strip().lower()
     if kind == "device":
@@ -217,7 +218,7 @@ async def resolve_channel_context(
             raise DeviceTokenResolverError("Kernel Device Mount owner/device mismatch")
 
         companion_id = str(
-            metadata.get("companion_id") or connection.attached_companion_id or ""
+            metadata.get("companion_id") or connection.answering_companion_id or ""
         ).strip()
         if not companion_id:
             return connection

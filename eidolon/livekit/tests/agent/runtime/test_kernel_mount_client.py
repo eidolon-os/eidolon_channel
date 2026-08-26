@@ -10,6 +10,13 @@ from eidolon.livekit.agent.runtime.kernel_mounts import (
     KernelMountHttpClient,
 )
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_1 = named_device_instance_id("device-1")
+_DEVICE_2 = named_device_instance_id("device-2")
+
 
 pytestmark = pytest.mark.asyncio
 
@@ -17,10 +24,10 @@ pytestmark = pytest.mark.asyncio
 def document(**overrides):
     value = {
         "operation": "kernel.device-mount",
-        "device_id": "device-1",
+        "device_id": _DEVICE_1,
         "owner_id": "owner-1",
         "device_ref": {
-            "device_instance_id": "device-1",
+            "device_instance_id": _DEVICE_1,
             "owner_domain_id": "owner-domain-1",
             "owner_domain_generation": 2,
             "claim_generation": 3,
@@ -41,7 +48,7 @@ def document(**overrides):
 async def test_kernel_mount_client_is_owner_scoped_and_accepts_no_attachment():
     async def handler(request):
         assert request.headers["X-Eidolon-Owner"] == "owner-1"
-        assert request.url.path.endswith("/resolve/device-1")
+        assert request.url.path.endswith(f"/resolve/{_DEVICE_1}")
         return httpx.Response(200, json=document())
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -49,11 +56,11 @@ async def test_kernel_mount_client_is_owner_scoped_and_accepts_no_attachment():
         client = KernelMountHttpClient(
             base_url="http://kernel.test/api/kernel/v1", http_client=http
         )
-        context = await client.resolve(owner_id="owner-1", device_id="device-1")
+        context = await client.resolve(owner_id="owner-1", device_id=_DEVICE_1)
     finally:
         await http.aclose()
 
-    assert context.device_id == "device-1"
+    assert context.device_id == _DEVICE_1
     assert str(context.device_ref.owner_domain_id) == "owner-domain-1"
     assert context.owner_id == "owner-1"
     assert context.mount_revision == 3
@@ -68,7 +75,7 @@ async def test_kernel_mount_client_rejects_contract_drift():
     try:
         client = KernelMountHttpClient(base_url="http://kernel.test", http_client=http)
         with pytest.raises(KernelMountContractError, match="fields"):
-            await client.resolve(owner_id="owner-1", device_id="device-1")
+            await client.resolve(owner_id="owner-1", device_id=_DEVICE_1)
     finally:
         await http.aclose()
 
@@ -80,7 +87,7 @@ async def test_kernel_mount_client_rejects_device_ref_for_another_device():
             json=document(
                 device_ref={
                     **document()["device_ref"],
-                    "device_instance_id": "device-2",
+                    "device_instance_id": _DEVICE_2,
                 }
             ),
         )
@@ -88,7 +95,7 @@ async def test_kernel_mount_client_rejects_device_ref_for_another_device():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = KernelMountHttpClient(base_url="http://kernel.test", http_client=http)
         with pytest.raises(KernelMountContractError, match="values"):
-            await client.resolve(owner_id="owner-1", device_id="device-1")
+            await client.resolve(owner_id="owner-1", device_id=_DEVICE_1)
 
 
 async def test_consumed_shape_matches_kernel_normative_mount_schema():

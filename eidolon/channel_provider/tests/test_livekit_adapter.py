@@ -22,6 +22,12 @@ from eidolon.channel_provider.spec import derive_spec
 
 from .helpers import audio_manifest, encoded, livekit_config, provision_payload
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_1 = named_device_instance_id("device-1")
+
 
 class FakeRoomService:
     def __init__(self) -> None:
@@ -299,7 +305,7 @@ async def test_the_device_can_ask_over_its_own_channel(wire_type, expected) -> N
     adapter, _ = _adapter()
     packet = _packet(
         topic=SESSION_CONTROL_TOPIC,
-        identity="device-1",
+        identity=_DEVICE_1,
         body={
             "schema_v": WIRE_SCHEMA_VERSION,
             "type": wire_type,
@@ -307,7 +313,7 @@ async def test_the_device_can_ask_over_its_own_channel(wire_type, expected) -> N
         },
     )
 
-    assert adapter._requested(packet, device="device-1", room="r") == ServingRequest(
+    assert adapter._requested(packet, device=_DEVICE_1, room="r") == ServingRequest(
         action=expected,
         conversation_id="conversation-1",
     )
@@ -331,7 +337,7 @@ async def test_a_request_from_a_device_not_yet_known_is_still_the_devices() -> N
         },
     )
 
-    assert adapter._requested(packet, device="device-1", room="r") == ServingRequest(
+    assert adapter._requested(packet, device=_DEVICE_1, room="r") == ServingRequest(
         action=ServingAction.START,
         conversation_id="conversation-1",
     )
@@ -349,25 +355,25 @@ async def test_a_request_from_a_device_not_yet_known_is_still_the_devices() -> N
         # Right sender, but this topic is not where requests live.
         _packet(
             topic="eidolon.audio_state",
-            identity="device-1",
+            identity=_DEVICE_1,
             body={"type": SESSION_OPEN_TYPE},
         ),
         # The other direction of this very topic must never loop back.
         _packet(
             topic=SESSION_CONTROL_TOPIC,
-            identity="device-1",
+            identity=_DEVICE_1,
             body={"type": "session_end", "reason": "user_left"},
         ),
-        _packet(topic=SESSION_CONTROL_TOPIC, identity="device-1", body=b"not json"),
-        _packet(topic=SESSION_CONTROL_TOPIC, identity="device-1", body=["not", "an", "object"]),
-        _packet(topic=SESSION_CONTROL_TOPIC, identity="device-1", body={}),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity=_DEVICE_1, body=b"not json"),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity=_DEVICE_1, body=["not", "an", "object"]),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity=_DEVICE_1, body={}),
     ],
 )
 async def test_only_this_device_saying_one_of_two_things_is_a_request(packet) -> None:
     """Untrusted input on a shared topic: anything else is simply not a request."""
     adapter, _ = _adapter()
 
-    assert adapter._requested(packet, device="device-1", room="r") is None
+    assert adapter._requested(packet, device=_DEVICE_1, room="r") is None
 
 
 class FakeRoom:

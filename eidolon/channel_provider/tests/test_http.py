@@ -28,6 +28,12 @@ from .helpers import (
     session_payload,
 )
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_NOBODY = named_device_instance_id("nobody")
+
 
 @pytest.mark.parametrize(
     ("error", "status", "code", "category", "retryable"),
@@ -140,7 +146,7 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
 
         unknown = await client.post(
             "/v1/device-channels/sessions/open",
-            json=session_payload(operation=OPEN_SESSION, device_id="nobody"),
+            json=session_payload(operation=OPEN_SESSION, device_id=_NOBODY),
             headers=headers,
         )
         assert unknown.status == 404

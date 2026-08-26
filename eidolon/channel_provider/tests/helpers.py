@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
 from eidolon.channel_provider.adapters.livekit import LiveKitConfig
 from eidolon.channel_provider.ports import ChannelGrant, ServingRequest, ServingRequestSink
 from eidolon.channel_provider.spec import ChannelSpec
@@ -22,7 +24,7 @@ def livekit_config(**overrides: Any) -> LiveKitConfig:
 
 def device_ref(**overrides: Any) -> dict[str, Any]:
     value: dict[str, Any] = {
-        "device_instance_id": "device-1",
+        "device_instance_id": named_device_instance_id("device-1"),
         "owner_domain_id": "owner-domain-1",
         "owner_domain_generation": 1,
         "claim_generation": 1,

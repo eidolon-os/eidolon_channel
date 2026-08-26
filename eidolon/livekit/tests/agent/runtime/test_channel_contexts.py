@@ -13,6 +13,12 @@ from eidolon.livekit.agent.runtime.resolver import (
     resolve_channel_context,
 )
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_1 = named_device_instance_id("device-1")
+
 
 def runtime_context(*, device_id=None, companion_id="companion-1"):
     return ResolvedContext(
@@ -28,14 +34,14 @@ def runtime_context(*, device_id=None, companion_id="companion-1"):
 
 
 def room(metadata: str):
-    participant = SimpleNamespace(identity="device-1", metadata=metadata)
-    return SimpleNamespace(remote_participants={"device-1": participant})
+    participant = SimpleNamespace(identity=_DEVICE_1, metadata=metadata)
+    return SimpleNamespace(remote_participants={_DEVICE_1: participant})
 
 
 pytestmark = pytest.mark.asyncio
 
 
-def device_ref(device_id: str = "device-1") -> DeviceRef:
+def device_ref(device_id: str = _DEVICE_1) -> DeviceRef:
     return DeviceRef(
         device_instance_id=device_id,
         owner_domain_id="owner-domain-1",
@@ -49,7 +55,7 @@ async def test_unattached_device_resolves_to_device_connection_without_runtime_l
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
-        device_id="device-1",
+        device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id=None,
@@ -59,7 +65,7 @@ async def test_unattached_device_resolves_to_device_connection_without_runtime_l
     context = await resolve_channel_context(
         runtime=runtime,
         mounts=mounts,
-        identity="device-1",
+        identity=_DEVICE_1,
         metadata={"kind": "device", "owner_id": "owner-1"},
     )
 
@@ -72,25 +78,25 @@ async def test_attached_device_resolves_complete_companion_interaction_context()
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
-        device_id="device-1",
+        device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id="companion-1",
     )
     runtime = AsyncMock()
-    runtime.resolve_companion.return_value = runtime_context(device_id="device-1")
+    runtime.resolve_companion.return_value = runtime_context(device_id=_DEVICE_1)
 
     context = await resolve_channel_context(
         runtime=runtime,
         mounts=mounts,
-        identity="device-1",
+        identity=_DEVICE_1,
         metadata={"kind": "device", "owner_id": "owner-1"},
     )
 
     assert isinstance(context, CompanionInteractionContext)
-    assert context.runtime.device_id == "device-1"
+    assert context.runtime.device_id == _DEVICE_1
     assert context.mount_revision == 7
-    runtime.resolve_companion.assert_awaited_once_with("companion-1", device_id="device-1")
+    runtime.resolve_companion.assert_awaited_once_with("companion-1", device_id=_DEVICE_1)
 
 
 async def test_companion_participant_needs_no_device():
@@ -117,7 +123,7 @@ async def test_device_context_fails_closed_on_owner_mismatch():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-2",
-        device_id="device-1",
+        device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=1,
         attached_companion_id=None,
@@ -127,7 +133,7 @@ async def test_device_context_fails_closed_on_owner_mismatch():
         await resolve_channel_context(
             runtime=AsyncMock(),
             mounts=mounts,
-            identity="device-1",
+            identity=_DEVICE_1,
             metadata={"kind": "device", "owner_id": "owner-1"},
         )
 
@@ -136,7 +142,7 @@ async def test_audio_token_resolver_rejects_unattached_device_before_signing():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
-        device_id="device-1",
+        device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=1,
         attached_companion_id=None,
@@ -187,20 +193,20 @@ async def test_an_explicit_companion_outranks_the_devices_attachment():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
-        device_id="device-1",
+        device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id="companion-attached",
     )
     runtime = AsyncMock()
     runtime.resolve_companion.return_value = runtime_context(
-        device_id="device-1", companion_id="companion-asked-for"
+        device_id=_DEVICE_1, companion_id="companion-asked-for"
     )
 
     context = await resolve_channel_context(
         runtime=runtime,
         mounts=mounts,
-        identity="device-1",
+        identity=_DEVICE_1,
         metadata={
             "kind": "device",
             "owner_id": "owner-1",
@@ -209,7 +215,7 @@ async def test_an_explicit_companion_outranks_the_devices_attachment():
     )
 
     assert isinstance(context, CompanionInteractionContext)
-    runtime.resolve_companion.assert_awaited_once_with("companion-asked-for", device_id="device-1")
+    runtime.resolve_companion.assert_awaited_once_with("companion-asked-for", device_id=_DEVICE_1)
 
 
 async def test_an_unassigned_device_is_not_given_the_owners_default():
@@ -228,7 +234,7 @@ async def test_an_unassigned_device_is_not_given_the_owners_default():
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
-        device_id="device-1",
+        device_id=_DEVICE_1,
         device_ref=device_ref(),
         mount_revision=7,
         attached_companion_id=None,
@@ -238,7 +244,7 @@ async def test_an_unassigned_device_is_not_given_the_owners_default():
     context = await resolve_channel_context(
         runtime=runtime,
         mounts=mounts,
-        identity="device-1",
+        identity=_DEVICE_1,
         metadata={"kind": "device", "owner_id": "owner-1"},
     )
 

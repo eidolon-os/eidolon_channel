@@ -31,6 +31,14 @@ from .helpers import (
     session_payload,
 )
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_1 = named_device_instance_id("device-1")
+_DEVICE_2 = named_device_instance_id("device-2")
+_UNKNOWN = named_device_instance_id("unknown")
+
 
 def _service(tmp_path, clock: list[int], backend: FakeAdapter | None = None):
     config = livekit_config()
@@ -168,11 +176,11 @@ async def test_revoke_deletes_rooms_scrubs_binding_and_is_idempotent(tmp_path) -
 async def test_revoke_unknown_device_is_desired_state_success(tmp_path) -> None:
     clock = [1_700_000_000_000]
     service, _store, backend = _service(tmp_path, clock)
-    request = RevokeRequest.parse(encoded(revoke_payload(device_id="unknown")))
+    request = RevokeRequest.parse(encoded(revoke_payload(device_id=_UNKNOWN)))
 
     response = await service.revoke(request)
 
-    assert json.loads(response)["device_ref"]["device_instance_id"] == "unknown"
+    assert json.loads(response)["device_ref"]["device_instance_id"] == _UNKNOWN
     assert backend.closed == []
 
 
@@ -193,7 +201,7 @@ async def test_a_session_runs_on_the_adapter_that_opened_the_channel(tmp_path) -
         )
     )
 
-    handle = {"resource": "livekit:device-1"}
+    handle = {"resource": f"livekit:{_DEVICE_1}"}
     assert backend.sessions_opened == [(handle, "conversation-1")]
     assert backend.sessions_closed == [(handle, "conversation-1")]
     assert json.loads(opened) == {
@@ -228,7 +236,7 @@ async def test_a_provisioned_channel_is_listened_to(tmp_path) -> None:
 
     await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
 
-    assert list(backend.watched) == ["livekit:device-1"]
+    assert list(backend.watched) == [f"livekit:{_DEVICE_1}"]
 
 
 async def test_a_device_can_start_and_stop_its_own_conversation(tmp_path) -> None:
@@ -237,10 +245,10 @@ async def test_a_device_can_start_and_stop_its_own_conversation(tmp_path) -> Non
     service, _store, backend = _service(tmp_path, clock)
     await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
 
-    await backend.device_asks("device-1", ServingRequest(ServingAction.START, "conversation-1"))
-    await backend.device_asks("device-1", ServingRequest(ServingAction.STOP, "conversation-1"))
+    await backend.device_asks(_DEVICE_1, ServingRequest(ServingAction.START, "conversation-1"))
+    await backend.device_asks(_DEVICE_1, ServingRequest(ServingAction.STOP, "conversation-1"))
 
-    handle = {"resource": "livekit:device-1"}
+    handle = {"resource": f"livekit:{_DEVICE_1}"}
     assert backend.sessions_opened == [(handle, "conversation-1")]
     assert backend.sessions_closed == [(handle, "conversation-1")]
 
@@ -252,18 +260,18 @@ async def test_a_restart_resumes_listening_to_every_open_channel(tmp_path) -> No
     await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
     await service.provision(
         ProvisionRequest.parse(
-            encoded(provision_payload(device_id="device-2") | {"operation_id": "enrollment-2"})
+            encoded(provision_payload(device_id=_DEVICE_2) | {"operation_id": "enrollment-2"})
         )
     )
 
     restarted, _store2, fresh_backend = _service(tmp_path, clock)
     await restarted.start()
 
-    assert sorted(fresh_backend.watched) == ["livekit:device-1", "livekit:device-2"]
+    assert sorted(fresh_backend.watched) == [f"livekit:{_DEVICE_1}", f"livekit:{_DEVICE_2}"]
     await fresh_backend.device_asks(
-        "device-2", ServingRequest(ServingAction.START, "conversation-2")
+        _DEVICE_2, ServingRequest(ServingAction.START, "conversation-2")
     )
-    assert fresh_backend.sessions_opened == [({"resource": "livekit:device-2"}, "conversation-2")]
+    assert fresh_backend.sessions_opened == [({"resource": f"livekit:{_DEVICE_2}"}, "conversation-2")]
 
 
 async def test_a_channel_that_cannot_be_watched_is_still_provisioned(tmp_path) -> None:
@@ -291,7 +299,7 @@ async def test_revocation_stops_listening_to_the_channel(tmp_path) -> None:
     await service.revoke(RevokeRequest.parse(encoded(revoke_payload())))
 
     assert backend.watched == {}
-    assert backend.stopped == [{"resource": "livekit:device-1"}]
+    assert backend.stopped == [{"resource": f"livekit:{_DEVICE_1}"}]
 
 
 async def test_a_revoked_device_cannot_hold_a_session(tmp_path) -> None:

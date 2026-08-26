@@ -13,6 +13,12 @@ from eidolon.livekit.agent.runtime.resolver import DeviceConnectionContext
 from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
 from eidolon.livekit.avatar.face_source import resolve_session_face_image
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_ESP32_A = named_device_instance_id("esp32-a")
+
 pytestmark = pytest.mark.asyncio
 JPEG = b"\xff\xd8\xffconfigured-face-bytes\xff\xd9"
 
@@ -40,7 +46,7 @@ def _context(*, device_id: str | None) -> ResolvedRuntimeIdentity:
 
 def _runtime(*, face: bytes | None = JPEG) -> AsyncMock:
     runtime = AsyncMock()
-    runtime.resolve_companion.return_value = _context(device_id="esp32-a")
+    runtime.resolve_companion.return_value = _context(device_id=_ESP32_A)
     runtime.resolve_owner.return_value = _context(device_id=None)
     runtime.get_companion_face.return_value = face
     return runtime
@@ -50,9 +56,9 @@ def _mounts() -> AsyncMock:
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-a",
-        device_id="esp32-a",
+        device_id=_ESP32_A,
         device_ref=DeviceRef(
-            device_instance_id="esp32-a",
+            device_instance_id=_ESP32_A,
             owner_domain_id="owner-domain-a",
             owner_domain_generation=1,
             claim_generation=1,
@@ -69,8 +75,8 @@ async def test_resolves_configured_face_for_mounted_device() -> None:
     services = ChannelRuntimeServices(runtime=runtime, mounts=_mounts())
     room = _room_with(
         _participant(
-            "esp32-a",
-            '{"kind":"device","device_id":"esp32-a","owner_id":"owner-a"}',
+            _ESP32_A,
+            f'{{"kind":"device","device_id":"{_ESP32_A}","owner_id":"owner-a"}}',
         )
     )
 
@@ -82,7 +88,7 @@ async def test_resolves_configured_face_for_mounted_device() -> None:
         )
         == JPEG
     )
-    runtime.resolve_companion.assert_awaited_once_with("companion-a", device_id="esp32-a")
+    runtime.resolve_companion.assert_awaited_once_with("companion-a", device_id=_ESP32_A)
     runtime.get_companion_face.assert_awaited_once_with("companion-a")
 
 

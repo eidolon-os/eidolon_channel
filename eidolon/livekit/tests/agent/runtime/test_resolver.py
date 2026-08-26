@@ -28,12 +28,20 @@ from eidolon.livekit.agent.runtime.resolver import (
     wait_for_runtime_participant_metadata,
 )
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEV_1 = named_device_instance_id("dev-1")
+_ESP32_007 = named_device_instance_id("esp32-007")
+_GHOST = named_device_instance_id("ghost")
+
 
 def _fake_admin() -> AsyncMock:
     return AsyncMock()
 
 
-def _mounts(*, device_id: str = "esp32-007") -> AsyncMock:
+def _mounts(*, device_id: str = _ESP32_007) -> AsyncMock:
     mounts = AsyncMock()
     mounts.resolve.return_value = DeviceConnectionContext(
         owner_id="owner-1",
@@ -76,7 +84,7 @@ pytestmark = pytest.mark.asyncio
 SECRET = "test-secret-with-enough-entropy-32b"
 
 
-def _ctx(*, device_id: str | None = "dev-1") -> ResolvedContext:
+def _ctx(*, device_id: str | None = _DEV_1) -> ResolvedContext:
     return ResolvedContext(
         owner_id="owner-1",
         companion_id="companion-1",
@@ -101,12 +109,12 @@ async def test_token_resolver_requires_explicit_session_binding() -> None:
 
 async def test_resolver_dispatches_to_device_for_kind_device():
     admin = _fake_admin()
-    admin.resolve_companion.return_value = _ctx(device_id="esp32-007")
+    admin.resolve_companion.return_value = _ctx(device_id=_ESP32_007)
     mounts = _mounts()
     room = _room_with(
         _participant(
-            "esp32-007",
-            '{"kind":"device","device_id":"esp32-007","owner_id":"owner-1"}',
+            _ESP32_007,
+            f'{{"kind":"device","device_id":"{_ESP32_007}","owner_id":"owner-1"}}',
         )
     )
     resolve = make_device_token_resolver(
@@ -124,27 +132,27 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert payload["session_id"] == "room-1"
     assert "memory_realm_id" not in payload
     assert "genome_id" not in payload
-    assert payload["device_id"] == "esp32-007"
+    assert payload["device_id"] == _ESP32_007
     assert payload["runtime_token_version"] == 5
     assert "actor_kind" not in payload
     assert "actor_id" not in payload
     assert identity.owner_id == "owner-1"
     assert identity.companion_id == "companion-1"
-    assert identity.device_id == "esp32-007"
+    assert identity.device_id == _ESP32_007
     assert identity.session_id == "room-1"
-    mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id="esp32-007")
-    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="esp32-007")
+    mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id=_ESP32_007)
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id=_ESP32_007)
 
 
 async def test_resolver_ignores_non_publishing_system_participant_before_device():
     admin = _fake_admin()
-    admin.resolve_companion.return_value = _ctx(device_id="esp32-007")
+    admin.resolve_companion.return_value = _ctx(device_id=_ESP32_007)
     mounts = _mounts()
     room = _room_with(
         _participant("eidolon-hub-control-test", can_publish=False),
         _participant(
-            "esp32-007",
-            '{"kind":"device","device_id":"esp32-007","owner_id":"owner-1"}',
+            _ESP32_007,
+            f'{{"kind":"device","device_id":"{_ESP32_007}","owner_id":"owner-1"}}',
             can_publish=True,
         ),
     )
@@ -159,17 +167,17 @@ async def test_resolver_ignores_non_publishing_system_participant_before_device(
     token = await resolve()
 
     payload = jwt.decode(token, SECRET, algorithms=["HS256"])
-    assert payload["device_id"] == "esp32-007"
-    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="esp32-007")
+    assert payload["device_id"] == _ESP32_007
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id=_ESP32_007)
 
 
 async def test_wait_for_runtime_participant_returns_device_metadata_not_hub():
     room = _room_with(
         _participant("eidolon-hub-control-test", can_publish=False),
         _participant(
-            "esp32-007",
+            _ESP32_007,
             (
-                '{"kind":"device","device_id":"esp32-007",'
+                f'{{"kind":"device","device_id":"{_ESP32_007}",'
                 '"interaction_mode":"full_duplex",'
                 '"session_intent":"presence_initiated"}'
             ),
@@ -182,7 +190,7 @@ async def test_wait_for_runtime_participant_returns_device_metadata_not_hub():
         timeout_sec=0,
     )
 
-    assert identity == "esp32-007"
+    assert identity == _ESP32_007
     assert metadata["interaction_mode"] == "full_duplex"
     assert metadata["session_intent"] == "presence_initiated"
 
@@ -258,9 +266,9 @@ async def test_resolver_caches_token_across_calls():
     token without hitting admin again. One LK session = one HTTP +
     one sign — the whole point of the cache."""
     admin = _fake_admin()
-    admin.resolve_companion.return_value = _ctx(device_id="dev-1")
-    mounts = _mounts(device_id="dev-1")
-    room = _room_with(_participant("dev-1", '{"kind":"device","owner_id":"owner-1"}'))
+    admin.resolve_companion.return_value = _ctx(device_id=_DEV_1)
+    mounts = _mounts(device_id=_DEV_1)
+    room = _room_with(_participant(_DEV_1, '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
@@ -271,7 +279,7 @@ async def test_resolver_caches_token_across_calls():
     t1 = await resolve()
     t2 = await resolve()
     assert t1 == t2
-    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="dev-1")
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id=_DEV_1)
 
 
 async def test_resolver_coalesces_concurrent_first_calls():
@@ -282,8 +290,8 @@ async def test_resolver_coalesces_concurrent_first_calls():
         return _ctx(device_id=device_id)
 
     admin.resolve_companion.side_effect = resolve_companion
-    mounts = _mounts(device_id="dev-1")
-    room = _room_with(_participant("dev-1", '{"kind":"device","owner_id":"owner-1"}'))
+    mounts = _mounts(device_id=_DEV_1)
+    room = _room_with(_participant(_DEV_1, '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
@@ -295,8 +303,8 @@ async def test_resolver_coalesces_concurrent_first_calls():
     tokens = await asyncio.gather(resolve(), resolve(), resolve())
 
     assert len(set(tokens)) == 1
-    mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id="dev-1")
-    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id="dev-1")
+    mounts.resolve.assert_awaited_once_with(owner_id="owner-1", device_id=_DEV_1)
+    admin.resolve_companion.assert_awaited_once_with("companion-1", device_id=_DEV_1)
 
 
 async def test_resolver_propagates_system_data_404_as_resolver_error():
@@ -305,8 +313,8 @@ async def test_resolver_propagates_system_data_404_as_resolver_error():
     APIConnectionError up to the LK pipeline."""
     admin = _fake_admin()
     admin.resolve_companion.side_effect = SystemDataNotFound("companion 'ghost' not found")
-    mounts = _mounts(device_id="ghost")
-    room = _room_with(_participant("ghost", '{"kind":"device","owner_id":"owner-1"}'))
+    mounts = _mounts(device_id=_GHOST)
+    room = _room_with(_participant(_GHOST, '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,
@@ -340,10 +348,10 @@ async def test_resolver_failure_does_not_cache():
     admin = _fake_admin()
     admin.resolve_companion.side_effect = [
         SystemDataNotFound("transient"),
-        _ctx(device_id="dev-1"),
+        _ctx(device_id=_DEV_1),
     ]
-    mounts = _mounts(device_id="dev-1")
-    room = _room_with(_participant("dev-1", '{"kind":"device","owner_id":"owner-1"}'))
+    mounts = _mounts(device_id=_DEV_1)
+    room = _room_with(_participant(_DEV_1, '{"kind":"device","owner_id":"owner-1"}'))
     resolve = make_device_token_resolver(
         room=room,
         runtime=admin,

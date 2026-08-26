@@ -15,13 +15,19 @@ from eidolon.channel_provider.contracts import (
 
 from .helpers import encoded, provision_payload, revoke_payload, session_payload
 
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_1 = named_device_instance_id("device-1")
+
 
 def test_provision_request_matches_hub_v1_contract() -> None:
     request = ProvisionRequest.parse(encoded(provision_payload()))
 
     assert request.operation_id == "enrollment-1"
     assert request.owner_domain_id == "owner-domain-1"
-    assert request.device_ref.device_instance_id == "device-1"
+    assert request.device_ref.device_instance_id == _DEVICE_1
     assert str(request.device.owner_id) == "owner_1"
     assert request.device.manifest["media"][0]["kind"] == "audio"
     assert request.fingerprint.startswith("sha256:")
@@ -31,7 +37,7 @@ def test_revoke_request_matches_hub_v1_contract() -> None:
     request = RevokeRequest.parse(encoded(revoke_payload()))
 
     assert request.operation_id == "revoke-1"
-    assert request.device_ref.device_instance_id == "device-1"
+    assert request.device_ref.device_instance_id == _DEVICE_1
     assert request.reason == "owner-request"
 
 
@@ -42,7 +48,7 @@ def test_session_request_matches_hub_v1_contract() -> None:
 
     assert request.operation == OPEN_SESSION
     assert request.owner_domain_id == "owner-domain-1"
-    assert request.device_id == "device-1"
+    assert request.device_id == _DEVICE_1
 
 
 @pytest.mark.parametrize(

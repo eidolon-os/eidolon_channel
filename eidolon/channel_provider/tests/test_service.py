@@ -386,3 +386,58 @@ async def test_a_refresh_ends_the_operation_it_advances_past(tmp_path) -> None:
         ]
         is not None
     )
+
+
+async def test_presence_answers_for_the_channels_it_granted(tmp_path) -> None:
+    """Presence had no producer on this Host; the channel is what knew.
+
+    Hub publishes existence and refuses liveness by contract, Kernel speaks
+    about an assignment rather than a body, and the runtime blackboard's reader
+    was withdrawn — so every body read 「未探测」 while its speaker was in a
+    call. This is the smallest truthful answer: for each channel granted, ask
+    that channel's transport whether the device itself is on it.
+    """
+
+    clock = [1_000]
+    service, _store, backend = _service(tmp_path, clock)
+    backend.on_channel = True
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload(device_id=_DEVICE_1))))
+
+    answer = json.loads(await service.presence())
+
+    assert answer["operation"] == "channel.presence"
+    assert [(row["device_id"], row["on_channel"]) for row in answer["bodies"]] == [
+        (_DEVICE_1, True)
+    ]
+    # Asked about the channel's own handle, which is the only thing that carries
+    # the device↔room binding.
+    assert backend.presence_reads and backend.presence_reads[0] == {
+        "resource": f"livekit:{_DEVICE_1}"
+    }
+
+
+async def test_a_transport_that_cannot_see_is_not_a_body_that_is_off(tmp_path) -> None:
+    """The distinction the whole three-state answer exists for."""
+
+    clock = [1_000]
+    service, _store, backend = _service(tmp_path, clock)
+    backend.on_channel = None
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload(device_id=_DEVICE_1))))
+
+    answer = json.loads(await service.presence())
+
+    assert answer["bodies"][0]["on_channel"] is None
+
+
+async def test_presence_says_nothing_about_a_revoked_body(tmp_path) -> None:
+    """A body with no channel is not a body that is off, it is one with no channel."""
+
+    clock = [1_000]
+    service, _store, backend = _service(tmp_path, clock)
+    backend.on_channel = True
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload(device_id=_DEVICE_1))))
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload(device_id=_DEVICE_1))))
+
+    answer = json.loads(await service.presence())
+
+    assert answer["bodies"] == []

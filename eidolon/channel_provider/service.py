@@ -183,6 +183,52 @@ class ChannelProviderService:
             separators=(",", ":"),
         )
 
+    async def presence(self) -> str:
+        """Which of this Host's bodies are on their channel right now.
+
+        Presence had no producer anywhere on this Host. Hub publishes existence
+        and lifecycle and refuses liveness by contract; Kernel commits an
+        assignment and says so about the assignment, not the body; the runtime
+        blackboard's reader was withdrawn. So every body on the Owner's map read
+        「未探测」 while its speaker was plainly in a call.
+
+        This is the smallest thing that can answer it truthfully, and it is a
+        read: for each channel this provider granted, ask its adapter whether
+        the device itself is on it. No heartbeat to keep alive, no session state
+        to hold — ``_converge_serving`` deliberately writes nothing — and no new
+        authority. The channel is the only thing that ever knew, and this
+        provider is what granted the channel.
+
+        The lock is taken only to read the provisions; the adapter calls happen
+        outside it. A transport that has gone slow must not hold up a device
+        asking to be served.
+        """
+
+        async with self._lock:
+            self._store.expire_credentials(self._now_ms())
+            active = self._store.active_provisions()
+        bodies = []
+        for stored in active:
+            adapter = self._registry.get(stored.adapter_name)
+            reader = getattr(adapter, "device_is_on_channel", None)
+            on_channel = await reader(json.loads(stored.handle_json)) if reader else None
+            bodies.append(
+                {
+                    # The device's stable instance id, which is what a body is
+                    # called everywhere else on this Host — see the request
+                    # contracts' own `device_id` property, which reads the same
+                    # field. Read directly: a `DeviceRef` that does not carry it
+                    # is a shape this method does not understand.
+                    "device_id": stored.device_ref.device_instance_id,
+                    "owner_id": stored.owner_id,
+                    "channel_id": stored.channel_id,
+                    # Three states. `null` is "this channel cannot say", which
+                    # is not the same answer as "the body is not there".
+                    "on_channel": on_channel,
+                }
+            )
+        return canonical_json({"operation": "channel.presence", "bodies": bodies})
+
     async def revoke(self, request: RevokeRequest) -> str:
         async with self._lock:
             now = self._now_ms()

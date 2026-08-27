@@ -140,6 +140,26 @@ class ChannelAdapter(Protocol):
         """Stop listening to this channel. Must tolerate one never watched."""
         ...
 
+    async def device_is_on_channel(self, handle: dict[str, Any]) -> bool | None:
+        """Whether the device itself is on this channel right now.
+
+        The device, not the channel: a channel that exists and an agent sitting
+        in it are both true of a body that is switched off, and neither is what
+        anyone means by "is it there". So an adapter answers this only about the
+        one participant that is the device.
+
+        Three answers, and the third is the important one. ``True`` and
+        ``False`` are observations. ``None`` means this adapter cannot see —
+        the transport did not answer, or this kind of channel has no notion of
+        being on it — and it must never be collapsed into ``False``, which
+        would tell someone their speaker is off when the truth is that nobody
+        with standing looked.
+
+        Must not raise for an unreachable backend: an observation that failed
+        is ``None``, and presence is never worth failing a read for.
+        """
+        ...
+
     async def shutdown(self) -> None:
         """Release adapter-wide resources at process exit."""
         ...

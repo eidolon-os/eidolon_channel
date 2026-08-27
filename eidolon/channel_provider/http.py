@@ -111,7 +111,26 @@ def create_app(
         await service.shutdown()
 
     app.on_startup.append(start)
+    async def presence(request: web.Request) -> web.Response:
+        """Which bodies are on their channel. A GET, because it asks nothing.
+
+        Every other route here takes a contract body naming one device, because
+        every other route acts on one device. This one has no input: nothing on
+        this Host knows which bodies to ask about — the composition that wants
+        presence has no device list of its own, which is the reason it had none
+        to join presence onto. So the channel answers for the channels it
+        granted, and the caller keeps only the rows it has standing for.
+        """
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        try:
+            return web.Response(text=await service.presence(), content_type="application/json")
+        except DomainError as exc:
+            return _problem(exc)
+
     app.router.add_get("/health", health)
+    app.router.add_get("/v1/device-channels/presence", presence)
     app.router.add_post("/v1/device-channels/provision", provision)
     app.router.add_post("/v1/device-channels/revoke", revoke)
     app.router.add_post("/v1/device-channels/current", current)

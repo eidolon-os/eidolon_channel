@@ -127,6 +127,12 @@ class FakeAdapter:
         self.stopped: list[dict[str, Any]] = []
         self.health_calls = 0
         self.shutdown_calls = 0
+        # What this transport will say about the device being on its channel.
+        # `None` is the default because "cannot see" is what a transport with no
+        # notion of presence must answer, and the tests need that case as much
+        # as the other two.
+        self.on_channel: bool | None = None
+        self.presence_reads: list[dict[str, Any]] = []
 
     @property
     def name(self) -> str:
@@ -152,6 +158,10 @@ class FakeAdapter:
 
     async def close(self, handle: dict[str, Any]) -> None:
         self.closed.append(handle)
+
+    async def device_is_on_channel(self, handle: dict[str, Any]) -> bool | None:
+        self.presence_reads.append(handle)
+        return self.on_channel
 
     async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         self.sessions_opened.append((handle, conversation_id))

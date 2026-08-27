@@ -268,6 +268,39 @@ class LiveKitChannelAdapter:
 
         watch.retry = asyncio.create_task(_rejoin())
 
+    async def device_is_on_channel(self, handle: dict[str, Any]) -> bool | None:
+        """Is the device's own participant in its room?
+
+        Exact rather than inferred, and that distinction is the whole method.
+        A room's participant count includes the agent, which sits in the room
+        whether or not anything is listening — so counting would report every
+        provisioned body as present forever. The device's identity is its
+        ``device_id`` (see ``_token``), so this asks for that one identity and
+        answers about that one thing.
+
+        Never raises. LiveKit being unreachable is not an offline speaker; it is
+        nobody having looked, which is ``None``.
+        """
+
+        room = str(handle.get("room") or "")
+        device = str(handle.get("device") or "")
+        if not room or not device:
+            return None
+        try:
+            participants = await self._client().room.list_participants(
+                api.ListParticipantsRequest(room=room)
+            )
+        except Exception:
+            # Includes the ordinary case of a room LiveKit has already reaped,
+            # which is indistinguishable here from a transport failure — and
+            # guessing between them is exactly what `None` exists to avoid.
+            logger.debug("could not read participants of room=%s", room, exc_info=True)
+            return None
+        return any(
+            getattr(participant, "identity", "") == device
+            for participant in getattr(participants, "participants", []) or []
+        )
+
     async def stop_accepting(self, handle: dict[str, Any]) -> None:
         # Dropped from the registry first: the disconnect below fires the same
         # event a failure does, and this is what tells them apart.

@@ -42,6 +42,7 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
     DeltaPayload,
     EidolonAgentSession,
     HandoffPayload,
+    ProgressPayload,
     StatePayload,
     TlsConfig,
     ToolCallPayload,
@@ -531,6 +532,30 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                         "[EidolonAgentGrpcLlmStream] state=%s turn=%s",
                         payload.state,
                         turn_id,
+                    )
+                elif isinstance(payload, ProgressPayload):
+                    # Reasoning/tool-fragment activity proves the accepted
+                    # brain turn is alive, but is intentionally never converted
+                    # to ChatChunk content (and therefore never reaches TTS).
+                    if not first_model_activity_seen:
+                        first_model_activity_seen = True
+                        llm_v.emit_provider_event(
+                            "brain_first_model_activity",
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            request_id=req_id,
+                            attempt=attempt,
+                            kind=payload.kind or "progress",
+                            phase=payload.phase,
+                        )
+                    llm_v.emit_provider_event(
+                        "brain_progress",
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        request_id=req_id,
+                        attempt=attempt,
+                        kind=payload.kind,
+                        phase=payload.phase,
                     )
                 elif isinstance(payload, ToolCallPayload):
                     # The channel neither forwards nor executes tools — the

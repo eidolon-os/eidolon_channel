@@ -34,7 +34,7 @@ from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordina
 
 
 def _coordinator() -> UserTurnCoordinator:
-    return UserTurnCoordinator()
+    return UserTurnCoordinator(speech_merge_grace_sec=0.8)
 
 
 def test_framework_completion_does_not_classify_meta_language() -> None:

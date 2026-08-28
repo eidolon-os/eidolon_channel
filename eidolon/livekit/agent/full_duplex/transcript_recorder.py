@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .transcript_event import FullDuplexTranscriptEvent
+from .transcript_hypothesis_reconciler import TranscriptHypothesisReconciler
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -16,8 +17,16 @@ logger = logging.getLogger("agent")
 class FullDuplexTranscriptRecorder:
     """Record accepted STT events into turn state, timeline, and EOT state."""
 
-    def __init__(self, pipeline: StreamingPipeline) -> None:
+    def __init__(
+        self,
+        pipeline: StreamingPipeline,
+        *,
+        transcript_revision_min_normalized_chars: int,
+    ) -> None:
         self._pipeline = pipeline
+        self._hypotheses = TranscriptHypothesisReconciler(
+            min_normalized_chars=transcript_revision_min_normalized_chars,
+        )
 
     def record(self, transcript_event: FullDuplexTranscriptEvent) -> None:
         if not transcript_event.has_transcript:
@@ -40,10 +49,24 @@ class FullDuplexTranscriptRecorder:
                 is_final=transcript_event.is_final,
             )
         pipeline._ensure_user_turn_coordinator()
-        pipeline._user_turns.add_transcript(
+        receipt = pipeline._user_turns.add_transcript(
             transcript_event.transcript,
             is_final=transcript_event.is_final,
         )
+        if receipt is not None:
+            covered_segments = self._hypotheses.observe(
+                receipt,
+                text=transcript_event.transcript,
+                is_final=transcript_event.is_final,
+            )
+            if covered_segments:
+                pipeline._user_turns.cover_pending_transcript_segments(
+                    candidate_id=receipt.candidate_id,
+                    segment_indexes=covered_segments,
+                    covered_by_generation_id=receipt.generation_id,
+                    covered_by_segment_index=receipt.segment_index,
+                    reason="provider_final_equivalent_hypothesis",
+                )
         if pipeline._timeline is not None:
             pipeline._timeline.mark(transcript_event.timeline_mark)
         try:

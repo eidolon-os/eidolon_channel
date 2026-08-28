@@ -8,11 +8,15 @@ hook is the sole normal path that commits or rejects a product user turn.
 from __future__ import annotations
 
 import time
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.session.transcript_revision import (
+    DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS,
+    normalized_text_equal,
+    transcript_revision_matches,
+)
 
 CandidateState = Literal["open", "committed", "rejected"]
 DecisionAction = Literal["none", "commit", "reject"]
@@ -23,8 +27,6 @@ OwnerKind = Literal[
     "merged_fragment",
 ]
 
-DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS = 4
-DEFAULT_SPEECH_MERGE_GRACE_SEC = 0.8
 TIMELINE_TEXT_PREVIEW_MAX_CHARS = 120
 OWNER_LEDGER_MAX_TRANSITIONS = 16
 COMMITTED_TURN_REVISION_REASON = "committed_turn_revision"
@@ -76,6 +78,13 @@ class TranscriptRevision:
     generation_id: int
 
 
+@dataclass(frozen=True)
+class TranscriptRevisionReceipt:
+    candidate_id: str
+    generation_id: int
+    segment_index: int
+
+
 @dataclass
 class SpeechSegment:
     started_at: float
@@ -83,6 +92,9 @@ class SpeechSegment:
     ended_at: float | None = None
     text: str = ""
     final_text: str = ""
+    covered_by_generation_id: int | None = None
+    covered_by_segment_index: int | None = None
+    coverage_reason: str = ""
 
     @property
     def selected_text(self) -> str:
@@ -110,6 +122,8 @@ class UserTurnCandidate:
     def selected_text(self) -> str:
         text = ""
         for segment in self.segments:
+            if segment.covered_by_generation_id is not None:
+                continue
             text = _merge_text(text, segment.selected_text)
         return text.strip()
 
@@ -134,7 +148,7 @@ class UserTurnCoordinator:
         transcript_revision_min_normalized_chars: int = (
             DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS
         ),
-        speech_merge_grace_sec: float = DEFAULT_SPEECH_MERGE_GRACE_SEC,
+        speech_merge_grace_sec: float,
         clock: Any | None = None,
     ) -> None:
         self._transcript_revision_min_normalized_chars = max(
@@ -244,13 +258,13 @@ class UserTurnCoordinator:
         *,
         is_final: bool,
         now: float | None = None,
-    ) -> None:
+    ) -> TranscriptRevisionReceipt | None:
         candidate = self._active
         if candidate is None or candidate.state != "open":
-            return
+            return None
         stripped = text.strip()
         if not stripped:
-            return
+            return None
         current_time = self._now(now)
         segment_index, segment = self._select_segment_for_revision(
             candidate,
@@ -270,11 +284,9 @@ class UserTurnCoordinator:
         segment.text = stripped
         if is_final:
             segment.final_text = stripped
-            self._finalize_equivalent_pending_segments(
-                candidate,
-                stripped,
-                selected_index=segment_index,
-            )
+            segment.covered_by_generation_id = None
+            segment.covered_by_segment_index = None
+            segment.coverage_reason = ""
         candidate.revisions.append(
             TranscriptRevision(
                 text=stripped,
@@ -289,6 +301,69 @@ class UserTurnCoordinator:
             candidate,
             event="transcript_final" if is_final else "transcript_interim",
         )
+        return TranscriptRevisionReceipt(
+            candidate_id=candidate.candidate_id,
+            generation_id=segment.generation_id,
+            segment_index=segment_index,
+        )
+
+    def cover_pending_transcript_segments(
+        self,
+        *,
+        candidate_id: str,
+        segment_indexes: tuple[int, ...],
+        covered_by_generation_id: int,
+        covered_by_segment_index: int,
+        reason: str,
+        now: float | None = None,
+    ) -> int:
+        """Apply explicit transcript-stream coverage resolved by STT ingress.
+
+        This method deliberately performs no text comparison. The transcript
+        boundary owns provider-hypothesis reconciliation; the coordinator only
+        records the resulting segment/generation relationship.
+        """
+
+        candidate = self._active
+        if (
+            candidate is None
+            or candidate.state != "open"
+            or candidate.candidate_id != candidate_id
+        ):
+            return 0
+        if not 0 <= covered_by_segment_index < len(candidate.segments):
+            return 0
+        target = candidate.segments[covered_by_segment_index]
+        if (
+            target.generation_id != covered_by_generation_id
+            or not target.final_text.strip()
+        ):
+            return 0
+
+        requested = set(segment_indexes)
+        covered = 0
+        for index, segment in enumerate(candidate.segments):
+            if (
+                index not in requested
+                or index == covered_by_segment_index
+                or segment.final_text.strip()
+            ):
+                continue
+            segment.covered_by_generation_id = covered_by_generation_id
+            segment.covered_by_segment_index = covered_by_segment_index
+            segment.coverage_reason = reason
+            covered += 1
+            self._record_owner_transition(
+                candidate,
+                owner="provisional_user_turn",
+                event="transcript_segment_covered",
+                reason=reason,
+                now=self._now(now),
+                segment_index=index,
+            )
+        if covered:
+            self._record_attrs(candidate, event="transcript_segments_covered")
+        return covered
 
     def note_speech_stopped(
         self,
@@ -334,7 +409,7 @@ class UserTurnCoordinator:
             candidate is None
             or candidate.state != "committed"
             or not stripped
-            or not _normalized_text_equal(candidate.selected_text, stripped)
+            or not normalized_text_equal(candidate.selected_text, stripped)
         ):
             return False
         if require_framework_completed and not self._has_framework_completed_owner(candidate):
@@ -412,6 +487,8 @@ class UserTurnCoordinator:
         candidate.voiceprint_reason = voiceprint_reason
         candidate.committed_at = current_time
         candidate.updated_at = current_time
+        if candidate.timeline is not None:
+            candidate.timeline.mark_at("turn_committed_at", current_time)
         self._record_owner_transition(
             candidate,
             owner="accepted_user_turn",
@@ -501,7 +578,12 @@ class UserTurnCoordinator:
 
         framework_text = transcript.strip()
         for segment in candidate.segments:
-            pending = segment.text.strip() if not segment.final_text.strip() else ""
+            pending = (
+                segment.text.strip()
+                if not segment.final_text.strip()
+                and segment.covered_by_generation_id is None
+                else ""
+            )
             if not pending:
                 continue
             if framework_text and self._text_matches_revision(pending, framework_text):
@@ -675,28 +757,6 @@ class UserTurnCoordinator:
             )
         ]
 
-    def _finalize_equivalent_pending_segments(
-        self,
-        candidate: UserTurnCandidate,
-        transcript: str,
-        *,
-        selected_index: int,
-    ) -> None:
-        """Close duplicate interim aliases created across a VAD boundary.
-
-        Some STT providers repeat the last interim in the next acoustic segment
-        before emitting its FINAL.  Leaving the alias interim-only makes the
-        framework gate wait forever for a final that will never exist.  Marking
-        equivalent aliases final preserves one canonical text via ``_merge_text``
-        while closing every revision stream covered by the provider FINAL.
-        """
-
-        for index, segment in enumerate(candidate.segments):
-            if index == selected_index or segment.final_text.strip():
-                continue
-            if self._text_matches_revision(segment.selected_text, transcript):
-                segment.final_text = transcript
-
     def _framework_segment_generation(self, candidate: UserTurnCandidate) -> int:
         if candidate.latest_generation_id == 0:
             candidate.latest_generation_id = self._next_generation_id()
@@ -794,6 +854,10 @@ class UserTurnCoordinator:
             "candidate_id": candidate.candidate_id,
             "state": candidate.state,
             "segments": len(candidate.segments),
+            "covered_segments": sum(
+                segment.covered_by_generation_id is not None
+                for segment in candidate.segments
+            ),
             "revisions": len(candidate.revisions),
             "acoustic_generation": (
                 candidate.current_segment.generation_id
@@ -812,7 +876,7 @@ class UserTurnCoordinator:
         }
 
     def _text_matches_revision(self, existing: str, revision: str) -> bool:
-        return _text_matches_revision(
+        return transcript_revision_matches(
             existing,
             revision,
             min_normalized_chars=self._transcript_revision_min_normalized_chars,
@@ -837,41 +901,3 @@ def _merge_text(left: str, right: str) -> str:
 
 def _looks_cjk(char: str) -> bool:
     return "\u4e00" <= char <= "\u9fff"
-
-
-def _text_matches_revision(
-    existing: str,
-    revision: str,
-    *,
-    min_normalized_chars: int = DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS,
-) -> bool:
-    existing_norm = _normalize_revision_text(existing)
-    revision_norm = _normalize_revision_text(revision)
-    if not existing_norm or not revision_norm:
-        return False
-    if existing_norm == revision_norm:
-        return True
-    if existing_norm.startswith(revision_norm) or revision_norm.startswith(existing_norm):
-        return True
-    if min(len(existing_norm), len(revision_norm)) < max(1, min_normalized_chars):
-        return False
-    shorter, longer = (
-        (existing_norm, revision_norm)
-        if len(existing_norm) <= len(revision_norm)
-        else (revision_norm, existing_norm)
-    )
-    return shorter in longer
-
-
-def _normalized_text_equal(left: str, right: str) -> bool:
-    left_norm = _normalize_revision_text(left)
-    right_norm = _normalize_revision_text(right)
-    return bool(left_norm and right_norm and left_norm == right_norm)
-
-
-def _normalize_revision_text(text: str) -> str:
-    return "".join(
-        char
-        for char in text.strip().lower()
-        if not unicodedata.category(char).startswith(("P", "Z"))
-    )

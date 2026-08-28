@@ -71,6 +71,8 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     eot = cfg.turn_policy.eot
     if not 1 <= eot.transcript_revision_min_normalized_chars <= 20:
         errors.append("turn_policy.eot.transcript_revision_min_normalized_chars must be in [1, 20]")
+    if not 0 <= eot.speech_merge_grace_ms <= 5_000:
+        errors.append("turn_policy.eot.speech_merge_grace_ms must be in [0, 5000]")
 
     intr = cfg.turn_policy.interrupt
     if not 200 <= intr.decision_timeout_ms <= 1_000:

@@ -121,6 +121,41 @@ async def test_framework_completed_is_the_single_normal_commit_boundary() -> Non
     pipeline._session.commit_user_turn.assert_not_called()
     pipeline._session.clear_user_turn.assert_not_called()
     assert message.content == ["你好世界"]
+    assert "turn_committed_at" in timeline.timestamps
+
+
+@pytest.mark.asyncio
+async def test_cross_vad_repeated_stt_hypothesis_commits_once() -> None:
+    """A provider FINAL explicitly covers its prior-generation interim alias."""
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline("cross-vad-repeated-hypothesis")
+    pipeline._timeline = timeline
+    pipeline._user_turns.start_speech(timeline=timeline, now=0.0)
+    pipeline._on_user_transcribed(_transcript_event("铁锤三二五", is_final=False))
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0, now=0.2)
+    pipeline._user_turns.start_speech(timeline=timeline, now=0.5)
+    pipeline._on_user_transcribed(_transcript_event("铁锤三二五", is_final=False))
+    pipeline._on_user_transcribed(_transcript_event("铁锤三二五。", is_final=True))
+
+    assert pipeline._user_turns.active is not None
+    first_segment, final_segment = pipeline._user_turns.active.segments
+    assert first_segment.final_text == ""
+    assert first_segment.covered_by_generation_id == final_segment.generation_id
+
+    message = ChatMessage(role="user", content=["铁锤三二五。"])
+    first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(), new_message=message
+    )
+    duplicate = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(), new_message=message
+    )
+
+    assert first is True
+    assert duplicate is False
+    assert message.text_content == "铁锤三二五。"
+    assert "turn_committed_at" in timeline.timestamps
 
 
 @pytest.mark.asyncio

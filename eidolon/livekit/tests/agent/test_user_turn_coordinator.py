@@ -12,7 +12,7 @@ def _owner_events(timeline: TurnTimeline) -> list[tuple[str, str, str]]:
 
 
 def test_interim_after_final_starts_a_new_sentence_segment() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     coordinator.start_speech(timeline=TurnTimeline("turn-final-then-interim"))
 
     coordinator.add_transcript("好啊。", is_final=True)
@@ -28,7 +28,7 @@ def test_interim_after_final_starts_a_new_sentence_segment() -> None:
 
 
 def test_vad_stop_records_boundary_without_terminal_decision() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     coordinator.start_speech(timeline=TurnTimeline("turn-vad-stop"))
     coordinator.add_transcript("那你记下来吧", is_final=False)
 
@@ -42,7 +42,7 @@ def test_vad_stop_records_boundary_without_terminal_decision() -> None:
 
 
 def test_new_speech_before_framework_completion_stays_in_same_product_turn() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-continuation")
     first = coordinator.start_speech(timeline=timeline, now=0.0)
     coordinator.add_transcript("看你能不能", is_final=True, now=0.1)
@@ -73,7 +73,7 @@ def test_new_speech_outside_merge_grace_starts_new_candidate() -> None:
 
 
 def test_framework_completion_resolves_exact_acoustic_generation() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-generations")
     coordinator.start_speech(timeline=timeline, now=0.0)
     coordinator.add_transcript("第一段", is_final=True, now=0.1)
@@ -85,28 +85,44 @@ def test_framework_completion_resolves_exact_acoustic_generation() -> None:
     assert coordinator.framework_completion_generation("第二段") == 2
 
 
-def test_final_closes_equivalent_interim_alias_across_vad_generation() -> None:
-    coordinator = UserTurnCoordinator()
+def test_explicit_ingress_resolution_covers_pending_generation() -> None:
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-repeated-hypothesis")
     coordinator.start_speech(timeline=timeline, now=0.0)
-    coordinator.add_transcript("铁锤三二五", is_final=False, now=0.1)
+    first = coordinator.add_transcript("铁锤三二五", is_final=False, now=0.1)
     coordinator.note_speech_stopped(eot_score=0.0, now=0.2)
     coordinator.start_speech(timeline=timeline, now=0.5)
     coordinator.add_transcript("铁锤三二五", is_final=False, now=0.6)
-    coordinator.add_transcript("铁锤三二五。", is_final=True, now=0.7)
+    final = coordinator.add_transcript("铁锤三二五。", is_final=True, now=0.7)
+    assert first is not None
+    assert final is not None
+    assert coordinator.cover_pending_transcript_segments(
+        candidate_id=final.candidate_id,
+        segment_indexes=(first.segment_index,),
+        covered_by_generation_id=final.generation_id,
+        covered_by_segment_index=final.segment_index,
+        reason="provider_final_equivalent_hypothesis",
+        now=0.7,
+    ) == 1
 
     readiness = coordinator.framework_completion_readiness("铁锤三二五。")
 
     assert readiness.ready is True
     assert coordinator.selected_text == "铁锤三二五。"
+    assert coordinator.active is not None
     assert [segment.final_text for segment in coordinator.active.segments] == [
-        "铁锤三二五。",
+        "",
         "铁锤三二五。",
     ]
+    assert coordinator.active.segments[0].covered_by_generation_id == 2
+    assert coordinator.active.segments[0].covered_by_segment_index == 1
+    assert coordinator.active.segments[0].coverage_reason == (
+        "provider_final_equivalent_hypothesis"
+    )
 
 
 def test_framework_completed_is_the_only_normal_commit_boundary() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-framework")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("帮我查一下天气", is_final=True)
@@ -119,11 +135,14 @@ def test_framework_completed_is_the_only_normal_commit_boundary() -> None:
         transcript="帮我查一下天气。",
         reason="framework_completed_turn",
         timeline=timeline,
+        now=42.0,
     )
 
     assert decision.action == "commit"
     assert decision.transcript == "帮我查一下天气。"
     assert coordinator.active.state == "committed"
+    assert coordinator.active.committed_at == 42.0
+    assert timeline.timestamps["turn_committed_at"] == 42.0
     assert _owner_events(timeline)[-1] == (
         "accepted_user_turn",
         "framework_completed",
@@ -132,7 +151,7 @@ def test_framework_completed_is_the_only_normal_commit_boundary() -> None:
 
 
 def test_framework_completion_keeps_final_then_interim_canonical_text() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-canonical")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("好啊。", is_final=True)
@@ -149,7 +168,7 @@ def test_framework_completion_keeps_final_then_interim_canonical_text() -> None:
 
 
 def test_prepare_framework_completion_exposes_canonical_before_terminal_decision() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-prepare-canonical")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("好啊。", is_final=True)
@@ -168,7 +187,7 @@ def test_prepare_framework_completion_exposes_canonical_before_terminal_decision
 
 
 def test_late_final_revises_previous_segment_during_continuation() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-late-final")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("对不是陪伴了是给一个嗯", is_final=False)
@@ -191,7 +210,7 @@ def test_late_final_revises_previous_segment_during_continuation() -> None:
 def test_repeated_trailing_final_is_idempotent() -> None:
     """Box-3 turn 5 emitted the same trailing backchannel FINAL twice."""
 
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-repeated-trailing-final")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("我觉得你有机会可以去一下。", is_final=True)
@@ -214,7 +233,7 @@ def test_repeated_trailing_final_is_idempotent() -> None:
 
 
 def test_duplicate_framework_completion_is_not_committed_twice() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-duplicate")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("你好", is_final=True)
@@ -235,7 +254,7 @@ def test_duplicate_framework_completion_is_not_committed_twice() -> None:
 
 
 def test_materially_different_duplicate_completion_on_same_timeline_is_noop() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-duplicate-different")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("第一版", is_final=True)
@@ -257,7 +276,7 @@ def test_materially_different_duplicate_completion_on_same_timeline_is_noop() ->
 
 
 def test_duplicate_speech_start_does_not_replace_open_candidate() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-duplicate-start")
     first = coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("还在说", is_final=False)
@@ -270,7 +289,7 @@ def test_duplicate_speech_start_does_not_replace_open_candidate() -> None:
 
 
 def test_framework_boundary_does_not_classify_meta_language() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-meta")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("我再说一下", is_final=True)
@@ -286,7 +305,7 @@ def test_framework_boundary_does_not_classify_meta_language() -> None:
 
 
 def test_framework_boundary_preserves_all_accepted_segments() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-meta-tail")
     coordinator.start_speech(timeline=timeline)
     coordinator.add_transcript("帮我查天气。", is_final=True)
@@ -303,7 +322,7 @@ def test_framework_boundary_preserves_all_accepted_segments() -> None:
 
 
 def test_empty_framework_turn_is_rejected() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
 
     decision = coordinator.mark_framework_completed(
         transcript="",
@@ -315,7 +334,7 @@ def test_empty_framework_turn_is_rejected() -> None:
 
 
 def test_new_speech_after_terminal_turn_gets_new_candidate() -> None:
-    coordinator = UserTurnCoordinator()
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     first_timeline = TurnTimeline("turn-first")
     coordinator.start_speech(timeline=first_timeline)
     coordinator.add_transcript("第一轮", is_final=True)

@@ -22,6 +22,7 @@ def test_balanced_profile_defaults() -> None:
     assert cfg.vad.activation_threshold == 0.50
     assert cfg.vad.prefix_padding_ms == 300
     assert cfg.vad.min_silence_duration_ms == 500
+    assert cfg.eot.speech_merge_grace_ms == 800
     assert cfg.interrupt.decision_timeout_ms == 450
     assert cfg.interrupt.early_cancel_score_threshold == 0.70
     assert cfg.ducking.fade_out_ms == 30
@@ -73,6 +74,7 @@ turn_policy:
   profile: balanced_semantic
   eot:
     transcript_revision_min_normalized_chars: 5
+    speech_merge_grace_ms: 650
   interrupt:
     decision_timeout_ms: 450
     framework_false_interruption_timeout_ms: 5500
@@ -151,6 +153,7 @@ voiceprint:
     assert cfg.turn_policy.interrupt.repeated_noise_min_chars == 3
     assert cfg.turn_policy.interrupt.repeated_noise_max_chars == 8
     assert cfg.turn_policy.eot.transcript_revision_min_normalized_chars == 5
+    assert cfg.turn_policy.eot.speech_merge_grace_ms == 650
     assert cfg.observability.llm_first_delta_timeout_ms == 2500
     assert cfg.observability.stt_pending_provider_event_window_ms == 1600
     assert cfg.observability.stt_pending_provider_event_preroll_ms == 350

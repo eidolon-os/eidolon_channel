@@ -1015,7 +1015,12 @@ class StreamingPipeline(BasePipeline):
 
     def _ensure_transcript_recorder(self) -> FullDuplexTranscriptRecorder:
         if not hasattr(self, "_transcript_recorder"):
-            self._transcript_recorder = FullDuplexTranscriptRecorder(self)
+            self._transcript_recorder = FullDuplexTranscriptRecorder(
+                self,
+                transcript_revision_min_normalized_chars=(
+                    self._turn_policy.eot.transcript_revision_min_normalized_chars
+                ),
+            )
         return self._transcript_recorder
 
     def _build_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
@@ -1048,6 +1053,9 @@ class StreamingPipeline(BasePipeline):
         return UserTurnCoordinator(
             transcript_revision_min_normalized_chars=(
                 self._turn_policy.eot.transcript_revision_min_normalized_chars
+            ),
+            speech_merge_grace_sec=(
+                self._turn_policy.eot.speech_merge_grace_ms / 1000.0
             ),
         )
 

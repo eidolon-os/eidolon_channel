@@ -120,6 +120,8 @@ eidolon/livekit/agent/
 │   ├── transcript_admission.py # TranscriptAdmissionGate: residual/echo transcript entry gate
 │   ├── transcript_event.py   # FullDuplexTranscriptEvent: LiveKit transcript event normalization
 │   ├── transcript_handler.py # FullDuplexTranscriptHandler: STT transcript entry routing
+│   ├── transcript_hypothesis_reconciler.py # provider hypothesis → acoustic generation coverage
+│   ├── transcript_recorder.py # accepted transcript side effects + generation reconciliation
 │   ├── speech_lifecycle.py # FullDuplexSpeechLifecycle: VAD speech segment lifecycle
 │   ├── user_state_event.py   # FullDuplexUserStateEvent: LiveKit user_state event normalization
 │   ├── user_state_handler.py # FullDuplexUserStateHandler: user_state entry routing
@@ -141,6 +143,7 @@ eidolon/livekit/agent/
 │   ├── semantic_interrupt.py # SemanticInterruptHandler: STT/EOT 打断热路径副作用
 │   ├── signals.py            # SessionSignalBridge: VAD/STT provider 信号桥接
 │   ├── transcript_echo.py    # TranscriptEchoGate: full-duplex TTS echo content gate
+│   ├── transcript_revision.py # shared pure transcript revision comparison
 │   └── user_turn_coordinator.py # transcript revision assembler + product terminal ledger
 ├── context/
 │   └── interrupted.py        # InterruptedContextManager: 被打断回复注入上下文
@@ -177,7 +180,7 @@ eidolon/livekit/agent/
 
 `full_duplex/transcript_handler.py` 是 full-duplex STT transcript 的入口路由。它按顺序执行 admission、accepted transcript recording、semantic interrupt gate、attention admission 和 base transcript forward；它不拥有 EOT、commit、cancel/resume 的 terminal decision。
 
-`full_duplex/transcript_recorder.py` 是 accepted STT transcript 副作用 owner。它负责把已接收 transcript 写入 latest ASR、interruption owner、`UserTurnCoordinator`、timeline mark 和 EOT ASR update；它不做 transcript admission、semantic interrupt gate 或 final commit 裁决。
+`full_duplex/transcript_recorder.py` 是 accepted STT transcript 副作用 owner。它负责把已接收 transcript 写入 latest ASR、interruption owner、`UserTurnCoordinator`、timeline mark 和 EOT ASR update；它不做 transcript admission、semantic interrupt gate 或 final commit 裁决。LiveKit 的归一化 transcript callback 不携带 provider utterance id，因此跨 VAD 重复 interim 的不可避免文本归并由 `TranscriptHypothesisReconciler` 在此入口完成：它输出显式的 `candidate_id + acoustic generation` 覆盖关系；coordinator 只记录该关系，不自行猜文本，也不把未收到 FINAL 的旧 segment 伪装成 final。
 
 `full_duplex/user_state_event.py` 是 LiveKit `user_state_changed` 事件的归一化边界。`StreamingPipeline` 只消费 `FullDuplexUserStateEvent.old_state/new_state` 与 `started_speaking/stopped_speaking` 判断；VAD start/end 后续的 speech segment lifecycle 交给 `FullDuplexSpeechLifecycle`。
 
@@ -207,7 +210,7 @@ eidolon/livekit/agent/
 
 `full_duplex/state_machine.py` 是 full-duplex turn contract 的无副作用可观测状态机。它把 timeline 统一标注为 `idle`、`user_speech_open`、`provisional_duck`、`evidence_arbitration`、`accepted_interruption`、`rejected_interruption`、`user_turn_pending`、`user_turn_committed`、`user_turn_rejected` 等阶段，并为每次 transition 标出 `side_effect=none|reversible|irreversible`。当前 contract 原则是：VAD 后的 duck/suspend 属于可回滚阶段；`AgentSession.interrupt()`、`playback.stop`、framework completed-turn 放行、用户 turn commit 属于不可逆或高副作用阶段，必须由 evidence/artifact gate 或 explicit client preempt 后的 terminal owner 触发。
 
-`session/user_turn_coordinator.py` 的 owner ledger 是 full-duplex 用户 turn ownership 的纯状态边界。每个 candidate 只经历 `open / committed / rejected`，并记录 provisional、accepted、rejected、merged transition。它不分类语义、不包含中文短语表，也不删除已经 admission 的 transcript segment。在 framework completed 前出现的新 VAD speech续接同一 open candidate，轮次边界不再由 0.8s/3.5s/4s 本地 timer 猜测。STT `FINAL` 关闭一个 revision stream；其后的 `INTERIM` 新建 sentence segment，避免旧 `final_text` 永久遮蔽后续文本。
+`session/user_turn_coordinator.py` 的 owner ledger 是 full-duplex 用户 turn ownership 的纯状态边界。每个 candidate 只经历 `open / committed / rejected`，并记录 provisional、accepted、rejected、merged transition。它不分类语义、不包含中文短语表，也不删除已经 admission 的 transcript segment。在 framework completed 前出现的新 VAD speech 仅可在 `turn_policy.eot.speech_merge_grace_ms` 指定的声学连续窗口内续接同一 open candidate；coordinator 没有私有时间默认值，超窗 speech 会 supersede 旧 candidate。STT `FINAL` 关闭一个 revision stream；其后的 `INTERIM` 新建 sentence segment，避免旧 `final_text` 永久遮蔽后续文本。真正的 `open → committed` 转移同时写入 candidate `committed_at` 与 timeline `turn_committed_at`，使 commit 状态和延迟观测共享同一时钟边界。
 
 #### 2.1.1 产品交互模式边界
 

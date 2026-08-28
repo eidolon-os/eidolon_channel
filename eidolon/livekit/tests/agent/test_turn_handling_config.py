@@ -7,7 +7,7 @@ from eidolon_sdk.biz.contracts import INTERACTION_MODE_HALF_DUPLEX
 
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.factory import SharedStageFactory
-from eidolon.livekit.common.config import TurnPolicyConfig
+from eidolon.livekit.common.config import EotPolicyConfig, TurnPolicyConfig
 
 
 def _pipe(*, allow_interruptions: bool) -> StreamingPipeline:
@@ -35,6 +35,19 @@ def test_preemptive_passthrough() -> None:
         th["preemptive_generation"]["preemptive_tts"]
         == p._turn_policy.preemptive.preemptive_tts
     )
+
+
+def test_turn_policy_speech_merge_grace_reaches_coordinator() -> None:
+    p = _pipe(allow_interruptions=True)
+    p._turn_policy = TurnPolicyConfig(
+        eot=EotPolicyConfig(speech_merge_grace_ms=650),
+    )
+    coordinator = p._build_user_turn_coordinator()
+    coordinator.start_speech(timeline=None, now=0.0)
+    coordinator.note_speech_stopped(eot_score=0.0, now=0.1)
+
+    assert coordinator.can_merge_new_speech(now=0.75) is True
+    assert coordinator.can_merge_new_speech(now=0.751) is False
 
 
 def test_streaming_pipeline_accepts_half_duplex_rejects_ptt() -> None:

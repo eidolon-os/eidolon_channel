@@ -115,6 +115,10 @@ class EotPolicyConfig:
     eot_unlikely_threshold: float = 0.50
     tail_hang_silence_ms: int = 2_000
     transcript_revision_min_normalized_chars: int = 4
+    # Maximum silence between VAD fragments that may still belong to one
+    # product user turn. The coordinator consumes this policy; it does not own
+    # an independent timing default.
+    speech_merge_grace_ms: int = 800
 
 
 @dataclass(frozen=True)

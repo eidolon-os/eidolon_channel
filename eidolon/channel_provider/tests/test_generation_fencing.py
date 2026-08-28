@@ -67,7 +67,9 @@ async def test_new_generation_fences_old_active_and_old_request_is_stale(tmp_pat
     assert (fenced.status, fenced.terminal_reason) == ("fenced", "generation_advanced")
     assert fenced.handle_json == ""
     assert store.active_device(new.device_ref) is not None
-    assert len(backend.closed) == 1
+    # The authorization generation is fenced, but both grants name the same
+    # standing room.  Fencing credentials must not delete that shared resource.
+    assert backend.closed == []
     with pytest.raises(StaleGeneration):
         await service.provision(old)
 
@@ -203,4 +205,6 @@ async def test_two_processes_racing_same_generation_commit_one_operation(tmp_pat
     assert left == right
     assert len(store.active_provisions()) == 1
     assert len(first_backend.opened) + len(second_backend.opened) == 2
-    assert len(first_backend.closed) + len(second_backend.closed) == 1
+    # The losing grant is disposable; the converged resource is not. Closing
+    # either handle would destroy the room retained by the winning operation.
+    assert len(first_backend.closed) + len(second_backend.closed) == 0

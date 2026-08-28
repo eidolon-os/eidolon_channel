@@ -93,6 +93,10 @@ class LiveKitChannelAdapter:
     def carries_media(self) -> bool:
         return True
 
+    def resource_identity(self, handle: dict[str, Any]) -> str:
+        room = str(handle.get("room") or "")
+        return f"livekit:room:{room}" if room else ""
+
     def _client(self) -> api.LiveKitAPI:
         # LiveKitAPI owns an aiohttp session and must be constructed in the
         # running service loop, not while the synchronous composition root loads.

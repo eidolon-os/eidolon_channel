@@ -92,6 +92,25 @@ def test_resolve_closes_evidence_window() -> None:
     assert owner.should_hold_deadline() is False
 
 
+def test_new_acoustic_generation_supersedes_stale_active_candidate() -> None:
+    first_timeline = TurnTimeline("turn-first-generation")
+    second_timeline = TurnTimeline("turn-second-generation")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=first_timeline, generation_id=1)
+
+    decision = owner.start_candidate(timeline=second_timeline, generation_id=2)
+
+    stale = owner.verdict_for(first_timeline.turn_id, generation_id=1)
+    assert stale is not None
+    assert stale.action is InterruptionVerdictAction.REJECTED_CANDIDATE
+    assert decision.action is InterruptionDecisionAction.SOFT_SUSPEND_OUTPUT
+    assert owner.active is True
+    assert second_timeline.attrs["interruption_orchestrator_last_event"]["generation_id"] == 2
+
+
 def test_turn_policy_hold_keeps_weak_transcript_in_evidence_window() -> None:
     now = 10.0
 
@@ -501,7 +520,7 @@ def test_resolved_normal_interrupt_exposes_committable_verdict() -> None:
 
     owner.resolve(action="cancel", reason="eot_cancel")
 
-    verdict = owner.verdict_for(timeline.turn_id)
+    verdict = owner.verdict_for(timeline.turn_id, generation_id=1)
     assert verdict is not None
     assert verdict.action is InterruptionVerdictAction.CONFIRMED_CANCEL
     assert verdict.continue_to_llm is True
@@ -529,7 +548,20 @@ def test_resolved_backchannel_exposes_non_committable_verdict() -> None:
 
     owner.resolve(action="rollback", reason="backchannel")
 
-    verdict = owner.verdict_for(timeline.turn_id)
+    verdict = owner.verdict_for(timeline.turn_id, generation_id=1)
     assert verdict is not None
     assert verdict.action is InterruptionVerdictAction.REJECTED_RESUME
     assert verdict.continue_to_llm is False
+
+
+def test_verdict_is_not_visible_to_a_later_acoustic_generation() -> None:
+    timeline = TurnTimeline("turn-generation-isolation")
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    owner.start_candidate(timeline=timeline, generation_id=1)
+    owner.resolve(action="rollback", reason="timeout")
+
+    assert owner.verdict_for(timeline.turn_id, generation_id=1) is not None
+    assert owner.verdict_for(timeline.turn_id, generation_id=2) is None

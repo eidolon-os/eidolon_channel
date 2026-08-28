@@ -156,6 +156,10 @@ class FakeAdapter:
             handle={"resource": f"{self._name}:{spec.device_id}"},
         )
 
+    def resource_identity(self, handle: dict[str, Any]) -> str:
+        resource = str(handle.get("resource") or "")
+        return f"{self._name}:{resource}" if resource else ""
+
     async def close(self, handle: dict[str, Any]) -> None:
         self.closed.append(handle)
 

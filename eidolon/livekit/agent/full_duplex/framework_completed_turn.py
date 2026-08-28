@@ -166,6 +166,9 @@ class FullDuplexFrameworkCompletedTurnGate:
     ) -> bool:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
+        completion_generation = owner._user_turns.framework_completion_generation(
+            completed_transcript
+        )
         readiness = owner._user_turns.framework_completion_readiness(completed_transcript)
         if not readiness.ready:
             if timeline is not None:
@@ -219,6 +222,7 @@ class FullDuplexFrameworkCompletedTurnGate:
         interruption_allowed = self._resolve_completed_turn_interruption_evidence(
             completed_transcript=candidate_transcript,
             timeline=timeline,
+            generation_id=completion_generation,
         )
         if interruption_allowed is False:
             return False
@@ -235,19 +239,25 @@ class FullDuplexFrameworkCompletedTurnGate:
         *,
         completed_transcript: str,
         timeline: TurnTimeline | None,
+        generation_id: int | None,
     ) -> bool | None:
         active_resolution = self._resolve_active_interruption_framework_completed_turn(
             completed_transcript,
             timeline=timeline,
+            generation_id=generation_id,
         )
         if active_resolution is not None:
             return active_resolution
-        return self._resolve_recorded_interruption_verdict(timeline=timeline)
+        return self._resolve_recorded_interruption_verdict(
+            timeline=timeline,
+            generation_id=generation_id,
+        )
 
     def _resolve_recorded_interruption_verdict(
         self,
         *,
         timeline: TurnTimeline | None,
+        generation_id: int | None,
     ) -> bool | None:
         """Consume only the interruption owner's typed terminal result."""
 
@@ -257,7 +267,10 @@ class FullDuplexFrameworkCompletedTurnGate:
         interruption_owner = getattr(owner, "_interruption_orchestrator", None)
         if interruption_owner is None:
             return None
-        verdict = interruption_owner.verdict_for(timeline.turn_id)
+        verdict = interruption_owner.verdict_for(
+            timeline.turn_id,
+            generation_id=generation_id,
+        )
         if verdict is None:
             return None
         self._record_completed_gate_event(
@@ -269,6 +282,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             verdict=verdict.action.value,
             intent=verdict.intent,
             turn_policy_action=verdict.turn_policy_action,
+            generation_id=verdict.generation_id,
         )
         if verdict.continue_to_llm:
             return True
@@ -394,13 +408,17 @@ class FullDuplexFrameworkCompletedTurnGate:
         completed_transcript: str,
         *,
         timeline: TurnTimeline | None,
+        generation_id: int | None,
     ) -> bool | None:
         owner = self._pipeline
         interruption_owner = getattr(owner, "_interruption_orchestrator", None)
         if (
             interruption_owner is None
             or not owner._barge_in_enabled
-            or not interruption_owner.blocks_framework_completed_turn()
+            or not interruption_owner.blocks_framework_completed_turn(
+                timeline.turn_id if timeline is not None else None,
+                generation_id=generation_id,
+            )
         ):
             return None
         decision = self._decide_from_completed_turn_evidence(
@@ -417,7 +435,10 @@ class FullDuplexFrameworkCompletedTurnGate:
                 transcript=completed_transcript,
                 vad_active=False,
             )
-            verdict_resolution = self._resolve_recorded_interruption_verdict(timeline=timeline)
+            verdict_resolution = self._resolve_recorded_interruption_verdict(
+                timeline=timeline,
+                generation_id=generation_id,
+            )
             if verdict_resolution is not None:
                 return verdict_resolution
             if interruption_owner.active:
@@ -425,7 +446,10 @@ class FullDuplexFrameworkCompletedTurnGate:
                     action=decision.action.value,
                     reason="framework_completed_interruption_evidence",
                 )
-            return self._resolve_recorded_interruption_verdict(timeline=timeline)
+            return self._resolve_recorded_interruption_verdict(
+                timeline=timeline,
+                generation_id=generation_id,
+            )
         reason = "interruption_owner_waiting_for_evidence"
         if timeline is not None:
             timeline.set_attr(

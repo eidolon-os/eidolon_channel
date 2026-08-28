@@ -91,15 +91,32 @@ class ChannelAdapter(Protocol):
         ...
 
     async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
-        """Provision the channel and mint the device's grant.
+        """Converge the channel resource and mint a fresh device grant.
 
         Called both for a first provision and for a refresh, so it must be
-        idempotent for the same spec.
+        idempotent for the same spec.  A returned handle names the standing
+        transport resource; it does not represent ownership of the credential
+        that was just minted.
+        """
+        ...
+
+    def resource_identity(self, handle: dict[str, Any]) -> str:
+        """Return the stable transport-resource identity named by ``handle``.
+
+        Credential operations have their own operation ids, but a refresh can
+        legitimately mint a new grant for the same standing room/topic.  The
+        service compares this identity before retiring a previous resource so
+        rotating authorization can never destroy the channel it authorizes.
         """
         ...
 
     async def close(self, handle: dict[str, Any]) -> None:
-        """Release whatever `open` provisioned. Must tolerate an absent channel."""
+        """Destroy the standing transport resource named by ``handle``.
+
+        This is a resource-lifecycle operation, not credential revocation.  It
+        is called only when no active provision retains the same resource
+        identity (or when the device channel is explicitly revoked).
+        """
         ...
 
     async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:

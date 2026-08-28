@@ -150,10 +150,28 @@ class ChannelProviderService:
             try:
                 committed, replayed = self._store.create_provision(value, now_ms=now)
             except Exception:
-                await adapter.close(grant.handle)
+                if not self._same_transport_resource(
+                    adapter,
+                    grant.handle,
+                    (
+                        self._registry.get(previous.adapter_name)
+                        if previous is not None
+                        else None
+                    ),
+                    json.loads(previous.handle_json) if previous is not None else None,
+                ):
+                    await adapter.close(grant.handle)
                 raise
             if replayed:
-                await adapter.close(grant.handle)
+                committed_adapter = self._registry.get(committed.adapter_name)
+                committed_handle = json.loads(committed.handle_json)
+                if not self._same_transport_resource(
+                    adapter,
+                    grant.handle,
+                    committed_adapter,
+                    committed_handle,
+                ):
+                    await adapter.close(grant.handle)
                 return committed.response_json
             if previous is not None and (
                 previous.device_ref != committed.device_ref
@@ -162,9 +180,36 @@ class ChannelProviderService:
             ):
                 previous_adapter = self._registry.get(previous.adapter_name)
                 previous_handle = json.loads(previous.handle_json)
-                await previous_adapter.stop_accepting(previous_handle)
-                await previous_adapter.close(previous_handle)
+                if not self._same_transport_resource(
+                    previous_adapter,
+                    previous_handle,
+                    adapter,
+                    grant.handle,
+                ):
+                    await previous_adapter.stop_accepting(previous_handle)
+                    await previous_adapter.close(previous_handle)
             return committed.response_json
+
+    @staticmethod
+    def _same_transport_resource(
+        left_adapter,
+        left_handle: dict | None,
+        right_adapter,
+        right_handle: dict | None,
+    ) -> bool:
+        """Whether two credential generations retain one standing resource."""
+
+        if (
+            left_adapter is None
+            or right_adapter is None
+            or left_adapter.name != right_adapter.name
+            or left_handle is None
+            or right_handle is None
+        ):
+            return False
+        left_identity = left_adapter.resource_identity(left_handle)
+        right_identity = right_adapter.resource_identity(right_handle)
+        return bool(left_identity and left_identity == right_identity)
 
     async def current(self, request: CurrentRequest) -> str:
         """Report the device's current binding. Reads only; issues nothing.

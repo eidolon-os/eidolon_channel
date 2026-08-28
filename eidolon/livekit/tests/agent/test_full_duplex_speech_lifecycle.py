@@ -22,6 +22,7 @@ def _owner() -> SimpleNamespace:
     owner._ensure_user_turn_coordinator = MagicMock()
     owner._user_turns = MagicMock()
     owner._user_turns.can_merge_new_speech.return_value = False
+    owner._user_turns.current_generation_id = 1
     owner._skip_commit_after_interrupt_cancel = True
     owner._suppress_commit_after_interrupt_until = 123.0
     owner._suppress_transcripts_until_next_speech = True
@@ -35,6 +36,7 @@ def _owner() -> SimpleNamespace:
     owner._room = SimpleNamespace(name="room-a")
     owner._runtime_participant_identity = "device-a"
     owner._append_turn_timeline_snapshot = MagicMock()
+    owner._flush_turn_timeline = MagicMock()
     owner._apply_pending_explicit_client_preempt = MagicMock()
     owner._apply_pending_client_control_events = MagicMock()
     owner._voiceprint_turns = MagicMock()
@@ -107,6 +109,7 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_called_once_with(
         timeline=owner._timeline,
+        generation_id=1,
     )
     owner._record_full_duplex_transition.assert_called_once()
     assert owner._record_full_duplex_transition.call_args.args[0].value == ("user_speech_open")
@@ -168,6 +171,10 @@ def test_speech_lifecycle_snapshots_replaced_unmerged_timeline() -> None:
         previous,
         "speech_started_replaced_unmerged_timeline",
     )
+    owner._flush_turn_timeline.assert_called_once_with(
+        previous,
+        "superseded_by_new_speech",
+    )
     first_transition = owner._record_full_duplex_transition.call_args_list[0]
     assert first_transition.args[0].value == "user_turn_rejected"
     assert first_transition.kwargs["event"] == "user_turn_superseded_by_new_speech"
@@ -184,6 +191,7 @@ def test_speech_lifecycle_keeps_merge_continuation_timeline() -> None:
     FullDuplexSpeechLifecycle(owner).handle_started()
 
     owner._append_turn_timeline_snapshot.assert_not_called()
+    owner._flush_turn_timeline.assert_not_called()
     assert owner._timeline is previous
 
 

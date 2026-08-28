@@ -79,6 +79,11 @@ class FullDuplexSpeechLifecycle:
                 replaced_unmerged_timeline,
                 "speech_started_replaced_unmerged_timeline",
             )
+            if superseding_pending_candidate:
+                owner._flush_turn_timeline(
+                    replaced_unmerged_timeline,
+                    "superseded_by_new_speech",
+                )
         _record_contract_transition(
             owner,
             FullDuplexPhase.USER_SPEECH_OPEN,
@@ -115,7 +120,10 @@ class FullDuplexSpeechLifecycle:
 
         interrupt_window_started = owner._attention_effects.handle_speaking_started()
         if interrupt_window_started:
-            owner._interruption_orchestrator.start_candidate(timeline=owner._timeline)
+            owner._interruption_orchestrator.start_candidate(
+                timeline=owner._timeline,
+                generation_id=owner._user_turns.current_generation_id,
+            )
 
     def handle_stopped(self) -> None:
         owner = self._owner

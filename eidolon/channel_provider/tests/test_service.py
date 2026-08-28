@@ -104,6 +104,27 @@ async def test_provision_refreshes_only_near_expiry_with_stable_resources(tmp_pa
         json.loads(refreshed)["channels"][0]["channel_id"]
         == (json.loads(first)["channels"][0]["channel_id"])
     )
+    assert backend.closed == []
+    assert backend.stopped == []
+    assert f"livekit:{request.device_ref.device_instance_id}" in backend.watched
+
+
+async def test_refresh_while_connected_rotates_grant_without_closing_resource(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    request = ProvisionRequest.parse(encoded(provision_payload()))
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(request)
+
+    clock[0] += 1800 * 1000 + 1
+    refresh = provision_payload()
+    refresh["operation"] = "channel.refresh-device"
+    refresh["operation_id"] = "refresh-connected"
+    await service.provision(ProvisionRequest.parse(encoded(refresh)))
+
+    resource = f"livekit:{request.device_ref.device_instance_id}"
+    assert backend.closed == []
+    assert backend.stopped == []
+    assert resource in backend.watched
 
 
 async def test_expired_operation_is_terminal_and_does_not_hold_the_active_lock(tmp_path) -> None:

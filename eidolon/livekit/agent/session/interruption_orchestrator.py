@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Callable
 from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
@@ -78,6 +79,7 @@ class InterruptionVerdict:
     action: InterruptionVerdictAction
     reason: str
     candidate_id: str | None
+    generation_id: int
     continue_to_llm: bool
     turn_policy_action: str = ""
     intent: str = ""
@@ -90,6 +92,7 @@ class InterruptionCandidate:
 
     candidate_id: str | None
     started_at: float
+    generation_id: int
     state: InterruptionState = InterruptionState.CANDIDATE_STARTED
     stopped_at: float | None = None
     awaiting_post_speech_evidence: bool = False
@@ -127,6 +130,7 @@ class InterruptionOrchestrator:
         evidence_timeout_sec: float,
         min_speech_sec: float,
         no_evidence_timeout_sec: float | None = None,
+        on_terminal_verdict: Callable[[InterruptionVerdict], None] | None = None,
         clock: Any | None = None,
     ) -> None:
         self._evidence_timeout_sec = max(0.0, float(evidence_timeout_sec))
@@ -140,10 +144,10 @@ class InterruptionOrchestrator:
             else max(0.0, float(no_evidence_timeout_sec))
         )
         self._clock = clock or time.monotonic
+        self._on_terminal_verdict = on_terminal_verdict
         self._candidate: InterruptionCandidate | None = None
         self._timeline: TurnTimeline | None = None
-        self._resolved_verdicts: dict[str, InterruptionVerdict] = {}
-        self._last_unkeyed_verdict: InterruptionVerdict | None = None
+        self._resolved_verdicts: dict[tuple[str | None, int], InterruptionVerdict] = {}
 
     @property
     def state(self) -> InterruptionState:
@@ -173,31 +177,52 @@ class InterruptionOrchestrator:
             return ""
         return candidate.final_transcript or candidate.transcript
 
-    def verdict_for(self, candidate_id: str | None) -> InterruptionVerdict | None:
-        """Return the owner verdict for exactly one framework turn."""
+    def verdict_for(
+        self,
+        candidate_id: str | None,
+        *,
+        generation_id: int | None,
+    ) -> InterruptionVerdict | None:
+        """Return a verdict only for its exact product/acoustic generation."""
 
-        if candidate_id:
-            return self._resolved_verdicts.get(candidate_id)
-        return self._last_unkeyed_verdict
+        if generation_id is None:
+            return None
+        return self._resolved_verdicts.get((candidate_id, generation_id))
 
     def start_candidate(
         self,
         *,
         timeline: TurnTimeline | None,
+        generation_id: int = 1,
         already_suspended: bool = True,
     ) -> InterruptionDecision:
         """Start owning a possible interruption after output has soft-ducked."""
 
-        self._timeline = timeline
         if self.active:
-            self._record_event("candidate_start_ignored_active")
-            return self._decision(
-                InterruptionDecisionAction.NO_OP,
-                "candidate_already_active",
+            current = self._candidate
+            candidate_id = getattr(timeline, "turn_id", None)
+            if (
+                current is not None
+                and current.candidate_id == candidate_id
+                and current.generation_id == generation_id
+            ):
+                self._record_event("candidate_start_ignored_active")
+                return self._decision(
+                    InterruptionDecisionAction.NO_OP,
+                    "candidate_already_active",
+                )
+            # A later acoustic generation has become the interruption owner.
+            # Terminalize the stale owner before switching timelines; output is
+            # already suspended and remains so for the replacement candidate.
+            self.resolve(
+                action="supersede",
+                reason="superseded_by_new_acoustic_generation",
             )
+        self._timeline = timeline
         self._candidate = InterruptionCandidate(
             candidate_id=getattr(timeline, "turn_id", None),
             started_at=self._now(),
+            generation_id=generation_id,
             state=(
                 InterruptionState.SUSPENDED_WAITING_EVIDENCE
                 if already_suspended
@@ -500,11 +525,25 @@ class InterruptionOrchestrator:
             return False
         return (self._now() - candidate.stopped_at) >= self._no_evidence_timeout_sec
 
-    def blocks_framework_completed_turn(self) -> bool:
+    def blocks_framework_completed_turn(
+        self,
+        candidate_id: str | None = None,
+        *,
+        generation_id: int | None = None,
+    ) -> bool:
         """True while LiveKit must not commit a not-yet-owned interrupt turn."""
 
         candidate = self._candidate
         if candidate is None or candidate.resolved:
+            return False
+        if candidate_id is None and generation_id is None:
+            candidate_id = candidate.candidate_id
+            generation_id = candidate.generation_id
+        if (
+            generation_id is None
+            or candidate.candidate_id != candidate_id
+            or candidate.generation_id != generation_id
+        ):
             return False
         if candidate.awaiting_post_speech_evidence:
             return True
@@ -585,12 +624,10 @@ class InterruptionOrchestrator:
         if candidate is None:
             return
         verdict = self._build_verdict(candidate, action=action, reason=reason)
-        if verdict.candidate_id:
-            self._resolved_verdicts[verdict.candidate_id] = verdict
-            while len(self._resolved_verdicts) > 16:
-                self._resolved_verdicts.pop(next(iter(self._resolved_verdicts)))
-        else:
-            self._last_unkeyed_verdict = verdict
+        verdict_key = (verdict.candidate_id, verdict.generation_id)
+        self._resolved_verdicts[verdict_key] = verdict
+        while len(self._resolved_verdicts) > 16:
+            self._resolved_verdicts.pop(next(iter(self._resolved_verdicts)))
         candidate.resolved = True
         self._record_event(
             "candidate_resolved",
@@ -601,18 +638,20 @@ class InterruptionOrchestrator:
             intent=verdict.intent,
         )
         if self._timeline is not None:
-            self._timeline.set_attr(
-                "interruption_verdict",
-                {
-                    "action": verdict.action.value,
-                    "reason": verdict.reason,
-                    "candidate_id": verdict.candidate_id,
-                    "continue_to_llm": verdict.continue_to_llm,
-                    "turn_policy_action": verdict.turn_policy_action,
-                    "intent": verdict.intent,
-                    "transcript_preview": verdict.transcript[:120],
-                },
-            )
+            verdict_payload = {
+                "action": verdict.action.value,
+                "reason": verdict.reason,
+                "candidate_id": verdict.candidate_id,
+                "generation_id": verdict.generation_id,
+                "continue_to_llm": verdict.continue_to_llm,
+                "turn_policy_action": verdict.turn_policy_action,
+                "intent": verdict.intent,
+                "transcript_preview": verdict.transcript[:120],
+            }
+            history = list(self._timeline.attrs.get("interruption_verdicts") or ())
+            history.append(verdict_payload)
+            self._timeline.set_attr("interruption_verdicts", history[-16:])
+            self._timeline.set_attr("interruption_verdict", verdict_payload)
         logger.info(
             "[InterruptionOrchestrator] resolved action=%s verdict=%s "
             "continue_to_llm=%s reason=%s",
@@ -622,6 +661,8 @@ class InterruptionOrchestrator:
             reason,
         )
         self._candidate = None
+        if self._on_terminal_verdict is not None:
+            self._on_terminal_verdict(verdict)
 
     @staticmethod
     def _build_verdict(
@@ -652,6 +693,7 @@ class InterruptionOrchestrator:
             action=verdict_action,
             reason=reason,
             candidate_id=candidate.candidate_id,
+            generation_id=candidate.generation_id,
             continue_to_llm=continue_to_llm,
             turn_policy_action=(
                 candidate.last_policy_action.value
@@ -715,6 +757,7 @@ class InterruptionOrchestrator:
         payload = {
             "event": event,
             "state": candidate.state.value if candidate is not None else "idle",
+            "generation_id": candidate.generation_id if candidate is not None else None,
             **fields,
         }
         if elapsed_ms is not None:

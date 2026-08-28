@@ -152,6 +152,18 @@ async def test_opening_a_channel_summons_no_agent() -> None:
     assert client.agent_dispatch.created == []
 
 
+async def test_rotated_grants_retain_one_stable_room_identity() -> None:
+    adapter, _client = _adapter()
+    spec = _spec()
+
+    first = await adapter.open(spec, issued_at_ms=1_000)
+    refreshed = await adapter.open(spec, issued_at_ms=2_000)
+
+    assert adapter.resource_identity(first.handle) == adapter.resource_identity(
+        refreshed.handle
+    )
+
+
 async def test_device_without_a_microphone_gets_no_agent_and_no_publish_grant() -> None:
     """A camera that never speaks is not assigned a voice agent."""
     adapter, client = _adapter()

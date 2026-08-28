@@ -24,6 +24,7 @@ OwnerKind = Literal[
 ]
 
 DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS = 4
+DEFAULT_SPEECH_MERGE_GRACE_SEC = 0.8
 TIMELINE_TEXT_PREVIEW_MAX_CHARS = 120
 OWNER_LEDGER_MAX_TRANSITIONS = 16
 COMMITTED_TURN_REVISION_REASON = "committed_turn_revision"
@@ -72,11 +73,13 @@ class TranscriptRevision:
     is_final: bool
     received_at: float
     segment_index: int
+    generation_id: int
 
 
 @dataclass
 class SpeechSegment:
     started_at: float
+    generation_id: int
     ended_at: float | None = None
     text: str = ""
     final_text: str = ""
@@ -101,6 +104,7 @@ class UserTurnCandidate:
     reject_reason: str = ""
     committed_at: float | None = None
     owner_transitions: list[OwnerTransition] = field(default_factory=list)
+    latest_generation_id: int = 0
 
     @property
     def selected_text(self) -> str:
@@ -130,14 +134,17 @@ class UserTurnCoordinator:
         transcript_revision_min_normalized_chars: int = (
             DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS
         ),
+        speech_merge_grace_sec: float = DEFAULT_SPEECH_MERGE_GRACE_SEC,
         clock: Any | None = None,
     ) -> None:
         self._transcript_revision_min_normalized_chars = max(
             1, int(transcript_revision_min_normalized_chars)
         )
         self._clock = clock or time.monotonic
+        self._speech_merge_grace_sec = max(0.0, float(speech_merge_grace_sec))
         self._active: UserTurnCandidate | None = None
         self._counter = 0
+        self._acoustic_generation_counter = 0
 
     @property
     def active(self) -> UserTurnCandidate | None:
@@ -147,11 +154,24 @@ class UserTurnCoordinator:
     def selected_text(self) -> str:
         return self._active.selected_text if self._active is not None else ""
 
+    @property
+    def current_generation_id(self) -> int | None:
+        candidate = self._active
+        segment = candidate.current_segment if candidate is not None else None
+        return segment.generation_id if segment is not None else None
+
     def can_merge_new_speech(self, *, now: float | None = None) -> bool:
-        """Keep speech in one candidate until LiveKit completes that turn."""
+        """Merge only an acoustically continuous fragment into the open turn."""
 
         candidate = self._active
-        return bool(candidate is not None and candidate.state == "open")
+        if candidate is None or candidate.state != "open":
+            return False
+        segment = candidate.current_segment
+        if segment is None:
+            return False
+        if segment.ended_at is None:
+            return True
+        return (self._now(now) - segment.ended_at) <= self._speech_merge_grace_sec
 
     def start_speech(
         self,
@@ -175,7 +195,13 @@ class UserTurnCoordinator:
                 self._record_attrs(candidate, event="duplicate_speech_started")
                 return candidate
             candidate.updated_at = current_time
-            candidate.segments.append(SpeechSegment(started_at=current_time))
+            candidate.latest_generation_id = self._next_generation_id()
+            candidate.segments.append(
+                SpeechSegment(
+                    started_at=current_time,
+                    generation_id=candidate.latest_generation_id,
+                )
+            )
             self._record_owner_transition(
                 candidate,
                 owner="merged_fragment",
@@ -187,6 +213,13 @@ class UserTurnCoordinator:
             self._record_attrs(candidate, event="speech_continued")
             return candidate
 
+        previous = self._active
+        if previous is not None and previous.state == "open":
+            self._reject_candidate(
+                previous,
+                reason="superseded_by_new_speech",
+                now=current_time,
+            )
         candidate = self._new_candidate(
             timeline=timeline,
             state="open",
@@ -226,18 +259,29 @@ class UserTurnCoordinator:
             now=current_time,
         )
         if segment is None:
-            segment = SpeechSegment(started_at=current_time)
+            if candidate.latest_generation_id == 0:
+                candidate.latest_generation_id = self._next_generation_id()
+            segment = SpeechSegment(
+                started_at=current_time,
+                generation_id=candidate.latest_generation_id,
+            )
             candidate.segments.append(segment)
             segment_index = len(candidate.segments) - 1
         segment.text = stripped
         if is_final:
             segment.final_text = stripped
+            self._finalize_equivalent_pending_segments(
+                candidate,
+                stripped,
+                selected_index=segment_index,
+            )
         candidate.revisions.append(
             TranscriptRevision(
                 text=stripped,
                 is_final=is_final,
                 received_at=current_time,
                 segment_index=segment_index,
+                generation_id=segment.generation_id,
             )
         )
         candidate.updated_at = current_time
@@ -469,6 +513,28 @@ class UserTurnCoordinator:
             )
         return FrameworkCompletionReadiness(True, "candidate_segments_covered")
 
+    def framework_completion_generation(self, transcript: str) -> int | None:
+        """Resolve the acoustic generation that produced a framework completion.
+
+        Provider callbacks can arrive after a later VAD segment has begun.  Match
+        the completed transcript against recorded revisions instead of assuming
+        the candidate's current segment owns it.
+        """
+
+        candidate = self._active
+        if candidate is None:
+            return None
+        text = transcript.strip()
+        if text:
+            for final_only in (True, False):
+                for revision in reversed(candidate.revisions):
+                    if final_only and not revision.is_final:
+                        continue
+                    if self._text_matches_revision(revision.text, text):
+                        return revision.generation_id
+        segment = candidate.current_segment
+        return segment.generation_id if segment is not None else None
+
     def reject_active(
         self,
         reason: str,
@@ -514,6 +580,7 @@ class UserTurnCoordinator:
         with_initial_segment: bool,
     ) -> UserTurnCandidate:
         self._counter += 1
+        initial_generation = self._next_generation_id() if with_initial_segment else 0
         return UserTurnCandidate(
             candidate_id=(
                 timeline.turn_id if timeline is not None else f"user-turn-{self._counter}"
@@ -522,7 +589,12 @@ class UserTurnCoordinator:
             state=state,
             created_at=now,
             updated_at=now,
-            segments=[SpeechSegment(started_at=now)] if with_initial_segment else [],
+            segments=(
+                [SpeechSegment(started_at=now, generation_id=initial_generation)]
+                if with_initial_segment
+                else []
+            ),
+            latest_generation_id=initial_generation,
         )
 
     def _select_segment_for_revision(
@@ -565,6 +637,7 @@ class UserTurnCoordinator:
             candidate.segments = [
                 SpeechSegment(
                     started_at=candidate.created_at,
+                    generation_id=self._framework_segment_generation(candidate),
                     ended_at=now,
                     text=transcript,
                     final_text=transcript,
@@ -578,6 +651,7 @@ class UserTurnCoordinator:
         candidate.segments.append(
             SpeechSegment(
                 started_at=now,
+                generation_id=self._framework_segment_generation(candidate),
                 ended_at=now,
                 text=transcript,
                 final_text=transcript,
@@ -594,11 +668,43 @@ class UserTurnCoordinator:
         candidate.segments = [
             SpeechSegment(
                 started_at=candidate.created_at,
+                generation_id=self._framework_segment_generation(candidate),
                 ended_at=now,
                 text=transcript,
                 final_text=transcript,
             )
         ]
+
+    def _finalize_equivalent_pending_segments(
+        self,
+        candidate: UserTurnCandidate,
+        transcript: str,
+        *,
+        selected_index: int,
+    ) -> None:
+        """Close duplicate interim aliases created across a VAD boundary.
+
+        Some STT providers repeat the last interim in the next acoustic segment
+        before emitting its FINAL.  Leaving the alias interim-only makes the
+        framework gate wait forever for a final that will never exist.  Marking
+        equivalent aliases final preserves one canonical text via ``_merge_text``
+        while closing every revision stream covered by the provider FINAL.
+        """
+
+        for index, segment in enumerate(candidate.segments):
+            if index == selected_index or segment.final_text.strip():
+                continue
+            if self._text_matches_revision(segment.selected_text, transcript):
+                segment.final_text = transcript
+
+    def _framework_segment_generation(self, candidate: UserTurnCandidate) -> int:
+        if candidate.latest_generation_id == 0:
+            candidate.latest_generation_id = self._next_generation_id()
+        return candidate.latest_generation_id
+
+    def _next_generation_id(self) -> int:
+        self._acoustic_generation_counter += 1
+        return self._acoustic_generation_counter
 
     @staticmethod
     def _has_framework_completed_owner(candidate: UserTurnCandidate) -> bool:
@@ -689,6 +795,11 @@ class UserTurnCoordinator:
             "state": candidate.state,
             "segments": len(candidate.segments),
             "revisions": len(candidate.revisions),
+            "acoustic_generation": (
+                candidate.current_segment.generation_id
+                if candidate.current_segment is not None
+                else None
+            ),
             "selected_text_preview": candidate.selected_text[:TIMELINE_TEXT_PREVIEW_MAX_CHARS],
             "eot_score": candidate.eot_score,
             "voiceprint_reason": candidate.voiceprint_reason,

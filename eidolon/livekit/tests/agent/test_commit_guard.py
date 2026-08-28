@@ -400,6 +400,88 @@ async def test_non_semantic_completed_turn_is_rejected_only_at_product_boundary(
 
 
 @pytest.mark.asyncio
+async def test_no_transcript_false_interruption_cannot_reject_later_real_speech() -> None:
+    """Welcome playback blip expires, then an idle utterance commits exactly once."""
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    blip_timeline = TurnTimeline("welcome-vad-blip")
+    pipeline._timeline = blip_timeline
+    blip = pipeline._user_turns.start_speech(timeline=blip_timeline, now=0.0)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0, now=0.5)
+    pipeline._interruption_orchestrator.start_candidate(
+        timeline=blip_timeline,
+        generation_id=1,
+    )
+
+    pipeline._interruption_orchestrator.resolve(
+        action="rollback",
+        reason="timeout",
+    )
+
+    assert blip.state == "rejected"
+    assert blip_timeline.attrs["timeline_flush_reason"] == (
+        "interruption_expired_resume_no_transcript"
+    )
+
+    real_timeline = TurnTimeline("real-idle-speech")
+    pipeline._timeline = real_timeline
+    real = pipeline._user_turns.start_speech(timeline=real_timeline, now=5.0)
+    pipeline._user_turns.add_transcript("你，你好，你好。", is_final=True, now=5.8)
+    message = ChatMessage(role="user", content=["你，你好，你好。"])
+
+    first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(),
+        new_message=message,
+    )
+    duplicate = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(),
+        new_message=message,
+    )
+
+    assert real is not blip
+    assert real.candidate_id == "real-idle-speech"
+    assert first is True
+    assert duplicate is False
+    assert pipeline._user_turns.snapshot()["state"] == "committed"
+    assert real_timeline.attrs["full_duplex_state"]["phase"] == "user_turn_committed"
+
+
+@pytest.mark.asyncio
+async def test_recorded_verdict_cannot_cross_generation_on_shared_timeline() -> None:
+    from eidolon.livekit.agent.session.interruption_orchestrator import (
+        InterruptionOrchestrator,
+    )
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline("shared-product-turn")
+    pipeline._timeline = timeline
+    pipeline._user_turns.start_speech(timeline=timeline, now=0.0)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0, now=0.2)
+    interruption = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+    )
+    interruption.start_candidate(timeline=timeline, generation_id=1)
+    interruption.resolve(action="rollback", reason="timeout")
+    pipeline._interruption_orchestrator = interruption
+
+    pipeline._user_turns.start_speech(timeline=timeline, now=0.5)
+    pipeline._user_turns.add_transcript("新的真实语音", is_final=True, now=0.6)
+    message = ChatMessage(role="user", content=["新的真实语音"])
+
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(),
+        new_message=message,
+    )
+
+    assert pipeline._user_turns.framework_completion_generation("新的真实语音") == 2
+    assert allowed is True
+    assert pipeline._user_turns.snapshot()["state"] == "committed"
+
+
+@pytest.mark.asyncio
 async def test_duplicate_framework_completion_is_noop_without_audio_clear() -> None:
     pipeline = _make_pipeline_with_session()
     timeline = TurnTimeline("duplicate")

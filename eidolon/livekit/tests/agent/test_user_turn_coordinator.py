@@ -48,13 +48,61 @@ def test_new_speech_before_framework_completion_stays_in_same_product_turn() -> 
     coordinator.add_transcript("看你能不能", is_final=True, now=0.1)
     coordinator.note_speech_stopped(eot_score=0.01, now=0.2)
 
-    assert coordinator.can_merge_new_speech(now=30.0)
-    second = coordinator.start_speech(timeline=timeline, now=30.0)
-    coordinator.add_transcript("帮我查天气", is_final=True, now=30.1)
+    assert coordinator.can_merge_new_speech(now=0.7)
+    second = coordinator.start_speech(timeline=timeline, now=0.7)
+    coordinator.add_transcript("帮我查天气", is_final=True, now=0.8)
 
     assert second is first
     assert coordinator.selected_text == "看你能不能帮我查天气"
     assert timeline.attrs["user_turn_coordinator"]["segments"] == 2
+
+
+def test_new_speech_outside_merge_grace_starts_new_candidate() -> None:
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
+    first = coordinator.start_speech(timeline=TurnTimeline("turn-old"), now=0.0)
+    coordinator.note_speech_stopped(eot_score=0.0, now=0.2)
+
+    assert coordinator.can_merge_new_speech(now=1.1) is False
+    second = coordinator.start_speech(timeline=TurnTimeline("turn-new"), now=1.1)
+
+    assert second is not first
+    assert second.candidate_id == "turn-new"
+    assert first.state == "rejected"
+    assert first.reject_reason == "superseded_by_new_speech"
+    assert second.latest_generation_id == 2
+
+
+def test_framework_completion_resolves_exact_acoustic_generation() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-generations")
+    coordinator.start_speech(timeline=timeline, now=0.0)
+    coordinator.add_transcript("第一段", is_final=True, now=0.1)
+    coordinator.note_speech_stopped(eot_score=0.0, now=0.2)
+    coordinator.start_speech(timeline=timeline, now=0.5)
+    coordinator.add_transcript("第二段", is_final=True, now=0.6)
+
+    assert coordinator.framework_completion_generation("第一段") == 1
+    assert coordinator.framework_completion_generation("第二段") == 2
+
+
+def test_final_closes_equivalent_interim_alias_across_vad_generation() -> None:
+    coordinator = UserTurnCoordinator()
+    timeline = TurnTimeline("turn-repeated-hypothesis")
+    coordinator.start_speech(timeline=timeline, now=0.0)
+    coordinator.add_transcript("铁锤三二五", is_final=False, now=0.1)
+    coordinator.note_speech_stopped(eot_score=0.0, now=0.2)
+    coordinator.start_speech(timeline=timeline, now=0.5)
+    coordinator.add_transcript("铁锤三二五", is_final=False, now=0.6)
+    coordinator.add_transcript("铁锤三二五。", is_final=True, now=0.7)
+
+    readiness = coordinator.framework_completion_readiness("铁锤三二五。")
+
+    assert readiness.ready is True
+    assert coordinator.selected_text == "铁锤三二五。"
+    assert [segment.final_text for segment in coordinator.active.segments] == [
+        "铁锤三二五。",
+        "铁锤三二五。",
+    ]
 
 
 def test_framework_completed_is_the_only_normal_commit_boundary() -> None:

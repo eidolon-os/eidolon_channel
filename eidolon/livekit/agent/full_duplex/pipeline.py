@@ -116,7 +116,11 @@ from .user_state_handler import FullDuplexUserStateHandler
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
 from ..session.eot_model import get_shared_eot_model
-from ..session.interruption_orchestrator import InterruptionOrchestrator
+from ..session.interruption_orchestrator import (
+    InterruptionOrchestrator,
+    InterruptionVerdict,
+    InterruptionVerdictAction,
+)
 from ..session.provider_events import ProviderEventObserver
 from ..session.room_data import RoomDataHandler
 from ..session.semantic_interrupt import SemanticInterruptHandler
@@ -597,6 +601,56 @@ class StreamingPipeline(BasePipeline):
             evidence_timeout_sec=timeout_sec,
             min_speech_sec=min_speech_sec,
             no_evidence_timeout_sec=(interrupt_policy.post_speech_no_evidence_timeout_ms / 1000.0),
+            on_terminal_verdict=self._on_terminal_interruption_verdict,
+        )
+
+    def _on_terminal_interruption_verdict(self, verdict: InterruptionVerdict) -> None:
+        """Close a transcript-less false interruption at its acoustic boundary.
+
+        A terminal resume verdict owns exactly one acoustic generation.  With no
+        transcript there is nothing a later framework callback can legitimately
+        commit, so retaining the product candidate would only allow unrelated
+        speech to inherit this verdict.
+        """
+
+        if verdict.transcript or verdict.continue_to_llm:
+            return
+        if verdict.action not in {
+            InterruptionVerdictAction.EXPIRED_RESUME,
+            InterruptionVerdictAction.REJECTED_RESUME,
+        }:
+            return
+        self._ensure_user_turn_coordinator()
+        candidate = self._user_turns.active
+        if (
+            candidate is None
+            or candidate.state != "open"
+            or candidate.candidate_id != verdict.candidate_id
+            or self._user_turns.current_generation_id != verdict.generation_id
+        ):
+            return
+
+        reason = (
+            "interruption_no_transcript_terminal:"
+            f"{verdict.action.value}:{verdict.reason}"
+        )
+        decision = self._user_turns.reject_active(reason)
+        timeline = candidate.timeline
+        if decision.action == "reject":
+            self._record_full_duplex_transition(
+                FullDuplexPhase.USER_TURN_REJECTED,
+                event="interruption_no_transcript_terminal",
+                reason=reason,
+                side_effect="irreversible",
+                timeline=timeline,
+                details={"acoustic_generation": verdict.generation_id},
+            )
+        turn_completion = self._ensure_turn_completion()
+        turn_completion.cancel_completed_voiceprint_turn()
+        turn_completion.reset_candidate_voiceprint_tasks()
+        self._flush_turn_timeline(
+            timeline,
+            f"interruption_{verdict.action.value}_no_transcript",
         )
 
     def _ensure_interruption_orchestrator(self) -> None:

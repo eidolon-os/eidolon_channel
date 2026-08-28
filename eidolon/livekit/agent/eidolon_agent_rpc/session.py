@@ -66,6 +66,7 @@ _CHANNEL_OPTIONS = list(DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS)
 #   DeltaPayload  -> ChatChunk(delta=…)
 #   UsagePayload  -> ChatChunk(usage=CompletionUsage(…))
 #   StatePayload  -> INFO log (UX feedback hook, future)
+#   ProgressPayload -> non-playable provider/brain activity
 #   ToolCallPayload / CitationPayload / HandoffPayload -> DEBUG log
 #   _DonePayload  -> end of turn (queue closes; consumer returns)
 #
@@ -95,6 +96,14 @@ class UsagePayload:
 @dataclass(frozen=True, slots=True)
 class StatePayload:
     state: str  # "thinking" | "speaking" | …
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressPayload:
+    """Non-playable evidence that the brain/provider stream is healthy."""
+
+    phase: str = ""
+    kind: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +158,7 @@ TurnPayload = (
     DeltaPayload
     | UsagePayload
     | StatePayload
+    | ProgressPayload
     | ToolCallPayload
     | ToolResultPayload
     | CitationPayload
@@ -535,6 +545,13 @@ class EidolonAgentSession:
             )
             if state:
                 q.put_nowait(StatePayload(state=state))
+        elif kind == pb.TurnEvent.PROGRESS:
+            q.put_nowait(
+                ProgressPayload(
+                    phase=_s_field(data_fields, "phase"),
+                    kind=_s_field(data_fields, "kind"),
+                )
+            )
         elif kind == pb.TurnEvent.TOOL_CALL:
             name = _s_field(data_fields, "name")
             args_raw = data_fields["args"] if data_fields is not None and "args" in data_fields else None
@@ -566,7 +583,7 @@ class EidolonAgentSession:
         elif kind == pb.TurnEvent.HANDOFF:
             q.put_nowait(HandoffPayload(raw=dict(ev.data) if ev.data is not None else {}))
         else:
-            # ACK / PROGRESS / KIND_UNSPECIFIED — not queued to the consumer.
+            # ACK / KIND_UNSPECIFIED — not queued to the consumer.
             logger.debug(
                 "[EidolonAgentSession] ignoring %s event (turn=%s)",
                 pb.TurnEvent.Kind.Name(kind),

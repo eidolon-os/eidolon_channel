@@ -71,6 +71,13 @@ def _state(turn_id: str, seq: int, state: str) -> pb.TurnEvent:
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.STATE, data=data)
 
 
+def _progress(turn_id: str, seq: int, *, phase: str, kind: str) -> pb.TurnEvent:
+    data = struct_pb2.Struct()
+    data["phase"] = phase
+    data["kind"] = kind
+    return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.PROGRESS, data=data)
+
+
 def _delta_role(turn_id: str, seq: int, text: str, role: str) -> pb.TurnEvent:
     data = struct_pb2.Struct()
     data["text"] = text
@@ -465,6 +472,110 @@ async def test_first_delta_timeout_cancels_without_replaying_logical_turn() -> N
         assert timeout_errors[0]["turn_id"] == "turn-1"
     finally:
         await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_progress_over_ten_second_equivalent_keeps_turn_alive_without_tts() -> None:
+    """A healthy reasoning stream may outlive the first-output deadline.
+
+    Progress releases the accepted-turn deadline while remaining invisible to
+    ChatChunk/TTS. The final answer is still the first playable output.
+    """
+
+    from livekit.agents.types import APIConnectOptions
+
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import (
+        DeltaPayload,
+        ProgressPayload,
+    )
+
+    class _ReasoningSession:
+        def __init__(self) -> None:
+            self.cancels: list[str] = []
+
+        async def start_turn(self, **_kwargs):
+            async def _payloads():
+                # Total reasoning time is 3x the configured 50ms first-output
+                # deadline, equivalent to >10s under the production setting.
+                for _ in range(3):
+                    yield ProgressPayload(phase="model", kind="reasoning")
+                    await asyncio.sleep(0.05)
+                yield DeltaPayload("869")
+
+            return "reasoning-turn", _payloads()
+
+        async def cancel_turn(self, turn_id: str) -> None:
+            self.cancels.append(turn_id)
+
+        def spawn(self, coro, *, name: str):
+            return asyncio.create_task(coro, name=name)
+
+    session = _ReasoningSession()
+    adapter = EidolonAgentGrpcLlm(
+        target="unused",
+        device_token=lambda: "test-token",
+        conversation_id="livekit:reasoning-progress",
+    )
+    adapter._get_session = AsyncMock(return_value=session)
+    adapter.discard_warm = AsyncMock()
+    provider_events: list[dict] = []
+    adapter.on("provider_event", provider_events.append)
+    try:
+        stream = adapter.chat(
+            chat_ctx=_ctx("只回答869"),
+            conn_options=APIConnectOptions(max_retry=0, timeout=0.05),
+        )
+        spoken = [
+            chunk.delta.content
+            async for chunk in stream
+            if chunk.delta and chunk.delta.content
+        ]
+
+        assert spoken == ["869"]
+        assert session.cancels == []
+        activity = [
+            event
+            for event in provider_events
+            if event.get("event") == "brain_first_model_activity"
+        ]
+        assert [event.get("kind") for event in activity] == ["reasoning"]
+        assert sum(event.get("event") == "brain_progress" for event in provider_events) == 3
+        assert sum(event.get("event") == "brain_first_answer_delta" for event in provider_events) == 1
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_grpc_progress_event_is_consumed_but_not_rendered() -> None:
+    class _ProgressServicer(pbg.EidolonAgentServicer):
+        async def Chat(self, request_iterator, context):  # type: ignore[override]
+            async for req in request_iterator:
+                if req.WhichOneof("payload") == "start":
+                    tid = req.start.turn_id
+                    yield _progress(tid, 1, phase="model", kind="reasoning")
+                    yield _delta(tid, 2, "八六九")
+                    yield _done(tid, 3)
+                    return
+
+    server, target = await _serve(_ProgressServicer())
+    adapter = EidolonAgentGrpcLlm(
+        target=target,
+        device_token=lambda: "test-token",
+        conversation_id="livekit:grpc-progress",
+    )
+    provider_events: list[dict] = []
+    adapter.on("provider_event", provider_events.append)
+    try:
+        spoken = [
+            chunk.delta.content
+            async for chunk in adapter.chat(chat_ctx=_ctx("只回答八六九"))
+            if chunk.delta and chunk.delta.content
+        ]
+        assert spoken == ["八六九"]
+        assert any(event.get("event") == "brain_progress" for event in provider_events)
+    finally:
+        await adapter.aclose()
+        await server.stop(grace=0.5)
 
 
 @pytest.mark.asyncio

@@ -601,7 +601,15 @@ class InterruptionOrchestrator:
         )
 
     def finish_confirmed_cancel_speech(self, transcript: str) -> bool:
-        """Mark VAD-end for a semantic cancel that kept collecting speech."""
+        """Terminalize a semantic cancel once its speech segment closes.
+
+        Cancelling playback is irreversible, but a normal interruption can
+        still be speaking at that instant.  In that case the owner stays in
+        ``CONFIRMED_CANCEL_COLLECTING_TURN`` until VAD-end, then publishes the
+        typed verdict consumed by the framework-completed boundary.  The
+        already-confirmed cancel must never be reclassified from a later EOT
+        score computed for the completed transcript.
+        """
 
         candidate = self._candidate
         if not self._is_committable_cancel_candidate(candidate):
@@ -610,14 +618,16 @@ class InterruptionOrchestrator:
         text = transcript.strip()
         if text:
             candidate.transcript = text
-            candidate.final_transcript = text
-        candidate.awaiting_post_speech_evidence = True
-        candidate.state = InterruptionState.SUSPENDED_POST_SPEECH_WAIT
+        has_transcript = bool(self.current_transcript.strip())
         self._record_event(
             "confirmed_cancel_speech_stopped",
             transcript_preview=self.current_transcript[:80],
         )
-        return bool(self.current_transcript.strip())
+        self.resolve(
+            action="cancel",
+            reason="confirmed_cancel_speech_completed",
+        )
+        return has_transcript
 
     def resolve(self, *, action: str, reason: str) -> None:
         candidate = self._candidate

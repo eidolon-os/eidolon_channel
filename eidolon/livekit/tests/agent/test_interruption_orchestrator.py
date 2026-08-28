@@ -470,12 +470,16 @@ def test_semantic_cancel_collects_until_speech_end_before_commit() -> None:
     now = 10.9
     assert owner.finish_confirmed_cancel_speech("不是，我刚才说错了") is True
 
-    assert owner.should_commit_after_confirmed_cancel() is True
-    assert owner.current_transcript == "不是，我刚才说错了"
-    assert owner.state is InterruptionState.SUSPENDED_POST_SPEECH_WAIT
+    verdict = owner.verdict_for(timeline.turn_id, generation_id=1)
+    assert verdict is not None
+    assert verdict.action is InterruptionVerdictAction.CONFIRMED_CANCEL
+    assert verdict.continue_to_llm is True
+    assert verdict.transcript == "不是，我刚才说错了"
+    assert owner.active is False
+    assert owner.state is InterruptionState.IDLE
     assert (
-        timeline.attrs["interruption_orchestrator_last_event"]["event"]
-        == "confirmed_cancel_speech_stopped"
+        timeline.attrs["interruption_verdict"]["reason"]
+        == "confirmed_cancel_speech_completed"
     )
 
 

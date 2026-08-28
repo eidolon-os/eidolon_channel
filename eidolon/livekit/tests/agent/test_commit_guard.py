@@ -11,7 +11,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from livekit.agents.llm import ChatContext, ChatMessage
@@ -514,6 +514,107 @@ async def test_recorded_verdict_cannot_cross_generation_on_shared_timeline() -> 
     assert pipeline._user_turns.framework_completion_generation("新的真实语音") == 2
     assert allowed is True
     assert pipeline._user_turns.snapshot()["state"] == "committed"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_cjk_barge_in_stops_playback_and_reaches_output_once() -> None:
+    """Replay the Box3 cancel-while-speaking sequence at the product boundary."""
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._allow_interruptions = True
+    pipeline._room = SimpleNamespace(
+        local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    pipeline._ensure_runtime_defaults()
+    pipeline._interruption_effects = pipeline._build_interruption_effects()
+    timeline = TurnTimeline("confirmed-cjk-barge-in")
+    pipeline._timeline = timeline
+
+    # The same product turn already used generation 1 for an empty/noisy VAD
+    # fragment.  The substantive interruption belongs to generation 2.
+    pipeline._user_turns.start_speech(timeline=timeline, now=0.0)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0, now=0.1)
+    pipeline._user_turns.start_speech(timeline=timeline, now=0.2)
+    assert pipeline._user_turns.current_generation_id == 2
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.USER_SPEECH_OPEN,
+        event="speech_started",
+        reason="new_speech_started",
+        timeline=timeline,
+    )
+    pipeline._record_full_duplex_transition(
+        FullDuplexPhase.PROVISIONAL_DUCK,
+        event="duck_started",
+        reason="vad_started",
+        timeline=timeline,
+    )
+    pipeline._user_turns.add_transcript("停一下，请只回答二", is_final=False, now=0.3)
+    pipeline._interruption_orchestrator.start_candidate(
+        timeline=timeline,
+        generation_id=2,
+    )
+    pipeline._interruption_orchestrator.note_turn_policy_decision(
+        Decision(
+            action=Action.CANCEL,
+            reason="stable_normal_interrupt score=0.48",
+            intent=InterruptIntent.NORMAL_INTERRUPT,
+        ),
+        transcript="停一下，请只回答二",
+        vad_active=True,
+        eot_score=0.48,
+    )
+
+    pipeline._ensure_interruption_effects().cancel_and_interrupt()
+    await asyncio.sleep(0)
+
+    pipeline._room.local_participant.publish_data.assert_awaited_once()
+    assert timeline.attrs["client_control_events"][-1]["op"] == "playback.stop"
+    assert "interrupt_cancel_resolved_at" in timeline.timestamps
+    assert pipeline._interruption_orchestrator.state.value == (
+        "confirmed_cancel_collecting_turn"
+    )
+
+    # VAD closes while only an interim is available.  The final framework text
+    # arrives later with a low EOT score; that score must not undo the already
+    # confirmed playback cancel.
+    interim = "请只回答2等于几"
+    final = "请只回答2等于几。"
+    pipeline._user_turns.add_transcript(interim, is_final=False, now=1.7)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.237, now=1.8)
+    assert pipeline._interruption_orchestrator.finish_confirmed_cancel_speech(interim)
+    pipeline._user_turns.add_transcript(final, is_final=True, now=2.1)
+    pipeline._get_eot_model.return_value.current_eot_score = 0.237
+    pipeline._get_eot_model.return_value._current_eot_score = 0.237
+
+    verdict = pipeline._interruption_orchestrator.verdict_for(
+        timeline.turn_id,
+        generation_id=2,
+    )
+    assert verdict is not None
+    assert verdict.action.value == "confirmed_cancel"
+    assert verdict.continue_to_llm is True
+
+    downstream_brain_tts = MagicMock()
+    for message in (
+        ChatMessage(role="user", content=[final]),
+        ChatMessage(role="user", content=[final]),
+    ):
+        allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(),
+            new_message=message,
+        )
+        if allowed:
+            downstream_brain_tts(message.text_content)
+
+    downstream_brain_tts.assert_called_once_with(final)
+    assert pipeline._user_turns.snapshot()["state"] == "committed"
+    assert pipeline._user_turns.snapshot()["commit_reason"] == "framework_completed_turn"
+    assert pipeline._active_agent_output_timeline() is timeline
+    assert "turn_committed_at" in timeline.timestamps
+    assert any(
+        event.get("verdict") == "confirmed_cancel"
+        for event in timeline.attrs["framework_completed_gate_events"]
+    )
 
 
 @pytest.mark.asyncio

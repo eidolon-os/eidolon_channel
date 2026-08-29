@@ -324,6 +324,20 @@ def test_half_duplex_ptt_phase_a_suite_is_mode_specific() -> None:
     assert tap_to_stop.expectations.agent_audio_response == "none"
 
 
+def test_half_duplex_short_multi_turn_case_is_a_three_commit_lifecycle_gate() -> None:
+    suite = load_suite("benchmark/cases/half_duplex/streaming_multi_turn.yaml")
+    case = {item.case_id: item for item in suite.cases}[
+        "streaming_three_short_rounds_commit_each_001"
+    ]
+
+    assert suite.suite_mode == "half_duplex"
+    assert len(case.user_steps) == 3
+    assert {step.audio for step in case.user_steps} == {"short_deadline"}
+    assert case.expectations.min_brain_requests == 3
+    assert case.expectations.min_user_finals == 3
+    assert case.expectations.min_agent_messages == 3
+
+
 @pytest.mark.asyncio
 async def test_livekit_room_ptt_step_publishes_release_edge(
     monkeypatch: pytest.MonkeyPatch,
@@ -1643,6 +1657,59 @@ async def test_wait_for_agent_quiet_times_out_without_next_reply() -> None:
         timeout_sec=0.06,
         after_elapsed_ms=20,
     ) is False
+
+
+@pytest.mark.asyncio
+async def test_consume_agent_audio_closes_stream_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmark import livekit_room_runner as runner
+
+    closed = asyncio.Event()
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Event().wait()
+
+        async def aclose(self) -> None:
+            closed.set()
+
+    monkeypatch.setattr(runner.rtc, "AudioStream", lambda *_args, **_kwargs: FakeStream())
+    task = asyncio.create_task(runner._consume_agent_audio(object(), object()))
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_close_room_stops_audio_consumers_before_disconnect() -> None:
+    from benchmark.livekit_room_runner import _close_room
+
+    consumer_closed = asyncio.Event()
+
+    async def consume() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            consumer_closed.set()
+
+    room = AsyncMock()
+    room.disconnect.side_effect = lambda: assert_consumer_closed()
+
+    def assert_consumer_closed() -> None:
+        assert consumer_closed.is_set()
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0)
+    await _close_room(room, [task])
+
+    room.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -415,11 +415,7 @@ async def _run_room_case(
         metrics.update(state.metrics())
         errors.append(f"{type(exc).__name__}: {exc}")
     finally:
-        await room.disconnect()
-        for task in audio_tasks:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        await _close_room(room, audio_tasks)
 
     metrics.setdefault("elapsed_ms", _elapsed_ms(started))
     metrics["room_name"] = room_name
@@ -834,15 +830,28 @@ async def _capture_pcm(
 
 async def _consume_agent_audio(track: rtc.Track, state: "_RoomCaseState") -> None:
     stream = rtc.AudioStream(track, sample_rate=16_000, num_channels=1, frame_size_ms=20)
-    async for event in stream:
-        payload = bytes(event.frame.data)
-        state.agent_audio_frames += 1
-        state.agent_audio_bytes += len(payload)
-        if _pcm16_rms(payload) >= 120.0:
-            state.mark("agent_audio_first_at")
-            state.agent_audio_frame_timestamps.append(_elapsed_ms(state.started))
-            if not state.first_agent_audio.is_set():
-                state.first_agent_audio.set()
+    try:
+        async for event in stream:
+            payload = bytes(event.frame.data)
+            state.agent_audio_frames += 1
+            state.agent_audio_bytes += len(payload)
+            if _pcm16_rms(payload) >= 120.0:
+                state.mark("agent_audio_first_at")
+                state.agent_audio_frame_timestamps.append(_elapsed_ms(state.started))
+                if not state.first_agent_audio.is_set():
+                    state.first_agent_audio.set()
+    finally:
+        await stream.aclose()
+
+
+async def _close_room(room: rtc.Room, audio_tasks: list[asyncio.Task]) -> None:
+    """Close track consumers before destroying their transport-owned room."""
+    for task in audio_tasks:
+        task.cancel()
+    for task in audio_tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    await room.disconnect()
 
 
 def _pcm16_rms(payload: bytes) -> float:

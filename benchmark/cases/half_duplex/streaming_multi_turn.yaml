@@ -19,6 +19,59 @@ suite_mode: half_duplex
 #     --livekit-interaction-mode half_duplex \
 #     --livekit-participant-identity <registered-device-identity>
 cases:
+  - case_id: streaming_three_short_rounds_commit_each_001
+    suite: half_duplex_streaming
+    description: 半双工流式三轮短问答。用同一条简短真实音频重复验证三次独立 EOT、commit、Brain 和 TTS；不让长内容生成时间主导状态机 gate。
+    timeout_sec: 150
+    tags: ["half_duplex", "streaming", "multi_turn", "lifecycle_gate", "m5stack_stackchan"]
+    device_envelope:
+      enabled: true
+      device:
+        model: m5stack_stackchan
+        mode: half_duplex
+        audio_state_hz: 12
+        playback_ack: simulated
+    audio_clips:
+      - id: short_deadline
+        text: 那大概多久能做完？
+        path: benchmark/audio/generated/normal_followup_deadline.wav
+        intent: normal
+    user_steps:
+      - text: 那大概多久能做完
+        audio: short_deadline
+        start_ms: 80
+        duration_ms: 2580
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+        client_mic_muted: false
+      - text: 那大概多久能做完
+        audio: short_deadline
+        start_ms: 6000
+        duration_ms: 2580
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+        client_mic_muted: false
+      - text: 那大概多久能做完
+        audio: short_deadline
+        start_ms: 12000
+        duration_ms: 2580
+        final_delay_ms: 120
+        agent_speaking: false
+        client_playback_state: idle
+        client_mic_muted: false
+    agent_replies:
+      - when: 多久
+        reply: 请先告诉我具体是什么任务。
+    expect:
+      action: none
+      brain: required
+      min_brain_requests: 3
+      agent_audio_response: after_user_done
+      min_user_finals: 3
+      min_agent_messages: 3
+
   - case_id: streaming_three_rounds_commit_each_001
     suite: half_duplex_streaming
     description: 半双工流式三轮问答（Q1→A1→Q2→A2→Q3→A3）。用户每轮都在 agent 空闲时说话，每轮都应经 EOT 提交、到达 brain 并出声；全程无 barge-in。

@@ -9,6 +9,7 @@ import pytest
 from scripts.bench_barge_in_e2e_ab import (
     DEFAULT_CASES,
     DEFAULT_SUITE_SET,
+    _all_profiles_passed,
     _artifact_case_labels,
     _fmt_ms,
     _case_paths_for_args,
@@ -299,6 +300,21 @@ def test_profile_brief_extracts_failed_cases_and_key_latencies(tmp_path: Path) -
         brief["key_latencies_p95"]["timeline_interrupt_speech_to_resolved_ms"]
         == 210.0
     )
+
+
+@pytest.mark.parametrize(
+    ("profiles", "expected"),
+    [
+        ([], False),
+        ([{"pass_rate": 1.0}], True),
+        ([{"pass_rate": 1.0}, {"pass_rate": 0.5}], False),
+        ([{"pass_rate": None}], False),
+    ],
+)
+def test_all_profiles_passed_requires_every_profile_green(
+    profiles: list[dict[str, object]], expected: bool
+) -> None:
+    assert _all_profiles_passed({"profiles": profiles}) is expected
 
 
 def test_recommendation_keeps_channel_when_native_has_lower_pass_rate() -> None:

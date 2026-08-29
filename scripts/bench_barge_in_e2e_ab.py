@@ -614,6 +614,16 @@ def _failed_case_ids(payload: dict[str, Any]) -> list[str]:
     return sorted(failed)
 
 
+def _all_profiles_passed(payload: dict[str, Any]) -> bool:
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, list) or not profiles:
+        return False
+    return all(
+        isinstance(profile, dict) and profile.get("pass_rate") == 1.0
+        for profile in profiles
+    )
+
+
 def _recommendation(briefs: list[dict[str, Any]]) -> dict[str, str]:
     by_profile = {item["profile"]: item for item in briefs}
     channel = by_profile.get("channel")
@@ -978,7 +988,7 @@ async def _main() -> int:
     )
     print(f"[barge-in-e2e-ab] wrote {run_root / 'e2e_ab_report.md'}")
     print(f"[barge-in-e2e-ab] recommendation={payload['recommendation']['decision']}")
-    return 0
+    return 0 if _all_profiles_passed(payload) else 1
 
 
 if __name__ == "__main__":

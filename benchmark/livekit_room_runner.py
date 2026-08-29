@@ -26,6 +26,7 @@ from eidolon_sdk.biz.contracts import (
     CLIENT_AUDIO_STATE_TOPIC,
     INPUT_MODE_AUTO,
     INPUT_MODE_PTT,
+    SESSION_CONVERSATION_ID_FIELD,
     WIRE_SCHEMA_VERSION,
 )
 
@@ -846,6 +847,11 @@ def _make_dispatch_token(
         participant_metadata=metadata,
         dispatch_agent=True,
         agent_name=agent_name,
+        agent_metadata={
+            SESSION_CONVERSATION_ID_FIELD: (
+                f"bench:{uuid.uuid5(uuid.NAMESPACE_URL, room_name).hex}"
+            )
+        },
     )
 
 

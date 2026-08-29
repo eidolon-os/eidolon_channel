@@ -23,7 +23,7 @@ from eidolon_sdk.biz.contracts import (
     CONTROL_OP_PLAYBACK_STOP,
     CONTROL_OP_PTT_TURN_STATUS,
     CONTROL_TOPIC,
-    INTERACTION_MODE_HALF_DUPLEX,
+    INTERACTION_MODE_PTT,
     SESSION_END_ERROR,
     SESSION_END_USER_LEFT,
     SESSION_INTENT_USER_INITIATED,
@@ -46,7 +46,9 @@ from eidolon.livekit.agent.session.client_control import (
     build_client_control_event,
     build_session_client_control_envelope,
 )
+from eidolon.livekit.agent.session.agent_output_coordinator import AgentOutputCoordinator
 from eidolon.livekit.agent.session.idle import IdleWatchdog
+from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
 
@@ -104,7 +106,18 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._session_closed_event: asyncio.Event = asyncio.Event()
         self._room_disconnected_event: asyncio.Event = asyncio.Event()
         self._timeline: TurnTimeline | None = None
-        self._timeline_debug_flushed = False
+        self._flushed_timeline_ids: set[str] = set()
+        self._agent_output = AgentOutputCoordinator()
+        self._provider_events = ProviderEventObserver(
+            factory=factory,
+            get_timeline=lambda: self._timeline,
+            get_output_timeline=lambda: self._agent_output.active_timeline,
+            agent_output=self._agent_output,
+            flush_timeline=self._flush_output_timeline,
+            first_delta_timeout_sec=(
+                self._observability.llm_first_delta_timeout_ms / 1000.0
+            ),
+        )
         self._pending_client_control_events: list[dict[str, str]] = []
         self._room_data = RoomDataHandler(get_timeline=lambda: self._timeline)
         self._last_ptt_held = False
@@ -137,6 +150,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._started = True
         self._install_room_observers(room)
         await self._warmup_stages()
+        self._provider_events.install_all()
 
         pipeline = self
 
@@ -201,6 +215,7 @@ class HalfDuplexPttPipeline(BasePipeline):
     async def shutdown(self) -> None:
         logger.info("[HalfDuplexPttPipeline] shutting down")
         self._stop_idle_watchdog()
+        self._provider_events.cancel_output_watchdog()
         for task in list(self._track_tasks):
             task.cancel()
         for task in list(self._turn_tasks):
@@ -211,6 +226,9 @@ class HalfDuplexPttPipeline(BasePipeline):
             await asyncio.gather(*self._turn_tasks, return_exceptions=True)
         self._track_tasks.clear()
         self._turn_tasks.clear()
+        output_timeline = self._agent_output.active_timeline
+        if output_timeline is not None:
+            self._flush_output_timeline(output_timeline, "ptt_pipeline_shutdown")
         session = self._session
         if session is not None:
             close = getattr(session, "aclose", None)
@@ -455,8 +473,16 @@ class HalfDuplexPttPipeline(BasePipeline):
             result.reason,
             transcript=result.transcript,
         )
-        session.generate_reply(user_input=result.transcript, input_modality="audio")
         self._record_ptt_result(result)
+        try:
+            session.generate_reply(user_input=result.transcript, input_modality="audio")
+        except Exception:
+            output_timeline = self._agent_output.active_timeline
+            if output_timeline is not None:
+                output_timeline.mark("brain_error_at")
+                output_timeline.set_attr("ptt_generate_reply_error", True)
+                self._flush_output_timeline(output_timeline, "ptt_generate_reply_error")
+            raise
 
     def _record_ptt_result(self, result: PttSegmentTurnResult) -> None:
         logger.info(
@@ -474,6 +500,23 @@ class HalfDuplexPttPipeline(BasePipeline):
             result.transcript[:80],
         )
         terminal_action = "commit" if result.action == "commit" else "reject"
+        if terminal_action == "commit":
+            timeline = self._timeline
+            if timeline is None:
+                return
+            terminal = {
+                "action": terminal_action,
+                "reason": result.reason,
+                "transcript_preview": result.transcript[:120],
+            }
+            self._apply_ptt_terminal(timeline, terminal=terminal, result=result)
+            timeline.set_attr("timeline_flush_reason", "ptt_segment_commit_pending_output")
+            self._timeline = None
+            self._pending_client_control_events = []
+            displaced = self._agent_output.claim(timeline)
+            if displaced is not None:
+                self._flush_output_timeline(displaced, "ptt_output_superseded")
+            return
         self._flush_ptt_timeline(
             terminal={
                 "action": terminal_action,
@@ -487,12 +530,11 @@ class HalfDuplexPttPipeline(BasePipeline):
     def _start_ptt_timeline(self, result: PttSegmentTurnResult) -> None:
         timeline = TurnTimeline(generate_turn_id())
         self._timeline = timeline
-        self._timeline_debug_flushed = False
         now = time.monotonic()
         room = getattr(self, "_room", None)
         timeline.set_attr("room_name", getattr(room, "name", "") if room else "")
         timeline.set_attr("pipeline", "half_duplex_ptt_segment")
-        timeline.set_attr("interaction_mode", INTERACTION_MODE_HALF_DUPLEX)
+        timeline.set_attr("interaction_mode", INTERACTION_MODE_PTT)
         timeline.set_attr("ptt_turn_owner", "segment")
         timeline.set_attr(
             "ptt_segment",
@@ -534,8 +576,20 @@ class HalfDuplexPttPipeline(BasePipeline):
         result: PttSegmentTurnResult | None = None,
     ) -> None:
         timeline = self._timeline
-        if timeline is None or self._timeline_debug_flushed:
+        if timeline is None:
             return
+        self._apply_ptt_terminal(timeline, terminal=terminal, result=result)
+        self._append_ptt_timeline(timeline, reason)
+        self._timeline = None
+        self._pending_client_control_events = []
+
+    def _apply_ptt_terminal(
+        self,
+        timeline: TurnTimeline,
+        *,
+        terminal: dict[str, object],
+        result: PttSegmentTurnResult | None,
+    ) -> None:
         now = time.monotonic()
         ptt_segment = dict(timeline.attrs.get("ptt_segment") or {})
         if result is not None:
@@ -566,11 +620,34 @@ class HalfDuplexPttPipeline(BasePipeline):
             ptt_segment.update({"state": "idle", "terminal": terminal})
         timeline.set_attr("ptt_segment", ptt_segment)
         timeline.set_attr("ptt_segment_terminal", terminal)
+
+    def _append_ptt_timeline(self, timeline: TurnTimeline, reason: str) -> None:
+        if timeline.turn_id in self._flushed_timeline_ids:
+            return
         timeline.set_attr("timeline_flush_reason", reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
-        self._timeline_debug_flushed = True
-        self._timeline = None
-        self._pending_client_control_events = []
+        self._flushed_timeline_ids.add(timeline.turn_id)
+
+    def _flush_output_timeline(self, timeline: TurnTimeline, reason: str) -> None:
+        if "tts_provider_first_audio_at" in timeline.timestamps:
+            timeline.mark("agent_audio_playback_done_at")
+        self._append_ptt_timeline(timeline, reason)
+        self._agent_output.release(timeline)
+
+    @staticmethod
+    def _output_timeline_started(timeline: TurnTimeline) -> bool:
+        return any(
+            mark in timeline.timestamps
+            for mark in (
+                "llm_started_at",
+                "brain_request_started_at",
+                "brain_request_sent_at",
+                "brain_first_delta_at",
+                "brain_error_at",
+                "brain_cancelled_at",
+                "tts_stream_started_at",
+            )
+        )
 
     def _agent_output_active_for_ptt(self) -> bool:
         return self._state in {PipelineState.GENERATING, PipelineState.SPEAKING}
@@ -598,11 +675,20 @@ class HalfDuplexPttPipeline(BasePipeline):
         if new:
             self._mark_activity()
         if new == "thinking":
+            output_timeline = self._agent_output.active_timeline
+            if output_timeline is not None:
+                output_timeline.mark("llm_started_at")
             self._publish_companion_ui_state("thinking", "agent_state:thinking")
         elif new == "speaking":
             self._publish_companion_ui_state("speaking", "agent_state:speaking")
         elif new in ("idle", "listening"):
             self._publish_companion_ui_state("listening", f"agent_state:{new}")
+            output_timeline = self._agent_output.active_timeline
+            if output_timeline is not None and self._output_timeline_started(output_timeline):
+                self._flush_output_timeline(
+                    output_timeline,
+                    f"ptt_agent_state_{new}",
+                )
 
     def _on_session_close(self, event: Any) -> None:
         reason = getattr(event, "reason", None)

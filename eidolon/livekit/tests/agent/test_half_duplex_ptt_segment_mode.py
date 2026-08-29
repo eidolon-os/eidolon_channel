@@ -192,6 +192,15 @@ def _segment_pipeline(
     return pipeline
 
 
+def _finish_fake_agent_output(pipeline: HalfDuplexPttPipeline) -> None:
+    timeline = pipeline._agent_output.active_timeline
+    assert timeline is not None
+    timeline.mark("brain_request_started_at")
+    pipeline._on_agent_state_changed(
+        SimpleNamespace(old_state="speaking", new_state="listening")
+    )
+
+
 def test_agent_session_supports_segment_ptt_text_reply_entrypoint() -> None:
     generate_reply = inspect.signature(AgentSession.generate_reply)
     assert "user_input" in generate_reply.parameters
@@ -695,9 +704,13 @@ async def test_pipeline_writes_segment_timeline_on_commit(tmp_path) -> None:
     pipeline._on_room_packet(packet_up)
     await asyncio.gather(*pipeline._turn_tasks)
 
+    assert not timeline_path.exists()
+    _finish_fake_agent_output(pipeline)
+
     row = json.loads(timeline_path.read_text(encoding="utf-8").strip())
     attrs = row["attrs"]
     assert attrs["pipeline"] == "half_duplex_ptt_segment"
+    assert attrs["interaction_mode"] == "ptt"
     assert attrs["ptt_turn_owner"] == "segment"
     assert attrs["ptt_segment_terminal"]["action"] == "commit"
     assert attrs["ptt_segment"]["stt_mode"] == "streaming"
@@ -804,6 +817,7 @@ async def test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline(tmp_
     assert session.generate_reply_calls == [
         {"user_input": "告诉我时间", "input_modality": "audio"}
     ]
+    _finish_fake_agent_output(pipeline)
     rows = [
         json.loads(line)
         for line in timeline_path.read_text(encoding="utf-8").splitlines()
@@ -815,6 +829,55 @@ async def test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline(tmp_
     assert rows[0]["attrs"]["ptt_segment_terminal"]["reason"] == "tap_to_stop"
     second_events = rows[1]["attrs"]["client_control_events"]
     assert not any(event["op"] == "playback.stop" for event in second_events)
+
+
+@pytest.mark.asyncio
+async def test_new_ptt_segment_does_not_steal_committed_output_owner(tmp_path) -> None:
+    timeline_path = tmp_path / "turns.jsonl"
+    stt = _FakeSttStage(streaming_text="告诉我时间")
+    pipeline = _segment_pipeline(
+        stt,
+        observability=ObservabilityConfig(timeline_debug_path=str(timeline_path)),
+    )
+
+    first_down = _packet(ptt=True)
+    pipeline._room_data.handle_packet(first_down)
+    pipeline._on_room_packet(first_down)
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(500, sample=1200)))
+    first_up = _packet(ptt=False)
+    pipeline._room_data.handle_packet(first_up)
+    pipeline._on_room_packet(first_up)
+    await asyncio.gather(*pipeline._turn_tasks)
+
+    output = pipeline._agent_output.active_timeline
+    assert output is not None
+    assert pipeline._timeline is None
+
+    pipeline._state = PipelineState.SPEAKING
+    second_down = _packet(ptt=True)
+    pipeline._room_data.handle_packet(second_down)
+    pipeline._on_room_packet(second_down)
+
+    candidate = pipeline._timeline
+    assert candidate is not None
+    assert candidate is not output
+    assert pipeline._agent_output.active_timeline is output
+
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(120, sample=1200)))
+    second_up = _packet(ptt=False)
+    pipeline._room_data.handle_packet(second_up)
+    pipeline._on_room_packet(second_up)
+    await asyncio.gather(*pipeline._turn_tasks)
+
+    assert pipeline._agent_output.active_timeline is output
+    output.mark("brain_cancelled_at")
+    pipeline._on_agent_state_changed(
+        SimpleNamespace(old_state="speaking", new_state="listening")
+    )
+
+    rows = [json.loads(line) for line in timeline_path.read_text().splitlines()]
+    assert {row["turn_id"] for row in rows} == {candidate.turn_id, output.turn_id}
+    assert pipeline._agent_output.active_timeline is None
 
 
 @pytest.mark.asyncio

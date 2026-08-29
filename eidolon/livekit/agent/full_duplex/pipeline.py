@@ -630,10 +630,7 @@ class StreamingPipeline(BasePipeline):
         ):
             return
 
-        reason = (
-            "interruption_no_transcript_terminal:"
-            f"{verdict.action.value}:{verdict.reason}"
-        )
+        reason = f"interruption_no_transcript_terminal:{verdict.action.value}:{verdict.reason}"
         decision = self._user_turns.reject_active(reason)
         timeline = candidate.timeline
         if decision.action == "reject":
@@ -702,8 +699,8 @@ class StreamingPipeline(BasePipeline):
         timeline: TurnTimeline | None = None,
     ) -> None:
         self._ensure_full_duplex_state_machine()
-        previous_phase = self._full_duplex_state.phase.value
         target_timeline = self._timeline if timeline is None else timeline
+        previous_phase = self._full_duplex_state.phase_for(target_timeline).value
         transition = self._full_duplex_state.transition(
             phase,
             event=event,
@@ -1054,9 +1051,7 @@ class StreamingPipeline(BasePipeline):
             transcript_revision_min_normalized_chars=(
                 self._turn_policy.eot.transcript_revision_min_normalized_chars
             ),
-            speech_merge_grace_sec=(
-                self._turn_policy.eot.speech_merge_grace_ms / 1000.0
-            ),
+            speech_merge_grace_sec=(self._turn_policy.eot.speech_merge_grace_ms / 1000.0),
         )
 
     def _ensure_user_turn_coordinator(self) -> None:

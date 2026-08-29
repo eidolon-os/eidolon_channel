@@ -32,11 +32,14 @@ class FullDuplexPhase(str, Enum):
     USER_TURN_REJECTED = "user_turn_rejected"
 
 
-# F1 guardrail (2026-07): expected forward edges of the contract, derived from
-# the real transition call sites. This is a *heuristic* graph used only to flag
-# anomalous sequences as an observability signal — the recorder never enforces
-# or blocks. Reset (IDLE) and reject (USER_TURN_REJECTED) may happen from any
-# phase, so they are always allowed (see ``_is_expected_transition``).
+# F1 guardrail (2026-07): expected edges of the contract, derived from the real
+# transition call sites. A product turn can contain several acoustic segments,
+# so speech, interruption arbitration, and the pending framework boundary are
+# deliberately re-entrant until the product turn reaches a terminal phase.
+# This is a *heuristic* graph used only to flag anomalous sequences as an
+# observability signal — the recorder never enforces or blocks. Reset (IDLE)
+# and product rejection (USER_TURN_REJECTED) may happen from any phase, so they
+# are always allowed (see ``_is_expected_transition``).
 _ALWAYS_ALLOWED_PHASES: frozenset[FullDuplexPhase] = frozenset(
     {FullDuplexPhase.IDLE, FullDuplexPhase.USER_TURN_REJECTED}
 )
@@ -63,30 +66,40 @@ _EXPECTED_NEXT_PHASES: dict[FullDuplexPhase, frozenset[FullDuplexPhase]] = {
             FullDuplexPhase.ACCEPTED_INTERRUPTION,
             FullDuplexPhase.REJECTED_INTERRUPTION,
             FullDuplexPhase.PROVISIONAL_DUCK,
+            FullDuplexPhase.USER_SPEECH_OPEN,
             FullDuplexPhase.USER_TURN_PENDING,
         }
     ),
     FullDuplexPhase.ACCEPTED_INTERRUPTION: frozenset(
         {
+            FullDuplexPhase.EVIDENCE_ARBITRATION,
+            FullDuplexPhase.REJECTED_INTERRUPTION,
+            FullDuplexPhase.USER_SPEECH_OPEN,
             FullDuplexPhase.USER_TURN_PENDING,
             FullDuplexPhase.USER_TURN_COMMITTED,
         }
     ),
     FullDuplexPhase.REJECTED_INTERRUPTION: frozenset(
         {
+            FullDuplexPhase.PROVISIONAL_DUCK,
+            FullDuplexPhase.EVIDENCE_ARBITRATION,
+            FullDuplexPhase.ACCEPTED_INTERRUPTION,
             FullDuplexPhase.USER_SPEECH_OPEN,
             FullDuplexPhase.USER_TURN_PENDING,
         }
     ),
     FullDuplexPhase.USER_TURN_PENDING: frozenset(
-        {FullDuplexPhase.USER_TURN_COMMITTED}
+        {
+            FullDuplexPhase.USER_SPEECH_OPEN,
+            FullDuplexPhase.PROVISIONAL_DUCK,
+            FullDuplexPhase.EVIDENCE_ARBITRATION,
+            FullDuplexPhase.ACCEPTED_INTERRUPTION,
+            FullDuplexPhase.REJECTED_INTERRUPTION,
+            FullDuplexPhase.USER_TURN_COMMITTED,
+        }
     ),
-    FullDuplexPhase.USER_TURN_COMMITTED: frozenset(
-        {FullDuplexPhase.USER_SPEECH_OPEN}
-    ),
-    FullDuplexPhase.USER_TURN_REJECTED: frozenset(
-        {FullDuplexPhase.USER_SPEECH_OPEN}
-    ),
+    FullDuplexPhase.USER_TURN_COMMITTED: frozenset({FullDuplexPhase.USER_SPEECH_OPEN}),
+    FullDuplexPhase.USER_TURN_REJECTED: frozenset({FullDuplexPhase.USER_SPEECH_OPEN}),
 }
 
 
@@ -126,7 +139,13 @@ class FullDuplexTransition:
 
 
 class FullDuplexStateMachine:
-    """Record the unified full-duplex contract without applying side effects."""
+    """Record the unified full-duplex contract without applying side effects.
+
+    Validation is scoped to the supplied ``TurnTimeline``. Provider callbacks
+    for an old turn can legally interleave with a newly-opened turn; comparing
+    both against one session-global phase creates false anomalies and makes the
+    observable contract depend on callback scheduling.
+    """
 
     def __init__(self, *, clock: Any | None = None) -> None:
         self._clock = clock or time.monotonic
@@ -146,6 +165,18 @@ class FullDuplexStateMachine:
     def unexpected_transition_count(self) -> int:
         """Count of transitions outside the expected graph (observability)."""
         return self._unexpected_count
+
+    def phase_for(self, timeline: TurnTimeline | None) -> FullDuplexPhase:
+        """Return the last phase owned by one timeline (or the session fallback)."""
+
+        if timeline is None:
+            return self._phase
+        state = timeline.attrs.get("full_duplex_state") or {}
+        value = state.get("phase") if isinstance(state, dict) else None
+        try:
+            return FullDuplexPhase(value) if value else FullDuplexPhase.IDLE
+        except (TypeError, ValueError):
+            return FullDuplexPhase.IDLE
 
     def transition(
         self,
@@ -168,9 +199,10 @@ class FullDuplexStateMachine:
             transcript_preview=transcript[:TIMELINE_TEXT_PREVIEW_MAX_CHARS],
             details=dict(details or {}),
         )
-        if not _is_expected_transition(self._phase, phase):
+        previous_phase = self.phase_for(timeline)
+        if not _is_expected_transition(previous_phase, phase):
             self._note_unexpected_transition(
-                timeline, self._phase, phase, event=event, reason=reason
+                timeline, previous_phase, phase, event=event, reason=reason
             )
         self._phase = phase
         self._transitions.append(transition)
@@ -203,8 +235,7 @@ class FullDuplexStateMachine:
         # Heuristic: treat entries as leads, not proof.
         self._unexpected_count += 1
         logger.warning(
-            "[FullDuplexStateMachine] unexpected transition %s -> %s "
-            "(event=%s reason=%s)",
+            "[FullDuplexStateMachine] unexpected transition %s -> %s (event=%s reason=%s)",
             from_phase.value,
             to_phase.value,
             event,
@@ -226,7 +257,7 @@ class FullDuplexStateMachine:
         )
         timeline.set_attr(
             "full_duplex_unexpected_transition_count",
-            self._unexpected_count,
+            int(timeline.attrs.get("full_duplex_unexpected_transition_count") or 0) + 1,
         )
 
     def _record_timeline(

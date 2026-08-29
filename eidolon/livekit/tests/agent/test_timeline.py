@@ -17,6 +17,7 @@ from eidolon.livekit.agent.full_duplex.interruption_effects import (
 )
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
 from eidolon.livekit.agent.shared.types import PipelineState
+from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
@@ -111,9 +112,7 @@ def test_timeline_interrupt_latency_breakdown() -> None:
     assert round(provider_latency["interrupt_speech_to_first_transcript_ms"]) == 340
     assert round(provider_latency["interrupt_started_to_first_transcript_ms"]) == 320
     assert round(provider_latency["stt_speech_to_actionable_transcript_ms"]) == 370
-    assert round(
-        provider_latency["stt_first_transcript_to_actionable_transcript_ms"]
-    ) == 30
+    assert round(provider_latency["stt_first_transcript_to_actionable_transcript_ms"]) == 30
     assert round(provider_latency["interrupt_first_transcript_to_intent_admitted_ms"]) == 50
     assert round(provider_latency["interrupt_actionable_transcript_to_resolved_ms"]) == 80
     assert round(provider_latency["interrupt_intent_admitted_to_resolved_ms"]) == 60
@@ -141,9 +140,7 @@ def test_timeline_keeps_cancel_resolution_distinct_from_rollback() -> None:
     assert round(provider_latency["interrupt_speech_to_resolved_ms"]) == 450
     assert round(provider_latency["interrupt_speech_to_rollback_resolved_ms"]) == 450
     assert round(provider_latency["interrupt_speech_to_cancel_resolved_ms"]) == 1500
-    assert round(
-        provider_latency["interrupt_actionable_transcript_to_cancel_resolved_ms"]
-    ) == 300
+    assert round(provider_latency["interrupt_actionable_transcript_to_cancel_resolved_ms"]) == 300
     assert round(durations["vad_start_to_interrupt_rollback_resolved"]) == 450
     assert round(durations["vad_start_to_interrupt_cancel_resolved"]) == 1500
 
@@ -195,12 +192,7 @@ def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
 
     snap = timeline.snapshot()
     assert "transcript_actionable_first_at" not in snap["timestamps"]
-    assert (
-        snap["attrs"]["provider_latency_ms"][
-            "stt_speech_to_actionable_transcript_ms"
-        ]
-        is None
-    )
+    assert snap["attrs"]["provider_latency_ms"]["stt_speech_to_actionable_transcript_ms"] is None
 
 
 def test_timeline_marks_semantic_score_wait_as_actionable_transcript() -> None:
@@ -218,10 +210,7 @@ def test_timeline_marks_semantic_score_wait_as_actionable_transcript() -> None:
     snap = timeline.snapshot()
     assert "transcript_actionable_first_at" in snap["timestamps"]
     assert (
-        snap["attrs"]["provider_latency_ms"][
-            "stt_speech_to_actionable_transcript_ms"
-        ]
-        is not None
+        snap["attrs"]["provider_latency_ms"]["stt_speech_to_actionable_transcript_ms"] is not None
     )
 
 
@@ -270,9 +259,7 @@ def test_timeline_keeps_decision_history_when_latest_decision_overwrites() -> No
         "cancel",
     ]
     assert attrs["decision_first_event"]["reason"].startswith("stable_signal_wait")
-    assert attrs["decision_last_event"]["resolved_reason"] == (
-        "interruption_verdict"
-    )
+    assert attrs["decision_last_event"]["resolved_reason"] == ("interruption_verdict")
 
 
 def test_timeline_keeps_interrupt_resolution_history() -> None:
@@ -394,10 +381,7 @@ def test_pipeline_records_timeline_transcript_ingress_with_boundary_state() -> N
     assert events[0]["pipeline_state"] == "processing_audio"
     assert events[0]["timeline_turn_id"] == "turn-with-transcript"
     assert pipeline._timeline.attrs["transcript_ingress_pre_timeline_event_count"] == 0
-    assert (
-        pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_event_count"]
-        == 0
-    )
+    assert pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_event_count"] == 0
 
 
 def test_pipeline_marks_recent_transcript_ingress_from_prior_timeline() -> None:
@@ -420,13 +404,8 @@ def test_pipeline_marks_recent_transcript_ingress_from_prior_timeline() -> None:
     pipeline._timeline = TurnTimeline("current-turn")
     pipeline._attach_transcript_ingress_recent_events("speech_started")
 
-    cross_turn = pipeline._timeline.attrs[
-        "transcript_ingress_recent_cross_turn_events"
-    ]
-    assert (
-        pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_event_count"]
-        == 1
-    )
+    cross_turn = pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_events"]
+    assert pipeline._timeline.attrs["transcript_ingress_recent_cross_turn_event_count"] == 1
     assert cross_turn[0]["transcript_preview"] == "换个话"
     assert cross_turn[0]["timeline_turn_id"] == "previous-turn"
 
@@ -532,9 +511,7 @@ def test_streaming_pipeline_records_brain_provider_events_into_timeline() -> Non
     assert snap["timestamps"]["brain_first_delta_at"] == 100.5
     assert snap["timestamps"]["llm_first_delta_at"] == 100.5
     assert snap["attrs"]["brain_rpc"]["request_id"] == "eidolon-t"
-    assert round(
-        snap["attrs"]["provider_latency_ms"]["brain_request_to_first_delta_ms"]
-    ) == 300
+    assert round(snap["attrs"]["provider_latency_ms"]["brain_request_to_first_delta_ms"]) == 300
 
 
 def test_streaming_pipeline_records_stt_provider_events_into_timeline() -> None:
@@ -584,19 +561,14 @@ def test_streaming_pipeline_records_stt_provider_events_into_timeline() -> None:
     assert snap["attrs"]["stt_stream"]["stream_id"] == "s"
     assert snap["attrs"]["stt_stream"]["last_text_preview"] == "你好"
     assert round(snap["attrs"]["provider_latency_ms"]["stt_first_audio_sent_ms"]) == 100
-    assert round(
-        snap["attrs"]["provider_latency_ms"][
-            "stt_first_audio_to_provider_partial_ms"
-        ]
-    ) == 250
-    assert round(
-        snap["attrs"]["provider_latency_ms"][
-            "stt_provider_partial_to_livekit_interim_ms"
-        ]
-    ) == 50
-    assert round(
-        snap["attrs"]["provider_latency_ms"]["stt_speech_to_provider_partial_ms"]
-    ) == 350
+    assert (
+        round(snap["attrs"]["provider_latency_ms"]["stt_first_audio_to_provider_partial_ms"]) == 250
+    )
+    assert (
+        round(snap["attrs"]["provider_latency_ms"]["stt_provider_partial_to_livekit_interim_ms"])
+        == 50
+    )
+    assert round(snap["attrs"]["provider_latency_ms"]["stt_speech_to_provider_partial_ms"]) == 350
 
 
 def test_streaming_pipeline_replays_pending_stt_provider_events() -> None:
@@ -700,9 +672,7 @@ def test_streaming_pipeline_flushes_timeline_on_agent_playback_done(tmp_path) ->
     pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
     pipeline._claim_agent_output_timeline(pipeline._timeline)
 
-    pipeline._on_agent_state_changed(
-        SimpleNamespace(old_state="speaking", new_state="listening")
-    )
+    pipeline._on_agent_state_changed(SimpleNamespace(old_state="speaking", new_state="listening"))
 
     rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
     assert len(rows) == 1
@@ -802,12 +772,8 @@ def test_streaming_pipeline_snapshot_does_not_clear_timeline(tmp_path) -> None:
 
     rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
     assert len(rows) == 2
-    assert rows[0]["attrs"]["timeline_snapshot_reason"] == (
-        "agent_output_first_delta_timeout"
-    )
-    assert rows[0]["attrs"]["timeline_flush_reason"] == (
-        "agent_output_first_delta_timeout"
-    )
+    assert rows[0]["attrs"]["timeline_snapshot_reason"] == ("agent_output_first_delta_timeout")
+    assert rows[0]["attrs"]["timeline_flush_reason"] == ("agent_output_first_delta_timeout")
     assert rows[1]["attrs"]["timeline_flush_reason"] == "agent_audio_playback_done"
     assert pipeline._timeline is None
 
@@ -838,6 +804,37 @@ def test_streaming_pipeline_flushes_unfinished_timeline_on_session_close(
     assert len(rows) == 1
     assert rows[0]["attrs"]["timeline_flush_reason"] == "session_closed"
     pipeline._session_closed_event.set.assert_called_once()
+
+
+def test_session_close_rejects_and_flushes_open_user_candidate(tmp_path) -> None:
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
+
+    debug_path = tmp_path / "timeline.jsonl"
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._state = PipelineState.IDLE
+    pipeline._callbacks = MagicMock()
+    pipeline._ducking = OutputDuckingController()
+    pipeline._ducking.mixer = None
+    pipeline._timeline = TurnTimeline("turn-open-at-close")
+    pipeline._timeline_debug_flushed = False
+    pipeline._observability = ObservabilityConfig(timeline_debug_path=str(debug_path))
+    pipeline._session_closed_event = MagicMock()
+    pipeline._get_eot_model = MagicMock()
+    pipeline._user_turns = UserTurnCoordinator(speech_merge_grace_sec=0.8)
+    candidate = pipeline._user_turns.start_speech(timeline=pipeline._timeline, now=1.0)
+
+    FullDuplexSessionLifecycle(pipeline)._on_session_close(
+        SimpleNamespace(reason="participant_left", error=None)
+    )
+
+    rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
+    assert candidate.state == "rejected"
+    assert candidate.reject_reason == "session_closed"
+    assert rows[0]["attrs"]["user_turn_coordinator"]["state"] == "rejected"
+    assert rows[0]["attrs"]["full_duplex_state"]["phase"] == "user_turn_rejected"
+    assert rows[0]["attrs"]["timeline_flush_reason"] == "session_closed"
+    assert pipeline._timeline is None
 
 
 def test_streaming_pipeline_does_not_flush_cancelled_timeline_on_session_close(
@@ -907,9 +904,7 @@ def test_streaming_pipeline_observes_client_audio_state() -> None:
 
     state = pipeline._room_data.client_audio_states["alice"]
     assert state.mic_muted is True
-    assert pipeline._timeline.attrs["client_audio_state"][
-        "participant_identity"
-    ] == "alice"
+    assert pipeline._timeline.attrs["client_audio_state"]["participant_identity"] == "alice"
     assert pipeline._timeline.attrs["room_data_events"][-1] == {
         "topic": CLIENT_AUDIO_STATE_TOPIC,
         "participant_identity": "alice",
@@ -967,9 +962,7 @@ def test_streaming_pipeline_ptt_data_force_cancels() -> None:
     pipeline._client_preempts.on_client_room_packet(packet)
 
     effects.cancel_and_interrupt.assert_called_once_with(force=True)
-    assert pipeline._timeline.attrs["explicit_client_interrupt"][
-        "participant_identity"
-    ] == "alice"
+    assert pipeline._timeline.attrs["explicit_client_interrupt"]["participant_identity"] == "alice"
 
 
 @pytest.mark.asyncio
@@ -1097,9 +1090,7 @@ async def test_duck_cancel_publishes_playback_stop_control() -> None:
         ),
         finish_agent_output=finish_agent_output,
         snapshot_interrupted_context=snapshot_interrupted_context,
-        cancel_residual_commit_suppress_sec=(
-            pipeline._cancel_residual_commit_suppress_sec
-        ),
+        cancel_residual_commit_suppress_sec=(pipeline._cancel_residual_commit_suppress_sec),
         semantic_interrupt_run=MagicMock(),
         correction_topic_stability_window_ms=lambda: 120,
         set_interrupt_cancel_suppression=MagicMock(),

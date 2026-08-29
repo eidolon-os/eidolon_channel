@@ -15,6 +15,7 @@ from ..integration import framework_patches
 from ..runtime.resolver import wait_for_runtime_participant_identity
 from ..shared.pipeline import BasePipeline
 from ..shared.types import generate_turn_id
+from .state_machine import FullDuplexPhase
 
 if TYPE_CHECKING:
     from livekit.rtc import Room
@@ -277,11 +278,34 @@ class FullDuplexSessionLifecycle:
                 "[StreamingPipeline] session duck metrics: %s",
                 duck_metrics,
             )
+        self._reject_open_user_turn_on_close(error=error)
         pipeline._finish_agent_output(
             "session_error_during_output" if error else "session_closed_during_output"
         )
         pipeline._append_timeline_debug("session_closed")
         pipeline._session_closed_event.set()
+
+    def _reject_open_user_turn_on_close(self, *, error: Any) -> None:
+        """Give every product candidate a durable terminal state before teardown."""
+
+        pipeline = self._pipeline
+        coordinator = getattr(pipeline, "_user_turns", None)
+        candidate = getattr(coordinator, "active", None)
+        if candidate is None or getattr(candidate, "state", None) != "open":
+            return
+        reason = "session_error" if error else "session_closed"
+        decision = coordinator.reject_active(reason)
+        if decision.action != "reject":
+            return
+        timeline = candidate.timeline
+        pipeline._record_full_duplex_transition(
+            FullDuplexPhase.USER_TURN_REJECTED,
+            event="session_closed_with_open_user_turn",
+            reason=reason,
+            side_effect="irreversible",
+            timeline=timeline,
+        )
+        pipeline._flush_turn_timeline(timeline, reason)
 
     async def _end_serving_on_close(self) -> None:
         """Give up this conversation promptly, before the provider shutdown drain.

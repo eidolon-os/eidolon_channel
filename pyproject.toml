@@ -3,15 +3,13 @@ name = "eidolon-channel"
 version = "0.1.0"
 description = "Eidolon LiveKit voice channel — agent worker, STT/TTS/VAD/EOT plugins"
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.13,<3.14"
 license = { text = "PolyForm-Noncommercial-1.0.0" }
 authors = [{ name = "Eidolon Team", email = "team@eidolon.ai" }]
 keywords = ["ai", "voice", "agent", "livekit"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 
@@ -63,12 +61,12 @@ packages = ["eidolon", "benchmark"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint.per-file-ignores]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = false
 warn_return_any = true
 warn_unused_ignores = true

@@ -495,6 +495,7 @@ async def _feed_case_audio(
                 quiet_ms=options.agent_quiet_ms,
                 timeout_sec=options.agent_quiet_wait_sec,
                 first_audio_wait_sec=options.agent_first_audio_wait_sec,
+                after_elapsed_ms=last_user_step_finished_ms,
             )
             if not quiet:
                 events.append(
@@ -748,6 +749,7 @@ async def _wait_for_agent_quiet(
     quiet_ms: int,
     timeout_sec: float,
     first_audio_wait_sec: float = 2.0,
+    after_elapsed_ms: int | None = None,
 ) -> bool:
     """Wait until the room has observed a quiet window in agent audio.
 
@@ -760,11 +762,23 @@ async def _wait_for_agent_quiet(
     caller is about to inject an unintended interrupt and should record that.
     """
     deadline = time.monotonic() + timeout_sec
-    with contextlib.suppress(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            state.first_agent_audio.wait(),
-            timeout=min(first_audio_wait_sec, timeout_sec),
-        )
+    if after_elapsed_ms is None:
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                state.first_agent_audio.wait(),
+                timeout=min(first_audio_wait_sec, timeout_sec),
+            )
+    else:
+        while time.monotonic() < deadline and not any(
+            timestamp >= after_elapsed_ms
+            for timestamp in state.agent_audio_frame_timestamps
+        ):
+            await asyncio.sleep(0.05)
+        if not any(
+            timestamp >= after_elapsed_ms
+            for timestamp in state.agent_audio_frame_timestamps
+        ):
+            return False
     quiet_sec = quiet_ms / 1000
     while time.monotonic() < deadline:
         last_audio = state.last_agent_audio_monotonic

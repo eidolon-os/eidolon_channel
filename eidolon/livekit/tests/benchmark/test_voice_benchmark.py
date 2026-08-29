@@ -1601,6 +1601,46 @@ def test_livekit_room_transcription_attribution_excludes_agent_tts() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_wait_for_agent_quiet_requires_a_new_reply_after_previous_user_step() -> None:
+    from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_quiet
+
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+    state.agent_audio_frame_timestamps.append(10)
+    state.last_agent_audio_monotonic = time.monotonic() - 1.0
+
+    wait = asyncio.create_task(
+        _wait_for_agent_quiet(
+            state,
+            quiet_ms=10,
+            timeout_sec=0.5,
+            after_elapsed_ms=20,
+        )
+    )
+    await asyncio.sleep(0.06)
+    assert wait.done() is False
+
+    state.agent_audio_frame_timestamps.append(30)
+    state.last_agent_audio_monotonic = time.monotonic()
+    assert await wait is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_agent_quiet_times_out_without_next_reply() -> None:
+    from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_quiet
+
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+    state.agent_audio_frame_timestamps.append(10)
+    state.last_agent_audio_monotonic = time.monotonic() - 1.0
+
+    assert await _wait_for_agent_quiet(
+        state,
+        quiet_ms=10,
+        timeout_sec=0.06,
+        after_elapsed_ms=20,
+    ) is False
+
+
 def test_livekit_dispatch_token_includes_participant_metadata() -> None:
     from benchmark.livekit_room_runner import (
         LiveKitRoomOptions,

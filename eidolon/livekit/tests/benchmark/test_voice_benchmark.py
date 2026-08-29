@@ -1622,6 +1622,10 @@ async def test_wait_for_agent_quiet_requires_a_new_reply_after_previous_user_ste
 
     state.agent_audio_frame_timestamps.append(30)
     state.last_agent_audio_monotonic = time.monotonic()
+    await asyncio.sleep(0.06)
+    assert wait.done() is False
+
+    state.agent_transcript_final_timestamps.append(35)
     assert await wait is True
 
 
@@ -1639,6 +1643,48 @@ async def test_wait_for_agent_quiet_times_out_without_next_reply() -> None:
         timeout_sec=0.06,
         after_elapsed_ms=20,
     ) is False
+
+
+@pytest.mark.asyncio
+async def test_feed_case_audio_does_not_inject_idle_step_before_reply_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmark import livekit_room_runner as runner
+
+    suite = load_suite("benchmark/cases/half_duplex/streaming_multi_turn.yaml")
+    case = suite.cases[0]
+    events: list[dict] = []
+
+    async def fake_wait_for_agent_quiet(*_args, **kwargs) -> bool:
+        return kwargs.get("after_elapsed_ms") is None
+
+    async def fake_capture_pcm(*_args, **_kwargs) -> int:
+        return 120
+
+    monkeypatch.setattr(runner, "_wait_for_agent_quiet", fake_wait_for_agent_quiet)
+    monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
+    monkeypatch.setattr(
+        runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000)
+    )
+    monkeypatch.setattr(
+        runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm
+    )
+
+    with pytest.raises(RuntimeError, match="previous agent reply to complete"):
+        await runner._feed_case_audio(
+            object(),
+            case=case,
+            root=Path("."),
+            events=events,
+            started=time.monotonic(),
+            state=object(),
+            options=LiveKitRoomOptions(),
+            local_participant=AsyncMock(),
+        )
+
+    starts = [event for event in events if event["type"] == "user_audio_started"]
+    assert [event["text"] for event in starts] == [case.user_steps[0].text]
+    assert any(event["type"] == "agent_quiet_wait_timeout" for event in events)
 
 
 def test_livekit_dispatch_token_includes_participant_metadata() -> None:

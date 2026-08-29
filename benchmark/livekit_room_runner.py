@@ -63,7 +63,7 @@ class LiveKitRoomOptions:
     # Deadline for a polite user turn waiting out the agent's previous answer.
     # Real-brain answers regularly exceed 8s; expiring early injects an
     # unintended interrupt, so this is deliberately generous.
-    agent_quiet_wait_sec: float = 30.0
+    agent_quiet_wait_sec: float = 60.0
     agent_speaking_recent_window_ms: int = 250
     # Real clients publish playback_state continuously while TTS is audible.
     # Prime the room data channel before injecting interruption audio so Channel
@@ -331,6 +331,8 @@ async def _run_room_case(
             is_final = bool(getattr(segment, "final", False))
             if role == "user" and is_final:
                 state.mark("transcript_final_at")
+            elif role == "agent" and is_final:
+                state.agent_transcript_final_timestamps.append(_elapsed_ms(started))
             events.append(
                 {
                     "type": "transcription",
@@ -504,6 +506,10 @@ async def _feed_case_audio(
                         "timestamp_ms": _elapsed_ms(started),
                         "step_text": step.text,
                     }
+                )
+                raise RuntimeError(
+                    "timed out waiting for the previous agent reply to complete "
+                    f"before user step {step.text!r}"
                 )
             playback_state = _step_playback_state(step, default="idle")
             if publish_client_state:
@@ -769,14 +775,19 @@ async def _wait_for_agent_quiet(
                 timeout=min(first_audio_wait_sec, timeout_sec),
             )
     else:
+        # A short quiet gap between streamed TTS chunks is not the end of a
+        # conversational reply. Require the agent's final transcription for the
+        # reply triggered by the previous user step, then wait for playout to
+        # drain. This keeps half-duplex cases from accidentally injecting the
+        # next utterance as a barge-in during a long, chunked answer.
         while time.monotonic() < deadline and not any(
             timestamp >= after_elapsed_ms
-            for timestamp in state.agent_audio_frame_timestamps
+            for timestamp in state.agent_transcript_final_timestamps
         ):
             await asyncio.sleep(0.05)
         if not any(
             timestamp >= after_elapsed_ms
-            for timestamp in state.agent_audio_frame_timestamps
+            for timestamp in state.agent_transcript_final_timestamps
         ):
             return False
     quiet_sec = quiet_ms / 1000
@@ -944,6 +955,7 @@ class _RoomCaseState:
     def __post_init__(self) -> None:
         self.timestamps: dict[str, int] = {}
         self.agent_audio_frame_timestamps: list[int] = []
+        self.agent_transcript_final_timestamps: list[int] = []
         self.last_agent_audio_monotonic: float | None = None
         self.agent_connected = asyncio.Event()
         self.first_agent_audio = asyncio.Event()

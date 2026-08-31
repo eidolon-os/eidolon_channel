@@ -260,8 +260,12 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
     )
 
 
-def _resolve_conversation_id(ctx) -> str:
-    """Read the device conversation correlation from the named dispatch."""
+def _resolve_runtime_session_id(ctx) -> str:
+    """Read the per-entry interaction identity from named dispatch metadata.
+
+    The external lifecycle wire still calls this field ``conversation_id``.
+    Internally it is never the Agent brain's long-lived conversation identity.
+    """
 
     try:
         metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
@@ -269,19 +273,19 @@ def _resolve_conversation_id(ctx) -> str:
         raise ValueError("agent dispatch metadata is not valid JSON") from exc
     if not isinstance(metadata, dict):
         raise ValueError("agent dispatch metadata must be an object")
-    conversation_id = normalize_conversation_id(metadata.get(SESSION_CONVERSATION_ID_FIELD))
-    if conversation_id is None:
+    runtime_session_id = normalize_conversation_id(metadata.get(SESSION_CONVERSATION_ID_FIELD))
+    if runtime_session_id is None:
         raise ValueError("agent dispatch has no valid conversation_id")
-    return conversation_id
+    return runtime_session_id
 
 
 def _session_lifecycle_payload(
-    message_type: str, conversation_id: str, *, reason: str | None = None
+    message_type: str, runtime_session_id: str, *, reason: str | None = None
 ) -> bytes:
     payload = {
         "schema_v": WIRE_SCHEMA_VERSION,
         "type": message_type,
-        SESSION_CONVERSATION_ID_FIELD: conversation_id,
+        SESSION_CONVERSATION_ID_FIELD: runtime_session_id,
     }
     if reason is not None:
         payload["reason"] = reason
@@ -305,7 +309,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
     prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
-    conversation_id = _resolve_conversation_id(ctx)
+    runtime_session_id = _resolve_runtime_session_id(ctx)
     # session_key still passed as a synchronous fallback (Room.sid is async,
     # Room.name is set pre-connect). D1: also pass the room reference so the
     # remote-agent adapter can lazily build conversation_id="<prefix>:<participant_identity>:<room_name>"
@@ -317,6 +321,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         prebuilt_voiceprint_provider=prebuilt_voiceprint_provider,
         livekit_session_key=session_key,
         livekit_room=room,
+        runtime_session_id=runtime_session_id,
     )
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
@@ -337,13 +342,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         if local is None:
             raise RuntimeError("cannot confirm session start without a local participant")
         await local.publish_data(
-            _session_lifecycle_payload(SESSION_STARTED_TYPE, conversation_id),
+            _session_lifecycle_payload(SESSION_STARTED_TYPE, runtime_session_id),
             reliable=True,
             topic=SESSION_CONTROL_TOPIC,
         )
         logger.info(
             "[lifecycle] session_started conversation_id=%s room=%s sent",
-            conversation_id,
+            runtime_session_id,
             room.name,
         )
 
@@ -367,7 +372,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             await local.publish_data(
                 _session_lifecycle_payload(
                     SESSION_END_TYPE,
-                    conversation_id,
+                    runtime_session_id,
                     reason=reason,
                 ),
                 reliable=True,
@@ -422,8 +427,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             # standing order: matching by agent name could delete a newer
             # conversation that has already superseded this one.
             logger.warning(
-                "[lifecycle] room=%s has no dispatch identity; cannot end serving "
-                "(context=%s)",
+                "[lifecycle] room=%s has no dispatch identity; cannot end serving (context=%s)",
                 room.name,
                 context,
             )
@@ -434,11 +438,10 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 room_name=room.name,
             )
             logger.info(
-                "[lifecycle] room=%s dispatch=%s conversation_id=%s withdrawn "
-                "(context=%s)",
+                "[lifecycle] room=%s dispatch=%s conversation_id=%s withdrawn (context=%s)",
                 room.name,
                 dispatch_id,
-                conversation_id,
+                runtime_session_id,
                 context,
             )
         except TwirpError as e:
@@ -604,10 +607,7 @@ def _validate_config(cfg: AgentConfig) -> None:
             errors.append(
                 "runtime_authority.enabled=false is not valid for eidolon_agent. Set enabled=true."
             )
-        elif not (
-            cfg.runtime_authority.jwt_secret
-            or _runtime_secret_file().is_file()
-        ):
+        elif not (cfg.runtime_authority.jwt_secret or _runtime_secret_file().is_file()):
             errors.append(
                 f"PAIRING_JWT_SECRET empty AND {_runtime_secret_file()} "
                 "missing. Start eidolon-agent once (it persists the secret) "

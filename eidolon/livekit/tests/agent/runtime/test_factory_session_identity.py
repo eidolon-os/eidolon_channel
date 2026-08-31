@@ -57,6 +57,43 @@ def test_runtime_token_uses_unique_dispatch_session_not_stable_room(
     assert captured["session_id"] == "esp32-dispatch-00000003"
 
 
+def test_same_device_room_gets_a_new_runtime_session_on_each_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions: list[str] = []
+
+    monkeypatch.setattr(
+        "eidolon_sdk.biz.runtime.resolve_shared_secret",
+        lambda _value: "resolved-secret",
+    )
+
+    def _resolver(**kwargs):
+        sessions.append(str(kwargs["session_id"]))
+        return object()
+
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.runtime.make_device_token_resolver",
+        _resolver,
+    )
+    stable_room = SimpleNamespace(name="eidolon-device-stable")
+
+    for interaction_id in (
+        "esp32-dispatch-00000002",
+        "esp32-dispatch-00000003",
+    ):
+        _build_device_token_source(
+            cfg=_config(),
+            livekit_room=stable_room,
+            runtime_services=_services(),
+            runtime_session_id=interaction_id,
+        )
+
+    assert sessions == [
+        "esp32-dispatch-00000002",
+        "esp32-dispatch-00000003",
+    ]
+
+
 def test_runtime_token_rejects_missing_dispatch_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

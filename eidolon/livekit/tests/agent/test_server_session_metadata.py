@@ -8,7 +8,7 @@ import pytest
 from eidolon.livekit.agent.runtime.resolver import DeviceTokenResolverError
 from eidolon.livekit.agent import server
 from eidolon.livekit.agent.server import (
-    _resolve_conversation_id,
+    _resolve_runtime_session_id,
     _resolve_session_metadata,
     _session_lifecycle_payload,
 )
@@ -54,10 +54,10 @@ class _FakeContext:
         self.room.remote_participants = self.room._participants_after_connect
 
 
-def test_conversation_id_comes_from_dispatch_metadata() -> None:
+def test_runtime_session_id_comes_from_dispatch_metadata() -> None:
     ctx = _FakeContext({}, dispatch_metadata='{"conversation_id":"conversation-7"}')
 
-    assert _resolve_conversation_id(ctx) == "conversation-7"
+    assert _resolve_runtime_session_id(ctx) == "conversation-7"
 
 
 @pytest.mark.parametrize("metadata", ["", "[]", "{}", '{"conversation_id":"bad id"}'])
@@ -65,7 +65,7 @@ def test_invalid_dispatch_conversation_id_is_rejected(metadata: str) -> None:
     ctx = _FakeContext({}, dispatch_metadata=metadata)
 
     with pytest.raises(ValueError, match="dispatch"):
-        _resolve_conversation_id(ctx)
+        _resolve_runtime_session_id(ctx)
 
 
 def test_session_lifecycle_payload_keeps_the_conversation_correlation() -> None:

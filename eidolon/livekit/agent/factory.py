@@ -264,9 +264,10 @@ class SharedStageFactory:
                 chat() time since the user has already spoken).
             runtime_session_id: The unique conversation id from the named
                 dispatch. This is the authenticated runtime and Memory session
-                boundary. It must not be the stable per-device room name: doing
-                so makes Memory's same-session echo suppression hide that
-                device's facts after every later re-entry.
+                boundary. It must not be the stable per-device room name:
+                authorization, realtime signals, turn provenance and lifecycle
+                cleanup all need one identifier per room entry. Long-lived brain
+                history remains keyed separately by the stable participant.
 
         Returns:
             A fully wired :class:`SharedStageFactory`.
@@ -310,9 +311,11 @@ class SharedStageFactory:
                         if participants:
                             p = participants[0]
                             ident = getattr(p, "identity", "") or "anon"
-                            # Voice rooms are per-session (device-<id>-<nonce>):
-                            # keying the conversation on the volatile room name
-                            # would start a fresh brain context on every JOIN. For
+                            # A room name is transport identity, regardless of
+                            # whether a deployment reuses it or rotates it.
+                            # Keying brain history on the room would either split
+                            # context on every JOIN or accidentally conflate it
+                            # with the interaction lifecycle. For
                             # a device, key on the stable participant identity
                             # alone (its LiveKit identity is constant across
                             # reconnects and single-format) so every JOIN from the

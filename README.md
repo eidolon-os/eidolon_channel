@@ -17,10 +17,12 @@ interaction。现有语音 pipeline 只接收完整 Companion context，不在 V
 - Channel 为一次 LiveKit 会话解析并缓存完整 runtime context。Agent token、Voiceprint 与
   Avatar 复用该结果，不存在 Admin Resolve 旁路。
 - Channel→Agent 使用 V5 窄 runtime token，只携带 `owner_id`、`companion_id`、必需
-  `session_id` 与可选 `device_id/scopes`。`session_id` 固定为当前 LiveKit room；
-  Genome/Realm/运行策略由 Agent 向 System Data 重新解析和校验。
+  `session_id` 与可选 `device_id/scopes`。`session_id` 来自 named dispatch，每次进入
+  interaction 都不同，不复用稳定的设备 room；Genome/Realm/运行策略由 Agent 向
+  System Data 重新解析和校验。
 - Proactive 订阅不再发送 wildcard/instance selector；Agent 只允许订阅 token 中
-  Companion 的事件。`conversation_id` 仍是历史上下文键，不承担会话授权。
+  Companion 的事件。脑侧 `conversation_id` 是独立的短期历史上下文键，不承担会话
+  授权，也不作为 Memory 长期事实的可见性条件。
 - LiveKit JWT 仍只属于 Channel/LiveKit 链路；上述 OS 边界不进入 VAD/STT/EOT/TTS
   算法，也不改变 full/half/PTT pipeline。
 

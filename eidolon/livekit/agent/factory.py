@@ -53,6 +53,7 @@ def _build_device_token_source(
     cfg: "AgentConfig",
     livekit_room: "Any | None",
     runtime_services: "Any",
+    runtime_session_id: str,
 ) -> "Any":
     """Build the per-session device-token resolver used by the gRPC LLM.
 
@@ -104,11 +105,11 @@ def _build_device_token_source(
             "the agent entrypoint."
         )
 
-    session_id = str(getattr(livekit_room, "name", "") or "").strip()
+    session_id = str(runtime_session_id or "").strip()
     if not session_id:
         raise RuntimeError(
-            "[device_token] livekit_room.name is empty — required to bind "
-            "the Agent credential to this LiveKit session."
+            "[device_token] runtime_session_id is empty — the named dispatch "
+            "must bind the Agent credential to one interaction session."
         )
 
     from eidolon.livekit.agent.runtime import make_device_token_resolver
@@ -232,6 +233,7 @@ class SharedStageFactory:
         prebuilt_voiceprint_provider: "Any | None" = None,
         livekit_session_key: str = "",
         livekit_room: "Any | None" = None,
+        runtime_session_id: str = "",
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -260,6 +262,11 @@ class SharedStageFactory:
                 user. Falls back to ``<prefix>:<room.name>`` when no
                 participant is connected yet (defensive — shouldn't happen at
                 chat() time since the user has already spoken).
+            runtime_session_id: The unique conversation id from the named
+                dispatch. This is the authenticated runtime and Memory session
+                boundary. It must not be the stable per-device room name: doing
+                so makes Memory's same-session echo suppression hide that
+                device's facts after every later re-entry.
 
         Returns:
             A fully wired :class:`SharedStageFactory`.
@@ -352,6 +359,7 @@ class SharedStageFactory:
                 cfg=cfg,
                 livekit_room=livekit_room,
                 runtime_services=runtime_services,
+                runtime_session_id=runtime_session_id,
             )
 
             llm = EidolonAgentGrpcLlm(

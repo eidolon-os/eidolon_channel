@@ -325,6 +325,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         prebuilt_voiceprint_provider=prebuilt_voiceprint_provider,
         livekit_session_key=session_key,
         livekit_room=room,
+        runtime_session_id=conversation_id,
     )
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode

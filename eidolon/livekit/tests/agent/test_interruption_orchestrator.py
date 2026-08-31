@@ -155,6 +155,42 @@ def test_turn_policy_hold_keeps_weak_transcript_in_evidence_window() -> None:
     assert last["last_policy_action"] == "hold"
 
 
+def test_provisional_short_latin_artifact_uses_bounded_evidence_window() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        no_evidence_timeout_sec=0.8,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=TurnTimeline("turn-latin-artifact"))
+    owner.note_transcript("Okay", is_final=False)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.HOLD,
+            reason="transcript_evidence_hold:short_latin_artifact cjk=0 latin=4",
+            intent=InterruptIntent.UNCERTAIN,
+        ),
+        transcript="Okay",
+        vad_active=True,
+    )
+
+    now = 10.55
+    assert owner.defer_false_resume_after_speech_end(
+        transcript="Okay",
+        duck_suspended=True,
+    )
+    assert owner.max_suspend_sec() == 0.8
+    assert owner.should_hold_deadline() is True
+
+    now = 11.36
+    assert owner.should_hold_deadline() is False
+
+
 def test_turn_policy_rollback_allows_fast_false_resume_after_speech_end() -> None:
     now = 10.0
 

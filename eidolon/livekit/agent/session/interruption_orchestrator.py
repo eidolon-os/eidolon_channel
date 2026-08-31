@@ -490,7 +490,9 @@ class InterruptionOrchestrator:
     def max_suspend_sec(self) -> float:
         """Max suspend window while waiting for post-speech evidence.
 
-        Capped to the shorter no-evidence window when no transcript has arrived.
+        Capped to the shorter no-evidence window when no stable transcript has
+        arrived. A short Latin interim is provisional until FINAL because it
+        may still be revised into a control phrase.
         """
 
         candidate = self._candidate
@@ -502,6 +504,8 @@ class InterruptionOrchestrator:
             and candidate.last_policy_action in (None, Action.HOLD)
         ):
             return self._evidence_timeout_sec
+        if self._has_provisional_short_latin_artifact(candidate):
+            return self._no_evidence_timeout_sec
         if not (candidate.final_transcript or candidate.transcript).strip():
             if (
                 candidate.awaiting_post_speech_evidence
@@ -519,11 +523,24 @@ class InterruptionOrchestrator:
         candidate = self._candidate
         if candidate is None:
             return False
-        if (candidate.final_transcript or candidate.transcript).strip():
+        if (
+            (candidate.final_transcript or candidate.transcript).strip()
+            and not self._has_provisional_short_latin_artifact(candidate)
+        ):
             return False
         if candidate.stopped_at is None:
             return False
         return (self._now() - candidate.stopped_at) >= self._no_evidence_timeout_sec
+
+    @staticmethod
+    def _has_provisional_short_latin_artifact(
+        candidate: InterruptionCandidate,
+    ) -> bool:
+        return bool(
+            not candidate.final_transcript.strip()
+            and candidate.last_policy_action is Action.HOLD
+            and "short_latin_artifact" in candidate.last_policy_reason
+        )
 
     def blocks_framework_completed_turn(
         self,

@@ -41,6 +41,18 @@ def test_echo_ignores_punctuation_and_spaces() -> None:
     assert gate.is_echo(" 你希望我叫你什么 ") is True
 
 
+def test_echo_tolerates_leading_streaming_boundary_duplication() -> None:
+    gate = _gate("你好！我是你的 AI 助手，请问有什么可以帮你的？")
+
+    assert gate.is_echo("我，我是你的AI助手") is True
+
+
+def test_echo_boundary_tolerance_does_not_drop_user_prefix() -> None:
+    gate = _gate("换个话题之后，我继续介绍方案。")
+
+    assert gate.is_echo("我换个话题") is False
+
+
 def test_real_user_turn_not_flagged_as_echo() -> None:
     gate = _gate(AGENT)
     # Substantive user input the agent did not say → not echo.

@@ -60,6 +60,49 @@ def test_livekit_17_agent_uses_structured_turn_handling_and_public_stt_node() ->
     assert inspect.isasyncgenfunction(agent.stt_node)
 
 
+@pytest.mark.asyncio
+async def test_public_tts_node_taps_text_without_reimplementing_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import Agent
+
+    forwarded: list[str] = []
+    recorded: list[tuple[int, str]] = []
+
+    async def fake_default_tts_node(self, text, model_settings):
+        async for chunk in text:
+            forwarded.append(chunk)
+        yield "audio-frame"
+
+    monkeypatch.setattr(Agent, "tts_node", fake_default_tts_node)
+    pipeline = SimpleNamespace(
+        _instructions="test",
+        _factory=SimpleNamespace(
+            stt=SimpleNamespace(stt=None),
+            llm=SimpleNamespace(llm=None),
+            tts=SimpleNamespace(tts=None),
+            vad=None,
+        ),
+        _turn_detection=lambda: "vad",
+        _begin_streamed_assistant_speech=lambda: 17,
+        _append_streamed_assistant_speech=lambda stream_id, text: recorded.append(
+            (stream_id, text)
+        ),
+        _abort_streamed_assistant_speech=lambda stream_id: None,
+    )
+    agent = build_full_duplex_agent(pipeline)
+
+    async def text_source():
+        yield "第一段"
+        yield "第二段"
+
+    frames = [frame async for frame in agent.tts_node(text_source(), None)]
+
+    assert frames == ["audio-frame"]
+    assert forwarded == ["第一段", "第二段"]
+    assert recorded == [(17, "第一段"), (17, "第二段")]
+
+
 def test_turn_policy_speech_merge_grace_reaches_coordinator() -> None:
     p = _pipe(allow_interruptions=True)
     p._turn_policy = TurnPolicyConfig(

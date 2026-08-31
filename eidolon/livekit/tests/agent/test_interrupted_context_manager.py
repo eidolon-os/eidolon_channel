@@ -79,6 +79,27 @@ def test_interrupted_context_manager_uses_assistant_speech_ledger_text() -> None
     session.history.messages.assert_not_called()
 
 
+def test_provider_neutral_assistant_text_precedes_optional_provider_text() -> None:
+    manager = InterruptedContextManager()
+    session = MagicMock()
+    factory = SimpleNamespace(
+        tts=SimpleNamespace(tts=SimpleNamespace(current_pushed_text="provider reply"))
+    )
+    cfg = SimpleNamespace(interrupted_context_enabled=True)
+
+    manager.snapshot(
+        session=session,
+        factory=factory,
+        duck_mixer=None,
+        config=cfg,
+        assistant_text="public tts node reply",
+    )
+
+    assert manager.last_context is not None
+    assert manager.last_context["text"] == "public tts node reply"
+    assert manager.last_context["source"] == "assistant_speech_ledger"
+
+
 def test_snapshot_without_new_output_does_not_relabel_pending_context() -> None:
     manager = InterruptedContextManager()
     pending = {

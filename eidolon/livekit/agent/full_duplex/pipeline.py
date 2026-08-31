@@ -1606,6 +1606,12 @@ class StreamingPipeline(BasePipeline):
         self._ensure_runtime_defaults()
         self._ensure_transcript_handler().handle(event)
 
+    def _on_user_transcription_timeout(self, event: Any) -> None:
+        """Apply product recovery after LiveKit observes speech with no final text."""
+
+        self._ensure_runtime_defaults()
+        self._ensure_turn_completion().handle_transcription_timeout(event)
+
     def _interrupt_decision_suppressed(self) -> bool:
         """Ignore residual ASR after a confirmed interrupt cancel."""
         return time.monotonic() < self._suppress_commit_after_interrupt_until

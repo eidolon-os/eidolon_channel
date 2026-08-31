@@ -12,8 +12,6 @@ from eidolon.livekit.agent.observability import TurnTimeline
 def _owner() -> SimpleNamespace:
     owner = SimpleNamespace()
     turn_completion = SimpleNamespace(
-        cancel_transcriptless_expiry=MagicMock(),
-        arm_transcriptless_expiry=MagicMock(),
         cancel_completed_voiceprint_turn=MagicMock(),
         remember_completed_voiceprint_turn=MagicMock(),
         reset_candidate_voiceprint_tasks=MagicMock(),
@@ -89,7 +87,6 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._suppress_commit_after_interrupt_until == 0.0
     assert owner._suppress_transcripts_until_next_speech is False
     owner._turn_completion.cancel_completed_voiceprint_turn.assert_called_once_with()
-    owner._turn_completion.cancel_transcriptless_expiry.assert_called_once_with()
     assert owner._latest_asr_text == ""
     assert owner._timeline is not None
     assert owner._timeline.attrs["room_name"] == "room-a"

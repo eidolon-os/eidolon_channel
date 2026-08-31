@@ -91,4 +91,3 @@ async def test_half_duplex_vad_stop_does_not_resolve_interruption() -> None:
     # Stop-side barge-in resolution is skipped; no duck was ever suspended.
     assert pipeline._ducking.is_suspended is False
     assert pipeline._interruption_orchestrator.active is False
-    pipeline._ensure_turn_completion().cancel_transcriptless_expiry()

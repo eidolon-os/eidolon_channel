@@ -40,6 +40,7 @@ def _handler(
     interrupt_window_active: bool = False,
     decision_suppressed: bool = False,
     attention_allowed: bool = True,
+    policy_transcript: str | None = None,
 ):
     gate = admission_gate or _AdmissionGate()
     calls = {
@@ -56,7 +57,9 @@ def _handler(
 
     return FullDuplexTranscriptHandler(
         admission_gate=lambda: gate,
-        record_accepted_event=lambda event: calls["recorded"].append(event),
+        record_accepted_event=lambda event: (
+            calls["recorded"].append(event) or policy_transcript
+        ),
         allow_interruptions=lambda: allow_interruptions,
         native_adaptive_owner=lambda: native_adaptive,
         agent_output_active=lambda speaker_id: (
@@ -175,6 +178,23 @@ def test_transcript_handler_runs_semantic_interrupt_when_attention_allows() -> N
             "attention_allowed": True,
         },
     ]
+
+
+def test_transcript_handler_uses_canonical_turn_for_semantic_policy() -> None:
+    handler, calls, _ = _handler(
+        agent_output_active=True,
+        attention_allowed=True,
+        policy_transcript="换个话题",
+    )
+    event = _event("话题", final=False, speaker_id="owner")
+
+    handler.handle(event)
+
+    assert calls["attention"] == [("换个话题", "owner")]
+    assert calls["semantic"] == [("换个话题", False)]
+    assert calls["forwarded"] == [event]
+    assert calls["semantic_gate_events"][-1]["transcript_preview"] == "换个话题"
+    assert calls["semantic_gate_events"][-1]["event_transcript_preview"] == "话题"
 
 
 def test_transcript_handler_forwards_without_semantic_run_when_attention_blocks() -> None:

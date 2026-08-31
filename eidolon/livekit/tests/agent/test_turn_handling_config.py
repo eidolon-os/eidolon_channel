@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from eidolon_sdk.biz.contracts import INTERACTION_MODE_HALF_DUPLEX
 
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.full_duplex.agent_builder import build_full_duplex_agent
+from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
 from eidolon.livekit.agent.factory import SharedStageFactory
 from eidolon.livekit.common.config import EotPolicyConfig, TurnPolicyConfig
 
@@ -58,6 +60,76 @@ def test_livekit_17_agent_uses_structured_turn_handling_and_public_stt_node() ->
 
     assert agent.turn_detection == "vad"
     assert inspect.isasyncgenfunction(agent.stt_node)
+
+
+@pytest.mark.asyncio
+async def test_session_uses_livekit_transcription_timeout_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from eidolon.livekit.agent.full_duplex import lifecycle as lifecycle_module
+    from livekit.agents import voice as livekit_voice
+
+    captured: dict[str, object] = {}
+
+    class SessionStarted(Exception):
+        pass
+
+    class FakeAgentSession:
+        def __init__(self, **kwargs):
+            captured["options"] = kwargs
+            self.output = SimpleNamespace(audio=None)
+
+        def on(self, event_name, callback):
+            captured.setdefault("events", {})[event_name] = callback
+
+        async def start(self, **kwargs):
+            raise SessionStarted
+
+    async def runtime_identity(_room):
+        return "owner-1"
+
+    monkeypatch.setattr(livekit_voice, "AgentSession", FakeAgentSession)
+    monkeypatch.setattr(
+        lifecycle_module,
+        "wait_for_runtime_participant_identity",
+        runtime_identity,
+    )
+
+    pipeline = SimpleNamespace(
+        _room=None,
+        _started=False,
+        _runtime_participant_identity="",
+        _ensure_turn_event_sink=lambda: SimpleNamespace(start=AsyncMock()),
+        _build_agent=lambda: object(),
+        _build_turn_handling=lambda: {"interruption": {"enabled": False}},
+        _aec_warmup_duration=0.4,
+        _stt_commit_transcript_timeout=1.5,
+        _on_user_state_changed=MagicMock(),
+        _on_agent_state_changed=MagicMock(),
+        _on_user_transcribed=MagicMock(),
+        _on_user_transcription_timeout=MagicMock(),
+        _on_session_error=MagicMock(),
+        _session_signals=SimpleNamespace(register_vad_inference_callback=MagicMock()),
+        _warmup_stages=AsyncMock(),
+        _filler=None,
+        _ensure_room_data_bridge=lambda: SimpleNamespace(install=MagicMock()),
+        _voiceprint_turns=SimpleNamespace(install=MagicMock()),
+        _audio_sample_rate=16000,
+        _avatar_enabled=False,
+    )
+    room = SimpleNamespace(name="room-1", on=MagicMock())
+
+    with pytest.raises(SessionStarted):
+        await FullDuplexSessionLifecycle(pipeline).run(room)
+
+    assert captured["options"] == {
+        "turn_handling": {"interruption": {"enabled": False}},
+        "aec_warmup_duration": 0.4,
+        "transcription_timeout": 1.5,
+    }
+    assert captured["events"]["user_transcription_timeout"] is (
+        pipeline._on_user_transcription_timeout
+    )
 
 
 @pytest.mark.asyncio

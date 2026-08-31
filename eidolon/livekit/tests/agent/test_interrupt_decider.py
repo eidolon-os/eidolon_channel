@@ -15,6 +15,7 @@ import pytest
 from eidolon.livekit.agent.turn_policy import (
     Action,
     Decision,
+    InterruptIntent,
     InterruptIntentResult,
     InterruptDecider,
     LexiconInterruptClassifier,
@@ -159,6 +160,23 @@ def test_backchannel_with_fast_lexical_rolls_back() -> None:
     assert decision.action is Action.ROLLBACK
     assert decision.intent is not None
     assert decision.intent.value == "backchannel"
+
+
+def test_provider_neutral_policy_text_cancels_segmented_topic_switch() -> None:
+    cfg = replace(
+        InterruptPolicyConfig(),
+        fast_lexical_intents=True,
+        correction_topic_stability_window_ms=0,
+    )
+    decision = InterruptDecider(cfg).on_stt_interim(
+        "换个话题",
+        score=0.24,
+        is_final=False,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent is InterruptIntent.TOPIC_SWITCH
+    assert decision.topic_switch_hint is True
 
 
 def test_short_acknowledgement_with_fast_lexical_rolls_back() -> None:

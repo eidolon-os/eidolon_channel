@@ -115,3 +115,25 @@ def test_silent_failure_fallback_is_suppressed_while_user_is_speaking():
     ) is False
     p._session.say.assert_not_called()
     assert timeline.attrs["silent_failure_fallback"]["reason"] == "user_speaking"
+
+
+def test_transcription_timeout_announces_once_outside_chat_context():
+    p = _pipeline_with_session()
+    p._mark_activity = Mock()
+    timeline = TurnTimeline("transcription-timeout")
+    boundary = p._ensure_turn_completion()._session_turns
+
+    assert boundary.notify_transcription_timeout_once(timeline=timeline) is True
+    assert boundary.notify_transcription_timeout_once(timeline=timeline) is False
+
+    p._session.say.assert_called_once_with(
+        "抱歉，刚才没听清，请再说一遍好吗？",
+        allow_interruptions=True,
+        add_to_chat_ctx=False,
+    )
+    p._mark_activity.assert_called_once_with()
+    assert timeline.attrs["transcription_timeout_fallback"] == {
+        "attempted": True,
+        "spoken": True,
+        "reason": "user_transcription_timeout",
+    }

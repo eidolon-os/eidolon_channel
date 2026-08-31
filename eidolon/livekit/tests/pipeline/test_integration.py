@@ -77,7 +77,11 @@ def shared_stage_factory():
             if cfg.providers.brain_provider == "eidolon_agent"
             else None
         )
-        factory = SharedStageFactory.from_config(cfg, livekit_room=livekit_room)
+        factory = SharedStageFactory.from_config(
+            cfg,
+            livekit_room=livekit_room,
+            runtime_session_id="integration-dispatch-session",
+        )
     except Exception as e:
         pytest.fail(f"Failed to build SharedStageFactory: {e}")
 

@@ -430,6 +430,15 @@ def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPa
     assert cfg.turn_policy.interrupt.fast_lexical_intents is True
     assert cfg.turn_policy.interrupt.correction_topic_stability_window_ms == 0
     assert cfg.turn_policy.ducking.suspended_passthrough_enabled is False
+    assert cfg.turn_policy.attention.echo_min_normalized_chars == 3
+
+
+def test_product_settings_do_not_enable_two_character_echo_matching() -> None:
+    root = Path(__file__).resolve().parents[4]
+    settings = yaml.safe_load((root / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    attention = settings["turn_policy"]["attention"]
+
+    assert attention.get("echo_min_normalized_chars", 3) >= 3
 
 
 def test_remote_agent_rejects_legacy_device_token_field(

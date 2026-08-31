@@ -181,7 +181,6 @@ turn_policy:
     require_direct_signal_during_playback: true
     soft_duck_on_playback_speech_start: true
     ignore_when_mic_muted: true
-    echo_min_normalized_chars: 2
     assistant_speech_recent_max_age_ms: 3000
 
 observability:

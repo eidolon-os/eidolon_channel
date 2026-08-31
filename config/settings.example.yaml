@@ -175,7 +175,8 @@ turn_policy:
     # transcript/EOT/intent evidence decide cancel vs resume/ignore.
     soft_duck_on_playback_speech_start: true
     ignore_when_mic_muted: true
-    # Avoid classifying one-character backchannels such as "好" as playback echo.
+    # Content-only matching is ambiguous for two-character correction cues
+    # such as "不是"; require at least three normalized characters.
     echo_min_normalized_chars: 3
     # Short fallback window for fixed assistant speech when TTS in-flight text
     # is not yet readable; prevents stale assistant text from entering echo/context.

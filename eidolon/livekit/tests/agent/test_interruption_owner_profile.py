@@ -106,6 +106,20 @@ def test_livekit_native_profile_sets_adaptive_turn_handling() -> None:
     assert interruption["false_interruption_timeout"] == 6.0
 
 
+def test_channel_profile_uses_public_options_without_dropping_input() -> None:
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._turn_policy = _policy("channel")
+    pipeline._allow_interruptions = True
+    pipeline._false_interruption_timeout = 6.0
+    pipeline._avatar_enabled = False
+
+    interruption = pipeline._build_turn_handling()["interruption"]
+
+    assert interruption["enabled"] is False
+    assert interruption["discard_audio_if_uninterruptible"] is False
+    assert "mode" not in interruption
+
+
 def test_native_profile_not_enabled_when_interruptions_disabled() -> None:
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._turn_policy = _policy("livekit_native_adaptive")

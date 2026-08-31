@@ -45,6 +45,7 @@ def _make_pipeline_with_session(*, latest_asr_text: str = "") -> Any:
     pipeline._user_speaking_start_time = None
     pipeline._skip_commit_after_interrupt_cancel = False
     pipeline._suppress_commit_after_interrupt_until = 0.0
+    pipeline._stt_commit_transcript_timeout = 0.05
 
     eot = MagicMock()
     eot._current_eot_score = 1.0
@@ -125,6 +126,47 @@ async def test_framework_completed_is_the_single_normal_commit_boundary() -> Non
 
 
 @pytest.mark.asyncio
+async def test_transcriptless_non_interruption_rejects_at_product_deadline() -> None:
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline("transcriptless-deadline")
+    pipeline._timeline = timeline
+    candidate = pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0)
+
+    pipeline._ensure_turn_completion().arm_transcriptless_expiry()
+    await asyncio.sleep(0.08)
+
+    assert candidate.state == "rejected"
+    assert candidate.reject_reason == "speech_stopped_without_transcript_deadline"
+    expiry = timeline.attrs["transcriptless_candidate_expiry"]
+    assert expiry["outcome"] == "rejected"
+    assert expiry["elapsed_ms"] >= 45
+    assert timeline.attrs["timeline_flush_reason"] == (
+        "speech_stopped_without_transcript_deadline"
+    )
+
+
+@pytest.mark.asyncio
+async def test_transcript_arrival_cancels_transcriptless_expiry() -> None:
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline("transcript-before-deadline")
+    pipeline._timeline = timeline
+    candidate = pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0)
+
+    pipeline._ensure_turn_completion().arm_transcriptless_expiry()
+    await asyncio.sleep(0.01)
+    pipeline._user_turns.add_transcript("迟到但有效的转写", is_final=False)
+    await asyncio.sleep(0.06)
+
+    assert candidate.state == "open"
+    assert candidate.selected_text == "迟到但有效的转写"
+    assert "transcriptless_candidate_expiry" not in timeline.attrs
+
+
+@pytest.mark.asyncio
 async def test_cross_vad_repeated_stt_hypothesis_commits_once() -> None:
     """A provider FINAL explicitly covers its prior-generation interim alias."""
 
@@ -187,7 +229,7 @@ async def test_completion_covering_latest_interim_commits_complete_candidate() -
 
 
 @pytest.mark.asyncio
-async def test_framework_gate_defers_stale_final_until_assembled_candidate_is_closed() -> None:
+async def test_framework_gate_waits_for_evidence_without_second_completion() -> None:
     """Replay the event order observed in the 13-turn Box-3 timeline.
 
     LiveKit can complete the earlier short FINAL after a new VAD segment has
@@ -218,26 +260,24 @@ async def test_framework_gate_defers_stale_final_until_assembled_candidate_is_cl
     pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=False))
 
     message = ChatMessage(role="user", content=["好啊。"])
-    first_allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        turn_ctx=ChatContext.empty(), new_message=message
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(), new_message=message
+        )
     )
-
-    assert first_allowed is False
+    await asyncio.sleep(0)
+    assert completion.done() is False
     assert pipeline._user_turns.snapshot()["state"] == "open"
 
     pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=True))
-    final_message = ChatMessage(
-        role="user",
-        content=["那你记下来吧，这是我们约定。"],
-    )
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        turn_ctx=ChatContext.empty(), new_message=final_message
-    )
+    allowed = await completion
 
     canonical = "好啊。那你记下来吧，这是我们约定。"
     assert allowed is True
     assert pipeline._user_turns.selected_text == canonical
-    assert final_message.content == [canonical]
+    assert message.content == [canonical]
+    assert timeline.attrs["framework_completed_settlement"]["outcome"] == "ready"
+    assert timeline.attrs["framework_completed_settlement"]["evidence_updates"] == 1
 
 
 @pytest.mark.asyncio
@@ -248,7 +288,7 @@ async def test_framework_gate_defers_stale_final_until_assembled_candidate_is_cl
         ("OK呀。", "到时候我还可以带几个朋友", "OK呀。到时候我还可以带几个朋友"),
     ],
 )
-async def test_stale_final_waits_for_later_interim_to_become_final(
+async def test_stale_final_is_released_by_later_final_without_second_completion(
     framework_final: str,
     later_interim: str,
     canonical: str,
@@ -264,20 +304,19 @@ async def test_stale_final_waits_for_later_interim_to_become_final(
     pipeline._on_user_transcribed(_transcript_event(later_interim, is_final=False))
 
     message = ChatMessage(role="user", content=[framework_final])
-    first_allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        turn_ctx=ChatContext.empty(), new_message=message
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(), new_message=message
+        )
     )
-
-    assert first_allowed is False
+    await asyncio.sleep(0)
+    assert completion.done() is False
     pipeline._on_user_transcribed(_transcript_event(later_interim, is_final=True))
-    final_message = ChatMessage(role="user", content=[later_interim])
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        turn_ctx=ChatContext.empty(), new_message=final_message
-    )
+    allowed = await completion
 
     assert allowed is True
     assert pipeline._user_turns.selected_text == canonical
-    assert final_message.text_content == canonical
+    assert message.text_content == canonical
 
 
 @pytest.mark.asyncio
@@ -292,23 +331,91 @@ async def test_correction_multi_final_starts_one_generation_with_complete_canoni
     pipeline._on_user_transcribed(_transcript_event("不是。", is_final=True))
     pipeline._on_user_transcribed(_transcript_event("我刚才说", is_final=False))
 
-    stale = ChatMessage(role="user", content=["不是。"])
-    assert (
-        await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-            turn_ctx=ChatContext.empty(), new_message=stale
+    message = ChatMessage(role="user", content=["不是。"])
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(), new_message=message
         )
-        is False
     )
+    await asyncio.sleep(0)
+    assert completion.done() is False
 
     pipeline._on_user_transcribed(_transcript_event("我刚才说错了。", is_final=True))
-    completed = ChatMessage(role="user", content=["我刚才说错了。"])
-    assert (
-        await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-            turn_ctx=ChatContext.empty(), new_message=completed
-        )
-        is True
+    assert await completion is True
+    assert message.text_content == "不是。我刚才说错了。"
+
+
+@pytest.mark.asyncio
+async def test_orphan_interim_commits_best_known_text_at_hard_deadline() -> None:
+    """No provider callback is required after LiveKit completes the turn."""
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._stt_commit_transcript_timeout = 0.01
+    timeline = TurnTimeline("orphan-interim-deadline")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._on_user_transcribed(_transcript_event("好啊。", is_final=True))
+    pipeline._on_user_transcribed(
+        _transcript_event("那你记下来吧，这是我们约定。", is_final=False)
     )
-    assert completed.text_content == "不是。我刚才说错了。"
+
+    message = ChatMessage(role="user", content=["好啊。"])
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(),
+        new_message=message,
+    )
+
+    assert allowed is True
+    assert message.text_content == "好啊。那你记下来吧，这是我们约定。"
+    assert pipeline._user_turns.snapshot()["state"] == "committed"
+    assert timeline.attrs["framework_completed_settlement"]["outcome"] == "deadline"
+    assert pipeline._user_turns.snapshot()["commit_reason"] == (
+        "framework_completed_turn:transcript_settlement_deadline"
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_candidate_supersedes_turn_waiting_for_provider_evidence() -> None:
+    """A late completion cannot commit across a newer acoustic turn."""
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._stt_commit_transcript_timeout = 1.0
+    old_timeline = TurnTimeline("provider-evidence-waiting")
+    pipeline._timeline = old_timeline
+    pipeline._ensure_runtime_defaults()
+    old_candidate = pipeline._user_turns.start_speech(
+        timeline=old_timeline,
+        now=0.0,
+    )
+    pipeline._user_turns.add_transcript("好啊。", is_final=True, now=0.1)
+    pipeline._user_turns.add_transcript("旧轮次仍在修订", is_final=False, now=0.2)
+    pipeline._user_turns.note_speech_stopped(eot_score=0.0, now=0.3)
+
+    message = ChatMessage(role="user", content=["好啊。"])
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(),
+            new_message=message,
+        )
+    )
+    await asyncio.sleep(0)
+    assert completion.done() is False
+
+    new_timeline = TurnTimeline("new-acoustic-turn")
+    new_candidate = pipeline._user_turns.start_speech(
+        timeline=new_timeline,
+        now=2.0,
+    )
+
+    assert await completion is False
+    assert old_candidate.state == "rejected"
+    assert old_candidate.reject_reason == "superseded_by_new_speech"
+    assert new_candidate.state == "open"
+    assert pipeline._user_turns.active is new_candidate
+    assert old_timeline.attrs["framework_completed_settlement"]["outcome"] == (
+        "candidate_replaced"
+    )
 
 
 @pytest.mark.asyncio

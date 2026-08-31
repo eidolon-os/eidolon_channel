@@ -24,6 +24,8 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("providers.brain_provider must be 'direct_llm' or 'eidolon_agent'")
 
     worker = cfg.worker
+    if not worker.agent_name.strip():
+        errors.append("worker.agent_name must be non-empty")
     if worker.num_idle_processes is not None and not (0 <= worker.num_idle_processes <= 64):
         errors.append("worker.num_idle_processes must be in [0, 64]")
     if not (1.0 <= worker.setup_timeout_sec <= 600.0):

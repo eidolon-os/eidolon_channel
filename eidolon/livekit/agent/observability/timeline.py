@@ -280,6 +280,18 @@ class TurnTimeline:
             raise ValueError(f"unknown timeline mark {name!r}")
         self.timestamps.setdefault(name, timestamp)
 
+    def mark_latest(self, name: str, *, timestamp: float | None = None) -> None:
+        """Set a boundary to its latest occurrence within a merged turn.
+
+        Most timeline marks are first-occurrence milestones and therefore use
+        ``setdefault``.  A merged multi-segment user turn is different: commit
+        latency must start at the final acoustic stop, not the first pause.
+        """
+
+        if name not in TIMELINE_FIELDS:
+            raise ValueError(f"unknown timeline mark {name!r}")
+        self.timestamps[name] = time.monotonic() if timestamp is None else timestamp
+
     def mark_interrupt_resolved(
         self,
         action: str,

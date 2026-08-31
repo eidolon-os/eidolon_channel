@@ -223,6 +223,8 @@ def test_full_duplex_gate_guard_cases_use_matching_audio_assets() -> None:
     assert false_start.audio_clips[0].id == "reaction_start"
     assert false_start.audio_clips[0].text == "我觉得"
     assert false_start.audio_clips[0].path.endswith("/reaction_start.wav")
+    assert false_start.expectations.decision_action == "any"
+    assert "cancel" in false_start.expectations.forbid_actions
 
     echo_guard = cases["fd_gate_echo_like_agent_words_holds_001"]
     assert echo_guard.audio_clips[0].id == "welcome_echo_words"
@@ -246,7 +248,6 @@ def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> 
     for case_id in (
         "opr_fullduplex_backchannel_then_followup_cancels_001",
         "opr_fullduplex_false_start_then_followup_cancels_001",
-        "opr_fullduplex_echo_then_followup_cancels_001",
     ):
         result = cases[case_id]
         assert result.metrics["actual_action"] == "cancel"
@@ -255,6 +256,42 @@ def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> 
             (decision.get("decision") or {}).get("action") == "hold"
             for decision in result.decisions
         )
+    echo_result = cases["opr_fullduplex_echo_then_followup_cancels_001"]
+    assert echo_result.metrics["actual_action"] == "cancel"
+    assert echo_result.metrics["actual_decision_action"] == "cancel"
+    assert echo_result.metrics["echo_rejection_count"] == 1
+    assert any(
+        decision.get("transcript_admission", {}).get("reason") == "agent_echo"
+        and (decision.get("decision") or {}).get("action") == "rollback"
+        for decision in echo_result.decisions
+    )
+
+
+def test_policy_runner_full_duplex_gate_uses_real_echo_admission() -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    run = run_policy_suite(
+        [suite],
+        turn_policy=TurnPolicyConfig(
+            attention=replace(AttentionPolicyConfig(), enforce=True),
+        ),
+        run_id="test",
+    )
+    cases = {case.case_id: case for case in run.cases}
+
+    assert all(case.passed for case in run.cases)
+    false_start = cases["fd_gate_false_start_holds_001"]
+    assert false_start.metrics["actual_action"] != "cancel"
+    assert false_start.metrics["actual_decision_action"] == "hold"
+    echo_result = cases["fd_gate_echo_like_agent_words_holds_001"]
+    assert echo_result.metrics["actual_action"] == "rollback"
+    assert echo_result.metrics["actual_decision_action"] == "rollback"
+    assert echo_result.metrics["echo_rejection_count"] == 1
+    assert any(
+        decision.get("transcript_admission", {}).get("reason") == "agent_echo"
+        and decision.get("transcript_admission", {}).get("assistant_text_source")
+        == "benchmark_welcome"
+        for decision in echo_result.decisions
+    )
 
 
 def test_barge_in_ab_default_cases_include_offline_policy_regression_suite() -> None:
@@ -262,6 +299,33 @@ def test_barge_in_ab_default_cases_include_offline_policy_regression_suite() -> 
         "benchmark/cases/shared/offline_policy_regression_enforced.yaml"
         in DEFAULT_BARGE_IN_AB_CASES
     )
+
+
+def test_barge_in_ab_native_contract_builds_current_pipeline_turn_handling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import bench_barge_in_ab
+
+    monkeypatch.setattr(
+        bench_barge_in_ab,
+        "load_effective_config",
+        lambda: SimpleNamespace(turn_policy=TurnPolicyConfig()),
+    )
+    monkeypatch.setattr(
+        bench_barge_in_ab,
+        "_livekit_inference_ready_detail",
+        lambda: {"ok": False, "detail": "not configured in unit test"},
+    )
+
+    contract = bench_barge_in_ab._native_contract()
+
+    assert contract["blocking_contract_ok"] is True
+    adaptive = next(
+        check
+        for check in contract["checks"]
+        if check["name"] == "pipeline_passes_livekit_adaptive_mode"
+    )
+    assert adaptive["ok"] is True
 
 
 def test_device_envelope_audio_state_interval_uses_device_cadence() -> None:
@@ -1412,10 +1476,49 @@ def test_livekit_room_retries_only_pre_audio_infrastructure_failures() -> None:
             "401 Unauthorized - no permissions to access the room"
         ],
     )
+    initial_greeting_stalled = CaseResult(
+        case_id="backchannel_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        metrics={
+            "room_connected_ms": 100,
+            "user_audio_done_ms": None,
+            "timeline_record_count": 0,
+        },
+        errors=[
+            "RuntimeError: timed out waiting for the previous agent reply to "
+            "complete before user step '先给我介绍一下这个方案。'"
+        ],
+    )
+    greeting_wait_failed_after_audio = CaseResult(
+        case_id="backchannel_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        metrics={"room_connected_ms": 100, "user_audio_done_ms": None},
+        events=[{"type": "user_audio_started", "timestamp_ms": 200}],
+        errors=list(initial_greeting_stalled.errors),
+    )
+    greeting_wait_failed_after_policy_record = CaseResult(
+        case_id="backchannel_001",
+        suite="semantic_control",
+        runner="livekit_room",
+        passed=False,
+        metrics={
+            "room_connected_ms": 100,
+            "user_audio_done_ms": None,
+            "timeline_record_count": 1,
+        },
+        errors=list(initial_greeting_stalled.errors),
+    )
 
     assert _should_retry_room_case(missing_agent) is True
     assert _should_retry_room_case(connect_transient) is True
+    assert _should_retry_room_case(initial_greeting_stalled) is True
     assert _should_retry_room_case(after_audio_failure) is False
+    assert _should_retry_room_case(greeting_wait_failed_after_audio) is False
+    assert _should_retry_room_case(greeting_wait_failed_after_policy_record) is False
     assert _should_retry_room_case(semantic_failure) is False
 
 
@@ -1522,6 +1625,65 @@ async def test_livekit_room_case_retry_records_room_connect_transient(
     assert result.metrics["retry_attempts"] == 1
     assert result.events[0]["reason"] == "room_connect_transient"
     assert result.events[0]["previous_room_name"] == "room-connect-failed"
+
+
+@pytest.mark.asyncio
+async def test_livekit_room_case_retry_records_initial_agent_setup_transient(
+    monkeypatch,
+) -> None:
+    from benchmark import livekit_room_runner
+    from benchmark.livekit_room_runner import (
+        LiveKitRoomOptions,
+        _run_room_case_with_retries,
+    )
+
+    calls = 0
+
+    async def fake_run_room_case(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return CaseResult(
+                case_id="backchannel_001",
+                suite="semantic_control",
+                runner="livekit_room",
+                passed=False,
+                metrics={
+                    "room_name": "room-greeting-stalled",
+                    "room_connected_ms": 100,
+                    "user_audio_done_ms": None,
+                },
+                errors=[
+                    "RuntimeError: timed out waiting for the previous agent reply "
+                    "to complete before user step '先给我介绍一下这个方案。'"
+                ],
+            )
+        return CaseResult(
+            case_id="backchannel_001",
+            suite="semantic_control",
+            runner="livekit_room",
+            passed=True,
+            metrics={"room_name": "room-retry"},
+        )
+
+    monkeypatch.setattr(livekit_room_runner, "_run_room_case", fake_run_room_case)
+    suite = load_suite("benchmark/cases/core.yaml")
+    case = next(case for case in suite.cases if case.case_id == "backchannel_001")
+
+    result = await _run_room_case_with_retries(
+        case,
+        root=Path("."),
+        options=LiveKitRoomOptions(agent_missing_retry_count=1),
+        livekit_url="ws://127.0.0.1:7880",
+        api_key="devkey",
+        api_secret="devkey_secret",
+    )
+
+    assert calls == 2
+    assert result.passed is True
+    assert result.metrics["retry_attempts"] == 1
+    assert result.events[0]["reason"] == "agent_setup_transient"
+    assert result.events[0]["previous_room_name"] == "room-greeting-stalled"
 
 
 @pytest.mark.asyncio
@@ -1657,6 +1819,44 @@ async def test_wait_for_agent_quiet_times_out_without_next_reply() -> None:
         timeout_sec=0.06,
         after_elapsed_ms=20,
     ) is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_initial_agent_quiet_requires_greeting_final() -> None:
+    from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_quiet
+
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+    state.first_agent_audio.set()
+    state.last_agent_audio_monotonic = time.monotonic() - 1.0
+
+    wait = asyncio.create_task(
+        _wait_for_agent_quiet(
+            state,
+            quiet_ms=10,
+            timeout_sec=0.5,
+            after_elapsed_ms=None,
+        )
+    )
+    await asyncio.sleep(0.06)
+    assert wait.done() is False
+
+    state.agent_transcript_final_timestamps.append(20)
+    assert await wait is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_initial_agent_quiet_allows_room_without_greeting() -> None:
+    from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_quiet
+
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+
+    assert await _wait_for_agent_quiet(
+        state,
+        quiet_ms=10,
+        timeout_sec=0.08,
+        first_audio_wait_sec=0.01,
+        after_elapsed_ms=None,
+    ) is True
 
 
 @pytest.mark.asyncio
@@ -2310,8 +2510,9 @@ def test_livekit_room_timeline_interrupt_slo_ignores_setup_commit(
             '"interrupted_context":{"source":"tts_in_flight",'
             '"played_seconds":1.2,"text_preview":"上一轮回答"},'
             '"client_control_events":[{"op":"playback.stop"}]},'
-            '"timestamps":{"speech_started_at":10.0,'
-            '"interrupt_cancel_resolved_at":10.49,'
+                '"timestamps":{"speech_started_at":10.0,'
+                '"interrupt_started_at":10.001,'
+                '"interrupt_cancel_resolved_at":10.49,'
             '"interrupt_resolved_at":10.49,'
             '"transcript_actionable_first_at":10.48},'
             '"durations_ms":{"vad_start_to_interrupt_cancel_resolved":490}}\n'
@@ -2368,9 +2569,10 @@ def test_livekit_room_topic_switch_uses_first_yield_for_slo(
                 },
                 "client_control_events": [{"op": "playback.stop"}],
             },
-            "timestamps": {
-                "speech_started_at": 10.0,
-                "transcript_actionable_first_at": 10.550,
+                "timestamps": {
+                    "speech_started_at": 10.0,
+                    "interrupt_started_at": 10.001,
+                    "transcript_actionable_first_at": 10.550,
                 "playback_stop_sent_at": 10.5511,
                 "interrupt_cancel_resolved_at": 10.5512,
                 "interrupt_resolved_at": 10.5512,
@@ -2398,9 +2600,10 @@ def test_livekit_room_topic_switch_uses_first_yield_for_slo(
                 },
                 "client_control_events": [{"op": "playback.stop"}],
             },
-            "timestamps": {
-                "speech_started_at": 20.0,
-                "transcript_actionable_first_at": 21.2476,
+                "timestamps": {
+                    "speech_started_at": 20.0,
+                    "interrupt_started_at": 20.001,
+                    "transcript_actionable_first_at": 21.2476,
                 "playback_stop_sent_at": 21.2477,
                 "interrupt_cancel_resolved_at": 21.2478,
                 "interrupt_resolved_at": 21.2478,
@@ -2432,7 +2635,7 @@ def test_livekit_room_topic_switch_uses_first_yield_for_slo(
     assert metrics["timeline_collect_new_topic_turn_playback_stop_ms"] == 1247.7
 
 
-def test_livekit_room_topic_switch_fails_when_first_yield_is_slow(
+def test_livekit_room_topic_switch_fails_when_first_actionable_transcript_is_slow(
     tmp_path,
 ) -> None:
     suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
@@ -2466,12 +2669,16 @@ def test_livekit_room_topic_switch_fails_when_first_yield_is_slow(
             },
             "timestamps": {
                 "speech_started_at": 10.0,
-                "interrupt_cancel_resolved_at": 10.9,
-                "interrupt_resolved_at": 10.9,
+                "interrupt_started_at": 10.001,
+                "transcript_actionable_first_at": 12.6,
+                "interrupt_cancel_resolved_at": 12.61,
+                "interrupt_resolved_at": 12.61,
             },
             "durations_ms": {
-                "vad_start_to_interrupt_cancel_resolved": 900.0,
-                "vad_start_to_interrupt_resolved": 900.0,
+                "stt_speech_to_actionable_transcript": 2600.0,
+                "interrupt_actionable_transcript_to_cancel_resolved": 10.0,
+                "vad_start_to_interrupt_cancel_resolved": 2610.0,
+                "vad_start_to_interrupt_resolved": 2610.0,
             },
         },
         {
@@ -2487,12 +2694,16 @@ def test_livekit_room_topic_switch_fails_when_first_yield_is_slow(
             },
             "timestamps": {
                 "speech_started_at": 20.0,
-                "interrupt_cancel_resolved_at": 20.3,
-                "interrupt_resolved_at": 20.3,
+                "interrupt_started_at": 20.001,
+                "transcript_actionable_first_at": 20.2,
+                "interrupt_cancel_resolved_at": 20.21,
+                "interrupt_resolved_at": 20.21,
             },
             "durations_ms": {
-                "vad_start_to_interrupt_cancel_resolved": 300.0,
-                "vad_start_to_interrupt_resolved": 300.0,
+                "stt_speech_to_actionable_transcript": 200.0,
+                "interrupt_actionable_transcript_to_cancel_resolved": 10.0,
+                "vad_start_to_interrupt_cancel_resolved": 210.0,
+                "vad_start_to_interrupt_resolved": 210.0,
             },
         },
     ]
@@ -2504,7 +2715,62 @@ def test_livekit_room_topic_switch_fails_when_first_yield_is_slow(
     apply_timeline_expectations(run, [suite], timeline_path)
 
     assert run.cases[0].passed is False
-    assert any("timeline interrupt decision exceeded" in error for error in run.cases[0].errors)
+    assert any(
+        "STT speech-to-actionable-transcript exceeded 2500" in error
+        for error in run.cases[0].errors
+    )
+
+
+def test_livekit_room_correction_fails_when_channel_resolution_is_slow(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    run = _expectation_run(
+        "fd_gate_correction_cancels_and_replies_001",
+        "full_duplex_gate",
+    )
+    room = "voice-bench-fd_gate_correction_cancels_and_replies_001-1234abcd"
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "turn_id": "slow-channel-resolution",
+                "attrs": {
+                    "room_name": room,
+                    "interrupt_action": "cancel",
+                    "decision": {
+                        "action": "cancel",
+                        "intent": "normal_interrupt",
+                        "correction_hint": True,
+                    },
+                },
+                "timestamps": {
+                    "speech_started_at": 10.0,
+                    "interrupt_started_at": 10.001,
+                    "transcript_actionable_first_at": 10.5,
+                    "interrupt_cancel_resolved_at": 10.56,
+                    "interrupt_resolved_at": 10.56,
+                },
+                "durations_ms": {
+                    "stt_speech_to_actionable_transcript": 500.0,
+                    "interrupt_actionable_transcript_to_cancel_resolved": 60.0,
+                    "vad_start_to_interrupt_cancel_resolved": 560.0,
+                    "vad_start_to_interrupt_resolved": 560.0,
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    assert run.cases[0].passed is False
+    assert any(
+        "actionable-transcript-to-interrupt-resolution exceeded 50" in error
+        for error in run.cases[0].errors
+    )
 
 
 def test_livekit_room_timeline_expectations_fail_wrong_ptt_terminal(
@@ -4052,6 +4318,34 @@ def test_room_user_done_audio_latency_bound() -> None:
 
     unbounded = next(case for case in suite.cases if case.case_id == "multi_turn_three_rounds_001")
     assert _user_done_audio_latency_errors(unbounded, {}) == []
+
+
+def test_real_room_enforces_nonempty_user_final_cardinality() -> None:
+    from benchmark.livekit_room_runner import _transcription_expectation_errors
+    from benchmark.schema import BenchmarkCase, Expectations
+
+    case = BenchmarkCase(
+        case_id="two-turns",
+        suite="test",
+        description="",
+        audio_clips=(),
+        user_steps=(),
+        expectations=Expectations(min_user_finals=2),
+    )
+    events = [
+        {"type": "transcription", "role": "agent", "final": True, "text": "欢迎"},
+        {"type": "transcription", "role": "user", "final": True, "text": "第一轮"},
+        {"type": "transcription", "role": "user", "final": True, "text": ""},
+    ]
+
+    assert _transcription_expectation_errors(case, events) == [
+        "expected at least 2 user finals, got 1"
+    ]
+
+    events.append(
+        {"type": "transcription", "role": "user", "final": True, "text": "第二轮"}
+    )
+    assert _transcription_expectation_errors(case, events) == []
 
 
 def test_event_recorder_waits_for_multiple_agent_messages() -> None:

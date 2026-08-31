@@ -65,7 +65,9 @@ def test_policy_interrupt_skips_when_output_cancelled() -> None:
 def test_policy_interrupt_fires_when_not_cancelled() -> None:
     effects, session = _effects(is_cancelled=False, allow_interruptions=True)
     effects.interrupt_current_turn(force=False)
-    session.interrupt.assert_called_once_with(force=False)
+    # Channel-owned policy is the authority; LiveKit auto-interruption is off,
+    # so an accepted decision uses the public forced-interrupt API.
+    session.interrupt.assert_called_once_with(force=True)
 
 
 def test_non_forced_blocked_when_interruptions_disabled() -> None:

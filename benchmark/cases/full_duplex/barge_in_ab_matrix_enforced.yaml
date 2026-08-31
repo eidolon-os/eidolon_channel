@@ -180,8 +180,13 @@ cases:
 
   - case_id: ab_echo_like_agent_words_observes_001
     suite: barge_in_ab_matrix
-    description: 播放期文本像 agent 正在说的话且语义证据低，应保持 observe，不污染上下文。
+    description: 播放期文本与 assistant speech ledger 匹配，应由产品 EchoGate 拒绝并 rollback，不污染上下文。
     tags: ["ab", "barge_in", "echo_safety"]
+    device_envelope:
+      enabled: true
+      agent:
+        speaking_text: 我会先讲系统结构，然后讲交互体验。
+        tts_duration_ms: 5000
     audio_clips:
       - id: echo_like_agent_words
         text: 我会先讲系统结构
@@ -199,7 +204,7 @@ cases:
         client_playback_state: agent_speaking
     expect:
       action: any
-      decision_action: hold
+      decision_action: rollback
       forbid_actions: ["cancel"]
 
   - case_id: ab_mic_muted_hard_stop_is_ignored_001

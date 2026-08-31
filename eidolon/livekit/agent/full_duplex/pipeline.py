@@ -29,12 +29,11 @@ IS NOT a replacement for AgentSession — it's a thin wrapper that:
      Eidolon's multi-signal interruption owner. Our soft-interrupt
      path is owned by channel in the default hybrid profile.
 
-  5. **Forces framework's auto-interrupt OFF** via
-     ``integration.framework_patches.disable_audio_activity_interruption`` —
-     so Eidolon's InterruptionOrchestrator / turn policy is the sole
-     authority. See
-     ``integration/framework_patches.py`` for the rationale (no public API
-     does this without breaking endpointing).
+  5. **Selects one interruption owner through public LiveKit options** —
+     native-adaptive profiles let LiveKit detect and apply interruptions;
+     channel-owned profiles disable LiveKit's automatic interruption while
+     preserving overlapping input audio, then use the public forced-interrupt
+     API only after Eidolon's multi-signal policy accepts a candidate.
 
 If you find yourself adding logic here that AgentSession already
 handles, push back — likely the right shape is to USE the
@@ -104,6 +103,7 @@ from .state_machine import (
 )
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_handler import FullDuplexTranscriptHandler
+from .transcript_evidence_buffer import TranscriptEvidenceBuffer
 from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
 from .transcript_recorder import FullDuplexTranscriptRecorder
 from .turn_handling import (
@@ -238,6 +238,7 @@ class StreamingPipeline(BasePipeline):
         self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._suppress_transcripts_until_next_speech = False
         self._transcript_admission = self._build_transcript_admission_gate()
+        self._transcript_evidence_buffer = TranscriptEvidenceBuffer()
         self._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
         self._completed_turn_voiceprint_task: asyncio.Task | None = None
         self._completed_turn_voiceprint_result: Any | None = None
@@ -1020,6 +1021,16 @@ class StreamingPipeline(BasePipeline):
             )
         return self._transcript_recorder
 
+    def _ensure_transcript_evidence_buffer(self) -> TranscriptEvidenceBuffer:
+        if not hasattr(self, "_transcript_evidence_buffer"):
+            self._transcript_evidence_buffer = TranscriptEvidenceBuffer()
+        return self._transcript_evidence_buffer
+
+    def _observe_stt_speech_event(self, event: Any) -> None:
+        """Observe a public LiveKit SpeechEvent before framework normalization."""
+
+        self._ensure_transcript_evidence_buffer().observe_speech_event(event)
+
     def _build_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
         return FullDuplexSpeechLifecycle(self)
 
@@ -1110,6 +1121,8 @@ class StreamingPipeline(BasePipeline):
             flush_timeline_debug=lambda reason, clear: self._finish_agent_output(reason),
             should_flush_on_playback_done=self._timeline_turn_terminal_for_playback_flush,
             agent_output=self._ensure_agent_output_coordinator(),
+            on_playback_started=self._assistant_speech_playback_started,
+            on_playback_finished=self._assistant_speech_playback_finished,
         )
 
     def _ensure_agent_state_effect_handler(self) -> None:
@@ -1422,6 +1435,21 @@ class StreamingPipeline(BasePipeline):
         if not hasattr(self, "_assistant_speech"):
             self._assistant_speech = AssistantSpeechLedger()
         self._assistant_speech.record(text, source=source)
+
+    def _queue_fixed_assistant_speech(self, text: str, *, source: str) -> None:
+        if not hasattr(self, "_assistant_speech"):
+            self._assistant_speech = AssistantSpeechLedger()
+        self._assistant_speech.queue_fixed_speech(text, source=source)
+
+    def _assistant_speech_playback_started(self) -> None:
+        if not hasattr(self, "_assistant_speech"):
+            self._assistant_speech = AssistantSpeechLedger()
+        self._assistant_speech.on_playback_started()
+
+    def _assistant_speech_playback_finished(self) -> None:
+        if not hasattr(self, "_assistant_speech"):
+            return
+        self._assistant_speech.on_playback_finished()
 
     def _build_agent(self) -> lk_Agent:
         """Build the LiveKit Agent."""

@@ -40,18 +40,9 @@ FD_SAFETY_SUITES: tuple[str, ...] = (
     "benchmark/cases/shared/offline_policy_regression_enforced.yaml",
 )
 
-# Cases that do not pass under the deterministic policy runner today, with the
-# reason. Each is a NON-CANCEL outcome (safety-neutral) whose expectation is
-# pinned to a more specific ``decision_action`` than the policy currently emits
-# — NOT a false cancel. Documented so the gate flags *new* regressions without
-# being blocked by a known, safety-neutral mismatch. Revisit when tightening
-# decision_action semantics (or in 2b when EOT cut paths are simplified).
-BASELINE_KNOWN_FAILURES: dict[str, str] = {
-    "fd_gate_echo_like_agent_words_holds_001": (
-        "echo-like words: case expects decision_action=rollback, policy emits "
-        "hold; both are non-cancel (safe). Safety-neutral decision_action nuance."
-    ),
-}
+# The deterministic policy corpus currently has no accepted failures.  Keep the
+# explicit registry so any future exception requires a named, reviewed entry.
+BASELINE_KNOWN_FAILURES: dict[str, str] = {}
 
 
 def run_fd_safety_corpus(run_id: str = "fd-safety") -> RunResult:

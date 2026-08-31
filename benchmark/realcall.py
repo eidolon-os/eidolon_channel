@@ -15,13 +15,14 @@ as evidence.
 
 from __future__ import annotations
 
-import re
-import contextlib
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 
+from .provider_smoke import check_stt as provider_check_stt
+from .provider_smoke import check_tts as provider_check_tts
 from .schema import CaseResult, RunResult
 from .timeline import load_timeline_records
 
@@ -311,8 +312,6 @@ async def preflight_real_stack(
     """
 
     import asyncio
-    import math
-    import struct
     import time
 
     from livekit.agents.types import APIConnectOptions
@@ -320,13 +319,6 @@ async def preflight_real_stack(
     from eidolon.livekit.agent.factory import SharedStageFactory
     from eidolon.livekit.agent.providers.llm import LlmInput
     from eidolon.livekit.common.config import load_effective_config
-
-    def _pcm_sine(duration_ms: int = 300, sample_rate: int = 16_000) -> bytes:
-        samples = int(sample_rate * duration_ms / 1000)
-        return b"".join(
-            struct.pack("<h", int(16_000 * math.sin(2 * math.pi * 440 * i / sample_rate)))
-            for i in range(samples)
-        )
 
     async def _check_llm(factory: Any) -> dict[str, Any]:
         out = await factory.llm.chat(
@@ -336,26 +328,10 @@ async def preflight_real_stack(
         return {"chars": len(out.text), "preview": out.text[:80]}
 
     async def _check_tts(factory: Any) -> dict[str, Any]:
-        await factory.tts.warmup()
-        frames = []
-        stream = factory.tts.synthesize("你好，测试。")
-        try:
-            async for frame in stream:
-                frames.append(frame)
-                if len(frames) >= 2:
-                    break
-        finally:
-            await stream.aclose()
-            if getattr(stream, "done", False):
-                with contextlib.suppress(BaseException):
-                    _ = stream.exception
-        if not frames:
-            raise RuntimeError("TTS returned no audio frames")
-        return {"frames": len(frames), "sample_rate": frames[0].sample_rate}
+        return await provider_check_tts(factory)
 
     async def _check_stt(factory: Any) -> dict[str, Any]:
-        text = await factory.stt.recognize_streaming(_pcm_sine())
-        return {"chars": len(text), "text": text[:80]}
+        return await provider_check_stt(factory)
 
     cfg = load_effective_config()
     if cfg.providers.brain_provider == "eidolon_agent" and "llm" not in checks:

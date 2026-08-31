@@ -1,14 +1,14 @@
 """Live integration tests for the Bailian FunASR STT plugin.
 
 These tests connect to the real Bailian / DashScope FunASR WebSocket API
-using the audio file ``vad.m4a`` from the pipeline test data directory.
+using a checked-in 16 kHz speech sample from the benchmark corpus.
 
 Run with::
 
-    DASHSCOPE_API_KEY=<your-key> python -m pytest \\
+    BAILIAN_STT_API_KEY=<your-key> python -m pytest \\
         eidolon/livekit/tests/stt/bailian/test_stt_live.py -v -s
 
-If ``DASHSCOPE_API_KEY`` is not set, all tests in this module are skipped.
+``DASHSCOPE_API_KEY`` remains supported as the shared credential fallback.
 """
 
 from __future__ import annotations
@@ -33,7 +33,9 @@ from eidolon.livekit.plugins.stt.bailian import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("test_bailian_live")
 
-_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+_API_KEY = os.environ.get("BAILIAN_STT_API_KEY") or os.environ.get(
+    "DASHSCOPE_API_KEY", ""
+)
 _API_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 # Skip the entire module if no API key is configured. Avoids leaking a
@@ -42,12 +44,18 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         not _API_KEY,
-        reason="DASHSCOPE_API_KEY env var not set; skipping Bailian live tests",
+        reason="BAILIAN_STT_API_KEY/DASHSCOPE_API_KEY not set; skipping Bailian live tests",
     ),
 ]
 
-# Audio file: stt/bailian/test_stt_live.py -> parents[5] = eidolon/
-_AUDIO_FILE = Path(__file__).resolve().parents[5] / "pipeline" / "data" / "vad.m4a"
+# test_stt_live.py -> parents[5] = repository root.
+_AUDIO_FILE = (
+    Path(__file__).resolve().parents[5]
+    / "benchmark"
+    / "audio"
+    / "generated"
+    / "normal_followup.wav"
+)
 
 
 def load_audio_chunks(
@@ -55,7 +63,7 @@ def load_audio_chunks(
     chunk_samples: int = 1600,
     target_sr: int = 16000,
 ) -> list[rtc.AudioFrame]:
-    """Decode an m4a file and return audio as LiveKit AudioFrame chunks.
+    """Decode an audio file and return audio as LiveKit AudioFrame chunks.
 
     Converts to 16 kHz mono 16-bit PCM and splits into ``chunk_samples``-size
     pieces (default 1600 samples = 100 ms at 16 kHz). Partial chunks are
@@ -236,8 +244,8 @@ async def test_connection_manager_send_audio_and_finish(audio_chunks):
 async def test_streaming_basic(audio_chunks):
     """Push real audio frames and verify INTERIM then FINAL_TRANSCRIPT."""
     from eidolon.livekit.plugins.stt.bailian.speech_stream import (
-            BailianFunASRSpeechStream,
-        )
+        BailianFunASRSpeechStream,
+    )
 
     stt = BailianFunASRSTT(api_url=_API_URL, api_key=_API_KEY)
     stream = BailianFunASRSpeechStream(
@@ -251,10 +259,8 @@ async def test_streaming_basic(audio_chunks):
 
     task = asyncio.create_task(_drain_stream(stream, events, errors))
 
-    # Wait briefly for the WebSocket connection to establish
-    await _wait_for(lambda: stream._conn._connected if hasattr(stream, '_conn') else False, timeout=10.0)
-
-    # Push audio frames
+    # RecognizeStream's public contract accepts frames while its provider
+    # connection starts asynchronously; do not inspect private connection state.
     for frame in audio_chunks:
         stream.push_frame(frame)
         await asyncio.sleep(0.001)
@@ -297,8 +303,8 @@ async def test_streaming_basic(audio_chunks):
 async def test_streaming_end_of_speech(audio_chunks):
     """After end_input() the stream emits END_OF_SPEECH."""
     from eidolon.livekit.plugins.stt.bailian.speech_stream import (
-            BailianFunASRSpeechStream,
-        )
+        BailianFunASRSpeechStream,
+    )
 
     stt = BailianFunASRSTT(api_url=_API_URL, api_key=_API_KEY)
     stream = BailianFunASRSpeechStream(stt=stt, sample_rate=16000, language="zh")
@@ -306,9 +312,9 @@ async def test_streaming_end_of_speech(audio_chunks):
 
     task = asyncio.create_task(_drain_stream(stream, events, []))
 
-    await _wait_for(lambda: stream._conn._connected if hasattr(stream, '_conn') else False, timeout=10.0)
-
-    for frame in audio_chunks[:5]:
+    # Use the complete utterance: the sample starts with a short silent lead-in,
+    # so a small prefix alone is correctly rejected by Bailian as EmptyAudio.
+    for frame in audio_chunks:
         stream.push_frame(frame)
 
     stream.end_input()
@@ -335,16 +341,14 @@ async def test_streaming_end_of_speech(audio_chunks):
 async def test_streaming_word_timestamps(audio_chunks):
     """FINAL_TRANSCRIPT should include word-level timing data."""
     from eidolon.livekit.plugins.stt.bailian.speech_stream import (
-            BailianFunASRSpeechStream,
-        )
+        BailianFunASRSpeechStream,
+    )
 
     stt = BailianFunASRSTT(api_url=_API_URL, api_key=_API_KEY)
     stream = BailianFunASRSpeechStream(stt=stt, sample_rate=16000, language="zh")
     events: list[lk_stt.SpeechEvent] = []
 
     task = asyncio.create_task(_drain_stream(stream, events, []))
-
-    await _wait_for(lambda: stream._conn._connected if hasattr(stream, '_conn') else False, timeout=10.0)
 
     for frame in audio_chunks:
         stream.push_frame(frame)

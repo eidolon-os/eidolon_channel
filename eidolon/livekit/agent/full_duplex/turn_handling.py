@@ -36,17 +36,33 @@ def build_full_duplex_turn_handling(
     worker, which re-renders whatever PCM it receives).
     """
 
+    native_adaptive = uses_livekit_native_adaptive_interruption(
+        turn_policy=turn_policy,
+        allow_interruptions=allow_interruptions,
+    )
+    channel_owned = bool(allow_interruptions) and not native_adaptive
+
+    # The public LiveKit contract is sufficient to separate the two owners:
+    #
+    # * native-adaptive: LiveKit detects and applies interruptions;
+    # * channel-owned: automatic interruption is disabled and Eidolon's
+    #   multi-signal policy explicitly calls ``session.interrupt(force=True)``
+    #   after accepting a candidate.
+    #
+    # ``enabled=False`` also makes framework-created SpeechHandles
+    # uninterruptible by default.  Keeping input audio when the channel owns
+    # interruption is therefore essential: otherwise LiveKit would replace the
+    # user's overlapping speech with silence before STT can supply policy
+    # evidence.  The explicit accepted-interruption path deliberately uses the
+    # public forced-interrupt API to end those handles.
     interruption: dict[str, Any] = {
-        "enabled": allow_interruptions,
-        "discard_audio_if_uninterruptible": True,
+        "enabled": native_adaptive,
+        "discard_audio_if_uninterruptible": not channel_owned,
         "false_interruption_timeout": false_interruption_timeout,
     }
     if avatar_mode:
         interruption["resume_false_interruption"] = False
-    elif uses_livekit_native_adaptive_interruption(
-        turn_policy=turn_policy,
-        allow_interruptions=allow_interruptions,
-    ):
+    elif native_adaptive:
         interruption["mode"] = "adaptive"
         interruption["resume_false_interruption"] = True
 

@@ -12,12 +12,8 @@ def test_integration_package_exports_client_audio_state() -> None:
     assert ClientAudioState is Direct
 
 
-def test_integration_package_exports_framework_patches() -> None:
-    from eidolon.livekit.agent.integration import framework_patches
-    from eidolon.livekit.agent.integration.framework_patches import (
-        disable_audio_activity_interruption,
-    )
+def test_integration_package_has_no_framework_private_patch_exports() -> None:
+    from eidolon.livekit.agent import integration
 
-    assert framework_patches.disable_audio_activity_interruption is (
-        disable_audio_activity_interruption
-    )
+    assert "framework_patches" not in integration.__all__
+    assert "disable_audio_activity_interruption" not in integration.__all__

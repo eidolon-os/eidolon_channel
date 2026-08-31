@@ -60,6 +60,8 @@ class AgentStateEffectHandler:
         flush_timeline_debug: Callable[[str, bool], None],
         should_flush_on_playback_done: Callable[[], bool] | None = None,
         agent_output: AgentOutputCoordinator | None = None,
+        on_playback_started: Callable[[], None] | None = None,
+        on_playback_finished: Callable[[], None] | None = None,
     ) -> None:
         self._get_timeline = get_timeline
         self._mark_activity = mark_activity
@@ -72,6 +74,8 @@ class AgentStateEffectHandler:
             should_flush_on_playback_done or (lambda: True)
         )
         self._agent_output = agent_output or AgentOutputCoordinator()
+        self._on_playback_started = on_playback_started or (lambda: None)
+        self._on_playback_finished = on_playback_finished or (lambda: None)
 
     def handle(self, event: Any) -> None:
         transition = AgentStateTransition.from_event(event)
@@ -93,7 +97,11 @@ class AgentStateEffectHandler:
             self._cancel_soft_interrupt()
 
         if transition.starts_playback:
+            self._on_playback_started()
             self._ducking.on_agent_started_speaking()
+
+        if transition.completes_playback:
+            self._on_playback_finished()
 
         if transition.starts_generation and self._ducking.reset_if_cancelled():
             logger.info(

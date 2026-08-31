@@ -32,7 +32,7 @@ import time
 import multiprocessing
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from livekit.agents import AgentServer
@@ -180,14 +180,6 @@ def _prewarm(proc) -> None:
 
 
 def _load_prewarm_models(proc) -> None:
-    # Validate framework-internal patches are still applicable on this
-    # SDK version. Logs WARNING (not fatal) on untested versions —
-    # surfaces SDK upgrades that may have broken our patches before
-    # users see weird behaviour. See integration/framework_patches.py for details.
-    from eidolon.livekit.agent.integration import framework_patches
-
-    framework_patches.check_framework_version()
-
     try:
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
         from eidolon.livekit.common.config import load_effective_config
@@ -691,14 +683,16 @@ def _build_server(cfg: AgentConfig) -> "AgentServer":
     )
 
     server.rtc_session(
-        agent_name="eidolon",
+        agent_name=cfg.worker.agent_name,
         type=WorkerType.PUBLISHER,
     )(_on_session)
 
     return server
 
 
-async def _serve() -> None:
+async def _serve(
+    *, on_server_ready: Callable[["AgentServer"], None] | None = None
+) -> None:
     cfg = load_agent_config()
     _validate_config(cfg)
 
@@ -714,9 +708,17 @@ async def _serve() -> None:
     )
 
     server = _build_server(cfg)
+    if on_server_ready is not None:
+        on_server_ready(server)
 
     is_dev = os.getenv("EIDOLON_ENV", "prod") == "dev"
     await server.run(devmode=is_dev)
+
+
+async def _close_server(server: "AgentServer") -> None:
+    """Close the LiveKit worker through its public lifecycle API."""
+
+    await server.aclose()
 
 
 def main() -> None:
@@ -728,25 +730,45 @@ def main() -> None:
 
     loop = asyncio.new_event_loop()
     server_task: asyncio.Task | None = None
+    shutdown_task: asyncio.Task[None] | None = None
+    active_server: AgentServer | None = None
+
+    def _remember_server(server: AgentServer) -> None:
+        nonlocal active_server
+        active_server = server
 
     async def _run():
         nonlocal server_task
-        server_task = asyncio.create_task(_serve())
+        server_task = asyncio.create_task(
+            _serve(on_server_ready=_remember_server),
+            name="eidolon_agent_server",
+        )
         await server_task
 
     def _signal_handler(sig: signal.Signals):
+        nonlocal shutdown_task
         logger.info("[Server] received %s, initiating graceful shutdown...", sig.name)
-        if server_task and not server_task.done():
-            server_task.cancel()
+        if active_server is not None and (shutdown_task is None or shutdown_task.done()):
+            shutdown_task = loop.create_task(
+                _close_server(active_server),
+                name="eidolon_agent_server_shutdown",
+            )
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _signal_handler, sig)
 
     try:
         loop.run_until_complete(_run())
-    except asyncio.CancelledError:
-        logger.info("[Server] main task cancelled, exiting.")
     finally:
+        if shutdown_task is not None:
+            loop.run_until_complete(shutdown_task)
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
         loop.close()
 
 

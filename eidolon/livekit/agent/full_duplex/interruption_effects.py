@@ -98,7 +98,13 @@ class FullDuplexInterruptionEffects:
 
         session = self._get_session()
         if session is not None:
-            session.interrupt(force=force)
+            # Channel-owned interruption disables LiveKit's automatic
+            # interruption through public turn-handling options. Framework
+            # reply handles are consequently non-interruptible by default, so
+            # an accepted channel decision must use LiveKit's public forced
+            # interruption API. ``force`` above still controls the local
+            # admission guards (explicit client preemption bypasses them).
+            session.interrupt(force=True)
 
         self._get_eot_model().update_vad(False)
         logger.info("[FullDuplexInterruptionEffects] turn interrupted")
@@ -376,8 +382,6 @@ class FullDuplexInterruptionEffects:
             transcript=self._get_latest_asr_text(),
             details={"drop_buffered": drop_buffered},
         )
-        orchestrator.resolve(action="rollback", reason=reason)
-        self._callbacks.on_duck_resolved("unduck")
         timeline = self._get_timeline()
         if timeline is not None:
             self._record_duck_event(
@@ -418,6 +422,11 @@ class FullDuplexInterruptionEffects:
             timeline.set_attr("interrupt_action", "rollback")
             timeline.set_attr("rollback_drop_buffered", drop_buffered)
             timeline.set_attr("rollback_reason", reason)
+        # ``resolve`` invokes the terminal-verdict callback.  That callback may
+        # flush and detach the active timeline, so all resolution evidence must
+        # be recorded before crossing that boundary.
+        orchestrator.resolve(action="rollback", reason=reason)
+        self._callbacks.on_duck_resolved("unduck")
 
     def cancel_silent_generation_for_explicit_preempt(self) -> None:
         """Cancel a non-audible active agent generation for explicit client control."""

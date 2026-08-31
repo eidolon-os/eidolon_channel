@@ -12,6 +12,7 @@ from eidolon.livekit.plugins.stt.bailian.models import parse_funasr_message
 from eidolon.livekit.plugins.stt.bailian.speech_stream import (
     BailianFunASRSpeechStream,
 )
+from eidolon.livekit.common.transcript_evidence import transcript_evidence_from_metadata
 
 
 FUNASR_ALIGNED_SAMPLE = {
@@ -73,6 +74,7 @@ def test_funasr_document_sample_maps_to_livekit_timed_strings() -> None:
     assert sentence.begin_time == 170
     assert sentence.end_time == 920
     assert sentence.text == "好，我知道了"
+    assert sentence.sentence_id == 1
 
     words = BailianFunASRSpeechStream.build_timed_strings(sentence)
 
@@ -91,6 +93,31 @@ def test_bailian_stt_declares_word_aligned_transcript() -> None:
     assert stt.capabilities.streaming is True
     assert stt.capabilities.interim_results is True
     assert stt.capabilities.aligned_transcript == "word"
+
+
+def test_bailian_missing_timestamps_do_not_invent_source_span() -> None:
+    _event_name, result = parse_funasr_message(
+        {
+            "header": {"task_id": "task-no-time", "event": "result-generated"},
+            "payload": {
+                "output": {
+                    "sentence": {
+                        "text": "只有文本",
+                        "sentence_end": True,
+                        "sentence_id": 2,
+                    }
+                }
+            },
+        }
+    )
+    sentence = result.sentences[0]
+    stream = object.__new__(BailianFunASRSpeechStream)
+
+    metadata = stream._transcript_evidence_metadata(result, sentence)
+    evidence = transcript_evidence_from_metadata(metadata)
+
+    assert evidence.revision_key == "2"
+    assert evidence.source_span is None
 
 
 def test_livekit_native_adaptive_compatibility_accepts_bailian(

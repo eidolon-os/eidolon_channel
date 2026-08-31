@@ -11,7 +11,6 @@ from eidolon_sdk.biz.contracts import (
     SESSION_END_USER_LEFT,
 )
 
-from ..integration import framework_patches
 from ..runtime.resolver import wait_for_runtime_participant_identity
 from ..shared.pipeline import BasePipeline
 from ..shared.types import generate_turn_id
@@ -101,10 +100,13 @@ class FullDuplexSessionLifecycle:
         if pipeline._uses_livekit_native_adaptive_interruption():
             logger.info(
                 "[StreamingPipeline] LiveKit native adaptive interruption owner "
-                "enabled; channel audio-activity patch skipped"
+                "enabled"
             )
         else:
-            framework_patches.disable_audio_activity_interruption(session)
+            logger.info(
+                "[StreamingPipeline] channel interruption owner enabled through "
+                "public LiveKit turn-handling options"
+            )
 
         # Barge-in only: the ducking mixer is a removable interposer over the
         # output sink. half_duplex never barges in, so it is not installed there;
@@ -289,6 +291,9 @@ class FullDuplexSessionLifecycle:
         """Give every product candidate a durable terminal state before teardown."""
 
         pipeline = self._pipeline
+        turn_completion = getattr(pipeline, "_turn_completion", None)
+        if turn_completion is not None:
+            turn_completion.cancel_transcriptless_expiry()
         coordinator = getattr(pipeline, "_user_turns", None)
         candidate = getattr(coordinator, "active", None)
         if candidate is None or getattr(candidate, "state", None) != "open":

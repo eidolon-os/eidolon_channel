@@ -29,6 +29,12 @@ from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
 
+from eidolon.livekit.common.transcript_evidence import (
+    TranscriptBoundary,
+    TranscriptEvidence,
+    transcript_source_span,
+)
+
 from .connection_manager import BailianConnectionError, BailianConnectionManager
 from .models import (
     FunASREventType,
@@ -624,6 +630,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             self._push_event(
                 self._SpeechEvent(
                     type=self._SpeechEventType.FINAL_TRANSCRIPT,
+                    request_id=result.request_id or result.task_id,
                     alternatives=[
                         self._SpeechData(
                             language=self._language,
@@ -632,6 +639,10 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                             end_time=end_s,
                             confidence=1.0,
                             words=words,
+                            metadata=self._transcript_evidence_metadata(
+                                result,
+                                latest,
+                            ),
                         )
                     ],
                 )
@@ -652,6 +663,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                 self._push_event(
                     self._SpeechEvent(
                         type=self._SpeechEventType.INTERIM_TRANSCRIPT,
+                        request_id=result.request_id or result.task_id,
                         alternatives=[
                             self._SpeechData(
                                 language=self._language,
@@ -660,6 +672,10 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                                 end_time=latest.end_time / 1000.0,
                                 confidence=1.0,
                                 words=self._build_timed_strings(latest),
+                                metadata=self._transcript_evidence_metadata(
+                                    result,
+                                    latest,
+                                ),
                             )
                         ],
                     )
@@ -667,18 +683,26 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                 # Interim changed -> (re)arm the stability timer. If it goes
                 # quiet for _PREFLIGHT_STABLE_MS we emit a PREFLIGHT_TRANSCRIPT
                 # so the framework can start the brain before the late FINAL.
-                self._arm_preflight(text, latest)
+                self._arm_preflight(text, latest, result)
 
-    def _arm_preflight(self, text: str, latest: FunASRSentence) -> None:
+    def _arm_preflight(
+        self,
+        text: str,
+        latest: FunASRSentence,
+        result: FunASRResultGenerated,
+    ) -> None:
         self._cancel_preflight()
         if len(text.strip()) < _PREFLIGHT_MIN_CHARS or text == self._preflight_sent_text:
             return
         self._preflight_task = asyncio.create_task(
-            self._emit_preflight_after_stable(text, latest)
+            self._emit_preflight_after_stable(text, latest, result)
         )
 
     async def _emit_preflight_after_stable(
-        self, text: str, latest: FunASRSentence
+        self,
+        text: str,
+        latest: FunASRSentence,
+        result: FunASRResultGenerated,
     ) -> None:
         try:
             await asyncio.sleep(_PREFLIGHT_STABLE_MS / 1000.0)
@@ -696,6 +720,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._push_event(
             self._SpeechEvent(
                 type=self._SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                request_id=result.request_id or result.task_id,
                 alternatives=[
                     self._SpeechData(
                         language=self._language,
@@ -704,10 +729,48 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                         end_time=latest.end_time / 1000.0,
                         confidence=1.0,
                         words=self._build_timed_strings(latest),
+                        metadata=self._transcript_evidence_metadata(
+                            result,
+                            latest,
+                            stable_prefix=text,
+                        ),
                     )
                 ],
             )
         )
+
+    def _transcript_evidence_metadata(
+        self,
+        result: FunASRResultGenerated,
+        sentence: FunASRSentence,
+        *,
+        stable_prefix: str | None = None,
+    ) -> dict[str, Any]:
+        boundaries: set[TranscriptBoundary] = set()
+        if sentence.sentence_begin:
+            boundaries.add(TranscriptBoundary.SENTENCE_BEGIN)
+        if sentence.sentence_end:
+            boundaries.add(TranscriptBoundary.SENTENCE_END)
+        sequence: int | None = None
+        if sentence.sentence_id is not None:
+            try:
+                sequence = int(sentence.sentence_id)
+            except (TypeError, ValueError):
+                sequence = None
+        evidence = TranscriptEvidence(
+            stream_key=result.task_id or self._stream_id,
+            revision_key=(
+                str(sentence.sentence_id) if sentence.sentence_id is not None else None
+            ),
+            sequence=sequence,
+            source_span=transcript_source_span(
+                sentence.begin_time / 1000.0,
+                sentence.end_time / 1000.0,
+            ),
+            boundaries=frozenset(boundaries),
+            stable_prefix=stable_prefix,
+        )
+        return evidence.as_metadata()
 
     def _cancel_preflight(self) -> None:
         task = self._preflight_task

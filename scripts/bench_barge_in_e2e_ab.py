@@ -178,6 +178,7 @@ class ManagedWorker:
 def _overlay_payload(
     *,
     interruption_owner: str,
+    agent_name: str | None = None,
     ptt_segment_stt_strategy: str | None = None,
     suspended_passthrough_enabled: bool = False,
     suspended_passthrough_volume: float | None = None,
@@ -197,9 +198,12 @@ def _overlay_payload(
         ptt = dict(turn_policy.get("ptt") or {})
         ptt["segment_stt_strategy"] = ptt_segment_stt_strategy
         turn_policy["ptt"] = ptt
+    worker: dict[str, Any] = {"num_idle_processes": 0}
+    if agent_name:
+        worker["agent_name"] = agent_name
     return {
         "core": {"port": server_port},
-        "worker": {"num_idle_processes": 0},
+        "worker": worker,
         "turn_policy": turn_policy,
         "observability": {"timeline_debug_path": str(timeline_path)},
     }
@@ -208,6 +212,7 @@ def _overlay_payload(
 def _write_overlay(
     *,
     profile: str,
+    agent_name: str,
     profile_dir: Path,
     server_port: int,
     ptt_segment_stt_strategy: str | None = None,
@@ -217,6 +222,7 @@ def _write_overlay(
     overlay_path = profile_dir / "settings.overlay.yaml"
     payload = _overlay_payload(
         interruption_owner=profile,
+        agent_name=agent_name,
         ptt_segment_stt_strategy=ptt_segment_stt_strategy,
         suspended_passthrough_enabled=suspended_passthrough_enabled,
         suspended_passthrough_volume=suspended_passthrough_volume,
@@ -280,10 +286,12 @@ def _isolate_loopback_proxy_in_env(env: dict[str, str]) -> None:
 
 
 async def _preflight_gate(output_dir: Path, *, checks: tuple[str, ...], skip: bool) -> None:
+    # Identity preflight and room artifacts share this directory even when the
+    # provider smoke is intentionally skipped for a focused rerun.
+    output_dir.mkdir(parents=True, exist_ok=True)
     if skip:
         return
     result = await preflight_real_stack(checks=checks)
-    output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "preflight.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -412,6 +420,7 @@ async def _run_profile(
     if args.manage_worker:
         overlay_path = _write_overlay(
             profile=profile,
+            agent_name=args.livekit_agent_name,
             profile_dir=profile_dir,
             server_port=args.worker_base_port + profile_index,
             ptt_segment_stt_strategy=args.ptt_segment_stt_strategy,

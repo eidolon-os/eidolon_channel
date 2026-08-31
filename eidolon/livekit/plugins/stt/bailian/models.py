@@ -47,6 +47,8 @@ class FunASRSentence:
     begin_time: int = 0  # milliseconds
     end_time: int = 0  # milliseconds
     sentence_end: bool = False
+    sentence_begin: bool = False
+    sentence_id: int | str | None = None
     words: list[FunASRWord] = field(default_factory=list)
     punctuation: str = ""
 
@@ -59,6 +61,8 @@ class FunASRSentence:
             begin_time=int(d.get("begin_time") or 0),
             end_time=int(d.get("end_time") or 0),
             sentence_end=bool(d.get("sentence_end", False)),
+            sentence_begin=bool(d.get("sentence_begin", False)),
+            sentence_id=d.get("sentence_id"),
             words=words,
             punctuation=d.get("text_with_punct", "") or "",
         )

@@ -241,6 +241,50 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
     if expected.correction_hint and not _any_decision_flag(records, "correction_hint"):
         errors.append("timeline expected correction_hint=True")
 
+    if expected.max_stt_speech_to_actionable_transcript_ms is not None:
+        durations = _stt_speech_to_actionable_durations_ms(
+            records,
+            expected.action,
+            first_yield_only=_is_semantic_redirect_case(case_id, expected),
+        )
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration > expected.max_stt_speech_to_actionable_transcript_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline STT speech-to-actionable-transcript exceeded "
+                    f"{expected.max_stt_speech_to_actionable_transcript_ms}ms: {slow}"
+                )
+        elif expected.action not in ("", "any", "none"):
+            errors.append("timeline missing STT speech-to-actionable-transcript duration")
+
+    if expected.max_actionable_transcript_to_interrupt_resolution_ms is not None:
+        durations = _actionable_transcript_to_resolution_durations_ms(
+            records,
+            expected.action,
+            first_yield_only=_is_semantic_redirect_case(case_id, expected),
+        )
+        if durations:
+            slow = [
+                round(duration, 1)
+                for duration in durations
+                if duration
+                > expected.max_actionable_transcript_to_interrupt_resolution_ms
+            ]
+            if slow:
+                errors.append(
+                    "timeline actionable-transcript-to-interrupt-resolution exceeded "
+                    f"{expected.max_actionable_transcript_to_interrupt_resolution_ms}ms: "
+                    f"{slow}"
+                )
+        elif expected.action not in ("", "any", "none"):
+            errors.append(
+                "timeline missing actionable-transcript-to-interrupt-resolution duration"
+            )
+
     if expected.max_interrupt_decision_ms is not None:
         durations = _interrupt_decision_durations_ms(
             records,
@@ -337,7 +381,7 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
                     "timeline speech-start-to-resume exceeded "
                     f"{max_speech_start_to_resume_ms}ms: {slow}"
                 )
-        else:
+        elif _has_interrupt_started(records):
             errors.append("timeline missing speech-start-to-resume duration")
 
     playback_stop_sent = getattr(expected, "playback_stop_sent", None)
@@ -653,6 +697,80 @@ def _interrupt_decision_durations_ms(
     return durations
 
 
+def _stt_speech_to_actionable_durations_ms(
+    records: list[dict[str, Any]],
+    expected_action: str = "",
+    *,
+    first_yield_only: bool = False,
+) -> list[float]:
+    durations: list[float] = []
+    for record in _resolved_interrupt_records(records, expected_action):
+        provider_latency = _mapping(
+            _mapping(record.get("attrs")).get("provider_latency_ms")
+        )
+        duration = _number(
+            provider_latency.get("stt_speech_to_actionable_transcript_ms")
+        )
+        if duration is None:
+            duration = _number(
+                _mapping(record.get("durations_ms")).get(
+                    "stt_speech_to_actionable_transcript"
+                )
+            )
+        if duration is None:
+            duration = _timestamp_delta_ms(
+                record,
+                "speech_started_at",
+                "transcript_actionable_first_at",
+            )
+        if duration is not None:
+            durations.append(duration)
+    if first_yield_only and durations:
+        return [durations[0]]
+    return durations
+
+
+def _actionable_transcript_to_resolution_durations_ms(
+    records: list[dict[str, Any]],
+    expected_action: str = "",
+    *,
+    first_yield_only: bool = False,
+) -> list[float]:
+    durations: list[float] = []
+    for record in _resolved_interrupt_records(records, expected_action):
+        provider_latency = _mapping(
+            _mapping(record.get("attrs")).get("provider_latency_ms")
+        )
+        provider_keys = (
+            ("interrupt_actionable_transcript_to_cancel_resolved_ms",)
+            if expected_action == "cancel"
+            else ("interrupt_actionable_transcript_to_resolved_ms",)
+        )
+        duration = _first_number(provider_latency.get(key) for key in provider_keys)
+        if duration is None:
+            duration_keys = (
+                ("interrupt_actionable_transcript_to_cancel_resolved",)
+                if expected_action == "cancel"
+                else ("interrupt_actionable_transcript_to_resolved",)
+            )
+            duration = _first_number(
+                _mapping(record.get("durations_ms")).get(key) for key in duration_keys
+            )
+        if duration is None:
+            timestamps = _mapping(record.get("timestamps"))
+            start = _number(timestamps.get("transcript_actionable_first_at"))
+            end = _first_number(
+                timestamps.get(key) for key in _resolved_timestamp_keys(expected_action)
+            )
+            if start is not None and end is not None:
+                duration = max(0.0, (end - start) * 1000.0)
+        if duration is not None:
+            durations.append(duration)
+    if first_yield_only and durations:
+        return [durations[0]]
+    return durations
+
+
 def _resolved_interrupt_records(
     records: list[dict[str, Any]],
     expected_action: str = "",
@@ -752,6 +870,14 @@ def _speech_start_to_suspend_durations_ms(records: list[dict[str, Any]]) -> list
         if duration is not None:
             durations.append(duration)
     return durations
+
+
+def _has_interrupt_started(records: list[dict[str, Any]]) -> bool:
+    return any(
+        _number(_mapping(record.get("timestamps")).get("interrupt_started_at"))
+        is not None
+        for record in records
+    )
 
 
 def _speech_start_to_cancel_durations_ms(records: list[dict[str, Any]]) -> list[float]:

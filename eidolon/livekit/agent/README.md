@@ -15,8 +15,8 @@ entrypoints; implementation code lives under named boundary packages.
 
 ## Boundary Packages
 
-- `integration/` contains direct external-contract adapters: LiveKit framework
-  patches and LiveKit data-channel payload parsing.
+- `integration/` contains direct external-contract adapters built on public
+  LiveKit events/options and LiveKit data-channel payload parsing.
 - `session/` contains per-session handlers and effect appliers: room data,
   provider events, idle, semantic interruption effects, commit guards, shared
   EOT helpers, session-local `eidolon.control` envelope helpers, full-duplex

@@ -82,6 +82,9 @@ class LiveKitRoomOptions:
 
 
 _AGENT_MISSING_ERROR = "timed out waiting for agent participant before user audio"
+_AGENT_SETUP_TRANSIENT_ERROR = (
+    "timed out waiting for the previous agent reply to complete before user step"
+)
 _ROOM_CONNECT_TRANSIENT_ERRORS = (
     "could not find any available nodes",
     "no permissions to access the room",
@@ -192,6 +195,8 @@ def _retry_reason(result: CaseResult) -> str | None:
         return "agent_missing"
     if _is_room_connect_transient_failure(result):
         return "room_connect_transient"
+    if _is_agent_setup_transient_failure(result):
+        return "agent_setup_transient"
     return None
 
 
@@ -202,6 +207,27 @@ def _is_room_connect_transient_failure(result: CaseResult) -> bool:
         return False
     error_text = "\n".join(str(error).lower() for error in result.errors)
     return any(marker in error_text for marker in _ROOM_CONNECT_TRANSIENT_ERRORS)
+
+
+def _is_agent_setup_transient_failure(result: CaseResult) -> bool:
+    """Retry a stalled initial greeting only before benchmark stimulus starts.
+
+    This deliberately excludes failures after any user audio or policy timeline
+    record. Such failures belong to the behavior under test and must remain
+    visible instead of being hidden by infrastructure retries.
+    """
+
+    if result.metrics.get("room_connected_ms") is None:
+        return False
+    if result.metrics.get("user_audio_done_ms") is not None:
+        return False
+    if any(event.get("type") == "user_audio_started" for event in result.events):
+        return False
+    timeline_record_count = result.metrics.get("timeline_record_count")
+    if timeline_record_count not in (None, 0):
+        return False
+    error_text = "\n".join(str(error).lower() for error in result.errors)
+    return _AGENT_SETUP_TRANSIENT_ERROR in error_text
 
 
 async def _run_room_case_with_hard_timeout(
@@ -410,6 +436,7 @@ async def _run_room_case(
         metrics.update(state.metrics())
         if state.agent_audio_frames <= 0 and _agent_audio_wait_mode(case) != "none":
             errors.append("no agent audio frames captured")
+        errors.extend(_transcription_expectation_errors(case, events))
         errors.extend(_user_done_audio_latency_errors(case, metrics))
     except Exception as exc:
         metrics.update(state.metrics())
@@ -770,6 +797,18 @@ async def _wait_for_agent_quiet(
                 state.first_agent_audio.wait(),
                 timeout=min(first_audio_wait_sec, timeout_sec),
             )
+        # The greeting is streamed in multiple TTS chunks. A quiet gap between
+        # chunks is not an idle agent, so once greeting audio has been observed,
+        # require its final synchronized transcript before applying the playout
+        # quiet window. Rooms with no greeting/audio still proceed normally.
+        if state.first_agent_audio.is_set():
+            while (
+                time.monotonic() < deadline
+                and not state.agent_transcript_final_timestamps
+            ):
+                await asyncio.sleep(0.05)
+            if not state.agent_transcript_final_timestamps:
+                return False
     else:
         # A short quiet gap between streamed TTS chunks is not the end of a
         # conversational reply. Require the agent's final transcription for the
@@ -908,6 +947,33 @@ def _user_done_audio_latency_errors(
         return ["user-done-to-agent-audio latency missing but a bound was set"]
     if latency > bound_ms:
         return [f"user-done-to-agent-audio too slow: {latency}>{bound_ms}ms"]
+    return []
+
+
+def _transcription_expectation_errors(
+    case: BenchmarkCase,
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """Enforce user-transcript cardinality in a real LiveKit room.
+
+    Headless tests already enforce ``min_user_finals``.  The room runner must
+    do the same or an acoustic rollback with no recognized backchannel can
+    masquerade as a semantic backchannel pass.
+    """
+
+    user_finals = sum(
+        1
+        for event in events
+        if event.get("type") == "transcription"
+        and event.get("role") == "user"
+        and event.get("final") is True
+        and str(event.get("text") or "").strip()
+    )
+    if user_finals < case.expectations.min_user_finals:
+        return [
+            "expected at least "
+            f"{case.expectations.min_user_finals} user finals, got {user_finals}"
+        ]
     return []
 
 

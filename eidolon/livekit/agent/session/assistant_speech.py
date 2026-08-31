@@ -29,6 +29,8 @@ class AssistantSpeechLedger:
     def __init__(self, *, clock: Any | None = None) -> None:
         self._clock = clock or time.monotonic
         self._latest: AssistantSpeechSnapshot | None = None
+        self._fixed_speech_pending = False
+        self._fixed_speech_active = False
 
     @property
     def latest(self) -> AssistantSpeechSnapshot | None:
@@ -44,6 +46,43 @@ class AssistantSpeechLedger:
             timestamp=float(self._clock()),
         )
 
+    def queue_fixed_speech(self, text: str, *, source: str) -> None:
+        """Record Channel-issued speech that will start on the next playback.
+
+        ``session.say()`` can queue text several seconds before the matching
+        audio reaches the room.  A wall-clock TTL measured from queue time can
+        therefore expire while the user is still hearing the sentence.  The
+        ledger models that lifecycle explicitly without depending on provider
+        task IDs or LiveKit private speech handles.
+        """
+
+        self.record(text, source=source)
+        if self._latest is not None:
+            self._fixed_speech_pending = True
+            self._fixed_speech_active = False
+
+    def on_playback_started(self) -> None:
+        """Activate the fixed speech queued for this playback, if any."""
+
+        if not self._fixed_speech_pending:
+            return
+        self._fixed_speech_pending = False
+        self._fixed_speech_active = True
+
+    def on_playback_finished(self) -> None:
+        """Close active fixed speech and start its residual-echo tail window."""
+
+        if not self._fixed_speech_active:
+            return
+        self._fixed_speech_active = False
+        latest = self._latest
+        if latest is not None:
+            self._latest = AssistantSpeechSnapshot(
+                text=latest.text,
+                source=latest.source,
+                timestamp=float(self._clock()),
+            )
+
     def current_or_recent_text(
         self,
         *,
@@ -55,6 +94,8 @@ class AssistantSpeechLedger:
             self.record(current, source="tts_in_flight")
             return current
         latest = self._latest
+        if self._fixed_speech_active and latest is not None:
+            return latest.text
         if latest is None or max_age_ms <= 0:
             return ""
         age_ms = (float(self._clock()) - latest.timestamp) * 1000.0

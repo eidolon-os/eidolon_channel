@@ -29,6 +29,7 @@ class FullDuplexSpeechLifecycle:
     def handle_started(self) -> None:
         owner = self._owner
         turn_completion = owner._ensure_turn_completion()
+        turn_completion.cancel_transcriptless_expiry()
         owner._ensure_user_turn_coordinator()
         merge_continuation = owner._user_turns.can_merge_new_speech()
         owner._set_interrupt_cancel_suppression(False, 0.0, reason="new_speech_started")
@@ -130,7 +131,7 @@ class FullDuplexSpeechLifecycle:
         turn_completion = owner._ensure_turn_completion()
         owner._user_speaking_start_time = None
         if owner._timeline is not None:
-            owner._timeline.mark("speech_stopped_at")
+            owner._timeline.mark_latest("speech_stopped_at")
         voiceprint_task = owner._voiceprint_turns.finish_turn()
         turn_completion.remember_completed_voiceprint_turn(
             voiceprint_task,
@@ -168,6 +169,8 @@ class FullDuplexSpeechLifecycle:
                 reason="automatic_turn_lifecycle",
                 transcript=transcript,
             )
+        elif not defer_post_speech_evidence and not confirmed_cancel_stopped:
+            turn_completion.arm_transcriptless_expiry()
 
     def _finish_confirmed_cancel_on_stop(self) -> bool:
         owner = self._owner

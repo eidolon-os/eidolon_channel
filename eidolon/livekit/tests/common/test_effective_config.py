@@ -236,7 +236,7 @@ voiceprint:
     assert cfg.voiceprint.enabled is False
     assert cfg.turn_policy.attention.require_direct_signal_during_playback is True
     assert cfg.turn_policy.interrupt.redirect_prefix_min_cjk_chars == 3
-    assert cfg.turn_policy.attention.echo_min_normalized_chars == 2
+    assert cfg.turn_policy.attention.echo_min_normalized_chars == 3
     assert cfg.turn_policy.attention.assistant_speech_recent_max_age_ms == 3000
 
 

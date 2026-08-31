@@ -5,8 +5,14 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
+from eidolon.livekit.agent.full_duplex.transcript_admission import (
+    TranscriptAdmissionGate,
+)
 from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
+from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+from eidolon.livekit.agent.session.transcript_echo import TranscriptEchoGate
 from eidolon.livekit.agent.turn_policy import (
     AdmissionAction,
     AttentionInput,
@@ -16,7 +22,7 @@ from eidolon.livekit.agent.turn_policy import (
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
 
 from .device_envelope import device_envelope_metrics
-from .schema import BenchmarkSuite, CaseResult, RunResult, UserStep
+from .schema import BenchmarkCase, BenchmarkSuite, CaseResult, RunResult, UserStep
 
 
 def _git_sha() -> str:
@@ -47,6 +53,15 @@ def run_policy_suite(
             started = time.monotonic()
             errors: list[str] = []
             decisions: list[dict] = []
+            assistant_speech = _assistant_speech_ledger(
+                case,
+                welcome_message=cfg.behavior.welcome_message,
+            )
+            echo_gate = TranscriptEchoGate(
+                get_agent_text=lambda: _latest_assistant_text(assistant_speech),
+                min_normalized_chars=policy.attention.echo_min_normalized_chars,
+            )
+            echo_rejection_count = 0
             action = Action.NONE
             intent = "uncertain"
             decision_action = "none"
@@ -58,6 +73,7 @@ def run_policy_suite(
 
             for step in case.user_steps:
                 if not step.agent_speaking:
+                    _record_matching_agent_reply(assistant_speech, case, step)
                     continue
                 texts = step.interims or (step.text,)
                 duck_active = False
@@ -138,6 +154,46 @@ def run_policy_suite(
                         },
                         "decision": None,
                     }
+                    transcript_admission = TranscriptAdmissionGate(
+                        suppress_until_next_speech=lambda: False,
+                        agent_output_active=lambda _speaker_id: step.agent_speaking,
+                        echo_gate=lambda: echo_gate,
+                    ).evaluate(
+                        SimpleNamespace(
+                            transcript=text,
+                            is_final=is_final,
+                            speaker_id=None,
+                        )
+                    )
+                    decision_record["transcript_admission"] = {
+                        "accepted": transcript_admission.accepted,
+                        "reason": transcript_admission.reason,
+                        "assistant_text_source": (
+                            assistant_speech.latest.source
+                            if assistant_speech.latest is not None
+                            else ""
+                        ),
+                    }
+                    if not transcript_admission.accepted:
+                        echo_rejection_count += 1
+                        action = Action.ROLLBACK
+                        intent = "uncertain"
+                        decision_action = action.value
+                        decision_intent = intent
+                        decision_start_ms = step.start_ms
+                        decision_at_ms = event_time_ms
+                        decision_record["decision"] = {
+                            "action": action.value,
+                            "reason": transcript_admission.reason,
+                            "intent": None,
+                            "intent_source": "transcript_admission",
+                            "intent_confidence": 1.0,
+                            "topic_switch_hint": False,
+                            "correction_hint": False,
+                            "rollback_drop_buffered": False,
+                        }
+                        decisions.append(decision_record)
+                        break
                     if attention_enforced and attention.action in (
                         AdmissionAction.IGNORE,
                         AdmissionAction.OBSERVE,
@@ -291,6 +347,7 @@ def run_policy_suite(
                 "actual_decision_intent": decision_intent,
                 "topic_switch_hint": topic_switch_hint,
                 "correction_hint": correction_hint,
+                "echo_rejection_count": echo_rejection_count,
                 **device_envelope_metrics(case),
             }
             results.append(
@@ -312,6 +369,38 @@ def run_policy_suite(
         profile=policy.profile,
         cases=results,
     )
+
+
+def _assistant_speech_ledger(
+    case: BenchmarkCase,
+    *,
+    welcome_message: str,
+) -> AssistantSpeechLedger:
+    ledger = AssistantSpeechLedger()
+    synthetic_text = case.device_envelope.agent.speaking_text.strip()
+    if synthetic_text:
+        ledger.record(synthetic_text, source="benchmark_device_envelope")
+    elif welcome_message.strip():
+        ledger.record(welcome_message, source="benchmark_welcome")
+    return ledger
+
+
+def _latest_assistant_text(ledger: AssistantSpeechLedger) -> str:
+    latest = ledger.latest
+    return latest.text if latest is not None else ""
+
+
+def _record_matching_agent_reply(
+    ledger: AssistantSpeechLedger,
+    case: BenchmarkCase,
+    step: UserStep,
+) -> None:
+    normalized_step = step.text.strip()
+    for reply in case.agent_replies:
+        trigger = reply.when.strip()
+        if trigger and (trigger in normalized_step or normalized_step in trigger):
+            ledger.record(reply.reply, source="benchmark_agent_reply")
+            return
 
 
 def _client_audio_state(step: UserStep) -> ClientAudioState | None:

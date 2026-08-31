@@ -11,12 +11,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
-import struct
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Awaitable, Callable
 
+from benchmark.provider_smoke import (
+    DEFAULT_STT_AUDIO as _DEFAULT_STT_AUDIO,
+    check_stt as _check_stt,
+    check_tts as _check_tts,
+)
 from livekit.agents.types import APIConnectOptions
 
 from eidolon.livekit.agent.factory import SharedStageFactory
@@ -30,17 +34,6 @@ class SmokeResult:
     ok: bool
     elapsed_ms: int
     detail: dict[str, object]
-
-
-def _pcm_sine(duration_ms: int = 300, sample_rate: int = 16_000) -> bytes:
-    samples = int(sample_rate * duration_ms / 1000)
-    return b"".join(
-        struct.pack(
-            "<h",
-            int(16_000 * math.sin(2 * math.pi * 440 * i / sample_rate)),
-        )
-        for i in range(samples)
-    )
 
 
 async def _timed(
@@ -79,27 +72,6 @@ async def _check_llm(factory: SharedStageFactory, timeout: float) -> dict[str, o
     return {"chars": len(out.text), "preview": out.text[:80]}
 
 
-async def _check_tts(factory: SharedStageFactory) -> dict[str, object]:
-    await factory.tts.warmup()
-    frames = []
-    async for frame in factory.tts.synthesize("你好，测试。"):
-        frames.append(frame)
-        if len(frames) >= 2:
-            break
-    if not frames:
-        raise RuntimeError("TTS returned no audio frames")
-    return {
-        "frames": len(frames),
-        "sample_rate": frames[0].sample_rate,
-        "samples_per_channel": frames[0].samples_per_channel,
-    }
-
-
-async def _check_stt(factory: SharedStageFactory) -> dict[str, object]:
-    text = await factory.stt.recognize_streaming(_pcm_sine())
-    return {"chars": len(text), "text": text[:80]}
-
-
 def _config_summary(cfg: EffectiveAgentConfig) -> dict[str, object]:
     return {
         "brain_provider": cfg.providers.brain_provider,
@@ -122,16 +94,28 @@ async def _main() -> int:
     parser.add_argument("--llm-timeout-sec", type=float, default=20.0)
     parser.add_argument("--stt-timeout-sec", type=float, default=30.0)
     parser.add_argument("--tts-timeout-sec", type=float, default=45.0)
+    parser.add_argument(
+        "--stt-audio-file",
+        type=Path,
+        default=_DEFAULT_STT_AUDIO,
+        help="PCM16 mono 16kHz WAV containing speech for the real STT check.",
+    )
     args = parser.parse_args()
 
-    cfg = load_effective_config()
-    factory = SharedStageFactory.from_config(cfg)
-
     requested = {x.strip() for x in args.checks.split(",") if x.strip()}
+    cfg = load_effective_config()
+    # Audio-only component checks must not construct the room-bound Brain or
+    # require its device-token authority. Reuse the factory's dedicated
+    # component path so provider selection remains identical to production.
+    factory = (
+        SharedStageFactory.from_config(cfg)
+        if "llm" in requested
+        else SharedStageFactory.components_from_config(cfg)
+    )
     checks: dict[str, Callable[[], Awaitable[dict[str, object]]]] = {
         "llm": lambda: _check_llm(factory, args.llm_timeout_sec),
         "tts": lambda: _check_tts(factory),
-        "stt": lambda: _check_stt(factory),
+        "stt": lambda: _check_stt(factory, args.stt_audio_file),
     }
     unknown = requested - set(checks)
     if unknown:
@@ -150,8 +134,10 @@ async def _main() -> int:
     finally:
         await factory.stt.shutdown()
         await factory.tts.shutdown()
-        if hasattr(factory.llm.llm, "aclose"):
-            await factory.llm.llm.aclose()
+        llm_stage = getattr(factory, "llm", None)
+        llm = getattr(llm_stage, "llm", None)
+        if llm is not None and hasattr(llm, "aclose"):
+            await llm.aclose()
 
     payload = {
         "config": _config_summary(cfg),

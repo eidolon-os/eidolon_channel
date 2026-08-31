@@ -14,6 +14,7 @@ from ..session.voiceprint_reasons import (
 )
 from .playback_turn_evidence import resolve_playback_turn_decision
 from .state_machine import FullDuplexPhase
+from .transcript_settlement import TranscriptSettlementLease
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -70,7 +71,7 @@ class FullDuplexFrameworkCompletedTurnGate:
                 transcript=completed_transcript,
             )
         if task is None and result is None:
-            return self._route_allowed_framework_completed_turn(
+            return await self._route_allowed_framework_completed_turn(
                 turn_ctx=turn_ctx,
                 completed_transcript=completed_transcript,
                 new_message=new_message,
@@ -109,7 +110,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             reason=reason,
         )
         if allowed:
-            return self._route_allowed_framework_completed_turn(
+            return await self._route_allowed_framework_completed_turn(
                 turn_ctx=turn_ctx,
                 completed_transcript=completed_transcript,
                 new_message=new_message,
@@ -155,7 +156,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             flush_reason=flush_reason,
         )
 
-    def _route_allowed_framework_completed_turn(
+    async def _route_allowed_framework_completed_turn(
         self,
         *,
         turn_ctx: Any,
@@ -166,36 +167,65 @@ class FullDuplexFrameworkCompletedTurnGate:
     ) -> bool:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
+        candidate = owner._user_turns.active
+        candidate_id = candidate.candidate_id if candidate is not None else None
         completion_generation = owner._user_turns.framework_completion_generation(
             completed_transcript
         )
-        readiness = owner._user_turns.framework_completion_readiness(completed_transcript)
-        if not readiness.ready:
-            if timeline is not None:
-                timeline.set_attr(
-                    "framework_completed_deferred",
-                    {
-                        "reason": readiness.reason,
-                        "framework_text_preview": completed_transcript[:120],
-                        "pending_text_preview": readiness.pending_transcript[:120],
-                    },
-                )
-                self._record_completed_gate_event(
-                    timeline,
-                    stage="candidate_readiness",
-                    action="defer",
-                    reason=readiness.reason,
-                    transcript=completed_transcript,
-                    pending_text_preview=readiness.pending_transcript[:120],
-                )
+        settlement = await TranscriptSettlementLease(
+            owner._user_turns,
+            timeout_sec=getattr(owner, "_stt_commit_transcript_timeout", 1.5),
+        ).settle(
+            candidate_id=candidate_id,
+            framework_transcript=completed_transcript,
+        )
+        if timeline is not None:
+            timeline.set_attr(
+                "framework_completed_settlement",
+                {
+                    "outcome": settlement.outcome,
+                    "reason": settlement.readiness.reason,
+                    "elapsed_ms": settlement.elapsed_sec * 1000.0,
+                    "evidence_updates": settlement.evidence_updates,
+                    "pending_text_preview": settlement.readiness.pending_transcript[:120],
+                },
+            )
+            self._record_completed_gate_event(
+                timeline,
+                stage="transcript_settlement",
+                action=("continue" if settlement.outcome != "candidate_replaced" else "reject"),
+                reason=settlement.readiness.reason,
+                transcript=completed_transcript,
+                outcome=settlement.outcome,
+                elapsed_ms=settlement.elapsed_sec * 1000.0,
+                evidence_updates=settlement.evidence_updates,
+                pending_text_preview=settlement.readiness.pending_transcript[:120],
+            )
+        if settlement.outcome == "candidate_replaced":
             logger.info(
-                "[StreamingPipeline] deferred stale framework completion "
-                "reason=%s framework=%r pending=%r",
-                readiness.reason,
+                "[StreamingPipeline] framework completion candidate replaced "
+                "while settling candidate=%s framework=%r",
+                candidate_id,
                 completed_transcript[:80],
-                readiness.pending_transcript[:80],
             )
             return False
+        if settlement.outcome == "deadline":
+            if timeline is not None:
+                timeline.set_attr(
+                    "framework_completed_settlement_fallback",
+                    {
+                        "reason": settlement.readiness.reason,
+                        "framework_text_preview": completed_transcript[:120],
+                        "pending_text_preview": settlement.readiness.pending_transcript[:120],
+                    },
+                )
+            logger.warning(
+                "[StreamingPipeline] transcript settlement deadline; using best-known "
+                "candidate reason=%s framework=%r pending=%r",
+                settlement.readiness.reason,
+                completed_transcript[:80],
+                settlement.readiness.pending_transcript[:80],
+            )
         candidate_transcript = owner._user_turns.prepare_framework_completed(
             transcript=completed_transcript,
             timeline=timeline,
@@ -232,6 +262,11 @@ class FullDuplexFrameworkCompletedTurnGate:
             new_message=new_message,
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
+            completion_reason=(
+                "framework_completed_turn:transcript_settlement_deadline"
+                if settlement.outcome == "deadline"
+                else "framework_completed_turn"
+            ),
         )
 
     def _resolve_completed_turn_interruption_evidence(
@@ -307,12 +342,13 @@ class FullDuplexFrameworkCompletedTurnGate:
         new_message: Any,
         timeline: TurnTimeline | None,
         voiceprint_reason: str,
+        completion_reason: str,
     ) -> bool:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
         decision = owner._user_turns.mark_framework_completed(
             transcript=completed_transcript,
-            reason="framework_completed_turn",
+            reason=completion_reason,
             timeline=timeline,
             voiceprint_reason=voiceprint_reason,
         )

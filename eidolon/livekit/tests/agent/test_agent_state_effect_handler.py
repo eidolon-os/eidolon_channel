@@ -26,6 +26,8 @@ def _handler(
     ducking=None,
     filler=None,
     should_flush_on_playback_done=None,
+    on_playback_started=None,
+    on_playback_finished=None,
 ):
     mark_activity = MagicMock()
     cancel_soft_interrupt = MagicMock()
@@ -40,6 +42,8 @@ def _handler(
         get_filler=lambda: filler,
         flush_timeline_debug=flush,
         should_flush_on_playback_done=should_flush_on_playback_done,
+        on_playback_started=on_playback_started,
+        on_playback_finished=on_playback_finished,
     )
     return handler, mark_activity, cancel_soft_interrupt, flush, ducking
 
@@ -117,6 +121,21 @@ def test_playback_done_marks_and_flushes_timeline() -> None:
 
     assert "agent_audio_playback_done_at" in timeline.timestamps
     flush.assert_called_once_with("agent_audio_playback_done", True)
+
+
+def test_playback_lifecycle_callbacks_follow_agent_state() -> None:
+    started = MagicMock()
+    finished = MagicMock()
+    handler, *_ = _handler(
+        on_playback_started=started,
+        on_playback_finished=finished,
+    )
+
+    handler.handle(SimpleNamespace(old_state="thinking", new_state="speaking"))
+    handler.handle(SimpleNamespace(old_state="speaking", new_state="listening"))
+
+    started.assert_called_once_with()
+    finished.assert_called_once_with()
 
 
 def test_playback_done_does_not_flush_non_terminal_user_turn() -> None:

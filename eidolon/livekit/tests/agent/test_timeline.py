@@ -162,6 +162,19 @@ def test_timeline_records_speech_stop_to_rollback_latency() -> None:
     assert round(durations["speech_stop_to_interrupt_rollback_resolved"]) == 1
 
 
+def test_timeline_merged_turn_uses_latest_speech_stop_for_commit_latency() -> None:
+    timeline = TurnTimeline("turn-merged-segments")
+    timeline.mark_at("speech_started_at", 10.0)
+    timeline.mark_at("speech_stopped_at", 10.5)
+    timeline.mark_latest("speech_stopped_at", timestamp=12.0)
+    timeline.mark_at("turn_committed_at", 12.2)
+
+    snap = timeline.snapshot()
+
+    assert snap["timestamps"]["speech_stopped_at"] == 12.0
+    assert round(snap["durations_ms"]["speech_stop_to_commit"]) == 200
+
+
 def test_timeline_framework_completed_latency_breakdown() -> None:
     timeline = TurnTimeline("turn-framework-completed")
     timeline.mark_at("speech_started_at", 10.0)
@@ -1250,7 +1263,7 @@ def test_streaming_pipeline_cancels_when_playback_evidence_outlives_duck_state()
     assert ducking.cancelled is True
     callbacks.on_duck_resolved.assert_called_once_with("cancel")
     orchestrator.resolve.assert_called_once_with(action="cancel", reason="eot_cancel")
-    session.interrupt.assert_called_once_with(force=False)
+    session.interrupt.assert_called_once_with(force=True)
     assert "interrupt_cancel_resolved_at" in timeline.timestamps
     assert timeline.attrs["duck_events"][-1]["event"] == "duck_cancelled"
 
@@ -1312,7 +1325,7 @@ def test_cancel_collects_confirmed_semantic_turn_without_resolving_candidate() -
     orchestrator.resolve.assert_not_called()
     orchestrator.should_commit_after_confirmed_cancel.assert_not_called()
     callbacks.on_duck_resolved.assert_called_once_with("cancel")
-    session.interrupt.assert_called_once_with(force=False)
+    session.interrupt.assert_called_once_with(force=True)
     eot_model.update_vad.assert_called_once_with(False)
     set_suppression.assert_called_once_with(True, ANY)
     assert timeline.attrs["cancel_reason"] == "eot_cancel"
@@ -1383,3 +1396,60 @@ def test_rollback_if_suspended_records_timeline_action() -> None:
     assert duck_event["suspended_passthrough_first_frame_ms"] == 150.0
     assert duck_event["suspended_passthrough_last_frame_ms"] == 190.0
     orchestrator.resolve.assert_called_once_with(action="rollback", reason="agent_echo")
+
+
+def test_rollback_marks_timeline_before_terminal_verdict_can_flush_it() -> None:
+    class FakeDucking:
+        installed = True
+        is_suspended = True
+
+        def stats(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                suspend_ms=40.0,
+                buffered_frames=0,
+                buffered_sec=0.0,
+                suspended_passthrough_frames=0,
+                buffer_frames_dropped_on_passthrough=0,
+                suspended_passthrough_enabled_ms=None,
+                suspended_passthrough_first_frame_ms=None,
+                suspended_passthrough_last_frame_ms=None,
+            )
+
+        def unduck_if_suspended(self, *, drop_buffered: bool) -> None:
+            pass
+
+    timeline = TurnTimeline("turn-flushed-by-verdict")
+    active = {"timeline": timeline}
+    flushed_snapshots: list[dict] = []
+
+    def resolve(*, action: str, reason: str) -> None:
+        flushed_snapshots.append(timeline.snapshot())
+        active["timeline"] = None
+
+    effects = FullDuplexInterruptionEffects(
+        ducking=FakeDucking(),
+        callbacks=MagicMock(),
+        get_session=lambda: MagicMock(),
+        allow_interruptions=lambda: True,
+        get_eot_model=lambda: MagicMock(),
+        get_timeline=lambda: active["timeline"],
+        get_latest_asr_text=lambda: "",
+        get_state_label=lambda: "SPEAKING",
+        get_interruption_orchestrator=lambda: SimpleNamespace(
+            awaiting_post_speech_evidence=False,
+            resolve=resolve,
+        ),
+        publish_playback_stop=MagicMock(),
+        snapshot_interrupted_context=MagicMock(),
+        cancel_residual_commit_suppress_sec=lambda: 0.0,
+        semantic_interrupt_run=MagicMock(),
+        correction_topic_stability_window_ms=lambda: 120,
+        set_interrupt_cancel_suppression=MagicMock(),
+        soft_interrupt_timeout_sec=lambda: 0.5,
+    )
+
+    effects.rollback_if_suspended(reason="timeout", drop_buffered=True)
+
+    flushed = flushed_snapshots[0]
+    assert flushed["attrs"]["interrupt_action"] == "rollback"
+    assert "interrupt_rollback_resolved_at" in flushed["timestamps"]

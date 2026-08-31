@@ -7,11 +7,13 @@ hook is the sole normal path that commits or rejects a product user turn.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
 from eidolon.livekit.agent.session.transcript_revision import (
     DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS,
     normalized_text_equal,
@@ -76,6 +78,7 @@ class TranscriptRevision:
     received_at: float
     segment_index: int
     generation_id: int
+    evidence: TranscriptEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,7 @@ class TranscriptRevisionReceipt:
     candidate_id: str
     generation_id: int
     segment_index: int
+    evidence: TranscriptEvidence | None = None
 
 
 @dataclass
@@ -95,6 +99,7 @@ class SpeechSegment:
     covered_by_generation_id: int | None = None
     covered_by_segment_index: int | None = None
     coverage_reason: str = ""
+    evidence: TranscriptEvidence | None = None
 
     @property
     def selected_text(self) -> str:
@@ -159,6 +164,8 @@ class UserTurnCoordinator:
         self._active: UserTurnCandidate | None = None
         self._counter = 0
         self._acoustic_generation_counter = 0
+        self._transcript_change_version = 0
+        self._transcript_change_waiters: set[asyncio.Future[None]] = set()
 
     @property
     def active(self) -> UserTurnCandidate | None:
@@ -173,6 +180,35 @@ class UserTurnCoordinator:
         candidate = self._active
         segment = candidate.current_segment if candidate is not None else None
         return segment.generation_id if segment is not None else None
+
+    @property
+    def transcript_change_version(self) -> int:
+        return self._transcript_change_version
+
+    async def wait_for_transcript_change(
+        self,
+        *,
+        after_version: int,
+        timeout_sec: float,
+    ) -> bool:
+        """Wait for transcript/candidate state to change without polling."""
+
+        if self._transcript_change_version != after_version:
+            return True
+        if timeout_sec <= 0:
+            return False
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._transcript_change_waiters.add(future)
+        if self._transcript_change_version != after_version:
+            self._transcript_change_waiters.discard(future)
+            return True
+        try:
+            await asyncio.wait_for(future, timeout=timeout_sec)
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            self._transcript_change_waiters.discard(future)
 
     def can_merge_new_speech(self, *, now: float | None = None) -> bool:
         """Merge only an acoustically continuous fragment into the open turn."""
@@ -225,6 +261,7 @@ class UserTurnCoordinator:
                 segment_index=len(candidate.segments) - 1,
             )
             self._record_attrs(candidate, event="speech_continued")
+            self._notify_transcript_change()
             return candidate
 
         previous = self._active
@@ -250,6 +287,7 @@ class UserTurnCoordinator:
             segment_index=0,
         )
         self._record_attrs(candidate, event="speech_started")
+        self._notify_transcript_change()
         return candidate
 
     def add_transcript(
@@ -257,6 +295,7 @@ class UserTurnCoordinator:
         text: str,
         *,
         is_final: bool,
+        evidence: TranscriptEvidence | None = None,
         now: float | None = None,
     ) -> TranscriptRevisionReceipt | None:
         candidate = self._active
@@ -270,6 +309,7 @@ class UserTurnCoordinator:
             candidate,
             stripped,
             is_final=is_final,
+            evidence=evidence,
             now=current_time,
         )
         if segment is None:
@@ -278,10 +318,15 @@ class UserTurnCoordinator:
             segment = SpeechSegment(
                 started_at=current_time,
                 generation_id=candidate.latest_generation_id,
+                evidence=evidence,
             )
             candidate.segments.append(segment)
             segment_index = len(candidate.segments) - 1
         segment.text = stripped
+        if evidence is not None:
+            segment.evidence = (
+                evidence.merge(segment.evidence) if segment.evidence is not None else evidence
+            )
         if is_final:
             segment.final_text = stripped
             segment.covered_by_generation_id = None
@@ -294,6 +339,7 @@ class UserTurnCoordinator:
                 received_at=current_time,
                 segment_index=segment_index,
                 generation_id=segment.generation_id,
+                evidence=evidence,
             )
         )
         candidate.updated_at = current_time
@@ -301,10 +347,12 @@ class UserTurnCoordinator:
             candidate,
             event="transcript_final" if is_final else "transcript_interim",
         )
+        self._notify_transcript_change()
         return TranscriptRevisionReceipt(
             candidate_id=candidate.candidate_id,
             generation_id=segment.generation_id,
             segment_index=segment_index,
+            evidence=evidence,
         )
 
     def cover_pending_transcript_segments(
@@ -363,6 +411,7 @@ class UserTurnCoordinator:
             )
         if covered:
             self._record_attrs(candidate, event="transcript_segments_covered")
+            self._notify_transcript_change()
         return covered
 
     def note_speech_stopped(
@@ -498,6 +547,7 @@ class UserTurnCoordinator:
             transcript=canonical,
         )
         self._record_attrs(candidate, event="framework_completed", transcript=canonical)
+        self._notify_transcript_change()
         return UserTurnDecision(
             action="commit",
             candidate_id=candidate.candidate_id,
@@ -637,6 +687,7 @@ class UserTurnCoordinator:
 
     def reset(self) -> None:
         self._active = None
+        self._notify_transcript_change()
 
     def snapshot(self) -> dict[str, Any]:
         return {"state": "idle"} if self._active is None else self._snapshot(self._active)
@@ -685,12 +736,25 @@ class UserTurnCoordinator:
         text: str,
         *,
         is_final: bool,
+        evidence: TranscriptEvidence | None,
         now: float,
     ) -> tuple[int, SpeechSegment | None]:
         current = candidate.current_segment
         if current is None:
             return -1, None
         current_index = len(candidate.segments) - 1
+        evidence_match = self._select_segment_by_evidence(candidate, evidence)
+        if evidence_match is not None:
+            return evidence_match
+        if (
+            evidence is not None
+            and evidence.revision_key
+            and current.evidence is not None
+            and current.evidence.revision_key
+        ):
+            # Both sides provide stable identity and disagree: this is a new
+            # provider revision, regardless of textual similarity.
+            return -1, None
         if not is_final:
             # FINAL closes one provider revision stream. A later INTERIM is a
             # new sentence even if VAD kept both in one acoustic interval.
@@ -706,6 +770,36 @@ class UserTurnCoordinator:
         if not current_text:
             return current_index, current
         return (-1, None) if current.final_text else (current_index, current)
+
+    @staticmethod
+    def _select_segment_by_evidence(
+        candidate: UserTurnCandidate,
+        evidence: TranscriptEvidence | None,
+    ) -> tuple[int, SpeechSegment] | None:
+        if evidence is None or not evidence.available:
+            return None
+        if evidence.revision_key:
+            for index in range(len(candidate.segments) - 1, -1, -1):
+                segment = candidate.segments[index]
+                if segment.evidence is not None and segment.evidence.same_revision(evidence):
+                    return index, segment
+        if evidence.source_span is not None:
+            for index in range(len(candidate.segments) - 1, -1, -1):
+                segment = candidate.segments[index]
+                segment_evidence = segment.evidence
+                if segment_evidence is None:
+                    continue
+                if (
+                    evidence.revision_key
+                    and segment_evidence.revision_key
+                    and not segment_evidence.same_revision(evidence)
+                ):
+                    # Stable identity outranks temporal overlap. Never alias two
+                    # explicitly different revisions through a weaker strategy.
+                    continue
+                if segment_evidence.same_source_span(evidence):
+                    return index, segment
+        return None
 
     def _merge_framework_transcript(
         self,
@@ -791,6 +885,7 @@ class UserTurnCoordinator:
             transcript=candidate.selected_text,
         )
         self._record_attrs(candidate, event="rejected")
+        self._notify_transcript_change()
         return UserTurnDecision(
             action="reject",
             candidate_id=candidate.candidate_id,
@@ -848,8 +943,24 @@ class UserTurnCoordinator:
             payload["committed_transcript_preview"] = transcript[:TIMELINE_TEXT_PREVIEW_MAX_CHARS]
         candidate.timeline.set_attr("user_turn_coordinator", payload)
 
+    def _notify_transcript_change(self) -> None:
+        self._transcript_change_version += 1
+        waiters = tuple(self._transcript_change_waiters)
+        self._transcript_change_waiters.clear()
+        for future in waiters:
+            if not future.done():
+                future.set_result(None)
+
     @staticmethod
     def _snapshot(candidate: UserTurnCandidate) -> dict[str, Any]:
+        capabilities = sorted(
+            {
+                capability.value
+                for revision in candidate.revisions
+                if revision.evidence is not None
+                for capability in revision.evidence.capabilities
+            }
+        )
         return {
             "candidate_id": candidate.candidate_id,
             "state": candidate.state,
@@ -873,6 +984,7 @@ class UserTurnCoordinator:
             "last_owner_transition": (
                 candidate.owner_transitions[-1].snapshot() if candidate.owner_transitions else None
             ),
+            "transcript_evidence_capabilities": capabilities,
         }
 
     def _text_matches_revision(self, existing: str, revision: str) -> bool:

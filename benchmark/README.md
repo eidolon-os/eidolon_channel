@@ -179,8 +179,13 @@ Interrupt note: Tier 0 hard stops still use VAD/speech-start ->
 redirects/corrections are split into yield-vs-collect diagnostics:
 
 - `timeline_yield_old_output_ms`: the first confirmed cancel path for the old
-  agent output. `max_interrupt_decision_ms` checks this value for topic-switch
-  and correction cases.
+  agent output. Legacy suites may still check it with
+  `max_interrupt_decision_ms`.
+- Provider-backed release gates split that aggregate into
+  `max_stt_speech_to_actionable_transcript_ms` (STT/evidence availability) and
+  `max_actionable_transcript_to_interrupt_resolution_ms` (channel policy and
+  effects). This keeps provider latency from being misreported as policy
+  latency while preserving an explicit end-user envelope.
 - `timeline_yield_old_output_playback_stop_ms`: the first client
   `playback.stop` path for the old agent output.
 - `timeline_interrupt_speech_to_playback_stop_ms` and

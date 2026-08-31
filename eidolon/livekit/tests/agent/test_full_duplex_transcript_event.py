@@ -12,6 +12,9 @@ def test_transcript_event_normalizes_livekit_event_shape() -> None:
         transcript="停一下",
         speaker_id="user-1",
         is_final=True,
+        item_id="revision-7",
+        language="zh",
+        created_at=42.0,
     )
 
     normalized = FullDuplexTranscriptEvent.from_event(event)
@@ -19,6 +22,10 @@ def test_transcript_event_normalizes_livekit_event_shape() -> None:
     assert normalized.transcript == "停一下"
     assert normalized.speaker_id == "user-1"
     assert normalized.is_final is True
+    assert normalized.item_id == "revision-7"
+    assert normalized.language == "zh"
+    assert normalized.created_at == 42.0
+    assert normalized.evidence.revision_key == "revision-7"
     assert normalized.has_transcript is True
     assert normalized.timeline_mark == "transcript_final_at"
 

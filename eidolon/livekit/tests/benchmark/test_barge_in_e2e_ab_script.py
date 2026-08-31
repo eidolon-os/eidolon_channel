@@ -16,6 +16,7 @@ from scripts.bench_barge_in_e2e_ab import (
     _filter_suites_by_case_ids,
     _overlay_payload,
     _participant_metadata,
+    _preflight_gate,
     _profile_brief,
     _recommendation,
     _suites_for_livekit_mode,
@@ -25,16 +26,29 @@ from scripts.bench_barge_in_e2e_ab import (
 from benchmark.schema import BenchmarkCase, BenchmarkSuite, Expectations
 
 
+@pytest.mark.asyncio
+async def test_skipped_preflight_still_creates_artifact_directory(tmp_path: Path) -> None:
+    output_dir = tmp_path / "new" / "livekit_room"
+
+    await _preflight_gate(output_dir, checks=("stt",), skip=True)
+
+    assert output_dir.is_dir()
+
+
 def test_overlay_payload_isolates_owner_port_and_timeline() -> None:
     payload = _overlay_payload(
         interruption_owner="channel",
+        agent_name="eidolon-isolated-test",
         server_port=18766,
         timeline_path=Path("runs/channel/worker-turn-timeline.jsonl"),
     )
 
     assert payload == {
         "core": {"port": 18766},
-        "worker": {"num_idle_processes": 0},
+        "worker": {
+            "num_idle_processes": 0,
+            "agent_name": "eidolon-isolated-test",
+        },
         "turn_policy": {
             "interruption_owner": "channel",
             "attention": {"enforce": True},

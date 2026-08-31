@@ -80,6 +80,80 @@ class AbruptCloseServer:
             pass
 
 
+class RecoverOnSecondConnectionServer(AbruptCloseServer):
+    """Crash one recognition task, then complete the retried task normally."""
+
+    async def _handler(self, ws: ServerConnection) -> None:
+        self.handler_invocations += 1
+        attempt = self.handler_invocations
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            msg = json.loads(raw)
+            task_id = msg["header"].get("task_id") or str(uuid.uuid4())[:32]
+            await ws.send(
+                json.dumps(
+                    {
+                        "header": {
+                            "event": "task-started",
+                            "task_id": task_id,
+                            "task_status": "RUNNING",
+                        },
+                        "payload": {},
+                    }
+                )
+            )
+            if attempt == 1:
+                await asyncio.wait_for(ws.recv(), timeout=1.0)
+                await ws.close(code=1011, reason="Injected first-attempt crash")
+                return
+
+            await ws.send(
+                json.dumps(
+                    {
+                        "header": {
+                            "event": "result-generated",
+                            "task_id": task_id,
+                            "request_id": "retry-request",
+                        },
+                        "payload": {
+                            "output": {
+                                "sentence": {
+                                    "sentence_id": 1,
+                                    "text": "重连成功",
+                                    "text_with_punct": "重连成功。",
+                                    "begin_time": 0,
+                                    "end_time": 800,
+                                    "sentence_end": True,
+                                }
+                            }
+                        },
+                    }
+                )
+            )
+            async for item in ws:
+                if not isinstance(item, str):
+                    continue
+                request = json.loads(item)
+                if request.get("header", {}).get("action") != "finish-task":
+                    continue
+                await ws.send(
+                    json.dumps(
+                        {
+                            "header": {
+                                "event": "task-finished",
+                                "task_id": task_id,
+                                "request_id": "retry-request",
+                            },
+                            "payload": {},
+                        }
+                    )
+                )
+                await ws.close()
+                return
+        except websockets.exceptions.ConnectionClosed:
+            return
+
+
 @pytest.fixture
 async def abrupt_server() -> "AbruptCloseServer":
     srv = AbruptCloseServer()
@@ -139,8 +213,60 @@ async def test_run_raises_api_error_on_abrupt_close(abrupt_server) -> None:
     )
 
 
-# Note: a follow-up test could verify ``handler_invocations >= 2`` after a
-# multi-retry cycle (framework's _main_task should call _run() multiple
-# times). That requires a more complete stub server that survives multiple
-# connect/close cycles cleanly; deferred. The framework retry-on-APIError
-# behaviour itself is framework code (stt.py:384-407) and not ours to test.
+@pytest.mark.asyncio
+async def test_framework_retry_recovers_after_provider_disconnect() -> None:
+    """The adapter must reconnect and resume emitting public SpeechEvents."""
+
+    server = RecoverOnSecondConnectionServer()
+    await server.start()
+    try:
+        stt = BailianFunASRSTT(
+            api_url=f"ws://127.0.0.1:{server.port}",
+            api_key="mock-key",
+        )
+        stream = stt.stream(
+            conn_options=APIConnectOptions(
+                max_retry=1,
+                retry_interval=0.0,
+                timeout=5.0,
+            )
+        )
+        from livekit import rtc
+        from livekit.agents import stt as lk_stt
+
+        frame = rtc.AudioFrame(
+            data=b"\x00\x00" * 1600,
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=1600,
+        )
+        events: list[lk_stt.SpeechEvent] = []
+
+        async def consume() -> None:
+            async for event in stream:
+                events.append(event)
+
+        consumer = asyncio.create_task(consume())
+        stream.push_frame(frame)
+        await asyncio.wait_for(
+            _wait_until(lambda: server.handler_invocations == 2),
+            timeout=3.0,
+        )
+        stream.push_frame(frame)
+        stream.end_input()
+        await asyncio.wait_for(consumer, timeout=3.0)
+
+        finals = [
+            event
+            for event in events
+            if event.type is lk_stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert server.handler_invocations == 2
+        assert [event.alternatives[0].text for event in finals] == ["重连成功"]
+    finally:
+        await server.stop()
+
+
+async def _wait_until(predicate, *, interval_sec: float = 0.01) -> None:
+    while not predicate():
+        await asyncio.sleep(interval_sec)

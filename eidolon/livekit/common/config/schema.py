@@ -133,7 +133,9 @@ class InterruptPolicyConfig:
     # resume promptly instead of staying suspended for the full evidence window.
     post_speech_no_evidence_timeout_ms: int = 800
     framework_false_interruption_timeout_ms: int = 6_000
-    stt_commit_transcript_timeout_ms: int = 5_000
+    # Hard product deadline for transcript settlement after LiveKit reports a
+    # completed turn. Evidence may finish earlier; this is never a fixed sleep.
+    stt_commit_transcript_timeout_ms: int = 1_500
     aec_warmup_ms: int | None = 1_000
     min_interim_chars: int = 2
     early_cancel_score_threshold: float = 0.70
@@ -242,7 +244,11 @@ class AttentionPolicyConfig:
     require_direct_signal_during_playback: bool = True
     soft_duck_on_playback_speech_start: bool = True
     ignore_when_mic_muted: bool = True
-    echo_min_normalized_chars: int = 2
+    # Content-only echo matching is ambiguous for very short CJK prefixes
+    # (for example the correction cue "不是"). Require at least three
+    # normalized characters unless an installation explicitly opts in to a
+    # more aggressive threshold.
+    echo_min_normalized_chars: int = 3
     assistant_speech_recent_max_age_ms: int = 3_000
 
 
@@ -297,6 +303,9 @@ class VoiceprintConfig:
 
 @dataclass(frozen=True)
 class WorkerConfig:
+    # LiveKit explicit dispatch target. Keep the product default stable while
+    # allowing isolated test workers to share one LiveKit deployment safely.
+    agent_name: str = "eidolon"
     # None preserves the historical runtime default:
     # dev=0, prod=min(cpu_count, 4). Set 1+ to force startup prewarm workers.
     num_idle_processes: int | None = None
@@ -399,8 +408,10 @@ class EffectiveAgentConfig:
     def sanitized_dict(self) -> dict:
         data = asdict(self)
         for path in (
+            ("core", "api_key"),
             ("core", "api_secret"),
             ("llm", "api_key"),
+            ("runtime_authority", "jwt_secret"),
             ("bailian_stt", "api_key"),
             ("sensetime_stt", "api_key"),
             ("bailian_tts", "api_key"),

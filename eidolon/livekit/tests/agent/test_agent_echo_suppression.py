@@ -51,6 +51,13 @@ def test_one_character_backchannel_is_not_echo() -> None:
     assert gate.is_echo("好") is False
 
 
+def test_two_character_correction_prefix_is_not_echo_by_default() -> None:
+    gate = _gate("这不是问题，我接着解释方案细节。")
+
+    assert gate.is_echo("不是") is False
+    assert gate.is_echo("不是。") is False
+
+
 def test_echo_min_chars_is_configurable() -> None:
     gate = TranscriptEchoGate(
         get_agent_text=lambda: "你好！我是你的 AI 助手，请问有什么可以帮你的？",
@@ -95,3 +102,48 @@ def test_assistant_ledger_does_not_return_stale_text() -> None:
     )
 
     assert gate.is_echo("我是你的 AI 助手") is False
+
+
+def test_queued_fixed_speech_remains_current_for_entire_playback() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    now = 100.0
+    ledger = AssistantSpeechLedger(clock=lambda: now)
+    ledger.queue_fixed_speech(
+        "你好！我是你的 AI 助手，请问有什么可以帮你的？",
+        source="welcome",
+    )
+    ledger.on_playback_started()
+    now = 110.0
+
+    assert ledger.current_or_recent_text(max_age_ms=3000) != ""
+
+
+def test_fixed_speech_tail_window_starts_when_playback_finishes() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    now = 100.0
+    ledger = AssistantSpeechLedger(clock=lambda: now)
+    ledger.queue_fixed_speech("欢迎使用", source="welcome")
+    ledger.on_playback_started()
+    now = 110.0
+    ledger.on_playback_finished()
+    now = 112.9
+    assert ledger.current_or_recent_text(max_age_ms=3000) == "欢迎使用"
+
+    now = 113.1
+    assert ledger.current_or_recent_text(max_age_ms=3000) == ""
+
+
+def test_completed_fixed_speech_is_not_reactivated_by_later_playback() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    now = 100.0
+    ledger = AssistantSpeechLedger(clock=lambda: now)
+    ledger.queue_fixed_speech("欢迎使用", source="welcome")
+    ledger.on_playback_started()
+    ledger.on_playback_finished()
+    now = 104.0
+    ledger.on_playback_started()
+
+    assert ledger.current_or_recent_text(max_age_ms=3000) == ""

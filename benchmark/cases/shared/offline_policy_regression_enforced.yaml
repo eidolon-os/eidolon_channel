@@ -155,7 +155,7 @@ cases:
 
   - case_id: opr_fullduplex_echo_like_agent_words_holds_001
     suite: offline_policy_regression
-    description: 全双工播放中出现像 agent 正在说的话的 transcript：低 EOT/低证据时保持 hold，避免把回声污染成用户 turn。
+    description: 全双工播放中出现与 assistant speech ledger 匹配的 transcript：产品 EchoGate 应拒绝并 rollback，避免把回声污染成用户 turn。
     timeout_sec: 30
     tags: ["offline_policy", "full_duplex", "echo_safety", "context_ledger"]
     device_envelope:
@@ -190,7 +190,7 @@ cases:
         client_playback_state: agent_speaking
     expect:
       action: any
-      decision_action: hold
+      decision_action: rollback
       forbid_actions: ["cancel"]
       no_full_assistant_context_commit: true
 

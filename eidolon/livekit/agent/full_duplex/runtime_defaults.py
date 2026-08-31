@@ -16,6 +16,7 @@ from ..shared.types import PipelineCallbacks, PipelineState
 from ..observability import ChannelTurnEventSink
 from ..session.agent_output_coordinator import AgentOutputCoordinator
 from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
+from .transcript_evidence_buffer import TranscriptEvidenceBuffer
 from ..session.voiceprint import VoiceprintTurnObserver
 from ..turn_policy import TurnPolicyRuntime
 
@@ -32,6 +33,10 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._turn_policy = TurnPolicyConfig()
     if not hasattr(pipeline, "_turn_runtime"):
         pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
+    if not hasattr(pipeline, "_stt_commit_transcript_timeout"):
+        pipeline._stt_commit_transcript_timeout = (
+            pipeline._turn_policy.interrupt.stt_commit_transcript_timeout_ms / 1000.0
+        )
     if not hasattr(pipeline, "_callbacks"):
         pipeline._callbacks = PipelineCallbacks()
     if not hasattr(pipeline, "_allow_interruptions"):
@@ -74,6 +79,8 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
     pipeline._ensure_transcript_admission_gate()
     if not hasattr(pipeline, "_transcript_ingress_ledger"):
         pipeline._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
+    if not hasattr(pipeline, "_transcript_evidence_buffer"):
+        pipeline._transcript_evidence_buffer = TranscriptEvidenceBuffer()
     if not hasattr(pipeline, "_completed_turn_voiceprint_task"):
         pipeline._completed_turn_voiceprint_task = None
     if not hasattr(pipeline, "_completed_turn_voiceprint_result"):

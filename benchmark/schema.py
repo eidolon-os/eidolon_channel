@@ -137,6 +137,13 @@ class Expectations:
     agent_audio_cancelled: bool = False
     min_user_finals: int = 1
     min_agent_messages: int = 0
+    # End-user interruption latency is decomposed at the provider boundary:
+    # VAD start -> first actionable transcript belongs to STT/evidence
+    # availability, while actionable transcript -> resolved belongs to the
+    # channel policy/effects path. Keep the legacy aggregate bound for older
+    # suites, but use these two fields for provider-backed release gates.
+    max_stt_speech_to_actionable_transcript_ms: float | None = None
+    max_actionable_transcript_to_interrupt_resolution_ms: float | None = None
     max_interrupt_decision_ms: float | None = None
     max_interrupt_resolution_after_started_ms: float | None = None
     # Turn-segmentation correctness (timeline source). A natural pause that is

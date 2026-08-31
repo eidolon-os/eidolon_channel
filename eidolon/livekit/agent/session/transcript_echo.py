@@ -25,7 +25,7 @@ class TranscriptEchoGate:
         *,
         factory: Any | None = None,
         get_agent_text: Callable[[], str] | None = None,
-        min_normalized_chars: int = 2,
+        min_normalized_chars: int = 3,
     ) -> None:
         self._factory = factory
         self._get_agent_text = get_agent_text

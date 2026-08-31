@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -20,6 +21,18 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
     from livekit.agents.voice import Agent
 
     class VoiceAgent(Agent):
+        async def stt_node(self, audio: Any, model_settings: Any):
+            """Tap public SpeechEvents so optional provider evidence is retained."""
+
+            events = super().stt_node(audio, model_settings)
+            if inspect.isawaitable(events):
+                events = await events
+            if events is None:
+                return
+            async for event in events:
+                pipeline._observe_stt_speech_event(event)
+                yield event
+
         async def on_enter(self) -> None:
             # [lifecycle] welcome timestamp — anchors "welcome played" so Phase
             # 0 can measure the gap to a later idle teardown and confirm
@@ -40,7 +53,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
                 room_name,
                 welcome[:30],
             )
-            pipeline._record_assistant_speech_text(welcome, source="welcome")
+            pipeline._queue_fixed_assistant_speech(welcome, source="welcome")
             # Round 8 R8.9: use ``session.say(welcome)`` instead of
             # ``session.generate_reply()`` for the initial greeting.
             # generate_reply with no user message hands an empty context to the
@@ -59,14 +72,15 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             if not allowed:
                 raise StopResponse()
 
-    # Round 8 R8.9 (re-fix): turn_handling config (including
-    # false_interruption_timeout, preemptive_generation) lives on AGENTSESSION,
-    # not Agent. Agent only carries per-agent turn_detection.
+    # Session-wide interruption/preemptive settings remain on AgentSession.
+    # LiveKit 1.7 prefers the structured ``turn_handling`` option over the
+    # deprecated individual ``turn_detection`` argument; the per-agent turn
+    # detector still overrides the session default through that structure.
     return VoiceAgent(
         instructions=pipeline._instructions,
         stt=pipeline._factory.stt.stt,
         llm=pipeline._factory.llm.llm,
         tts=pipeline._factory.tts.tts,
         vad=pipeline._factory.vad.vad if pipeline._factory.vad else None,
-        turn_detection=pipeline._turn_detection(),
+        turn_handling={"turn_detection": pipeline._turn_detection()},
     )

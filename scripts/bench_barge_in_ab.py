@@ -125,6 +125,7 @@ def _native_contract() -> dict[str, Any]:
     pipeline._turn_policy = policy
     pipeline._allow_interruptions = True
     pipeline._false_interruption_timeout = 6.0
+    pipeline._avatar_enabled = False
     interruption = pipeline._build_turn_handling()["interruption"]
     add(
         "pipeline_passes_livekit_adaptive_mode",

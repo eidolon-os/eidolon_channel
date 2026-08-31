@@ -4,17 +4,20 @@ from eidolon.livekit.agent.full_duplex.transcript_hypothesis_reconciler import (
     TranscriptHypothesisReconciler,
 )
 from eidolon.livekit.agent.session.user_turn_coordinator import TranscriptRevisionReceipt
+from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
 
 
 def _receipt(
     candidate_id: str,
     generation_id: int,
     segment_index: int,
+    evidence: TranscriptEvidence | None = None,
 ) -> TranscriptRevisionReceipt:
     return TranscriptRevisionReceipt(
         candidate_id=candidate_id,
         generation_id=generation_id,
         segment_index=segment_index,
+        evidence=evidence,
     )
 
 
@@ -69,4 +72,41 @@ def test_candidate_boundary_discards_prior_hypotheses() -> None:
 
     assert reconciler.observe(
         _receipt("turn-b", 2, 0), text="不会跨轮。", is_final=True
+    ) == ()
+
+
+def test_identity_covers_same_revision_without_text_heuristic() -> None:
+    reconciler = TranscriptHypothesisReconciler(min_normalized_chars=20)
+    evidence = TranscriptEvidence(stream_key="task-a", revision_key="sentence-1")
+    reconciler.observe(
+        _receipt("turn-a", 1, 0, evidence),
+        text="旧假设",
+        is_final=False,
+    )
+    reconciler.observe(
+        _receipt("turn-a", 2, 1, evidence),
+        text="完全不同的新假设",
+        is_final=False,
+    )
+
+    assert reconciler.observe(
+        _receipt("turn-a", 2, 1, evidence),
+        text="最终改写",
+        is_final=True,
+    ) == (0,)
+
+
+def test_conflicting_identity_prevents_text_based_aliasing() -> None:
+    reconciler = TranscriptHypothesisReconciler(min_normalized_chars=4)
+    first = TranscriptEvidence(stream_key="task-a", revision_key="sentence-1")
+    second = TranscriptEvidence(stream_key="task-a", revision_key="sentence-2")
+    reconciler.observe(
+        _receipt("turn-a", 1, 0, first), text="再说一次", is_final=False
+    )
+    reconciler.observe(
+        _receipt("turn-a", 2, 1, second), text="再说一次", is_final=False
+    )
+
+    assert reconciler.observe(
+        _receipt("turn-a", 2, 1, second), text="再说一次。", is_final=True
     ) == ()

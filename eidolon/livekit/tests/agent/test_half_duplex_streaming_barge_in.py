@@ -77,7 +77,7 @@ def test_full_duplex_vad_start_enters_barge_in() -> None:
     assert pipeline._timeline.attrs.get("interruption_owner") != "disabled_no_barge_in"
 
 
-def test_half_duplex_vad_stop_does_not_resolve_interruption() -> None:
+async def test_half_duplex_vad_stop_does_not_resolve_interruption() -> None:
     pipeline = _pipeline(INTERACTION_MODE_HALF_DUPLEX, allow_interruptions=False)
     # voiceprint is a shared (non-barge-in) owner; stub it so finish_turn does not
     # spawn a background verify task (which would need a running loop, irrelevant
@@ -91,3 +91,4 @@ def test_half_duplex_vad_stop_does_not_resolve_interruption() -> None:
     # Stop-side barge-in resolution is skipped; no duck was ever suspended.
     assert pipeline._ducking.is_suspended is False
     assert pipeline._interruption_orchestrator.active is False
+    pipeline._ensure_turn_completion().cancel_transcriptless_expiry()

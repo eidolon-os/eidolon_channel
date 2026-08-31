@@ -15,6 +15,9 @@ core:
   port: 8766
 
 worker:
+  # Explicit LiveKit dispatch target. Override for isolated test workers that
+  # share a LiveKit server with the product worker.
+  agent_name: eidolon
   # Set 1+ to keep idle prewarmed worker processes alive. 0 disables the
   # startup prewarm process; omit the field to use env-specific defaults.
   num_idle_processes: 1
@@ -100,7 +103,7 @@ turn_policy:
     post_speech_evidence_timeout_ms: 6000
     post_speech_evidence_min_speech_ms: 250
     framework_false_interruption_timeout_ms: 6000
-    stt_commit_transcript_timeout_ms: 5000
+    stt_commit_transcript_timeout_ms: 1500
     aec_warmup_ms: 1000
     min_interim_chars: 2
     early_cancel_score_threshold: 0.70
@@ -173,7 +176,7 @@ turn_policy:
     soft_duck_on_playback_speech_start: true
     ignore_when_mic_muted: true
     # Avoid classifying one-character backchannels such as "好" as playback echo.
-    echo_min_normalized_chars: 2
+    echo_min_normalized_chars: 3
     # Short fallback window for fixed assistant speech when TTS in-flight text
     # is not yet readable; prevents stale assistant text from entering echo/context.
     assistant_speech_recent_max_age_ms: 3000

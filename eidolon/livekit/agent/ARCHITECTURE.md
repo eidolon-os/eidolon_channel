@@ -69,7 +69,6 @@ eidolon/livekit/agent/
 ├── factory.py                # SharedStageFactory: 统一创建 stt/llm/tts/vad/turn_detection
 ├── integration/
 │   ├── __init__.py           # LiveKit/framework 外部契约边界
-│   ├── framework_patches.py  # LiveKit internal API patch，升级时唯一审计点
 │   └── client_audio_state.py # client.audio_state data-channel payload parser/model
 ├── shared/
 │   ├── pipeline.py           # BasePipeline: half/full duplex pipeline 共享基类
@@ -168,7 +167,7 @@ eidolon/livekit/agent/
 
 `turn_policy/` 负责“是否打断、如何标注 tier、是否 rollback/observe”的决策。这里应尽量保持输入输出结构化，不直接操作 LiveKit Room、播放句柄或 chat context。
 
-`integration/` 负责 LiveKit/framework 边界代码，包括 internal API patch 和 data-channel payload parser。任何需要碰外部协议、框架 underscore API、线缆格式的代码都优先放在这里，业务逻辑层只消费结构化对象。
+`integration/` 负责 LiveKit/framework 的公开契约边界和 data-channel payload parser。禁止依赖或修改框架 underscore/private API；如果公开事件需要补充 provider 能力，应在 STT adapter boundary 映射为 provider-neutral evidence，业务逻辑层只消费结构化对象。
 
 `output/` 负责 Agent 输出侧副作用，包括 TTS 播放控制、取消、填充语、输出状态和相关 metrics。未来如果继续收敛 duck/mute/unduck，也应优先放在这个边界内。
 
@@ -180,7 +179,7 @@ eidolon/livekit/agent/
 
 `full_duplex/transcript_handler.py` 是 full-duplex STT transcript 的入口路由。它按顺序执行 admission、accepted transcript recording、semantic interrupt gate、attention admission 和 base transcript forward；它不拥有 EOT、commit、cancel/resume 的 terminal decision。
 
-`full_duplex/transcript_recorder.py` 是 accepted STT transcript 副作用 owner。它负责把已接收 transcript 写入 latest ASR、interruption owner、`UserTurnCoordinator`、timeline mark 和 EOT ASR update；它不做 transcript admission、semantic interrupt gate 或 final commit 裁决。LiveKit 的归一化 transcript callback 不携带 provider utterance id，因此跨 VAD 重复 interim 的不可避免文本归并由 `TranscriptHypothesisReconciler` 在此入口完成：它输出显式的 `candidate_id + acoustic generation` 覆盖关系；coordinator 只记录该关系，不自行猜文本，也不把未收到 FINAL 的旧 segment 伪装成 final。
+`full_duplex/transcript_recorder.py` 是 accepted STT transcript 副作用 owner。它负责把已接收 transcript 写入 latest ASR、interruption owner、`UserTurnCoordinator`、timeline mark 和 EOT ASR update；它不做 transcript admission、semantic interrupt gate 或 final commit 裁决。provider 可选的 utterance identity、sequence、source span、word timing 与 boundary 先映射为 `TranscriptEvidence`；有稳定 identity/span 时优先据此归并，没有时才由 `TranscriptHypothesisReconciler` 使用文本等价 fallback。coordinator 只记录显式覆盖关系，不把未收到 FINAL 的旧 segment 伪装成 final。
 
 `full_duplex/user_state_event.py` 是 LiveKit `user_state_changed` 事件的归一化边界。`StreamingPipeline` 只消费 `FullDuplexUserStateEvent.old_state/new_state` 与 `started_speaking/stopped_speaking` 判断；VAD start/end 后续的 speech segment lifecycle 交给 `FullDuplexSpeechLifecycle`。
 
@@ -204,7 +203,7 @@ eidolon/livekit/agent/
 
 `full_duplex/context_ledger.py` 是 full-duplex interrupted context ledger wiring。底层 capture/consume 算法仍由 `context/InterruptedContextManager` 负责；这里只把 full-duplex runtime 的 `AgentSession`、TTS factory、ducking playback offset、EOT config 和 timeline observability 传入，避免 `StreamingPipeline` 直接知道 context ledger 细节。ledger 只标注本次 output cancel 新捕获的上下文，不会用旧 pending context 重标后续候选；上下文跨 rejected control turn 保留，只在 framework gate 接受下一条真实用户 turn 时 claim 一次并写入 LiveKit 为该次生成提供的临时 `turn_ctx`。它不写持久 `session.history`，因此只帮助当前续答，不会污染长期对话历史，也不会被 hard-stop、wrong-speaker、noise 或重复 completion 消费。
 
-`full_duplex/lifecycle.py` 是 full-duplex AgentSession 生命周期 owner。它负责 `AgentSession` 创建、event handler 绑定、stage warmup、RoomData/Voiceprint bridge 安装、`session.start()`、framework auto-interrupt patch、duck mixer/filler 输出准备、EOT session start、idle watchdog/proactive consumer 启停、session close prompt room teardown，以及 shutdown 顺序。`StreamingPipeline` 保留 `run()` / `shutdown()` 公共入口，但不再承载这些生命周期私有步骤。
+`full_duplex/lifecycle.py` 是 full-duplex AgentSession 生命周期 owner。它负责 `AgentSession` 创建、event handler 绑定、stage warmup、RoomData/Voiceprint bridge 安装、`session.start()`、duck mixer/filler 输出准备、EOT session start、idle watchdog/proactive consumer 启停、session close prompt room teardown，以及 shutdown 顺序。打断 owner 只通过公开 `turn_handling.interruption` 配置选择：LiveKit native-adaptive owner 自行检测和执行；Channel owner 关闭框架自动打断但保留输入音频，在策略确认后调用公开 `session.interrupt(force=True)`。`StreamingPipeline` 保留 `run()` / `shutdown()` 公共入口，但不再承载这些生命周期私有步骤。
 
 `full_duplex/semantic_interrupt_gate.py` 是 full-duplex transcript 触发 semantic interruption owner 前的纯门禁。它只判断当前 transcript 是否处在可打断窗口、是否被 cancel 后残留抑制、是否需要 attention admission；真正的 EOT/intent 决策和输出副作用仍由 `SemanticInterruptHandler`、`TurnPolicyRuntime` 与 effect handlers 执行。
 

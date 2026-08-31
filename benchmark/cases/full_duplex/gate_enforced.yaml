@@ -73,7 +73,9 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: none
-      max_interrupt_decision_ms: 800
+      max_speech_start_to_suspend_ms: 120
+      max_stt_speech_to_actionable_transcript_ms: 2500
+      max_actionable_transcript_to_interrupt_resolution_ms: 50
       playback_stop_sent: true
       no_full_assistant_context_commit: true
 
@@ -119,7 +121,9 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: after_user_done
-      max_interrupt_decision_ms: 800
+      max_speech_start_to_suspend_ms: 120
+      max_stt_speech_to_actionable_transcript_ms: 2500
+      max_actionable_transcript_to_interrupt_resolution_ms: 50
       no_full_assistant_context_commit: true
 
   - case_id: fd_gate_correction_cancels_and_replies_001
@@ -164,7 +168,9 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: after_user_done
-      max_interrupt_decision_ms: 800
+      max_speech_start_to_suspend_ms: 120
+      max_stt_speech_to_actionable_transcript_ms: 2500
+      max_actionable_transcript_to_interrupt_resolution_ms: 50
       no_full_assistant_context_commit: true
 
   - case_id: fd_gate_backchannel_resumes_001
@@ -202,7 +208,11 @@ cases:
         reply: 好的，我会分成几个部分说明，这段回答会持续一会儿，方便检测短反馈是否误打断。
     expect:
       action: any
-      decision_action: rollback
+      # If pVAD opened a duck candidate, the backchannel must rollback. If only
+      # STT recognized the short acknowledgement and playback was never ducked,
+      # no terminal interruption action is required. Both paths must never
+      # cancel or create a semantic user turn.
+      decision_action: any
       forbid_actions: ["cancel"]
       min_user_finals: 2
       min_agent_messages: 1
@@ -212,7 +222,7 @@ cases:
 
   - case_id: fd_gate_false_start_holds_001
     suite: full_duplex_gate
-    description: 全双工 open-mic：播放中低证据开头“我觉得”应 hold/observe，不应立即 cancel 或提交用户 turn。
+    description: 全双工 open-mic：播放中低证据开头“我觉得”应先 hold/observe，并在无后续证据时安全 rollback；不得 cancel 或提交用户 turn。
     timeout_sec: 60
     tags: ["full_duplex", "gate", "false_start"]
     audio_clips:
@@ -232,9 +242,11 @@ cases:
         client_playback_state: agent_speaking
     expect:
       action: any
-      decision_action: hold
+      # 真实 STT 可能只产生 VAD、interim，或完全没有文本；这些路径分别
+      # terminal 为 hold/rollback。纯 policy corpus 另行固定 interim=hold。
+      decision_action: any
       forbid_actions: ["cancel"]
-      min_user_finals: 1
+      min_user_finals: 0
       min_agent_messages: 1
       agent_audio_response: first
       rejected_turn_brain: forbidden

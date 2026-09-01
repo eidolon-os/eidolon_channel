@@ -93,9 +93,7 @@ def _controller(
 ) -> HalfDuplexPttTurnController:
     preemptions = preemptions if preemptions is not None else []
     return HalfDuplexPttTurnController(
-        recorder=PttAudioSegmentRecorder(
-            config=PttAudioSegmentConfig(max_duration_sec=2.0)
-        ),
+        recorder=PttAudioSegmentRecorder(config=PttAudioSegmentConfig(max_duration_sec=2.0)),
         transcriber=PttSegmentTranscriber(
             stt,
             config=PttSegmentTranscriberConfig(
@@ -141,6 +139,12 @@ class _FakeSession:
 class _FakeFactory:
     def __init__(self, stt: _FakeSttStage) -> None:
         self.stt = stt
+        self.turn_decisions: list[dict[str, object]] = []
+        self.llm = SimpleNamespace(
+            llm=SimpleNamespace(
+                set_turn_decision_metadata=self.turn_decisions.append,
+            )
+        )
 
 
 def _packet(*, ptt: bool):
@@ -196,9 +200,7 @@ def _finish_fake_agent_output(pipeline: HalfDuplexPttPipeline) -> None:
     timeline = pipeline._agent_output.active_timeline
     assert timeline is not None
     timeline.mark("brain_request_started_at")
-    pipeline._on_agent_state_changed(
-        SimpleNamespace(old_state="speaking", new_state="listening")
-    )
+    pipeline._on_agent_state_changed(SimpleNamespace(old_state="speaking", new_state="listening"))
 
 
 def test_agent_session_supports_segment_ptt_text_reply_entrypoint() -> None:
@@ -241,9 +243,7 @@ def test_half_duplex_idle_policy_uses_session_intent() -> None:
         session_intent=SESSION_INTENT_PROACTIVE,
     )
 
-    assert pipeline._idle_timeout_sec == (
-        policy.idle.proactive_disconnect_after_idle_ms / 1000.0
-    )
+    assert pipeline._idle_timeout_sec == (policy.idle.proactive_disconnect_after_idle_ms / 1000.0)
     assert pipeline._idle_end_reason == SESSION_END_PROACTIVE_DONE
 
 
@@ -618,9 +618,7 @@ async def test_tap_to_stop_then_next_ptt_commit_uses_clean_segment() -> None:
     agent_output_active = True
     stt = _FakeSttStage(streaming_text="告诉我时间")
     controller = HalfDuplexPttTurnController(
-        recorder=PttAudioSegmentRecorder(
-            config=PttAudioSegmentConfig(max_duration_sec=2.0)
-        ),
+        recorder=PttAudioSegmentRecorder(config=PttAudioSegmentConfig(max_duration_sec=2.0)),
         transcriber=PttSegmentTranscriber(
             stt,
             config=PttSegmentTranscriberConfig(
@@ -674,9 +672,11 @@ async def test_pipeline_release_commits_segment_text_to_agent_session() -> None:
 
     session = pipeline._session
     assert isinstance(session, _FakeSession)
-    assert session.generate_reply_calls == [
-        {"user_input": "告诉我时间", "input_modality": "audio"}
-    ]
+    assert session.generate_reply_calls == [{"user_input": "告诉我时间", "input_modality": "audio"}]
+    turn_decisions = pipeline._factory.turn_decisions
+    assert len(turn_decisions) == 1
+    assert turn_decisions[0]["decision"] == "commit"
+    assert turn_decisions[0]["evidence"]["boundary"] == "ptt_segment_commit"
     local = pipeline._room.local_participant
     outcomes = [
         payload["payload"]["outcome"]
@@ -814,14 +814,9 @@ async def test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline(tmp_
     pipeline._on_room_packet(packet_up)
     await asyncio.gather(*pipeline._turn_tasks)
 
-    assert session.generate_reply_calls == [
-        {"user_input": "告诉我时间", "input_modality": "audio"}
-    ]
+    assert session.generate_reply_calls == [{"user_input": "告诉我时间", "input_modality": "audio"}]
     _finish_fake_agent_output(pipeline)
-    rows = [
-        json.loads(line)
-        for line in timeline_path.read_text(encoding="utf-8").splitlines()
-    ]
+    rows = [json.loads(line) for line in timeline_path.read_text(encoding="utf-8").splitlines()]
     assert [row["attrs"]["ptt_segment_terminal"]["action"] for row in rows] == [
         "reject",
         "commit",
@@ -871,9 +866,7 @@ async def test_new_ptt_segment_does_not_steal_committed_output_owner(tmp_path) -
 
     assert pipeline._agent_output.active_timeline is output
     output.mark("brain_cancelled_at")
-    pipeline._on_agent_state_changed(
-        SimpleNamespace(old_state="speaking", new_state="listening")
-    )
+    pipeline._on_agent_state_changed(SimpleNamespace(old_state="speaking", new_state="listening"))
 
     rows = [json.loads(line) for line in timeline_path.read_text().splitlines()]
     assert {row["turn_id"] for row in rows} == {candidate.turn_id, output.turn_id}

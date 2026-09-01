@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
-from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.turn_policy import Action, Decision, TurnPolicyRuntime
-
-logger = logging.getLogger("agent.session.decision_effects")
 
 
 class DecisionEffectApplier:
@@ -19,14 +15,12 @@ class DecisionEffectApplier:
     session-facing effects that follow from that decision:
 
     - timeline decision attributes,
-    - remote-brain turn-control metadata,
     - cancel / rollback callbacks supplied by ``StreamingPipeline``.
     """
 
     def __init__(
         self,
         *,
-        factory: Any,
         turn_runtime: TurnPolicyRuntime,
         get_timeline: Callable[[], TurnTimeline | None],
         on_cancel: Callable[[], None],
@@ -35,7 +29,6 @@ class DecisionEffectApplier:
         on_decision: Callable[..., object] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
     ) -> None:
-        self._factory = factory
         self._turn_runtime = turn_runtime
         self._get_timeline = get_timeline
         self._on_cancel = on_cancel
@@ -77,11 +70,9 @@ class DecisionEffectApplier:
                 eot_score=eot_score,
             )
         if decision.action is Action.CANCEL:
-            self._publish_control_signal(decision)
             self._on_cancel()
             return
         if decision.action is Action.ROLLBACK:
-            self._publish_control_signal(decision)
             self._on_rollback(
                 resolved_reason or decision.reason,
                 decision.rollback_drop_buffered,
@@ -121,24 +112,3 @@ class DecisionEffectApplier:
             vad_active=vad_active,
             hold_recheck_ms=decision.hold_recheck_ms,
         )
-
-    def publish_turn_control(self, metadata: dict[str, object]) -> None:
-        """Attach control hints to the next remote-brain turn when supported."""
-        try:
-            llm_plugin = getattr(self._factory.llm, "llm", None)
-            setter = getattr(llm_plugin, "set_turn_control_metadata", None)
-            if setter is not None:
-                setter(metadata)
-        except Exception:
-            logger.debug(
-                "[DecisionEffectApplier] failed to publish turn_control metadata",
-                exc_info=True,
-            )
-
-    def _publish_control_signal(self, decision: Decision) -> None:
-        signal = self._turn_runtime.control_signal_from_decision(decision)
-        metadata = signal.as_metadata()
-        self.publish_turn_control(metadata)
-        timeline = self._get_timeline()
-        if timeline is not None:
-            timeline.set_attr("turn_control", metadata)

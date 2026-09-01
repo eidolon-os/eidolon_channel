@@ -6,7 +6,10 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from eidolon_sdk.biz.dialogue_control import TurnCommitBoundary
+
 from ..observability import TurnTimeline
+from ..session.committed_turn import publish_committed_turn_decision
 from ..session.messages import message_text
 from ..session.voiceprint_reasons import (
     voiceprint_blocked_reason,
@@ -396,6 +399,16 @@ class FullDuplexFrameworkCompletedTurnGate:
             new_message,
             canonical,
             source="framework_completed_turn",
+            timeline=timeline,
+        )
+        committed_turn_decision = owner._turn_runtime.committed_turn_decision(
+            canonical,
+            boundary=TurnCommitBoundary.FRAMEWORK_COMPLETED,
+            eot_score=self._current_eot_score(),
+        )
+        publish_committed_turn_decision(
+            factory=owner._factory,
+            decision=committed_turn_decision,
             timeline=timeline,
         )
         self._session_turns.consume_interrupted_context(

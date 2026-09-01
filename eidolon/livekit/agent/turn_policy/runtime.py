@@ -5,13 +5,17 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 
+from eidolon_sdk.biz.dialogue_control import (
+    CommittedTurnDecision,
+    TurnCommitBoundary,
+)
+
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .attention import AttentionAdmission, AttentionDecision, AttentionInput
 from .constants import (
     SEMANTIC_SCORE_WAIT_REASON_PREFIX,
     STABLE_NORMAL_INTERRUPT_REASON_PREFIX,
-    STABLE_SIGNAL_WAIT_REASON_PREFIX,
     WEAK_SIGNAL_HOLD_REASON_PREFIXES,
 )
 from .decider import Action, Decision, InterruptDecider
@@ -125,6 +129,21 @@ class TurnPolicyRuntime:
     def user_silent_decision(self, transcript: str = "") -> Decision:
         return self.tiers.annotate_decision(self.decider.on_user_silent(transcript))
 
+    def committed_turn_decision(
+        self,
+        text: str,
+        *,
+        boundary: TurnCommitBoundary,
+        eot_score: float | None = None,
+    ) -> CommittedTurnDecision:
+        """Build the only cross-process decision from a real commit boundary."""
+
+        return CommittedTurnDecision.create(
+            text=text,
+            boundary=boundary,
+            eot_score=eot_score,
+        )
+
     @staticmethod
     def control_signal_from_decision(
         decision: Decision,
@@ -160,7 +179,6 @@ class _StableSignalStabilizer:
 
     def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config
-        self._intent_candidate: _StableCandidate | None = None
         self._normal_candidate: _StableCandidate | None = None
 
     def apply(
@@ -175,19 +193,7 @@ class _StableSignalStabilizer:
     ) -> Decision:
         if not vad_active:
             self._clear()
-            if self._is_explicit_redirect_cancel(decision):
-                return self._redirect_as_normal_interrupt(decision)
             return decision
-        if decision.intent is InterruptIntent.HARD_STOP:
-            self._clear()
-            return decision
-        if self._is_explicit_redirect_cancel(decision):
-            return self._stabilize_explicit_redirect(
-                decision,
-                text=text,
-                is_final=is_final,
-                now_ms=now_ms,
-            )
         if (
             self._config.interrupt.stabilize_normal_interrupts
             and self._is_normal_interrupt_wait(decision)
@@ -203,44 +209,6 @@ class _StableSignalStabilizer:
         if decision.action in (Action.CANCEL, Action.ROLLBACK):
             self._clear()
         return decision
-
-    def _stabilize_explicit_redirect(
-        self,
-        decision: Decision,
-        *,
-        text: str,
-        is_final: bool,
-        now_ms: float,
-    ) -> Decision:
-        window_ms = self._config.interrupt.correction_topic_stability_window_ms
-        if window_ms <= 0 or is_final:
-            self._intent_candidate = None
-            return self._redirect_as_normal_interrupt(decision)
-        candidate = self._update_candidate(
-            self._intent_candidate,
-            intent=decision.intent or InterruptIntent.UNCERTAIN,
-            text=text,
-            now_ms=now_ms,
-        )
-        self._intent_candidate = candidate
-        age_ms = now_ms - candidate.first_seen_ms
-        if candidate.event_count >= 2 and age_ms >= window_ms:
-            self._intent_candidate = None
-            return self._redirect_as_normal_interrupt(decision)
-        return Decision(
-            action=Action.HOLD,
-            reason=(
-                f"{STABLE_SIGNAL_WAIT_REASON_PREFIX} "
-                f"intent={decision.intent.value if decision.intent else 'unknown'} "
-                f"age_ms={age_ms:.0f} window_ms={window_ms}"
-            ),
-            intent=InterruptIntent.UNCERTAIN,
-            intent_source=decision.intent_source or "stable_signal",
-            intent_confidence=0.0,
-            topic_switch_hint=decision.topic_switch_hint,
-            correction_hint=decision.correction_hint,
-            hold_recheck_ms=max(0.0, window_ms - age_ms),
-        )
 
     def _stabilize_normal_interrupt(
         self,
@@ -328,25 +296,8 @@ class _StableSignalStabilizer:
 
     @staticmethod
     def _is_normal_interrupt_wait(decision: Decision) -> bool:
-        return (
-            decision.action is Action.HOLD
-            and decision.reason.startswith(SEMANTIC_SCORE_WAIT_REASON_PREFIX)
-        )
-
-    @staticmethod
-    def _is_explicit_redirect_cancel(decision: Decision) -> bool:
-        return (
-            decision.action is Action.CANCEL
-            and decision.intent
-            in (InterruptIntent.CORRECTION, InterruptIntent.TOPIC_SWITCH)
-        )
-
-    @staticmethod
-    def _redirect_as_normal_interrupt(decision: Decision) -> Decision:
-        return replace(
-            decision,
-            intent=InterruptIntent.NORMAL_INTERRUPT,
-            intent_confidence=max(0.70, decision.intent_confidence),
+        return decision.action is Action.HOLD and decision.reason.startswith(
+            SEMANTIC_SCORE_WAIT_REASON_PREFIX
         )
 
     def _is_substantive_text(self, text: str) -> bool:
@@ -355,12 +306,10 @@ class _StableSignalStabilizer:
         latin = sum(1 for ch in normalized if "a" <= ch.lower() <= "z")
         intr = self._config.interrupt
         return (
-            cjk >= intr.min_normal_interim_cjk_chars
-            or latin > intr.latin_artifact_hold_max_chars
+            cjk >= intr.min_normal_interim_cjk_chars or latin > intr.latin_artifact_hold_max_chars
         )
 
     def _clear(self) -> None:
-        self._intent_candidate = None
         self._normal_candidate = None
 
 
@@ -405,13 +354,9 @@ class _WeakSignalFollowupStabilizer:
             return False
         if (
             decision.intent_source == "eot"
-            and decision.intent_confidence
-            >= self._config.interrupt.early_cancel_score_threshold
+            and decision.intent_confidence >= self._config.interrupt.early_cancel_score_threshold
         ):
             return False
-        if decision.topic_switch_hint or decision.correction_hint:
-            return False
         return (
-            decision.action is Action.CANCEL
-            and decision.intent == InterruptIntent.NORMAL_INTERRUPT
+            decision.action is Action.CANCEL and decision.intent == InterruptIntent.NORMAL_INTERRUPT
         )

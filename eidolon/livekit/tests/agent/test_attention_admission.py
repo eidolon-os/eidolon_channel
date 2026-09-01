@@ -19,11 +19,7 @@ from eidolon.livekit.agent.turn_policy import (
     AttentionInput,
     TurnPolicyRuntime,
 )
-from eidolon.livekit.common.config import (
-    AttentionPolicyConfig,
-    InterruptPolicyConfig,
-    TurnPolicyConfig,
-)
+from eidolon.livekit.common.config import AttentionPolicyConfig, TurnPolicyConfig
 
 
 def _client_state(**kwargs) -> ClientAudioState:
@@ -157,7 +153,7 @@ def test_attention_allows_high_eot_overlap_during_playback() -> None:
     assert decision.reason == "transcript_evidence:high_eot_transcript"
 
 
-def test_attention_hard_stop_upgrades_during_playback() -> None:
+def test_attention_stop_like_text_is_observed_without_eot_evidence() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -168,8 +164,8 @@ def test_attention_hard_stop_upgrades_during_playback() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.HARD_INTERRUPT
-    assert decision.reason == "transcript_hard_stop"
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "playback_low_evidence_transcript:substantive_cjk_transcript"
 
 
 def test_attention_observes_short_latin_hard_stop_artifact_during_playback() -> None:
@@ -188,7 +184,7 @@ def test_attention_observes_short_latin_hard_stop_artifact_during_playback() -> 
     assert decision.evidence_reason == "short_latin_artifact"
 
 
-def test_attention_hard_stop_homophone_upgrades_during_playback() -> None:
+def test_attention_single_character_homophone_has_no_control_authority() -> None:
     admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
@@ -199,17 +195,12 @@ def test_attention_hard_stop_homophone_upgrades_during_playback() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.HARD_INTERRUPT
-    assert decision.reason == "transcript_hard_stop"
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "playback_low_evidence_transcript:insufficient_transcript_evidence"
 
 
-def test_attention_allows_topic_switch_intent_during_playback() -> None:
-    admission = AttentionAdmission(
-        replace(
-            TurnPolicyConfig(),
-            interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-        )
-    )
+def test_attention_topic_text_is_observed_without_eot_evidence() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
         AttentionInput(
@@ -219,17 +210,12 @@ def test_attention_allows_topic_switch_intent_during_playback() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
-    assert decision.reason == "transcript_intent:topic_switch"
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "playback_low_evidence_transcript:substantive_cjk_transcript"
 
 
-def test_attention_allows_correction_intent_during_playback() -> None:
-    admission = AttentionAdmission(
-        replace(
-            TurnPolicyConfig(),
-            interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-        )
-    )
+def test_attention_correction_text_is_observed_without_eot_evidence() -> None:
+    admission = AttentionAdmission(TurnPolicyConfig())
 
     decision = admission.decide(
         AttentionInput(
@@ -239,8 +225,8 @@ def test_attention_allows_correction_intent_during_playback() -> None:
         )
     )
 
-    assert decision.action is AdmissionAction.DUCK_AND_DECIDE
-    assert decision.reason == "transcript_intent:correction"
+    assert decision.action is AdmissionAction.OBSERVE
+    assert decision.reason == "playback_low_evidence_transcript:insufficient_transcript_evidence"
 
 
 def test_attention_observes_short_prefix_during_playback() -> None:
@@ -382,10 +368,7 @@ def test_pipeline_attention_soft_ducks_on_playback_speech_start() -> None:
     pipeline._attention_effects.handle_speaking_started()
 
     pipeline._output_flow.duck_and_arm_timeout.assert_called_once()
-    assert (
-        pipeline._timeline.attrs["attention_admission"]["action"]
-        == "duck_and_decide"
-    )
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
         == "playback_speech_start_soft_duck"
@@ -441,39 +424,31 @@ def test_pipeline_attention_allows_high_eot_playback_speech() -> None:
     )
 
 
-def test_pipeline_attention_allows_hard_stop_during_playback() -> None:
+def test_pipeline_attention_does_not_hard_interrupt_from_text() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
 
     allowed = _allows_eot(pipeline, "别说了")
 
     assert allowed is True
     pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
 
-def test_pipeline_attention_allows_topic_switch_intent_during_playback() -> None:
+def test_pipeline_attention_does_not_duck_from_topic_words() -> None:
     pipeline = _pipeline_with_client_state(_client_state())
-    pipeline._turn_policy = replace(
-        pipeline._turn_policy,
-        interrupt=replace(
-            pipeline._turn_policy.interrupt,
-            fast_lexical_intents=True,
-        ),
-    )
-    pipeline._turn_runtime = TurnPolicyRuntime(pipeline._turn_policy)
 
     allowed = _allows_eot(pipeline, "我们聊点别的。")
 
     assert allowed is True
-    pipeline._output_flow.duck_and_arm_timeout.assert_called_once()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
+    pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
     assert (
         pipeline._timeline.attrs["attention_admission"]["reason"]
-        == "transcript_intent:topic_switch"
+        == "playback_low_evidence_transcript:substantive_cjk_transcript"
     )
 
 
-def test_pipeline_attention_uses_client_playback_when_internal_state_idle() -> None:
+def test_pipeline_attention_uses_client_playback_without_text_reclassification() -> None:
     pipeline = _pipeline_with_client_state(
         _client_state(),
         pipeline_state=PipelineState.IDLE,
@@ -483,7 +458,7 @@ def test_pipeline_attention_uses_client_playback_when_internal_state_idle() -> N
 
     assert allowed is True
     pipeline._output_flow.duck_and_arm_timeout.assert_not_called()
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
 
 def test_user_transcript_runs_semantic_when_client_playback_active_but_state_idle() -> None:
@@ -552,10 +527,7 @@ def test_user_transcript_routes_observed_substantive_playback_to_semantic_owner(
         pipeline._timeline.attrs["attention_admission"]["evidence_reason"]
         == "substantive_cjk_transcript"
     )
-    assert (
-        pipeline._timeline.attrs["semantic_interrupt_gate_last_event"]["reason"]
-        == "eligible"
-    )
+    assert pipeline._timeline.attrs["semantic_interrupt_gate_last_event"]["reason"] == "eligible"
 
 
 def test_user_transcript_blocks_short_latin_hard_stop_artifact_during_playback() -> None:
@@ -627,9 +599,7 @@ def test_user_transcript_suppresses_semantic_during_post_cancel_residual_window(
 
 def test_user_transcript_ignores_stale_client_playback_after_output_cancelled() -> None:
     stale_received_at = (
-        time.monotonic()
-        - TurnPolicyConfig().attention.client_state_max_age_ms / 1000.0
-        - 1.0
+        time.monotonic() - TurnPolicyConfig().attention.client_state_max_age_ms / 1000.0 - 1.0
     )
     pipeline = _pipeline_with_client_state(
         _client_state(participant_identity="manson", received_at=stale_received_at),
@@ -778,8 +748,8 @@ def test_pipeline_attention_records_decision_history() -> None:
     _allows_eot(pipeline, "别说了")
 
     events = pipeline._timeline.attrs["attention_admission_events"]
-    assert [event["action"] for event in events] == ["observe", "hard_interrupt"]
-    assert pipeline._timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
+    assert [event["action"] for event in events] == ["observe", "observe"]
+    assert pipeline._timeline.attrs["attention_admission"]["action"] == "observe"
 
 
 def test_terminal_boundary_does_not_reclassify_short_transcript_by_character_count() -> None:
@@ -789,10 +759,7 @@ def test_terminal_boundary_does_not_reclassify_short_transcript_by_character_cou
         [
             {
                 "action": "observe",
-                "reason": (
-                    "playback_low_evidence_transcript:"
-                    "insufficient_transcript_evidence"
-                ),
+                "reason": ("playback_low_evidence_transcript:insufficient_transcript_evidence"),
             }
         ],
     )
@@ -818,10 +785,7 @@ def test_terminal_boundary_does_not_reclassify_confirmed_redirect_text() -> None
         [
             {
                 "action": "observe",
-                "reason": (
-                    "playback_low_evidence_transcript:"
-                    "insufficient_transcript_evidence"
-                ),
+                "reason": ("playback_low_evidence_transcript:insufficient_transcript_evidence"),
             }
         ],
     )

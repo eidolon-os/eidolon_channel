@@ -11,8 +11,8 @@ measurement:
     ~552ms). The ~1984ms was ``speech→commit`` (the user's own speaking time),
     not a cancel delay.
   - A pure-text fast-lane broke the committed dogfood contract that *substantive
-    text alone must not cancel* — cancelling needs an EOT semantic score or an
-    explicit lexicon intent. Root cause: EOT is an end-of-turn signal, low
+    text alone must not cancel* — cancelling needs EOT or terminal turn
+    evidence. A lexicon match is only a replaceable intent hint. Root cause: EOT is an end-of-turn signal, low
     mid-utterance by design, so a substantive interim is indistinguishable from
     a preamble ("我想问一下…") without a model. Cancelling on text alone is the
     over-cancel anti-pattern the team had already eliminated.
@@ -59,16 +59,21 @@ def test_high_eot_score_still_cancels() -> None:
     # rejection above is specifically about *text length* short-circuiting the
     # score, not about cancelling ever.
     d = InterruptDecider()
-    decision = d.on_stt_interim(
-        "那你现在能帮我做什么", 0.85, vad_active=True, agent_speaking=True
-    )
+    decision = d.on_stt_interim("那你现在能帮我做什么", 0.85, vad_active=True, agent_speaking=True)
     assert decision.action is Action.CANCEL
     assert decision.intent_source == "eot"
 
 
-def test_explicit_hard_stop_lexicon_still_cancels() -> None:
-    # Explicit intent (lexicon) is a legitimate cancel signal — not affected by
-    # the no-fast-lane rule.
+def test_terminal_evidence_does_not_turn_phrase_text_into_control_authority() -> None:
     d = InterruptDecider()
-    decision = d.on_stt_interim("停一下", 0.0, vad_active=True, agent_speaking=True)
-    assert decision.action is Action.CANCEL
+    interim = d.on_stt_interim("停一下", 0.0, vad_active=True, agent_speaking=True)
+    terminal = d.on_stt_interim(
+        "停一下",
+        0.0,
+        vad_active=False,
+        agent_speaking=True,
+        is_final=True,
+    )
+
+    assert interim.action is Action.HOLD
+    assert terminal.action is Action.HOLD

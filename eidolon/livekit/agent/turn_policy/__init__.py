@@ -8,7 +8,6 @@ from .intent_classifier import (
     InterruptIntent,
     InterruptIntentClassifier,
     InterruptIntentResult,
-    LexiconInterruptClassifier,
     NoopModelInterruptClassifier,
     OnnxInterruptClassifier,
 )
@@ -27,7 +26,6 @@ __all__ = [
     "InterruptIntent",
     "InterruptIntentClassifier",
     "InterruptIntentResult",
-    "LexiconInterruptClassifier",
     "NoopModelInterruptClassifier",
     "OnnxInterruptClassifier",
     "TranscriptEvidence",

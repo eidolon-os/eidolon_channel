@@ -30,9 +30,9 @@ cases:
 
   - case_id: flow_normal_question_then_hard_stop_001
     suite: v1_realistic_flows
-    description: 真实打断：用户先正常提问，agent 回答中用户明确说停一下，应取消当前回答。
+    description: 真实打断：用户先正常提问，agent 回答中后续语音获得高 EOT 证据后，应取消当前回答。
     timeout_sec: 60
-    tags: ["v1_realistic_flows", "tier0", "hard_stop", "multi_step"]
+    tags: ["v1_realistic_flows", "tier2", "eot", "multi_step"]
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
@@ -55,6 +55,7 @@ cases:
         start_ms: 1600
         duration_ms: 520
         interims: ["停一下"]
+        eot_scores: [0.74]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -63,16 +64,16 @@ cases:
         reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意较长，用来制造可打断窗口。
     expect:
       action: cancel
-      intent: hard_stop
+      intent: normal_interrupt
       max_interrupt_decision_ms: 800
       min_user_finals: 2
       min_agent_messages: 1
 
   - case_id: flow_normal_question_then_hard_stop_delayed_phrase_001
     suite: v1_realistic_flows
-    description: 真实硬停成型延迟：STT 先吐出短噪声/半句话，随后才形成“不要说了”，应按 Tier0 取消；livekit_room 用来暴露 STT 成型慢。
+    description: 真实打断成型延迟：STT 先吐出短噪声/半句话，完整终局文本获得高 EOT 证据后取消；livekit_room 用来暴露 STT 成型慢。
     timeout_sec: 60
-    tags: ["v1_realistic_flows", "tier0", "hard_stop", "asr_partial", "multi_step"]
+    tags: ["v1_realistic_flows", "tier2", "eot", "asr_partial", "multi_step"]
     audio_clips:
       - id: ask_intro
         text: 帮我详细介绍一下这个方案。
@@ -95,6 +96,7 @@ cases:
         start_ms: 1600
         duration_ms: 900
         interims: ["要", "行", "行，不要说了"]
+        eot_scores: [0.0, 0.0, 0.74]
         final_delay_ms: 100
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -103,7 +105,7 @@ cases:
         reply: 我会继续较长时间说明方案边界、延迟、稳定性和测试方法，用来验证硬停短句成型慢时是否仍能及时停止。
     expect:
       action: cancel
-      intent: hard_stop
+      intent: normal_interrupt
       max_interrupt_decision_ms: 900
       min_user_finals: 2
       min_agent_messages: 1

@@ -527,8 +527,8 @@ class EOTScoreSemanticPolicy(CutPolicy):
     EOT score exceeds a threshold. Unlike EOTScorePolicy, this uses the EOT score
     directly rather than silence duration (since the user is still speaking).
 
-    Threshold is adjusted by intent strength (weak intent lowers threshold) and
-    VAD signal (VAD active → more aggressive, VAD silent → more conservative).
+    Threshold is adjusted only by acoustic VAD state. Lexical phrase lists are
+    not turn-control evidence.
     """
 
     def __init__(
@@ -538,7 +538,7 @@ class EOTScoreSemanticPolicy(CutPolicy):
         vad_active_delta: float = 0.1,
     ):
         self.base_threshold = base_threshold
-        self.weak_intent_threshold = weak_intent_threshold
+        del weak_intent_threshold
         self.vad_active_delta = vad_active_delta
 
     def check(
@@ -552,11 +552,7 @@ class EOTScoreSemanticPolicy(CutPolicy):
 
         score = state.eot_score
 
-        # Weak intent lowers the threshold (more aggressive cut).
-        if turn_end_policy.is_weak_interrupt_intent(text):
-            threshold = self.weak_intent_threshold
-        else:
-            threshold = self.base_threshold
+        threshold = self.base_threshold
 
         # VAD signal: if VAD active, user is still speaking → slightly lower threshold.
         if state.vad_active:
@@ -625,42 +621,34 @@ class PolicyChain:
 
         Policy order (priority):
         1. InterruptCooldownPolicy      — prevent too-frequent interruptions
-        2. BackchannelSuppressionPolicy — block "嗯嗯/好的" backchannel acks (R7 G1)
-        3. NoiseLikeTranscriptPolicy    — block cough/sigh transcripts (R7 G2a)
-        4. InterruptIntentPolicy        — strong interrupt / continuation override
-        5. MinSpeakingDurationPolicy    — filter coughs/noise/vocalizations
-        6. VADStabilityPolicy          — filter rapid VAD toggling
-        7. MinIntervalPolicy            — interval debounce (guard only, no decision)
-        8. DuplicateTextPolicy         — ASR duplicate text filter
-        9. MaxDurationPolicy            — duration safety net
-        10. VADStalePolicy             — VAD silence safety net
-        11. EOTScoreSemanticPolicy       — EOT score threshold (semantic variant)
+        2. MinSpeakingDurationPolicy    — acoustic short-speech guard
+        3. VADStabilityPolicy           — filter rapid VAD toggling
+        4. MinIntervalPolicy            — interval debounce (guard only, no decision)
+        5. DuplicateTextPolicy          — ASR duplicate text filter
+        6. MaxDurationPolicy            — duration safety net
+        7. VADStalePolicy               — VAD silence safety net
+        8. EOTScoreSemanticPolicy       — provider-neutral EOT score threshold
 
         Order rationale:
-          - Cooldown / Backchannel / NoiseLike are **block-only** guards;
-            placing them before InterruptIntent ensures even strong-intent
-            cuts respect cooldown and don't fire on an "嗯嗯".
-          - But Backchannel/NoiseLike are placed BEFORE InterruptIntent
-            because in semantic-interrupt mode, "嗯嗯" while agent talks
-            should NEVER cut, even with strong intent words elsewhere.
+          - No fixed phrase list participates. Semantic confidence, VAD and
+            timing evidence decide whether to cut.
         """
-        return cls([
-            InterruptCooldownPolicy(),
-            BackchannelSuppressionPolicy(),
-            NoiseLikeTranscriptPolicy(),
-            InterruptIntentPolicy(),
-            MinSpeakingDurationPolicy(
-                min_speech_duration_sec,
-                min_avg_vad_confidence=min_avg_vad_confidence,
-                confidence_window_sec=confidence_window_sec,
-            ),
-            VADStabilityPolicy(vad_flip_window_sec, vad_flip_count_threshold),
-            MinIntervalPolicy(),
-            DuplicateTextPolicy(similarity_threshold),
-            MaxDurationPolicy(),
-            VADStalePolicy(),
-            EOTScoreSemanticPolicy(base_threshold, weak_threshold, vad_active_delta),
-        ])
+        return cls(
+            [
+                InterruptCooldownPolicy(),
+                MinSpeakingDurationPolicy(
+                    min_speech_duration_sec,
+                    min_avg_vad_confidence=min_avg_vad_confidence,
+                    confidence_window_sec=confidence_window_sec,
+                ),
+                VADStabilityPolicy(vad_flip_window_sec, vad_flip_count_threshold),
+                MinIntervalPolicy(),
+                DuplicateTextPolicy(similarity_threshold),
+                MaxDurationPolicy(),
+                VADStalePolicy(),
+                EOTScoreSemanticPolicy(base_threshold, weak_threshold, vad_active_delta),
+            ]
+        )
 
     @classmethod
     def for_normal_turn_end(
@@ -681,39 +669,33 @@ class PolicyChain:
 
         Policy order (priority):
         1. InterruptCooldownPolicy      — prevent too-frequent interruptions
-        2. NoiseLikeTranscriptPolicy    — block cough/sigh transcripts (R7 G2a)
-        3. InterruptIntentPolicy         — intent override (strong/continuation)
-        4. MinSpeakingDurationPolicy     — filter coughs/noise/vocalizations
-        5. VADStabilityPolicy           — filter rapid VAD toggling
-        6. MinIntervalPolicy            — interval debounce (guard only)
-        7. DuplicateTextPolicy          — ASR duplicate text filter
-        8. ASRStabilityPolicy          — ASR final stability requirement
-        9. MaxDurationPolicy            — duration safety net
-        10. VADStalePolicy             — VAD silence safety net
-        11. ASRFinalCutPolicy          — ASR final + silence cutoff
-        12. EOTScorePolicy             — EOT score + silence threshold (normal variant)
-
-        BackchannelSuppressionPolicy is intentionally NOT in this chain — in
-        normal turn-end mode (agent silent), the user uttering "嗯嗯" is
-        their entire turn and should commit normally; only when the agent
-        is talking is "嗯嗯" reliably an acknowledgement (handled in the
-        semantic_interruption chain).
+        2. MinSpeakingDurationPolicy     — acoustic short-speech guard
+        3. VADStabilityPolicy            — filter rapid VAD toggling
+        4. MinIntervalPolicy             — interval debounce (guard only)
+        5. DuplicateTextPolicy           — ASR duplicate text filter
+        6. ASRStabilityPolicy            — ASR final stability requirement
+        7. MaxDurationPolicy             — duration safety net
+        8. VADStalePolicy                — VAD silence safety net
+        9. ASRFinalCutPolicy             — ASR final + silence cutoff
+        10. EOTScorePolicy               — EOT score + silence threshold
         """
-        return cls([
-            InterruptCooldownPolicy(),
-            NoiseLikeTranscriptPolicy(),
-            InterruptIntentPolicy(),
-            MinSpeakingDurationPolicy(
-                min_speech_duration_sec,
-                min_avg_vad_confidence=min_avg_vad_confidence,
-                confidence_window_sec=confidence_window_sec,
-            ),
-            VADStabilityPolicy(vad_flip_window_sec, vad_flip_count_threshold),
-            MinIntervalPolicy(),
-            DuplicateTextPolicy(similarity_threshold),
-            ASRStabilityPolicy(stability_short_sec, stability_long_sec, stability_long_char_threshold),
-            MaxDurationPolicy(),
-            VADStalePolicy(),
-            ASRFinalCutPolicy(final_cut_min_silence_sec),
-            EOTScorePolicy(),
-        ])
+        return cls(
+            [
+                InterruptCooldownPolicy(),
+                MinSpeakingDurationPolicy(
+                    min_speech_duration_sec,
+                    min_avg_vad_confidence=min_avg_vad_confidence,
+                    confidence_window_sec=confidence_window_sec,
+                ),
+                VADStabilityPolicy(vad_flip_window_sec, vad_flip_count_threshold),
+                MinIntervalPolicy(),
+                DuplicateTextPolicy(similarity_threshold),
+                ASRStabilityPolicy(
+                    stability_short_sec, stability_long_sec, stability_long_char_threshold
+                ),
+                MaxDurationPolicy(),
+                VADStalePolicy(),
+                ASRFinalCutPolicy(final_cut_min_silence_sec),
+                EOTScorePolicy(),
+            ]
+        )

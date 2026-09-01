@@ -160,7 +160,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._tls = tls
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
-        self._pending_turn_control_metadata: dict[str, Any] | None = None
+        self._pending_turn_decision_metadata: dict[str, Any] | None = None
         self._pending_trace_id: str | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
 
@@ -208,13 +208,13 @@ class EidolonAgentGrpcLlm(llm.LLM):
                     )
         return self._session
 
-    def set_turn_control_metadata(self, metadata: dict[str, Any]) -> None:
-        """Attach channel-side turn-control metadata to the next StartTurn."""
-        self._pending_turn_control_metadata = dict(metadata)
+    def set_turn_decision_metadata(self, metadata: dict[str, Any]) -> None:
+        """Attach a committed Channel decision to the next StartTurn."""
+        self._pending_turn_decision_metadata = dict(metadata)
 
-    def pop_turn_control_metadata(self) -> dict[str, Any] | None:
-        metadata = self._pending_turn_control_metadata
-        self._pending_turn_control_metadata = None
+    def pop_turn_decision_metadata(self) -> dict[str, Any] | None:
+        metadata = self._pending_turn_decision_metadata
+        self._pending_turn_decision_metadata = None
         return metadata
 
     def set_turn_trace_id(self, trace_id: str) -> None:
@@ -262,7 +262,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
-            turn_control_metadata=self.pop_turn_control_metadata(),
+            turn_decision_metadata=self.pop_turn_decision_metadata(),
             trace_id=self.pop_turn_trace_id(),
             user_text=user_text,
             conversation_id=self._resolve_conversation_id_for_chat(),
@@ -333,12 +333,12 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         chat_ctx: ChatContext,
         tools: list[Tool],
         conn_options: APIConnectOptions,
-        turn_control_metadata: dict[str, Any] | None,
+        turn_decision_metadata: dict[str, Any] | None,
         trace_id: str | None,
         user_text: str,
         conversation_id: str,
     ) -> None:
-        self._turn_control_metadata = turn_control_metadata
+        self._turn_decision_metadata = turn_decision_metadata
         self._trace_id = trace_id
         self._user_text = user_text
         self._conversation_id = conversation_id
@@ -376,8 +376,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 session.start_turn(
                     text=user_text,
                     conversation_id=conversation_id,
-                    metadata={"turn_control": self._turn_control_metadata}
-                    if self._turn_control_metadata
+                    metadata={"turn_decision": self._turn_decision_metadata}
+                    if self._turn_decision_metadata
                     else None,
                     trace_id=self._trace_id,
                 ),

@@ -95,9 +95,7 @@ def run_policy_suite(
                         "attention_admission": {
                             "action": speech_start_attention.action.value,
                             "reason": speech_start_attention.reason,
-                            "client_state_used": (
-                                speech_start_attention.client_state_used
-                            ),
+                            "client_state_used": (speech_start_attention.client_state_used),
                         },
                         "decision": None,
                     }
@@ -123,18 +121,11 @@ def run_policy_suite(
                             "rollback_drop_buffered": False,
                         }
                         break
-                    duck_active = (
-                        speech_start_attention.action
-                        is AdmissionAction.DUCK_AND_DECIDE
-                    )
+                    duck_active = speech_start_attention.action is AdmissionAction.DUCK_AND_DECIDE
                 for index, text in enumerate(texts):
                     is_final = index == len(texts) - 1
                     event_time_ms = step.start_ms + index * 80
-                    eot_score = (
-                        step.eot_scores[index]
-                        if index < len(step.eot_scores)
-                        else 0.0
-                    )
+                    eot_score = step.eot_scores[index] if index < len(step.eot_scores) else 0.0
                     attention = runtime.admit_attention(
                         AttentionInput(
                             agent_speaking=step.agent_speaking,
@@ -175,9 +166,7 @@ def run_policy_suite(
                         ),
                     }
                     if not transcript_admission.accepted:
-                        possible_echo = (
-                            transcript_admission.reason == "possible_agent_echo_hold"
-                        )
+                        possible_echo = transcript_admission.reason == "possible_agent_echo_hold"
                         if not possible_echo:
                             echo_rejection_count += 1
                         action = Action.HOLD if possible_echo else Action.ROLLBACK
@@ -202,10 +191,7 @@ def run_policy_suite(
                         AdmissionAction.IGNORE,
                         AdmissionAction.OBSERVE,
                     ):
-                        if not (
-                            attention.action is AdmissionAction.OBSERVE
-                            and duck_active
-                        ):
+                        if not (attention.action is AdmissionAction.OBSERVE and duck_active):
                             decisions.append(decision_record)
                             continue
                     if (
@@ -234,7 +220,11 @@ def run_policy_suite(
                     decision = runtime.decide_from_transcript(
                         text,
                         eot_score,
-                        vad_active=True,
+                        # A scripted step is a complete acoustic segment. Its
+                        # last transcript therefore models the provider-neutral
+                        # FINAL + VAD-terminal boundary, not another active
+                        # interim. Earlier texts remain reversible evidence.
+                        vad_active=not is_final,
                         agent_speaking=step.agent_speaking,
                         is_final=is_final,
                         event_time_ms=event_time_ms,
@@ -251,9 +241,7 @@ def run_policy_suite(
                     }
                     decisions.append(decision_record)
                     decision_action = decision.action.value
-                    decision_intent = (
-                        decision.intent.value if decision.intent else "unknown"
-                    )
+                    decision_intent = decision.intent.value if decision.intent else "unknown"
                     if decision.action is not Action.HOLD:
                         action = decision.action
                         intent = decision_intent
@@ -278,17 +266,16 @@ def run_policy_suite(
                 case.expectations.action not in ("", "any")
                 and action.value != case.expectations.action
             ):
-                errors.append(
-                    f"expected action={case.expectations.action}, got {action.value}"
-                )
-            if case.expectations.intent not in ("", "uncertain") and intent != case.expectations.intent:
+                errors.append(f"expected action={case.expectations.action}, got {action.value}")
+            if (
+                case.expectations.intent not in ("", "uncertain")
+                and intent != case.expectations.intent
+            ):
                 errors.append(f"expected intent={case.expectations.intent}, got {intent}")
             expected_decision_action = case.expectations.decision_action
             if expected_decision_action == "none":
                 if decision_action != "none":
-                    errors.append(
-                        f"expected no decision_action, got {decision_action}"
-                    )
+                    errors.append(f"expected no decision_action, got {decision_action}")
             elif expected_decision_action not in ("", "any"):
                 if decision_action != expected_decision_action:
                     errors.append(
@@ -302,8 +289,7 @@ def run_policy_suite(
                 and decision_intent != expected_decision_intent
             ):
                 errors.append(
-                    "expected decision_intent="
-                    f"{expected_decision_intent}, got {decision_intent}"
+                    f"expected decision_intent={expected_decision_intent}, got {decision_intent}"
                 )
             if (
                 case.expectations.topic_switch_hint

@@ -13,7 +13,6 @@ from eidolon.livekit.agent.turn_policy import (
     InterruptIntent,
     TurnPolicyRuntime,
 )
-from eidolon.livekit.agent.turn_policy.intent_classifier import hard_stop_intent
 
 logger = logging.getLogger("agent.session.semantic_interrupt")
 
@@ -39,9 +38,6 @@ class SemanticInterruptHandler:
         soft_interrupt_active: Callable[[], bool],
         soft_interrupt_timeout: Callable[[], float],
         apply_decision: Callable[..., None],
-        record_decision_attrs: Callable[..., None],
-        publish_turn_control: Callable[[dict[str, object]], None],
-        cancel_duck_and_interrupt: Callable[[], None],
         interrupt_current_turn: Callable[[], None],
         enter_soft_interrupt: Callable[[], None],
         decide_from_transcript: Callable[..., Decision] | None = None,
@@ -55,14 +51,9 @@ class SemanticInterruptHandler:
         self._soft_interrupt_active = soft_interrupt_active
         self._soft_interrupt_timeout = soft_interrupt_timeout
         self._apply_decision = apply_decision
-        self._record_decision_attrs = record_decision_attrs
-        self._publish_turn_control = publish_turn_control
-        self._cancel_duck_and_interrupt = cancel_duck_and_interrupt
         self._interrupt_current_turn = interrupt_current_turn
         self._enter_soft_interrupt = enter_soft_interrupt
-        self._decide_from_transcript = (
-            decide_from_transcript or turn_runtime.decide_from_transcript
-        )
+        self._decide_from_transcript = decide_from_transcript or turn_runtime.decide_from_transcript
 
     def run(self, text: str, *, is_final: bool = False) -> None:
         """Run the synchronous EOT semantic check for one transcript update."""
@@ -73,38 +64,6 @@ class SemanticInterruptHandler:
         duck_active = self._get_duck_active()
         vad_active = self._get_vad_active()
         score = eot_model.current_eot_score
-
-        if hard_stop_intent(text) is InterruptIntent.HARD_STOP:
-            decision = self._decide_from_transcript(
-                text,
-                score,
-                vad_active=vad_active,
-                agent_speaking=True,
-                is_final=is_final,
-            )
-            if decision.intent is InterruptIntent.HARD_STOP:
-                self._handle_strong_interrupt(
-                    text,
-                    decision=decision,
-                    duck_active=duck_active,
-                    score=score,
-                    vad_active=vad_active,
-                )
-                return
-            logger.info(
-                "[SemanticInterruptHandler] EOT: legacy strong signal "
-                "resolved as %s reason=%s text=%r",
-                decision.intent.value if decision.intent else "unknown",
-                decision.reason,
-                text[:80],
-            )
-            self._apply_decision(
-                decision,
-                eot_score=score,
-                transcript=text,
-                vad_active=vad_active,
-            )
-            return
 
         should_cut = eot_model.should_interrupt(
             text,
@@ -131,8 +90,7 @@ class SemanticInterruptHandler:
 
         if self._soft_interrupt_active():
             logger.info(
-                "[SemanticInterruptHandler] EOT: already in soft interrupt, "
-                "waiting. text=%r",
+                "[SemanticInterruptHandler] EOT: already in soft interrupt, waiting. text=%r",
                 text[:80],
             )
             return
@@ -149,44 +107,6 @@ class SemanticInterruptHandler:
                 "[SemanticInterruptHandler] EOT: should_interrupt=False, text=%r",
                 text[:80],
             )
-
-    def _handle_strong_interrupt(
-        self,
-        text: str,
-        *,
-        decision: Decision,
-        duck_active: bool,
-        score: float,
-        vad_active: bool,
-    ) -> None:
-        logger.info(
-            "[SemanticInterruptHandler] EOT: strong interrupt intent, text=%r",
-            text[:50],
-        )
-        if duck_active:
-            self._apply_decision(
-                decision,
-                eot_score=score,
-                transcript=text,
-                vad_active=vad_active,
-            )
-            return
-        signal = self._turn_runtime.control_signal_from_decision(decision)
-        metadata = signal.as_metadata()
-        self._publish_turn_control(metadata)
-        timeline = self._get_timeline()
-        if timeline is not None:
-            self._record_decision_attrs(
-                decision,
-                source="strong_intent",
-                transcript=text,
-                vad_active=True,
-            )
-            timeline.set_attr("turn_control", metadata)
-        if timeline is not None:
-            timeline.mark_interrupt_resolved("cancel")
-            timeline.set_attr("cancel_reason", "strong_intent_cancel")
-        self._interrupt_current_turn()
 
     def _handle_duck_active(
         self,
@@ -299,8 +219,7 @@ class SemanticInterruptHandler:
             return
 
         logger.info(
-            "[SemanticInterruptHandler] EOT: score=%.2f -> soft interrupt "
-            "(timeout=%.2fs). text=%r",
+            "[SemanticInterruptHandler] EOT: score=%.2f -> soft interrupt (timeout=%.2fs). text=%r",
             score,
             self._soft_interrupt_timeout(),
             text[:80],

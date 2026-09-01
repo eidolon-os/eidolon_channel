@@ -571,7 +571,6 @@ class StreamingPipeline(BasePipeline):
     def _build_decision_effect_applier(self) -> DecisionEffectApplier:
         interruption_effects = self._ensure_interruption_effects()
         return DecisionEffectApplier(
-            factory=getattr(self, "_factory", None),
             turn_runtime=self._turn_runtime,
             get_timeline=lambda: self._timeline,
             on_cancel=lambda: interruption_effects.cancel_and_interrupt(),
@@ -1168,9 +1167,6 @@ class StreamingPipeline(BasePipeline):
             soft_interrupt_active=lambda: interruption_effects.soft_interrupt_active(),
             soft_interrupt_timeout=lambda: self._soft_interrupt_timeout,
             apply_decision=self._decision_effects.apply,
-            record_decision_attrs=self._decision_effects.record_decision_attrs,
-            publish_turn_control=self._decision_effects.publish_turn_control,
-            cancel_duck_and_interrupt=lambda: interruption_effects.cancel_and_interrupt(),
             interrupt_current_turn=lambda: interruption_effects.interrupt_current_turn(),
             enter_soft_interrupt=lambda: interruption_effects.enter_soft_interrupt(),
             decide_from_transcript=(
@@ -1208,9 +1204,7 @@ class StreamingPipeline(BasePipeline):
             should_hold_for_evidence=(
                 lambda: self._interruption_orchestrator.should_hold_deadline()
             ),
-            get_hold_remaining_sec=(
-                lambda: self._interruption_orchestrator.hold_remaining_sec()
-            ),
+            get_hold_remaining_sec=(lambda: self._interruption_orchestrator.hold_remaining_sec()),
         )
 
     def _ensure_duck_suspend_timeout_handler(self) -> None:

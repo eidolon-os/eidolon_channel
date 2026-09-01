@@ -133,6 +133,17 @@ class UserTurnCandidate:
         return text.strip()
 
     @property
+    def selected_policy_text(self) -> str:
+        """Return canonical text with provider segment-boundary punctuation folded."""
+
+        text = ""
+        for segment in self.segments:
+            if segment.covered_by_generation_id is not None:
+                continue
+            text = _merge_policy_text(text, segment.selected_text)
+        return text.strip()
+
+    @property
     def last_speech_ended_at(self) -> float | None:
         for segment in reversed(self.segments):
             if segment.ended_at is not None:
@@ -174,6 +185,10 @@ class UserTurnCoordinator:
     @property
     def selected_text(self) -> str:
         return self._active.selected_text if self._active is not None else ""
+
+    @property
+    def selected_policy_text(self) -> str:
+        return self._active.selected_policy_text if self._active is not None else ""
 
     @property
     def current_generation_id(self) -> int | None:
@@ -1009,6 +1024,18 @@ def _merge_text(left: str, right: str) -> str:
     if _looks_cjk(left[-1]) or _looks_cjk(right[0]):
         return f"{left}{right}"
     return f"{left} {right}"
+
+
+_SEGMENT_BOUNDARY_PUNCTUATION = "，,。.；;！!？?、"
+
+
+def _merge_policy_text(left: str, right: str) -> str:
+    """Join standard STT segments for semantic policy without changing chat text."""
+
+    return _merge_text(
+        left.rstrip(_SEGMENT_BOUNDARY_PUNCTUATION),
+        right.lstrip(_SEGMENT_BOUNDARY_PUNCTUATION),
+    )
 
 
 def _looks_cjk(char: str) -> bool:

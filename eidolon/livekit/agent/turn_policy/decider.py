@@ -293,6 +293,14 @@ class InterruptDecider:
                 agent_speaking=True,
                 eot_score=0.0,
             )
+            if intent.intent in (InterruptIntent.BACKCHANNEL, InterruptIntent.NOISE):
+                artifact_hold = self._hold_short_latin_artifact(
+                    intent,
+                    text,
+                    reason_prefix=DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
+                )
+                if artifact_hold is not None:
+                    return artifact_hold
             if self._is_fast_deadline_false_interrupt(text, intent):
                 return Decision(
                     action=Action.ROLLBACK,
@@ -429,7 +437,7 @@ class InterruptDecider:
         artifact_reason_prefix: str = TRANSCRIPT_EVIDENCE_HOLD_REASON_PREFIX,
     ) -> Decision | None:
         if intent.intent == InterruptIntent.HARD_STOP:
-            artifact_hold = self._hold_short_latin_hard_stop_artifact(
+            artifact_hold = self._hold_short_latin_artifact(
                 intent,
                 normalized_text,
                 reason_prefix=artifact_reason_prefix,
@@ -462,6 +470,19 @@ class InterruptDecider:
                 correction_hint=True,
             )
         if intent.intent in (InterruptIntent.BACKCHANNEL, InterruptIntent.NOISE):
+            # A short Latin interim can be a transient ASR hypothesis for a
+            # later control phrase (for example ``Okay`` -> ``停一下``). Keep
+            # the acoustic candidate open until FINAL/VAD-end instead of making
+            # the reversible rollback terminal. The existing evidence gate and
+            # owner timeout bound this wait; raw/provider metadata is irrelevant.
+            if vad_active and not is_final:
+                artifact_hold = self._hold_short_latin_artifact(
+                    intent,
+                    normalized_text,
+                    reason_prefix=artifact_reason_prefix,
+                )
+                if artifact_hold is not None:
+                    return artifact_hold
             if (
                 vad_active
                 and len(normalized_text) <= 1
@@ -487,7 +508,7 @@ class InterruptDecider:
             )
         return None
 
-    def _hold_short_latin_hard_stop_artifact(
+    def _hold_short_latin_artifact(
         self,
         intent: InterruptIntentResult,
         normalized_text: str,

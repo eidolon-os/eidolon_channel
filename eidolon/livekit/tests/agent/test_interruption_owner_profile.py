@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.session.transcript_echo import EchoEvidence
 from eidolon.livekit.agent.full_duplex import StreamingPipeline
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 from eidolon.livekit.common.config import TurnPolicyConfig
@@ -65,7 +66,7 @@ def _transcript_pipeline(owner: str) -> StreamingPipeline:
         return_value=pipeline._client_audio_state,
     )
     pipeline._transcript_echo_gate = MagicMock()
-    pipeline._transcript_echo_gate.is_echo.return_value = False
+    pipeline._transcript_echo_gate.classify.return_value = EchoEvidence.NONE
     pipeline._interrupt_window_active = MagicMock(return_value=False)
     pipeline._interrupt_decision_suppressed = MagicMock(return_value=False)
     pipeline._ensure_user_turn_coordinator = MagicMock()

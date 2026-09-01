@@ -2635,6 +2635,102 @@ def test_livekit_room_topic_switch_uses_first_yield_for_slo(
     assert metrics["timeline_collect_new_topic_turn_playback_stop_ms"] == 1247.7
 
 
+def test_livekit_room_correction_does_not_pair_prior_turn_speech_with_early_stt_interrupt(
+    tmp_path,
+) -> None:
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    run = _expectation_run(
+        "fd_gate_correction_cancels_and_replies_001",
+        "full_duplex_gate",
+    )
+    room = "voice-bench-fd_gate_correction_cancels_and_replies_001-1234abcd"
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    records = [
+        {
+            "turn_id": "answer-output",
+            "attrs": {
+                "room_name": room,
+                "interrupt_action": "cancel",
+                "decision": {
+                    "action": "cancel",
+                    "intent": "normal_interrupt",
+                    "correction_hint": True,
+                },
+                "interrupted_context": {
+                    "source": "tts_in_flight",
+                    "played_seconds": 9.2,
+                    "text_preview": "上一轮回答",
+                },
+                "client_control_events": [{"op": "playback.stop"}],
+                "provider_latency_ms": {
+                    "interrupt_speech_to_started_ms": 7103.8,
+                    "interrupt_speech_to_playback_stop_ms": 7104.6,
+                    "interrupt_started_to_playback_stop_ms": 0.8,
+                    "stt_speech_to_actionable_transcript_ms": 7104.3,
+                },
+            },
+            "timestamps": {
+                "speech_started_at": 10.0,
+                "turn_committed_at": 12.0,
+                "interrupt_started_at": 17.1038,
+                "transcript_actionable_first_at": 17.1043,
+                "playback_stop_sent_at": 17.1046,
+            },
+            "durations_ms": {"vad_start_to_playback_stop_sent": 7104.6},
+        },
+        {
+            "turn_id": "correction-input",
+            "attrs": {
+                "room_name": room,
+                "interrupt_action": "cancel",
+                "cancel_reason": "intent:correction",
+                "decision": {
+                    "action": "cancel",
+                    "intent": "normal_interrupt",
+                    "correction_hint": True,
+                },
+                "interrupted_context": {
+                    "source": "tts_in_flight",
+                    "played_seconds": 9.2,
+                    "text_preview": "上一轮回答",
+                },
+                "client_control_events": [{"op": "playback.stop"}],
+                "provider_latency_ms": {
+                    "stt_speech_to_actionable_transcript_ms": 79.6,
+                    "interrupt_speech_to_cancel_resolved_ms": 80.3,
+                    "interrupt_speech_to_playback_stop_ms": 80.1,
+                    "interrupt_actionable_transcript_to_cancel_resolved_ms": 0.7,
+                },
+            },
+            "timestamps": {
+                "speech_started_at": 17.3035,
+                "transcript_actionable_first_at": 17.3831,
+                "playback_stop_sent_at": 17.3836,
+                "interrupt_cancel_resolved_at": 17.3838,
+                "interrupt_resolved_at": 17.3838,
+            },
+            "durations_ms": {
+                "vad_start_to_interrupt_cancel_resolved": 80.3,
+                "vad_start_to_interrupt_resolved": 80.3,
+                "vad_start_to_playback_stop_sent": 80.1,
+            },
+        },
+    ]
+    timeline_path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    apply_timeline_expectations(run, [suite], timeline_path)
+
+    metrics = run.cases[0].metrics
+    assert not any("speech-start-to-suspend" in error for error in run.cases[0].errors)
+    assert metrics["timeline_interrupt_speech_to_playback_stop_ms"] == 80.1
+    assert metrics["timeline_yield_old_output_playback_stop_ms"] == 0.8
+    assert metrics["timeline_collect_new_topic_turn_playback_stop_ms"] == 80.1
+    assert metrics["timeline_stt_speech_to_actionable_transcript_ms"] == 79.6
+
+
 def test_livekit_room_topic_switch_fails_when_first_actionable_transcript_is_slow(
     tmp_path,
 ) -> None:

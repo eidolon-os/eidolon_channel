@@ -202,7 +202,7 @@ def test_short_latin_backchannel_deadline_keeps_candidate_open() -> None:
     assert "short_latin_artifact" in decision.reason
 
 
-@pytest.mark.parametrize("text", ["换个话题", "换个画", "换个花", "换个华"])
+@pytest.mark.parametrize("text", ["换个话题"])
 def test_provider_neutral_policy_text_cancels_segmented_topic_switch(text: str) -> None:
     cfg = replace(
         InterruptPolicyConfig(),

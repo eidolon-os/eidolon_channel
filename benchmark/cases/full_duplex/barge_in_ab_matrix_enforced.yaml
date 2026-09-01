@@ -3,7 +3,7 @@ suite_mode: full_duplex
 cases:
   - case_id: ab_tier0_hard_stop_tingyixia_fast_cancel_001
     suite: barge_in_ab_matrix
-    description: 播放期明确说“停一下”，应按 Tier0 快速取消。
+    description: 播放期显式 PTT 手势应按 Tier0 快速取消；同期文本不参与控制判定。
     tags: ["ab", "barge_in", "tier0", "hard_stop"]
     audio_clips:
       - id: hard_stop_stop
@@ -19,6 +19,7 @@ cases:
         eot_scores: [0.0]
         agent_speaking: true
         client_playback_state: agent_speaking
+        client_ptt: true
     expect:
       action: cancel
       intent: hard_stop
@@ -28,8 +29,8 @@ cases:
 
   - case_id: ab_tier0_productive_hard_stop_buyaojiangle_001
     suite: barge_in_ab_matrix
-    description: 播放期说“不要讲了”，应由生产式中文硬停规则覆盖，而不是依赖单条硬编码。
-    tags: ["ab", "barge_in", "tier0", "hard_stop", "productive_rule"]
+    description: 播放期显式 PTT 手势在另一段文本下仍应按 Tier0 快速取消，证明控制不依赖固定短语。
+    tags: ["ab", "barge_in", "tier0", "hard_stop", "explicit_control"]
     audio_clips:
       - id: hard_stop_buyaojiang
         text: 不要讲了。
@@ -44,6 +45,7 @@ cases:
         eot_scores: [0.0]
         agent_speaking: true
         client_playback_state: agent_speaking
+        client_ptt: true
     expect:
       action: cancel
       intent: hard_stop
@@ -66,14 +68,14 @@ cases:
         start_ms: 240
         duration_ms: 400
         interims: ["嗯嗯"]
-        eot_scores: [0.0]
+        eot_scores: [0.1]
         vad_probability: 0.9
         agent_speaking: true
         client_playback_state: agent_speaking
     expect:
       action: any
       decision_action: rollback
-      decision_intent: backchannel
+      decision_intent: uncertain
       forbid_actions: ["cancel"]
 
   - case_id: ab_ack_haode_does_not_cancel_001
@@ -91,14 +93,14 @@ cases:
         start_ms: 240
         duration_ms: 400
         interims: ["好的"]
-        eot_scores: [0.0]
+        eot_scores: [0.1]
         vad_probability: 0.9
         agent_speaking: true
         client_playback_state: agent_speaking
     expect:
       action: any
       decision_action: rollback
-      decision_intent: backchannel
+      decision_intent: uncertain
       forbid_actions: ["cancel"]
 
   - case_id: ab_false_start_wojuede_waits_for_more_evidence_001

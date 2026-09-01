@@ -110,6 +110,7 @@ def _eot_log(hypothesis_id: str, location: str, message: str, data: dict | None 
     except Exception:
         pass
 
+
 if TYPE_CHECKING:
     from livekit.agents import llm
 
@@ -294,17 +295,14 @@ class EidolonEOTModel(ABC):
         framework's endpointing delay and ultimately when ``commit_user_turn``
         fires (and therefore when the LLM is invoked).
 
-        **Score composition** (semantic completeness only):
-
-        * Raw ONNX score from FireRed Chat Turn Detector
-        * Context adjustments via ``ContextEnhancedEot._get_context_adjustment``
-          (greeting bonus, follow-up, hesitation, filler, user profile, etc.)
+        **Score composition**: the learned FireRed Chat Turn Detector score.
+        Fixed transcript phrases do not modify the production score.
 
         **Explicitly NOT included** — these belong to :meth:`should_interrupt`:
 
         * Cooldown after a recent interrupt
         * Similarity to last-interrupt text
-        * Continuation-intent guards ("再换一首")
+        * Interruption cooldown and duplicate-transcript suppression
 
         Returns a score in [0, 1]; framework treats ``score >= unlikely_threshold``
         as "user done".
@@ -314,20 +312,20 @@ class EidolonEOTModel(ABC):
             logger.debug("[EOT] predict_end_of_turn: no user text, returning 0.0")
             return 0.0
 
-        # Use the shared ``semantic_completeness_score`` so this path agrees
-        # with ``compute_score``'s gates on continuation-intent and too-short
-        # filler — only cooldown/similarity (interrupt-specific) live in
-        # compute_score. Without this, backchannels like "嗯" scored ~0.7
-        # here while compute_score returned 0.0 → framework committed the
-        # turn anyway and fired LLM. Production bug 2026-05-07.
+        # Use the same learned scorer as the interruption path; only
+        # cooldown/similarity (interrupt-specific) live in compute_score.
         score = self._context_eot.semantic_completeness_score(text)
 
-        _eot_log("H2/H5", "base.py:EidolonEOTModel.predict_end_of_turn",
-                 f"EOT CALLED! text={text[:80]!r} score={score:.3f}",
-                 {"text": text, "score": score})
+        _eot_log(
+            "H2/H5",
+            "base.py:EidolonEOTModel.predict_end_of_turn",
+            f"EOT CALLED! text={text[:80]!r} score={score:.3f}",
+            {"text": text, "score": score},
+        )
         logger.info(
             "[EOT] predict_end_of_turn text=%r score=%.3f",
-            text[:80], score,
+            text[:80],
+            score,
         )
         return score
 
@@ -437,9 +435,8 @@ class EidolonEOTModel(ABC):
         self._state.update_asr(text, is_final)
         now = time.time()
 
-        should_infer = (
-            len(text.strip()) >= self._MIN_INFERENCE_CHARS
-            and (is_final or (now - self._last_asr_update_time) >= self._MIN_INFERENCE_INTERVAL)
+        should_infer = len(text.strip()) >= self._MIN_INFERENCE_CHARS and (
+            is_final or (now - self._last_asr_update_time) >= self._MIN_INFERENCE_INTERVAL
         )
         self._last_asr_update_time = now
 
@@ -456,8 +453,13 @@ class EidolonEOTModel(ABC):
         phase = self._phase_detector.detect(text, history_length)
         self._state.update_conversation_phase(phase)
 
-        logger.info("[EOT] update_asr text=%r is_final=%s score=%.3f phase=%s",
-                    text[:80], is_final, self._current_eot_score, phase.name)
+        logger.info(
+            "[EOT] update_asr text=%r is_final=%s score=%.3f phase=%s",
+            text[:80],
+            is_final,
+            self._current_eot_score,
+            phase.name,
+        )
         return self._current_eot_score
 
     def should_interrupt(self, text: str, vad_active: bool, is_final: bool = False) -> bool:
@@ -471,21 +473,18 @@ class EidolonEOTModel(ABC):
 
         **Score composition** (via ``ContextEnhancedEot.compute_score``):
 
-        * Continuation-intent guard ("再换一首" → score=0)
-        * Valid-speech guard (too short / pure filler → score=0)
         * Cooldown guard (recent interrupt → score=0)
         * Similarity guard (duplicate of last cut text → score=0)
-        * Raw ONNX score + context adjustments (same as Path A)
+        * EOT model score and provider-neutral acoustic/finality state
 
         **Then delegates to** the semantic-interruption ``PolicyChain``
-        (cooldown, intent, MinSpeakingDuration, VADStability,
+        (cooldown, MinSpeakingDuration, VADStability,
         DuplicateText, MaxDuration, VADStale, EOTScoreSemantic) for the
         final cut/block decision.
 
-        Strong interrupt intent ("停", "闭嘴", etc.) is handled by
-        ``InterruptIntentPolicy`` in the chain. A separate fast-path check
-        in the full-duplex pipeline covers the immediate hard-interrupt case
-        (bypasses the two-stage soft-interrupt flow entirely).
+        No fixed transcript phrase receives control authority. Immediate
+        hard interruption is reserved for explicit client control such as PTT;
+        spoken interruption uses EOT/VAD/finality evidence.
 
         Args:
             text: Current streaming ASR text.
@@ -534,9 +533,7 @@ class EidolonEOTModel(ABC):
             )
         return False
 
-    def get_dynamic_silence_threshold(
-        self, text: str, p_complete: float, is_final: bool
-    ) -> float:
+    def get_dynamic_silence_threshold(self, text: str, p_complete: float, is_final: bool) -> float:
         """
         Called by AgentSession during silence: return how many seconds to wait before breaking.
 

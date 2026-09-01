@@ -18,6 +18,7 @@ import grpc.aio
 import pytest
 from google.protobuf import struct_pb2
 from livekit.agents.llm import ChatContext, ChatMessage
+from eidolon_sdk.biz.dialogue_control import CommittedTurnDecision, TurnCommitBoundary
 
 from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
@@ -334,7 +335,12 @@ async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
         return session
 
     adapter._get_session = _get_session  # type: ignore[method-assign]
-    adapter.set_turn_control_metadata({"action": "cancel", "reason": "interrupt"})
+    turn_decision = CommittedTurnDecision.create(
+        text="第一轮 canonical",
+        boundary=TurnCommitBoundary.FRAMEWORK_COMPLETED,
+        eot_score=0.8,
+    ).as_metadata()
+    adapter.set_turn_decision_metadata(turn_decision)
     adapter.set_turn_trace_id("channel-turn-trace")
 
     stream = adapter.chat(
@@ -351,8 +357,8 @@ async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
     assert session.starts == ["第一轮 canonical", "第一轮 canonical"]
     assert session.conversations == ["livekit:retry-1", "livekit:retry-1"]
     assert session.metadata == [
-        {"turn_control": {"action": "cancel", "reason": "interrupt"}},
-        {"turn_control": {"action": "cancel", "reason": "interrupt"}},
+        {"turn_decision": turn_decision},
+        {"turn_decision": turn_decision},
     ]
     assert session.trace_ids == ["channel-turn-trace", "channel-turn-trace"]
 
@@ -420,6 +426,7 @@ async def test_first_delta_timeout_cancels_without_replaying_logical_turn() -> N
                     yield StatePayload("speaking")
                     await asyncio.sleep(10.0)
                     yield DeltaPayload("late")
+
             return turn_id, _payloads()
 
         async def cancel_turn(self, turn_id: str) -> None:
@@ -526,21 +533,19 @@ async def test_reasoning_progress_over_ten_second_equivalent_keeps_turn_alive_wi
             conn_options=APIConnectOptions(max_retry=0, timeout=0.05),
         )
         spoken = [
-            chunk.delta.content
-            async for chunk in stream
-            if chunk.delta and chunk.delta.content
+            chunk.delta.content async for chunk in stream if chunk.delta and chunk.delta.content
         ]
 
         assert spoken == ["869"]
         assert session.cancels == []
         activity = [
-            event
-            for event in provider_events
-            if event.get("event") == "brain_first_model_activity"
+            event for event in provider_events if event.get("event") == "brain_first_model_activity"
         ]
         assert [event.get("kind") for event in activity] == ["reasoning"]
         assert sum(event.get("event") == "brain_progress" for event in provider_events) == 3
-        assert sum(event.get("event") == "brain_first_answer_delta" for event in provider_events) == 1
+        assert (
+            sum(event.get("event") == "brain_first_answer_delta" for event in provider_events) == 1
+        )
     finally:
         await adapter.aclose()
 
@@ -627,27 +632,19 @@ async def test_tool_call_releases_first_output_deadline_without_becoming_answer_
             conn_options=APIConnectOptions(max_retry=3, timeout=0.05),
         )
         spoken = [
-            chunk.delta.content
-            async for chunk in stream
-            if chunk.delta and chunk.delta.content
+            chunk.delta.content async for chunk in stream if chunk.delta and chunk.delta.content
         ]
 
         assert spoken == ["播放完成"]
         assert session.turn_ids == ["tool-turn"]
         assert session.cancels == []
         activity = [
-            event
-            for event in provider_events
-            if event.get("event") == "brain_first_model_activity"
+            event for event in provider_events if event.get("event") == "brain_first_model_activity"
         ]
         assert [event.get("kind") for event in activity] == ["tool_call"]
         assert sum(event.get("event") == "brain_first_delta" for event in provider_events) == 1
         assert (
-            sum(
-                event.get("event") == "brain_first_answer_delta"
-                for event in provider_events
-            )
-            == 1
+            sum(event.get("event") == "brain_first_answer_delta" for event in provider_events) == 1
         )
     finally:
         await adapter.aclose()

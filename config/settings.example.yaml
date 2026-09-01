@@ -116,7 +116,8 @@ turn_policy:
     repeated_noise_min_chars: 2
     repeated_noise_max_chars: 6
     weak_signal_followup_hold_ms: 1500
-    fast_lexical_intents: true
+    # Deprecated compatibility flag; fixed phrases never control turns.
+    fast_lexical_intents: false
     correction_topic_stability_window_ms: 0
     normal_interrupt_stability_window_ms: 350
     cancel_residual_commit_suppress_ms: 2000

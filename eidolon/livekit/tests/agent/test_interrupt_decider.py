@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from eidolon_sdk.biz.dialogue_control import LexiconInterruptClassifier
 
 from eidolon.livekit.agent.turn_policy import (
     Action,
@@ -18,7 +19,6 @@ from eidolon.livekit.agent.turn_policy import (
     InterruptIntent,
     InterruptIntentResult,
     InterruptDecider,
-    LexiconInterruptClassifier,
 )
 from eidolon.livekit.common.config import InterruptPolicyConfig
 
@@ -57,27 +57,14 @@ def test_is_backchannel_text(text: str, expected: bool) -> None:
     assert is_backchannel is expected
 
 
-# ---------------------------------------------------------------------------
-# on_strong_intent
-# ---------------------------------------------------------------------------
-
-
-def test_strong_intent_always_cancels() -> None:
-    d = InterruptDecider()
-    decision = d.on_strong_intent()
-    assert decision.action is Action.CANCEL
-    assert "strong_intent" in decision.reason
-
-
-def test_hard_stop_prefix_cancels_on_hot_path() -> None:
+def test_hard_stop_hint_does_not_cancel_without_evidence() -> None:
     d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("别说", score=0.0)
 
-    assert decision.action is Action.CANCEL
+    assert decision.action is Action.HOLD
     assert decision.intent is not None
-    assert decision.intent.value == "hard_stop"
-    assert decision.intent_source == "lexicon_prefix"
+    assert decision.intent.value == "uncertain"
 
 
 def test_hard_stop_prefix_cjk_threshold_is_configurable() -> None:
@@ -127,65 +114,73 @@ def test_substantive_interim_without_evidence_holds() -> None:
     assert decision.action is Action.HOLD
 
 
-def test_hard_stop_prefix_still_cancels() -> None:
+def test_hard_stop_hint_still_waits_for_evidence() -> None:
     d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("别说", score=0.0)
 
-    assert decision.action is Action.CANCEL
+    assert decision.action is Action.HOLD
     assert decision.intent is not None
-    assert decision.intent.value == "hard_stop"
-    assert decision.intent_source == "lexicon_prefix"
+    assert decision.intent.value == "uncertain"
 
 
-def test_hard_stop_speech_control_pattern_cancels_without_eot_score() -> None:
+def test_final_text_and_vad_terminal_do_not_replace_eot_evidence() -> None:
     d = InterruptDecider(min_interim_chars=2)
 
-    decision = d.on_stt_interim("不要讲了。", score=0.0, is_final=True)
+    active = d.on_stt_interim("不要讲了。", score=0.0, is_final=True)
+    terminal = d.on_stt_interim(
+        "不要讲了。",
+        score=0.0,
+        vad_active=False,
+        is_final=True,
+    )
 
-    assert decision.action is Action.CANCEL
-    assert decision.intent is not None
-    assert decision.intent.value == "hard_stop"
-    assert decision.intent_source == "lexicon_pattern"
+    assert active.action is Action.HOLD
+    assert terminal.action is Action.HOLD
+    assert terminal.intent is InterruptIntent.UNCERTAIN
 
 
-def test_backchannel_with_fast_lexical_rolls_back() -> None:
-    # fast_lexical_intents is now a config flag (default off). When on, the
-    # classifier rolls back a backchannel before any cancel path.
+def test_legacy_fast_lexical_flag_does_not_enable_phrase_control() -> None:
     cfg = replace(InterruptPolicyConfig(), min_interim_chars=2, fast_lexical_intents=True)
     d = InterruptDecider(cfg)
 
     decision = d.on_stt_interim("好的", score=0.0)
 
-    assert decision.action is Action.ROLLBACK
+    assert decision.action is Action.HOLD
     assert decision.intent is not None
-    assert decision.intent.value == "backchannel"
+    assert decision.intent.value == "uncertain"
 
 
-def test_short_latin_backchannel_interim_waits_for_transcript_revision() -> None:
+def test_short_latin_interim_and_zero_score_final_both_hold() -> None:
     cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
     decider = InterruptDecider(cfg)
 
     interim = decider.on_stt_interim("Okay", score=0.0, is_final=False)
-    final = decider.on_stt_interim("停一下", score=0.0, is_final=True)
+    final = decider.on_stt_interim(
+        "停一下",
+        score=0.0,
+        vad_active=False,
+        is_final=True,
+    )
 
     assert interim.action is Action.HOLD
     assert "short_latin_artifact" in interim.reason
-    assert final.action is Action.CANCEL
-    assert final.intent is InterruptIntent.HARD_STOP
+    assert final.action is Action.HOLD
+    assert final.intent is InterruptIntent.UNCERTAIN
 
 
-def test_short_latin_backchannel_final_rolls_back() -> None:
+def test_short_latin_zero_score_final_does_not_infer_backchannel() -> None:
     cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
 
     decision = InterruptDecider(cfg).on_stt_interim(
         "Okay",
         score=0.0,
+        vad_active=False,
         is_final=True,
     )
 
-    assert decision.action is Action.ROLLBACK
-    assert decision.intent is InterruptIntent.BACKCHANNEL
+    assert decision.action is Action.HOLD
+    assert decision.intent is InterruptIntent.UNCERTAIN
 
 
 def test_short_latin_backchannel_deadline_keeps_candidate_open() -> None:
@@ -203,7 +198,7 @@ def test_short_latin_backchannel_deadline_keeps_candidate_open() -> None:
 
 
 @pytest.mark.parametrize("text", ["换个话题"])
-def test_provider_neutral_policy_text_cancels_segmented_topic_switch(text: str) -> None:
+def test_provider_neutral_policy_does_not_derive_topic_hints_from_text(text: str) -> None:
     cfg = replace(
         InterruptPolicyConfig(),
         fast_lexical_intents=True,
@@ -215,20 +210,20 @@ def test_provider_neutral_policy_text_cancels_segmented_topic_switch(text: str) 
         is_final=False,
     )
 
-    assert decision.action is Action.CANCEL
-    assert decision.intent is InterruptIntent.TOPIC_SWITCH
-    assert decision.topic_switch_hint is True
+    assert decision.action is Action.HOLD
+    assert decision.intent is InterruptIntent.UNCERTAIN
+    assert decision.topic_switch_hint is False
 
 
-def test_short_acknowledgement_with_fast_lexical_rolls_back() -> None:
+def test_short_acknowledgement_is_not_classified_by_fixed_phrase() -> None:
     cfg = replace(InterruptPolicyConfig(), min_interim_chars=2, fast_lexical_intents=True)
     d = InterruptDecider(cfg)
 
     decision = d.on_stt_interim("对呀", score=0.0)
 
-    assert decision.action is Action.ROLLBACK
+    assert decision.action is Action.HOLD
     assert decision.intent is not None
-    assert decision.intent.value == "backchannel"
+    assert decision.intent.value == "uncertain"
 
 
 def test_substantive_interim_cancels_with_high_semantic_score() -> None:
@@ -271,8 +266,8 @@ def test_short_latin_artifact_holds_instead_of_cancel() -> None:
     assert "short_latin_artifact" in decision.reason
 
 
-def test_short_latin_hard_stop_artifact_holds_instead_of_cancel() -> None:
-    """Even lexicon hard-stop words need evidence before irreversible effects."""
+def test_short_latin_artifact_does_not_derive_hard_stop_intent() -> None:
+    """Short latin text is transcript evidence, never fixed-phrase authority."""
     d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("stop", score=0.0)
@@ -305,15 +300,13 @@ def test_final_substantive_transcript_still_waits_for_semantics() -> None:
     assert "final=true" in decision.reason
 
 
-def test_final_low_eot_score_rolls_back_substantive_text() -> None:
-    """A final transcript with explicit low EOT confidence is a false interrupt."""
+def test_final_low_eot_score_does_not_override_active_vad() -> None:
     d = InterruptDecider(min_interim_chars=2, early_resume_score_threshold=0.2)
 
     decision = d.on_stt_interim("我想问一下", score=0.1, is_final=True)
 
-    assert decision.action is Action.ROLLBACK
-    assert decision.reason.startswith("final_eot_score_low")
-    assert decision.intent_source == "eot_final"
+    assert decision.action is Action.HOLD
+    assert "semantic_score_wait" in decision.reason
 
 
 def test_first_signal_holds_single_char_backchannel() -> None:
@@ -323,13 +316,13 @@ def test_first_signal_holds_single_char_backchannel() -> None:
     assert decision.action is Action.HOLD
 
 
-def test_final_single_char_backchannel_rolls_back() -> None:
-    """A final single-char backchannel is enough evidence to resume playback."""
+def test_final_single_char_zero_score_waits_for_commit_boundary() -> None:
+    """Finality proves stability; it does not classify a one-character intent."""
     d = InterruptDecider(min_interim_chars=2)
-    decision = d.on_stt_interim("好", score=0.0, is_final=True)
-    assert decision.action is Action.ROLLBACK
+    decision = d.on_stt_interim("好", score=0.0, vad_active=False, is_final=True)
+    assert decision.action is Action.HOLD
     assert decision.intent is not None
-    assert decision.intent.value == "backchannel"
+    assert decision.intent.value == "uncertain"
 
 
 def test_final_single_char_ambient_sound_still_holds() -> None:
@@ -339,11 +332,10 @@ def test_final_single_char_ambient_sound_still_holds() -> None:
     assert decision.action is Action.HOLD
 
 
-def test_first_signal_skips_compound_backchannel() -> None:
-    """Compound backchannel like '嗯嗯' is in the set → ROLLBACK."""
+def test_first_signal_compound_backchannel_is_only_a_hint() -> None:
     d = InterruptDecider(min_interim_chars=2)
     decision = d.on_stt_interim("嗯嗯", score=0.0)
-    assert decision.action is Action.ROLLBACK
+    assert decision.action is Action.HOLD
 
 
 def test_first_signal_below_min_chars_is_hold() -> None:
@@ -401,21 +393,18 @@ def test_first_signal_respects_min_chars_setting() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_repeated_noise_rolls_back_even_with_high_score() -> None:
-    """Repeated noise shape wins over EOT score without a backchannel word list."""
+def test_high_eot_evidence_wins_over_repeated_noise_hint() -> None:
     d = InterruptDecider(early_cancel_score_threshold=0.7)
     decision = d.on_stt_interim("嗯嗯", score=0.85)
-    assert decision.action is Action.ROLLBACK
-    assert "intent:" in decision.reason
+    assert decision.action is Action.CANCEL
+    assert decision.intent is InterruptIntent.NORMAL_INTERRUPT
 
 
-def test_low_score_rollback_only_when_positive() -> None:
-    """Score in (0, resume_thr] → ROLLBACK with drain (drop_buffered=False)."""
+def test_low_score_active_interim_holds() -> None:
     d = InterruptDecider(early_resume_score_threshold=0.2)
     decision = d.on_stt_interim("你", score=0.1)
-    assert decision.action is Action.ROLLBACK
-    assert decision.rollback_drop_buffered is False
-    assert "eot_score_low" in decision.reason
+    assert decision.action is Action.HOLD
+    assert "transcript_evidence_hold" in decision.reason
 
 
 def test_zero_score_means_no_signal_yet_holds() -> None:
@@ -433,7 +422,7 @@ def test_mid_band_score_holds() -> None:
     )
     decision = d.on_stt_interim("你", score=0.5)
     assert decision.action is Action.HOLD
-    assert "eot_score_mid" in decision.reason
+    assert "transcript_evidence_hold" in decision.reason
 
 
 def test_topic_switch_text_waits_without_semantic_score() -> None:
@@ -575,12 +564,37 @@ def test_user_silent_fast_rollback_drains() -> None:
     assert decision.rollback_drop_buffered is False
 
 
-def test_user_silent_text_rolls_back_without_lexical_intent() -> None:
+def test_user_silent_text_waits_for_final_commit() -> None:
     d = InterruptDecider()
     decision = d.on_user_silent("我想问一下")
-    assert decision.action is Action.ROLLBACK
+    assert decision.action is Action.HOLD
     assert decision.intent is not None
     assert decision.intent.value == "uncertain"
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        InterruptIntent.HARD_STOP,
+        InterruptIntent.TOPIC_SWITCH,
+        InterruptIntent.CORRECTION,
+        InterruptIntent.BACKCHANNEL,
+        InterruptIntent.NOISE,
+    ],
+)
+def test_classifier_hint_cannot_make_active_low_score_interim_terminal(intent) -> None:
+    class _Classifier:
+        def classify(self, *_args, **_kwargs):
+            return InterruptIntentResult(intent, 1.0, "test_hint", intent.value)
+
+    decision = InterruptDecider(classifier=_Classifier()).on_stt_interim(
+        "这是测试文本",
+        score=0.0,
+        vad_active=True,
+        is_final=False,
+    )
+
+    assert decision.action is Action.HOLD
 
 
 # ---------------------------------------------------------------------------

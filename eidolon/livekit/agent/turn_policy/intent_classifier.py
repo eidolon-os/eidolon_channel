@@ -1,10 +1,8 @@
-"""Interrupt-intent classification for real-time turn control.
+"""Replaceable model-intent interface for real-time turn observability.
 
-The taxonomy, lexicons, and deterministic classifiers now live in
-``eidolon_sdk.biz.dialogue_control`` — shared with eidolon_agent's reflex
-layer so both sides of the Chat stream agree on what counts as a stop.
-This module re-exports them under their historical names and keeps the
-channel-only classifier slots (noop/ONNX).
+Production turn control does not import or execute fixed phrase classifiers.
+An optional learned classifier may annotate a decision, but EOT/VAD/finality
+evidence remains the authority for irreversible output effects.
 """
 
 from __future__ import annotations
@@ -12,24 +10,16 @@ from __future__ import annotations
 from eidolon_sdk.biz.dialogue_control import (
     InterruptIntent,
     InterruptIntentResult,
-    LexiconInterruptClassifier,
     canonicalize_interrupt_text,
-    hard_stop_intent,
-    hard_stop_prefix_intent,
-    normalize_interrupt_text,
 )
 
 __all__ = [
     "InterruptIntent",
     "InterruptIntentClassifier",
     "InterruptIntentResult",
-    "LexiconInterruptClassifier",
     "NoopModelInterruptClassifier",
     "OnnxInterruptClassifier",
     "canonicalize_interrupt_text",
-    "hard_stop_intent",
-    "hard_stop_prefix_intent",
-    "normalize_interrupt_text",
 ]
 
 

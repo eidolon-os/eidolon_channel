@@ -34,7 +34,7 @@ cases:
 
   - case_id: fd_gate_hard_stop_cancels_001
     suite: full_duplex_gate
-    description: 全双工 open-mic：agent 回答中明确硬停，应取消当前播放，不要求形成新用户 turn。
+    description: 全双工 open-mic：agent 回答中用户语音获得高 EOT 证据后，应取消当前播放并提交新 turn。
     timeout_sec: 60
     tags: ["full_duplex", "gate", "hard_stop"]
     audio_clips:
@@ -59,6 +59,7 @@ cases:
         start_ms: 1600
         duration_ms: 520
         interims: ["停一下"]
+        eot_scores: [0.74]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -67,9 +68,9 @@ cases:
         reply: 好的，我会详细展开。第一点是实时控制，第二点是语义状态，第三点是观测指标，这段回答故意较长，用来制造可打断窗口。
     expect:
       action: cancel
-      intent: hard_stop
+      intent: normal_interrupt
       decision_action: cancel
-      decision_intent: hard_stop
+      decision_intent: normal_interrupt
       min_user_finals: 2
       min_agent_messages: 1
       agent_audio_response: none

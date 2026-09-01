@@ -6,14 +6,6 @@ belong in ``config/settings.yaml`` and ``InterruptPolicyConfig`` instead.
 
 from __future__ import annotations
 
-# Canonical definitions shared with eidolon_agent via the SDK.
-from eidolon_sdk.biz.dialogue_control import (
-    ASR_EXACT_CANONICALIZATIONS,
-    ASR_PREFIX_CANONICALIZATIONS,
-    INTERRUPT_TEXT_TRAILING_CHARS,
-    REPEATED_NOISE_CHARS,
-)
-
 TRANSCRIPT_PREVIEW_MAX_CHARS = 80
 
 TRANSCRIPT_EVIDENCE_HOLD_REASON_PREFIX = "transcript_evidence_hold:"

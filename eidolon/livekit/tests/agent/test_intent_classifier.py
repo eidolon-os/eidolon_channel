@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from eidolon.livekit.agent.turn_policy import (
+from eidolon_sdk.biz.dialogue_control import (
     InterruptIntent,
     LexiconInterruptClassifier,
-)
-from eidolon.livekit.agent.turn_policy.intent_classifier import (
     hard_stop_intent,
     hard_stop_prefix_intent,
-)
-from eidolon.livekit.common.config.defaults import (
     DEFAULT_CORRECTION_EXCLUSION_LEXICON,
     DEFAULT_CORRECTION_LEXICON,
     DEFAULT_HARD_STOP_LEXICON,

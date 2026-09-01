@@ -51,11 +51,7 @@ class TranscriptEvidenceGate:
             return TranscriptEvidence(False, "empty_transcript", cjk, latin)
         if is_final:
             return TranscriptEvidence(True, "final_transcript", cjk, latin)
-        if (
-            cjk == 0
-            and latin > 0
-            and latin <= self._config.latin_artifact_hold_max_chars
-        ):
+        if cjk == 0 and latin > 0 and latin <= self._config.latin_artifact_hold_max_chars:
             return TranscriptEvidence(False, "short_latin_artifact", cjk, latin)
         if cjk >= self._config.min_normal_interim_cjk_chars:
             return TranscriptEvidence(True, "enough_cjk_interim", cjk, latin)
@@ -73,7 +69,8 @@ class TranscriptEvidenceGate:
 
         Attention admission should not classify intent. It only decides whether
         the transcript is substantive enough to leave Tier4 observation and let
-        the normal turn policy decide. Tier0 hard-stop is handled before this.
+        the normal turn policy decide. Only an explicit device PTT signal may
+        request an immediate hard cut; transcript text is never reclassified here.
         """
 
         stripped = text.strip()
@@ -83,16 +80,9 @@ class TranscriptEvidenceGate:
             return AttentionEvidence(True, "gate_disabled", cjk, latin)
         if not stripped:
             return AttentionEvidence(False, "empty_transcript", cjk, latin)
-        if (
-            cjk == 0
-            and latin > 0
-            and latin <= self._config.latin_artifact_hold_max_chars
-        ):
+        if cjk == 0 and latin > 0 and latin <= self._config.latin_artifact_hold_max_chars:
             return AttentionEvidence(False, "short_latin_artifact", cjk, latin)
-        if (
-            eot_score >= self._config.early_cancel_score_threshold
-            and (cjk > 0 or latin > 0)
-        ):
+        if eot_score >= self._config.early_cancel_score_threshold and (cjk > 0 or latin > 0):
             return AttentionEvidence(True, "high_eot_transcript", cjk, latin)
         if cjk >= self._config.min_normal_interim_cjk_chars:
             return AttentionEvidence(True, "substantive_cjk_transcript", cjk, latin)

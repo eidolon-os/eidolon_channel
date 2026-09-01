@@ -653,7 +653,7 @@ def test_load_v1_interrupt_tiers_enforced_suite() -> None:
     )
     assert ambient.user_steps[0].client_playback_state == "agent_speaking"
     assert ambient.expectations.action == "any"
-    assert ambient.expectations.decision_action == "hold"
+    assert ambient.expectations.decision_action == "rollback"
     assert "cancel" in ambient.expectations.forbid_actions
 
 
@@ -677,8 +677,8 @@ def test_policy_runner_v1_interrupt_tiers_enforced_suite() -> None:
     tier4 = next(
         case for case in run.cases if case.case_id == "tier4_ambient_speech_enforced_observes_001"
     )
-    assert tier4.metrics["actual_action"] == "hold"
-    assert tier4.metrics["actual_decision_action"] == "hold"
+    assert tier4.metrics["actual_action"] == "rollback"
+    assert tier4.metrics["actual_decision_action"] == "rollback"
     assert tier4.decisions[0]["attention_admission"]["action"] == "duck_and_decide"
     assert tier4.decisions[0]["decision"] is None
 
@@ -794,7 +794,7 @@ def test_load_v1_realistic_extended_suite() -> None:
         if case.case_id == "extended_hard_stop_homophone_then_correct_001"
     )
     assert homophone.user_steps[1].interims[0] == "亭"
-    assert homophone.expectations.intent == "hard_stop"
+    assert homophone.expectations.intent == "normal_interrupt"
     ambient = next(
         case
         for case in suite.cases
@@ -1813,12 +1813,15 @@ async def test_wait_for_agent_quiet_times_out_without_next_reply() -> None:
     state.agent_audio_frame_timestamps.append(10)
     state.last_agent_audio_monotonic = time.monotonic() - 1.0
 
-    assert await _wait_for_agent_quiet(
-        state,
-        quiet_ms=10,
-        timeout_sec=0.06,
-        after_elapsed_ms=20,
-    ) is False
+    assert (
+        await _wait_for_agent_quiet(
+            state,
+            quiet_ms=10,
+            timeout_sec=0.06,
+            after_elapsed_ms=20,
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -1850,13 +1853,16 @@ async def test_wait_for_initial_agent_quiet_allows_room_without_greeting() -> No
 
     state = _RoomCaseState(started=time.monotonic(), events=[])
 
-    assert await _wait_for_agent_quiet(
-        state,
-        quiet_ms=10,
-        timeout_sec=0.08,
-        first_audio_wait_sec=0.01,
-        after_elapsed_ms=None,
-    ) is True
+    assert (
+        await _wait_for_agent_quiet(
+            state,
+            quiet_ms=10,
+            timeout_sec=0.08,
+            first_audio_wait_sec=0.01,
+            after_elapsed_ms=None,
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1930,9 +1936,7 @@ async def test_feed_case_audio_does_not_inject_idle_step_before_reply_completed(
 
     monkeypatch.setattr(runner, "_wait_for_agent_quiet", fake_wait_for_agent_quiet)
     monkeypatch.setattr(runner, "_capture_pcm", fake_capture_pcm)
-    monkeypatch.setattr(
-        runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000)
-    )
+    monkeypatch.setattr(runner, "load_clip_pcm", lambda *_args, **_kwargs: (b"\0\0" * 160, 16000))
     monkeypatch.setattr(
         runner, "render_device_envelope_mic_pcm", lambda _case, _step, pcm, **_kw: pcm
     )
@@ -2510,9 +2514,9 @@ def test_livekit_room_timeline_interrupt_slo_ignores_setup_commit(
             '"interrupted_context":{"source":"tts_in_flight",'
             '"played_seconds":1.2,"text_preview":"上一轮回答"},'
             '"client_control_events":[{"op":"playback.stop"}]},'
-                '"timestamps":{"speech_started_at":10.0,'
-                '"interrupt_started_at":10.001,'
-                '"interrupt_cancel_resolved_at":10.49,'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.001,'
+            '"interrupt_cancel_resolved_at":10.49,'
             '"interrupt_resolved_at":10.49,'
             '"transcript_actionable_first_at":10.48},'
             '"durations_ms":{"vad_start_to_interrupt_cancel_resolved":490}}\n'
@@ -2569,10 +2573,10 @@ def test_livekit_room_topic_switch_uses_first_yield_for_slo(
                 },
                 "client_control_events": [{"op": "playback.stop"}],
             },
-                "timestamps": {
-                    "speech_started_at": 10.0,
-                    "interrupt_started_at": 10.001,
-                    "transcript_actionable_first_at": 10.550,
+            "timestamps": {
+                "speech_started_at": 10.0,
+                "interrupt_started_at": 10.001,
+                "transcript_actionable_first_at": 10.550,
                 "playback_stop_sent_at": 10.5511,
                 "interrupt_cancel_resolved_at": 10.5512,
                 "interrupt_resolved_at": 10.5512,
@@ -2600,10 +2604,10 @@ def test_livekit_room_topic_switch_uses_first_yield_for_slo(
                 },
                 "client_control_events": [{"op": "playback.stop"}],
             },
-                "timestamps": {
-                    "speech_started_at": 20.0,
-                    "interrupt_started_at": 20.001,
-                    "transcript_actionable_first_at": 21.2476,
+            "timestamps": {
+                "speech_started_at": 20.0,
+                "interrupt_started_at": 20.001,
+                "transcript_actionable_first_at": 21.2476,
                 "playback_stop_sent_at": 21.2477,
                 "interrupt_cancel_resolved_at": 21.2478,
                 "interrupt_resolved_at": 21.2478,
@@ -4438,9 +4442,7 @@ def test_real_room_enforces_nonempty_user_final_cardinality() -> None:
         "expected at least 2 user finals, got 1"
     ]
 
-    events.append(
-        {"type": "transcription", "role": "user", "final": True, "text": "第二轮"}
-    )
+    events.append({"type": "transcription", "role": "user", "final": True, "text": "第二轮"})
     assert _transcription_expectation_errors(case, events) == []
 
 

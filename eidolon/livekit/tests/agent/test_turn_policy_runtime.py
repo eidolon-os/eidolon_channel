@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from eidolon_sdk.biz.dialogue_control import TurnCommitBoundary
 
 from eidolon.livekit.agent.turn_policy import Action, TurnPolicyRuntime
-from eidolon.livekit.common.config import InterruptPolicyConfig, TurnPolicyConfig
+from eidolon.livekit.common.config import TurnPolicyConfig
 
 
 def test_runtime_exposes_decision_timeout_from_config() -> None:
@@ -14,267 +14,80 @@ def test_runtime_exposes_decision_timeout_from_config() -> None:
     assert runtime.decision_timeout_sec == 0.45
 
 
-def test_runtime_decision_becomes_turn_control_metadata() -> None:
+def test_runtime_builds_transcript_bound_committed_turn_decision() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
-    runtime.decide_from_transcript(
+    decision = runtime.committed_turn_decision(
         "换个话题",
-        0.8,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    decision = runtime.decide_from_transcript(
-        "换个话题",
-        0.8,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=240.0,
+        boundary=TurnCommitBoundary.FRAMEWORK_COMPLETED,
+        eot_score=0.8,
     )
 
-    signal = runtime.control_signal_from_decision(
-        decision,
-        interrupted_text_excerpt="被打断的回复",
-        played_seconds=1.25,
-        latency_ms=120.0,
-    )
-    metadata = signal.as_metadata()
+    metadata = decision.as_metadata()
 
-    assert decision.action is Action.CANCEL
-    assert metadata["intent"] == "normal_interrupt"
-    assert metadata["topic_switch_hint"] is False
-    assert metadata["correction_hint"] is False
-    assert metadata["interrupted_text_excerpt"] == "被打断的回复"
-    assert metadata["played_seconds"] == 1.25
-    assert metadata["latency_ms"] == 120.0
+    assert metadata["decision"] == "commit"
+    assert "intent" not in metadata
+    assert metadata["evidence"]["boundary"] == "framework_completed_turn"
+    assert decision.matches_text("换个话题") is True
 
 
-def test_runtime_annotates_hard_stop_as_tier0() -> None:
+def test_runtime_fixed_phrases_have_no_control_authority() -> None:
+    outcomes = []
+    for text in ("别说了", "换个话题", "不是，我说错了", "普通用户内容"):
+        runtime = TurnPolicyRuntime(TurnPolicyConfig())
+        decision = runtime.decide_from_transcript(
+            text,
+            0.0,
+            vad_active=True,
+            agent_speaking=True,
+            event_time_ms=100.0,
+        )
+        outcomes.append((decision.action, decision.intent.value, decision.tier))
+        assert decision.topic_switch_hint is False
+        assert decision.correction_hint is False
+
+    assert outcomes == [(Action.HOLD, "uncertain", "tier2_interruption")] * 4
+
+
+def test_runtime_high_eot_is_authoritative_independent_of_text() -> None:
+    for text in ("换个话题", "普通用户内容"):
+        decision = TurnPolicyRuntime(TurnPolicyConfig()).decide_from_transcript(
+            text,
+            0.82,
+            vad_active=True,
+            agent_speaking=True,
+            event_time_ms=100.0,
+        )
+
+        assert decision.action is Action.CANCEL
+        assert decision.intent.value == "normal_interrupt"
+        assert decision.intent_source == "eot"
+        assert decision.tier == "tier2_interruption"
+
+
+def test_runtime_deadline_uses_evidence_not_lexical_content() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
-    decision = runtime.decide_from_transcript(
-        "别说了",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.tier == "tier0_hard_stop"
-    assert decision.tier_reason.startswith("intent:hard_stop")
-
-
-def test_runtime_annotates_non_hard_redirect_text_as_tier2() -> None:
-    runtime = TurnPolicyRuntime(TurnPolicyConfig())
-
-    decision = runtime.decide_from_transcript(
-        "换个话题",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.tier == "tier2_interruption"
-    assert decision.topic_switch_hint is False
-
-
-def test_runtime_fast_lexical_topic_switch_enters_tier1_as_normal_interrupt() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    decision = runtime.decide_from_transcript(
-        "换个话题",
-        0.0,
-        vad_active=False,
-        agent_speaking=True,
-        is_final=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.topic_switch_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_fast_lexical_correction_enters_tier1_as_normal_interrupt() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    decision = runtime.decide_from_transcript(
-        "不是，我刚才说错了",
-        0.0,
-        vad_active=False,
-        agent_speaking=True,
-        is_final=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.correction_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_fast_lexical_topic_switch_bypasses_weak_followup_hold() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    runtime.decide_from_transcript(
-        "换个",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    runtime.decide_from_transcript(
-        "换个话题",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=180.0,
-    )
-    decision = runtime.decide_from_transcript(
-        "换个话题",
-        0.72,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=340.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.topic_switch_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_fast_lexical_correction_bypasses_weak_followup_hold() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    runtime.decide_from_transcript(
-        "不是",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    runtime.decide_from_transcript(
-        "不是，我刚才",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=180.0,
-    )
-    decision = runtime.decide_from_transcript(
-        "不是，我刚才说错了",
-        0.75,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=260.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.correction_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_deadline_recheck_normalizes_fast_lexical_correction() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    first = runtime.decide_from_transcript(
-        "不是",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    decision = runtime.deadline_decision(
-        True,
-        has_transcript=True,
-        transcript="不是",
-        eot_score=0.0,
-    )
-
-    assert first.action is Action.HOLD
-    assert first.reason.startswith("stable_signal_wait")
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.correction_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_deadline_recheck_normalizes_fast_lexical_topic_switch() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    first = runtime.decide_from_transcript(
-        "换个话题",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    decision = runtime.deadline_decision(
+    low = runtime.deadline_decision(
         True,
         has_transcript=True,
         transcript="换个话题",
         eot_score=0.0,
     )
-
-    assert first.action is Action.HOLD
-    assert first.reason.startswith("stable_signal_wait")
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.topic_switch_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_deadline_stable_backchannel_rolls_back_before_final() -> None:
-    runtime = TurnPolicyRuntime(TurnPolicyConfig())
-
-    first = runtime.decide_from_transcript(
-        "好",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    decision = runtime.deadline_decision(
+    high = runtime.deadline_decision(
         True,
         has_transcript=True,
-        transcript="好",
-        eot_score=0.0,
+        transcript="普通用户内容",
+        eot_score=0.82,
     )
 
-    assert first.action is Action.HOLD
-    assert first.intent.value == "backchannel"
-    assert decision.action is Action.ROLLBACK
-    assert decision.intent.value == "backchannel"
-    assert decision.rollback_drop_buffered is False
+    assert low.action is Action.HOLD
+    assert low.intent.value == "uncertain"
+    assert low.topic_switch_hint is False
+    assert high.action is Action.CANCEL
+    assert high.intent_source == "eot"
 
 
-def test_runtime_deadline_ambiguous_single_char_ack_waits_for_more_speech() -> None:
+def test_runtime_short_transcript_stays_reversible_without_semantic_evidence() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     first = runtime.decide_from_transcript(
@@ -284,7 +97,7 @@ def test_runtime_deadline_ambiguous_single_char_ack_waits_for_more_speech() -> N
         agent_speaking=True,
         event_time_ms=100.0,
     )
-    decision = runtime.deadline_decision(
+    deadline = runtime.deadline_decision(
         True,
         has_transcript=True,
         transcript="是",
@@ -292,128 +105,9 @@ def test_runtime_deadline_ambiguous_single_char_ack_waits_for_more_speech() -> N
     )
 
     assert first.action is Action.HOLD
-    assert first.intent.value == "backchannel"
-    assert decision.action is Action.HOLD
-    assert decision.reason.startswith("deadline_wait_for_more_transcript")
-
-
-def test_runtime_deadline_stable_topic_prefix_cancels_as_redirect() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(InterruptPolicyConfig(), fast_lexical_intents=True),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    first = runtime.decide_from_transcript(
-        "换个话",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    decision = runtime.deadline_decision(
-        True,
-        has_transcript=True,
-        transcript="换个话",
-        eot_score=0.0,
-    )
-
-    assert first.action is Action.HOLD
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.topic_switch_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_zero_redirect_window_cancels_topic_prefix_immediately() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(
-            InterruptPolicyConfig(),
-            fast_lexical_intents=True,
-            correction_topic_stability_window_ms=0,
-        ),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    decision = runtime.decide_from_transcript(
-        "换个话",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.topic_switch_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_zero_redirect_window_cancels_correction_immediately() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(
-            InterruptPolicyConfig(),
-            fast_lexical_intents=True,
-            correction_topic_stability_window_ms=0,
-        ),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    decision = runtime.decide_from_transcript(
-        "不是",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "normal_interrupt"
-    assert decision.correction_hint is True
-    assert decision.tier == "tier1_redirect"
-
-
-def test_runtime_zero_redirect_window_keeps_non_redirect_guards() -> None:
-    policy = replace(
-        TurnPolicyConfig(),
-        interrupt=replace(
-            InterruptPolicyConfig(),
-            fast_lexical_intents=True,
-            correction_topic_stability_window_ms=0,
-        ),
-    )
-    runtime = TurnPolicyRuntime(policy)
-
-    short_prefix = runtime.decide_from_transcript(
-        "换个",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=100.0,
-    )
-    ack = runtime.decide_from_transcript(
-        "好的",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=160.0,
-    )
-    followup = runtime.decide_from_transcript(
-        "那它的主要风险是什么",
-        0.0,
-        vad_active=True,
-        agent_speaking=True,
-        event_time_ms=220.0,
-    )
-
-    assert short_prefix.action is Action.HOLD
-    assert "insufficient_transcript_evidence" in short_prefix.reason
-    assert ack.action is Action.ROLLBACK
-    assert ack.intent.value == "backchannel"
-    assert followup.action is Action.HOLD
-    assert followup.reason.startswith("semantic_score_wait")
+    assert first.intent.value == "uncertain"
+    assert deadline.action is Action.HOLD
+    assert deadline.reason.startswith("deadline_wait_for_more_transcript")
 
 
 def test_runtime_annotates_normal_interrupt_as_tier2() -> None:
@@ -472,10 +166,10 @@ def test_runtime_annotates_short_weak_signal_as_tier3() -> None:
     )
 
     assert decision.tier == "tier3_backchannel_noise"
-    assert decision.tier_reason.startswith("intent:backchannel_await_more_speech")
+    assert decision.tier_reason.startswith("weak_signal_short_transcript")
 
 
-def test_runtime_hard_stop_bypasses_stable_signal_window() -> None:
+def test_runtime_stop_like_text_does_not_create_a_hard_stop_hint() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     decision = runtime.decide_from_transcript(
@@ -486,8 +180,8 @@ def test_runtime_hard_stop_bypasses_stable_signal_window() -> None:
         event_time_ms=100.0,
     )
 
-    assert decision.action is Action.CANCEL
-    assert decision.reason.startswith("intent:hard_stop")
+    assert decision.action is Action.HOLD
+    assert decision.intent.value == "uncertain"
 
 
 def test_runtime_short_correction_text_waits_for_more_evidence() -> None:
@@ -523,7 +217,7 @@ def test_runtime_short_correction_text_waits_for_more_evidence() -> None:
     assert third.correction_hint is False
 
 
-def test_runtime_hard_stop_prefix_bypasses_stability_window() -> None:
+def test_runtime_hard_stop_prefix_stays_a_hint() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     decision = runtime.decide_from_transcript(
@@ -534,10 +228,9 @@ def test_runtime_hard_stop_prefix_bypasses_stability_window() -> None:
         event_time_ms=100.0,
     )
 
-    assert decision.action is Action.CANCEL
-    assert decision.intent.value == "hard_stop"
-    assert decision.intent_source == "lexicon_prefix"
-    assert decision.tier == "tier0_hard_stop"
+    assert decision.action is Action.HOLD
+    assert decision.intent.value == "uncertain"
+    assert decision.tier == "tier3_backchannel_noise"
 
 
 def test_runtime_long_topic_text_uses_normal_stability_window() -> None:
@@ -712,7 +405,7 @@ def test_runtime_holds_normal_followup_shortly_after_short_artifact() -> None:
     assert followup.reason.startswith("semantic_score_wait")
 
 
-def test_runtime_noise_followup_does_not_block_hard_stop() -> None:
+def test_runtime_weak_followup_does_not_promote_text_to_control_intent() -> None:
     runtime = TurnPolicyRuntime(TurnPolicyConfig())
 
     runtime.decide_from_transcript(
@@ -730,7 +423,8 @@ def test_runtime_noise_followup_does_not_block_hard_stop() -> None:
         event_time_ms=700.0,
     )
 
-    assert decision.action is Action.CANCEL
+    assert decision.action is Action.HOLD
+    assert decision.intent.value == "uncertain"
 
 
 def test_runtime_mid_score_hold_does_not_mark_weak_signal() -> None:

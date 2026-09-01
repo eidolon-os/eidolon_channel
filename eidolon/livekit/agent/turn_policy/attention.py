@@ -11,11 +11,6 @@ from eidolon.livekit.agent.integration.client_audio_state import ClientAudioStat
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .constants import TRANSCRIPT_PREVIEW_MAX_CHARS
-from .intent_classifier import (
-    InterruptIntent,
-    LexiconInterruptClassifier,
-    hard_stop_intent,
-)
 from .evidence import TranscriptEvidenceGate
 
 
@@ -55,11 +50,6 @@ class AttentionAdmission:
 
     def __init__(self, config: TurnPolicyConfig) -> None:
         self._config = config.attention
-        self._intent_classifier = LexiconInterruptClassifier(
-            fast_intents=config.interrupt.fast_lexical_intents,
-            repeated_noise_min_chars=config.interrupt.repeated_noise_min_chars,
-            repeated_noise_max_chars=config.interrupt.repeated_noise_max_chars,
-        )
         self._evidence_gate = TranscriptEvidenceGate(config.interrupt)
 
     def decide(self, signal: AttentionInput) -> AttentionDecision:
@@ -75,8 +65,7 @@ class AttentionAdmission:
             )
         client = signal.client_state
         client_playback_active = (
-            client is not None
-            and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
+            client is not None and client.playback_state == PLAYBACK_STATE_AGENT_SPEAKING
         )
         if not (signal.agent_speaking or client_playback_active):
             return AttentionDecision(
@@ -141,39 +130,6 @@ class AttentionAdmission:
                 text,
                 eot_score=eot_score,
             )
-            intent = hard_stop_intent(text)
-            if intent is InterruptIntent.HARD_STOP:
-                if evidence.reason == "short_latin_artifact":
-                    return AttentionDecision(
-                        AdmissionAction.OBSERVE,
-                        f"playback_low_evidence_transcript:{evidence.reason}",
-                        transcript_preview=preview,
-                        client_state_used=True,
-                        evidence_reason=evidence.reason,
-                    )
-                return AttentionDecision(
-                    AdmissionAction.HARD_INTERRUPT,
-                    "transcript_hard_stop",
-                    transcript_preview=preview,
-                    client_state_used=True,
-                )
-            lexical_intent = self._intent_classifier.classify(
-                text,
-                vad_active=True,
-                agent_speaking=True,
-                eot_score=eot_score,
-            )
-            if lexical_intent.intent in (
-                InterruptIntent.TOPIC_SWITCH,
-                InterruptIntent.CORRECTION,
-            ):
-                return AttentionDecision(
-                    AdmissionAction.DUCK_AND_DECIDE,
-                    f"transcript_intent:{lexical_intent.reason}",
-                    transcript_preview=preview,
-                    client_state_used=True,
-                )
-
             if evidence.allow_decision and evidence.reason == "high_eot_transcript":
                 return AttentionDecision(
                     AdmissionAction.DUCK_AND_DECIDE,

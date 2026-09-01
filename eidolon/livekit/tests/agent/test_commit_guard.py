@@ -59,7 +59,7 @@ def _make_pipeline_with_session(*, latest_asr_text: str = "") -> Any:
     pipeline._context_ledger = MagicMock()
 
     llm = SimpleNamespace(
-        set_turn_control_metadata=MagicMock(),
+        set_turn_decision_metadata=MagicMock(),
     )
     pipeline._factory = SimpleNamespace(llm=SimpleNamespace(llm=llm))
     return pipeline
@@ -123,6 +123,12 @@ async def test_framework_completed_is_the_single_normal_commit_boundary() -> Non
     pipeline._session.clear_user_turn.assert_not_called()
     assert message.content == ["你好世界"]
     assert "turn_committed_at" in timeline.timestamps
+    setter = pipeline._factory.llm.llm.set_turn_decision_metadata
+    setter.assert_called_once()
+    metadata = setter.call_args.args[0]
+    assert metadata["decision"] == "commit"
+    assert metadata["evidence"]["boundary"] == "framework_completed_turn"
+    assert timeline.attrs["committed_turn_decision"] == metadata
 
 
 def test_livekit_transcription_timeout_rejects_transcriptless_candidate() -> None:
@@ -149,9 +155,7 @@ def test_livekit_transcription_timeout_rejects_transcriptless_candidate() -> Non
         allow_interruptions=True,
         add_to_chat_ctx=False,
     )
-    assert timeline.attrs["timeline_flush_reason"] == (
-        "speech_stopped_without_transcript_deadline"
-    )
+    assert timeline.attrs["timeline_flush_reason"] == ("speech_stopped_without_transcript_deadline")
 
 
 def test_livekit_transcription_timeout_ignores_candidate_with_text() -> None:
@@ -363,9 +367,7 @@ async def test_orphan_interim_commits_best_known_text_at_hard_deadline() -> None
     pipeline._ensure_runtime_defaults()
     pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._on_user_transcribed(_transcript_event("好啊。", is_final=True))
-    pipeline._on_user_transcribed(
-        _transcript_event("那你记下来吧，这是我们约定。", is_final=False)
-    )
+    pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=False))
 
     message = ChatMessage(role="user", content=["好啊。"])
     allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
@@ -420,9 +422,7 @@ async def test_new_candidate_supersedes_turn_waiting_for_provider_evidence() -> 
     assert old_candidate.reject_reason == "superseded_by_new_speech"
     assert new_candidate.state == "open"
     assert pipeline._user_turns.active is new_candidate
-    assert old_timeline.attrs["framework_completed_settlement"]["outcome"] == (
-        "candidate_replaced"
-    )
+    assert old_timeline.attrs["framework_completed_settlement"]["outcome"] == ("candidate_replaced")
 
 
 @pytest.mark.asyncio
@@ -636,9 +636,7 @@ async def test_confirmed_cjk_barge_in_stops_playback_and_reaches_output_once() -
 
     pipeline = _make_pipeline_with_session()
     pipeline._allow_interruptions = True
-    pipeline._room = SimpleNamespace(
-        local_participant=SimpleNamespace(publish_data=AsyncMock())
-    )
+    pipeline._room = SimpleNamespace(local_participant=SimpleNamespace(publish_data=AsyncMock()))
     pipeline._ensure_runtime_defaults()
     pipeline._interruption_effects = pipeline._build_interruption_effects()
     timeline = TurnTimeline("confirmed-cjk-barge-in")
@@ -684,9 +682,7 @@ async def test_confirmed_cjk_barge_in_stops_playback_and_reaches_output_once() -
     pipeline._room.local_participant.publish_data.assert_awaited_once()
     assert timeline.attrs["client_control_events"][-1]["op"] == "playback.stop"
     assert "interrupt_cancel_resolved_at" in timeline.timestamps
-    assert pipeline._interruption_orchestrator.state.value == (
-        "confirmed_cancel_collecting_turn"
-    )
+    assert pipeline._interruption_orchestrator.state.value == ("confirmed_cancel_collecting_turn")
 
     # VAD closes while only an interim is available.  The final framework text
     # arrives later with a low EOT score; that score must not undo the already

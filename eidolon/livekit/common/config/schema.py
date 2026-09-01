@@ -154,6 +154,8 @@ class InterruptPolicyConfig:
     # Interrupt behavior flags (formerly the separate `interrupt_mode` axis,
     # collapsed into the single profile/config axis). Defaults = the stable
     # "balanced" behavior; the retired "responsive" mode flipped these on/off.
+    # Deprecated compatibility field. Fixed-phrase classification is not part
+    # of the production decision graph; this value intentionally has no effect.
     fast_lexical_intents: bool = False
     stabilize_normal_interrupts: bool = True
     weak_signal_followup_hold: bool = True

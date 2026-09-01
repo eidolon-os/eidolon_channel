@@ -102,8 +102,7 @@ def test_load_attention_admission_benchmark_suite() -> None:
     backchannel_case = next(
         case for case in suite.cases if case.case_id == "short_backchannel_rolls_back_001"
     )
-    # fast_lexical_intents defaults off after the interrupt_mode axis was retired,
-    # so a short backchannel is held (evidence gate) rather than fast-rolled-back.
+    # A short transcript is held by the evidence gate rather than interpreted.
     assert backchannel_case.expectations.action == "hold"
     assert "cancel" in backchannel_case.expectations.forbid_actions
 

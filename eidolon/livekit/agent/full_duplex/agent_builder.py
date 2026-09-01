@@ -24,7 +24,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
         async def stt_node(self, audio: Any, model_settings: Any):
             """Tap public SpeechEvents so optional provider evidence is retained."""
 
-            events = super().stt_node(audio, model_settings)
+            events: Any = super().stt_node(audio, model_settings)
             if inspect.isawaitable(events):
                 events = await events
             if events is None:
@@ -32,6 +32,28 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             async for event in events:
                 pipeline._observe_stt_speech_event(event)
                 yield event
+
+        async def tts_node(self, text: Any, model_settings: Any):
+            """Tap the public provider-neutral text stream before TTS synthesis."""
+
+            stream_id = pipeline._begin_streamed_assistant_speech()
+
+            async def observed_text():
+                async for chunk in text:
+                    pipeline._append_streamed_assistant_speech(stream_id, chunk)
+                    yield chunk
+
+            try:
+                audio_frames: Any = super().tts_node(observed_text(), model_settings)
+                if inspect.isawaitable(audio_frames):
+                    audio_frames = await audio_frames
+                if audio_frames is None:
+                    return
+                async for frame in audio_frames:
+                    yield frame
+            except BaseException:
+                pipeline._abort_streamed_assistant_speech(stream_id)
+                raise
 
         async def on_enter(self) -> None:
             # [lifecycle] welcome timestamp — anchors "welcome played" so Phase

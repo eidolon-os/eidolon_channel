@@ -20,10 +20,10 @@ class AssistantSpeechSnapshot:
 class AssistantSpeechLedger:
     """Small text ledger for the assistant output currently heard by the user.
 
-    Provider ``current_pushed_text`` remains the primary source for streaming
-    replies. The ledger fills the gap for Channel-issued fixed speech such as
-    the welcome line, where LiveKit may start playback before provider text is
-    readable from the active synth stream.
+    The provider-neutral source is LiveKit's public ``Agent.tts_node`` text
+    stream. Provider ``current_pushed_text`` is an optional compatibility
+    source when present. The ledger also covers Channel-issued fixed speech
+    such as the welcome line.
     """
 
     def __init__(self, *, clock: Any | None = None) -> None:
@@ -31,6 +31,11 @@ class AssistantSpeechLedger:
         self._latest: AssistantSpeechSnapshot | None = None
         self._fixed_speech_pending = False
         self._fixed_speech_active = False
+        self._playback_active = False
+        self._streamed_speech_pending = False
+        self._streamed_speech_active = False
+        self._stream_id = 0
+        self._stream_text = ""
 
     @property
     def latest(self) -> AssistantSpeechSnapshot | None:
@@ -45,6 +50,37 @@ class AssistantSpeechLedger:
             source=source,
             timestamp=float(self._clock()),
         )
+
+    def begin_streamed_speech(self) -> int:
+        """Open one public ``tts_node`` text stream and return its identity."""
+
+        self._stream_id += 1
+        self._stream_text = ""
+        self._streamed_speech_pending = False
+        self._streamed_speech_active = False
+        return self._stream_id
+
+    def append_streamed_speech(self, stream_id: int, text: str) -> bool:
+        """Append a text delta from the active provider-neutral TTS stream."""
+
+        if stream_id != self._stream_id or not isinstance(text, str) or not text:
+            return False
+        self._stream_text += text
+        self.record(self._stream_text, source="livekit_tts_node")
+        if self._playback_active:
+            self._streamed_speech_active = True
+        else:
+            self._streamed_speech_pending = True
+        return True
+
+    def abort_streamed_speech(self, stream_id: int) -> None:
+        """Discard an unplayed text stream when synthesis fails."""
+
+        if stream_id != self._stream_id:
+            return
+        if not self._streamed_speech_active:
+            self._streamed_speech_pending = False
+            self._stream_text = ""
 
     def queue_fixed_speech(self, text: str, *, source: str) -> None:
         """Record Channel-issued speech that will start on the next playback.
@@ -64,19 +100,24 @@ class AssistantSpeechLedger:
     def on_playback_started(self) -> None:
         """Activate the fixed speech queued for this playback, if any."""
 
+        self._playback_active = True
+        if self._streamed_speech_pending:
+            self._streamed_speech_pending = False
+            self._streamed_speech_active = True
         if not self._fixed_speech_pending:
             return
         self._fixed_speech_pending = False
         self._fixed_speech_active = True
 
     def on_playback_finished(self) -> None:
-        """Close active fixed speech and start its residual-echo tail window."""
+        """Close active speech and start its residual-echo tail window."""
 
-        if not self._fixed_speech_active:
-            return
-        self._fixed_speech_active = False
         latest = self._latest
-        if latest is not None:
+        belongs_to_playback = self._fixed_speech_active or self._streamed_speech_active
+        self._playback_active = False
+        self._fixed_speech_active = False
+        self._streamed_speech_active = False
+        if latest is not None and belongs_to_playback:
             self._latest = AssistantSpeechSnapshot(
                 text=latest.text,
                 source=latest.source,
@@ -89,13 +130,15 @@ class AssistantSpeechLedger:
         factory: Any | None = None,
         max_age_ms: int = 0,
     ) -> str:
+        latest = self._latest
+        if latest is not None and (
+            self._fixed_speech_active or self._streamed_speech_active
+        ):
+            return latest.text
         current = self.current_tts_text(factory)
         if current.strip():
             self.record(current, source="tts_in_flight")
             return current
-        latest = self._latest
-        if self._fixed_speech_active and latest is not None:
-            return latest.text
         if latest is None or max_age_ms <= 0:
             return ""
         age_ms = (float(self._clock()) - latest.timestamp) * 1000.0

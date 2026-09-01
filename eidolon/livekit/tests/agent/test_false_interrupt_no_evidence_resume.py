@@ -13,11 +13,13 @@ waiting the full evidence window. A real (STT-lagging) interrupt that *does*
 produce a transcript still gets the full window.
 
 These test the orchestrator's decision surface (``should_hold_deadline`` /
-``max_suspend_sec``); the deadline handler turns "stop holding" into an actual
+``hold_remaining_sec``); the deadline handler turns "stop holding" into an actual
 resume (covered end-to-end by the web dogfood re-run).
 """
 
 from __future__ import annotations
+
+import pytest
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.interruption_orchestrator import (
@@ -74,18 +76,19 @@ def test_no_transcript_resumes_after_grace() -> None:
     assert owner.should_hold_deadline() is False
 
 
-def test_no_transcript_max_suspend_capped() -> None:
+def test_no_transcript_remaining_budget_is_measured_from_vad_end() -> None:
     clock = _Clock()
     owner = _enter_no_transcript_wait(clock)
-    assert owner.max_suspend_sec() == _NO_EVIDENCE  # not the full 6s
+    clock.t += 0.2
+    assert owner.hold_remaining_sec() == pytest.approx(_NO_EVIDENCE - 0.2)
 
 
-def test_no_transcript_max_suspend_caps_active_candidate_before_vad_end() -> None:
+def test_active_candidate_uses_full_evidence_budget_before_vad_end() -> None:
     clock = _Clock()
     owner = _owner(clock)
     owner.start_candidate(timeline=TurnTimeline("turn-1"))
 
-    assert owner.max_suspend_sec() == _NO_EVIDENCE
+    assert owner.hold_remaining_sec() == _EVIDENCE
 
 
 def test_transcript_present_keeps_full_evidence_window() -> None:
@@ -97,7 +100,9 @@ def test_transcript_present_keeps_full_evidence_window() -> None:
     owner.defer_false_resume_after_speech_end(transcript="那你现在", duck_suspended=True)
     clock.t += _NO_EVIDENCE + 0.05
     assert owner.should_hold_deadline() is True
-    assert owner.max_suspend_sec() == _EVIDENCE
+    assert owner.hold_remaining_sec() == pytest.approx(
+        _EVIDENCE - (_NO_EVIDENCE + 0.05)
+    )
 
 
 def test_transcript_arriving_during_grace_extends_to_full_window() -> None:
@@ -107,7 +112,9 @@ def test_transcript_arriving_during_grace_extends_to_full_window() -> None:
     owner.note_transcript("那你现在", is_final=False)
     clock.t += _NO_EVIDENCE + 0.05
     assert owner.should_hold_deadline() is True
-    assert owner.max_suspend_sec() == _EVIDENCE
+    assert owner.hold_remaining_sec() == pytest.approx(
+        _EVIDENCE - (_NO_EVIDENCE + 0.05)
+    )
 
 
 def test_default_preserves_full_window_behavior() -> None:
@@ -124,4 +131,6 @@ def test_default_preserves_full_window_behavior() -> None:
     owner.defer_false_resume_after_speech_end(transcript="", duck_suspended=True)
     clock.t += _NO_EVIDENCE + 0.05
     assert owner.should_hold_deadline() is True
-    assert owner.max_suspend_sec() == _EVIDENCE
+    assert owner.hold_remaining_sec() == pytest.approx(
+        _EVIDENCE - (_NO_EVIDENCE + 0.05)
+    )

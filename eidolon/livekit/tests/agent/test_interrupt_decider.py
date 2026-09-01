@@ -15,6 +15,7 @@ import pytest
 from eidolon.livekit.agent.turn_policy import (
     Action,
     Decision,
+    InterruptIntent,
     InterruptIntentResult,
     InterruptDecider,
     LexiconInterruptClassifier,
@@ -159,6 +160,64 @@ def test_backchannel_with_fast_lexical_rolls_back() -> None:
     assert decision.action is Action.ROLLBACK
     assert decision.intent is not None
     assert decision.intent.value == "backchannel"
+
+
+def test_short_latin_backchannel_interim_waits_for_transcript_revision() -> None:
+    cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
+    decider = InterruptDecider(cfg)
+
+    interim = decider.on_stt_interim("Okay", score=0.0, is_final=False)
+    final = decider.on_stt_interim("停一下", score=0.0, is_final=True)
+
+    assert interim.action is Action.HOLD
+    assert "short_latin_artifact" in interim.reason
+    assert final.action is Action.CANCEL
+    assert final.intent is InterruptIntent.HARD_STOP
+
+
+def test_short_latin_backchannel_final_rolls_back() -> None:
+    cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
+
+    decision = InterruptDecider(cfg).on_stt_interim(
+        "Okay",
+        score=0.0,
+        is_final=True,
+    )
+
+    assert decision.action is Action.ROLLBACK
+    assert decision.intent is InterruptIntent.BACKCHANNEL
+
+
+def test_short_latin_backchannel_deadline_keeps_candidate_open() -> None:
+    cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
+
+    decision = InterruptDecider(cfg).on_decision_deadline(
+        True,
+        has_transcript=True,
+        transcript="Okay",
+        eot_score=0.0,
+    )
+
+    assert decision.action is Action.HOLD
+    assert "short_latin_artifact" in decision.reason
+
+
+@pytest.mark.parametrize("text", ["换个话题"])
+def test_provider_neutral_policy_text_cancels_segmented_topic_switch(text: str) -> None:
+    cfg = replace(
+        InterruptPolicyConfig(),
+        fast_lexical_intents=True,
+        correction_topic_stability_window_ms=0,
+    )
+    decision = InterruptDecider(cfg).on_stt_interim(
+        text,
+        score=0.24,
+        is_final=False,
+    )
+
+    assert decision.action is Action.CANCEL
+    assert decision.intent is InterruptIntent.TOPIC_SWITCH
+    assert decision.topic_switch_hint is True
 
 
 def test_short_acknowledgement_with_fast_lexical_rolls_back() -> None:

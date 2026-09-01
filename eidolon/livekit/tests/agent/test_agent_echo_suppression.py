@@ -13,7 +13,9 @@ agent-playback and drops matched transcripts before they start a user turn.
 
 from __future__ import annotations
 
-from eidolon.livekit.agent.session.transcript_echo import TranscriptEchoGate
+from types import SimpleNamespace
+
+from eidolon.livekit.agent.session.transcript_echo import EchoEvidence, TranscriptEchoGate
 
 
 def _gate(agent_text: str) -> TranscriptEchoGate:
@@ -37,6 +39,25 @@ def test_echo_ignores_punctuation_and_spaces() -> None:
     gate = _gate(AGENT)
     assert gate.is_echo("说前面那个。") is True
     assert gate.is_echo(" 你希望我叫你什么 ") is True
+
+
+def test_echo_tolerates_leading_streaming_boundary_duplication() -> None:
+    gate = _gate("你好！我是你的 AI 助手，请问有什么可以帮你的？")
+
+    assert gate.is_echo("我，我是你的AI助手") is True
+
+
+def test_short_assistant_fragment_is_hold_evidence_not_confirmed_echo() -> None:
+    gate = _gate("你好！我是你的 AI 助手，请问有什么可以帮你的？")
+
+    assert gate.classify("我是。") is EchoEvidence.POSSIBLE
+    assert gate.is_echo("我是。") is False
+
+
+def test_echo_boundary_tolerance_does_not_drop_user_prefix() -> None:
+    gate = _gate("换个话题之后，我继续介绍方案。")
+
+    assert gate.is_echo("我换个话题") is False
 
 
 def test_real_user_turn_not_flagged_as_echo() -> None:
@@ -147,3 +168,63 @@ def test_completed_fixed_speech_is_not_reactivated_by_later_playback() -> None:
     ledger.on_playback_started()
 
     assert ledger.current_or_recent_text(max_age_ms=3000) == ""
+
+
+def test_streamed_assistant_text_remains_current_for_active_playback() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    now = 100.0
+    ledger = AssistantSpeechLedger(clock=lambda: now)
+    stream_id = ledger.begin_streamed_speech()
+    assert ledger.append_streamed_speech(stream_id, "这是仍在") is True
+    ledger.on_playback_started()
+    now = 101.0
+    assert ledger.append_streamed_speech(stream_id, "播放的完整回答。") is True
+    now = 110.0
+
+    assert ledger.current_or_recent_text(max_age_ms=3000) == "这是仍在播放的完整回答。"
+
+    ledger.on_playback_finished()
+    now = 112.9
+    assert ledger.current_or_recent_text(max_age_ms=3000) == "这是仍在播放的完整回答。"
+    now = 113.1
+    assert ledger.current_or_recent_text(max_age_ms=3000) == ""
+
+
+def test_streamed_assistant_text_precedes_optional_provider_text() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    ledger = AssistantSpeechLedger()
+    stream_id = ledger.begin_streamed_speech()
+    ledger.append_streamed_speech(stream_id, "公开节点回复")
+    ledger.on_playback_started()
+    factory = SimpleNamespace(
+        tts=SimpleNamespace(tts=SimpleNamespace(current_pushed_text="provider reply"))
+    )
+
+    assert ledger.current_or_recent_text(factory=factory) == "公开节点回复"
+
+
+def test_assistant_ledger_ignores_superseded_stream_chunks() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    ledger = AssistantSpeechLedger()
+    old_stream_id = ledger.begin_streamed_speech()
+    current_stream_id = ledger.begin_streamed_speech()
+
+    assert ledger.append_streamed_speech(old_stream_id, "旧回复") is False
+    assert ledger.append_streamed_speech(current_stream_id, "新回复") is True
+    assert ledger.latest is not None
+    assert ledger.latest.text == "新回复"
+
+
+def test_aborted_unplayed_stream_is_not_reactivated() -> None:
+    from eidolon.livekit.agent.session.assistant_speech import AssistantSpeechLedger
+
+    ledger = AssistantSpeechLedger()
+    stream_id = ledger.begin_streamed_speech()
+    ledger.append_streamed_speech(stream_id, "合成失败的回复")
+    ledger.abort_streamed_speech(stream_id)
+    ledger.on_playback_started()
+
+    assert ledger.current_or_recent_text(max_age_ms=0) == ""

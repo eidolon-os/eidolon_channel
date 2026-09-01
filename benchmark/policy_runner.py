@@ -175,8 +175,12 @@ def run_policy_suite(
                         ),
                     }
                     if not transcript_admission.accepted:
-                        echo_rejection_count += 1
-                        action = Action.ROLLBACK
+                        possible_echo = (
+                            transcript_admission.reason == "possible_agent_echo_hold"
+                        )
+                        if not possible_echo:
+                            echo_rejection_count += 1
+                        action = Action.HOLD if possible_echo else Action.ROLLBACK
                         intent = "uncertain"
                         decision_action = action.value
                         decision_intent = intent

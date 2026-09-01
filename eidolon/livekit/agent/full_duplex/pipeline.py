@@ -1208,7 +1208,9 @@ class StreamingPipeline(BasePipeline):
             should_hold_for_evidence=(
                 lambda: self._interruption_orchestrator.should_hold_deadline()
             ),
-            get_max_suspend_sec=lambda: self._interruption_orchestrator.max_suspend_sec(),
+            get_hold_remaining_sec=(
+                lambda: self._interruption_orchestrator.hold_remaining_sec()
+            ),
         )
 
     def _ensure_duck_suspend_timeout_handler(self) -> None:
@@ -1436,6 +1438,21 @@ class StreamingPipeline(BasePipeline):
             self._assistant_speech = AssistantSpeechLedger()
         self._assistant_speech.record(text, source=source)
 
+    def _begin_streamed_assistant_speech(self) -> int:
+        if not hasattr(self, "_assistant_speech"):
+            self._assistant_speech = AssistantSpeechLedger()
+        return self._assistant_speech.begin_streamed_speech()
+
+    def _append_streamed_assistant_speech(self, stream_id: int, text: str) -> None:
+        if not hasattr(self, "_assistant_speech"):
+            self._assistant_speech = AssistantSpeechLedger()
+        self._assistant_speech.append_streamed_speech(stream_id, text)
+
+    def _abort_streamed_assistant_speech(self, stream_id: int) -> None:
+        if not hasattr(self, "_assistant_speech"):
+            return
+        self._assistant_speech.abort_streamed_speech(stream_id)
+
     def _queue_fixed_assistant_speech(self, text: str, *, source: str) -> None:
         if not hasattr(self, "_assistant_speech"):
             self._assistant_speech = AssistantSpeechLedger()
@@ -1590,6 +1607,12 @@ class StreamingPipeline(BasePipeline):
         """
         self._ensure_runtime_defaults()
         self._ensure_transcript_handler().handle(event)
+
+    def _on_user_transcription_timeout(self, event: Any) -> None:
+        """Apply product recovery after LiveKit observes speech with no final text."""
+
+        self._ensure_runtime_defaults()
+        self._ensure_turn_completion().handle_transcription_timeout(event)
 
     def _interrupt_decision_suppressed(self) -> bool:
         """Ignore residual ASR after a confirmed interrupt cancel."""

@@ -27,6 +27,17 @@ def test_interim_after_final_starts_a_new_sentence_segment() -> None:
     assert [revision.segment_index for revision in coordinator.active.revisions] == [0, 1]
 
 
+def test_policy_text_folds_provider_segment_boundary_without_changing_chat_text() -> None:
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
+    coordinator.start_speech(timeline=TurnTimeline("turn-provider-segments"))
+
+    coordinator.add_transcript("换个。", is_final=True)
+    coordinator.add_transcript("话题", is_final=False)
+
+    assert coordinator.selected_text == "换个。话题"
+    assert coordinator.selected_policy_text == "换个话题"
+
+
 def test_vad_stop_records_boundary_without_terminal_decision() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     coordinator.start_speech(timeline=TurnTimeline("turn-vad-stop"))

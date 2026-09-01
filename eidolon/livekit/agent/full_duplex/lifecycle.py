@@ -52,12 +52,14 @@ class FullDuplexSessionLifecycle:
         session = AgentSession(
             turn_handling=pipeline._build_turn_handling(),
             aec_warmup_duration=pipeline._aec_warmup_duration,
+            transcription_timeout=pipeline._stt_commit_transcript_timeout,
         )
         pipeline._session = session
 
         session.on("user_state_changed", pipeline._on_user_state_changed)
         session.on("agent_state_changed", pipeline._on_agent_state_changed)
         session.on("user_input_transcribed", pipeline._on_user_transcribed)
+        session.on("user_transcription_timeout", pipeline._on_user_transcription_timeout)
         session.on("error", pipeline._on_session_error)
         session.on("close", self._on_session_close)
 
@@ -291,9 +293,6 @@ class FullDuplexSessionLifecycle:
         """Give every product candidate a durable terminal state before teardown."""
 
         pipeline = self._pipeline
-        turn_completion = getattr(pipeline, "_turn_completion", None)
-        if turn_completion is not None:
-            turn_completion.cancel_transcriptless_expiry()
         coordinator = getattr(pipeline, "_user_turns", None)
         candidate = getattr(coordinator, "active", None)
         if candidate is None or getattr(candidate, "state", None) != "open":

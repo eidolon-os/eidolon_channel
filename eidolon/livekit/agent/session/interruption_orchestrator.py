@@ -474,56 +474,49 @@ class InterruptionOrchestrator:
         evidence window; a no-transcript trigger expires on its shorter grace.
         """
 
-        candidate = self._candidate
-        if candidate is None or candidate.resolved:
-            return False
-        if (
-            candidate.stopped_at is None
-            and candidate.last_vad_active is True
-            and candidate.last_policy_action in (None, Action.HOLD)
-        ):
-            return True
-        if not self.awaiting_post_speech_evidence:
-            return False
-        return not self._no_evidence_grace_elapsed()
+        remaining_sec = self.hold_remaining_sec()
+        return remaining_sec is not None and remaining_sec > 0
 
-    def max_suspend_sec(self) -> float:
-        """Max suspend window while waiting for post-speech evidence.
+    def hold_remaining_sec(self) -> float | None:
+        """Return the owner-clock budget remaining for an evidence HOLD.
 
-        Capped to the shorter no-evidence window when no transcript has arrived.
+        Active-speech evidence is bounded from VAD start. Once speech stops,
+        the post-speech evidence window is measured from VAD end; a long valid
+        utterance must not consume that grace before STT can finalize it. A
+        short Latin interim is provisional until FINAL and uses the shorter
+        no-evidence grace.
         """
 
         candidate = self._candidate
         if candidate is None or candidate.resolved:
-            return 0.0
+            return None
         if (
             candidate.stopped_at is None
-            and candidate.last_vad_active is True
             and candidate.last_policy_action in (None, Action.HOLD)
         ):
-            return self._evidence_timeout_sec
-        if not (candidate.final_transcript or candidate.transcript).strip():
-            if (
-                candidate.awaiting_post_speech_evidence
-                or self._no_evidence_timeout_sec < self._evidence_timeout_sec
-            ):
-                return self._no_evidence_timeout_sec
-            return 0.0
-        if candidate.awaiting_post_speech_evidence:
-            return self._evidence_timeout_sec
-        return 0.0
+            return max(
+                0.0,
+                self._evidence_timeout_sec - (self._now() - candidate.started_at),
+            )
+        if not candidate.awaiting_post_speech_evidence or candidate.stopped_at is None:
+            return None
+        transcript = (candidate.final_transcript or candidate.transcript).strip()
+        timeout_sec = (
+            self._no_evidence_timeout_sec
+            if not transcript or self._has_provisional_short_latin_artifact(candidate)
+            else self._evidence_timeout_sec
+        )
+        return max(0.0, timeout_sec - (self._now() - candidate.stopped_at))
 
-    def _no_evidence_grace_elapsed(self) -> bool:
-        """True once no transcript has arrived and the no-evidence grace passed."""
-
-        candidate = self._candidate
-        if candidate is None:
-            return False
-        if (candidate.final_transcript or candidate.transcript).strip():
-            return False
-        if candidate.stopped_at is None:
-            return False
-        return (self._now() - candidate.stopped_at) >= self._no_evidence_timeout_sec
+    @staticmethod
+    def _has_provisional_short_latin_artifact(
+        candidate: InterruptionCandidate,
+    ) -> bool:
+        return bool(
+            not candidate.final_transcript.strip()
+            and candidate.last_policy_action is Action.HOLD
+            and "short_latin_artifact" in candidate.last_policy_reason
+        )
 
     def blocks_framework_completed_turn(
         self,

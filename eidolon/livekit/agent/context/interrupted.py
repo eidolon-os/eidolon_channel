@@ -45,22 +45,6 @@ class InterruptedContextManager:
         try:
             played_sec = duck_mixer.played_seconds if duck_mixer is not None else None
 
-            in_flight_text = self._current_tts_text(factory)
-            if in_flight_text and in_flight_text.strip():
-                self.last_context = {
-                    "text": in_flight_text,
-                    "timestamp": time.monotonic(),
-                    "played_seconds": played_sec,
-                    "source": "tts_in_flight",
-                }
-                logger.info(
-                    "[InterruptedContextManager] captured "
-                    "(source=tts_in_flight): text=%r played=%.2fs",
-                    in_flight_text[:80],
-                    played_sec or 0.0,
-                )
-                return self.last_context
-
             recent_assistant_text = assistant_text.strip()
             if recent_assistant_text:
                 self.last_context = {
@@ -73,6 +57,22 @@ class InterruptedContextManager:
                     "[InterruptedContextManager] captured "
                     "(source=assistant_speech_ledger): text=%r played=%.2fs",
                     recent_assistant_text[:80],
+                    played_sec or 0.0,
+                )
+                return self.last_context
+
+            in_flight_text = self._current_tts_text(factory)
+            if in_flight_text and in_flight_text.strip():
+                self.last_context = {
+                    "text": in_flight_text,
+                    "timestamp": time.monotonic(),
+                    "played_seconds": played_sec,
+                    "source": "tts_in_flight",
+                }
+                logger.info(
+                    "[InterruptedContextManager] captured "
+                    "(source=tts_in_flight): text=%r played=%.2fs",
+                    in_flight_text[:80],
                     played_sec or 0.0,
                 )
                 return self.last_context

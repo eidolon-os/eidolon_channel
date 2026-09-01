@@ -215,7 +215,9 @@ class TestTurnEndPolicy:
 
         policy = TurnEndPolicy()
         # High EOT score should use T_FAST
-        threshold = policy.get_dynamic_threshold("你好，请问天气怎么样？", p_complete=0.9, is_final=True)
+        threshold = policy.get_dynamic_threshold(
+            "你好，请问天气怎么样？", p_complete=0.9, is_final=True
+        )
         assert threshold == pytest.approx(policy.T_URGENT)
 
     def test_dynamic_threshold_medium_score(self):
@@ -261,9 +263,7 @@ class TestTurnEndPolicy:
         policy = TurnEndPolicy()
         # Declarative sentences that DON'T end with question particles
         for txt in ["今天天气真不错", "我要点一杯咖啡", "好的我知道了"]:
-            assert not policy.is_question_ending(txt), (
-                f"{txt!r} should NOT be a question"
-            )
+            assert not policy.is_question_ending(txt), f"{txt!r} should NOT be a question"
 
     def test_is_question_ending_ambiguous_particles_not_matched(self):
         from eidolon.livekit.plugins.eot import TurnEndPolicy
@@ -290,7 +290,9 @@ class TestTurnEndPolicy:
 
         policy = TurnEndPolicy()
         threshold = policy.get_dynamic_threshold(
-            "你好吗", p_complete=0.5, is_final=True,
+            "你好吗",
+            p_complete=0.5,
+            is_final=True,
         )
         assert threshold == pytest.approx(policy.T_URGENT)
 
@@ -300,7 +302,9 @@ class TestTurnEndPolicy:
 
         policy = TurnEndPolicy()
         threshold = policy.get_dynamic_threshold(
-            "你好吗", p_complete=0.5, is_final=False,
+            "你好吗",
+            p_complete=0.5,
+            is_final=False,
         )
         assert threshold == pytest.approx(policy.T_MIN)
 
@@ -310,7 +314,9 @@ class TestTurnEndPolicy:
 
         policy = TurnEndPolicy()
         threshold = policy.get_dynamic_threshold(
-            "我要去北京", p_complete=0.5, is_final=False,
+            "我要去北京",
+            p_complete=0.5,
+            is_final=False,
         )
         # Falls through to EOT tier (medium score → T_MID), NOT T_URGENT/T_MIN.
         assert threshold == pytest.approx(policy.T_MID)
@@ -324,7 +330,9 @@ class TestTurnEndPolicy:
         # Pick a command word that doesn't end in a question particle
         cmd = next(c for c in COMMAND_WORDS if not c.endswith(("吗", "呢", "么", "嘛")))
         threshold = policy.get_dynamic_threshold(
-            cmd, p_complete=0.5, is_final=False,
+            cmd,
+            p_complete=0.5,
+            is_final=False,
         )
         assert threshold == pytest.approx(policy.T_URGENT)
 
@@ -387,9 +395,9 @@ class TestTurnDetectionStateManager:
         )
 
         manager = TurnDetectionStateManager()
-        manager.update_vad(True)   # 1 transition: False -> True
+        manager.update_vad(True)  # 1 transition: False -> True
         manager.update_vad(False)  # 2 transitions: False -> True -> False
-        manager.update_vad(True)   # 3 transitions: False -> True -> False -> True
+        manager.update_vad(True)  # 3 transitions: False -> True -> False -> True
         assert len(manager._vad.transition_times) == 3
 
     def test_update_asr_sets_final(self):
@@ -650,8 +658,10 @@ class TestBackchannelSuppressionPolicy:
 
     def test_simple_chinese_ack_blocked(self):
         from eidolon.livekit.plugins.eot import (
-            BackchannelSuppressionPolicy, TurnEndPolicy,
+            BackchannelSuppressionPolicy,
+            TurnEndPolicy,
         )
+
         policy = BackchannelSuppressionPolicy()
         for txt in ["嗯", "嗯嗯", "好的", "对", "是的", "可以"]:
             state = self._state_with_text(txt)
@@ -662,8 +672,10 @@ class TestBackchannelSuppressionPolicy:
 
     def test_english_ack_blocked(self):
         from eidolon.livekit.plugins.eot import (
-            BackchannelSuppressionPolicy, TurnEndPolicy,
+            BackchannelSuppressionPolicy,
+            TurnEndPolicy,
         )
+
         policy = BackchannelSuppressionPolicy()
         for txt in ["OK", "okay", "yes", "yeah", "uh-huh", "right"]:
             state = self._state_with_text(txt)
@@ -674,8 +686,10 @@ class TestBackchannelSuppressionPolicy:
 
     def test_punctuation_stripped(self):
         from eidolon.livekit.plugins.eot import (
-            BackchannelSuppressionPolicy, TurnEndPolicy,
+            BackchannelSuppressionPolicy,
+            TurnEndPolicy,
         )
+
         policy = BackchannelSuppressionPolicy()
         # ASR sometimes appends punctuation; backchannel should still match.
         for txt in ["嗯。", "好的!", "OK!", "嗯嗯,"]:
@@ -687,8 +701,10 @@ class TestBackchannelSuppressionPolicy:
 
     def test_compound_backchannel_blocked(self):
         from eidolon.livekit.plugins.eot import (
-            BackchannelSuppressionPolicy, TurnEndPolicy,
+            BackchannelSuppressionPolicy,
+            TurnEndPolicy,
         )
+
         policy = BackchannelSuppressionPolicy()
         # Compound vocalisations made of single-char backchannel atoms.
         for txt in ["嗯好", "嗯对", "好对", "嗯嗯好"]:
@@ -700,8 +716,10 @@ class TestBackchannelSuppressionPolicy:
 
     def test_real_speech_passes_through(self):
         from eidolon.livekit.plugins.eot import (
-            BackchannelSuppressionPolicy, TurnEndPolicy,
+            BackchannelSuppressionPolicy,
+            TurnEndPolicy,
         )
+
         policy = BackchannelSuppressionPolicy()
         for txt in ["北京天气怎么样", "好的我知道了", "停", "我想想看"]:
             state = self._state_with_text(txt)
@@ -712,22 +730,21 @@ class TestBackchannelSuppressionPolicy:
 
     def test_empty_text_abstains(self):
         from eidolon.livekit.plugins.eot import (
-            BackchannelSuppressionPolicy, TurnEndPolicy,
+            BackchannelSuppressionPolicy,
+            TurnEndPolicy,
         )
+
         policy = BackchannelSuppressionPolicy()
         result = policy.check(self._state_with_text(""), TurnEndPolicy())
         assert result is None
 
-    def test_in_semantic_chain_only(self):
-        """Backchannel suppression must be in semantic_interruption chain
-        (agent speaking) but NOT in normal_turn_end chain."""
+    def test_not_in_production_chains(self):
+        """Legacy fixed-word helper remains importable but is not authoritative."""
         from eidolon.livekit.plugins.eot import PolicyChain
 
-        sem_types = [type(p).__name__ for p in
-                     PolicyChain.for_semantic_interruption()._policies]
-        normal_types = [type(p).__name__ for p in
-                        PolicyChain.for_normal_turn_end()._policies]
-        assert "BackchannelSuppressionPolicy" in sem_types
+        sem_types = [type(p).__name__ for p in PolicyChain.for_semantic_interruption()._policies]
+        normal_types = [type(p).__name__ for p in PolicyChain.for_normal_turn_end()._policies]
+        assert "BackchannelSuppressionPolicy" not in sem_types
         assert "BackchannelSuppressionPolicy" not in normal_types
 
 
@@ -743,8 +760,10 @@ class TestNoiseLikeTranscriptPolicy:
 
     def test_single_cough_token_blocked(self):
         from eidolon.livekit.plugins.eot import (
-            NoiseLikeTranscriptPolicy, TurnEndPolicy,
+            NoiseLikeTranscriptPolicy,
+            TurnEndPolicy,
         )
+
         policy = NoiseLikeTranscriptPolicy()
         for txt in ["啊", "咳", "咳咳", "嗯哼", "哎", "哎呀"]:
             state = self._state_with_text(txt)
@@ -755,8 +774,10 @@ class TestNoiseLikeTranscriptPolicy:
 
     def test_repeated_noise_chars_blocked(self):
         from eidolon.livekit.plugins.eot import (
-            NoiseLikeTranscriptPolicy, TurnEndPolicy,
+            NoiseLikeTranscriptPolicy,
+            TurnEndPolicy,
         )
+
         policy = NoiseLikeTranscriptPolicy()
         for txt in ["啊啊", "啊啊啊", "咳咳咳", "嗯嗯嗯嗯"]:
             state = self._state_with_text(txt)
@@ -767,27 +788,24 @@ class TestNoiseLikeTranscriptPolicy:
 
     def test_real_speech_passes_through(self):
         from eidolon.livekit.plugins.eot import (
-            NoiseLikeTranscriptPolicy, TurnEndPolicy,
+            NoiseLikeTranscriptPolicy,
+            TurnEndPolicy,
         )
+
         policy = NoiseLikeTranscriptPolicy()
         for txt in ["北京天气怎么样", "我要点一杯咖啡", "你好啊朋友"]:
             state = self._state_with_text(txt)
             result = policy.check(state, TurnEndPolicy())
-            assert result is None, (
-                f"text={txt!r} is real speech, policy must abstain"
-            )
+            assert result is None, f"text={txt!r} is real speech, policy must abstain"
 
-    def test_in_both_chains(self):
-        """NoiseLike should be in BOTH chains — coughs aren't intentional in
-        either turn-end nor interrupt scenarios."""
+    def test_not_in_production_chains(self):
+        """Legacy fixed-word helper remains importable but is not authoritative."""
         from eidolon.livekit.plugins.eot import PolicyChain
 
-        sem_types = [type(p).__name__ for p in
-                     PolicyChain.for_semantic_interruption()._policies]
-        normal_types = [type(p).__name__ for p in
-                        PolicyChain.for_normal_turn_end()._policies]
-        assert "NoiseLikeTranscriptPolicy" in sem_types
-        assert "NoiseLikeTranscriptPolicy" in normal_types
+        sem_types = [type(p).__name__ for p in PolicyChain.for_semantic_interruption()._policies]
+        normal_types = [type(p).__name__ for p in PolicyChain.for_normal_turn_end()._policies]
+        assert "NoiseLikeTranscriptPolicy" not in sem_types
+        assert "NoiseLikeTranscriptPolicy" not in normal_types
 
 
 class TestG6VadProbabilityState:
@@ -823,7 +841,7 @@ class TestG6VadProbabilityState:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
 
         sm = TurnDetectionStateManager()
-        sm.update_vad_probability(1.5)   # > 1
+        sm.update_vad_probability(1.5)  # > 1
         sm.update_vad_probability(-0.5)  # < 0
         sm.update_vad_probability(0.5)
         # 1.5 → 1.0, -0.5 → 0.0, 0.5 → 0.5; avg = 0.5
@@ -894,24 +912,30 @@ class TestG5ConversationPhase:
 
     def test_detect_greeting_first_turn(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         for txt in ["你好", "您好", "嗨"]:
             assert d.detect(txt, history_length=0) == ConversationPhase.GREETING
 
     def test_detect_greeting_only_in_early_turns(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         # 5th turn: "你好" no longer GREETING (out of greeting window)
         assert d.detect("你好", history_length=5) == ConversationPhase.GATHERING
 
     def test_detect_thinking(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         # Words actually in THINKING_WORDS (substring match works on these).
         for txt in ["让我想想", "我想想看", "我感觉这个", "我觉得吧"]:
@@ -919,16 +943,20 @@ class TestG5ConversationPhase:
 
     def test_detect_closing_summary_words(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         for txt in ["好的，就这样吧", "就这些", "讲完了"]:
             assert d.detect(txt, history_length=3) == ConversationPhase.CLOSING
 
     def test_detect_closing_full_word(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         # Single word strong-ending words → CLOSING when whole utterance
         for txt in ["再见", "拜拜", "谢谢"]:
@@ -936,8 +964,10 @@ class TestG5ConversationPhase:
 
     def test_detect_gathering_default(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         for txt in ["北京天气怎么样", "我要点一杯咖啡", ""]:
             assert d.detect(txt, history_length=2) == ConversationPhase.GATHERING
@@ -945,8 +975,10 @@ class TestG5ConversationPhase:
     def test_priority_closing_beats_thinking(self):
         """CLOSING has higher priority than THINKING."""
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, ConversationPhaseDetector,
+            ConversationPhase,
+            ConversationPhaseDetector,
         )
+
         d = ConversationPhaseDetector()
         # Contains both "让我想想" (THINKING) and "就这样吧" (CLOSING-summary);
         # CLOSING wins per priority order.
@@ -954,56 +986,85 @@ class TestG5ConversationPhase:
 
     def test_threshold_multiplier_loosens_thinking(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, TurnEndPolicy,
+            ConversationPhase,
+            TurnEndPolicy,
         )
+
         policy = TurnEndPolicy()
         base = policy.get_dynamic_threshold(
-            "我想想", p_complete=0.5, is_final=False, phase=None,
+            "我想想",
+            p_complete=0.5,
+            is_final=False,
+            phase=None,
         )
         thinking = policy.get_dynamic_threshold(
-            "我想想", p_complete=0.5, is_final=False, phase=ConversationPhase.THINKING,
+            "我想想",
+            p_complete=0.5,
+            is_final=False,
+            phase=ConversationPhase.THINKING,
         )
         # THINKING multiplier (1.5) → larger threshold (allow longer pause).
         # But _ends_with_tail also returns T_TAIL_HANG for "我想想",
         # so test a non-tail text instead.
         base = policy.get_dynamic_threshold(
-            "今天天气", p_complete=0.5, is_final=False, phase=None,
+            "今天天气",
+            p_complete=0.5,
+            is_final=False,
+            phase=None,
         )
         thinking = policy.get_dynamic_threshold(
-            "今天天气", p_complete=0.5, is_final=False, phase=ConversationPhase.THINKING,
+            "今天天气",
+            p_complete=0.5,
+            is_final=False,
+            phase=ConversationPhase.THINKING,
         )
         assert thinking > base
 
     def test_threshold_multiplier_tightens_greeting(self):
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, TurnEndPolicy,
+            ConversationPhase,
+            TurnEndPolicy,
         )
+
         policy = TurnEndPolicy()
         base = policy.get_dynamic_threshold(
-            "今天天气", p_complete=0.5, is_final=False, phase=None,
+            "今天天气",
+            p_complete=0.5,
+            is_final=False,
+            phase=None,
         )
         greeting = policy.get_dynamic_threshold(
-            "今天天气", p_complete=0.5, is_final=False, phase=ConversationPhase.GREETING,
+            "今天天气",
+            p_complete=0.5,
+            is_final=False,
+            phase=ConversationPhase.GREETING,
         )
         assert greeting <= base
 
     def test_threshold_clamped_to_T_URGENT_minimum(self):
         """Phase scaling never produces a threshold below T_URGENT."""
         from eidolon.livekit.plugins.eot import (
-            ConversationPhase, TurnEndPolicy,
+            ConversationPhase,
+            TurnEndPolicy,
         )
+
         policy = TurnEndPolicy()
         # Even with most-aggressive phase + high score, can't dip below T_URGENT
         threshold = policy.get_dynamic_threshold(
-            "好的", p_complete=0.95, is_final=True, phase=ConversationPhase.GREETING,
+            "好的",
+            p_complete=0.95,
+            is_final=True,
+            phase=ConversationPhase.GREETING,
         )
         assert threshold >= policy.T_URGENT - 1e-6
 
     def test_eot_model_updates_phase_on_update_asr(self):
         """EidolonEOTModel.update_asr should refresh state.conversation_phase."""
         from eidolon.livekit.plugins.eot import (
-            ChineseModel, ConversationPhase,
+            ChineseModel,
+            ConversationPhase,
         )
+
         m = ChineseModel()
         m.start_session("test-session")
         m.update_asr("你好", is_final=True)
@@ -1044,7 +1105,8 @@ class TestG2bMinSpeakingDurationVadGate:
     def test_default_disabled(self):
         """Default behaviour unchanged — abstains."""
         from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
+            MinSpeakingDurationPolicy,
+            TurnEndPolicy,
         )
 
         policy = MinSpeakingDurationPolicy()
@@ -1061,7 +1123,8 @@ class TestG2bMinSpeakingDurationVadGate:
         (returns None) so the chain can advance to score-based policies.
         """
         from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
+            MinSpeakingDurationPolicy,
+            TurnEndPolicy,
         )
 
         policy = MinSpeakingDurationPolicy(
@@ -1073,14 +1136,13 @@ class TestG2bMinSpeakingDurationVadGate:
             sm.update_vad_probability(0.3)
 
         result = policy.check(sm, TurnEndPolicy())
-        assert result is None, (
-            "G18c: VAD confidence gate must be no-op (was: blocked cuts)"
-        )
+        assert result is None, "G18c: VAD confidence gate must be no-op (was: blocked cuts)"
 
     def test_high_confidence_still_abstains(self):
         """Symmetric: high confidence also returns None (same as low)."""
         from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
+            MinSpeakingDurationPolicy,
+            TurnEndPolicy,
         )
 
         policy = MinSpeakingDurationPolicy(
@@ -1096,7 +1158,8 @@ class TestG2bMinSpeakingDurationVadGate:
         """The OTHER half of MinSpeakingDurationPolicy (short-utterance
         filter) is unchanged — must still block sub-threshold speech."""
         from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
+            MinSpeakingDurationPolicy,
+            TurnEndPolicy,
         )
 
         policy = MinSpeakingDurationPolicy(min_speech_duration_sec=0.15)
@@ -1109,7 +1172,8 @@ class TestG2bMinSpeakingDurationVadGate:
     def test_speech_duration_check_still_runs_first(self):
         """Speech-too-short check has higher priority than VAD confidence gate."""
         from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, TurnEndPolicy,
+            MinSpeakingDurationPolicy,
+            TurnEndPolicy,
         )
 
         policy = MinSpeakingDurationPolicy(
@@ -1130,7 +1194,8 @@ class TestG2bMinSpeakingDurationVadGate:
         """PolicyChain factory methods must accept and propagate the new
         VAD-confidence args to MinSpeakingDurationPolicy."""
         from eidolon.livekit.plugins.eot import (
-            MinSpeakingDurationPolicy, PolicyChain,
+            MinSpeakingDurationPolicy,
+            PolicyChain,
         )
 
         chain = PolicyChain.for_semantic_interruption(
@@ -1174,6 +1239,7 @@ class TestG0aDualPathArchitecture:
         assert m._context_eot._dialogue_history.maxlen == m._config.utterance_end_max_history
 
         from eidolon.livekit.plugins.eot.impl.context_enhanced_eot import ContextEnhancedEot
+
         ctx = ContextEnhancedEot(max_history=7)
         assert ctx._dialogue_history.maxlen == 7
 
@@ -1199,7 +1265,11 @@ class TestOnnxEotBackend:
         # parent.parent.parent = eidolon/livekit/
         default_dir = (
             Path(__file__).parent.parent.parent
-            / "plugins" / "eot" / "data" / "model" / "firered_chat_turn_detector"
+            / "plugins"
+            / "eot"
+            / "data"
+            / "model"
+            / "firered_chat_turn_detector"
         )
         backend = OnnxEotBackend(default_dir, prefer_multilingual=False)
         assert backend._session is not None
@@ -1210,7 +1280,11 @@ class TestOnnxEotBackend:
 
         default_dir = (
             Path(__file__).parent.parent.parent
-            / "plugins" / "eot" / "data" / "model" / "firered_chat_turn_detector"
+            / "plugins"
+            / "eot"
+            / "data"
+            / "model"
+            / "firered_chat_turn_detector"
         )
         backend = OnnxEotBackend(default_dir, prefer_multilingual=False)
 
@@ -1225,7 +1299,11 @@ class TestOnnxEotBackend:
 
         default_dir = (
             Path(__file__).parent.parent.parent
-            / "plugins" / "eot" / "data" / "model" / "firered_chat_turn_detector"
+            / "plugins"
+            / "eot"
+            / "data"
+            / "model"
+            / "firered_chat_turn_detector"
         )
         backend = OnnxEotBackend(default_dir, prefer_multilingual=False)
 
@@ -1256,30 +1334,23 @@ class TestEidolonEOTModel:
         result = model.should_interrupt("你好", vad_active=True)
         assert isinstance(result, bool)
 
-    def test_should_interrupt_continuation_intent(self):
+    def test_should_interrupt_does_not_special_case_continuation_wording(self):
         from eidolon.livekit.plugins.eot import ChineseModel
 
         model = ChineseModel()
-        # Continuation requests should NOT trigger interruption
-        assert model.should_interrupt("再换一个", vad_active=True) is False
-        assert model.should_interrupt("不好笑，换一个笑话", vad_active=True) is False
-        assert model.should_interrupt("继续说", vad_active=True) is False
-        # Full phrase from the bug report
-        assert (
-            model.should_interrupt(
-                "嗯，那你再换一个。我想听呃，人的冷笑话，不是带动物的。",
-                vad_active=True,
-            )
-            is False
-        )
+        model.update_vad(True)
+        model._state._vad.active_since = time.time() - 1.0
+        model._state._sentence.start_time = time.time() - 1.0
+        model._context_eot.compute_score = lambda *_args, **_kwargs: 0.9
+        assert model.should_interrupt("再换一个", vad_active=True) is True
 
-    def test_should_interrupt_strong_intent_still_works(self):
+    def test_should_interrupt_fixed_phrase_has_no_override(self):
         from eidolon.livekit.plugins.eot import ChineseModel
 
         model = ChineseModel()
-        # Strong interrupt should still trigger interruption
-        assert model.should_interrupt("停", vad_active=True) is True
-        assert model.should_interrupt("闭嘴", vad_active=True) is True
+        model._context_eot.compute_score = lambda *_args, **_kwargs: 0.3
+        assert model.should_interrupt("停", vad_active=True) is False
+        assert model.should_interrupt("闭嘴", vad_active=True) is False
 
     def test_dynamic_silence_threshold(self):
         from eidolon.livekit.plugins.eot import ChineseModel
@@ -1300,16 +1371,14 @@ class TestEidolonEOTModel:
 class TestContextEnhancedEot:
     """Test ContextEnhancedEot."""
 
-    def test_compute_score_returns_zero_for_continuation_intent(self):
+    def test_compute_score_does_not_zero_continuation_wording(self):
         from eidolon.livekit.plugins.eot import (
             ContextEnhancedEot,
         )
 
         ctx = ContextEnhancedEot()
-        # Continuation phrases should return a low score (not triggering cut)
-        assert ctx.compute_score("再换一个") == pytest.approx(0.0)
-        assert ctx.compute_score("继续说") == pytest.approx(0.0)
-        assert ctx.compute_score("不好笑，换一个") == pytest.approx(0.0)
+        for text in ("再换一个", "继续说", "不好笑，换一个"):
+            assert ctx.compute_score(text) == pytest.approx(ctx._base_eot.p_complete_score(text))
 
     def test_compute_score_normal_text(self):
         from eidolon.livekit.plugins.eot import (
@@ -1349,8 +1418,6 @@ class TestPluginRegistration:
         assert ChineseModel is not None
         assert MultilingualModel is not None
         assert EidolonEOTPlugin is not None
-
-
 
 
 # =============================================================================
@@ -1447,7 +1514,9 @@ class TestNewPolicies:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        policy = EOTScoreSemanticPolicy(base_threshold=0.7, weak_intent_threshold=0.5, vad_active_delta=0.1)
+        policy = EOTScoreSemanticPolicy(
+            base_threshold=0.7, weak_intent_threshold=0.5, vad_active_delta=0.1
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 2.0
@@ -1477,14 +1546,16 @@ class TestNewPolicies:
         result = policy.check(state, TurnEndPolicy())
         assert result is None
 
-    def test_eot_score_semantic_weak_intent_lowers_threshold(self):
+    def test_eot_score_semantic_text_does_not_lower_threshold(self):
         from eidolon.livekit.plugins.eot import (
             EOTScoreSemanticPolicy,
         )
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        policy = EOTScoreSemanticPolicy(base_threshold=0.7, weak_intent_threshold=0.5, vad_active_delta=0.1)
+        policy = EOTScoreSemanticPolicy(
+            base_threshold=0.7, weak_intent_threshold=0.5, vad_active_delta=0.1
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 2.0
@@ -1492,9 +1563,9 @@ class TestNewPolicies:
         state._sentence.start_time = time.time() - 2.0
         state.current_text = "好的"
         state.update_eot_score(0.5)
-        # score=0.5 >= threshold(weak, vad_active)=0.5-0.1=0.4
+        # VAD-active threshold is 0.6. Wording must not lower it.
         result = policy.check(state, TurnEndPolicy())
-        assert result is not None and result.should_cut is True
+        assert result is None
 
     def test_eot_score_semantic_vad_inactive_raises_threshold(self):
         from eidolon.livekit.plugins.eot import (
@@ -1503,7 +1574,9 @@ class TestNewPolicies:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        policy = EOTScoreSemanticPolicy(base_threshold=0.7, weak_intent_threshold=0.5, vad_active_delta=0.1)
+        policy = EOTScoreSemanticPolicy(
+            base_threshold=0.7, weak_intent_threshold=0.5, vad_active_delta=0.1
+        )
         state = TurnDetectionStateManager()
         state._vad.active = False
         state.current_text = "北京天气"
@@ -1640,7 +1713,9 @@ class TestNewPolicies:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        policy = ASRStabilityPolicy(stability_short_sec=0.10, stability_long_sec=0.40, long_char_threshold=10)
+        policy = ASRStabilityPolicy(
+            stability_short_sec=0.10, stability_long_sec=0.40, long_char_threshold=10
+        )
         state = TurnDetectionStateManager()
         state._asr.is_final = True
         state._asr.stable_since = time.time() - 0.2  # past short threshold
@@ -1653,7 +1728,9 @@ class TestNewPolicies:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        policy = ASRStabilityPolicy(stability_short_sec=0.10, stability_long_sec=0.40, long_char_threshold=10)
+        policy = ASRStabilityPolicy(
+            stability_short_sec=0.10, stability_long_sec=0.40, long_char_threshold=10
+        )
         state = TurnDetectionStateManager()
         state._asr.is_final = True
         state._asr.stable_since = time.time() - 0.2  # not past long threshold (0.4)
@@ -1758,10 +1835,12 @@ class TestPolicyChainIntegration:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        chain = PolicyChain([
-            MinSpeakingDurationPolicy(0.15),  # short speech → should_cut=False
-            EOTScoreSemanticPolicy(0.9),  # high score → should_cut=True
-        ])
+        chain = PolicyChain(
+            [
+                MinSpeakingDurationPolicy(0.15),  # short speech → should_cut=False
+                EOTScoreSemanticPolicy(0.9),  # high score → should_cut=True
+            ]
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 0.05
@@ -1783,10 +1862,12 @@ class TestPolicyChainIntegration:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        chain = PolicyChain([
-            MinSpeakingDurationPolicy(0.15),  # 1s speech → None (let chain continue)
-            EOTScoreSemanticPolicy(0.9),  # high score → should_cut=True
-        ])
+        chain = PolicyChain(
+            [
+                MinSpeakingDurationPolicy(0.15),  # 1s speech → None (let chain continue)
+                EOTScoreSemanticPolicy(0.9),  # high score → should_cut=True
+            ]
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 1.0
@@ -1807,10 +1888,12 @@ class TestPolicyChainIntegration:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        chain = PolicyChain([
-            InterruptIntentPolicy(),
-            EOTScoreSemanticPolicy(0.9),
-        ])
+        chain = PolicyChain(
+            [
+                InterruptIntentPolicy(),
+                EOTScoreSemanticPolicy(0.9),
+            ]
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 1.0
@@ -1831,10 +1914,12 @@ class TestPolicyChainIntegration:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        chain = PolicyChain([
-            InterruptIntentPolicy(),
-            EOTScoreSemanticPolicy(0.1),
-        ])
+        chain = PolicyChain(
+            [
+                InterruptIntentPolicy(),
+                EOTScoreSemanticPolicy(0.1),
+            ]
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 1.0
@@ -1867,12 +1952,12 @@ class TestPolicyChainIntegration:
         types = [type(p).__name__ for p in chain._policies]
         assert "EOTScoreSemanticPolicy" not in types
 
-    def test_semantic_chain_includes_interrupt_intent(self):
+    def test_semantic_chain_excludes_fixed_phrase_intent(self):
         from eidolon.livekit.plugins.eot import PolicyChain
 
         chain = PolicyChain.for_semantic_interruption()
         types = [type(p).__name__ for p in chain._policies]
-        assert "InterruptIntentPolicy" in types
+        assert "InterruptIntentPolicy" not in types
 
     def test_min_interval_policy_blocks_chain_when_not_met(self):
         from eidolon.livekit.plugins.eot import (
@@ -1883,10 +1968,12 @@ class TestPolicyChainIntegration:
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
 
-        chain = PolicyChain([
-            MinIntervalPolicy(),
-            EOTScoreSemanticPolicy(0.1),
-        ])
+        chain = PolicyChain(
+            [
+                MinIntervalPolicy(),
+                EOTScoreSemanticPolicy(0.1),
+            ]
+        )
         state = TurnDetectionStateManager()
         state._vad.active = True
         state._vad.active_since = time.time() - 1.0
@@ -2044,25 +2131,24 @@ class TestContextEnhancedEotPaths:
             f"sanity: '{text}' should match _is_follow_up (it ends with 呢)"
         )
         assert score >= base_score, (
-            f"follow-up should raise score; got score={score:.3f} "
-            f"vs base={base_score:.3f}"
+            f"follow-up should raise score; got score={score:.3f} vs base={base_score:.3f}"
         )
 
 
 class TestEidolonEOTModelEndToEnd:
     """End-to-end tests for EidolonEOTModel using the real ONNX model."""
 
-    def test_should_interrupt_delegates_to_chain(self):
+    def test_should_interrupt_delegates_high_score_to_chain(self):
         from eidolon.livekit.plugins.eot import ChineseModel
 
         model = ChineseModel()
         model._state.update_vad(True)
         model._state._vad.active_since = time.time() - 1.0
         model._state._sentence.start_time = time.time() - 1.0
-        model._state.current_text = "停"
-        model._state.update_eot_score(0.5)
-        # Strong interrupt intent handled by chain → should_cut=True
-        result = model.should_interrupt("停", vad_active=True)
+        model._context_eot.compute_score = lambda *_args, **_kwargs: 0.9
+        model._state.current_text = "任意完整文本"
+        model._state.update_eot_score(0.9)
+        result = model.should_interrupt("任意完整文本", vad_active=True)
         assert result is True
 
     def test_should_interrupt_side_effects(self):
@@ -2170,7 +2256,6 @@ class TestL8UserProfileLifecycle:
         assert ctx_eot._max_profiles == 1000
 
 
-
 class TestMultiTurnScenario:
     """Multi-turn scenario tests: simulate 5+ rounds of realistic dialogue.
 
@@ -2235,11 +2320,11 @@ class TestMultiTurnScenario:
         tp = TurnEndPolicy()
 
         turns = [
-            ("停", 0.5),
-            ("不对", 0.5),
-            ("等一下", 0.5),
-            ("等会再说", 0.5),
-            ("先不要说了", 0.5),
+            ("停", 0.7),
+            ("不对", 0.7),
+            ("等一下", 0.7),
+            ("等会再说", 0.7),
+            ("先不要说了", 0.7),
         ]
 
         cut_count = 0
@@ -2250,7 +2335,7 @@ class TestMultiTurnScenario:
             decision = chain.check(state, tp)
             if decision is not None and decision.should_cut:
                 cut_count += 1
-        assert cut_count >= 4
+        assert cut_count == 5
 
     # -------------------------------------------------------------------------
     # 5-turn mixed scenario
@@ -2265,16 +2350,14 @@ class TestMultiTurnScenario:
         state = TurnDetectionStateManager()
         tp = TurnEndPolicy()
 
-        # Round 7 G1: "好的" is a backchannel and should NOT cut while agent
-        # is speaking. To exercise the weak-interrupt path here, replaced
-        # the original "好的" case with "不要这样" (not a backchannel, weak
-        # intent via "不要"). Other turns unchanged.
+        # Decisions follow only the score/acoustic evidence; wording does not
+        # create a separate control path.
         turns = [
-            ("不要这样", 0.5),    # weak interrupt (not backchannel) → cut
-            ("再换一个", 0.5),     # continuation → no cut
-            ("停", 0.5),          # strong interrupt → cut
-            ("北京天气", 0.3),    # low score < 0.4 → no cut
-            ("不对错了", 0.8),    # strong interrupt + high score → cut
+            ("不要这样", 0.7),
+            ("再换一个", 0.5),
+            ("停", 0.7),
+            ("北京天气", 0.3),
+            ("不对错了", 0.8),
         ]
         expected_cuts = [True, False, True, False, True]
 
@@ -2292,9 +2375,8 @@ class TestMultiTurnScenario:
             )
         assert results == expected_cuts
 
-    def test_backchannel_blocks_weak_interrupt_in_agent_speaking_chain(self):
-        """Round 7 G1 — "好的" while agent speaking is a backchannel (NOT a
-        weak interrupt). Document the policy interaction explicitly."""
+    def test_high_score_is_not_overridden_by_backchannel_wording(self):
+        """The same high EOT evidence cuts regardless of transcript wording."""
         from eidolon.livekit.plugins.eot import PolicyChain
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
@@ -2307,8 +2389,8 @@ class TestMultiTurnScenario:
 
         decision = chain.check(state, tp)
         assert decision is not None
-        assert decision.should_cut is False
-        assert "ackchannel" in decision.reason.lower()
+        assert decision.should_cut is True
+        assert "EOT score" in decision.reason
 
     # -------------------------------------------------------------------------
     # Cooldown persists across turns
@@ -2326,7 +2408,7 @@ class TestMultiTurnScenario:
         # Turn 1: cut → record interrupt time so next turn hits cooldown
         state._sentence.last_cut_time = time.time() - 1.0
         state._interrupt.last_interrupt_time = 0.0  # no prior interrupt
-        self._make_speech_state(state, "停", 0.5)
+        self._make_speech_state(state, "停", 0.7)
         decision = chain.check(state, tp)
         assert decision is not None and decision.should_cut
         state.update_interrupt()  # record so next turn is in cooldown
@@ -2377,7 +2459,7 @@ class TestMultiTurnScenario:
     # Continuation intent across 5 turns → 0 cuts
     # -------------------------------------------------------------------------
 
-    def test_continuation_intent_not_cut_across_5_turns(self):
+    def test_high_score_is_not_overridden_by_continuation_wording(self):
         from eidolon.livekit.plugins.eot import PolicyChain
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
@@ -2400,15 +2482,15 @@ class TestMultiTurnScenario:
             self._make_speech_state(state, text, 0.99)
             decision = chain.check(state, tp)
             assert decision is not None
-            assert decision.should_cut is False, (
-                f"Turn {i}: continuation '{text}' should NOT cut, got cut={decision.should_cut}"
+            assert decision.should_cut is True, (
+                f"Turn {i}: high score for '{text}' should cut, got cut={decision.should_cut}"
             )
 
     # -------------------------------------------------------------------------
     # Strong intent across 5 turns → 5 cuts
     # -------------------------------------------------------------------------
 
-    def test_strong_intent_always_cuts_across_5_turns(self):
+    def test_low_score_is_not_overridden_by_strong_wording(self):
         from eidolon.livekit.plugins.eot import PolicyChain
         from eidolon.livekit.plugins.eot import TurnDetectionStateManager
         from eidolon.livekit.plugins.eot import TurnEndPolicy
@@ -2430,8 +2512,8 @@ class TestMultiTurnScenario:
             state._sentence.last_cut_time = time.time() - 1.0
             self._make_speech_state(state, text, score)
             decision = chain.check(state, tp)
-            assert decision is not None and decision.should_cut, (
-                f"Turn {i}: strong '{text}' should cut, got={decision}"
+            assert decision is None or not decision.should_cut, (
+                f"Turn {i}: low score for '{text}' should not cut, got={decision}"
             )
 
     # -------------------------------------------------------------------------
@@ -2449,17 +2531,15 @@ class TestMultiTurnScenario:
 
         # Turn 1: cut
         state._sentence.last_cut_time = time.time() - 1.0
-        self._make_speech_state(state, "停", 0.5)
+        self._make_speech_state(state, "停", 0.7)
         decision1 = chain.check(state, tp)
         assert decision1 is not None and decision1.should_cut
 
-        # Immediately: interval not met, but strong intent overrides.
+        # Immediately: interval guard blocks another score-driven cut.
         state._sentence.last_cut_time = time.time()  # just now
-        self._make_speech_state(state, "停", 0.5)
+        self._make_speech_state(state, "停", 0.7)
         decision2 = chain.check(state, tp)
-        # InterruptIntentPolicy comes before MinIntervalPolicy in the chain,
-        # so "停" (strong interrupt) still cuts regardless of interval.
-        assert decision2 is not None and decision2.should_cut
+        assert decision2 is not None and not decision2.should_cut
 
 
 # ---------------------------------------------------------------------------
@@ -2521,21 +2601,18 @@ class TestR8DualPathConsistency:
         assert score_b == 0.0
 
     @pytest.mark.asyncio
-    async def test_path_b_zeros_on_continuation_intent_path_a_unaffected(self):
-        """Continuation intent ("再换一个") should NOT interrupt the
-        agent (Path B → 0), but the framework can still consider it
-        a complete user turn for endpointing (Path A unaffected).
-        """
+    async def test_paths_agree_for_continuation_wording(self):
+        """Fixed wording must not make endpointing and interruption diverge."""
         from eidolon.livekit.plugins.eot import ContextEnhancedEot
 
         ctx = ContextEnhancedEot()
         text = "再换一个吧"
 
-        score_a = ctx.p_complete_score(text)
+        score_a = ctx.semantic_completeness_score(text)
         score_b = ctx.compute_score(text)
 
         assert score_a > 0
-        assert score_b == 0.0
+        assert score_b == pytest.approx(score_a)
 
 
 if __name__ == "__main__":

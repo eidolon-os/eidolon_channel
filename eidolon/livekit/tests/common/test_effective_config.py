@@ -427,7 +427,7 @@ def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPa
 
     assert cfg.providers.brain_provider == "eidolon_agent"
     assert cfg.turn_policy.profile == "balanced_semantic"
-    assert cfg.turn_policy.interrupt.fast_lexical_intents is True
+    assert cfg.turn_policy.interrupt.fast_lexical_intents is False
     assert cfg.turn_policy.interrupt.correction_topic_stability_window_ms == 0
     assert cfg.turn_policy.ducking.suspended_passthrough_enabled is False
     assert cfg.turn_policy.attention.echo_min_normalized_chars == 3

@@ -36,7 +36,7 @@ cases:
 
   - case_id: enforced_hard_stop_still_cancels_001
     suite: attention_admission_enforced
-    description: attention.enforce=true 时，播放态中的明确硬打断仍必须快速取消。
+    description: attention.enforce=true 时，显式 PTT 打断仍必须快速取消，文本本身不获得控制权。
     tags: ["attention_admission", "owner_directed", "hard_interrupt", "enforced"]
     audio_clips:
       - id: hard_stop_dont
@@ -53,6 +53,7 @@ cases:
         vad_probability: 0.95
         agent_speaking: true
         client_playback_state: agent_speaking
+        client_ptt: true
     expect:
       action: cancel
       intent: hard_stop

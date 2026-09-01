@@ -3,7 +3,7 @@ suite_mode: full_duplex
 cases:
   - case_id: tier0_hard_stop_enforced_cancels_001
     suite: v1_interrupt_tiers
-    description: Tier 0：播放态中明确硬停应最快取消，不等待 EOT 稳定窗口。
+    description: Tier 0：播放态中的显式 PTT 用户手势应最快取消，不等待 EOT 稳定窗口；文本本身不获得控制权。
     tags: ["v1_interrupt_tiers", "tier0", "hard_stop", "enforced"]
     audio_clips:
       - id: hard_stop_dont
@@ -20,6 +20,7 @@ cases:
         vad_probability: 0.95
         agent_speaking: true
         client_playback_state: agent_speaking
+        client_ptt: true
     expect:
       action: cancel
       intent: hard_stop
@@ -162,7 +163,7 @@ cases:
 
   - case_id: tier4_ambient_speech_enforced_observes_001
     suite: v1_interrupt_tiers
-    description: Tier 4：播放态中 fresh client state 表明 agent 正在播放，短弱环境声没有足够语义证据时 observe/ignore。
+    description: Tier 4：播放态短弱环境声在 active interim 阶段只观察，低终局 EOT 证据到达后 rollback 恢复播放。
     tags: ["v1_interrupt_tiers", "tier4", "ambient_weak_speech", "enforced"]
     audio_clips:
       - id: normal_followup
@@ -176,6 +177,7 @@ cases:
         duration_ms: 300
         interims:
           - 啊
+        eot_scores: [0.1]
         final_delay_ms: 80
         vad_probability: 0.9
         agent_speaking: true
@@ -183,6 +185,6 @@ cases:
     expect:
       action: any
       intent: uncertain
-      decision_action: hold
+      decision_action: rollback
       forbid_actions: ["cancel"]
       min_user_finals: 1

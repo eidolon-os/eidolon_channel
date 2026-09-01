@@ -34,9 +34,6 @@ def _handler(
 ) -> tuple[SemanticInterruptHandler, SimpleNamespace]:
     calls = SimpleNamespace(
         apply_decision=MagicMock(),
-        record_decision_attrs=MagicMock(),
-        publish_turn_control=MagicMock(),
-        cancel_duck_and_interrupt=MagicMock(),
         interrupt_current_turn=MagicMock(),
         enter_soft_interrupt=MagicMock(),
         timeline=MagicMock(),
@@ -51,26 +48,20 @@ def _handler(
         soft_interrupt_active=lambda: soft_interrupt_active,
         soft_interrupt_timeout=lambda: 0.5,
         apply_decision=calls.apply_decision,
-        record_decision_attrs=calls.record_decision_attrs,
-        publish_turn_control=calls.publish_turn_control,
-        cancel_duck_and_interrupt=calls.cancel_duck_and_interrupt,
         interrupt_current_turn=calls.interrupt_current_turn,
         enter_soft_interrupt=calls.enter_soft_interrupt,
     )
     return handler, calls
 
 
-def test_strong_interrupt_without_duck_interrupts_immediately() -> None:
+def test_hard_stop_hint_without_evidence_has_no_direct_side_effect() -> None:
     runtime = MagicMock()
     decision = Decision(
-        action=Action.CANCEL,
-        reason="intent:hard_stop",
+        action=Action.HOLD,
+        reason="semantic_score_wait",
         intent=InterruptIntent.HARD_STOP,
     )
     runtime.decide_from_transcript.return_value = decision
-    runtime.control_signal_from_decision.return_value.as_metadata.return_value = {
-        "action": "cancel",
-    }
     handler, calls = _handler(
         eot_model=_eot_model(strong_intent=True),
         turn_runtime=runtime,
@@ -80,12 +71,13 @@ def test_strong_interrupt_without_duck_interrupts_immediately() -> None:
     handler.run("别说了")
 
     runtime.decide_from_transcript.assert_called_once()
-    calls.publish_turn_control.assert_called_once_with({"action": "cancel"})
-    calls.record_decision_attrs.assert_called_once()
-    calls.cancel_duck_and_interrupt.assert_not_called()
-    calls.interrupt_current_turn.assert_called_once()
-    calls.timeline.set_attr.assert_any_call("turn_control", {"action": "cancel"})
-    calls.timeline.set_attr.assert_any_call("cancel_reason", "strong_intent_cancel")
+    calls.apply_decision.assert_called_once_with(
+        decision,
+        eot_score=0.0,
+        transcript="别说了",
+        vad_active=True,
+    )
+    calls.interrupt_current_turn.assert_not_called()
 
 
 def test_strong_interrupt_with_duck_uses_decision_effect_path() -> None:
@@ -110,7 +102,6 @@ def test_strong_interrupt_with_duck_uses_decision_effect_path() -> None:
         transcript="别说了",
         vad_active=True,
     )
-    calls.cancel_duck_and_interrupt.assert_not_called()
     calls.interrupt_current_turn.assert_not_called()
 
 
@@ -144,7 +135,6 @@ def test_legacy_strong_signal_keeps_correction_intent() -> None:
         transcript="我刚才说错了",
         vad_active=True,
     )
-    calls.publish_turn_control.assert_not_called()
     calls.interrupt_current_turn.assert_not_called()
 
 
@@ -177,7 +167,6 @@ def test_duck_active_delegates_decision_to_effect_applier() -> None:
         transcript="我刚才说错了",
         vad_active=True,
     )
-    calls.cancel_duck_and_interrupt.assert_not_called()
 
 
 def test_fallback_semantic_runs_for_normalized_redirect_hint() -> None:

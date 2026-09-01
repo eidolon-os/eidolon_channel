@@ -30,7 +30,7 @@ cases:
 
   - case_id: extended_hard_stop_latin_artifact_then_correct_001
     suite: v1_realistic_extended
-    description: 硬停前先出现短 latin-only interim，应该先 observe/hold，等“别说了”出现后 Tier0 取消。
+    description: 短 latin-only interim 先 observe/hold，终局文本获得高 EOT 证据后按普通插话取消。
     timeout_sec: 60
     tags: ["v1_realistic_extended", "tier0", "hard_stop", "asr_artifact", "multi_step"]
     audio_clips:
@@ -55,6 +55,7 @@ cases:
         start_ms: 1600
         duration_ms: 520
         interims: ["If", "别说了"]
+        eot_scores: [0.0, 0.74]
         final_delay_ms: 120
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -63,14 +64,14 @@ cases:
         reply: 我会持续说明架构、延迟、状态同步和风险控制，这段回答用于制造稳定的可打断窗口。
     expect:
       action: cancel
-      intent: hard_stop
+      intent: normal_interrupt
       max_interrupt_decision_ms: 800
       min_user_finals: 2
       min_agent_messages: 1
 
   - case_id: extended_hard_stop_homophone_then_correct_001
     suite: v1_realistic_extended
-    description: 硬停“停一下”首个 interim 可能被识别成“亭/这”等短误识别，应在 STT 修正后稳定进入 Tier0。
+    description: 首个 interim 可能被识别成“亭/这”等短误识别，应在 STT 修正且高 EOT 证据到达后按普通插话取消。
     timeout_sec: 60
     tags: ["v1_realistic_extended", "tier0", "hard_stop", "asr_homophone", "multi_step"]
     audio_clips:
@@ -95,6 +96,7 @@ cases:
         start_ms: 1600
         duration_ms: 520
         interims: ["亭", "停一下"]
+        eot_scores: [0.0, 0.74]
         final_delay_ms: 80
         agent_speaking: true
         client_playback_state: agent_speaking
@@ -103,7 +105,7 @@ cases:
         reply: 我会继续展开方案细节，用足够长的回答来验证同音误识别不会拖慢硬停。
     expect:
       action: cancel
-      intent: hard_stop
+      intent: normal_interrupt
       max_interrupt_decision_ms: 650
       min_user_finals: 2
       min_agent_messages: 1

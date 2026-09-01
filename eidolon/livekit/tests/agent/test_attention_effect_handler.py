@@ -84,17 +84,12 @@ def test_allows_eot_routes_substantive_fresh_playback_without_ducking() -> None:
     assert timeline.attrs["attention_admission"]["reason"] == (
         "playback_low_evidence_transcript:substantive_cjk_transcript"
     )
-    assert (
-        timeline.attrs["attention_admission"]["evidence_reason"]
-        == "substantive_cjk_transcript"
-    )
+    assert timeline.attrs["attention_admission"]["evidence_reason"] == "substantive_cjk_transcript"
 
 
 def test_allows_eot_blocks_substantive_stale_playback_evidence() -> None:
     received_at = (
-        time.monotonic()
-        - TurnPolicyConfig().attention.client_state_max_age_ms / 1000.0
-        - 1.0
+        time.monotonic() - TurnPolicyConfig().attention.client_state_max_age_ms / 1000.0 - 1.0
     )
     handler, timeline, on_duck, on_interrupt = _handler(
         client_state=_client_state(received_at=received_at),
@@ -202,7 +197,7 @@ def test_allows_eot_ducks_when_no_client_state() -> None:
     assert timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
 
 
-def test_hard_stop_during_playback_allows_eot_without_ducking() -> None:
+def test_stop_like_text_during_playback_is_observed_without_ducking() -> None:
     handler, timeline, on_duck, on_interrupt = _handler(client_state=_client_state())
 
     allowed = handler.allows_eot_check("别说了")
@@ -210,8 +205,8 @@ def test_hard_stop_during_playback_allows_eot_without_ducking() -> None:
     assert allowed is True
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
-    assert timeline.attrs["attention_admission"]["action"] == "hard_interrupt"
-    assert "interrupt_intent_admitted_at" in timeline.timestamps
+    assert timeline.attrs["attention_admission"]["action"] == "observe"
+    assert "interrupt_intent_admitted_at" not in timeline.timestamps
 
 
 def test_short_latin_hard_stop_artifact_during_playback_blocks_eot() -> None:
@@ -269,9 +264,7 @@ def test_speaking_started_soft_ducks_playback_when_configured() -> None:
     on_duck.assert_called_once_with()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["action"] == "duck_and_decide"
-    assert timeline.attrs["attention_admission"]["reason"] == (
-        "playback_speech_start_soft_duck"
-    )
+    assert timeline.attrs["attention_admission"]["reason"] == ("playback_speech_start_soft_duck")
 
 
 def test_observe_only_rollout_records_but_allows_eot() -> None:

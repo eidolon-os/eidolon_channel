@@ -32,7 +32,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..log import logger
 from .eot_manager import EotManager
 from .constants import (
-    CONTINUATION_INTENT_PATTERNS,
     FILLER_WORDS,
     FOLLOWUP_INDICATORS,
     GREETING_WORDS,
@@ -75,14 +74,10 @@ class UserProfile:
         self._recent_pauses.append(pause_duration)
 
         if self._recent_lengths:
-            self.avg_response_length = sum(self._recent_lengths) / len(
-                self._recent_lengths
-            )
+            self.avg_response_length = sum(self._recent_lengths) / len(self._recent_lengths)
 
         if self._recent_pauses:
-            self.avg_pause_between_turns = sum(self._recent_pauses) / len(
-                self._recent_pauses
-            )
+            self.avg_pause_between_turns = sum(self._recent_pauses) / len(self._recent_pauses)
 
         pace = self.avg_response_length / max(self.avg_pause_between_turns, 0.1)
         if pace > 15:
@@ -219,9 +214,10 @@ class ContextEnhancedEot:
             while len(self._user_profiles) >= self._max_profiles:
                 evicted_id, _ = self._user_profiles.popitem(last=False)
                 logger.info(
-                    "[%s] LRU evicted UserProfile for session=%s "
-                    "(cache full at %d)",
-                    self.tag, evicted_id, self._max_profiles,
+                    "[%s] LRU evicted UserProfile for session=%s (cache full at %d)",
+                    self.tag,
+                    evicted_id,
+                    self._max_profiles,
                 )
             self._user_profiles[session_id] = UserProfile()
 
@@ -244,9 +240,10 @@ class ContextEnhancedEot:
         removed = self._user_profiles.pop(target, None)
         if removed is not None:
             logger.info(
-                "[%s] end_session: removed UserProfile for %s "
-                "(cache size now %d)",
-                self.tag, target, len(self._user_profiles),
+                "[%s] end_session: removed UserProfile for %s (cache size now %d)",
+                self.tag,
+                target,
+                len(self._user_profiles),
             )
         if self._current_session_id == target:
             self._current_session_id = None
@@ -258,7 +255,6 @@ class ContextEnhancedEot:
             return
 
         current_time = time.time()
-        turn_duration = current_time - self._current_turn_start
         pause_duration = current_time - self._last_turn_time if self._last_turn_time else 0
 
         if self._enable_profile and self._current_session_id:
@@ -330,9 +326,7 @@ class ContextEnhancedEot:
             if text.endswith(ending):
                 return True
 
-        text_tail = (
-            text[-PUNCTUATION_RADIUS:] if len(text) >= PUNCTUATION_RADIUS else text
-        )
+        text_tail = text[-PUNCTUATION_RADIUS:] if len(text) >= PUNCTUATION_RADIUS else text
         if any(p in text_tail for p in TERMINAL_PUNCTUATION):
             return True
 
@@ -412,9 +406,7 @@ class ContextEnhancedEot:
 
         return max(-0.3, min(0.35, adjustment))
 
-    def predict(
-        self, text: str, is_final: bool = False, threshold: float = 0.5
-    ) -> Dict[str, Any]:
+    def predict(self, text: str, is_final: bool = False, threshold: float = 0.5) -> Dict[str, Any]:
         """
         Predict EOT probability.
 
@@ -454,50 +446,21 @@ class ContextEnhancedEot:
     def p_complete_score(self, text: str) -> float:
         """Compatibility interface: return EOT probability score (0-1)."""
         result = self.predict(text, is_final=False)
-        return result["probability"]
+        return float(result["probability"])
 
     def semantic_completeness_score(self, text: str) -> float:
-        """Shared scorer used by BOTH ``predict_end_of_turn`` (framework's
-        endpointing question) and ``compute_score`` (interrupt question).
+        """Return the provider-neutral learned EOT score for production.
 
-        Encodes the gates that are **semantically-true regardless of which
-        path asks** — i.e. "is this even a valid turn?":
-
-        * Continuation intent (``"再换一首"``) → 0.0
-        * Too-short / pure-filler ("嗯", "啊") → 0.0
-        * Otherwise: raw ONNX score + context adjustment (greeting, follow-up,
-          hesitation, profile, etc.)
-
-        Path-B-specific guards (cooldown after recent interrupt, similarity
-        to last-cut text) are **NOT** here — they belong in ``compute_score``
-        because they protect against double-interrupting, not against
-        committing a turn.
-
-        Production bug 2026-05-07: framework's ``predict_end_of_turn`` was
-        previously calling raw ``p_complete_score`` directly, so backchannels
-        like "嗯" got raw=0.733 and crossed framework's unlikely_threshold —
-        framework committed the turn and fired LLM, even though
-        ``compute_score`` (correctly) returned 0.0 from the too-short gate.
-        Two paths, two answers, one user yelling at the agent.
+        Transcript wording never receives control authority here. Optional
+        provider metadata is normalized before this layer; providers without
+        richer evidence still work from text, VAD and finality. Interruption-
+        specific cooldown and similarity guards remain in ``compute_score``.
         """
         stripped = (text or "").strip()
         if not stripped:
             return 0.0
-        if any(p in stripped for p in CONTINUATION_INTENT_PATTERNS):
-            logger.debug(
-                "[%s] semantic_completeness_score: continuation intent %r → 0.0",
-                self.tag, text[:30],
-            )
-            return 0.0
-        is_valid, reason = self._is_valid_speech(text)
-        if not is_valid:
-            logger.debug(
-                "[%s] semantic_completeness_score: invalid speech %r — %s → 0.0",
-                self.tag, text, reason,
-            )
-            return 0.0
-        # Raw model + context adjustment (same as p_complete_score path).
-        return self.p_complete_score(text)
+        score = self._base_eot.p_complete_score(stripped)
+        return max(0.0, min(1.0, score))
 
     def _calculate_confidence(self, score: float, adjustment: float) -> str:
         """Calculate confidence level."""
@@ -532,9 +495,7 @@ class ContextEnhancedEot:
 
         return ";".join(reasons)
 
-    def record_turn(
-        self, text: str, is_complete: bool, eot_score: float
-    ) -> None:
+    def record_turn(self, text: str, is_complete: bool, eot_score: float) -> None:
         """Record a turn of dialogue."""
         turn = TurnContext(
             text=text,
@@ -564,7 +525,9 @@ class ContextEnhancedEot:
         self._last_text = ""
         self._current_eot_score = 0.0
         self._current_turn_start = time.time()
-        logger.debug(f"[{self.tag}] Turn reset complete (history preserved: {len(self._dialogue_history)} turns)")
+        logger.debug(
+            f"[{self.tag}] Turn reset complete (history preserved: {len(self._dialogue_history)} turns)"
+        )
 
     def reset_session(self) -> None:
         """Full session reset — clears dialogue history, profiles, and all state."""
@@ -670,10 +633,8 @@ class ContextEnhancedEot:
         Returns:
             Context-enhanced EOT score in [0.0, 1.0].
         """
-        # Step 1+2 (continuation-intent + too-short/filler) live in the
-        # shared ``semantic_completeness_score`` so both this path and
-        # framework's ``predict_end_of_turn`` agree on what counts as a
-        # valid turn end. Returns 0.0 when text is not a valid completion.
+        # Step 1: provider-neutral learned score shared with framework
+        # endpointing. Fixed transcript phrases do not alter this value.
         semantic_score = self.semantic_completeness_score(text)
         if semantic_score == 0.0:
             return 0.0
@@ -695,22 +656,17 @@ class ContextEnhancedEot:
                 )
                 return 0.0
 
-        # Decompose for log compatibility (downstream tests grep "base=...adj=...").
-        eot_score = self._base_eot.p_complete_score(text)
-        profile = None
-        if self._enable_profile and self._current_session_id:
-            profile = self._user_profiles.get(self._current_session_id)
-        adjustment = self._get_context_adjustment(text, eot_score, profile)
-
+        # Preserve the structured log shape while making the production score
+        # source explicit: learned EOT only, with no lexical adjustment.
         logger.debug(
             f"[{self.tag}] compute_score: text={text[:30]!r} "
-            f"base={eot_score:.3f} adj={adjustment:.3f} final={semantic_score:.3f}"
+            f"base={semantic_score:.3f} adj=0.000 final={semantic_score:.3f}"
         )
         return semantic_score
 
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics."""
-        stats = {
+        stats: Dict[str, Any] = {
             "history_length": len(self._dialogue_history),
             "user_profiles_count": len(self._user_profiles),
         }

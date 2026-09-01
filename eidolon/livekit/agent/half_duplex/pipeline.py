@@ -29,6 +29,7 @@ from eidolon_sdk.biz.contracts import (
     SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
 )
+from eidolon_sdk.biz.dialogue_control import TurnCommitBoundary
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.runtime.interaction_mode import (
@@ -46,11 +47,13 @@ from eidolon.livekit.agent.session.client_control import (
     build_client_control_event,
     build_session_client_control_envelope,
 )
+from eidolon.livekit.agent.session.committed_turn import publish_committed_turn_decision
 from eidolon.livekit.agent.session.agent_output_coordinator import AgentOutputCoordinator
 from eidolon.livekit.agent.session.idle import IdleWatchdog
 from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
+from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 
 from .control import (
     PTT_OUTCOME_COMMITTED,
@@ -95,6 +98,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._welcome_message = welcome_message
         self._audio_sample_rate = audio_sample_rate
         self._turn_policy = turn_policy or TurnPolicyConfig()
+        self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._session_intent = session_intent
         self._observability = observability or ObservabilityConfig()
         self._on_session_started = on_session_started
@@ -114,9 +118,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             get_output_timeline=lambda: self._agent_output.active_timeline,
             agent_output=self._agent_output,
             flush_timeline=self._flush_output_timeline,
-            first_delta_timeout_sec=(
-                self._observability.llm_first_delta_timeout_ms / 1000.0
-            ),
+            first_delta_timeout_sec=(self._observability.llm_first_delta_timeout_ms / 1000.0),
         )
         self._pending_client_control_events: list[dict[str, str]] = []
         self._room_data = RoomDataHandler(get_timeline=lambda: self._timeline)
@@ -472,6 +474,15 @@ class HalfDuplexPttPipeline(BasePipeline):
             PTT_OUTCOME_COMMITTED,
             result.reason,
             transcript=result.transcript,
+        )
+        committed_turn_decision = self._turn_runtime.committed_turn_decision(
+            result.transcript,
+            boundary=TurnCommitBoundary.PTT_SEGMENT,
+        )
+        publish_committed_turn_decision(
+            factory=self._factory,
+            decision=committed_turn_decision,
+            timeline=self._timeline,
         )
         self._record_ptt_result(result)
         try:

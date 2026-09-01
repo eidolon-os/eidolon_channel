@@ -24,13 +24,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
-from .constants import (
-    ASR_TRAILING_PUNCTUATION,
-    BACKCHANNEL_COMPOUND_CHARS,
-    BACKCHANNEL_WORDS,
-    NOISE_LIKE_TRANSCRIPTIONS,
-    REPEATED_NOISE_CHARS,
-)
 from .state import TurnDetectionStateManager
 from .turn_end_policy import TurnEndPolicy
 from .utils import compute_text_hash, is_similar_text
@@ -102,99 +95,6 @@ class MinIntervalPolicy(CutPolicy):
         return None
 
 
-class BackchannelSuppressionPolicy(CutPolicy):
-    """Block cuts when ASR text is a backchannel acknowledgement.
-
-    Backchannels are short utterances ("嗯嗯", "好的", "OK") that a listener
-    emits while the speaker continues — they're acknowledgements, NOT
-    turn-takes. Without this guard, a user nodding along with "嗯嗯" while
-    the agent is talking would falsely trigger an interrupt.
-
-    Used only in the **semantic interruption** chain (where the agent is
-    speaking and the user starts talking). In the normal turn-end chain,
-    a user uttering "嗯嗯" is genuinely the entire turn and should be
-    treated as completion.
-
-    Added in Round 7 G1.
-    """
-
-    def check(
-        self,
-        state: TurnDetectionStateManager,
-        turn_end_policy: TurnEndPolicy,
-    ) -> Optional[CutDecision]:
-        text = state.current_text
-        if not text:
-            return None
-        # Strip end punctuation that ASR sometimes adds.
-        stripped = text.strip().rstrip(ASR_TRAILING_PUNCTUATION)
-        if not stripped:
-            return None
-        if stripped.lower() in BACKCHANNEL_WORDS:
-            return CutDecision(
-                should_cut=False,
-                reason=f"Backchannel detected: {stripped!r}",
-                silence_duration=0.0,
-            )
-        # Compound backchannel like "嗯嗯好" / "嗯好的" — rare but seen in practice.
-        # Only consider very short texts (≤ 4 chars) to avoid false positives.
-        if 2 <= len(stripped) <= 4 and all(
-            stripped[i] in BACKCHANNEL_COMPOUND_CHARS for i in range(len(stripped))
-        ):
-            return CutDecision(
-                should_cut=False,
-                reason=f"Compound backchannel: {stripped!r}",
-                silence_duration=0.0,
-            )
-        return None
-
-
-class NoiseLikeTranscriptPolicy(CutPolicy):
-    """Block cuts when ASR transcript looks like a vocalization (cough / sigh).
-
-    Coughs, throat-clearing, and sighs frequently get transcribed by ASR
-    as single-character or repeated-character utterances ("啊", "啊啊啊",
-    "咳", "嗯哼"). These are not intentional speech and shouldn't drive
-    turn-end / interrupt decisions.
-
-    Complementary to ``MinSpeakingDurationPolicy`` (which catches short
-    audio segments) and ``VADStabilityPolicy`` (which catches rapid VAD
-    flapping). This one targets the case where ASR DID emit a transcript
-    but the content itself is non-lexical noise.
-
-    Added in Round 7 G2a.
-    """
-
-    def check(
-        self,
-        state: TurnDetectionStateManager,
-        turn_end_policy: TurnEndPolicy,
-    ) -> Optional[CutDecision]:
-        text = state.current_text
-        if not text:
-            return None
-        stripped = text.strip().rstrip(ASR_TRAILING_PUNCTUATION)
-        if not stripped:
-            return None
-        if stripped in NOISE_LIKE_TRANSCRIPTIONS:
-            return CutDecision(
-                should_cut=False,
-                reason=f"Noise-like transcript: {stripped!r}",
-                silence_duration=0.0,
-            )
-        # Detect repeated single-character sequences ("啊啊啊啊", "咳咳咳"),
-        # which are typical of coughs / sighs / extended noises.
-        if 2 <= len(stripped) <= 6 and len(set(stripped)) == 1:
-            char = stripped[0]
-            if char in REPEATED_NOISE_CHARS:
-                return CutDecision(
-                    should_cut=False,
-                    reason=f"Repeated noise char: {stripped!r}",
-                    silence_duration=0.0,
-                )
-        return None
-
-
 class DuplicateTextPolicy(CutPolicy):
     """Duplicate text check: blocks cuts if current text is too similar to last cut text.
 
@@ -241,31 +141,15 @@ class MinSpeakingDurationPolicy(CutPolicy):
     Filters out coughs, sneezes, ambient noise, and other non-intentional vocalizations
     that are shorter than min_speech_duration_sec.
 
-    G18c (2026-05-18) — the original Round 7 G2b "average VAD probability"
-    gate was removed. It required ≥1s of frame accumulation to stabilise,
-    which made it the single largest contributor to the multi-second
-    interrupt-delay problem fixed by G18a's first-signal triggers. The
-    InterruptDecider's first-INTERIM + backchannel filter handles echo /
-    noise classification with no latency penalty.
-
-    The ``min_avg_vad_confidence`` and ``confidence_window_sec`` constructor
-    arguments remain for backward compatibility but are NO LONGER USED
-    by ``check()``. They will be removed in a follow-up release once
-    callers (and tests) have been migrated.
+    Acoustic duration is the only signal consumed here; transcript wording is
+    intentionally outside this policy.
     """
 
     def __init__(
         self,
         min_speech_duration_sec: float = 0.15,
-        min_avg_vad_confidence: float = 0.0,  # G18c: unused, kept for compat
-        confidence_window_sec: float = 2.0,  # G18c: unused, kept for compat
     ):
         self.min_speech_duration_sec = min_speech_duration_sec
-        # G18c (2026-05-18): these fields are kept as no-op attributes for
-        # the deprecation transition. Reading them is fine; their values
-        # have no effect on cut decisions.
-        self.min_avg_vad_confidence = min_avg_vad_confidence
-        self.confidence_window_sec = confidence_window_sec
 
     def check(
         self,
@@ -282,9 +166,6 @@ class MinSpeakingDurationPolicy(CutPolicy):
                 reason=f"Speech too short {speech_duration:.3f}s < {self.min_speech_duration_sec}s",
                 silence_duration=0.0,
             )
-        # G18c: no more VAD-confidence-ramp gate. Returning None hands the
-        # decision back to the chain (subsequent policies, EOT semantic
-        # score, then InterruptDecider).
         return None
 
 
@@ -371,47 +252,6 @@ class ASRStabilityPolicy(CutPolicy):
                 reason=f"ASR not stable yet {stable_duration:.2f}s < {stability_window}s",
                 silence_duration=state.get_silence_duration(),
             )
-        return None
-
-
-# -----------------------------------------------------------------------------
-# Intent Override Policies — intent-based cut decisions
-# -----------------------------------------------------------------------------
-
-
-class InterruptIntentPolicy(CutPolicy):
-    """Intent-based override: maps user speech intent to cut decisions.
-
-    Priority:
-    1. Strong interrupt intent  → should_cut=True  (e.g. "停", "闭嘴", "不对")
-    2. Continuation intent      → should_cut=False (e.g. "再换一个", "继续说")
-
-    All other cases return None, letting the chain continue.
-    """
-
-    def check(
-        self,
-        state: TurnDetectionStateManager,
-        turn_end_policy: TurnEndPolicy,
-    ) -> Optional[CutDecision]:
-        text = state.current_text
-        if not text:
-            return None
-
-        # Priority 1: Strong interrupt → always cut immediately.
-        if turn_end_policy.is_strong_interrupt_intent(text):
-            return CutDecision(
-                should_cut=True,
-                reason="strong interrupt intent",
-            )
-
-        # Priority 2: Continuation intent → block the cut.
-        if turn_end_policy.is_continuation_intent(text):
-            return CutDecision(
-                should_cut=False,
-                reason="continuation intent",
-            )
-
         return None
 
 
@@ -506,7 +346,6 @@ class EOTScorePolicy(CutPolicy):
         silence_duration = state.get_silence_duration()
 
         threshold = turn_end_policy.get_dynamic_threshold(
-            state.current_text,
             score,
             state._asr.is_final,
         )
@@ -534,11 +373,9 @@ class EOTScoreSemanticPolicy(CutPolicy):
     def __init__(
         self,
         base_threshold: float = 0.7,
-        weak_intent_threshold: float = 0.5,
         vad_active_delta: float = 0.1,
     ):
         self.base_threshold = base_threshold
-        del weak_intent_threshold
         self.vad_active_delta = vad_active_delta
 
     def check(
@@ -607,14 +444,11 @@ class PolicyChain:
     def for_semantic_interruption(
         cls,
         base_threshold: float = 0.7,
-        weak_threshold: float = 0.5,
         vad_active_delta: float = 0.1,
         vad_flip_window_sec: float = 1.0,
         vad_flip_count_threshold: int = 3,
         min_speech_duration_sec: float = 0.15,
         similarity_threshold: float = 0.85,
-        min_avg_vad_confidence: float = 0.0,
-        confidence_window_sec: float = 2.0,
     ) -> "PolicyChain":
         """
         Semantic interruption chain: agent is speaking, user starts speaking.
@@ -636,17 +470,13 @@ class PolicyChain:
         return cls(
             [
                 InterruptCooldownPolicy(),
-                MinSpeakingDurationPolicy(
-                    min_speech_duration_sec,
-                    min_avg_vad_confidence=min_avg_vad_confidence,
-                    confidence_window_sec=confidence_window_sec,
-                ),
+                MinSpeakingDurationPolicy(min_speech_duration_sec),
                 VADStabilityPolicy(vad_flip_window_sec, vad_flip_count_threshold),
                 MinIntervalPolicy(),
                 DuplicateTextPolicy(similarity_threshold),
                 MaxDurationPolicy(),
                 VADStalePolicy(),
-                EOTScoreSemanticPolicy(base_threshold, weak_threshold, vad_active_delta),
+                EOTScoreSemanticPolicy(base_threshold, vad_active_delta),
             ]
         )
 
@@ -661,8 +491,6 @@ class PolicyChain:
         vad_flip_count_threshold: int = 3,
         min_speech_duration_sec: float = 0.15,
         similarity_threshold: float = 0.85,
-        min_avg_vad_confidence: float = 0.0,
-        confidence_window_sec: float = 2.0,
     ) -> "PolicyChain":
         """
         Normal turn-end chain: agent is idle, user finishes speaking.
@@ -682,11 +510,7 @@ class PolicyChain:
         return cls(
             [
                 InterruptCooldownPolicy(),
-                MinSpeakingDurationPolicy(
-                    min_speech_duration_sec,
-                    min_avg_vad_confidence=min_avg_vad_confidence,
-                    confidence_window_sec=confidence_window_sec,
-                ),
+                MinSpeakingDurationPolicy(min_speech_duration_sec),
                 VADStabilityPolicy(vad_flip_window_sec, vad_flip_count_threshold),
                 MinIntervalPolicy(),
                 DuplicateTextPolicy(similarity_threshold),

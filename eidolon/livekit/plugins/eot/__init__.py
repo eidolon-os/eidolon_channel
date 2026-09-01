@@ -28,12 +28,9 @@ The framework's ``turn_detection`` parameter accepts:
 This plugin IS a custom ``_TurnDetector`` (the right extension shape).
 What it adds beyond a plain probability score:
 
-1. **PolicyChain** — multi-signal fusion for Chinese conversation:
-   backchannel suppression ("嗯"/"好"), VAD confidence gating,
-   conversation-phase detection (greeting/main/closing), filler
-   detection ("那个"/"就是"). Framework's built-in modes give a single
-   numeric score; for "agent shouldn't be interrupted by an
-   acknowledgement during its reply" we need fusion logic.
+1. **PolicyChain** — provider-neutral fusion of learned EOT probability,
+   VAD, STT finality, timing and streaming duplicate guards. Transcript
+   wording is evaluated only by the learned model.
 
 2. **Soft/hard interrupt staging** — soft pause first, hard cut only
    if user keeps talking. Framework has
@@ -41,11 +38,7 @@ What it adds beyond a plain probability score:
    intent, but it's a single timer; our soft-interrupt is a state
    machine that can be cancelled by silence.
 
-3. **Per-session UserProfile** — language, speaking rate, filler
-   ratio, response length — used to bias scoring per-user. Out of
-   scope for framework's per-call ``predict_end_of_turn``.
-
-4. **Two-path scoring (Round 7 G0a)** — same model serves
+3. **Two-path scoring** — same model serves
    ``predict_end_of_turn`` (framework's endpointing) and
    ``should_interrupt`` (our PolicyChain decision), with shared cache
    and slightly different post-processing.
@@ -67,9 +60,7 @@ Usage::
         turn_detection=ChineseModel(
             model_dir="/path/to/model",        # Override default bundled model
             prefer_multilingual=False,         # True for multilingual model
-            min_threshold=0.4,
             max_threshold=2.2,
-            enable_semantic_tail_hang=True,
         ),
     )
 
@@ -100,18 +91,11 @@ from .impl.eot_policy import (
     MinSpeakingDurationPolicy,
     VADStabilityPolicy,
     ASRStabilityPolicy,
-    InterruptIntentPolicy,
     MaxDurationPolicy,
     VADStalePolicy,
     ASRFinalCutPolicy,
     EOTScorePolicy,
     EOTScoreSemanticPolicy,
-    BackchannelSuppressionPolicy,
-    NoiseLikeTranscriptPolicy,
-)
-from .impl.constants import (
-    BACKCHANNEL_WORDS,
-    NOISE_LIKE_TRANSCRIPTIONS,
 )
 from .impl.state import (
     TurnDetectionStateManager,
@@ -123,11 +107,6 @@ from .impl.state import (
 )
 from .impl.turn_end_policy import TurnEndPolicy
 from .impl.context_enhanced_eot import ContextEnhancedEot
-from .impl.conversation_phase import (
-    ConversationPhase,
-    ConversationPhaseDetector,
-    PHASE_THRESHOLD_MULTIPLIERS,
-)
 from .impl.utils import (
     longest_common_prefix_len,
     extract_incremental_text,
@@ -153,16 +132,11 @@ __all__ = [
     "MinSpeakingDurationPolicy",
     "VADStabilityPolicy",
     "ASRStabilityPolicy",
-    "InterruptIntentPolicy",
     "MaxDurationPolicy",
     "VADStalePolicy",
     "ASRFinalCutPolicy",
     "EOTScorePolicy",
     "EOTScoreSemanticPolicy",
-    "BackchannelSuppressionPolicy",
-    "NoiseLikeTranscriptPolicy",
-    "BACKCHANNEL_WORDS",
-    "NOISE_LIKE_TRANSCRIPTIONS",
     "TurnDetectionStateManager",
     "VADState",
     "ASRState",
@@ -171,9 +145,6 @@ __all__ = [
     "NoiseState",
     "TurnEndPolicy",
     "ContextEnhancedEot",
-    "ConversationPhase",
-    "ConversationPhaseDetector",
-    "PHASE_THRESHOLD_MULTIPLIERS",
     "longest_common_prefix_len",
     "extract_incremental_text",
     "is_similar_text",

@@ -95,7 +95,6 @@ turn_policy:
     min_silence_duration_ms: 500
   eot:
     eot_unlikely_threshold: 0.50
-    tail_hang_silence_ms: 2000
     transcript_revision_min_normalized_chars: 4
     speech_merge_grace_ms: 800
   interrupt:

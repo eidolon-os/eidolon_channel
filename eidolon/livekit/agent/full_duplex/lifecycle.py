@@ -256,8 +256,8 @@ class FullDuplexSessionLifecycle:
         We capture it here and signal ``_session_closed_event``; ``run()`` is
         awaiting that event and will proceed to ``shutdown()``.
 
-        Also clean up the EOT model's per-session UserProfile so long-running
-        daemons don't accumulate state across rooms. Defensive: catch and log;
+        Also clear the EOT model's bounded per-session diagnostic state so
+        long-running daemons do not retain room state. Defensive: catch and log;
         this must not block the close path.
         """
         pipeline = self._pipeline

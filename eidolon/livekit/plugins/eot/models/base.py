@@ -66,7 +66,6 @@ from typing import TYPE_CHECKING
 from ..config import EidolonEOTConfig
 from ..impl.eot_manager import EotManager
 from ..impl.context_enhanced_eot import ContextEnhancedEot
-from ..impl.conversation_phase import ConversationPhaseDetector
 from ..impl.turn_end_policy import TurnEndPolicy
 from ..impl.state import TurnDetectionStateManager
 from ..impl.eot_policy import PolicyChain
@@ -143,22 +142,17 @@ class EidolonEOTModel(ABC):
         # Context-enhanced EOT scorer
         self._context_eot = ContextEnhancedEot(
             base_eot=self._eot_manager,
-            max_history=config.utterance_end_max_history,
-            enable_user_profile=config.enable_user_profile,
-            enable_temporary_compensations=config.enable_temporary_compensations,
             cooldown_period=config.context_eot_cooldown_sec,
+            similarity_threshold=config.similarity_threshold,
         )
 
         # Dynamic threshold policy
         self._turn_end_policy = TurnEndPolicy(
-            t_min=config.min_threshold,
             t_max=config.max_threshold,
             t_urgent=config.urgent_threshold,
-            enable_semantic_tail_hang=config.enable_semantic_tail_hang,
             t_fast=config.t_fast,
             t_mid=config.t_mid,
             t_deep=config.t_deep,
-            t_tail_hang=config.tail_hang_silence_sec,
             is_final_reduction=config.is_final_threshold_reduction,
         )
 
@@ -179,30 +173,20 @@ class EidolonEOTModel(ABC):
             vad_flip_count_threshold=config.vad_flip_count_threshold,
             min_speech_duration_sec=config.min_speech_duration_sec,
             similarity_threshold=config.similarity_threshold,
-            min_avg_vad_confidence=config.min_avg_vad_confidence,
-            confidence_window_sec=config.vad_confidence_window_sec,
         )
         # Dedicated chain for semantic interruption (agent speaking, user starts speaking).
         self._semantic_policy_chain = PolicyChain.for_semantic_interruption(
             base_threshold=config.streaming_eot_base_threshold,
-            weak_threshold=config.streaming_eot_weak_threshold,
             vad_active_delta=config.semantic_threshold_vad_active_delta,
             vad_flip_window_sec=config.vad_flip_window_sec,
             vad_flip_count_threshold=config.vad_flip_count_threshold,
             min_speech_duration_sec=config.min_speech_duration_sec,
             similarity_threshold=config.similarity_threshold,
-            min_avg_vad_confidence=config.min_avg_vad_confidence,
-            confidence_window_sec=config.vad_confidence_window_sec,
         )
 
         # EOT score cache for the current streaming text
         self._current_eot_score: float = 0.0
         self._last_asr_update_time: float = 0.0
-
-        # Round 7 G5: conversation-phase detector (stateless). Called on
-        # update_asr / record_turn to refresh state.conversation_phase so
-        # TurnEndPolicy can scale silence thresholds by phase.
-        self._phase_detector: ConversationPhaseDetector = ConversationPhaseDetector()
 
         # NOTE: Round 8 R8.13 turn-merge dampener was removed when STT
         # was moved back to Bailian streaming. The dampener existed to
@@ -446,19 +430,11 @@ class EidolonEOTModel(ABC):
         elif len(text.strip()) < self._MIN_INFERENCE_CHARS:
             self._current_eot_score = 0.0
 
-        # Round 7 G5: refresh conversation phase (cheap stateless detection).
-        # Done on every update so transitions like "...好" → "...好的就这样吧"
-        # (CLOSING) are caught as soon as the ASR delivers the trigger word.
-        history_length = len(self._context_eot._dialogue_history)
-        phase = self._phase_detector.detect(text, history_length)
-        self._state.update_conversation_phase(phase)
-
         logger.info(
-            "[EOT] update_asr text=%r is_final=%s score=%.3f phase=%s",
+            "[EOT] update_asr text=%r is_final=%s score=%.3f",
             text[:80],
             is_final,
             self._current_eot_score,
-            phase.name,
         )
         return self._current_eot_score
 
@@ -506,7 +482,7 @@ class EidolonEOTModel(ABC):
         # branch on it (tiered hard vs. soft interrupt) without redoing
         # the work. Read via :pyattr:`current_eot_score`.
         if text.strip():
-            eot_score = self._context_eot.compute_score(text, is_final=False)
+            eot_score = self._context_eot.compute_score(text)
             self._state.update_eot_score(eot_score)
             self._current_eot_score = eot_score
 
@@ -545,19 +521,14 @@ class EidolonEOTModel(ABC):
         Returns:
             Silence threshold in seconds.
         """
-        return self._turn_end_policy.get_dynamic_threshold(
-            text=text,
-            p_complete=p_complete,
-            is_final=is_final,
-            # Round 7 G5: scale threshold by current conversation phase.
-            phase=self._state.conversation_phase,
-        )
+        del text
+        return self._turn_end_policy.get_dynamic_threshold(p_complete, is_final)
 
     def start_session(self, session_id: str) -> None:
         """Initialize session context for multi-turn awareness.
 
         Must be called once when the pipeline starts (e.g. after session.start()).
-        Enables user profile tracking and dialogue history.
+        Starts bounded diagnostic history for the room.
         """
         self._context_eot.start_session(session_id)
         logger.info("[EOT] session started: %s", session_id)
@@ -565,8 +536,7 @@ class EidolonEOTModel(ABC):
     def end_session(self, session_id: "str | None" = None) -> None:
         """Round 8 P2.L8: clean up session-scoped state on room close.
 
-        Removes the session's ``UserProfile`` and clears the active
-        session-id pointer. Should be called from
+        Clears the active session and bounded diagnostic history. Called from
         ``StreamingPipeline._on_session_close`` so long-running
         daemons don't accumulate per-session state forever.
 
@@ -582,8 +552,7 @@ class EidolonEOTModel(ABC):
         """Record a completed user turn into dialogue history.
 
         Must be called at turn boundaries (user stops speaking) BEFORE reset().
-        Enables multi-turn features: follow-up detection, hesitation patterns,
-        first-turn greeting detection.
+        The history is diagnostic only and never changes the learned score.
         """
         if text and text.strip():
             self._context_eot.record_turn(text, is_complete, eot_score)
@@ -607,9 +576,6 @@ class EidolonEOTModel(ABC):
         self._state.reset_turn()
         self._current_eot_score = 0.0
         self._last_asr_update_time = 0.0
-        # Round 7 G5: clear conversation phase between turns. Will be
-        # re-detected on the next update_asr.
-        self._state.update_conversation_phase(None)
 
     @property
     def current_eot_score(self) -> float:

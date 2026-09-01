@@ -125,8 +125,7 @@ async def test_framework_completed_is_the_single_normal_commit_boundary() -> Non
     assert "turn_committed_at" in timeline.timestamps
 
 
-@pytest.mark.asyncio
-async def test_transcriptless_non_interruption_rejects_at_product_deadline() -> None:
+def test_livekit_transcription_timeout_rejects_transcriptless_candidate() -> None:
     pipeline = _make_pipeline_with_session()
     pipeline._ensure_runtime_defaults()
     timeline = TurnTimeline("transcriptless-deadline")
@@ -134,21 +133,28 @@ async def test_transcriptless_non_interruption_rejects_at_product_deadline() -> 
     candidate = pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._user_turns.note_speech_stopped(eot_score=0.0)
 
-    pipeline._ensure_turn_completion().arm_transcriptless_expiry()
-    await asyncio.sleep(0.08)
+    rejected = pipeline._ensure_turn_completion().handle_transcription_timeout(
+        SimpleNamespace(speech_duration=1.2, vad_speech_started_at=123.0)
+    )
 
+    assert rejected is True
     assert candidate.state == "rejected"
     assert candidate.reject_reason == "speech_stopped_without_transcript_deadline"
     expiry = timeline.attrs["transcriptless_candidate_expiry"]
     assert expiry["outcome"] == "rejected"
-    assert expiry["elapsed_ms"] >= 45
+    assert expiry["source"] == "livekit_user_transcription_timeout"
+    assert expiry["speech_duration"] == 1.2
+    pipeline._session.say.assert_called_once_with(
+        "抱歉，刚才没听清，请再说一遍好吗？",
+        allow_interruptions=True,
+        add_to_chat_ctx=False,
+    )
     assert timeline.attrs["timeline_flush_reason"] == (
         "speech_stopped_without_transcript_deadline"
     )
 
 
-@pytest.mark.asyncio
-async def test_transcript_arrival_cancels_transcriptless_expiry() -> None:
+def test_livekit_transcription_timeout_ignores_candidate_with_text() -> None:
     pipeline = _make_pipeline_with_session()
     pipeline._ensure_runtime_defaults()
     timeline = TurnTimeline("transcript-before-deadline")
@@ -156,11 +162,12 @@ async def test_transcript_arrival_cancels_transcriptless_expiry() -> None:
     candidate = pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._user_turns.note_speech_stopped(eot_score=0.0)
 
-    pipeline._ensure_turn_completion().arm_transcriptless_expiry()
-    await asyncio.sleep(0.01)
     pipeline._user_turns.add_transcript("迟到但有效的转写", is_final=False)
-    await asyncio.sleep(0.06)
+    rejected = pipeline._ensure_turn_completion().handle_transcription_timeout(
+        SimpleNamespace(speech_duration=1.2, vad_speech_started_at=123.0)
+    )
 
+    assert rejected is False
     assert candidate.state == "open"
     assert candidate.selected_text == "迟到但有效的转写"
     assert "transcriptless_candidate_expiry" not in timeline.attrs

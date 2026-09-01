@@ -28,9 +28,9 @@ class FullDuplexTranscriptRecorder:
             min_normalized_chars=transcript_revision_min_normalized_chars,
         )
 
-    def record(self, transcript_event: FullDuplexTranscriptEvent) -> None:
+    def record(self, transcript_event: FullDuplexTranscriptEvent) -> str:
         if not transcript_event.has_transcript:
-            return
+            return ""
 
         pipeline = self._pipeline
         # Real recognized speech (interim or final) keeps the session alive.
@@ -58,12 +58,17 @@ class FullDuplexTranscriptRecorder:
             if buffered_evidence is not None
             else transcript_event.evidence
         )
-        transcript_kwargs = {"evidence": evidence} if evidence.available else {}
-        receipt = pipeline._user_turns.add_transcript(
-            transcript_event.transcript,
-            is_final=transcript_event.is_final,
-            **transcript_kwargs,
-        )
+        if evidence.available:
+            receipt = pipeline._user_turns.add_transcript(
+                transcript_event.transcript,
+                is_final=transcript_event.is_final,
+                evidence=evidence,
+            )
+        else:
+            receipt = pipeline._user_turns.add_transcript(
+                transcript_event.transcript,
+                is_final=transcript_event.is_final,
+            )
         if receipt is not None:
             covered_segments = self._hypotheses.observe(
                 receipt,
@@ -83,12 +88,23 @@ class FullDuplexTranscriptRecorder:
                         else "provider_final_equivalent_hypothesis"
                     ),
                 )
+        selected_policy_text = (
+            getattr(pipeline._user_turns, "selected_policy_text", "")
+            if receipt is not None
+            else ""
+        )
+        policy_transcript = (
+            selected_policy_text
+            if isinstance(selected_policy_text, str) and selected_policy_text.strip()
+            else transcript_event.transcript
+        )
         if pipeline._timeline is not None:
             pipeline._timeline.mark(transcript_event.timeline_mark)
         try:
             pipeline._get_eot_model().update_asr(
-                transcript_event.transcript,
+                policy_transcript,
                 is_final=transcript_event.is_final,
             )
         except Exception:
             logger.exception("[StreamingPipeline] eot_model.update_asr failed")
+        return policy_transcript

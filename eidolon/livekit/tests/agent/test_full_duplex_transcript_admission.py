@@ -5,16 +5,24 @@ from types import SimpleNamespace
 from eidolon.livekit.agent.full_duplex.transcript_admission import (
     TranscriptAdmissionGate,
 )
+from eidolon.livekit.agent.session.transcript_echo import EchoEvidence
 
 
 class _EchoGate:
-    def __init__(self, result: bool) -> None:
-        self.result = result
+    def __init__(
+        self,
+        result: bool = False,
+        *,
+        evidence: EchoEvidence | None = None,
+    ) -> None:
+        self.evidence = evidence or (
+            EchoEvidence.CONFIRMED if result else EchoEvidence.NONE
+        )
         self.calls: list[str] = []
 
-    def is_echo(self, transcript: str) -> bool:
+    def classify(self, transcript: str) -> EchoEvidence:
         self.calls.append(transcript)
-        return self.result
+        return self.evidence
 
 
 def _event(
@@ -76,6 +84,21 @@ def test_rejects_agent_echo_during_output() -> None:
     assert decision.reason == "agent_echo"
     assert decision.speaker_id == "user-1"
     assert echo_gate.calls == ["这是 AI 正在说的话"]
+
+
+def test_holds_possible_echo_prefix_without_confirming_rejection() -> None:
+    echo_gate = _EchoGate(evidence=EchoEvidence.POSSIBLE)
+    gate = TranscriptAdmissionGate(
+        suppress_until_next_speech=lambda: False,
+        agent_output_active=lambda _speaker_id: True,
+        echo_gate=lambda: echo_gate,
+    )
+
+    decision = gate.evaluate(_event("我是。", is_final=True))
+
+    assert not decision.accepted
+    assert decision.reason == "possible_agent_echo_hold"
+    assert echo_gate.calls == ["我是。"]
 
 
 def test_rejects_committed_turn_revision_before_echo_gate() -> None:

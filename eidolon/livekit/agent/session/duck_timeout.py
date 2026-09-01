@@ -25,7 +25,7 @@ class DuckSuspendTimeoutHandler:
     VAD start immediately ducks output. This handler owns the later deadline:
     by then we may have STT text, an EOT score, or only VAD. The policy runtime
     remains the authority for the decision; this class only handles deadline
-    bookkeeping, max-suspend rollback and applying the resolved decision.
+    scheduling, generic duck-buffer bounds and applying the resolved decision.
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class DuckSuspendTimeoutHandler:
         get_eot_model: Callable[[], Any],
         apply_decision: Callable[..., None],
         should_hold_for_evidence: Callable[[], bool] | None = None,
-        get_max_suspend_sec: Callable[[], float] | None = None,
+        get_hold_remaining_sec: Callable[[], float | None] | None = None,
         deadline_decision: Callable[..., Decision] | None = None,
     ) -> None:
         self._turn_runtime = turn_runtime
@@ -58,7 +58,7 @@ class DuckSuspendTimeoutHandler:
         self._get_eot_model = get_eot_model
         self._apply_decision = apply_decision
         self._should_hold_for_evidence = should_hold_for_evidence or (lambda: False)
-        self._get_max_suspend_sec = get_max_suspend_sec or (lambda: 0.0)
+        self._get_hold_remaining_sec = get_hold_remaining_sec or (lambda: None)
         self._deadline_decision = deadline_decision or turn_runtime.deadline_decision
 
     async def run(self, timeout_sec: float) -> None:
@@ -124,32 +124,35 @@ class DuckSuspendTimeoutHandler:
         timeout_sec: float,
         eot_model: Any,
     ) -> Decision:
-        eot_config = getattr(eot_model, "_config", None)
-        owner_max_suspend_sec = self._get_max_suspend_sec()
-        if owner_max_suspend_sec > 0:
-            max_suspend_sec = max(timeout_sec, owner_max_suspend_sec)
+        owner_remaining_sec = self._get_hold_remaining_sec()
+        if owner_remaining_sec is not None:
+            if owner_remaining_sec <= 0:
+                return self._bounded_rollback(
+                    decision,
+                    reason=(
+                        "deadline_hold_owner_budget_elapsed "
+                        f"last_reason={decision.reason}"
+                    ),
+                )
+            next_timeout = owner_remaining_sec
         else:
+            eot_config = getattr(eot_model, "_config", None)
             max_suspend_sec = max(
                 timeout_sec,
                 getattr(eot_config, "duck_buffer_max_sec", timeout_sec),
             )
-        suspend_sec = time.monotonic() - self._get_suspend_start()
-        if suspend_sec >= max_suspend_sec:
-            rollback = Decision(
-                action=Action.ROLLBACK,
-                reason=(
-                    "deadline_hold_max_suspend_elapsed "
-                    f"suspend={suspend_sec:.2f}s>={max_suspend_sec:.2f}s "
-                    f"last_reason={decision.reason}"
-                ),
-                rollback_drop_buffered=True,
-                intent=InterruptIntent.UNCERTAIN,
-                intent_source="timeout",
-                intent_confidence=0.0,
-            )
-            return self._turn_runtime.tiers.annotate_decision(rollback)
+            suspend_sec = time.monotonic() - self._get_suspend_start()
+            if suspend_sec >= max_suspend_sec:
+                return self._bounded_rollback(
+                    decision,
+                    reason=(
+                        "deadline_hold_max_suspend_elapsed "
+                        f"suspend={suspend_sec:.2f}s>={max_suspend_sec:.2f}s "
+                        f"last_reason={decision.reason}"
+                    ),
+                )
+            next_timeout = max(0.0, max_suspend_sec - suspend_sec)
 
-        next_timeout = max(0.0, max_suspend_sec - suspend_sec)
         if decision.hold_recheck_ms is not None:
             next_timeout = min(
                 next_timeout,
@@ -159,3 +162,14 @@ class DuckSuspendTimeoutHandler:
             self._create_task(self.run(min(timeout_sec, next_timeout)))
         )
         return decision
+
+    def _bounded_rollback(self, decision: Decision, *, reason: str) -> Decision:
+        rollback = Decision(
+            action=Action.ROLLBACK,
+            reason=reason,
+            rollback_drop_buffered=True,
+            intent=InterruptIntent.UNCERTAIN,
+            intent_source="timeout",
+            intent_confidence=0.0,
+        )
+        return self._turn_runtime.tiers.annotate_decision(rollback)

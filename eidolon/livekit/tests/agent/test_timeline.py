@@ -108,6 +108,7 @@ def test_timeline_interrupt_latency_breakdown() -> None:
     provider_latency = snap["attrs"]["provider_latency_ms"]
     durations = snap["durations_ms"]
 
+    assert "transcript_evidence_sufficient_first_at" in snap["timestamps"]
     assert round(provider_latency["interrupt_speech_to_started_ms"]) == 20
     assert round(provider_latency["interrupt_speech_to_first_transcript_ms"]) == 340
     assert round(provider_latency["interrupt_started_to_first_transcript_ms"]) == 320
@@ -208,8 +209,8 @@ def test_timeline_does_not_mark_noise_as_actionable_transcript() -> None:
     assert snap["attrs"]["provider_latency_ms"]["stt_speech_to_actionable_transcript_ms"] is None
 
 
-def test_timeline_marks_semantic_score_wait_as_actionable_transcript() -> None:
-    timeline = TurnTimeline("turn-actionable-hold")
+def test_timeline_marks_semantic_score_wait_as_sufficient_but_not_actionable() -> None:
+    timeline = TurnTimeline("turn-evidence-sufficient-hold")
     timeline.mark_at("speech_started_at", 10.0)
     timeline.mark_at("transcript_interim_first_at", 10.1)
 
@@ -221,10 +222,13 @@ def test_timeline_marks_semantic_score_wait_as_actionable_transcript() -> None:
     )
 
     snap = timeline.snapshot()
-    assert "transcript_actionable_first_at" in snap["timestamps"]
+    assert "transcript_evidence_sufficient_first_at" in snap["timestamps"]
+    assert "transcript_actionable_first_at" not in snap["timestamps"]
     assert (
-        snap["attrs"]["provider_latency_ms"]["stt_speech_to_actionable_transcript_ms"] is not None
+        snap["attrs"]["provider_latency_ms"]["stt_speech_to_evidence_sufficient_transcript_ms"]
+        is not None
     )
+    assert snap["attrs"]["provider_latency_ms"]["stt_speech_to_actionable_transcript_ms"] is None
 
 
 def test_timeline_records_hold_recheck_ms() -> None:

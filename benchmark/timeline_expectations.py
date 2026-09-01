@@ -327,7 +327,11 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         None,
     )
     if max_speech_start_to_suspend_ms is not None:
-        durations = _speech_start_to_suspend_durations_ms(records)
+        durations = _speech_start_to_suspend_durations_ms(
+            records,
+            expected.action,
+            first_yield_only=_is_semantic_redirect_case(case_id, expected),
+        )
         if durations:
             slow = [
                 round(duration, 1)
@@ -857,16 +861,62 @@ def _interrupt_resolution_after_started_ms(
     return durations
 
 
-def _speech_start_to_suspend_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+def _speech_start_to_suspend_durations_ms(
+    records: list[dict[str, Any]],
+    expected_action: str = "",
+    *,
+    first_yield_only: bool = False,
+) -> list[float]:
+    """Measure the effective output suspension boundary.
+
+    The first actionable STT event can arrive before the framework emits the
+    next VAD ``speech_started`` event. In that ordering the output timeline may
+    record an early ``interrupt_started_at`` while still carrying the previous
+    user turn's ``speech_started_at``. Pairing those timestamps invents a
+    multi-second latency. For that transcript-led ordering, measure the signal
+    admission to the actual playback stop. Otherwise retain the normal
+    VAD-speech to interrupt-start boundary. Semantic redirects are judged on
+    their first yield because later repeated interims only collect the new turn
+    after the old output is already stopped.
+    """
+
     durations: list[float] = []
-    for record in records:
-        duration = _timestamp_delta_ms(
-            record,
-            "speech_started_at",
-            "interrupt_started_at",
-        )
+    candidate_records = [
+        record
+        for record in records
+        if expected_action != "cancel" or _record_is_cancel(record)
+    ]
+    if expected_action in {"rollback", "resume"}:
+        candidate_records = [
+            record for record in candidate_records if _record_is_resume(record)
+        ]
+    candidate_records.sort(key=_playback_stop_sort_key)
+    if first_yield_only and candidate_records:
+        candidate_records = candidate_records[:1]
+    elif not candidate_records:
+        candidate_records = _resolved_interrupt_records(records, expected_action)
+
+    for record in candidate_records:
+        if _interrupt_uses_prior_turn_speech_origin(record):
+            duration = _timestamp_delta_ms(
+                record,
+                "interrupt_started_at",
+                "playback_stop_sent_at",
+            )
+        else:
+            duration = _timestamp_delta_ms(
+                record,
+                "speech_started_at",
+                "interrupt_started_at",
+            )
         if duration is None:
             duration = _duck_started_duration_ms(record)
+        if duration is None and _record_is_cancel(record):
+            duration = _timestamp_delta_ms(
+                record,
+                "speech_started_at",
+                "playback_stop_sent_at",
+            )
         if duration is not None:
             durations.append(duration)
     return durations
@@ -1166,7 +1216,17 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
         durations = _mapping(record.get("durations_ms"))
         attrs = _mapping(record.get("attrs"))
         provider_latency = _mapping(attrs.get("provider_latency_ms"))
+        prior_turn_speech_origin = _interrupt_uses_prior_turn_speech_origin(record)
         for key, value in provider_latency.items():
+            if prior_turn_speech_origin and (
+                key.startswith("interrupt_speech_to_")
+                or key
+                in {
+                    "stt_speech_to_actionable_transcript_ms",
+                    "stt_first_transcript_to_actionable_transcript_ms",
+                }
+            ):
+                continue
             number = _number(value)
             if number is not None:
                 samples.setdefault(f"timeline_{key}", []).append(number)
@@ -1177,6 +1237,8 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
                 hold_recheck_ms
             )
         total_interrupt = _number(durations.get("vad_start_to_interrupt_resolved"))
+        if prior_turn_speech_origin:
+            total_interrupt = None
         if total_interrupt is not None:
             samples.setdefault(
                 "timeline_vad_start_to_interrupt_resolved",
@@ -1185,6 +1247,8 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
         cancel_interrupt = _number(
             durations.get("vad_start_to_interrupt_cancel_resolved")
         )
+        if prior_turn_speech_origin:
+            cancel_interrupt = None
         if cancel_interrupt is not None:
             samples.setdefault(
                 "timeline_vad_start_to_interrupt_cancel_resolved",
@@ -1194,7 +1258,9 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
                 (_interrupt_sort_key(record, "cancel"), cancel_interrupt)
             )
         playback_stop = _number(durations.get("vad_start_to_playback_stop_sent"))
-        if playback_stop is None:
+        if prior_turn_speech_origin:
+            playback_stop = None
+        if playback_stop is None and not prior_turn_speech_origin:
             playback_stop = _number(
                 provider_latency.get("interrupt_speech_to_playback_stop_ms")
             )
@@ -1202,17 +1268,33 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
             timestamps = _mapping(record.get("timestamps"))
             start = _number(timestamps.get("speech_started_at"))
             end = _number(timestamps.get("playback_stop_sent_at"))
-            if start is not None and end is not None:
+            if (
+                not prior_turn_speech_origin
+                and start is not None
+                and end is not None
+            ):
                 playback_stop = max(0.0, (end - start) * 1000.0)
+        playback_stop_from_interrupt = False
+        if playback_stop is None and prior_turn_speech_origin:
+            playback_stop = _number(
+                provider_latency.get("interrupt_started_to_playback_stop_ms")
+            )
+            playback_stop_from_interrupt = playback_stop is not None
+            if playback_stop is not None:
+                samples.setdefault(
+                    "timeline_interrupt_signal_to_playback_stop_ms",
+                    [],
+                ).append(playback_stop)
         if playback_stop is not None:
             samples.setdefault(
                 "timeline_vad_start_to_playback_stop_sent",
                 [],
             ).append(playback_stop)
-            samples.setdefault(
-                "timeline_interrupt_speech_to_playback_stop_ms",
-                [],
-            ).append(playback_stop)
+            if not playback_stop_from_interrupt:
+                samples.setdefault(
+                    "timeline_interrupt_speech_to_playback_stop_ms",
+                    [],
+                ).append(playback_stop)
             playback_stop_durations.append(
                 (_playback_stop_sort_key(record), playback_stop)
             )
@@ -1248,6 +1330,21 @@ def _latency_metrics(records: list[dict[str, Any]]) -> dict[str, float]:
                 duration for _sort_key, duration in playback_stop_durations[1:]
             )
     return metrics
+
+
+def _interrupt_uses_prior_turn_speech_origin(record: dict[str, Any]) -> bool:
+    """Return true when an output interrupt landed on a committed turn record."""
+
+    timestamps = _mapping(record.get("timestamps"))
+    speech_started = _number(timestamps.get("speech_started_at"))
+    turn_committed = _number(timestamps.get("turn_committed_at"))
+    interrupt_started = _number(timestamps.get("interrupt_started_at"))
+    return (
+        speech_started is not None
+        and turn_committed is not None
+        and interrupt_started is not None
+        and speech_started <= turn_committed < interrupt_started
+    )
 
 
 def _playback_stop_sort_key(record: dict[str, Any]) -> float:

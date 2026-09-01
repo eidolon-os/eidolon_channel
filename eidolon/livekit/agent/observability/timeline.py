@@ -20,6 +20,7 @@ TIMELINE_FIELDS = (
     "stt_provider_first_partial_at",
     "stt_provider_final_at",
     "transcript_interim_first_at",
+    "transcript_evidence_sufficient_first_at",
     "transcript_actionable_first_at",
     "transcript_final_at",
     "framework_completed_turn_at",
@@ -89,6 +90,13 @@ PROVIDER_LATENCY_SEGMENTS: tuple[ProviderLatencySegment, ...] = (
         stage="stt",
         start="stt_provider_first_partial_at",
         end="transcript_interim_first_at",
+    ),
+    ProviderLatencySegment(
+        name="stt_evidence_sufficient_transcript",
+        label="STT: speech start -> first sufficient transcript evidence",
+        stage="stt",
+        start="speech_started_at",
+        end="transcript_evidence_sufficient_first_at",
     ),
     ProviderLatencySegment(
         name="stt_actionable_transcript",
@@ -374,13 +382,18 @@ class TurnTimeline:
         self.attrs["decision_reason"] = reason
         self.attrs["interrupt_action"] = action
         self.attrs["rollback_drop_buffered"] = rollback_drop_buffered
-        if _is_actionable_transcript_decision(
+        actionable_transcript = _is_actionable_transcript_decision(
             action=action,
-            reason=reason,
             intent=intent,
             topic_switch_hint=topic_switch_hint,
             correction_hint=correction_hint,
+        )
+        if actionable_transcript or _is_sufficient_transcript_evidence_decision(
+            action=action,
+            reason=reason,
         ):
+            self.mark("transcript_evidence_sufficient_first_at")
+        if actionable_transcript:
             self.mark("transcript_actionable_first_at")
 
     def duration_ms(self, start: str, end: str) -> float | None:
@@ -443,6 +456,15 @@ class TurnTimeline:
             ),
             "stt_provider_final_to_livekit_final_ms": self.duration_ms(
                 "stt_provider_final_at", "transcript_final_at"
+            ),
+            "stt_speech_to_evidence_sufficient_transcript_ms": self.duration_ms(
+                "speech_started_at", "transcript_evidence_sufficient_first_at"
+            ),
+            "stt_first_transcript_to_evidence_sufficient_transcript_ms": (
+                self.duration_from_first_ms(
+                    ("transcript_interim_first_at", "transcript_final_at"),
+                    "transcript_evidence_sufficient_first_at",
+                )
             ),
             "stt_speech_to_actionable_transcript_ms": self.duration_ms(
                 "speech_started_at", "transcript_actionable_first_at"
@@ -654,6 +676,9 @@ class TurnTimeline:
                 "stt_speech_to_actionable_transcript": self.duration_ms(
                     "speech_started_at", "transcript_actionable_first_at"
                 ),
+                "stt_speech_to_evidence_sufficient_transcript": self.duration_ms(
+                    "speech_started_at", "transcript_evidence_sufficient_first_at"
+                ),
                 "framework_completed_after_speech": self.duration_ms(
                     "speech_started_at", "framework_completed_turn_at"
                 ),
@@ -729,15 +754,12 @@ def _duration_ms(start: float, end: float) -> float | None:
 def _is_actionable_transcript_decision(
     *,
     action: str,
-    reason: str,
     intent: str | None,
     topic_switch_hint: bool,
     correction_hint: bool,
 ) -> bool:
     if action not in {"cancel", "hold"}:
         return False
-    if action == "hold" and reason.startswith("semantic_score_wait"):
-        return True
     if intent in {
         "hard_stop",
         "topic_switch",
@@ -746,3 +768,14 @@ def _is_actionable_transcript_decision(
     }:
         return True
     return topic_switch_hint or correction_hint
+
+
+def _is_sufficient_transcript_evidence_decision(*, action: str, reason: str) -> bool:
+    """Return whether STT text is sufficient to run semantic turn policy.
+
+    Evidence sufficiency is deliberately distinct from actionability: an
+    interim such as ``换个花`` can contain enough language evidence for policy
+    evaluation while remaining semantically ambiguous until a later result.
+    """
+
+    return action == "hold" and reason.startswith("semantic_score_wait")

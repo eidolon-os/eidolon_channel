@@ -6,7 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from eidolon.livekit.agent.session.transcript_echo import TranscriptEchoGate
+from eidolon.livekit.agent.session.transcript_echo import (
+    EchoEvidence,
+    TranscriptEchoGate,
+)
 
 from .transcript_event import FullDuplexTranscriptEvent
 
@@ -59,18 +62,24 @@ class TranscriptAdmissionGate:
                 speaker_id=speaker_id,
                 is_final=is_final,
             )
-        if (
-            transcript
-            and self._agent_output_active(speaker_id)
-            and self._echo_gate().is_echo(transcript)
-        ):
-            return TranscriptAdmissionDecision(
-                accepted=False,
-                reason="agent_echo",
-                transcript=transcript,
-                speaker_id=speaker_id,
-                is_final=is_final,
-            )
+        if transcript and self._agent_output_active(speaker_id):
+            echo_evidence = self._echo_gate().classify(transcript)
+            if echo_evidence is EchoEvidence.CONFIRMED:
+                return TranscriptAdmissionDecision(
+                    accepted=False,
+                    reason="agent_echo",
+                    transcript=transcript,
+                    speaker_id=speaker_id,
+                    is_final=is_final,
+                )
+            if echo_evidence is EchoEvidence.POSSIBLE:
+                return TranscriptAdmissionDecision(
+                    accepted=False,
+                    reason="possible_agent_echo_hold",
+                    transcript=transcript,
+                    speaker_id=speaker_id,
+                    is_final=is_final,
+                )
         return TranscriptAdmissionDecision(
             accepted=True,
             transcript=transcript,

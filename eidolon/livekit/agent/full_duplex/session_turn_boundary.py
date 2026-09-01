@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent")
 
 _SILENT_OUTPUT_FALLBACK_TEXT = "刚才卡了一下，请再说一遍好吗？"
+_TRANSCRIPTION_TIMEOUT_FALLBACK_TEXT = "抱歉，刚才没听清，请再说一遍好吗？"
 
 
 class FullDuplexSessionTurnBoundary:
@@ -117,20 +118,51 @@ class FullDuplexSessionTurnBoundary:
         if "brain_first_answer_delta_at" in timeline.timestamps:
             return False
 
-        fallback = dict(timeline.attrs.get("silent_failure_fallback") or {})
+        return self._speak_local_fallback_once(
+            timeline=timeline,
+            attr_name="silent_failure_fallback",
+            reason="llm_error_without_delta",
+            text=_SILENT_OUTPUT_FALLBACK_TEXT,
+        )
+
+    def notify_transcription_timeout_once(
+        self,
+        *,
+        timeline: TurnTimeline | None,
+    ) -> bool:
+        """Prompt for a retry after LiveKit reports a transcript-less turn."""
+
+        if timeline is None:
+            return False
+        return self._speak_local_fallback_once(
+            timeline=timeline,
+            attr_name="transcription_timeout_fallback",
+            reason="user_transcription_timeout",
+            text=_TRANSCRIPTION_TIMEOUT_FALLBACK_TEXT,
+        )
+
+    def _speak_local_fallback_once(
+        self,
+        *,
+        timeline: TurnTimeline,
+        attr_name: str,
+        reason: str,
+        text: str,
+    ) -> bool:
+        fallback = dict(timeline.attrs.get(attr_name) or {})
         if fallback.get("attempted"):
             return False
 
         session = getattr(self._pipeline, "_session", None)
         if session is None:
             timeline.set_attr(
-                "silent_failure_fallback",
+                attr_name,
                 {"attempted": True, "spoken": False, "reason": "session_unavailable"},
             )
             return False
         if str(getattr(session, "user_state", "") or "") == "speaking":
             timeline.set_attr(
-                "silent_failure_fallback",
+                attr_name,
                 {"attempted": True, "spoken": False, "reason": "user_speaking"},
             )
             return False
@@ -138,7 +170,7 @@ class FullDuplexSessionTurnBoundary:
         say = getattr(session, "say", None)
         if not callable(say):
             timeline.set_attr(
-                "silent_failure_fallback",
+                attr_name,
                 {"attempted": True, "spoken": False, "reason": "say_unavailable"},
             )
             return False
@@ -146,22 +178,25 @@ class FullDuplexSessionTurnBoundary:
         # Claim before calling into LiveKit so duplicate terminal events cannot
         # enqueue the same fallback twice even if say() raises.
         timeline.set_attr(
-            "silent_failure_fallback",
-            {"attempted": True, "spoken": False, "reason": "llm_error_without_delta"},
+            attr_name,
+            {"attempted": True, "spoken": False, "reason": reason},
         )
         try:
             say(
-                _SILENT_OUTPUT_FALLBACK_TEXT,
+                text,
                 allow_interruptions=True,
                 add_to_chat_ctx=False,
             )
         except Exception:
-            logger.exception("[StreamingPipeline] silent-output fallback announcement failed")
+            logger.exception(
+                "[StreamingPipeline] local fallback announcement failed reason=%s",
+                reason,
+            )
             return False
 
         timeline.set_attr(
-            "silent_failure_fallback",
-            {"attempted": True, "spoken": True, "reason": "llm_error_without_delta"},
+            attr_name,
+            {"attempted": True, "spoken": True, "reason": reason},
         )
         try:
             self._pipeline._mark_activity()

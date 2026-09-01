@@ -40,6 +40,7 @@ def _handler(
     interrupt_window_active: bool = False,
     decision_suppressed: bool = False,
     attention_allowed: bool = True,
+    policy_transcript: str | None = None,
 ):
     gate = admission_gate or _AdmissionGate()
     calls = {
@@ -56,7 +57,9 @@ def _handler(
 
     return FullDuplexTranscriptHandler(
         admission_gate=lambda: gate,
-        record_accepted_event=lambda event: calls["recorded"].append(event),
+        record_accepted_event=lambda event: (
+            calls["recorded"].append(event) or policy_transcript
+        ),
         allow_interruptions=lambda: allow_interruptions,
         native_adaptive_owner=lambda: native_adaptive,
         agent_output_active=lambda speaker_id: (
@@ -177,6 +180,23 @@ def test_transcript_handler_runs_semantic_interrupt_when_attention_allows() -> N
     ]
 
 
+def test_transcript_handler_uses_canonical_turn_for_semantic_policy() -> None:
+    handler, calls, _ = _handler(
+        agent_output_active=True,
+        attention_allowed=True,
+        policy_transcript="换个话题",
+    )
+    event = _event("话题", final=False, speaker_id="owner")
+
+    handler.handle(event)
+
+    assert calls["attention"] == [("换个话题", "owner")]
+    assert calls["semantic"] == [("换个话题", False)]
+    assert calls["forwarded"] == [event]
+    assert calls["semantic_gate_events"][-1]["transcript_preview"] == "换个话题"
+    assert calls["semantic_gate_events"][-1]["event_transcript_preview"] == "话题"
+
+
 def test_transcript_handler_forwards_without_semantic_run_when_attention_blocks() -> None:
     handler, calls, _ = _handler(
         agent_output_active=True,
@@ -283,3 +303,24 @@ def test_transcript_handler_does_not_echo_rollback_for_other_rejections() -> Non
     assert calls["echo_rejected"] == []
     assert calls["admission_events"][0]["reason"] == "suppressed_until_next_speech"
     assert calls["semantic_gate_events"] == []
+
+
+def test_transcript_handler_holds_possible_echo_without_terminal_side_effect() -> None:
+    gate = _AdmissionGate(
+        TranscriptAdmissionDecision(
+            accepted=False,
+            reason="possible_agent_echo_hold",
+            transcript="我是。",
+            speaker_id="user",
+            is_final=True,
+        )
+    )
+    handler, calls, _ = _handler(admission_gate=gate)
+
+    handler.handle(_event("我是。", final=True))
+
+    assert calls["recorded"] == []
+    assert calls["semantic"] == []
+    assert calls["forwarded"] == []
+    assert calls["echo_rejected"] == []
+    assert calls["admission_events"][0]["reason"] == "possible_agent_echo_hold"

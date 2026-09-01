@@ -35,7 +35,7 @@ def _handler(
     vad_active: bool = True,
     eot_model: SimpleNamespace | None = None,
     should_hold_for_evidence: bool = False,
-    max_suspend_sec: float = 0.0,
+    hold_remaining_sec: float | None = None,
 ) -> tuple[DuckSuspendTimeoutHandler, SimpleNamespace]:
     calls = SimpleNamespace(
         create_task=MagicMock(),
@@ -57,7 +57,7 @@ def _handler(
         get_eot_model=lambda: eot_model or _eot_model(),
         apply_decision=calls.apply_decision,
         should_hold_for_evidence=lambda: should_hold_for_evidence,
-        get_max_suspend_sec=lambda: max_suspend_sec,
+        get_hold_remaining_sec=lambda: hold_remaining_sec,
     )
     return handler, calls
 
@@ -102,7 +102,7 @@ async def test_hold_rearms_before_max_suspend_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_owner_no_evidence_budget_caps_generic_duck_buffer() -> None:
+async def test_owner_remaining_budget_rearms_independently_of_duck_start() -> None:
     runtime = MagicMock()
     decision = Decision(
         action=Action.HOLD,
@@ -114,7 +114,7 @@ async def test_owner_no_evidence_budget_caps_generic_duck_buffer() -> None:
         runtime=runtime,
         suspend_start=time.monotonic() - 0.45,
         eot_model=_eot_model(max_suspend_sec=2.0),
-        max_suspend_sec=0.8,
+        hold_remaining_sec=0.35,
     )
 
     await handler.run(0.45)
@@ -123,6 +123,30 @@ async def test_owner_no_evidence_budget_caps_generic_duck_buffer() -> None:
     assert rearmed_coro.cr_frame is not None
     assert rearmed_coro.cr_frame.f_locals["timeout_sec"] == pytest.approx(0.35, abs=0.02)
     rearmed_coro.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_elapsed_budget_rolls_back_without_rearming() -> None:
+    runtime = MagicMock()
+    runtime.deadline_decision.return_value = Decision(
+        action=Action.HOLD,
+        reason="deadline_wait_for_post_speech_evidence",
+        intent=InterruptIntent.UNCERTAIN,
+    )
+    runtime.tiers.annotate_decision.side_effect = lambda decision: decision
+    handler, calls = _handler(
+        runtime=runtime,
+        suspend_start=time.monotonic() - 2.0,
+        eot_model=_eot_model(max_suspend_sec=5.0),
+        hold_remaining_sec=0.0,
+    )
+
+    await handler.run(0.45)
+
+    calls.create_task.assert_not_called()
+    applied = calls.apply_decision.call_args.args[0]
+    assert applied.action is Action.ROLLBACK
+    assert applied.reason.startswith("deadline_hold_owner_budget_elapsed")
 
 
 @pytest.mark.asyncio
@@ -195,7 +219,7 @@ async def test_vad_idle_can_hold_for_post_speech_evidence_window() -> None:
         suspend_start=time.monotonic(),
         vad_active=False,
         should_hold_for_evidence=True,
-        max_suspend_sec=6.0,
+        hold_remaining_sec=6.0,
     )
 
     await handler.run(0.5)
@@ -222,7 +246,7 @@ async def test_active_speech_backchannel_deadline_cannot_terminally_rollback() -
         latest_asr_text="好",
         vad_active=True,
         should_hold_for_evidence=True,
-        max_suspend_sec=6.0,
+        hold_remaining_sec=6.0,
     )
 
     await handler.run(0.45)
@@ -258,7 +282,7 @@ def _post_speech_no_transcript_owner(clock: _Clock) -> InterruptionOrchestrator:
         clock=clock,
     )
     owner.start_candidate(timeline=TurnTimeline("t"))
-    clock.t += 0.7  # spoke ~700ms, then VAD end with no transcript at all
+    clock.t += 1.2  # speech exceeds the 800ms post-speech no-evidence grace
     owner.defer_false_resume_after_speech_end(transcript="", duck_suspended=True)
     return owner
 
@@ -285,14 +309,14 @@ def _owner_handler(
         create_task=calls.create_task,
         get_duck_suspended=lambda: True,
         get_duck_stats=lambda: DuckingStats(suspend_ms=1.0),
-        get_suspend_start=lambda: time.monotonic(),
+        get_suspend_start=lambda: time.monotonic() - 1.4,
         set_timeout_task=calls.set_timeout_task,
         get_latest_asr_text=lambda: "",
         get_vad_active=lambda: False,
         get_eot_model=lambda: _eot_model(max_suspend_sec=1.0),
         apply_decision=calls.apply_decision,
         should_hold_for_evidence=owner.should_hold_deadline,
-        get_max_suspend_sec=owner.max_suspend_sec,
+        get_hold_remaining_sec=owner.hold_remaining_sec,
     )
     return handler, calls
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.interruption_orchestrator import (
     InterruptionDecisionAction,
@@ -37,7 +39,7 @@ def test_vad_end_without_transcript_waits_for_evidence_when_ducked() -> None:
 
     assert deferred is True
     assert owner.should_hold_deadline() is True
-    assert owner.max_suspend_sec() == 6.0
+    assert owner.hold_remaining_sec() == pytest.approx(6.0, abs=0.01)
     assert owner.state is InterruptionState.SUSPENDED_POST_SPEECH_WAIT
     assert timeline.attrs["interruption_orchestrator_last_event"]["event"] == (
         "post_speech_evidence_wait"
@@ -155,6 +157,42 @@ def test_turn_policy_hold_keeps_weak_transcript_in_evidence_window() -> None:
     assert last["last_policy_action"] == "hold"
 
 
+def test_provisional_short_latin_artifact_uses_bounded_evidence_window() -> None:
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    owner = InterruptionOrchestrator(
+        evidence_timeout_sec=6.0,
+        min_speech_sec=0.25,
+        no_evidence_timeout_sec=0.8,
+        clock=clock,
+    )
+    owner.start_candidate(timeline=TurnTimeline("turn-latin-artifact"))
+    owner.note_transcript("Okay", is_final=False)
+    owner.note_turn_policy_decision(
+        Decision(
+            action=Action.HOLD,
+            reason="transcript_evidence_hold:short_latin_artifact cjk=0 latin=4",
+            intent=InterruptIntent.UNCERTAIN,
+        ),
+        transcript="Okay",
+        vad_active=True,
+    )
+
+    now = 10.55
+    assert owner.defer_false_resume_after_speech_end(
+        transcript="Okay",
+        duck_suspended=True,
+    )
+    assert owner.hold_remaining_sec() == 0.8
+    assert owner.should_hold_deadline() is True
+
+    now = 11.36
+    assert owner.should_hold_deadline() is False
+
+
 def test_turn_policy_rollback_allows_fast_false_resume_after_speech_end() -> None:
     now = 10.0
 
@@ -245,7 +283,7 @@ def test_single_char_backchannel_cannot_end_candidate_while_speech_is_active() -
     )
 
     assert owner.should_hold_deadline() is True
-    assert owner.max_suspend_sec() == 6.0
+    assert owner.hold_remaining_sec() == pytest.approx(6.0, abs=0.01)
 
 
 def test_interruption_owner_events_record_elapsed_and_delta_ms() -> None:

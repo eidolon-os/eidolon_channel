@@ -100,14 +100,6 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.interrupt.min_normal_interim_cjk_chars must be in [1, 12]")
     if not 0 <= intr.latin_artifact_hold_max_chars <= 12:
         errors.append("turn_policy.interrupt.latin_artifact_hold_max_chars must be in [0, 12]")
-    if not 1 <= intr.hard_stop_prefix_min_cjk_chars <= 8:
-        errors.append("turn_policy.interrupt.hard_stop_prefix_min_cjk_chars must be in [1, 8]")
-    if not 1 <= intr.redirect_prefix_min_cjk_chars <= 8:
-        errors.append("turn_policy.interrupt.redirect_prefix_min_cjk_chars must be in [1, 8]")
-    if not 1 <= intr.repeated_noise_min_chars <= intr.repeated_noise_max_chars <= 20:
-        errors.append(
-            "turn_policy.interrupt repeated noise chars must satisfy 1 <= min <= max <= 20"
-        )
     if not 0 <= intr.weak_signal_followup_hold_ms <= 5_000:
         errors.append("turn_policy.interrupt.weak_signal_followup_hold_ms must be in [0, 5000]")
     if not 0 <= intr.correction_topic_stability_window_ms <= 1_000:

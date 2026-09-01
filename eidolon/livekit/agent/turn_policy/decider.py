@@ -12,7 +12,7 @@ from .intent_classifier import (
     InterruptIntentClassifier,
     InterruptIntentResult,
     NoopModelInterruptClassifier,
-    canonicalize_interrupt_text,
+    normalize_transcript_text,
 )
 from .constants import (
     DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
@@ -125,7 +125,7 @@ class InterruptDecider:
             agent_speaking=agent_speaking,
             eot_score=score,
         )
-        stripped = canonicalize_interrupt_text(text)
+        stripped = normalize_transcript_text(text)
         evidence = self._evidence_gate.evaluate(
             stripped,
             is_final=is_final,
@@ -200,7 +200,7 @@ class InterruptDecider:
                     intent_source="timeout",
                     intent_confidence=0.0,
                 )
-            text = canonicalize_interrupt_text(transcript)
+            text = normalize_transcript_text(transcript)
             intent = self.classify_intent_hint(
                 transcript,
                 vad_active=True,
@@ -266,7 +266,7 @@ class InterruptDecider:
         )
 
     def on_user_silent(self, transcript: str = "") -> Decision:
-        text = canonicalize_interrupt_text(transcript)
+        text = normalize_transcript_text(transcript)
         if text:
             intent = self.classify_intent_hint(
                 transcript,

@@ -8,10 +8,7 @@ wiring, mixer side effects) lives in test_first_signal_trigger.py.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
-from eidolon_sdk.biz.dialogue_control import LexiconInterruptClassifier
 
 from eidolon.livekit.agent.turn_policy import (
     Action,
@@ -23,40 +20,6 @@ from eidolon.livekit.agent.turn_policy import (
 from eidolon.livekit.common.config import InterruptPolicyConfig
 
 
-# ---------------------------------------------------------------------------
-# is_backchannel_text helper
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text,expected",
-    [
-        ("嗯", True),
-        ("嗯嗯", True),
-        ("好的", True),
-        ("OK", True),
-        ("ok", True),
-        ("Yeah", True),
-        ("嗯。", True),
-        ("", True),  # empty counts as backchannel
-        ("   ", True),  # whitespace-only stripped → empty
-        ("你好", False),
-        ("我不相信你", False),
-        ("停一下", False),
-    ],
-)
-def test_is_backchannel_text(text: str, expected: bool) -> None:
-    classifier = LexiconInterruptClassifier()
-    result: InterruptIntentResult = classifier.classify(
-        text,
-        vad_active=True,
-        agent_speaking=True,
-        eot_score=0.0,
-    )
-    is_backchannel = result.intent.value in ("backchannel", "noise")
-    assert is_backchannel is expected
-
-
 def test_hard_stop_hint_does_not_cancel_without_evidence() -> None:
     d = InterruptDecider(min_interim_chars=2)
 
@@ -65,19 +28,6 @@ def test_hard_stop_hint_does_not_cancel_without_evidence() -> None:
     assert decision.action is Action.HOLD
     assert decision.intent is not None
     assert decision.intent.value == "uncertain"
-
-
-def test_hard_stop_prefix_cjk_threshold_is_configurable() -> None:
-    d = InterruptDecider(
-        InterruptPolicyConfig(
-            min_interim_chars=2,
-            hard_stop_prefix_min_cjk_chars=3,
-        )
-    )
-
-    decision = d.on_stt_interim("别说", score=0.0)
-
-    assert decision.action is not Action.CANCEL
 
 
 def test_ambiguous_hard_stop_fragment_does_not_cancel() -> None:
@@ -140,20 +90,8 @@ def test_final_text_and_vad_terminal_do_not_replace_eot_evidence() -> None:
     assert terminal.intent is InterruptIntent.UNCERTAIN
 
 
-def test_legacy_fast_lexical_flag_does_not_enable_phrase_control() -> None:
-    cfg = replace(InterruptPolicyConfig(), min_interim_chars=2, fast_lexical_intents=True)
-    d = InterruptDecider(cfg)
-
-    decision = d.on_stt_interim("好的", score=0.0)
-
-    assert decision.action is Action.HOLD
-    assert decision.intent is not None
-    assert decision.intent.value == "uncertain"
-
-
 def test_short_latin_interim_and_zero_score_final_both_hold() -> None:
-    cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
-    decider = InterruptDecider(cfg)
+    decider = InterruptDecider(InterruptPolicyConfig())
 
     interim = decider.on_stt_interim("Okay", score=0.0, is_final=False)
     final = decider.on_stt_interim(
@@ -170,9 +108,7 @@ def test_short_latin_interim_and_zero_score_final_both_hold() -> None:
 
 
 def test_short_latin_zero_score_final_does_not_infer_backchannel() -> None:
-    cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
-
-    decision = InterruptDecider(cfg).on_stt_interim(
+    decision = InterruptDecider().on_stt_interim(
         "Okay",
         score=0.0,
         vad_active=False,
@@ -184,9 +120,7 @@ def test_short_latin_zero_score_final_does_not_infer_backchannel() -> None:
 
 
 def test_short_latin_backchannel_deadline_keeps_candidate_open() -> None:
-    cfg = replace(InterruptPolicyConfig(), fast_lexical_intents=True)
-
-    decision = InterruptDecider(cfg).on_decision_deadline(
+    decision = InterruptDecider().on_decision_deadline(
         True,
         has_transcript=True,
         transcript="Okay",
@@ -199,11 +133,7 @@ def test_short_latin_backchannel_deadline_keeps_candidate_open() -> None:
 
 @pytest.mark.parametrize("text", ["换个话题"])
 def test_provider_neutral_policy_does_not_derive_topic_hints_from_text(text: str) -> None:
-    cfg = replace(
-        InterruptPolicyConfig(),
-        fast_lexical_intents=True,
-        correction_topic_stability_window_ms=0,
-    )
+    cfg = InterruptPolicyConfig(correction_topic_stability_window_ms=0)
     decision = InterruptDecider(cfg).on_stt_interim(
         text,
         score=0.24,
@@ -216,8 +146,7 @@ def test_provider_neutral_policy_does_not_derive_topic_hints_from_text(text: str
 
 
 def test_short_acknowledgement_is_not_classified_by_fixed_phrase() -> None:
-    cfg = replace(InterruptPolicyConfig(), min_interim_chars=2, fast_lexical_intents=True)
-    d = InterruptDecider(cfg)
+    d = InterruptDecider(min_interim_chars=2)
 
     decision = d.on_stt_interim("对呀", score=0.0)
 

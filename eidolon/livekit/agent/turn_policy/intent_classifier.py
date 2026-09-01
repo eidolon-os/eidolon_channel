@@ -10,7 +10,6 @@ from __future__ import annotations
 from eidolon_sdk.biz.dialogue_control import (
     InterruptIntent,
     InterruptIntentResult,
-    canonicalize_interrupt_text,
 )
 
 __all__ = [
@@ -19,8 +18,14 @@ __all__ = [
     "InterruptIntentResult",
     "NoopModelInterruptClassifier",
     "OnnxInterruptClassifier",
-    "canonicalize_interrupt_text",
+    "normalize_transcript_text",
 ]
+
+
+def normalize_transcript_text(text: str) -> str:
+    """Normalize transport whitespace without interpreting transcript words."""
+
+    return " ".join((text or "").strip().lower().split())
 
 
 class InterruptIntentClassifier:

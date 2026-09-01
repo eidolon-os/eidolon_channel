@@ -143,20 +143,10 @@ class InterruptPolicyConfig:
     transcript_evidence_gate_enabled: bool = True
     min_normal_interim_cjk_chars: int = 3
     latin_artifact_hold_max_chars: int = 4
-    hard_stop_prefix_min_cjk_chars: int = 2
-    redirect_prefix_min_cjk_chars: int = 3
-    repeated_noise_min_chars: int = 2
-    repeated_noise_max_chars: int = 6
     weak_signal_followup_hold_ms: int = 1500
     correction_topic_stability_window_ms: int = 120
     normal_interrupt_stability_window_ms: int = 350
     cancel_residual_commit_suppress_ms: int = 2_000
-    # Interrupt behavior flags (formerly the separate `interrupt_mode` axis,
-    # collapsed into the single profile/config axis). Defaults = the stable
-    # "balanced" behavior; the retired "responsive" mode flipped these on/off.
-    # Deprecated compatibility field. Fixed-phrase classification is not part
-    # of the production decision graph; this value intentionally has no effect.
-    fast_lexical_intents: bool = False
     stabilize_normal_interrupts: bool = True
     weak_signal_followup_hold: bool = True
 

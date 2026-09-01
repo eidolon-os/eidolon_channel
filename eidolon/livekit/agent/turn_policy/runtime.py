@@ -19,7 +19,7 @@ from .constants import (
     WEAK_SIGNAL_HOLD_REASON_PREFIXES,
 )
 from .decider import Action, Decision, InterruptDecider
-from .intent_classifier import InterruptIntent, canonicalize_interrupt_text
+from .intent_classifier import InterruptIntent, normalize_transcript_text
 from .tiers.chain import TierPolicyChain
 
 
@@ -268,7 +268,7 @@ class _StableSignalStabilizer:
         text: str,
         now_ms: float,
     ) -> _StableCandidate:
-        normalized = canonicalize_interrupt_text(text)
+        normalized = normalize_transcript_text(text)
         if (
             candidate is None
             or candidate.intent is not intent
@@ -301,7 +301,7 @@ class _StableSignalStabilizer:
         )
 
     def _is_substantive_text(self, text: str) -> bool:
-        normalized = canonicalize_interrupt_text(text)
+        normalized = normalize_transcript_text(text)
         cjk = sum(1 for ch in normalized if "\u4e00" <= ch <= "\u9fff")
         latin = sum(1 for ch in normalized if "a" <= ch.lower() <= "z")
         intr = self._config.interrupt

@@ -81,9 +81,6 @@ turn_policy:
     stt_commit_transcript_timeout_ms: 4200
     aec_warmup_ms: 750
     cancel_residual_commit_suppress_ms: 1800
-    hard_stop_prefix_min_cjk_chars: 3
-    repeated_noise_min_chars: 3
-    repeated_noise_max_chars: 8
   ptt:
     segment_stt_strategy: streaming
     segment_min_audio_ms: 120
@@ -149,9 +146,6 @@ voiceprint:
     assert cfg.turn_policy.idle.disconnect_grace_ms == 450
     assert cfg.turn_policy.interrupt.aec_warmup_ms == 750
     assert cfg.turn_policy.interrupt.cancel_residual_commit_suppress_ms == 1800
-    assert cfg.turn_policy.interrupt.hard_stop_prefix_min_cjk_chars == 3
-    assert cfg.turn_policy.interrupt.repeated_noise_min_chars == 3
-    assert cfg.turn_policy.interrupt.repeated_noise_max_chars == 8
     assert cfg.turn_policy.eot.transcript_revision_min_normalized_chars == 5
     assert cfg.turn_policy.eot.speech_merge_grace_ms == 650
     assert cfg.observability.llm_first_delta_timeout_ms == 2500
@@ -235,7 +229,6 @@ voiceprint:
     assert cfg.turn_policy.attention.soft_duck_on_playback_speech_start is True
     assert cfg.voiceprint.enabled is False
     assert cfg.turn_policy.attention.require_direct_signal_during_playback is True
-    assert cfg.turn_policy.interrupt.redirect_prefix_min_cjk_chars == 3
     assert cfg.turn_policy.attention.echo_min_normalized_chars == 3
     assert cfg.turn_policy.attention.assistant_speech_recent_max_age_ms == 3000
 
@@ -427,7 +420,6 @@ def test_settings_example_loads_as_effective_config(monkeypatch: pytest.MonkeyPa
 
     assert cfg.providers.brain_provider == "eidolon_agent"
     assert cfg.turn_policy.profile == "balanced_semantic"
-    assert cfg.turn_policy.interrupt.fast_lexical_intents is False
     assert cfg.turn_policy.interrupt.correction_topic_stability_window_ms == 0
     assert cfg.turn_policy.ducking.suspended_passthrough_enabled is False
     assert cfg.turn_policy.attention.echo_min_normalized_chars == 3

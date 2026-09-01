@@ -12,12 +12,10 @@ from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 
 def _eot_model(
     *,
-    strong_intent: bool = False,
     should_interrupt: bool = False,
     score: float = 0.0,
 ) -> MagicMock:
     model = MagicMock()
-    model._turn_end_policy.is_strong_interrupt_intent.return_value = strong_intent
     model.should_interrupt.return_value = should_interrupt
     model.current_eot_score = score
     model.hard_interrupt_score_threshold = 0.75
@@ -63,7 +61,7 @@ def test_hard_stop_hint_without_evidence_has_no_direct_side_effect() -> None:
     )
     runtime.decide_from_transcript.return_value = decision
     handler, calls = _handler(
-        eot_model=_eot_model(strong_intent=True),
+        eot_model=_eot_model(),
         turn_runtime=runtime,
         duck_active=False,
     )
@@ -89,7 +87,7 @@ def test_strong_interrupt_with_duck_uses_decision_effect_path() -> None:
     )
     runtime.decide_from_transcript.return_value = decision
     handler, calls = _handler(
-        eot_model=_eot_model(strong_intent=True, score=0.9),
+        eot_model=_eot_model(score=0.9),
         turn_runtime=runtime,
         duck_active=True,
     )
@@ -105,7 +103,7 @@ def test_strong_interrupt_with_duck_uses_decision_effect_path() -> None:
     calls.interrupt_current_turn.assert_not_called()
 
 
-def test_legacy_strong_signal_keeps_correction_intent() -> None:
+def test_model_intent_keeps_correction_hint() -> None:
     runtime = MagicMock()
     decision = Decision(
         action=Action.CANCEL,
@@ -115,7 +113,7 @@ def test_legacy_strong_signal_keeps_correction_intent() -> None:
     )
     runtime.decide_from_transcript.return_value = decision
     handler, calls = _handler(
-        eot_model=_eot_model(strong_intent=True, score=0.2),
+        eot_model=_eot_model(score=0.2),
         turn_runtime=runtime,
         duck_active=True,
     )

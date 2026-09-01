@@ -2,10 +2,10 @@
 
 Unit tests for the two new behaviours in StreamingPipeline:
 
-  1. In the duck-active semantic interrupt branch, a non-backchannel
+  1. In the duck-active semantic interrupt branch, an
      STT INTERIM of ≥ ``interrupt_min_interim_chars`` chars is enough
      transcript evidence to keep evaluating, but ordinary text still needs
-     EOT semantic confidence (or explicit intent) before canceling.
+     EOT semantic confidence before canceling.
 
   2. In the duck suspend-window deadline handler, when the timeout fires while
      VAD is still active, the resolution depends on transcript evidence
@@ -45,8 +45,6 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
     cfg = EidolonEOTConfig()
     eot_model = MagicMock()
     eot_model._config = cfg
-    # is_strong_interrupt_intent → return False so we exercise the score path
-    eot_model._turn_end_policy.is_strong_interrupt_intent.return_value = False
     # should_interrupt + current_eot_score are read in the semantic-tiered path.
     eot_model.should_interrupt.return_value = False
     eot_model.current_eot_score = eot_score
@@ -377,11 +375,3 @@ def test_default_min_chars_is_2() -> None:
 
     cfg = EidolonEOTConfig()
     assert cfg.interrupt_min_interim_chars == 2
-
-
-def test_default_vad_confidence_gate_disabled() -> None:
-    """G18a: default ``min_avg_vad_confidence`` is now 0.0 (gate off)."""
-    from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
-
-    cfg = EidolonEOTConfig()
-    assert cfg.min_avg_vad_confidence == 0.0

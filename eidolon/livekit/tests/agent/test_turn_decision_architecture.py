@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 from eidolon.livekit.agent.session import decision_effects, semantic_interrupt
 from eidolon.livekit.agent.turn_policy import attention, decider, intent_classifier, runtime
@@ -43,6 +44,15 @@ def test_production_eot_chains_exclude_lexical_override_policies() -> None:
 
     assert semantic.isdisjoint(forbidden)
     assert normal.isdisjoint(forbidden)
+
+
+def test_retired_lexical_eot_modules_are_absent() -> None:
+    impl_dir = Path(inspect.getfile(ContextEnhancedEot)).parent
+    common_dir = impl_dir.parents[2] / "common"
+
+    assert not (impl_dir / "constants.py").exists()
+    assert not (impl_dir / "conversation_phase.py").exists()
+    assert not (common_dir / "conversation_signals.py").exists()
 
 
 def test_production_eot_score_does_not_apply_fixed_phrase_overrides() -> None:

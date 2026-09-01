@@ -22,19 +22,14 @@ class EidolonEOTConfig:
     """All configuration options for the Eidolon EOT plugin."""
 
     # EOT / turn-end threshold
-    min_threshold: float = 0.4
     max_threshold: float = 2.2
     urgent_threshold: float = 0.18
     eot_unlikely_threshold: float = 0.5
-    enable_semantic_tail_hang: bool = True
 
     # Dynamic threshold steps
     t_fast: float = 0.25
     t_mid: float = 1.0
     t_deep: float = 2.0
-
-    # Tail-hang silence (thinking / conjunction endings)
-    tail_hang_silence_sec: float = 2.5
 
     # VAD related
     vad_stale_timeout_sec: float = 0.35
@@ -51,30 +46,8 @@ class EidolonEOTConfig:
     # high-confidence interim cuts through immediately.
     min_speech_duration_sec: float = 0.05
 
-    # Round 7 G2b: VAD probability gate.
-    # When > 0, MinSpeakingDurationPolicy blocks cuts if recent average VAD
-    # probability is below this threshold (likely echo / noise rather than
-    # real speech). Requires the VAD inference callback to be wired (G6).
-    # 0.0 disables the gate; turn_policy now owns runtime tuning.
-    #
-    # G18a (2026-05-18): default dropped from 0.40 → 0.0 (gate disabled).
-    # The "wait for VAD avg to ramp" was the largest single contributor to
-    # the 5s production interrupt delay: rolling-avg confidence needs ~1s
-    # of frame accumulation to cross any non-trivial threshold, by which
-    # time the interrupt opportunity has passed. We now rely on the
-    # ≤500ms decision window in ``DuckSuspendTimeoutHandler`` plus
-    # backchannel filtering on the first STT INTERIM to distinguish real
-    # interrupts from echo/noise — much faster signal sources.
-    # Phase 2 (G18c) will remove the gate code from MinSpeakingDurationPolicy
-    # entirely. For Phase 1, default to 0.0 (no-op) but leave the env
-    # available for emergency rollback.
-    min_avg_vad_confidence: float = 0.0
-
-    vad_confidence_window_sec: float = 2.0
-
     # Semantic interruption: EOT score thresholds (used by EOTScoreSemanticPolicy)
     streaming_eot_base_threshold: float = 0.7
-    streaming_eot_weak_threshold: float = 0.5
     semantic_threshold_vad_active_delta: float = 0.1
     is_final_threshold_reduction: float = 0.2
 
@@ -84,13 +57,11 @@ class EidolonEOTConfig:
     # different reaction speeds depending on how confident we are:
     #
     #   score ≥ hard_interrupt_score_threshold (default 0.9)
-    #     Very confident the user wants to interrupt — bypass soft stage,
-    #     hard-cut the agent immediately. Used for "停, I 不想听" and
-    #     similar where the linguistic + VAD evidence is overwhelming.
+    #     Very confident the turn is complete — bypass soft stage and
+    #     hard-cut playback immediately.
     #
     #   soft_interrupt_score_threshold ≤ score < hard_interrupt_score_threshold
-    #     Likely interrupt but worth a brief grace window in case the
-    #     speech turns out to be a backchannel or noise. Enter soft
+    #     Likely interrupt but worth a brief acoustic/finality grace window. Enter soft
     #     interrupt with ``soft_interrupt_timeout_sec`` (default 0.5 s).
     #     If the user falls silent during the window we cancel; if not we
     #     upgrade to hard.
@@ -112,11 +83,11 @@ class EidolonEOTConfig:
     # layer). During the suspend window an "early-resume watcher" listens
     # to STT interim and decides:
     #
-    #   strong intent / score ≥ ``early_cancel_score_threshold``
+    #   model score ≥ ``early_cancel_score_threshold``
     #     → mixer.cancel() + session.interrupt(force=True)
     #       Buffer is discarded (real interrupt, no resume).
     #
-    #   semantic score 0.0 (filler/too-short) OR
+    #   semantic score 0.0 OR
     #   score ≤ ``early_resume_score_threshold``
     #     → mixer.unduck()
     #       Buffered frames are drained with fade-in ramp — user hears
@@ -180,12 +151,8 @@ class EidolonEOTConfig:
 
     interrupt_min_interim_chars: int = 2
     """G18a (2026-05-18): minimum character count in the first STT INTERIM
-    that triggers an immediate cancel during the SUSPENDED window
-    (bypassing the EOT-score-based path). ≥2 filters single-char vocalizations
-    and aligns with industry pre-filters (Pipecat ``interrupt_min_words``,
-    LiveKit ``min_words``). Combined with ``BACKCHANNEL_WORDS`` rejection
-    in ``SemanticInterruptHandler``, this is the fast-path "real interrupt confirmed
-    by semantic signal" trigger."""
+    that makes a transcript eligible for the model-scored SUSPENDED path.
+    Character count is only an inference-cost floor, not semantic authority."""
 
     duck_early_cancel_score_threshold: float = 0.7
     """Score threshold during the suspend window above which we call
@@ -196,10 +163,8 @@ class EidolonEOTConfig:
 
     duck_early_resume_score_threshold: float = 0.2
     """Score threshold during the suspend window below which we call
-    ``unduck()`` immediately, classifying as false interrupt. Backchannels
-    ("嗯", "好的") usually score < 0.1 via semantic_completeness_score's
-    too-short / filler gates; this catches partial-low-confidence
-    transcripts too."""
+    ``unduck()`` immediately, classifying as false interrupt. This catches
+    partial low-confidence transcripts without classifying their wording."""
 
     duck_cooldown_sec: float = 0.8
     """Minimum interval between unduck and the next duck trigger. Prevents
@@ -211,10 +176,7 @@ class EidolonEOTConfig:
     # allowing a cut. Filters jittery finals.
     final_cut_min_silence_sec: float = 0.2
 
-    # Context enhancement
-    utterance_end_max_history: int = 3
-    enable_user_profile: bool = True
-    enable_temporary_compensations: bool = True
+    # Non-linguistic streaming duplicate guard
     similarity_threshold: float = 0.85
 
     # ContextEnhancedEot cooldown (seconds between cuts)

@@ -26,7 +26,6 @@ def profile_defaults(name: str) -> TurnPolicyConfig:
             ),
             eot=EotPolicyConfig(
                 eot_unlikely_threshold=0.50,
-                tail_hang_silence_ms=1_200,
             ),
             interrupt=InterruptPolicyConfig(
                 decision_timeout_ms=350,
@@ -53,7 +52,6 @@ def profile_defaults(name: str) -> TurnPolicyConfig:
             ),
             eot=EotPolicyConfig(
                 eot_unlikely_threshold=0.50,
-                tail_hang_silence_ms=3_500,
             ),
             interrupt=InterruptPolicyConfig(
                 decision_timeout_ms=700,

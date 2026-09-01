@@ -22,10 +22,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
-
-if TYPE_CHECKING:
-    from .conversation_phase import ConversationPhase
+from typing import Optional
 
 
 @dataclass
@@ -37,14 +34,14 @@ class VADState:
     silence_since: Optional[float] = None
     last_active_time: float = 0.0
     last_silence_time: float = 0.0
-    transition_times: deque = field(default_factory=lambda: deque(maxlen=20))
+    transition_times: deque[float] = field(default_factory=lambda: deque(maxlen=20))
     confirmed_active: bool = False
     has_active_in_segment: bool = False
     # Round 7 G6: per-frame VAD inference probability samples for confidence
     # gating. Each entry is (timestamp, probability ∈ [0, 1]). Window size
     # 200 samples × ~32 ms inference window ≈ 6 s of history (more than
     # enough to compute a 2 s rolling average).
-    probability_samples: deque = field(
+    probability_samples: deque[tuple[float, float]] = field(
         default_factory=lambda: deque(maxlen=200)
     )
 
@@ -111,12 +108,6 @@ class TurnDetectionStateManager:
         self.min_cut_interval = min_cut_interval
 
         self._current_eot_score: float = 0.0
-        # Round 7 G5: current conversation phase. Updated by EidolonEOTModel
-        # via update_phase(). Default GATHERING (the neutral phase). Read by
-        # TurnEndPolicy.get_dynamic_threshold to scale silence thresholds
-        # based on conversational context (greeting fast, thinking slow,
-        # etc.).
-        self._conversation_phase: "Optional[ConversationPhase]" = None
 
     @property
     def vad_active(self) -> bool:
@@ -162,21 +153,6 @@ class TurnDetectionStateManager:
         else:
             self._vad.active_since = None
             self._vad.last_silence_time = now
-
-    @property
-    def conversation_phase(self) -> "Optional[ConversationPhase]":
-        """Round 7 G5: current conversation phase, or None if not set."""
-        return self._conversation_phase
-
-    def update_conversation_phase(
-        self, phase: "Optional[ConversationPhase]"
-    ) -> None:
-        """Round 7 G5: record the current conversation phase.
-
-        Called by ``EidolonEOTModel`` whenever ASR text changes or a turn
-        is recorded. Pass ``None`` to clear (e.g. on session reset).
-        """
-        self._conversation_phase = phase
 
     def update_vad_probability(self, probability: float) -> None:
         """Round 7 G6: record a per-frame VAD inference probability.

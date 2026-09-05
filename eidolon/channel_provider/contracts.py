@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import rfc8785
-from eidolon_sdk.device_foundation.v1 import BusinessOwnerId, DeviceRef
+from eidolon_sdk.device_foundation.v1 import (
+    BusinessOwnerId,
+    DeviceCapabilityManifest,
+    DeviceRef,
+)
 from eidolon_sdk.biz.contracts import normalize_conversation_id
 from pydantic import ValidationError
 
@@ -141,92 +145,45 @@ def _text(value: Any, *, name: str, minimum: int = 1, maximum: int) -> str:
     return value
 
 
-def _array(value: Any, *, name: str, maximum: int) -> list[Any]:
-    if not isinstance(value, list) or len(value) > maximum:
-        raise ContractError(f"{name} must be an array with at most {maximum} items")
-    return value
+def _manifest_problem(exc: ValidationError) -> str:
+    """The first thing wrong with the document, as a place and a reason."""
 
-
-def _schema_object(value: Any, *, name: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ContractError(f"{name} must be a JSON Schema object")
-    return value
+    first = exc.errors()[0]
+    where = ".".join(str(part) for part in first["loc"]) or "<document>"
+    return f"device.manifest.{where}: {first['msg']}"
 
 
 def _manifest(value: Any) -> dict[str, Any]:
-    manifest = _exact_object(
-        value,
-        name="device.manifest",
-        required={"schema_version", "title", "properties", "actions", "events", "media"},
-    )
-    if manifest["schema_version"] != 1 or isinstance(manifest["schema_version"], bool):
-        raise ContractError("device.manifest.schema_version must be 1")
-    _text(manifest["title"], name="device.manifest.title", maximum=128)
+    """Check the declaration against the one definition of its shape.
 
-    for index, item in enumerate(
-        _array(manifest["properties"], name="device.manifest.properties", maximum=64)
-    ):
-        prop = _exact_object(
-            item,
-            name=f"device.manifest.properties[{index}]",
-            required={"name", "schema", "observable", "writable"},
-        )
-        _text(prop["name"], name=f"device.manifest.properties[{index}].name", maximum=128)
-        _schema_object(prop["schema"], name=f"device.manifest.properties[{index}].schema")
-        if not isinstance(prop["observable"], bool) or not isinstance(prop["writable"], bool):
-            raise ContractError("manifest property flags must be booleans")
+    This used to be a hand-written copy of the vocabulary, and it was the
+    strictest of five: it required `codecs`, which Hub's own binding made
+    optional and which nothing anywhere reads, so one document could pass the
+    Authority and be refused here. Reading the canonical definition instead is
+    what makes the entry gate and this consumer accept the same set — the gap
+    between them was the whole defect, because a document admitted upstream and
+    refused here becomes a Claim the Owner approved and a channel that never
+    arrives.
 
-    for index, item in enumerate(
-        _array(manifest["actions"], name="device.manifest.actions", maximum=64)
-    ):
-        action = _exact_object(
-            item,
-            name=f"device.manifest.actions[{index}]",
-            required={"name", "version", "input_schema", "output_schema", "idempotent"},
-        )
-        _text(action["name"], name=f"device.manifest.actions[{index}].name", maximum=128)
-        version = action["version"]
-        if isinstance(version, bool) or not isinstance(version, int) or not 1 <= version <= 65535:
-            raise ContractError("manifest action version must be an integer in 1..65535")
-        _schema_object(action["input_schema"], name="manifest action input_schema")
-        _schema_object(action["output_schema"], name="manifest action output_schema")
-        if not isinstance(action["idempotent"], bool):
-            raise ContractError("manifest action idempotent must be boolean")
+    The parsed model is deliberately discarded and the decoded object returned
+    unchanged: the Manifest's digest is over exactly these bytes, and `spec.py`
+    reads the document, not a binding.
+    """
 
-    for index, item in enumerate(
-        _array(manifest["events"], name="device.manifest.events", maximum=64)
-    ):
-        event = _exact_object(
-            item,
-            name=f"device.manifest.events[{index}]",
-            required={"name", "data_schema"},
-        )
-        _text(event["name"], name=f"device.manifest.events[{index}].name", maximum=128)
-        _schema_object(event["data_schema"], name="manifest event data_schema")
-
-    for index, item in enumerate(
-        _array(manifest["media"], name="device.manifest.media", maximum=16)
-    ):
-        media = _exact_object(
-            item,
-            name=f"device.manifest.media[{index}]",
-            required={"kind", "direction", "codecs"},
-        )
-        if media["kind"] not in {"audio", "video"}:
-            raise ContractError("manifest media kind must be audio or video")
-        if media["direction"] not in {"publish", "subscribe", "bidirectional"}:
-            raise ContractError("manifest media direction is invalid")
-        codecs = _array(media["codecs"], name="manifest media codecs", maximum=32)
-        for codec in codecs:
-            _text(codec, name="manifest media codec", maximum=64)
-    return manifest
+    if not isinstance(value, dict):
+        raise ContractError("device.manifest must be an object")
+    try:
+        DeviceCapabilityManifest.model_validate(value)
+    except ValidationError as exc:
+        raise ContractError(_manifest_problem(exc)) from exc
+    return value
 
 
 @dataclass(frozen=True, slots=True)
 class ProvisionDevice:
     owner_id: BusinessOwnerId
     display_name: str
-    device_kind: str
+    manifest_id: str
     manifest: dict[str, Any] = field(repr=False)
     manifest_revision: str = ""
 
@@ -275,7 +232,9 @@ class ProvisionRequest:
                 minimum=0,
                 maximum=256,
             ),
-            device_kind=_text(device_value["device_kind"], name="device.device_kind", maximum=96),
+            manifest_id=_text(
+                device_value["device_kind"], name="device.device_kind", maximum=96
+            ),
             manifest=_manifest(device_value["manifest"]),
             manifest_revision=_text(
                 device_value["manifest_revision"],

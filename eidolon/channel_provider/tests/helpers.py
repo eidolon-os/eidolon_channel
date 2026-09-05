@@ -113,9 +113,17 @@ def encoded(value: dict[str, Any]) -> bytes:
 class FakeAdapter:
     """A transport that records what it was asked to carry."""
 
-    def __init__(self, *, name: str = "fake", carries_media: bool = True, ttl_seconds: int = 1800):
+    def __init__(
+        self,
+        *,
+        name: str = "fake",
+        carries_media: bool = True,
+        serves_dataonly: bool = False,
+        ttl_seconds: int = 1800,
+    ):
         self._name = name
         self._carries_media = carries_media
+        self._serves_dataonly = serves_dataonly
         self.ttl_seconds = ttl_seconds
         self.opened: list[ChannelSpec] = []
         self.closed: list[dict[str, Any]] = []
@@ -141,6 +149,10 @@ class FakeAdapter:
     @property
     def carries_media(self) -> bool:
         return self._carries_media
+
+    @property
+    def serves_dataonly(self) -> bool:
+        return self._serves_dataonly
 
     async def healthcheck(self) -> None:
         self.health_calls += 1

@@ -433,7 +433,7 @@ async def test_livekit_room_ptt_step_publishes_release_edge(
         root=Path("."),
         events=events,
         started=0.0,
-        state=object(),
+        state=runner._RoomCaseState(started=0.0, events=events),
         options=LiveKitRoomOptions(),
         local_participant=local_participant,
     )
@@ -478,7 +478,7 @@ async def test_livekit_room_agent_speaking_primes_client_state_before_audio(
         root=Path("."),
         events=events,
         started=0.0,
-        state=object(),
+        state=runner._RoomCaseState(started=0.0, events=events),
         options=LiveKitRoomOptions(agent_speaking_client_state_lead_ms=120),
         local_participant=local_participant,
     )
@@ -529,7 +529,7 @@ async def test_livekit_room_agent_speaking_step_fails_fast_when_no_agent_audio(
             root=Path("."),
             events=events,
             started=0.0,
-            state=object(),
+            state=runner._RoomCaseState(started=time.monotonic(), events=events),
             options=LiveKitRoomOptions(agent_speaking_wait_sec=0.01),
             local_participant=local_participant,
         )
@@ -1405,6 +1405,62 @@ def test_livekit_room_state_marks_agent_connected() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trailing_silence_ms", [0, 600])
+@pytest.mark.parametrize("ptt", [False, True])
+async def test_room_reply_latency_excludes_feed_padding(monkeypatch, trailing_silence_ms, ptt):
+    """A reply during tail silence must be measured and must satisfy the wait."""
+    from dataclasses import replace
+    from benchmark import livekit_room_runner as runner
+    from eidolon.livekit.tests._harness.audio import synth_voiced, synth_silence
+
+    case = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml").cases[0]
+    step = replace(case.user_steps[0], start_ms=0, client_ptt=ptt,
+                   client_playback_state="idle" if ptt else "none")
+    case = replace(case, user_steps=(step,))
+    pcm = synth_voiced(.1) + synth_silence(trailing_silence_ms / 1000)
+    clock_ms = 0
+    boundary_ms = 100 + trailing_silence_ms if ptt else 100
+    state = runner._RoomCaseState(started=0, events=[])
+
+    class Source:
+        async def capture_frame(self, frame):
+            nonlocal clock_ms
+            clock_ms += 20
+            if clock_ms == boundary_ms + 200:
+                state.mark("agent_audio_first_at")
+                state.agent_audio_frame_timestamps.append(clock_ms)
+
+    monkeypatch.setattr(runner, "_elapsed_ms", lambda _: clock_ms)
+    monkeypatch.setattr(runner, "_wait_for_agent_quiet", AsyncMock(return_value=True))
+    monkeypatch.setattr(runner, "load_clip_pcm", lambda _: (pcm, 16000))
+    monkeypatch.setattr(runner, "render_device_envelope_mic_pcm", lambda _c, _s, p, **kw: p)
+    await runner._feed_case_audio(Source(), case=case, root=Path("."), events=state.events,
+                                  started=0, state=state, options=LiveKitRoomOptions(),
+                                  local_participant=AsyncMock() if ptt else None)
+    state.mark("input_feed_done_at")
+    if "user_audio_done_at" not in state.timestamps:
+        state.mark("user_audio_done_at")
+    metrics = state.metrics()
+    assert metrics["user_audio_done_ms"] == boundary_ms
+    assert metrics["user_done_to_agent_audio_after_user_done_ms"] == 200
+    assert metrics["input_feed_done_ms"] > boundary_ms + 200
+    assert metrics["user_audio_done_reference"] == ("ptt_release" if ptt else "last_voiced_frame")
+    assert state.agent_audio_after_user_done.is_set()
+
+
+def test_room_latest_input_cannot_reuse_previous_reply():
+    from benchmark.livekit_room_runner import _RoomCaseState
+
+    state = _RoomCaseState(started=0, events=[])
+    state.agent_audio_frame_timestamps = [300]
+    state.finish_user_input(100, reference="last_voiced_frame")
+    assert state.agent_audio_after_user_done.is_set()
+    state.finish_user_input(600, reference="last_voiced_frame")
+    assert not state.agent_audio_after_user_done.is_set()
+    assert state.metrics()["user_done_to_agent_audio_after_user_done_ms"] is None
+
+
+@pytest.mark.asyncio
 async def test_livekit_room_wait_for_agent_speaking_requires_audio_after_previous_user_step() -> (
     None
 ):
@@ -1947,7 +2003,7 @@ async def test_feed_case_audio_does_not_inject_idle_step_before_reply_completed(
             root=Path("."),
             events=events,
             started=time.monotonic(),
-            state=object(),
+            state=runner._RoomCaseState(started=time.monotonic(), events=events),
             options=LiveKitRoomOptions(),
             local_participant=AsyncMock(),
         )
@@ -4443,6 +4499,82 @@ def test_real_room_enforces_nonempty_user_final_cardinality() -> None:
 
     events.append({"type": "transcription", "role": "user", "final": True, "text": "第二轮"})
     assert _transcription_expectation_errors(case, events) == []
+
+
+def test_room_ptt_requires_distinct_committed_transcripts_from_agent() -> None:
+    import json
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from livekit import rtc
+    from eidolon_sdk.biz.contracts import CONTROL_OP_PTT_TURN_STATUS, CONTROL_TOPIC
+    from benchmark.livekit_room_runner import (
+        _RoomCaseState,
+        _record_ptt_turn_status,
+        _transcription_expectation_errors,
+    )
+    from eidolon.livekit.agent.half_duplex.control import build_ptt_turn_status_payload
+    from eidolon.livekit.agent.session.client_control import build_session_client_control_envelope
+
+    case = load_suite("benchmark/cases/half_duplex/ptt_phase_a_enforced.yaml").cases[0]
+    case = replace(case, expectations=replace(case.expectations, min_user_finals=2))
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+
+    def deliver(turn_id, text, outcome="committed", *, agent=True):
+        envelope = build_session_client_control_envelope(
+            op=CONTROL_OP_PTT_TURN_STATUS,
+            reason="segment_transcribed",
+            turn_id=turn_id,
+            payload=build_ptt_turn_status_payload(outcome, "segment_transcribed", transcript=text),
+        )
+        packet = SimpleNamespace(
+            topic=CONTROL_TOPIC,
+            participant=SimpleNamespace(
+                identity="agent" if agent else "user",
+                kind=(rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if agent
+                      else rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD),
+            ),
+            data=json.dumps(envelope).encode(),
+        )
+        _record_ptt_turn_status(packet, state)
+
+    deliver("first", "第一轮")
+    deliver("first", "第一轮")  # Duplicate delivery is not a second turn.
+    deliver("empty", " ")
+    deliver("rejected", "没有提交", "rejected:tap_to_stop")
+    deliver("pending", "还在识别", "finalizing")
+    deliver("", "缺少轮次")
+    deliver("spoof", "客户端伪造", agent=False)
+    state.events.append({"type": "transcription", "role": "user", "final": True, "text": "流式"})
+    assert _transcription_expectation_errors(case, state.events) == [
+        "expected at least 2 PTT committed transcripts, got 1"
+    ]
+    assert all(event.get("participant") != "user" for event in state.events)
+
+    deliver("second", "第二轮")
+    assert _transcription_expectation_errors(case, state.events) == []
+    streaming_case = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml").cases[0]
+    streaming_case = replace(streaming_case, expectations=replace(streaming_case.expectations, min_user_finals=1))
+    assert _transcription_expectation_errors(streaming_case, [
+        event for event in state.events if event["type"] == "ptt_turn_status"
+    ]) == ["expected at least 1 user finals, got 0"]
+
+
+@pytest.mark.parametrize("data", [b"invalid", b"[]", b'"string"', b"\xff", b'{"v":1,"kind":"cmd","op":"ptt.turn_status","payload":[]}'])
+def test_room_ignores_malformed_ptt_control(data) -> None:
+    from types import SimpleNamespace
+    from livekit import rtc
+    from eidolon_sdk.biz.contracts import CONTROL_TOPIC
+    from benchmark.livekit_room_runner import _RoomCaseState, _record_ptt_turn_status
+
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+    packet = SimpleNamespace(
+        topic=CONTROL_TOPIC,
+        participant=SimpleNamespace(kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT),
+        data=data,
+    )
+    _record_ptt_turn_status(packet, state)
+    assert state.events == []
 
 
 def test_event_recorder_waits_for_multiple_agent_messages() -> None:

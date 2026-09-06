@@ -72,7 +72,6 @@ def test_terminal_llm_failure_without_delta_announces_once_outside_chat_context(
 
     p._session.say.assert_called_once_with(
         "刚才卡了一下，请再说一遍好吗？",
-        allow_interruptions=True,
         add_to_chat_ctx=False,
     )
     p._mark_activity.assert_called_once_with()
@@ -128,7 +127,6 @@ def test_transcription_timeout_announces_once_outside_chat_context():
 
     p._session.say.assert_called_once_with(
         "抱歉，刚才没听清，请再说一遍好吗？",
-        allow_interruptions=True,
         add_to_chat_ctx=False,
     )
     p._mark_activity.assert_called_once_with()

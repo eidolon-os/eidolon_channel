@@ -54,6 +54,7 @@ class TestSttStage:
 
         assert transcript == "你好"
         assert stt.bytes_pushed == len(pcm)
+        await stage.shutdown()
 
 
 # ---------------------------------------------------------------------------

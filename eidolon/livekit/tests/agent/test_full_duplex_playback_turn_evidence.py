@@ -1,14 +1,17 @@
+import pytest
+
 from eidolon.livekit.agent.full_duplex.playback_turn_evidence import (
     resolve_playback_turn_decision,
 )
 from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 
 
-def test_topic_switch_completed_playback_turn_continues_to_llm() -> None:
+@pytest.mark.parametrize('intent', [InterruptIntent.NORMAL_INTERRUPT, InterruptIntent.TOPIC_SWITCH])
+def test_topic_switch_completed_playback_turn_continues_to_llm(intent) -> None:
     decision = Decision(
         action=Action.CANCEL,
         reason="topic_switch",
-        intent=InterruptIntent.NORMAL_INTERRUPT,
+        intent=intent,
         topic_switch_hint=True,
     )
 
@@ -19,11 +22,12 @@ def test_topic_switch_completed_playback_turn_continues_to_llm() -> None:
     assert resolution.continue_to_llm is True
 
 
-def test_correction_completed_playback_turn_continues_to_llm() -> None:
+@pytest.mark.parametrize('intent', [InterruptIntent.NORMAL_INTERRUPT, InterruptIntent.CORRECTION])
+def test_correction_completed_playback_turn_continues_to_llm(intent) -> None:
     decision = Decision(
         action=Action.CANCEL,
         reason="correction",
-        intent=InterruptIntent.NORMAL_INTERRUPT,
+        intent=intent,
         correction_hint=True,
     )
 

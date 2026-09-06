@@ -86,7 +86,6 @@ class FullDuplexSessionTurnBoundary:
         try:
             say(
                 "抱歉，我暂时无法连接到你的助手，请检查账号绑定或联系管理员。",
-                allow_interruptions=True,
             )
         except Exception:
             logger.exception("[StreamingPipeline] context-error fallback announcement failed")
@@ -184,7 +183,6 @@ class FullDuplexSessionTurnBoundary:
         try:
             say(
                 text,
-                allow_interruptions=True,
                 add_to_chat_ctx=False,
             )
         except Exception:

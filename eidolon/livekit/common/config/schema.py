@@ -55,6 +55,7 @@ class LLMConfig:
     temperature: float | None = None
     timeout: float | None = None
     max_completion_tokens: int | None = None
+    extra_body: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,8 @@ class EotPolicyConfig:
 
 @dataclass(frozen=True)
 class InterruptPolicyConfig:
+    intent_provider: Literal["none", "llm"] = "none"
+    intent_timeout_ms: int = 1500
     decision_timeout_ms: int = 450
     post_speech_evidence_timeout_ms: int = 6_000
     post_speech_evidence_min_speech_ms: int = 250
@@ -256,6 +259,11 @@ class TurnPolicyConfig:
     idle: IdlePolicyConfig = field(default_factory=IdlePolicyConfig)
     preemptive: PreemptivePolicyConfig = field(default_factory=PreemptivePolicyConfig)
     attention: AttentionPolicyConfig = field(default_factory=AttentionPolicyConfig)
+
+    @property
+    def uses_channel_model_intent(self) -> bool:
+        """Whether the configured interruption owner consumes the LLM evidence."""
+        return self.interruption_owner == "channel" and self.interrupt.intent_provider == "llm"
 
 
 @dataclass(frozen=True)

@@ -53,6 +53,8 @@ def _owner() -> SimpleNamespace:
     owner._attach_transcript_ingress_recent_events = MagicMock()
     owner._ducking = SimpleNamespace(is_suspended=True)
     owner._interruption_orchestrator = MagicMock()
+    owner._interruption_orchestrator.current_transcript = ""
+    owner._interruption_orchestrator.current_final_transcript = ""
     owner._record_full_duplex_transition = MagicMock()
     owner._agent_output = MagicMock()
     owner._ensure_agent_output_coordinator = MagicMock(return_value=owner._agent_output)

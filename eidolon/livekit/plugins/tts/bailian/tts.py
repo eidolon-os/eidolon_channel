@@ -12,6 +12,7 @@ from typing import Any
 
 import aiohttp
 import numpy as np
+from livekit import rtc
 from livekit.agents import APIError
 from livekit.agents.tts import AudioEmitter, SynthesizeStream, TTS, TTSCapabilities
 from livekit.agents.types import APIConnectOptions
@@ -424,9 +425,7 @@ class BailianSynthesizeStream(SynthesizeStream):
                 )
                 byte_stream = self._audio_byte_stream
                 if byte_stream is not None:
-                    for remaining in byte_stream.flush():
-                        output_emitter.push(remaining.data.tobytes())
-                        self._pcm_total_bytes += len(remaining.data)
+                    self._emit_pcm_frames(byte_stream.flush(), output_emitter)
                     self._audio_byte_stream = None
                 output_emitter.end_segment()
                 output_emitter.end_input()
@@ -565,9 +564,20 @@ class BailianSynthesizeStream(SynthesizeStream):
         byte_stream = self._audio_byte_stream
         if byte_stream is None:
             return
-        for frame in byte_stream.push(converted):
-            output_emitter.push(frame.data.tobytes())
-            self._pcm_total_bytes += len(frame.data)
+        self._emit_pcm_frames(byte_stream.push(converted), output_emitter)
+
+    def _emit_pcm_frames(
+        self, frames: list[rtc.AudioFrame], output_emitter: AudioEmitter,
+    ) -> None:
+        for frame in frames:
+            # CosyVoice can prepend ~350 ms of digital zero padding. Skip only
+            # whole zero PCM frames before the first output; retain even +/-1
+            # samples, the entire onset frame, and all later pauses unchanged.
+            if self._pcm_total_bytes == 0 and not any(frame.data):
+                continue
+            pcm = frame.data.tobytes()
+            output_emitter.push(pcm)
+            self._pcm_total_bytes += len(pcm)
 
     async def _input_loop(self, client: BailianTTSClient) -> None:
         first_token_wait = self._config.first_token_timeout

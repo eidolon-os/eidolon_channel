@@ -65,6 +65,10 @@ def build_full_duplex_turn_handling(
     elif native_adaptive:
         interruption["mode"] = "adaptive"
         interruption["resume_false_interruption"] = True
+    else:
+        # The channel owns reversible suspension; the SDK must not run a
+        # second resume policy for channel-owned or half-duplex speech.
+        interruption["resume_false_interruption"] = False
 
     return {
         "interruption": interruption,

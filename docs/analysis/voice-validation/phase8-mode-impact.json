@@ -1,0 +1,168 @@
+{
+  "scope": "Controlled endpoint-bound comparison on current remaining code; not a full HEAD comparison. Real SDK/EOT, scripted providers and real-paced PCM memory sink. 2.2 second within-question pause.",
+  "stimulus": {
+    "prefix": "我想问的是",
+    "continuation": "明天的天气怎么样。",
+    "vad_start_ms": [
+      350,
+      3200
+    ],
+    "vad_end_ms": [
+      1000,
+      3900
+    ],
+    "stt_final_ms": [
+      700,
+      3550
+    ],
+    "within_question_silence_ms": 2200,
+    "overlap": false,
+    "providers": "Scripted ASR/VAD/reply LLM/TTS; real LiveKit 1.7.1 and local EOT; real-time PCM replay, memory audio sink"
+  },
+  "runs": [
+    {
+      "mode": "full_duplex",
+      "endpoint_bounds_sec": [
+        0.5,
+        3.0
+      ],
+      "prefix_eot_score": 0.02449715357633552,
+      "checked_before_continuation_at_ms": 3100,
+      "continuation_scripted_start_ms": 3200,
+      "early_committed_user_messages": [],
+      "early_reply_audio": false,
+      "final_user_messages": [
+        "我想问的是 明天的天气怎么样。"
+      ],
+      "final_agent_messages": [
+        "现在回应你的问题。"
+      ],
+      "audible_segments_ms": [
+        4414.2
+      ]
+    },
+    {
+      "mode": "full_duplex",
+      "endpoint_bounds_sec": [
+        0.25,
+        2.0
+      ],
+      "prefix_eot_score": 0.02449715357633552,
+      "checked_before_continuation_at_ms": 3100,
+      "continuation_scripted_start_ms": 3200,
+      "early_committed_user_messages": [
+        "我想问的是"
+      ],
+      "early_reply_audio": true,
+      "final_user_messages": [
+        "我想问的是",
+        "明天的天气怎么样。"
+      ],
+      "final_agent_messages": [
+        "现在回应你的问题。",
+        "现在回应你的问题。"
+      ],
+      "audible_segments_ms": [
+        3007.7,
+        4158.7
+      ]
+    },
+    {
+      "mode": "half_duplex",
+      "endpoint_bounds_sec": [
+        0.5,
+        3.0
+      ],
+      "prefix_eot_score": 0.02449715357633552,
+      "checked_before_continuation_at_ms": 3100,
+      "continuation_scripted_start_ms": 3200,
+      "early_committed_user_messages": [],
+      "early_reply_audio": false,
+      "final_user_messages": [
+        "我想问的是 明天的天气怎么样。"
+      ],
+      "final_agent_messages": [
+        "现在回应你的问题。"
+      ],
+      "audible_segments_ms": [
+        4412.0
+      ]
+    },
+    {
+      "mode": "half_duplex",
+      "endpoint_bounds_sec": [
+        0.25,
+        2.0
+      ],
+      "prefix_eot_score": 0.02449715357633552,
+      "checked_before_continuation_at_ms": 3100,
+      "continuation_scripted_start_ms": 3200,
+      "early_committed_user_messages": [
+        "我想问的是"
+      ],
+      "early_reply_audio": true,
+      "final_user_messages": [
+        "我想问的是",
+        "明天的天气怎么样。"
+      ],
+      "final_agent_messages": [
+        "现在回应你的问题。",
+        "现在回应你的问题。"
+      ],
+      "audible_segments_ms": [
+        3012.1,
+        4162.8
+      ]
+    },
+    {
+      "mode": "full_duplex",
+      "endpoint_bounds_sec": [
+        0.25,
+        3.0
+      ],
+      "prefix_eot_score": 0.02449715357633552,
+      "checked_before_continuation_at_ms": 3100,
+      "continuation_scripted_start_ms": 3200,
+      "early_committed_user_messages": [],
+      "early_reply_audio": false,
+      "final_user_messages": [
+        "我想问的是 明天的天气怎么样。"
+      ],
+      "final_agent_messages": [
+        "现在回应你的问题。"
+      ],
+      "audible_segments_ms": [
+        4158.9
+      ]
+    },
+    {
+      "mode": "half_duplex",
+      "endpoint_bounds_sec": [
+        0.25,
+        3.0
+      ],
+      "prefix_eot_score": 0.02449715357633552,
+      "checked_before_continuation_at_ms": 3100,
+      "continuation_scripted_start_ms": 3200,
+      "early_committed_user_messages": [],
+      "early_reply_audio": false,
+      "final_user_messages": [
+        "我想问的是 明天的天气怎么样。"
+      ],
+      "final_agent_messages": [
+        "现在回应你的问题。"
+      ],
+      "audible_segments_ms": [
+        4162.9
+      ]
+    }
+  ],
+  "finding": "Both full and half duplex reply audibly to the incomplete prefix and split the turn with 0.25/2.0 bounds. Neither 0.5/3.0 nor 0.25/3.0 does so in this controlled scenario. PTT bypasses EOT and is not included in this comparison.",
+  "recommendation": "Continue the optimization with selective rollback: restore the low-completeness maximum to 3.0 seconds, retain and validate the 0.25-second complete-turn minimum; retain correctness fixes. Evaluate the LLM intent policy and its endpoint settlement together in controlled integration, not as proven production defaults.",
+  "limitations": [
+    "One replay per mode/bound pair, not a population error rate or production P95.",
+    "The old variant restores endpoint bounds only; all other channel code is current.",
+    "A 3-second cap is not proof of correct handling of every longer pause.",
+    "No production rollback applied in this assessment."
+  ]
+}

@@ -1,0 +1,1274 @@
+{
+  "scope": "Full-duplex semantic completion versus first audible reply latency. No production changes or deployment in phase 11.",
+  "test_changes": [
+    "Four short-answer latency guards using the existing production harness: 好 and 7 in full/half duplex.",
+    "Existing 12 real intent-model overlap cases now use paced PCM aligned to VAD and record stop-to-first-audible-reply latency for reply actions. Effect pass is not a latency acceptance."
+  ],
+  "input_contract_reference": "https://huggingface.co/FireRedTeam/FireRedChat-turn-detector",
+  "score_probe": {
+    "model": "chinese_best_model_q8.onnx, existing downloaded weights",
+    "shared_settings": {
+      "max_length": 128,
+      "truncation": true,
+      "truncation_side": "left",
+      "punctuation_cleanup": "unchanged production regex"
+    },
+    "samples": [
+      {
+        "text": "不要讲了",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.2121297739347363,
+            "inference_ms": 2.166
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.02621619059918396,
+            "inference_ms": 1.448
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.04022438223723224,
+            "inference_ms": 17.067
+          }
+        ],
+        "multilingual_official": 0.2787081407272664
+      },
+      {
+        "text": "换个话题吧",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.384018925214251,
+            "inference_ms": 2.533
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.8740601835462447,
+            "inference_ms": 1.719
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.7924660389279966,
+            "inference_ms": 16.021
+          }
+        ],
+        "multilingual_official": 0.3839474094846357
+      },
+      {
+        "text": "不是，我说的是明天",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.11818541370934937,
+            "inference_ms": 2.382
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.5655961760448215,
+            "inference_ms": 2.386
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.6574548909500932,
+            "inference_ms": 16.892
+          }
+        ],
+        "multilingual_official": 0.18923955703721912
+      },
+      {
+        "text": "就这样吧",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.1001444240745889,
+            "inference_ms": 1.874
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.0722676229301202,
+            "inference_ms": 1.422
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.07779614005940018,
+            "inference_ms": 15.619
+          }
+        ],
+        "multilingual_official": 0.24278847731985062
+      },
+      {
+        "text": "我觉得",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.003355980988457907,
+            "inference_ms": 1.831
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.007641902514220006,
+            "inference_ms": 1.871
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.006803547813036781,
+            "inference_ms": 16.487
+          }
+        ],
+        "multilingual_official": 0.2892885295537951
+      },
+      {
+        "text": "因为这个",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.018950393583583806,
+            "inference_ms": 2.719
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.006786307077419764,
+            "inference_ms": 1.537
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.0016741609940393461,
+            "inference_ms": 20.439
+          }
+        ],
+        "multilingual_official": 0.10753727464385525
+      },
+      {
+        "text": "然后",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.03320136384475225,
+            "inference_ms": 2.125
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.010054236049486501,
+            "inference_ms": 1.443
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.014357563372506857,
+            "inference_ms": 19.246
+          }
+        ],
+        "multilingual_official": 0.1422847770833409
+      },
+      {
+        "text": "还有就是",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.04173928457651292,
+            "inference_ms": 2.483
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.05550545782145085,
+            "inference_ms": 2.251
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.09259897930495094,
+            "inference_ms": 19.541
+          }
+        ],
+        "multilingual_official": 0.18946025173801972
+      },
+      {
+        "text": "我想问的是",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.02449715357633552,
+            "inference_ms": 2.926
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.0308217837076065,
+            "inference_ms": 3.107
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.026686428057110346,
+            "inference_ms": 20.795
+          }
+        ],
+        "multilingual_official": 0.30083494337866534
+      },
+      {
+        "text": "好的",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.7426834721787134,
+            "inference_ms": 2.363
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.6823623276167996,
+            "inference_ms": 1.647
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.6395413711867715,
+            "inference_ms": 20.269
+          }
+        ],
+        "multilingual_official": 0.5094699597729502
+      },
+      {
+        "text": "不要停止，请继续刚才的解释",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.9348116395818845,
+            "inference_ms": 3.582
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9924025982743853,
+            "inference_ms": 3.398
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9925561592730286,
+            "inference_ms": 17.243
+          }
+        ],
+        "multilingual_official": 0.9676482681616544
+      },
+      {
+        "text": "帮我详细介绍一下这个方案。",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.9197000917949641,
+            "inference_ms": 3.742
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9014081068082058,
+            "inference_ms": 2.7
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.8753536190392621,
+            "inference_ms": 18.879
+          }
+        ],
+        "multilingual_official": 0.9211664024534261
+      },
+      {
+        "text": "请把今天和明天的天气都告诉我",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.8753336455948835,
+            "inference_ms": 4.598
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9754818423662943,
+            "inference_ms": 3.893
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.971146939009005,
+            "inference_ms": 18.647
+          }
+        ],
+        "multilingual_official": 0.8170084829543683
+      },
+      {
+        "text": "我想了解一下明天的天气",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.336627781177165,
+            "inference_ms": 3.191
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9474566150251262,
+            "inference_ms": 3.263
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9501603011038624,
+            "inference_ms": 17.146
+          }
+        ],
+        "multilingual_official": 0.5330360959703102
+      },
+      {
+        "text": "我我我想问一下明天明天的天气",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.7089595200222549,
+            "inference_ms": 2.801
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9109372314498111,
+            "inference_ms": 2.493
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9058569307907901,
+            "inference_ms": 16.154
+          }
+        ],
+        "multilingual_official": 0.7411767642569494
+      },
+      {
+        "text": "帮我设置明天早上的提醒",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.5390568404556224,
+            "inference_ms": 3.846
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.5805555826288803,
+            "inference_ms": 2.553
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.6424195865451207,
+            "inference_ms": 16.378
+          }
+        ],
+        "multilingual_official": 0.755364273888553
+      },
+      {
+        "text": "订明天，不对，是后天去上海的票",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.09025957487016455,
+            "inference_ms": 2.898
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.29126422334896135,
+            "inference_ms": 4.503
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.2850686284986431,
+            "inference_ms": 22.431
+          }
+        ],
+        "multilingual_official": 0.7924463444223001
+      },
+      {
+        "text": "嗯那个我想问一下这件事情怎么办",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.9654968416278613,
+            "inference_ms": 3.597
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9982082398357128,
+            "inference_ms": 3.801
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9977580889494708,
+            "inference_ms": 17.266
+          }
+        ],
+        "multilingual_official": 0.987061979612979
+      },
+      {
+        "text": "好",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.6676591315877032,
+            "inference_ms": 1.819
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.46014551510675156,
+            "inference_ms": 1.536
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.4604283577116111,
+            "inference_ms": 16.194
+          }
+        ],
+        "multilingual_official": 0.22859565051904543
+      },
+      {
+        "text": "7",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.7146326567661291,
+            "inference_ms": 1.968
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.48742877864337725,
+            "inference_ms": 1.554
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.4722256538417942,
+            "inference_ms": 16.797
+          }
+        ],
+        "multilingual_official": 0.24609147546946938
+      },
+      {
+        "text": "13800138000",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.06904100061299581,
+            "inference_ms": 2.222
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9944400762097781,
+            "inference_ms": 1.438
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9843229557923944,
+            "inference_ms": 15.182
+          }
+        ],
+        "multilingual_official": 0.23353217887627334
+      },
+      {
+        "text": "Could you explain that again please",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.8453789750352818,
+            "inference_ms": 2.716
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9525109960627143,
+            "inference_ms": 2.324
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9585021795702074,
+            "inference_ms": 17.303
+          }
+        ],
+        "multilingual_official": 0.5972154616453469
+      },
+      {
+        "text": "帮我检查一下 API timeout 的原因",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.965523573577892,
+            "inference_ms": 3.004
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9932824727884182,
+            "inference_ms": 2.164
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.990818314866528,
+            "inference_ms": 15.026
+          }
+        ],
+        "multilingual_official": 0.8547185768975674
+      },
+      {
+        "text": "他说不要讲了但我还想听你继续解释",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.9086653473143634,
+            "inference_ms": 3.636
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9573133926255503,
+            "inference_ms": 3.217
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9573637055634168,
+            "inference_ms": 15.889
+          }
+        ],
+        "multilingual_official": 0.9419225945535088
+      },
+      {
+        "text": "如果明天下雨而且风比较大的话我们就改到室内活动你觉得怎么样",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.9998719959615752,
+            "inference_ms": 4.57
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9998332959673327,
+            "inference_ms": 4.742
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9998404614398444,
+            "inference_ms": 16.469
+          }
+        ],
+        "multilingual_official": 0.9996724413883342
+      },
+      {
+        "text": "我想了一下还是选择第二个方案",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.8995928713267823,
+            "inference_ms": 4.09
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.8647630468037226,
+            "inference_ms": 2.981
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.8833125812683756,
+            "inference_ms": 15.625
+          }
+        ],
+        "multilingual_official": 0.8692717650998822
+      },
+      {
+        "text": "改成后天下午三点吧",
+        "variants": [
+          {
+            "special_tokens": true,
+            "padding": false,
+            "score": 0.645472315315074,
+            "inference_ms": 2.479
+          },
+          {
+            "special_tokens": false,
+            "padding": false,
+            "score": 0.9227937740879649,
+            "inference_ms": 1.953
+          },
+          {
+            "special_tokens": false,
+            "padding": "max_length",
+            "score": 0.9229419249891752,
+            "inference_ms": 16.885
+          }
+        ],
+        "multilingual_official": 0.6177006291611108
+      }
+    ],
+    "limits": "27 diagnostic texts; not held-out accuracy, calibration, or inference latency distribution. Multilingual official-format scores are an additional diagnostic only."
+  },
+  "format_e2e": {
+    "conditions": "Full duplex, no overlapping welcome; same SDK/EOT weights, scripted STT/VAD/reply LLM/TTS, paced PCM, memory sink, min/max endpoint 0.25/3 seconds. Only tokenizer special-token and padding arguments changed within the experiment process. One sample per condition.",
+    "runs": [
+      {
+        "format": "current",
+        "passes_1000ms_gate": false,
+        "text": "换个话题吧",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 3034.9,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 37.7,
+            "score": 0.384018925214251,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "current",
+        "passes_1000ms_gate": false,
+        "text": "不是，我说的是明天",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 3020.1,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 26.5,
+            "score": 0.11818541370934937,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "current",
+        "passes_1000ms_gate": true,
+        "text": "好",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 267.3,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 24.9,
+            "score": 0.6676591315877032,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "current",
+        "passes_1000ms_gate": true,
+        "text": "7",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 267.9,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 20.2,
+            "score": 0.7146326567661291,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "official",
+        "passes_1000ms_gate": true,
+        "text": "换个话题吧",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 271.2,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 68.8,
+            "score": 0.7924660389279966,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "official",
+        "passes_1000ms_gate": true,
+        "text": "不是，我说的是明天",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 269.5,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 58.7,
+            "score": 0.6574548909500932,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "official",
+        "passes_1000ms_gate": false,
+        "text": "好",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 3019.4,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 60.9,
+            "score": 0.4604283577116111,
+            "threshold": 0.5
+          }
+        ]
+      },
+      {
+        "format": "official",
+        "passes_1000ms_gate": false,
+        "text": "7",
+        "mode": "full_duplex",
+        "stop_to_reply_audio_ms": 3024.9,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 58.6,
+            "score": 0.4722256538417942,
+            "threshold": 0.5
+          }
+        ]
+      }
+    ]
+  },
+  "policy_comparison": {
+    "conditions": "Same overlapping welcome and three transcripts, none versus llm. Only intent classifier is a real external model; STT/VAD/reply LLM/TTS scripted. One sample per condition. VAD start/end 350/1050 ms, ASR final 700 ms, intent timeout 1500 ms.",
+    "runs": [
+      {
+        "provider": "none",
+        "text": "好的",
+        "expected_reply": false,
+        "old_speech_interrupted": true,
+        "user_messages": [
+          "好的"
+        ],
+        "reply_generated": true,
+        "output_state": "NORMAL",
+        "intent": null,
+        "correct_effect": false,
+        "latency": {
+          "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+          "stop_to_reply_audio_ms": 279.6,
+          "complete_to_reply_audio_ms": 614.1,
+          "sdk_complete_to_reply_audio_ms": 259.7,
+          "commit_to_reply_audio_ms": 16.2,
+          "from_acoustic_stop_ms": {
+            "speech_started_at": -692.9,
+            "interrupt_started_at": -692.7,
+            "transcript_final_at": -342.1,
+            "transcript_evidence_sufficient_first_at": -334.2,
+            "transcript_actionable_first_at": -334.2,
+            "interrupt_resolved_at": -333.6,
+            "interrupt_cancel_resolved_at": -333.6,
+            "speech_stopped_at": 7.7,
+            "framework_completed_turn_at": 259.5,
+            "turn_committed_at": 259.8,
+            "llm_started_at": 263.5,
+            "llm_first_delta_at": 263.8,
+            "tts_first_audio_at": 279.8,
+            "agent_audio_playback_done_at": 528.7,
+            "sdk_user_committed": 263.4,
+            "reply_audible": 279.6
+          },
+          "eot_predictions": [
+            {
+              "after_stop_ms": 19.9,
+              "score": 0.7426834721787134,
+              "threshold": 0.5
+            }
+          ],
+          "final_eot_predictions": [
+            {
+              "after_stop_ms": -334.5,
+              "score": 0.7426834721787134,
+              "text": "好的"
+            }
+          ]
+        }
+      },
+      {
+        "provider": "none",
+        "text": "不要停止，请继续刚才的解释",
+        "expected_reply": false,
+        "old_speech_interrupted": true,
+        "user_messages": [
+          "不要停止，请继续刚才的解释"
+        ],
+        "reply_generated": true,
+        "output_state": "NORMAL",
+        "intent": null,
+        "correct_effect": false,
+        "latency": {
+          "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+          "stop_to_reply_audio_ms": 258.9,
+          "complete_to_reply_audio_ms": 610.1,
+          "sdk_complete_to_reply_audio_ms": 259.4,
+          "commit_to_reply_audio_ms": 19.2,
+          "from_acoustic_stop_ms": {
+            "speech_started_at": -713.9,
+            "interrupt_started_at": -713.6,
+            "transcript_final_at": -365.3,
+            "transcript_evidence_sufficient_first_at": -350.7,
+            "transcript_actionable_first_at": -350.7,
+            "interrupt_resolved_at": -350.2,
+            "interrupt_cancel_resolved_at": -350.2,
+            "speech_stopped_at": -15.6,
+            "framework_completed_turn_at": 235.8,
+            "turn_committed_at": 236.0,
+            "llm_started_at": 239.9,
+            "llm_first_delta_at": 240.3,
+            "tts_first_audio_at": 259.3,
+            "agent_audio_playback_done_at": 508.9,
+            "sdk_user_committed": 239.7,
+            "reply_audible": 258.9
+          },
+          "eot_predictions": [
+            {
+              "after_stop_ms": -0.4,
+              "score": 0.9348116395818845,
+              "threshold": 0.5
+            }
+          ],
+          "final_eot_predictions": [
+            {
+              "after_stop_ms": -351.1,
+              "score": 0.9348116395818845,
+              "text": "不要停止，请继续刚才的解释"
+            }
+          ]
+        }
+      },
+      {
+        "provider": "none",
+        "text": "不是，我说的是明天",
+        "expected_reply": true,
+        "old_speech_interrupted": false,
+        "user_messages": [],
+        "reply_generated": false,
+        "output_state": "NORMAL",
+        "intent": null,
+        "correct_effect": false
+      },
+      {
+        "provider": "llm",
+        "text": "好的",
+        "expected_reply": false,
+        "old_speech_interrupted": false,
+        "user_messages": [],
+        "reply_generated": false,
+        "output_state": "NORMAL",
+        "intent": "backchannel",
+        "correct_effect": true
+      },
+      {
+        "provider": "llm",
+        "text": "不要停止，请继续刚才的解释",
+        "expected_reply": false,
+        "old_speech_interrupted": false,
+        "user_messages": [],
+        "reply_generated": false,
+        "output_state": "NORMAL",
+        "intent": "backchannel",
+        "correct_effect": true
+      },
+      {
+        "provider": "llm",
+        "text": "不是，我说的是明天",
+        "expected_reply": true,
+        "old_speech_interrupted": true,
+        "user_messages": [
+          "不是，我说的是明天"
+        ],
+        "reply_generated": true,
+        "output_state": "NORMAL",
+        "intent": "normal_interrupt",
+        "correct_effect": true,
+        "latency": {
+          "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+          "stop_to_reply_audio_ms": 3020.6,
+          "complete_to_reply_audio_ms": null,
+          "sdk_complete_to_reply_audio_ms": null,
+          "commit_to_reply_audio_ms": 15.9,
+          "from_acoustic_stop_ms": {
+            "speech_started_at": -699.2,
+            "interrupt_started_at": -699.1,
+            "transcript_final_at": -348.0,
+            "speech_stopped_at": 0.7,
+            "transcript_evidence_sufficient_first_at": 405.5,
+            "transcript_actionable_first_at": 405.5,
+            "interrupt_resolved_at": 406.1,
+            "interrupt_cancel_resolved_at": 406.1,
+            "framework_completed_turn_at": 3002.4,
+            "turn_committed_at": 3002.5,
+            "llm_started_at": 3005.0,
+            "llm_first_delta_at": 3005.3,
+            "tts_first_audio_at": 3020.7,
+            "agent_audio_playback_done_at": 3270.2,
+            "sdk_user_committed": 3004.7,
+            "reply_audible": 3020.6
+          },
+          "eot_predictions": [
+            {
+              "after_stop_ms": 414.3,
+              "score": 0.11818541370934937,
+              "threshold": 0.5
+            }
+          ],
+          "final_eot_predictions": [
+            {
+              "after_stop_ms": -337.2,
+              "score": 0.11818541370934937,
+              "text": "不是，我说的是明天"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "verification": {
+    "short_answers_complete_turn_and_pause": {
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "duration_seconds": 47.89,
+      "cases": [
+        {
+          "name": "test_short_answer_replies_promptly[\\u597d-full_duplex]",
+          "outcome": "passed",
+          "properties": {
+            "text": "好",
+            "mode": "full_duplex",
+            "stop_to_reply_audio_ms": 290.1,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 33.1,
+                "score": 0.6676591315877032,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_short_answer_replies_promptly[\\u597d-half_duplex]",
+          "outcome": "passed",
+          "properties": {
+            "text": "好",
+            "mode": "half_duplex",
+            "stop_to_reply_audio_ms": 283.3,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 30.7,
+                "score": 0.6676591315877032,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_short_answer_replies_promptly[7-full_duplex]",
+          "outcome": "passed",
+          "properties": {
+            "text": 7,
+            "mode": "full_duplex",
+            "stop_to_reply_audio_ms": 268.9,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 25.2,
+                "score": 0.7146326567661291,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_short_answer_replies_promptly[7-half_duplex]",
+          "outcome": "passed",
+          "properties": {
+            "text": 7,
+            "mode": "half_duplex",
+            "stop_to_reply_audio_ms": 272.9,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 25.7,
+                "score": 0.7146326567661291,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+          "outcome": "passed",
+          "properties": {
+            "stop_to_reply_audio_ms": 782.7,
+            "complete_to_reply_audio_ms": 653.0,
+            "budget_ms": 1000
+          }
+        },
+        {
+          "name": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+          "outcome": "passed",
+          "properties": {
+            "stop_to_reply_audio_ms": 762.1,
+            "complete_to_reply_audio_ms": 655.5,
+            "budget_ms": 1000
+          }
+        },
+        {
+          "name": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+          "outcome": "passed",
+          "properties": {
+            "stop_to_reply_audio_ms": 847.4,
+            "complete_to_reply_audio_ms": 737.6,
+            "budget_ms": 1500
+          }
+        },
+        {
+          "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[full_duplex-none]",
+          "outcome": "passed",
+          "properties": {
+            "prefix_eot_score": 0.02449715357633552,
+            "premature_commits": 0,
+            "premature_audio_bytes": 0,
+            "stop_to_reply_audio_ms": 244.3,
+            "sdk_complete_to_reply_audio_ms": 244.6
+          }
+        },
+        {
+          "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[full_duplex-llm]",
+          "outcome": "passed",
+          "properties": {
+            "prefix_eot_score": 0.02449715357633552,
+            "premature_commits": 0,
+            "premature_audio_bytes": 0,
+            "stop_to_reply_audio_ms": 265.8,
+            "sdk_complete_to_reply_audio_ms": 248.1
+          }
+        },
+        {
+          "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[half_duplex-none]",
+          "outcome": "passed",
+          "properties": {
+            "prefix_eot_score": 0.02449715357633552,
+            "premature_commits": 0,
+            "premature_audio_bytes": 0,
+            "stop_to_reply_audio_ms": 271.8,
+            "sdk_complete_to_reply_audio_ms": 243.1
+          }
+        }
+      ]
+    },
+    "real_intent_overlap": {
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "duration_seconds": 68.671,
+      "cases": [
+        {
+          "name": "test_real_model_overlap_effects[\\u597d\\u7684-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-reply]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "reply",
+            "interrupted": true,
+            "output_state": "CANCELLED",
+            "intent": "InterruptIntent.NORMAL_INTERRUPT",
+            "stop_to_reply_audio_ms": 3022.6,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 258.2,
+                "score": 0.11818541370934937,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u505c-stop]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "stop",
+            "interrupted": true,
+            "output_state": "CANCELLED",
+            "intent": "InterruptIntent.HARD_STOP"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u4e0d\\u7528\\u56de\\u7b54\\u6211\\u521a\\u521a\\u7684\\u95ee\\u9898\\uff0c\\u7ee7\\u7eed\\u4f60\\u539f\\u6765\\u8bb2\\u7684-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u4ed6\\u8bf4\\u4e0d\\u8981\\u8bb2\\u4e86\\uff0c\\u4f46\\u6211\\u8fd8\\u60f3\\u542c\\u4f60\\u7ee7\\u7eed\\u89e3\\u91ca-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u5148\\u4e0d\\u8bb2\\u80cc\\u666f\\uff0c\\u544a\\u8bc9\\u6211\\u8d39\\u7528-reply]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "reply",
+            "interrupted": true,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.NORMAL_INTERRUPT",
+            "stop_to_reply_audio_ms": 733.1,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 718.4,
+                "score": 0.7606236417630644,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u6211\\uff0c\\u6211\\u60f3\\u95ee\\u7684\\u662f\\uff0c\\u8fd9\\u4e2a\\u65b9\\u6848\\u6bcf\\u4e2a\\u6708\\u8981\\u82b1\\u591a\\u5c11\\u94b1\\uff1f-reply]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "reply",
+            "interrupted": true,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.NORMAL_INTERRUPT",
+            "stop_to_reply_audio_ms": 265.9,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 162.6,
+                "score": 0.9682901206500483,
+                "threshold": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u5443\\u2026\\u2026\\u55ef\\uff0c\\u660e\\u767d\\u4e86\\uff0c\\u4f60\\u63a5\\u7740\\u8bf4-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u4e0d\\u662f\\u8ba9\\u4f60\\u505c\\uff0c\\u6211\\u662f\\u8bf4\\u8fd9\\u4e2a\\u8bcd\\u53eb stop\\uff0c\\u63a5\\u7740\\u89e3\\u91ca\\u5427-resume]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "resume",
+            "interrupted": false,
+            "output_state": "NORMAL",
+            "intent": "InterruptIntent.BACKCHANNEL"
+          }
+        },
+        {
+          "name": "test_real_model_overlap_effects[\\u7b49\\u7b49\\uff0c\\u5148\\u522b\\u8bf4\\u4e86\\uff0c\\u6211\\u9700\\u8981\\u60f3\\u4e00\\u60f3-stop]",
+          "outcome": "passed",
+          "properties": {
+            "expected_action": "stop",
+            "interrupted": true,
+            "output_state": "CANCELLED",
+            "intent": "InterruptIntent.HARD_STOP"
+          }
+        }
+      ]
+    },
+    "ruff": "passed on both changed test files",
+    "git_diff_check": "passed"
+  },
+  "decision": "Do not promote official-format tokenization yet: topic/correction improve but already-working single-character/numeric answers wait about 3 seconds. No threshold fitting, lexical exceptions, model switch, or conflation of interruption intent with end-of-turn completeness. Keep existing production settings and orchestration.",
+  "remaining": [
+    "Current default none intent path still fails existing semantic contracts.",
+    "Optional LLM intent fixes the three tested effects but correction still waits about 3 seconds because EOT remains below threshold.",
+    "Next algorithm evaluation must include representative context-dependent short answers and incomplete continuations; assess completion and latency together before changing the existing EOT adapter.",
+    "Production RPC/RTC/device validation and device backpressure remain outstanding; this phase contains no real ASR/TTS or physical-device latency measurement."
+  ]
+}

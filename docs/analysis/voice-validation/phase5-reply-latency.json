@@ -1,0 +1,597 @@
+{
+  "scope": "real synthetic-audio replay, direct LLM, memory sink; no RTC/device/Agent RPC",
+  "note": "Three optimized samples per speaking scenario. No production P95 inferred. Baseline complete_to_reply_audio_ms measured SDK EOT return; later records separate final EOT evidence and SDK release.",
+  "summary": {
+    "test_real_speech_to_real_reply[normal-full_duplex]": {
+      "n": 3,
+      "median_ms": 2000.1,
+      "min_ms": 1589.4,
+      "max_ms": 2019.7
+    },
+    "test_real_audio_overlap_to_playback_effects[correction-reply]": {
+      "n": 3,
+      "median_ms": 2341.3,
+      "min_ms": 2083.5,
+      "max_ms": 2767.4
+    }
+  },
+  "runs": [
+    {
+      "variant": "baseline",
+      "run": "latency-baseline",
+      "case": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "passed": true,
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "29",
+        "output_bytes": "213120",
+        "elapsed_seconds": "5.775718708988279",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2028.1,
+        "complete_to_reply_audio_ms": 1492.2,
+        "commit_to_reply_audio_ms": 1485.4,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1514.1,
+          "stt_ws_connected_at": -1942.6,
+          "stt_stream_first_audio_sent_at": -1942.0,
+          "stt_provider_first_partial_at": -1421.5,
+          "transcript_interim_first_at": -1418.7,
+          "stt_first_audio_sent_at": -1418.0,
+          "speech_stopped_at": 524.3,
+          "stt_provider_final_at": 526.5,
+          "transcript_final_at": 526.9,
+          "framework_completed_turn_at": 536.4,
+          "turn_committed_at": 536.5,
+          "llm_started_at": 542.8,
+          "tts_stream_started_at": 1400.7,
+          "tts_request_started_at": 1400.8,
+          "tts_connection_acquired_at": 1439.9,
+          "llm_first_delta_at": 1403.9,
+          "tts_first_text_sent_at": 1553.8,
+          "tts_provider_first_audio_at": 1870.6,
+          "tts_first_audio_at": 1872.0,
+          "agent_audio_playback_done_at": 3664.7,
+          "sdk_user_committed": 542.7,
+          "reply_audible": 2028.1
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 535.8,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "variant": "baseline",
+      "run": "latency-baseline",
+      "case": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "passed": true,
+      "properties": {
+        "clip": "correction",
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。",
+        "reply_chars": "15",
+        "reply_audio_bytes": "113280"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 5690.5,
+        "complete_to_reply_audio_ms": 3633.2,
+        "commit_to_reply_audio_ms": 3629.0,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1374.8,
+          "stt_stream_first_audio_sent_at": -1778.5,
+          "interrupt_started_at": -1374.7,
+          "stt_first_audio_sent_at": -1278.3,
+          "stt_provider_first_partial_at": -1195.7,
+          "transcript_interim_first_at": -1194.9,
+          "speech_stopped_at": 525.2,
+          "stt_provider_final_at": 620.6,
+          "transcript_final_at": 621.8,
+          "transcript_evidence_sufficient_first_at": 2049.0,
+          "transcript_actionable_first_at": 2049.0,
+          "interrupt_resolved_at": 2049.8,
+          "interrupt_cancel_resolved_at": 2049.8,
+          "framework_completed_turn_at": 2057.8,
+          "turn_committed_at": 2057.9,
+          "llm_started_at": 2061.6,
+          "tts_stream_started_at": 5128.4,
+          "tts_request_started_at": 5128.6,
+          "llm_first_delta_at": 5129.7,
+          "tts_connection_acquired_at": 5168.8,
+          "tts_first_text_sent_at": 5169.5,
+          "tts_provider_first_audio_at": 5504.1,
+          "tts_first_audio_at": 5505.3,
+          "agent_audio_playback_done_at": 6414.3,
+          "sdk_user_committed": 2061.5,
+          "reply_audible": 5690.5
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 2057.2,
+            "score": 0.668601563373425,
+            "threshold": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "variant": "incomplete_harness_warmup",
+      "run": "latency-optimized",
+      "case": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "passed": true,
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "23",
+        "output_bytes": "170880",
+        "elapsed_seconds": "5.042535125045106",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1713.6,
+        "complete_to_reply_audio_ms": 1189.3,
+        "commit_to_reply_audio_ms": 1181.0,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1514.5,
+          "stt_ws_connected_at": -1921.9,
+          "stt_stream_first_audio_sent_at": -1921.3,
+          "stt_provider_first_partial_at": -1433.8,
+          "transcript_interim_first_at": -1432.4,
+          "stt_first_audio_sent_at": -1420.5,
+          "stt_provider_final_at": 511.7,
+          "transcript_final_at": 513.8,
+          "speech_stopped_at": 523.5,
+          "framework_completed_turn_at": 526.1,
+          "turn_committed_at": 526.2,
+          "llm_started_at": 532.8,
+          "tts_stream_started_at": 1041.1,
+          "tts_request_started_at": 1041.3,
+          "tts_connection_acquired_at": 1081.7,
+          "llm_first_delta_at": 1043.9,
+          "tts_first_text_sent_at": 1207.6,
+          "tts_provider_first_audio_at": 1549.9,
+          "tts_first_audio_at": 1551.3,
+          "agent_audio_playback_done_at": 2937.7,
+          "sdk_user_committed": 532.6,
+          "reply_audible": 1713.6
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 524.2,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "variant": "incomplete_harness_warmup",
+      "run": "latency-optimized",
+      "case": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "passed": false,
+      "properties": {
+        "session_ready_ms": "442.6"
+      },
+      "failure": "TimeoutError"
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-optimized-ready",
+      "case": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "passed": true,
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "23",
+        "output_bytes": "181120",
+        "elapsed_seconds": "5.0537627909798175",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1589.4,
+        "complete_to_reply_audio_ms": 1098.4,
+        "sdk_complete_to_reply_audio_ms": 1067.6,
+        "commit_to_reply_audio_ms": 1062.9,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1515.6,
+          "stt_ws_connected_at": -1582.0,
+          "stt_stream_first_audio_sent_at": -1581.0,
+          "stt_first_audio_sent_at": -1420.4,
+          "stt_provider_first_partial_at": -1376.4,
+          "transcript_interim_first_at": -1374.0,
+          "stt_provider_final_at": 484.6,
+          "transcript_final_at": 484.9,
+          "speech_stopped_at": 521.5,
+          "framework_completed_turn_at": 522.6,
+          "turn_committed_at": 522.7,
+          "llm_started_at": 526.6,
+          "tts_stream_started_at": 862.2,
+          "tts_request_started_at": 862.3,
+          "tts_connection_acquired_at": 903.6,
+          "llm_first_delta_at": 863.1,
+          "tts_first_text_sent_at": 1091.3,
+          "tts_provider_first_audio_at": 1419.1,
+          "tts_first_audio_at": 1421.1,
+          "agent_audio_playback_done_at": 2950.5,
+          "sdk_user_committed": 526.5,
+          "reply_audible": 1589.4
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 521.8,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 491.0,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-optimized-ready",
+      "case": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "passed": true,
+      "properties": {
+        "session_ready_ms": "529.4",
+        "clip": "correction",
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。",
+        "reply_chars": "21",
+        "reply_audio_bytes": "146560"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2767.4,
+        "complete_to_reply_audio_ms": 2208.2,
+        "sdk_complete_to_reply_audio_ms": 1553.7,
+        "commit_to_reply_audio_ms": 1549.3,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1373.7,
+          "stt_stream_first_audio_sent_at": -1778.5,
+          "interrupt_started_at": -1373.5,
+          "stt_first_audio_sent_at": -1278.4,
+          "stt_provider_first_partial_at": -1063.6,
+          "transcript_interim_first_at": -1062.8,
+          "speech_stopped_at": 527.0,
+          "stt_provider_final_at": 552.1,
+          "transcript_final_at": 552.8,
+          "transcript_evidence_sufficient_first_at": 1205.1,
+          "transcript_actionable_first_at": 1205.1,
+          "interrupt_resolved_at": 1205.5,
+          "interrupt_cancel_resolved_at": 1205.5,
+          "framework_completed_turn_at": 1214.2,
+          "turn_committed_at": 1214.4,
+          "llm_started_at": 1218.1,
+          "tts_stream_started_at": 1934.0,
+          "tts_request_started_at": 1934.1,
+          "tts_connection_acquired_at": 2154.1,
+          "llm_first_delta_at": 1935.3,
+          "tts_first_text_sent_at": 2216.8,
+          "tts_provider_first_audio_at": 2579.6,
+          "tts_first_audio_at": 2580.7,
+          "agent_audio_playback_done_at": 3757.0,
+          "sdk_user_committed": 1218.0,
+          "reply_audible": 2767.4
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 1213.6,
+            "score": 0.668601563373425,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 559.2,
+            "score": 0.668601563373425,
+            "text": "不是，我刚才说错了。"
+          }
+        ]
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-repeat1",
+      "case": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "passed": true,
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "27",
+        "output_bytes": "190080",
+        "elapsed_seconds": "5.809939583996311",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2019.7,
+        "complete_to_reply_audio_ms": 1442.4,
+        "sdk_complete_to_reply_audio_ms": 1441.8,
+        "commit_to_reply_audio_ms": 1434.1,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1514.6,
+          "stt_ws_connected_at": -1936.7,
+          "stt_stream_first_audio_sent_at": -1936.2,
+          "stt_first_audio_sent_at": -1419.3,
+          "stt_provider_first_partial_at": -1405.5,
+          "transcript_interim_first_at": -1402.3,
+          "speech_stopped_at": 523.7,
+          "stt_provider_final_at": 569.3,
+          "transcript_final_at": 570.2,
+          "framework_completed_turn_at": 578.5,
+          "turn_committed_at": 578.7,
+          "llm_started_at": 585.8,
+          "tts_stream_started_at": 1215.0,
+          "tts_request_started_at": 1215.1,
+          "tts_connection_acquired_at": 1258.6,
+          "llm_first_delta_at": 1219.2,
+          "tts_first_text_sent_at": 1491.1,
+          "tts_provider_first_audio_at": 1830.6,
+          "tts_first_audio_at": 1831.3,
+          "agent_audio_playback_done_at": 3702.2,
+          "sdk_user_committed": 585.6,
+          "reply_audible": 2019.7
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 578.0,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 577.3,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-repeat1",
+      "case": "test_real_audio_overlap_to_playback_effects[backchannel_ok-resume]",
+      "passed": true,
+      "properties": {
+        "session_ready_ms": "511.9",
+        "clip": "backchannel_ok",
+        "intent": "backchannel",
+        "source": "llm",
+        "stt_text": "好。"
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-repeat1",
+      "case": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "passed": true,
+      "properties": {
+        "session_ready_ms": "653.8",
+        "clip": "correction",
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。",
+        "reply_chars": "15",
+        "reply_audio_bytes": "115840"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2083.5,
+        "complete_to_reply_audio_ms": 1551.5,
+        "sdk_complete_to_reply_audio_ms": 1027.8,
+        "commit_to_reply_audio_ms": 1022.1,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1373.0,
+          "stt_stream_first_audio_sent_at": -1778.8,
+          "interrupt_started_at": -1372.8,
+          "stt_first_audio_sent_at": -1278.5,
+          "stt_provider_first_partial_at": -1199.5,
+          "transcript_interim_first_at": -1198.6,
+          "stt_provider_final_at": 524.8,
+          "transcript_final_at": 525.3,
+          "speech_stopped_at": 542.5,
+          "transcript_evidence_sufficient_first_at": 1046.7,
+          "transcript_actionable_first_at": 1046.7,
+          "interrupt_resolved_at": 1047.3,
+          "interrupt_cancel_resolved_at": 1047.3,
+          "framework_completed_turn_at": 1056.2,
+          "turn_committed_at": 1056.3,
+          "llm_started_at": 1061.5,
+          "tts_stream_started_at": 1334.0,
+          "tts_request_started_at": 1334.0,
+          "tts_connection_acquired_at": 1377.3,
+          "llm_first_delta_at": 1336.5,
+          "tts_first_text_sent_at": 1572.9,
+          "tts_provider_first_audio_at": 1898.6,
+          "tts_first_audio_at": 1899.8,
+          "agent_audio_playback_done_at": 2869.2,
+          "sdk_user_committed": 1061.4,
+          "reply_audible": 2083.5
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 1055.7,
+            "score": 0.668601563373425,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 531.9,
+            "score": 0.668601563373425,
+            "text": "不是，我刚才说错了。"
+          }
+        ]
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-repeat1",
+      "case": "test_real_audio_overlap_to_playback_effects[hard_stop_stop-stop]",
+      "passed": true,
+      "properties": {
+        "session_ready_ms": "643.4",
+        "clip": "hard_stop_stop",
+        "intent": "hard_stop",
+        "source": "llm",
+        "stt_text": "停一下！"
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-repeat2",
+      "case": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "passed": true,
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "26",
+        "output_bytes": "196480",
+        "elapsed_seconds": "5.523591584060341",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2000.1,
+        "complete_to_reply_audio_ms": 1481.2,
+        "sdk_complete_to_reply_audio_ms": 1477.1,
+        "commit_to_reply_audio_ms": 1471.2,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1515.8,
+          "stt_ws_connected_at": -1933.3,
+          "stt_stream_first_audio_sent_at": -1932.8,
+          "stt_provider_first_partial_at": -1432.3,
+          "transcript_interim_first_at": -1430.4,
+          "stt_first_audio_sent_at": -1420.3,
+          "stt_provider_final_at": 510.1,
+          "transcript_final_at": 511.1,
+          "speech_stopped_at": 522.3,
+          "framework_completed_turn_at": 523.5,
+          "turn_committed_at": 523.7,
+          "llm_started_at": 529.0,
+          "tts_stream_started_at": 1257.6,
+          "tts_request_started_at": 1257.7,
+          "tts_connection_acquired_at": 1299.0,
+          "llm_first_delta_at": 1260.2,
+          "tts_first_text_sent_at": 1530.4,
+          "tts_provider_first_audio_at": 1839.2,
+          "tts_first_audio_at": 1840.5,
+          "agent_audio_playback_done_at": 3415.2,
+          "sdk_user_committed": 528.9,
+          "reply_audible": 2000.1
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 523.0,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 518.9,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    },
+    {
+      "variant": "optimized",
+      "run": "latency-repeat2",
+      "case": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "passed": true,
+      "properties": {
+        "session_ready_ms": "764.5",
+        "clip": "correction",
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。",
+        "reply_chars": "26",
+        "reply_audio_bytes": "184960"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2341.3,
+        "complete_to_reply_audio_ms": 1714.9,
+        "sdk_complete_to_reply_audio_ms": 1289.3,
+        "commit_to_reply_audio_ms": 1285.2,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1374.9,
+          "stt_stream_first_audio_sent_at": -1779.5,
+          "interrupt_started_at": -1374.7,
+          "stt_first_audio_sent_at": -1279.6,
+          "stt_provider_first_partial_at": -1157.3,
+          "transcript_interim_first_at": -1156.7,
+          "speech_stopped_at": 526.6,
+          "stt_provider_final_at": 618.4,
+          "transcript_final_at": 619.6,
+          "transcript_evidence_sufficient_first_at": 1043.0,
+          "transcript_actionable_first_at": 1043.0,
+          "interrupt_resolved_at": 1043.7,
+          "interrupt_cancel_resolved_at": 1043.7,
+          "framework_completed_turn_at": 1052.5,
+          "turn_committed_at": 1052.8,
+          "llm_started_at": 1056.1,
+          "tts_stream_started_at": 1544.5,
+          "tts_request_started_at": 1544.6,
+          "tts_connection_acquired_at": 1583.9,
+          "llm_first_delta_at": 1545.8,
+          "tts_first_text_sent_at": 1823.3,
+          "tts_provider_first_audio_at": 2155.8,
+          "tts_first_audio_at": 2156.9,
+          "agent_audio_playback_done_at": 3732.0,
+          "sdk_user_committed": 1056.1,
+          "reply_audible": 2341.3
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 1052.0,
+            "score": 0.668601563373425,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 626.4,
+            "score": 0.668601563373425,
+            "text": "不是，我刚才说错了。"
+          }
+        ]
+      }
+    }
+  ]
+}

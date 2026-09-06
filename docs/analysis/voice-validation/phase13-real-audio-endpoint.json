@@ -1,0 +1,1998 @@
+{
+  "scope": "Phase 13: real synthetic speech waveform, real configured Bailian STT and FireRed pVAD, installed LiveKit 1.7.1 local audio EOT v1-mini versus current text EOT. Scripted reply LLM/TTS, real-time input, memory audio sink. Not human recordings, real reply generation, RTC/AEC/device or production RPC acceptance.",
+  "production_changes": [],
+  "decision": "Do not adopt the experimental audio-detector substitution. Normal-speed conditional pause protection does not survive slow speech, ordinary complete inputs often wait about 3 s, and one fast-reply case commits incomplete/reordered text. These are integration observations, not a general model-quality ranking.",
+  "test_only_changes": [
+    "Allow existing ReplyLatencyProbe to measure acoustic/sink timing when a streaming detector has no predict_end_of_turn method; preserve text-detector behavior.",
+    "Parameterize the existing acoustic-clock regression for both detector interfaces. No new orchestration or provider abstraction."
+  ],
+  "setup": {
+    "sdk_version": "1.7.1",
+    "native_model": "v1-mini",
+    "native_language_threshold": {
+      "zh": 0.355
+    },
+    "endpoint_seconds": {
+      "min": 0.25,
+      "max": 3
+    },
+    "intent_provider": "none",
+    "input_format": "mono 16kHz signed 16-bit PCM, real-time delivery",
+    "speed_transform": "ffmpeg atempo .7 / 1 / 1.4, pitch preserving",
+    "pause_transform": "Insert 2.2 seconds of silence inside the existing synthesized clause pause, without splicing independently synthesized phrases. Original pause remains. Normal conditional cut=1.82 s, continuation=1.88 s; question cut=1.30 s, continuation=1.37 s. Slow cut and continuation times divided by .7 before insertion.",
+    "vad_guard": "Exact isinstance(FireredPvadVAD), not fallback",
+    "native_adapter_boundary": "Test-process replacement of StreamingPipeline._turn_detection only. Does not preserve the production text-only InterruptAwareTurnDetector settlement wrapper. No overlapping assistant speech in these tests; suitability for full-duplex interruption settlement is unverified. No source or dependency edit to SDK.",
+    "native_observation": "Public stream/predict result future instrumented only in experiment; inference_duration present and no fallback/degraded flags in observed records. Native inference roughly 13-17 ms, not the full reply latency.",
+    "public_event_check": "Installed AgentActivity.on_eot_prediction forwards to a session host; it does not emit a public local AgentSession eot_prediction event. No SDK hook was added."
+  },
+  "sample_limitations": [
+    "One run per detector/condition, sequential current then audio, remote ASR latency varies. No P95 or causal A/B latency claim.",
+    "Native returned prediction time is not consumed prediction time. Do not infer an SDK delay defect solely from a positive native score.",
+    "The native fast intro receives channel final-ASR EOT update at +2986.7 ms, immediately before the +2994.4 ms reply; this corrects an earlier suspicion of extra SDK endpoint waiting.",
+    "Channel timeline is reset/reused across candidates; from_acoustic_stop_ms can omit a provider final or show the first fragment. Raw final_eot_predictions preserves later observed final-ASR updates.",
+    "Small closed-form synthetic diagnostic corpus; no calibrated accuracy or evidence of best model."
+  ],
+  "fixtures": [
+    {
+      "name": "conditional",
+      "text": "如果预算不够的话，就选便宜的。",
+      "path": "/tmp/eidolon-phase13-audio/conditional.wav",
+      "sample_rate": 16000,
+      "seconds": 3.47,
+      "provenance": "configured synthetic TTS, whole sentence generated in one request",
+      "sha256": "71aefeda46403c245d6725141280ab33d7bfc3bafba30f9be888ddb4fa692342"
+    },
+    {
+      "name": "question_pause",
+      "text": "我想问的是，明天的天气怎么样？",
+      "path": "/tmp/eidolon-phase13-audio/question_pause.wav",
+      "sample_rate": 16000,
+      "seconds": 3.31,
+      "provenance": "configured synthetic TTS, whole sentence generated in one request",
+      "sha256": "db4413687aed6b54b621b1cf535485ae3f02a264124dfc15002177b6ed892028"
+    },
+    {
+      "name": "correction",
+      "text": "不是，我说的是明天。",
+      "path": "/tmp/eidolon-phase13-audio/correction.wav",
+      "sample_rate": 16000,
+      "seconds": 2.67,
+      "provenance": "configured synthetic TTS, whole sentence generated in one request",
+      "sha256": "53e876543d7f4f25023928d8d973d711327cd181b6b97b382d4780f609e9b81c"
+    },
+    {
+      "name": "digit",
+      "text": "七。",
+      "path": "/tmp/eidolon-phase13-audio/digit.wav",
+      "sample_rate": 16000,
+      "seconds": 1.17,
+      "provenance": "configured synthetic TTS, whole sentence generated in one request",
+      "sha256": "67379d2121b86ad5fb418fd762e428c3f7204cb785ae8fb83670536bb6fef29d"
+    }
+  ],
+  "existing_fixtures": [
+    "benchmark/audio/generated/normal_ask_intro.wav",
+    "benchmark/audio/generated/backchannel_ok.wav"
+  ],
+  "smoke_runs": [
+    {
+      "detector": "current",
+      "clip": "intro",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 2.948,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "帮我详细介绍一下这个方案。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "帮我",
+          "final": false
+        },
+        {
+          "text": "帮我下",
+          "final": false
+        },
+        {
+          "text": "帮我下",
+          "final": false
+        },
+        {
+          "text": "帮我下细介绍一",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案。",
+          "final": true
+        }
+      ],
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 5594.6,
+        "complete_to_reply_audio_ms": 8.6,
+        "sdk_complete_to_reply_audio_ms": 7.7,
+        "commit_to_reply_audio_ms": 3.9,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1513.0,
+          "speech_stopped_at": 523.3,
+          "turn_committed_at": 5587.7,
+          "sdk_user_committed": 5590.7,
+          "reply_audible": 5594.6
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 5587.0,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 5586.1,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "intro",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 2.948,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "帮我详细介绍一下这个方案。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "帮我",
+          "final": false
+        },
+        {
+          "text": "帮我下",
+          "final": false
+        },
+        {
+          "text": "帮我下",
+          "final": false
+        },
+        {
+          "text": "帮我下细介绍一",
+          "final": false
+        },
+        {
+          "text": "帮我下细介绍一",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案。",
+          "final": true
+        }
+      ],
+      "native_predictions": [
+        {
+          "score": 0.26217347383499146,
+          "inference_duration": 0.016327249817550182,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3026.3,
+        "complete_to_reply_audio_ms": 1913.7,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 2.3,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1638.8,
+          "stt_stream_started_at": -2104.4,
+          "stt_ws_connected_at": -848.9,
+          "stt_stream_first_audio_sent_at": -848.3,
+          "stt_first_audio_sent_at": -848.3,
+          "stt_provider_first_partial_at": -482.2,
+          "transcript_interim_first_at": -481.4,
+          "speech_stopped_at": 521.4,
+          "stt_provider_final_at": 1103.7,
+          "transcript_final_at": 1104.3,
+          "framework_completed_turn_at": 3022.1,
+          "turn_committed_at": 3022.2,
+          "llm_started_at": 3024.0,
+          "llm_first_delta_at": 3024.1,
+          "tts_first_audio_at": 3026.6,
+          "agent_audio_playback_done_at": 3027.4,
+          "sdk_user_committed": 3024.0,
+          "reply_audible": 3026.3
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 260.6,
+            "score": 0.26217347383499146,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 1112.6,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    }
+  ],
+  "extended_runs": [
+    {
+      "detector": "current",
+      "clip": "intro_slow",
+      "speed": 0.7,
+      "mode": "full_duplex",
+      "duration_seconds": 4.205625,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "帮我详细介绍一下这个方案。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "帮温",
+          "final": false
+        },
+        {
+          "text": "帮我",
+          "final": false
+        },
+        {
+          "text": "帮我",
+          "final": false
+        },
+        {
+          "text": "帮我详细记",
+          "final": false
+        },
+        {
+          "text": "帮我详细记",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案。",
+          "final": true
+        }
+      ],
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1299.8,
+        "complete_to_reply_audio_ms": 11.1,
+        "sdk_complete_to_reply_audio_ms": 10.7,
+        "commit_to_reply_audio_ms": 6.0,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -2395.3,
+          "stt_ws_connected_at": -1260.9,
+          "stt_stream_first_audio_sent_at": -1260.0,
+          "stt_first_audio_sent_at": -1260.0,
+          "stt_provider_first_partial_at": -843.0,
+          "transcript_interim_first_at": -841.2,
+          "speech_stopped_at": 503.8,
+          "stt_provider_final_at": 1280.8,
+          "transcript_final_at": 1281.5,
+          "framework_completed_turn_at": 1289.6,
+          "turn_committed_at": 1289.9,
+          "llm_started_at": 1293.9,
+          "llm_first_delta_at": 1294.4,
+          "tts_first_audio_at": 1301.0,
+          "agent_audio_playback_done_at": 1303.2,
+          "sdk_user_committed": 1293.8,
+          "reply_audible": 1299.8
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 1289.1,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 1288.7,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "intro_slow",
+      "speed": 0.7,
+      "mode": "full_duplex",
+      "duration_seconds": 4.205625,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "帮我详细介绍一下这个方案。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "帮温",
+          "final": false
+        },
+        {
+          "text": "帮我",
+          "final": false
+        },
+        {
+          "text": "帮我详细记",
+          "final": false
+        },
+        {
+          "text": "帮我详细记",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案。",
+          "final": true
+        }
+      ],
+      "native_predictions": [
+        {
+          "score": 0.166041299700737,
+          "inference_duration": 0.015596040990203619,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3008.4,
+        "complete_to_reply_audio_ms": 1798.0,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 2.3,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -2397.8,
+          "stt_ws_connected_at": -1655.6,
+          "stt_stream_first_audio_sent_at": -1655.1,
+          "stt_first_audio_sent_at": -1655.0,
+          "stt_provider_first_partial_at": -1280.1,
+          "transcript_interim_first_at": -1278.6,
+          "speech_stopped_at": 503.0,
+          "stt_provider_final_at": 1201.6,
+          "transcript_final_at": 1202.3,
+          "framework_completed_turn_at": 3003.7,
+          "turn_committed_at": 3003.9,
+          "llm_started_at": 3006.2,
+          "llm_first_delta_at": 3006.4,
+          "tts_first_audio_at": 3008.8,
+          "agent_audio_playback_done_at": 3010.1,
+          "sdk_user_committed": 3006.1,
+          "reply_audible": 3008.4
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 237.9,
+            "score": 0.166041299700737,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 1210.5,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "intro_fast",
+      "speed": 1.4,
+      "mode": "full_duplex",
+      "duration_seconds": 2.10325,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "帮我详细介绍一下这个方案。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "The",
+          "final": false
+        },
+        {
+          "text": "帮我详细",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案。",
+          "final": true
+        }
+      ],
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 779.7,
+        "complete_to_reply_audio_ms": 5.9,
+        "sdk_complete_to_reply_audio_ms": 5.5,
+        "commit_to_reply_audio_ms": 3.2,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1157.0,
+          "stt_stream_started_at": -1522.1,
+          "stt_ws_connected_at": -412.5,
+          "stt_stream_first_audio_sent_at": -411.8,
+          "stt_first_audio_sent_at": -411.8,
+          "stt_provider_first_partial_at": -24.4,
+          "transcript_interim_first_at": -23.0,
+          "speech_stopped_at": 524.2,
+          "stt_provider_final_at": 766.5,
+          "transcript_final_at": 767.1,
+          "framework_completed_turn_at": 774.4,
+          "turn_committed_at": 774.5,
+          "llm_started_at": 776.6,
+          "llm_first_delta_at": 777.0,
+          "tts_first_audio_at": 780.0,
+          "agent_audio_playback_done_at": 782.5,
+          "sdk_user_committed": 776.5,
+          "reply_audible": 779.7
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 774.2,
+            "score": 0.9197000917949641,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 773.8,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "intro_fast",
+      "speed": 1.4,
+      "mode": "full_duplex",
+      "duration_seconds": 2.10325,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "帮我详细介绍一下这个方案。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "The",
+          "final": false
+        },
+        {
+          "text": "帮我详细",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案",
+          "final": false
+        },
+        {
+          "text": "帮我详细介绍一下这个方案。",
+          "final": true
+        }
+      ],
+      "native_predictions": [
+        {
+          "score": 0.3718894124031067,
+          "inference_duration": 0.013110625091940165,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2994.4,
+        "complete_to_reply_audio_ms": 7.6,
+        "sdk_complete_to_reply_audio_ms": 2758.8,
+        "commit_to_reply_audio_ms": 2.6,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1156.3,
+          "stt_stream_started_at": -1521.5,
+          "speech_stopped_at": 525.9,
+          "turn_committed_at": 2988.7,
+          "sdk_user_committed": 2991.8,
+          "reply_audible": 2994.4
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 235.6,
+            "score": 0.3718894124031067,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 2986.7,
+            "score": 0.9197000917949641,
+            "text": "帮我详细介绍一下这个方案。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "short_ok",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 1.018,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "好。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "好",
+          "final": false
+        },
+        {
+          "text": "好。",
+          "final": true
+        }
+      ],
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1742.5,
+        "complete_to_reply_audio_ms": 8.5,
+        "sdk_complete_to_reply_audio_ms": 7.9,
+        "commit_to_reply_audio_ms": 4.5,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -157.3,
+          "stt_stream_started_at": -642.4,
+          "speech_stopped_at": 505.4,
+          "stt_ws_connected_at": 1072.1,
+          "stt_stream_first_audio_sent_at": 1072.8,
+          "stt_first_audio_sent_at": 1072.9,
+          "turn_committed_at": 1735.1,
+          "sdk_user_committed": 1738.0,
+          "reply_audible": 1742.5
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 1734.6,
+            "score": 0.6676591315877032,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 1734.0,
+            "score": 0.6676591315877032,
+            "text": "好。"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "short_ok",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 1.018,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "好。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "好",
+          "final": false
+        },
+        {
+          "text": "好。",
+          "final": true
+        }
+      ],
+      "native_predictions": [
+        {
+          "score": 0.15924859046936035,
+          "inference_duration": 0.01712304214015603,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3009.3,
+        "complete_to_reply_audio_ms": 2269.2,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 3.0,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -155.9,
+          "stt_stream_started_at": -643.2,
+          "stt_ws_connected_at": 258.9,
+          "stt_stream_first_audio_sent_at": 259.4,
+          "stt_first_audio_sent_at": 259.5,
+          "speech_stopped_at": 501.5,
+          "stt_provider_first_partial_at": 732.4,
+          "stt_provider_final_at": 732.7,
+          "transcript_interim_first_at": 733.5,
+          "transcript_final_at": 733.9,
+          "framework_completed_turn_at": 3003.2,
+          "turn_committed_at": 3003.4,
+          "llm_started_at": 3006.4,
+          "llm_first_delta_at": 3006.7,
+          "tts_first_audio_at": 3009.7,
+          "agent_audio_playback_done_at": 3010.9,
+          "sdk_user_committed": 3006.3,
+          "reply_audible": 3009.3
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 221.4,
+            "score": 0.15924859046936035,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 740.1,
+            "score": 0.6676591315877032,
+            "text": "好。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "digit",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 1.138,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "七。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "7",
+          "final": false
+        },
+        {
+          "text": "七",
+          "final": false
+        },
+        {
+          "text": "七。",
+          "final": true
+        }
+      ],
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2410.9,
+        "complete_to_reply_audio_ms": 8.5,
+        "sdk_complete_to_reply_audio_ms": 8.0,
+        "commit_to_reply_audio_ms": 4.5,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -239.1,
+          "speech_stopped_at": 545.1,
+          "stt_ws_connected_at": 1192.1,
+          "stt_stream_first_audio_sent_at": 1192.7,
+          "stt_first_audio_sent_at": 1192.7,
+          "turn_committed_at": 2403.2,
+          "sdk_user_committed": 2406.5,
+          "reply_audible": 2410.9
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 2402.9,
+            "score": 0.758606467548761,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 2402.4,
+            "score": 0.758606467548761,
+            "text": "七。"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "digit",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 1.138,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "七。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "7",
+          "final": false
+        },
+        {
+          "text": "七",
+          "final": false
+        },
+        {
+          "text": "七。",
+          "final": true
+        }
+      ],
+      "native_predictions": [
+        {
+          "score": 0.13462471961975098,
+          "inference_duration": 0.017118583898991346,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3050.0,
+        "complete_to_reply_audio_ms": 2070.4,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 3.2,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -237.8,
+          "stt_ws_connected_at": 519.2,
+          "stt_stream_first_audio_sent_at": 519.9,
+          "stt_first_audio_sent_at": 520.0,
+          "speech_stopped_at": 543.3,
+          "stt_provider_first_partial_at": 903.9,
+          "transcript_interim_first_at": 905.0,
+          "stt_provider_final_at": 973.3,
+          "transcript_final_at": 974.9,
+          "framework_completed_turn_at": 3044.1,
+          "turn_committed_at": 3044.3,
+          "llm_started_at": 3046.9,
+          "llm_first_delta_at": 3047.1,
+          "tts_first_audio_at": 3050.5,
+          "agent_audio_playback_done_at": 3051.7,
+          "sdk_user_committed": 3046.8,
+          "reply_audible": 3050.0
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 276.8,
+            "score": 0.13462471961975098,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 979.6,
+            "score": 0.758606467548761,
+            "text": "七。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "correction",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 2.638,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "不是。我说的是明天。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "不是",
+          "final": false
+        },
+        {
+          "text": "不是。",
+          "final": true
+        },
+        {
+          "text": "卧",
+          "final": false
+        },
+        {
+          "text": "我说的是明",
+          "final": false
+        },
+        {
+          "text": "我说的是明",
+          "final": false
+        },
+        {
+          "text": "我说的是明天。",
+          "final": true
+        }
+      ],
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 730.9,
+        "complete_to_reply_audio_ms": null,
+        "sdk_complete_to_reply_audio_ms": 219.8,
+        "commit_to_reply_audio_ms": 4.1,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1496.7,
+          "stt_stream_started_at": -1963.5,
+          "stt_ws_connected_at": -656.3,
+          "stt_stream_first_audio_sent_at": -655.6,
+          "stt_first_audio_sent_at": -655.5,
+          "stt_provider_first_partial_at": -254.0,
+          "transcript_interim_first_at": -253.1,
+          "stt_provider_final_at": -153.7,
+          "transcript_final_at": -152.7,
+          "speech_stopped_at": 504.5,
+          "framework_completed_turn_at": 511.5,
+          "turn_committed_at": 717.8,
+          "llm_started_at": 727.1,
+          "llm_first_delta_at": 727.9,
+          "tts_first_audio_at": 731.5,
+          "agent_audio_playback_done_at": 733.0,
+          "sdk_user_committed": 726.9,
+          "reply_audible": 730.9
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": 511.1,
+            "score": 0.7033010340138348,
+            "threshold": 0.5
+          },
+          {
+            "after_stop_ms": 723.6,
+            "score": 0.042015038311012054,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": -145.9,
+            "score": 0.7033010340138348,
+            "text": "不是。"
+          },
+          {
+            "after_stop_ms": 717.2,
+            "score": 0.11818541370934937,
+            "text": "不是我说的是明天。"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "correction",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 2.638,
+      "inserted_silence_seconds": 0,
+      "continuation_at_seconds": null,
+      "users": [
+        "不是。我说的是明天。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "不是",
+          "final": false
+        },
+        {
+          "text": "不是。",
+          "final": true
+        },
+        {
+          "text": "卧",
+          "final": false
+        },
+        {
+          "text": "我说的是明",
+          "final": false
+        },
+        {
+          "text": "我说的是明天。",
+          "final": true
+        }
+      ],
+      "native_predictions": [
+        {
+          "score": 0.10776089131832123,
+          "inference_duration": 0.0175992080476135,
+          "degraded": false,
+          "fallback": false
+        },
+        {
+          "score": 0.3053903579711914,
+          "inference_duration": 0.014170416863635182,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3011.5,
+        "complete_to_reply_audio_ms": null,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 3.0,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1497.1,
+          "stt_stream_started_at": -1962.9,
+          "speech_stopped_at": 504.5,
+          "stt_ws_connected_at": 783.9,
+          "stt_stream_first_audio_sent_at": 784.6,
+          "stt_first_audio_sent_at": 784.7,
+          "stt_provider_first_partial_at": 1218.5,
+          "transcript_interim_first_at": 1219.3,
+          "stt_provider_final_at": 1360.5,
+          "transcript_final_at": 1362.2,
+          "framework_completed_turn_at": 3005.0,
+          "turn_committed_at": 3005.2,
+          "llm_started_at": 3008.6,
+          "llm_first_delta_at": 3008.8,
+          "tts_first_audio_at": 3012.0,
+          "agent_audio_playback_done_at": 3013.6,
+          "sdk_user_committed": 3008.4,
+          "reply_audible": 3011.5
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": -1117.3,
+            "score": 0.10776089131832123,
+            "threshold": 0.355
+          },
+          {
+            "after_stop_ms": 236.6,
+            "score": 0.3053903579711914,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": 1367.5,
+            "score": 0.7033010340138348,
+            "text": "不是。"
+          },
+          {
+            "after_stop_ms": 1697.4,
+            "score": 0.11818541370934937,
+            "text": "不是我说的是明天。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "conditional_pause",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 5.638,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 4.08,
+      "users": [
+        "如果预算不够的话。",
+        "就选便宜的。"
+      ],
+      "replies": [
+        "收到。",
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话。",
+          "final": true
+        },
+        {
+          "text": "就是",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选便宜的。",
+          "final": true
+        }
+      ],
+      "premature_commits": 1,
+      "premature_audible": true
+    },
+    {
+      "detector": "audio",
+      "clip": "conditional_pause",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 5.638,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 4.08,
+      "users": [
+        "如果预算不够的话。 就选便宜的。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话。",
+          "final": true
+        },
+        {
+          "text": "就是",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选便宜的。",
+          "final": true
+        }
+      ],
+      "premature_commits": 0,
+      "premature_audible": false,
+      "native_predictions": [
+        {
+          "score": 0.3522648513317108,
+          "inference_duration": 0.011131874984130263,
+          "degraded": false,
+          "fallback": false
+        },
+        {
+          "score": 0.21505382657051086,
+          "inference_duration": 0.016168792033568025,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3049.8,
+        "complete_to_reply_audio_ms": null,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 3.5,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -756.2,
+          "stt_first_audio_sent_at": -659.9,
+          "transcript_interim_first_at": -160.8,
+          "speech_stopped_at": 540.9,
+          "transcript_final_at": 736.1,
+          "framework_completed_turn_at": 3042.0,
+          "turn_committed_at": 3042.2,
+          "llm_started_at": 3046.5,
+          "llm_first_delta_at": 3046.8,
+          "tts_first_audio_at": 3050.3,
+          "agent_audio_playback_done_at": 3051.6,
+          "sdk_user_committed": 3046.4,
+          "reply_audible": 3049.8
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": -2967.7,
+            "score": 0.3522648513317108,
+            "threshold": 0.355
+          },
+          {
+            "after_stop_ms": 259.0,
+            "score": 0.21505382657051086,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": -2329.6,
+            "score": 0.6014498088087934,
+            "text": "如果预算不够的话。"
+          },
+          {
+            "after_stop_ms": 743.1,
+            "score": 0.0009576006732847048,
+            "text": "就选便宜的。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "conditional_pause_slow",
+      "speed": 0.7,
+      "mode": "full_duplex",
+      "duration_seconds": 7.1068125,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 4.885714285714286,
+      "users": [
+        "如果预算不够的话。",
+        "就选便宜的。"
+      ],
+      "replies": [
+        "收到。",
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果预算不",
+          "final": false
+        },
+        {
+          "text": "如果预算不",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话。",
+          "final": true
+        },
+        {
+          "text": "就",
+          "final": false
+        },
+        {
+          "text": "就选",
+          "final": false
+        },
+        {
+          "text": "就选",
+          "final": false
+        },
+        {
+          "text": "就选便宜的",
+          "final": false
+        },
+        {
+          "text": "就选便宜的。",
+          "final": true
+        }
+      ],
+      "premature_commits": 1,
+      "premature_audible": true
+    },
+    {
+      "detector": "audio",
+      "clip": "conditional_pause_slow",
+      "speed": 0.7,
+      "mode": "full_duplex",
+      "duration_seconds": 7.1068125,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 4.885714285714286,
+      "users": [
+        "如果预算不够的话。",
+        "就选便宜的。"
+      ],
+      "replies": [
+        "收到。",
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果预算不",
+          "final": false
+        },
+        {
+          "text": "如果预算不",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话。",
+          "final": true
+        },
+        {
+          "text": "就",
+          "final": false
+        },
+        {
+          "text": "就选",
+          "final": false
+        },
+        {
+          "text": "就选",
+          "final": false
+        },
+        {
+          "text": "就选便宜的",
+          "final": false
+        },
+        {
+          "text": "就选便宜的",
+          "final": false
+        },
+        {
+          "text": "就选便宜的。",
+          "final": true
+        }
+      ],
+      "premature_commits": 1,
+      "premature_audible": true,
+      "native_predictions": [
+        {
+          "score": 0.5589606761932373,
+          "inference_duration": 0.016968708019703627,
+          "degraded": false,
+          "fallback": false
+        },
+        {
+          "score": 0.19055305421352386,
+          "inference_duration": 0.013382666045799851,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    },
+    {
+      "detector": "current",
+      "clip": "question_pause",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 5.478,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 3.5700000000000003,
+      "users": [
+        "我想问的是。 明天的天气怎么样？"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "我",
+          "final": false
+        },
+        {
+          "text": "我想问",
+          "final": false
+        },
+        {
+          "text": "我想问的是。",
+          "final": true
+        },
+        {
+          "text": "民",
+          "final": false
+        },
+        {
+          "text": "明天",
+          "final": false
+        },
+        {
+          "text": "明天",
+          "final": false
+        },
+        {
+          "text": "明天的天气怎么",
+          "final": false
+        },
+        {
+          "text": "明天的天气怎么",
+          "final": false
+        },
+        {
+          "text": "明天的天气怎么样？",
+          "final": true
+        }
+      ],
+      "premature_commits": 0,
+      "premature_audible": false,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 749.9,
+        "complete_to_reply_audio_ms": null,
+        "sdk_complete_to_reply_audio_ms": 7.6,
+        "commit_to_reply_audio_ms": 4.7,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1116.3,
+          "stt_first_audio_sent_at": -1041.5,
+          "transcript_interim_first_at": -819.4,
+          "speech_stopped_at": 524.8,
+          "transcript_final_at": 726.7,
+          "framework_completed_turn_at": 742.7,
+          "turn_committed_at": 742.8,
+          "llm_started_at": 745.3,
+          "llm_first_delta_at": 745.9,
+          "tts_first_audio_at": 750.2,
+          "agent_audio_playback_done_at": 751.2,
+          "sdk_user_committed": 745.2,
+          "reply_audible": 749.9
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": -2561.5,
+            "score": 0.02449715357633552,
+            "threshold": 0.5
+          },
+          {
+            "after_stop_ms": 531.4,
+            "score": 0.02449715357633552,
+            "threshold": 0.5
+          },
+          {
+            "after_stop_ms": 742.3,
+            "score": 0.8981187919362903,
+            "threshold": 0.5
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": -2562.1,
+            "score": 0.02449715357633552,
+            "text": "我想问的是。"
+          },
+          {
+            "after_stop_ms": 734.1,
+            "score": 0.822909255978693,
+            "text": "明天的天气怎么样？"
+          }
+        ]
+      }
+    },
+    {
+      "detector": "audio",
+      "clip": "question_pause",
+      "speed": 1,
+      "mode": "full_duplex",
+      "duration_seconds": 5.478,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 3.5700000000000003,
+      "users": [
+        "明天我想问的是。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "我",
+          "final": false
+        },
+        {
+          "text": "我想问",
+          "final": false
+        },
+        {
+          "text": "我想问",
+          "final": false
+        },
+        {
+          "text": "我想问的是。",
+          "final": true
+        },
+        {
+          "text": "民",
+          "final": false
+        },
+        {
+          "text": "明天",
+          "final": false
+        },
+        {
+          "text": "明天",
+          "final": false
+        },
+        {
+          "text": "明天的天气怎么",
+          "final": false
+        },
+        {
+          "text": "明天的天气怎么样？",
+          "final": true
+        }
+      ],
+      "premature_commits": 0,
+      "premature_audible": false,
+      "native_predictions": [
+        {
+          "score": 0.1346641182899475,
+          "inference_duration": 0.015399750089272857,
+          "degraded": false,
+          "fallback": false
+        },
+        {
+          "score": 0.518933117389679,
+          "inference_duration": 0.014295500004664063,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 529.7,
+        "complete_to_reply_audio_ms": null,
+        "sdk_complete_to_reply_audio_ms": 272.9,
+        "commit_to_reply_audio_ms": 2.8,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -1114.2,
+          "stt_first_audio_sent_at": -1039.3,
+          "transcript_interim_first_at": -764.3,
+          "speech_stopped_at": 523.8,
+          "framework_completed_turn_at": 524.6,
+          "turn_committed_at": 524.8,
+          "llm_started_at": 527.0,
+          "llm_first_delta_at": 527.2,
+          "tts_first_audio_at": 530.1,
+          "agent_audio_playback_done_at": 531.3,
+          "sdk_user_committed": 526.9,
+          "reply_audible": 529.7
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": -3361.3,
+            "score": 0.1346641182899475,
+            "threshold": 0.355
+          },
+          {
+            "after_stop_ms": 256.8,
+            "score": 0.518933117389679,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": -2267.5,
+            "score": 0.02449715357633552,
+            "text": "我想问的是。"
+          },
+          {
+            "after_stop_ms": 852.0,
+            "score": 0.822909255978693,
+            "text": "明天的天气怎么样？"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions. The 529.7 ms result is not a successful latency improvement: committed text omits the question even though the later ASR final contains it.",
+      "transcript_contract_passed": false
+    },
+    {
+      "detector": "current",
+      "clip": "conditional_pause_half",
+      "speed": 1,
+      "mode": "half_duplex",
+      "duration_seconds": 5.638,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 4.08,
+      "users": [
+        "如果预算不够的话。",
+        "就选便宜的。"
+      ],
+      "replies": [
+        "收到。",
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话。",
+          "final": true
+        },
+        {
+          "text": "就是",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选便宜的。",
+          "final": true
+        }
+      ],
+      "premature_commits": 1,
+      "premature_audible": true
+    },
+    {
+      "detector": "audio",
+      "clip": "conditional_pause_half",
+      "speed": 1,
+      "mode": "half_duplex",
+      "duration_seconds": 5.638,
+      "inserted_silence_seconds": 2.2,
+      "continuation_at_seconds": 4.08,
+      "users": [
+        "如果预算不够的话。 就选便宜的。"
+      ],
+      "replies": [
+        "收到。"
+      ],
+      "transcripts": [
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的",
+          "final": false
+        },
+        {
+          "text": "如果预算不够的话。",
+          "final": true
+        },
+        {
+          "text": "就是",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选拼",
+          "final": false
+        },
+        {
+          "text": "就选便宜的。",
+          "final": true
+        }
+      ],
+      "premature_commits": 0,
+      "premature_audible": false,
+      "native_predictions": [
+        {
+          "score": 0.3522648513317108,
+          "inference_duration": 0.015938750002533197,
+          "degraded": false,
+          "fallback": false
+        },
+        {
+          "score": 0.21505382657051086,
+          "inference_duration": 0.016467582900077105,
+          "degraded": false,
+          "fallback": false
+        }
+      ],
+      "native_inference_observed": true,
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 3047.6,
+        "complete_to_reply_audio_ms": null,
+        "sdk_complete_to_reply_audio_ms": null,
+        "commit_to_reply_audio_ms": 2.8,
+        "from_acoustic_stop_ms": {
+          "speech_started_at": -758.4,
+          "stt_first_audio_sent_at": -661.4,
+          "transcript_interim_first_at": 55.1,
+          "speech_stopped_at": 541.7,
+          "transcript_final_at": 1043.9,
+          "framework_completed_turn_at": 3042.2,
+          "turn_committed_at": 3042.4,
+          "llm_started_at": 3044.9,
+          "llm_first_delta_at": 3045.0,
+          "tts_first_audio_at": 3047.8,
+          "agent_audio_playback_done_at": 3049.1,
+          "sdk_user_committed": 3044.8,
+          "reply_audible": 3047.6
+        },
+        "eot_predictions": [
+          {
+            "after_stop_ms": -2958.8,
+            "score": 0.3522648513317108,
+            "threshold": 0.355
+          },
+          {
+            "after_stop_ms": 261.3,
+            "score": 0.21505382657051086,
+            "threshold": 0.355
+          }
+        ],
+        "final_eot_predictions": [
+          {
+            "after_stop_ms": -2413.5,
+            "score": 0.6014498088087934,
+            "text": "如果预算不够的话。"
+          },
+          {
+            "after_stop_ms": 1051.2,
+            "score": 0.0009576006732847048,
+            "text": "就选便宜的。"
+          }
+        ]
+      },
+      "interpretation": "Experimental SDK audio-detector substitution, not production channel integration. Native predictions are produced results, not proof of which prediction the SDK consumed; final_eot_predictions and complete_to_reply_audio_ms are legacy channel text-EOT diagnostics, not native completion decisions."
+    }
+  ],
+  "ptt_engineering_review": {
+    "path": "eidolon/livekit/agent/providers/stt.py:SttStage.recognize_streaming -> stream.aclose -> RecognizeStream cancellation -> Bailian speech_stream._run finally -> conn.close -> WebSocket.close",
+    "finding": "The previously measured task-finished to return gap lies in awaited WebSocket cleanup. No fixed sleep was found on that path. Moving it off the reply path requires owned cleanup and cancellation/shutdown/next-press validation; no fire-and-forget change was made.",
+    "scope": "Read-only code review this phase; no new PTT service latency measurement."
+  },
+  "temporary_artifacts": {
+    "runner": "/tmp/eidolon_phase13_audio_cascade.py",
+    "runner_sha256": "b562fa6c1586bbc9b4da934b6fe46d0fe2090912e3a254ff4ae3b70aa719b215",
+    "generator": "/tmp/eidolon_phase13_generate.py",
+    "extended_log": "/tmp/phase13-audio-cascade-extended.log",
+    "startup_failure_log": "/tmp/phase13-audio-cascade-startup-failure.log",
+    "startup_failure": "Initial class-name guard rejected the FireRed alias named VAD; corrected to exact isinstance and restarted. Not counted as a model failure.",
+    "durability": "Temporary runner and WAVs are not installed or copied into production. Their paths may expire; raw experiment observations and fixture hashes are retained here."
+  },
+  "unresolved": [
+    "Conditional-prefix premature reply in current full/half duplex remains.",
+    "Default interruption semantic gaps remain; optional LLM intent is not promoted.",
+    "Production latency improvement, full-duplex overlap with audio EOT, RPC/RTC/device/AEC and output backpressure acceptance remain unproven."
+  ],
+  "regression": {
+    "command_scope": [
+      "eidolon/livekit/tests/agent/test_reply_latency_measurement.py",
+      "eidolon/livekit/tests/scenarios/test_complete_turn_latency.py",
+      "eidolon/livekit/tests/agent/test_half_duplex_ptt_segment_mode.py"
+    ],
+    "passed": 44,
+    "strict_xfail": 3,
+    "seconds": 59.11,
+    "junit": "/tmp/phase13-regression.xml",
+    "ruff": "passed for two changed Python files",
+    "cases": [
+      {
+        "name": "test_latency_uses_acoustic_end_not_late_vad_or_old_reply[False]",
+        "status": "passed"
+      },
+      {
+        "name": "test_latency_uses_acoustic_end_not_late_vad_or_old_reply[True]",
+        "status": "passed"
+      },
+      {
+        "name": "test_silent_tts_prefix_does_not_count_as_audible_reply",
+        "status": "passed"
+      },
+      {
+        "name": "test_short_answer_replies_promptly[\\u597d-full_duplex]",
+        "status": "passed"
+      },
+      {
+        "name": "test_short_answer_replies_promptly[\\u597d-half_duplex]",
+        "status": "passed"
+      },
+      {
+        "name": "test_short_answer_replies_promptly[7-full_duplex]",
+        "status": "passed"
+      },
+      {
+        "name": "test_short_answer_replies_promptly[7-half_duplex]",
+        "status": "passed"
+      },
+      {
+        "name": "test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+        "status": "passed"
+      },
+      {
+        "name": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+        "status": "passed"
+      },
+      {
+        "name": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+        "status": "passed"
+      },
+      {
+        "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-full_duplex-none]",
+        "status": "passed"
+      },
+      {
+        "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-full_duplex-llm]",
+        "status": "passed"
+      },
+      {
+        "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-half_duplex-none]",
+        "status": "passed"
+      },
+      {
+        "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+        "status": "xfail"
+      },
+      {
+        "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+        "status": "xfail"
+      },
+      {
+        "name": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+        "status": "xfail"
+      },
+      {
+        "name": "test_agent_session_supports_segment_ptt_text_reply_entrypoint",
+        "status": "passed"
+      },
+      {
+        "name": "test_livekit_transcription_topic_matches_sdk_contract",
+        "status": "passed"
+      },
+      {
+        "name": "test_server_uses_ptt_pipeline_only_for_ptt_mode",
+        "status": "passed"
+      },
+      {
+        "name": "test_half_duplex_idle_policy_uses_session_intent",
+        "status": "passed"
+      },
+      {
+        "name": "test_half_duplex_uses_shared_session_opening_policy",
+        "status": "passed"
+      },
+      {
+        "name": "test_half_duplex_idle_watchdog_notifies_and_deletes_room",
+        "status": "passed"
+      },
+      {
+        "name": "test_half_duplex_idle_watchdog_rearms_while_ptt_turn_is_busy",
+        "status": "passed"
+      },
+      {
+        "name": "test_empty_ptt_tap_rejects_without_stt_call",
+        "status": "passed"
+      },
+      {
+        "name": "test_release_transcribes_complete_ptt_audio_once",
+        "status": "passed"
+      },
+      {
+        "name": "test_provider_without_offline_recognize_uses_one_shot_streaming",
+        "status": "passed"
+      },
+      {
+        "name": "test_default_strategy_uses_one_shot_streaming",
+        "status": "passed"
+      },
+      {
+        "name": "test_auto_strategy_falls_back_to_streaming_when_offline_raises",
+        "status": "passed"
+      },
+      {
+        "name": "test_press_during_agent_output_preempts_and_records_new_turn",
+        "status": "passed"
+      },
+      {
+        "name": "test_duplicate_press_while_recording_is_idempotent",
+        "status": "passed"
+      },
+      {
+        "name": "test_press_while_transcribing_rejects_busy_without_new_segment",
+        "status": "passed"
+      },
+      {
+        "name": "test_press_during_agent_output_spoken_text_commits",
+        "status": "passed"
+      },
+      {
+        "name": "test_preempted_short_hold_rejects_as_tap_to_stop_without_stt",
+        "status": "passed"
+      },
+      {
+        "name": "test_preempted_buffered_backchannel_rejects_as_tap_to_stop",
+        "status": "passed"
+      },
+      {
+        "name": "test_preempted_backchannel_with_control_lead_rejects_as_tap_to_stop",
+        "status": "passed"
+      },
+      {
+        "name": "test_preempted_long_speech_after_control_lead_commits",
+        "status": "passed"
+      },
+      {
+        "name": "test_tap_to_stop_then_next_ptt_commit_uses_clean_segment",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_release_commits_segment_text_to_agent_session",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_writes_segment_timeline_on_commit",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_rejects_transcription_error_and_resets_controller",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_records_playback_stop_in_segment_timeline",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline",
+        "status": "passed"
+      },
+      {
+        "name": "test_new_ptt_segment_does_not_steal_committed_output_owner",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_busy_press_during_finalizing_does_not_fake_release",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_observes_existing_subscribed_audio_tracks",
+        "status": "passed"
+      },
+      {
+        "name": "test_segment_client_control_without_local_participant_is_not_recorded",
+        "status": "passed"
+      },
+      {
+        "name": "test_pipeline_ptt_press_during_output_interrupts_and_stops_playback",
+        "status": "passed"
+      }
+    ]
+  },
+  "sdk_integrity": {
+    "version": "1.7.1",
+    "python_files_checked_against_installed_RECORD": 207,
+    "mismatches": []
+  }
+}

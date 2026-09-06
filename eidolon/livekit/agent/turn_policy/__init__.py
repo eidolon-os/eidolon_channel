@@ -9,7 +9,7 @@ from .intent_classifier import (
     InterruptIntentClassifier,
     InterruptIntentResult,
     NoopModelInterruptClassifier,
-    OnnxInterruptClassifier,
+    intent_requires_reply,
 )
 from .runtime import TurnControlSignal, TurnPolicyRuntime
 from .tiers import Tier, TierEvidence, TierPolicyChain
@@ -27,7 +27,7 @@ __all__ = [
     "InterruptIntentClassifier",
     "InterruptIntentResult",
     "NoopModelInterruptClassifier",
-    "OnnxInterruptClassifier",
+    "intent_requires_reply",
     "TranscriptEvidence",
     "TranscriptEvidenceGate",
     "Tier",

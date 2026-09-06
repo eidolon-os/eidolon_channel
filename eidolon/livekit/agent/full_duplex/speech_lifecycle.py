@@ -8,6 +8,7 @@ from typing import Any
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.shared.types import generate_turn_id
+from eidolon.livekit.agent.turn_policy import Action
 
 from .state_machine import FullDuplexPhase
 
@@ -195,9 +196,34 @@ class FullDuplexSpeechLifecycle:
 
         if owner._ducking.is_suspended and not owner._uses_livekit_native_adaptive_interruption():
             should_defer = owner._interruption_orchestrator.defer_false_resume_after_speech_end(
-                transcript=owner._latest_asr_text,
+                transcript=owner._interruption_orchestrator.current_transcript or owner._latest_asr_text,
                 duck_suspended=True,
             )
+            final_text = owner._interruption_orchestrator.current_final_transcript
+            if final_text:
+                if owner._semantic_interrupts.uses_model_intent:
+                    owner._semantic_interrupts.run(final_text, is_final=True)
+                    return owner._interruption_orchestrator.active
+                # Final STT and VAD-stop can arrive in either order. Apply the
+                # same policy once both facts are available, without waiting for
+                # another transcript event that the provider may never send.
+                score = owner._get_eot_model().current_eot_score
+                decision = owner._interruption_orchestrator.decide_from_transcript(
+                    owner._turn_runtime,
+                    final_text,
+                    score,
+                    vad_active=False,
+                    agent_speaking=True,
+                    is_final=True,
+                )
+                owner._decision_effects.apply(
+                    decision,
+                    resolved_reason="speech_stopped_final_transcript",
+                    transcript=final_text,
+                    vad_active=False,
+                    eot_score=score,
+                )
+                return should_defer and decision.action is Action.HOLD
             if not should_defer:
                 decision = owner._turn_runtime.user_silent_decision(owner._latest_asr_text)
                 owner._decision_effects.apply(

@@ -18,7 +18,7 @@ Eidolon EOT model base class.
 This is the core adapter layer that implements the LiveKit Agent turn detection interface.
 It orchestrates:
   - EotManager (singleton, ONNX inference)
-  - ContextEnhancedEot (context-aware scoring)
+  - ContextEnhancedEot (learned scoring and interruption state guards)
   - TurnEndPolicy (dynamic silence threshold)
   - TurnDetectionStateManager (VAD/ASR state)
   - PolicyChain (cut decision rules)
@@ -32,10 +32,9 @@ its own entry method:
 * :meth:`predict_end_of_turn` — answers framework's question
   *"is the user done speaking?"*. Called by ``AgentSession`` after each
   STT-final transcript. Score affects framework's endpointing delay; it
-  must reflect **semantic completeness only** (greeting bonus, follow-up
-  detection, hesitation, filler — same context adjustments as
-  ``compute_score``). It MUST NOT include interruption-specific guards
-  (cooldown / similarity / continuation-intent) because those are
+  must reflect **semantic completeness only**, using the learned model's
+  score for the current user text. It MUST NOT include interruption-specific
+  guards (cooldown / similarity) because those are
   irrelevant to "did the user finish their turn".
 
 * :meth:`should_interrupt` — answers Eidolon's question *"should we
@@ -43,14 +42,13 @@ its own entry method:
   ``SemanticInterruptHandler`` whenever STT delivers interim or
   final text **while the agent is speaking**. Score must include
   semantic completeness PLUS interruption-specific guards (cooldown to
-  avoid bouncing interrupts, similarity to avoid duplicate cuts,
-  continuation-intent to avoid cutting on "再换一首"). Strictly stricter
+  avoid bouncing interrupts, similarity to avoid duplicate cuts). Strictly stricter
   than :meth:`predict_end_of_turn` — interrupting agent is more
   disruptive than waiting for user to finish.
 
 Both paths share the same underlying ONNX call via
-:meth:`_raw_eot_score` (the ``EotManager`` 50ms TTL cache guarantees a
-single physical inference per text). The difference is in which
+:meth:`_raw_eot_score` (the ``EotManager`` 50ms TTL cache reuses the
+last text's score after inference completes). The difference is in which
 adjustments / guards each path layers on top.
 """
 
@@ -186,7 +184,8 @@ class EidolonEOTModel(ABC):
 
         # EOT score cache for the current streaming text
         self._current_eot_score: float = 0.0
-        self._last_asr_update_time: float = 0.0
+        self._current_eot_text = ""
+        self._last_asr_inference_time: float | None = None
 
         # NOTE: Round 8 R8.13 turn-merge dampener was removed when STT
         # was moved back to Bailian streaming. The dampener existed to
@@ -237,8 +236,8 @@ class EidolonEOTModel(ABC):
         """
         LiveKit Agent entry point: given a ChatContext, return EOT probability [0,1].
 
-        Extracts the last user text from chat_ctx and computes the context-enhanced
-        EOT score.
+        Extracts the last user text from chat_ctx and computes the learned
+        EOT score. Conversation history is not part of this model's input.
 
         Args:
             chat_ctx: LiveKit ChatContext containing the conversation history.
@@ -406,8 +405,8 @@ class EidolonEOTModel(ABC):
         Update ASR text and recompute EOT score.
 
         Skips ONNX inference for very short interim transcripts and applies a
-        200ms time debounce to avoid excessive inference during rapid ASR updates.
-        Final transcripts always trigger inference regardless of debounce.
+        200ms inference throttle to avoid excessive inference during rapid ASR updates.
+        Nonempty final transcripts are scored regardless of length or cadence.
 
         Args:
             text: Current ASR text.
@@ -417,18 +416,28 @@ class EidolonEOTModel(ABC):
             Current EOT score [0, 1].
         """
         self._state.update_asr(text, is_final)
-        now = time.time()
-
-        should_infer = len(text.strip()) >= self._MIN_INFERENCE_CHARS and (
-            is_final or (now - self._last_asr_update_time) >= self._MIN_INFERENCE_INTERVAL
+        now = time.monotonic()
+        stripped = text.strip()
+        # Throttle from the last inference, not the last ASR event. A stream
+        # of 90ms interims must continue making progress without going quiet.
+        due = (
+            self._last_asr_inference_time is None
+            or now - self._last_asr_inference_time >= self._MIN_INFERENCE_INTERVAL
         )
-        self._last_asr_update_time = now
-
+        should_infer = bool(stripped) and (
+            is_final or (len(stripped) >= self._MIN_INFERENCE_CHARS and due)
+        )
         if should_infer:
             self._current_eot_score = self._context_eot.p_complete_score(text)
+            self._current_eot_text = stripped
+            self._last_asr_inference_time = now
             self._state.update_eot_score(self._current_eot_score)
-        elif len(text.strip()) < self._MIN_INFERENCE_CHARS:
+        elif len(stripped) < self._MIN_INFERENCE_CHARS or stripped != self._current_eot_text:
+            # A throttled revision has no score yet. The preceding hypothesis'
+            # score must not authorize an interruption of this different text.
             self._current_eot_score = 0.0
+            self._current_eot_text = ""
+            self._state.update_eot_score(0.0)
 
         logger.info(
             "[EOT] update_asr text=%r is_final=%s score=%.3f",
@@ -485,6 +494,7 @@ class EidolonEOTModel(ABC):
             eot_score = self._context_eot.compute_score(text)
             self._state.update_eot_score(eot_score)
             self._current_eot_score = eot_score
+            self._current_eot_text = text.strip()
 
         # Delegate entirely to the semantic interruption policy chain.
         decision = self._semantic_policy_chain.check(self._state, self._turn_end_policy)
@@ -511,7 +521,10 @@ class EidolonEOTModel(ABC):
 
     def get_dynamic_silence_threshold(self, text: str, p_complete: float, is_final: bool) -> float:
         """
-        Called by AgentSession during silence: return how many seconds to wait before breaking.
+        Return the product silence policy's threshold.
+
+        The Agent adapter binds its fast/deep bounds through SDK endpointing
+        options. AgentSession does not call this helper for every transcript.
 
         Args:
             text: Current ASR text.
@@ -575,7 +588,8 @@ class EidolonEOTModel(ABC):
         self._context_eot.reset_turn()
         self._state.reset_turn()
         self._current_eot_score = 0.0
-        self._last_asr_update_time = 0.0
+        self._current_eot_text = ""
+        self._last_asr_inference_time = None
 
     @property
     def current_eot_score(self) -> float:

@@ -13,6 +13,7 @@ from .intent_classifier import (
     InterruptIntentResult,
     NoopModelInterruptClassifier,
     normalize_transcript_text,
+    intent_requires_reply,
 )
 from .constants import (
     DEADLINE_BETTER_TRANSCRIPT_REASON_PREFIX,
@@ -118,8 +119,9 @@ class InterruptDecider:
         vad_active: bool = True,
         agent_speaking: bool = True,
         is_final: bool = False,
+        intent_result: InterruptIntentResult | None = None,
     ) -> Decision:
-        intent = self.classify_intent_hint(
+        intent = intent_result or self.classify_intent_hint(
             text,
             vad_active=vad_active,
             agent_speaking=agent_speaking,
@@ -132,6 +134,22 @@ class InterruptDecider:
             eot_score=score,
         )
         hint_fields = self._hint_fields(intent)
+
+        if self._config.intent_provider == "llm":
+            # Model meaning and provider finality are independent evidence.
+            # A transient prefix must never authorize an irreversible cut.
+            if not is_final or intent_result is None:
+                return Decision(Action.HOLD, "awaiting_final_intent", **hint_fields)
+            if not stripped:
+                return Decision(Action.HOLD, "empty_intent_transcript", **hint_fields)
+            if intent.intent is InterruptIntent.HARD_STOP or intent_requires_reply(intent.intent):
+                return Decision(Action.CANCEL, "confirmed_final_intent", **hint_fields)
+            if not vad_active:
+                return Decision(
+                    Action.ROLLBACK, "final_intent_resume", rollback_drop_buffered=False,
+                    **hint_fields,
+                )
+            return Decision(Action.HOLD, "intent_wait_for_speech_end", **hint_fields)
 
         if not evidence.allow_cancel:
             if len(stripped) < self._config.min_interim_chars and score == 0.0:
@@ -191,6 +209,12 @@ class InterruptDecider:
         transcript: str = "",
         eot_score: float = 0.0,
     ) -> Decision:
+        if self._config.intent_provider == "llm":
+            # The bounded classifier request or the owner deadline settles it;
+            # the old EOT-only timer must not race the semantic decision.
+            if vad_still_active or has_transcript:
+                return Decision(Action.HOLD, "awaiting_final_intent")
+            return Decision(Action.ROLLBACK, "deadline_no_speech_evidence")
         if vad_still_active:
             if not has_transcript:
                 return Decision(

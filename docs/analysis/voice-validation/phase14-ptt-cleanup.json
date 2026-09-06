@@ -1,0 +1,1790 @@
+{
+  "scope": "Move completed one-shot STT transport cleanup off the PTT reply critical path within the existing SttStage. No SDK, provider protocol, EOT, intent strategy or mode-owner changes.",
+  "production_change": "SttStage keeps one owned close task. Successful streaming recognition returns after the same pre-existing END_OF_SPEECH/iterator completion boundary. A lock serializes one-shot recognition; subsequent streaming or offline recognition joins prior cleanup before opening/using another stream. Shutdown joins cleanup before plugin shutdown. Failed/cancelled recognition still awaits close, and shielding preserves cleanup ownership under repeated cancellation.",
+  "lifecycle_contract": "Production PTT already cancels and joins turn tasks before stage shutdown. Direct callers shutting down during recognition wait for it; no new recognition timeout was introduced. There is at most one pending stream-close task per stage, not an unbounded background task queue.",
+  "tradeoff": "A rapid next PTT release can still wait for unfinished prior cleanup. This preserves shared-connection isolation and bounds cleanup concurrency. Transport work is overlapped with response generation, not removed or forcibly timed out.",
+  "unchanged": "PTT press/release/tap-to-stop and commit ownership, full/half-duplex continuous STT stream paths, LiveKit scheduler, ASR result-selection boundary, dependencies and shared settings.",
+  "before_regression": {
+    "source": "/tmp/phase14-before.xml",
+    "counts": {
+      "passed": 2,
+      "failed": 3,
+      "error": 0,
+      "xfail": 0,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_result_precedes_close_but_next_recognition_and_shutdown_drain_it",
+        "outcome": "failed",
+        "reason": "TimeoutError"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_cancelled_next_request_cannot_cancel_previous_cleanup",
+        "outcome": "failed",
+        "reason": "TimeoutError"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_shutdown_waits_for_inflight_recognition_and_its_cleanup",
+        "outcome": "failed",
+        "reason": "AssertionError: Expected mock to not have been awaited. Awaited 1 times."
+      }
+    ]
+  },
+  "stage_regression_initial": {
+    "source": "/tmp/phase14-stage.xml",
+    "counts": {
+      "passed": 12,
+      "failed": 0,
+      "error": 0,
+      "xfail": 0,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_result_precedes_close_but_next_recognition_and_shutdown_drain_it",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_cancelled_next_request_cannot_cancel_previous_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_shutdown_waits_for_inflight_recognition_and_its_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestSttStage::test_recognize_streaming_returns_on_end_of_speech",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_initial_state",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_shutdown_resets_state",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_agent_state_changed_callbacks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_user_transcribed_callbacks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_session_error_callback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestTypes::test_generate_turn_id",
+        "outcome": "passed"
+      }
+    ]
+  },
+  "sandbox_blocked_regression": {
+    "source": "/tmp/phase14-regression.xml",
+    "counts": {
+      "passed": 91,
+      "failed": 11,
+      "error": 27,
+      "xfail": 0,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestSttStage::test_recognize_streaming_returns_on_end_of_speech",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_initial_state",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_shutdown_resets_state",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_agent_state_changed_callbacks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_user_transcribed_callbacks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_session_error_callback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestTypes::test_generate_turn_id",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_result_precedes_close_but_next_recognition_and_shutdown_drain_it",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_cancelled_next_request_cannot_cancel_previous_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_shutdown_waits_for_inflight_recognition_and_its_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_offline_recognition_also_waits_for_previous_stream_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_repeated_cancellation_and_cancelled_shutdown_keep_cleanup_owned",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_close_failure_is_observed_and_does_not_replace_recognition_error",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_tts_stage::test_synthesize_closes_underlying_stream_when_consumer_stops",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[fast]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[slow]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[repeated_words]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[repeated_interims]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[self_correction]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[hesitation]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[short_answer]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[single_digit]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[long_number]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[english]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[mixed_language]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[quoted_command]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[negated_command]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[long_clause]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[within_turn_pause]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[late_final]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_press_during_output_preempts_and_short_tap_does_not_submit_again",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_ptt_reply_plays_before_stt_cleanup_and_next_turn_stays_isolated",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_agent_session_supports_segment_ptt_text_reply_entrypoint",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_livekit_transcription_topic_matches_sdk_contract",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_server_uses_ptt_pipeline_only_for_ptt_mode",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_idle_policy_uses_session_intent",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_uses_shared_session_opening_policy",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_idle_watchdog_notifies_and_deletes_room",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_idle_watchdog_rearms_while_ptt_turn_is_busy",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_empty_ptt_tap_rejects_without_stt_call",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_release_transcribes_complete_ptt_audio_once",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_provider_without_offline_recognize_uses_one_shot_streaming",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_default_strategy_uses_one_shot_streaming",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_auto_strategy_falls_back_to_streaming_when_offline_raises",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_press_during_agent_output_preempts_and_records_new_turn",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_duplicate_press_while_recording_is_idempotent",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_press_while_transcribing_rejects_busy_without_new_segment",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_press_during_agent_output_spoken_text_commits",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_short_hold_rejects_as_tap_to_stop_without_stt",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_buffered_backchannel_rejects_as_tap_to_stop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_backchannel_with_control_lead_rejects_as_tap_to_stop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_long_speech_after_control_lead_commits",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_tap_to_stop_then_next_ptt_commit_uses_clean_segment",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_release_commits_segment_text_to_agent_session",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_writes_segment_timeline_on_commit",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_rejects_transcription_error_and_resets_controller",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_records_playback_stop_in_segment_timeline",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_new_ptt_segment_does_not_steal_committed_output_owner",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_busy_press_during_finalizing_does_not_fake_release",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_observes_existing_subscribed_audio_tracks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_segment_client_control_without_local_participant_is_not_recorded",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_ptt_press_during_output_interrupts_and_stops_playback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_funasr_document_sample_maps_to_livekit_timed_strings",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_bailian_stt_declares_word_aligned_transcript",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_bailian_missing_timestamps_do_not_invent_source_span",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_livekit_native_adaptive_compatibility_accepts_bailian",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_idle_no_forward",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_keepalive_1hz",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_preroll_flush",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_tail_window",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_tail_window_cancel",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_energy_fallback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_hysteresis_no_thrash",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_long_speech_buffer_drops_old",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_finalizes_metrics",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_input_validation",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_run_task_payload_declares_explicit_pcm_format",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_manager_basic",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_manager_send_audio",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_manager_finish",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_streaming_basic",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_streaming_flush",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_streaming_end_of_speech",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_word_timestamps",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_stt_properties",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_batch_recognize",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_failure_bad_url",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_stream_after_end_is_noop",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_keepalive::test_send_loop_keepalives_during_idle",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_keepalive::test_keepalive_disabled_sends_nothing_when_idle",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_lifecycle::test_close_closes_ws_even_before_handshake_connected",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_lifecycle::test_batch_recognize_closes_connection_when_send_fails",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_retry::test_run_raises_api_error_on_abrupt_close",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_retry::test_framework_retry_recovers_after_provider_disconnect",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_connect_success",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_disconnect",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_task_start_awaits_ack",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_task_finish_transitions_to_finishing",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_double_disconnect_is_safe",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_send_audio_while_disconnected_raises",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionReconnect::test_ensure_connected_when_ready",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionReconnect::test_ensure_connected_reconnects_after_force_close",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_warmup_does_not_send_task_start",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_warmup_is_idempotent",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_shutdown_closes_connection",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_shutdown_safe_when_not_warmed_up",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_persistent_connection_fields_present",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_stream_basic_emits_final_transcript",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_audio_sent_as_binary_not_json",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_stream_task_failure_propagates",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_sequential_streams_reuse_same_connection",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEventDrivenExit::test_task_finished_triggers_exit",
+        "outcome": "error",
+        "reason": "failed on setup with \"PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted\""
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEventDrivenExit::test_inter_segment_delay_does_not_break_exit",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEventDrivenExit::test_silent_server_cleanup_ack_timeout",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_signal_user_away_sets_event",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_signal_user_present_clears_event",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_user_away_does_NOT_abort_stream",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_user_away_event_cleared_at_stream_start",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEdgeCases::test_properties",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEdgeCases::test_constructed_with_kwargs",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSessionLongMultiUtterance::test_three_utterances_one_task",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSessionLongMultiUtterance::test_long_idle_does_not_kill_stream",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSessionLongMultiUtterance::test_user_away_during_session_long_stream_does_NOT_kill_it",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_reliability.TestRetryOnConnDrop::test_recovers_from_single_mid_session_drop",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_reliability.TestRetryOnConnDrop::test_retry_budget_exhausted_emits_error_and_exits",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_reliability.TestRetryOnConnDrop::test_no_retry_on_natural_session_end",
+        "outcome": "failed",
+        "reason": "PermissionError: [Errno 1] error while attempting to bind on address ('127.0.0.1', 0): [errno 1] operation not permitted"
+      }
+    ]
+  },
+  "regression": {
+    "source": "/tmp/phase14-regression-ports.xml",
+    "counts": {
+      "passed": 129,
+      "failed": 0,
+      "error": 0,
+      "xfail": 0,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestSttStage::test_recognize_streaming_returns_on_end_of_speech",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_initial_state",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_shutdown_resets_state",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_agent_state_changed_callbacks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_user_transcribed_callbacks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestBasePipeline::test_on_session_error_callback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_pipeline.TestTypes::test_generate_turn_id",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_result_precedes_close_but_next_recognition_and_shutdown_drain_it",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_cancelled_next_request_cannot_cancel_previous_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_shutdown_waits_for_inflight_recognition_and_its_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_offline_recognition_also_waits_for_previous_stream_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_repeated_cancellation_and_cancelled_shutdown_keep_cleanup_owned",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_close_failure_is_observed_and_does_not_replace_recognition_error",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_tts_stage::test_synthesize_closes_underlying_stream_when_consumer_stops",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[fast]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[slow]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[repeated_words]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[repeated_interims]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[self_correction]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[hesitation]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[short_answer]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[single_digit]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[long_number]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[english]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[mixed_language]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[quoted_command]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[negated_command]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[long_clause]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[within_turn_pause]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[late_final]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_press_during_output_preempts_and_short_tap_does_not_submit_again",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_ptt_reply_plays_before_stt_cleanup_and_next_turn_stays_isolated",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_agent_session_supports_segment_ptt_text_reply_entrypoint",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_livekit_transcription_topic_matches_sdk_contract",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_server_uses_ptt_pipeline_only_for_ptt_mode",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_idle_policy_uses_session_intent",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_uses_shared_session_opening_policy",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_idle_watchdog_notifies_and_deletes_room",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_half_duplex_idle_watchdog_rearms_while_ptt_turn_is_busy",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_empty_ptt_tap_rejects_without_stt_call",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_release_transcribes_complete_ptt_audio_once",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_provider_without_offline_recognize_uses_one_shot_streaming",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_default_strategy_uses_one_shot_streaming",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_auto_strategy_falls_back_to_streaming_when_offline_raises",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_press_during_agent_output_preempts_and_records_new_turn",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_duplicate_press_while_recording_is_idempotent",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_press_while_transcribing_rejects_busy_without_new_segment",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_press_during_agent_output_spoken_text_commits",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_short_hold_rejects_as_tap_to_stop_without_stt",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_buffered_backchannel_rejects_as_tap_to_stop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_backchannel_with_control_lead_rejects_as_tap_to_stop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_preempted_long_speech_after_control_lead_commits",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_tap_to_stop_then_next_ptt_commit_uses_clean_segment",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_release_commits_segment_text_to_agent_session",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_writes_segment_timeline_on_commit",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_rejects_transcription_error_and_resets_controller",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_records_playback_stop_in_segment_timeline",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_tap_to_stop_then_next_ptt_commit_has_clean_timeline",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_new_ptt_segment_does_not_steal_committed_output_owner",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_busy_press_during_finalizing_does_not_fake_release",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_observes_existing_subscribed_audio_tracks",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_segment_client_control_without_local_participant_is_not_recorded",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode::test_pipeline_ptt_press_during_output_interrupts_and_stops_playback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_funasr_document_sample_maps_to_livekit_timed_strings",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_bailian_stt_declares_word_aligned_transcript",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_bailian_missing_timestamps_do_not_invent_source_span",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_aligned_transcript::test_livekit_native_adaptive_compatibility_accepts_bailian",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_idle_no_forward",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_keepalive_1hz",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_preroll_flush",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_tail_window",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_tail_window_cancel",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_energy_fallback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_hysteresis_no_thrash",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_long_speech_buffer_drops_old",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_finalizes_metrics",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_gate::test_gate_input_validation",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_run_task_payload_declares_explicit_pcm_format",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_manager_basic",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_manager_send_audio",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_manager_finish",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_streaming_basic",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_streaming_flush",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_streaming_end_of_speech",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_word_timestamps",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_stt_properties",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_batch_recognize",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_connection_failure_bad_url",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt::test_stream_after_end_is_noop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_keepalive::test_send_loop_keepalives_during_idle",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_keepalive::test_keepalive_disabled_sends_nothing_when_idle",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_lifecycle::test_close_closes_ws_even_before_handshake_connected",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_lifecycle::test_batch_recognize_closes_connection_when_send_fails",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_retry::test_run_raises_api_error_on_abrupt_close",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.bailian.test_stt_retry::test_framework_retry_recovers_after_provider_disconnect",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_connect_success",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_disconnect",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_task_start_awaits_ack",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_task_finish_transitions_to_finishing",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_double_disconnect_is_safe",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionLifecycle::test_send_audio_while_disconnected_raises",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionReconnect::test_ensure_connected_when_ready",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSTTConnectionReconnect::test_ensure_connected_reconnects_after_force_close",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_warmup_does_not_send_task_start",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_warmup_is_idempotent",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_shutdown_closes_connection",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_shutdown_safe_when_not_warmed_up",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSenseTimeSTTPersistentConnection::test_persistent_connection_fields_present",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_stream_basic_emits_final_transcript",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_audio_sent_as_binary_not_json",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_stream_task_failure_propagates",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSpeechStream::test_sequential_streams_reuse_same_connection",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEventDrivenExit::test_task_finished_triggers_exit",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEventDrivenExit::test_inter_segment_delay_does_not_break_exit",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEventDrivenExit::test_silent_server_cleanup_ack_timeout",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_signal_user_away_sets_event",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_signal_user_present_clears_event",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_user_away_does_NOT_abort_stream",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestStateSyncBridge::test_user_away_event_cleared_at_stream_start",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEdgeCases::test_properties",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestEdgeCases::test_constructed_with_kwargs",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSessionLongMultiUtterance::test_three_utterances_one_task",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSessionLongMultiUtterance::test_long_idle_does_not_kill_stream",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_persistent.TestSessionLongMultiUtterance::test_user_away_during_session_long_stream_does_NOT_kill_it",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_reliability.TestRetryOnConnDrop::test_recovers_from_single_mid_session_drop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_reliability.TestRetryOnConnDrop::test_retry_budget_exhausted_emits_error_and_exits",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.stt.sensetime.test_stt_reliability.TestRetryOnConnDrop::test_no_retry_on_natural_session_end",
+        "outcome": "passed"
+      }
+    ]
+  },
+  "real_service_comparison": [
+    {
+      "speed": 0.7,
+      "variant": "await_cleanup_before_result",
+      "trace": [
+        {
+          "event": "recognize_streaming_start",
+          "at_ms": 764.3
+        },
+        {
+          "event": "_handle_task_finished_start",
+          "at_ms": 4278.6
+        },
+        {
+          "event": "_handle_task_finished_end",
+          "at_ms": 4278.6
+        },
+        {
+          "event": "close_start",
+          "at_ms": 4279.3
+        },
+        {
+          "event": "close_end",
+          "at_ms": 5473.0
+        },
+        {
+          "event": "recognize_streaming_end",
+          "at_ms": 5476.1
+        }
+      ],
+      "properties": {
+        "release_to_reply_audio_ms": 5979.5,
+        "committed_user_turns": 1,
+        "captured_audio_bytes": 129920,
+        "ptt_timing": "{\"from_release_ms\": {\"speech_started_at\": -1.0, \"speech_stopped_at\": 0.1, \"stt_stream_started_at\": 3.3, \"stt_ws_connected_at\": 1995.2, \"stt_stream_first_audio_sent_at\": 1995.8, \"stt_flush_sent_at\": 2013.7, \"stt_provider_first_partial_at\": 2399.0, \"stt_provider_final_at\": 3516.5, \"transcript_final_at\": 4715.0, \"transcript_interim_first_at\": 4715.0, \"turn_committed_at\": 4715.0, \"llm_started_at\": 4726.1, \"tts_stream_started_at\": 5331.3, \"tts_request_started_at\": 5331.5, \"tts_connection_acquired_at\": 5370.2, \"llm_first_delta_at\": 5336.2, \"tts_first_text_sent_at\": 5520.1, \"tts_provider_first_audio_at\": 5812.8, \"agent_audio_playback_done_at\": 6853.5}, \"llm_metrics\": {\"request_id\": \"61bb71f5-ed68-40fd-b007-701efad122df\", \"ttft_ms\": 610.0982499774545, \"duration_ms\": 797.1096248365939, \"completion_tokens\": 10, \"prompt_tokens\": 21, \"total_tokens\": 31, \"cancelled\": false}, \"session_states\": [\"listening\", \"thinking\", \"speaking\", \"listening\"]}",
+        "speed": 0.7,
+        "mode": "ptt",
+        "input_seconds": 4.205625,
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": 17,
+        "output_bytes": 129920,
+        "elapsed_seconds": 6.856533917132765,
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      },
+      "outcome": "passed",
+      "recognition_finished_to_result_ms": 1197.5,
+      "transport_close_ms": 1193.7
+    },
+    {
+      "speed": 0.7,
+      "variant": "stage_owned_cleanup",
+      "trace": [
+        {
+          "event": "recognize_streaming_start",
+          "at_ms": 228.0
+        },
+        {
+          "event": "_handle_task_finished_start",
+          "at_ms": 3316.3
+        },
+        {
+          "event": "_handle_task_finished_end",
+          "at_ms": 3316.3
+        },
+        {
+          "event": "recognize_streaming_end",
+          "at_ms": 3316.6
+        },
+        {
+          "event": "close_start",
+          "at_ms": 3323.6
+        },
+        {
+          "event": "close_end",
+          "at_ms": 4522.3
+        }
+      ],
+      "properties": {
+        "release_to_reply_audio_ms": 4378.6,
+        "committed_user_turns": 1,
+        "captured_audio_bytes": 237440,
+        "ptt_timing": "{\"from_release_ms\": {\"speech_started_at\": -2.0, \"speech_stopped_at\": 0.1, \"stt_stream_started_at\": 6.0, \"stt_ws_connected_at\": 1571.6, \"stt_stream_first_audio_sent_at\": 1572.4, \"stt_flush_sent_at\": 1592.1, \"stt_provider_first_partial_at\": 2065.6, \"stt_provider_final_at\": 3092.0, \"transcript_final_at\": 3093.2, \"transcript_interim_first_at\": 3093.2, \"turn_committed_at\": 3093.2, \"llm_started_at\": 3100.8, \"tts_stream_started_at\": 3630.6, \"tts_request_started_at\": 3630.9, \"tts_connection_acquired_at\": 3667.9, \"llm_first_delta_at\": 3632.4, \"tts_first_text_sent_at\": 3878.9, \"tts_provider_first_audio_at\": 4200.9, \"agent_audio_playback_done_at\": 6414.5}, \"llm_metrics\": {\"request_id\": \"307ceda9-e322-46ea-9161-c29d76289bfa\", \"ttft_ms\": 531.5902079455554, \"duration_ms\": 780.5462079122663, \"completion_tokens\": 20, \"prompt_tokens\": 21, \"total_tokens\": 41, \"cancelled\": false}, \"session_states\": [\"listening\", \"thinking\", \"speaking\", \"listening\"]}",
+        "speed": 0.7,
+        "mode": "ptt",
+        "input_seconds": 4.205625,
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": 33,
+        "output_bytes": 237440,
+        "elapsed_seconds": 6.417949999915436,
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      },
+      "outcome": "passed",
+      "recognition_finished_to_result_ms": 0.3,
+      "transport_close_ms": 1198.7
+    },
+    {
+      "speed": 1.0,
+      "variant": "stage_owned_cleanup",
+      "trace": [
+        {
+          "event": "recognize_streaming_start",
+          "at_ms": 224.0
+        },
+        {
+          "event": "_handle_task_finished_start",
+          "at_ms": 2172.1
+        },
+        {
+          "event": "_handle_task_finished_end",
+          "at_ms": 2172.1
+        },
+        {
+          "event": "recognize_streaming_end",
+          "at_ms": 2172.4
+        },
+        {
+          "event": "close_start",
+          "at_ms": 2178.2
+        },
+        {
+          "event": "close_end",
+          "at_ms": 3713.4
+        }
+      ],
+      "properties": {
+        "release_to_reply_audio_ms": 2970.3,
+        "committed_user_turns": 1,
+        "captured_audio_bytes": 178560,
+        "ptt_timing": "{\"from_release_ms\": {\"speech_started_at\": -1.2, \"speech_stopped_at\": 0.1, \"stt_stream_started_at\": 3.7, \"stt_ws_connected_at\": 1267.9, \"stt_stream_first_audio_sent_at\": 1268.7, \"stt_flush_sent_at\": 1280.4, \"stt_provider_first_partial_at\": 1658.0, \"stt_provider_final_at\": 1950.4, \"transcript_final_at\": 1951.6, \"transcript_interim_first_at\": 1951.6, \"turn_committed_at\": 1951.6, \"llm_started_at\": 1958.3, \"tts_stream_started_at\": 2301.5, \"tts_request_started_at\": 2301.7, \"tts_connection_acquired_at\": 2341.1, \"llm_first_delta_at\": 2304.2, \"tts_first_text_sent_at\": 2476.4, \"tts_provider_first_audio_at\": 2788.6, \"agent_audio_playback_done_at\": 4390.7}, \"llm_metrics\": {\"request_id\": \"4136182e-3551-4237-8262-500d0259b9b6\", \"ttft_ms\": 345.8751670550555, \"duration_ms\": 520.4662079922855, \"completion_tokens\": 13, \"prompt_tokens\": 21, \"total_tokens\": 34, \"cancelled\": false}, \"session_states\": [\"listening\", \"thinking\", \"speaking\", \"listening\"]}",
+        "speed": 1.0,
+        "mode": "ptt",
+        "input_seconds": 2.948,
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": 23,
+        "output_bytes": 178560,
+        "elapsed_seconds": 4.399765917100012,
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      },
+      "outcome": "passed",
+      "recognition_finished_to_result_ms": 0.3,
+      "transport_close_ms": 1535.2
+    },
+    {
+      "speed": 1.0,
+      "variant": "await_cleanup_before_result",
+      "trace": [
+        {
+          "event": "recognize_streaming_start",
+          "at_ms": 234.1
+        },
+        {
+          "event": "_handle_task_finished_start",
+          "at_ms": 3835.8
+        },
+        {
+          "event": "_handle_task_finished_end",
+          "at_ms": 3835.8
+        },
+        {
+          "event": "close_start",
+          "at_ms": 3836.4
+        },
+        {
+          "event": "close_end",
+          "at_ms": 5024.3
+        },
+        {
+          "event": "recognize_streaming_end",
+          "at_ms": 5025.6
+        }
+      ],
+      "properties": {
+        "release_to_reply_audio_ms": 6056.7,
+        "committed_user_turns": 1,
+        "captured_audio_bytes": 160640,
+        "ptt_timing": "{\"from_release_ms\": {\"speech_started_at\": -1.4, \"speech_stopped_at\": 0.1, \"stt_stream_started_at\": 4.0, \"stt_ws_connected_at\": 2403.5, \"stt_stream_first_audio_sent_at\": 2403.9, \"stt_flush_sent_at\": 2418.0, \"stt_provider_first_partial_at\": 2802.7, \"stt_provider_final_at\": 3604.7, \"transcript_final_at\": 4795.1, \"transcript_interim_first_at\": 4795.1, \"turn_committed_at\": 4795.1, \"llm_started_at\": 4799.6, \"tts_stream_started_at\": 5391.5, \"tts_request_started_at\": 5391.7, \"tts_connection_acquired_at\": 5427.8, \"llm_first_delta_at\": 5392.8, \"tts_first_text_sent_at\": 5599.8, \"tts_provider_first_audio_at\": 5953.8, \"agent_audio_playback_done_at\": 7172.2}, \"llm_metrics\": {\"request_id\": \"4f106727-9168-443e-abed-8ae9671ca25a\", \"ttft_ms\": 593.229291960597, \"duration_ms\": 801.1756248306483, \"completion_tokens\": 13, \"prompt_tokens\": 21, \"total_tokens\": 34, \"cancelled\": false}, \"session_states\": [\"listening\", \"thinking\", \"speaking\", \"listening\"]}",
+        "speed": 1.0,
+        "mode": "ptt",
+        "input_seconds": 2.948,
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": 23,
+        "output_bytes": 160640,
+        "elapsed_seconds": 7.176938000135124,
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      },
+      "outcome": "passed",
+      "recognition_finished_to_result_ms": 1189.8,
+      "transport_close_ms": 1187.9
+    },
+    {
+      "speed": 1.4,
+      "variant": "await_cleanup_before_result",
+      "trace": [
+        {
+          "event": "recognize_streaming_start",
+          "at_ms": 189.1
+        },
+        {
+          "event": "_handle_task_finished_start",
+          "at_ms": 2947.2
+        },
+        {
+          "event": "_handle_task_finished_end",
+          "at_ms": 2947.2
+        },
+        {
+          "event": "close_start",
+          "at_ms": 2947.7
+        },
+        {
+          "event": "close_end",
+          "at_ms": 4144.0
+        },
+        {
+          "event": "recognize_streaming_end",
+          "at_ms": 4145.0
+        }
+      ],
+      "properties": {
+        "release_to_reply_audio_ms": 5131.9,
+        "committed_user_turns": 1,
+        "captured_audio_bytes": 176000,
+        "ptt_timing": "{\"from_release_ms\": {\"speech_started_at\": -0.4, \"speech_stopped_at\": 0.0, \"stt_stream_started_at\": 1.6, \"stt_ws_connected_at\": 1578.7, \"stt_stream_first_audio_sent_at\": 1579.3, \"stt_flush_sent_at\": 1589.7, \"stt_provider_first_partial_at\": 2046.0, \"stt_provider_final_at\": 2758.9, \"transcript_final_at\": 3957.6, \"transcript_interim_first_at\": 3957.6, \"turn_committed_at\": 3957.6, \"llm_started_at\": 3964.8, \"tts_stream_started_at\": 4389.4, \"tts_request_started_at\": 4389.5, \"tts_connection_acquired_at\": 4426.9, \"llm_first_delta_at\": 4391.6, \"tts_first_text_sent_at\": 4633.7, \"tts_provider_first_audio_at\": 4957.2, \"agent_audio_playback_done_at\": 6516.6}, \"llm_metrics\": {\"request_id\": \"108fb951-2d95-4030-99c6-6c4abd6add01\", \"ttft_ms\": 426.8462909385562, \"duration_ms\": 671.2617080193013, \"completion_tokens\": 15, \"prompt_tokens\": 21, \"total_tokens\": 36, \"cancelled\": false}, \"session_states\": [\"listening\", \"thinking\", \"speaking\", \"listening\"]}",
+        "speed": 1.4,
+        "mode": "ptt",
+        "input_seconds": 2.10325,
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": 25,
+        "output_bytes": 176000,
+        "elapsed_seconds": 6.523647249909118,
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      },
+      "outcome": "passed",
+      "recognition_finished_to_result_ms": 1197.8,
+      "transport_close_ms": 1196.3
+    },
+    {
+      "speed": 1.4,
+      "variant": "stage_owned_cleanup",
+      "trace": [
+        {
+          "event": "recognize_streaming_start",
+          "at_ms": 240.4
+        },
+        {
+          "event": "_handle_task_finished_start",
+          "at_ms": 1932.0
+        },
+        {
+          "event": "_handle_task_finished_end",
+          "at_ms": 1932.0
+        },
+        {
+          "event": "recognize_streaming_end",
+          "at_ms": 1932.3
+        },
+        {
+          "event": "close_start",
+          "at_ms": 1939.3
+        },
+        {
+          "event": "close_end",
+          "at_ms": 3105.8
+        }
+      ],
+      "properties": {
+        "release_to_reply_audio_ms": 2905.6,
+        "committed_user_turns": 1,
+        "captured_audio_bytes": 240000,
+        "ptt_timing": "{\"from_release_ms\": {\"speech_started_at\": -0.9, \"speech_stopped_at\": 0.1, \"stt_stream_started_at\": 3.6, \"stt_ws_connected_at\": 1245.4, \"stt_stream_first_audio_sent_at\": 1245.8, \"stt_flush_sent_at\": 1255.0, \"stt_provider_first_partial_at\": 1601.9, \"stt_provider_final_at\": 1693.9, \"transcript_final_at\": 1695.1, \"transcript_interim_first_at\": 1695.1, \"turn_committed_at\": 1695.1, \"llm_started_at\": 1702.8, \"tts_stream_started_at\": 2213.9, \"tts_request_started_at\": 2214.0, \"tts_connection_acquired_at\": 2251.8, \"llm_first_delta_at\": 2217.0, \"tts_first_text_sent_at\": 2424.1, \"tts_provider_first_audio_at\": 2735.3, \"agent_audio_playback_done_at\": 4878.7}, \"llm_metrics\": {\"request_id\": \"5530a912-4e2d-44ad-9f26-812b07d999cc\", \"ttft_ms\": 514.2972089815885, \"duration_ms\": 724.5327499695122, \"completion_tokens\": 18, \"prompt_tokens\": 21, \"total_tokens\": 39, \"cancelled\": false}, \"session_states\": [\"listening\", \"thinking\", \"speaking\", \"listening\"]}",
+        "speed": 1.4,
+        "mode": "ptt",
+        "input_seconds": 2.10325,
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": 34,
+        "output_bytes": 240000,
+        "elapsed_seconds": 4.882555042160675,
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      },
+      "outcome": "passed",
+      "recognition_finished_to_result_ms": 0.3,
+      "transport_close_ms": 1166.5
+    }
+  ],
+  "comparison_method": "Existing test_real_speech_to_real_reply with real configured Bailian ASR/TTS and direct LLM, generic normal_ask_intro.wav, ffmpeg atempo .7/1/1.4, brief instruction and explicit experimental 96-token cap. Same updated code for both variants: a test-process wrapper restores waiting for stream cleanup before returning text in the synchronous control. This is not a separate historical production checkout run. Order alternates for normal speed. Actual SDK/production PTT pipeline and memory sink.",
+  "interpretation": "All six real service runs passed their transcription, reply-audio and usage assertions. Task-finished to returned text is 1189.8-1197.8 ms in synchronous controls and 0.3 ms in all three updated runs. WebSocket close still takes 1166.5-1535.2 ms in updated runs and is awaited by lifecycle. This supports removing the measured cleanup dependency, not reducing the recognition or network duration.",
+  "measurement_limits": [
+    "Each speed/variant once, no P95 or production SLO; total release-to-first-audible differences include cloud variability.",
+    "Local regressions were running during some provider calls; do not interpret end-to-end differences as a strictly isolated performance benchmark.",
+    "Real service reply sink is in memory, not RTC/speaker. Full-duplex EOT/intent defects remain unresolved.",
+    "The prior PTT 45-second whole-reply timeout is not claimed fixed by this change."
+  ],
+  "artifacts": {
+    "real_runner": "/tmp/eidolon_phase14_ptt_compare.py",
+    "real_log": "/tmp/phase14-ptt-compare.log",
+    "real_runner_sha256": "c530e44e30396c4fceeb363b8215320dd45b6627af0d85940f6cb123aa215a26"
+  },
+  "checks": {
+    "ruff": "passed for four changed Python files",
+    "git_diff_check": "passed",
+    "deployment": "not committed or deployed",
+    "sdk_integrity": {
+      "version": "1.7.1",
+      "checked_python_files": 207,
+      "mismatches": []
+    }
+  },
+  "streaming_modes_regression": {
+    "source": "/tmp/phase14-streaming-modes.xml",
+    "counts": {
+      "passed": 48,
+      "failed": 0,
+      "xfail": 6,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[fast-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[fast-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[slow-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[slow-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_words-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_words-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_interims-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_interims-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[self_correction-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[self_correction-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[hesitation-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[hesitation-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[short_answer-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[short_answer-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[single_digit-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[single_digit-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_number-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_number-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[english-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[english-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[mixed_language-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[mixed_language-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[quoted_command-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[quoted_command-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[negated_command-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[negated_command-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_clause-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_clause-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[within_turn_pause-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[within_turn_pause-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[late_final-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[late_final-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_welcome_inherits_interruption_owner[full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_welcome_inherits_interruption_owner[half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_brief_noise_during_reply_does_not_destroy_output[full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_brief_noise_during_reply_does_not_destroy_output[half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u597d\\u7684-False]",
+        "outcome": "xfail",
+        "reason": "EOT completeness is still used as interruption intent; see execution report FD-INTENT"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-False]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+        "outcome": "xfail",
+        "reason": "Negated commands need intent evidence independent of EOT; see FD-INTENT"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+        "outcome": "xfail",
+        "reason": "Low EOT corrective interruption is not recognized; see FD-INTENT"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u505c-True]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[\\u597d-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[\\u597d-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[7-full_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[7-half_duplex]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-full_duplex-none]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-full_duplex-llm]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-half_duplex-none]",
+        "outcome": "passed",
+        "reason": null
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+        "outcome": "xfail",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+        "outcome": "xfail",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+        "outcome": "xfail",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+      }
+    ]
+  }
+}

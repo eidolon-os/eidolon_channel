@@ -30,6 +30,18 @@ class FullDuplexSessionLifecycle:
     def __init__(self, pipeline: StreamingPipeline) -> None:
         self._pipeline = pipeline
 
+    def bind_session(self, session: Any) -> None:
+        """Bind production callbacks to either RoomIO or in-memory session IO."""
+        pipeline = self._pipeline
+        pipeline._session = session
+
+        session.on("user_state_changed", pipeline._on_user_state_changed)
+        session.on("agent_state_changed", pipeline._on_agent_state_changed)
+        session.on("user_input_transcribed", pipeline._on_user_transcribed)
+        session.on("user_transcription_timeout", pipeline._on_user_transcription_timeout)
+        session.on("error", pipeline._on_session_error)
+        session.on("close", self._on_session_close)
+
     async def run(self, room: Room) -> None:
         """Start the full-duplex pipeline and block until the session closes."""
         from livekit.agents.voice import AgentSession
@@ -54,14 +66,7 @@ class FullDuplexSessionLifecycle:
             aec_warmup_duration=pipeline._aec_warmup_duration,
             transcription_timeout=pipeline._stt_commit_transcript_timeout,
         )
-        pipeline._session = session
-
-        session.on("user_state_changed", pipeline._on_user_state_changed)
-        session.on("agent_state_changed", pipeline._on_agent_state_changed)
-        session.on("user_input_transcribed", pipeline._on_user_transcribed)
-        session.on("user_transcription_timeout", pipeline._on_user_transcription_timeout)
-        session.on("error", pipeline._on_session_error)
-        session.on("close", self._on_session_close)
+        self.bind_session(session)
 
         room.on("disconnected", self._on_room_disconnected)
 
@@ -397,7 +402,7 @@ class FullDuplexSessionLifecycle:
             len(text),
         )
         pipeline._mark_activity()
-        session.say(text, allow_interruptions=True)
+        session.say(text)
 
     def _stop_proactive_consumer(self) -> None:
         pipeline = self._pipeline
@@ -411,6 +416,8 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         logger.info("[StreamingPipeline] shutting down")
         self._stop_proactive_consumer()
+        if hasattr(pipeline, "_semantic_interrupts"):
+            await pipeline._semantic_interrupts.aclose()
         if hasattr(pipeline, "_interruption_effects"):
             pipeline._interruption_effects.cancel_soft_interrupt()
             pipeline._interruption_effects.cancel_stable_signal_timer()

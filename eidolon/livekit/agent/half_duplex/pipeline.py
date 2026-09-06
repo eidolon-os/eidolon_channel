@@ -143,16 +143,23 @@ class HalfDuplexPttPipeline(BasePipeline):
             welcome_message=self._welcome_message,
         )
 
-    async def run(self, room: Room) -> None:
-        from livekit.agents.voice import Agent, AgentSession
-        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
+    @staticmethod
+    def _build_turn_handling() -> dict[str, Any]:
+        # Button release is the only commit boundary; button press explicitly
+        # preempts with force=True. Ambient speech has no control authority.
+        return {
+            "turn_detection": "manual",
+            "interruption": {"enabled": False, "resume_false_interruption": False},
+        }
 
-        logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
-        self._room = room
-        self._started = True
-        self._install_room_observers(room)
-        await self._warmup_stages()
-        self._provider_events.install_all()
+    def _bind_session(self, session: Any) -> None:
+        self._session = session
+        session.on("agent_state_changed", self._on_agent_state_changed)
+        session.on("error", self._on_session_error)
+        session.on("close", self._on_session_close)
+
+    def _build_agent(self):
+        from livekit.agents.voice import Agent
 
         pipeline = self
 
@@ -169,20 +176,30 @@ class HalfDuplexPttPipeline(BasePipeline):
                     "[HalfDuplexPttPipeline] welcome on_enter room=%s",
                     getattr(pipeline._room, "name", ""),
                 )
-                self.session.say(welcome, allow_interruptions=True)
+                self.session.say(welcome)
 
-        session = AgentSession()
-        self._session = session
-        session.on("agent_state_changed", self._on_agent_state_changed)
-        session.on("error", self._on_session_error)
-        session.on("close", self._on_session_close)
+        return PttAgent(
+            instructions=self._instructions,
+            llm=self._factory.llm.llm,
+            tts=self._factory.tts.tts,
+        )
+
+    async def run(self, room: Room) -> None:
+        from livekit.agents.voice import AgentSession
+        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
+
+        logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
+        self._room = room
+        self._started = True
+        self._install_room_observers(room)
+        await self._warmup_stages()
+        self._provider_events.install_all()
+
+        session = AgentSession(turn_handling=self._build_turn_handling())
+        self._bind_session(session)
 
         await session.start(
-            agent=PttAgent(
-                instructions=self._instructions,
-                llm=self._factory.llm.llm,
-                tts=self._factory.tts.tts,
-            ),
+            agent=self._build_agent(),
             room=room,
             room_options=RoomOptions(
                 audio_input=False,

@@ -1,0 +1,822 @@
+{
+  "scope": "Audit of accumulated ownership/lifecycle changes; reuse existing mode policy and short EOT cache. No new hotword table, timer, endpoint engine or YAML setting.",
+  "owner_before": {
+    "counts": {
+      "failed": 3,
+      "passed": 2
+    },
+    "groups": {
+      "eidolon.livekit.tests.agent.test_interrupt_model_config": {
+        "failed": 3,
+        "passed": 2
+      }
+    },
+    "cases": [
+      {
+        "case": "test_native_interruption_owner_does_not_construct_channel_classifier",
+        "status": "failed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[full_duplex-channel-llm-True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[half_duplex-channel-llm-False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[full_duplex-livekit_native_adaptive-llm-False]",
+        "status": "failed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[full_duplex-channel-none-False]",
+        "status": "failed"
+      }
+    ]
+  },
+  "consumer_validation_before": {
+    "counts": {
+      "passed": 2,
+      "failed": 1
+    },
+    "groups": {
+      "eidolon.livekit.tests.agent.test_interrupt_model_config": {
+        "passed": 2,
+        "failed": 1
+      }
+    },
+    "cases": [
+      {
+        "case": "test_direct_model_requirement_follows_actual_consumer[channel-eidolon_agent-True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_direct_model_requirement_follows_actual_consumer[livekit_native_adaptive-eidolon_agent-False]",
+        "status": "failed"
+      },
+      {
+        "case": "test_direct_model_requirement_follows_actual_consumer[livekit_native_adaptive-direct_llm-True]",
+        "status": "passed"
+      }
+    ]
+  },
+  "cache_before": {
+    "counts": {
+      "failed": 2
+    },
+    "groups": {
+      "eidolon.livekit.tests.eot.test_eot_model": {
+        "failed": 2
+      }
+    },
+    "cases": [
+      {
+        "case": "test_slow_inference_is_shared_by_asr_and_endpoint_within_cache_window",
+        "status": "failed"
+      },
+      {
+        "case": "test_eot_cache_expiry_uses_elapsed_time_even_if_wall_clock_moves_back",
+        "status": "failed"
+      }
+    ]
+  },
+  "regression_after": {
+    "counts": {
+      "passed": 1006,
+      "skipped": 2,
+      "xfail": 11
+    },
+    "groups": {
+      "eidolon.livekit.tests.agent.runtime.test_channel_contexts": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.runtime.test_eidolon_data_resolve": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.runtime.test_factory_session_identity": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.runtime.test_grpc_llm_callable_token": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.runtime.test_kernel_body_client": {
+        "passed": 6,
+        "skipped": 2
+      },
+      "eidolon.livekit.tests.agent.runtime.test_resolver": {
+        "passed": 13
+      },
+      "eidolon.livekit.tests.agent.runtime.test_runtime_services": {
+        "passed": 1
+      },
+      "eidolon.livekit.tests.agent.test_agent_echo_suppression": {
+        "passed": 20
+      },
+      "eidolon.livekit.tests.agent.test_agent_output_coordinator": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_agent_state_effect_handler": {
+        "passed": 11
+      },
+      "eidolon.livekit.tests.agent.test_async_interrupt_intent": {
+        "passed": 16
+      },
+      "eidolon.livekit.tests.agent.test_attention_admission": {
+        "passed": 39
+      },
+      "eidolon.livekit.tests.agent.test_attention_effect_handler": {
+        "passed": 15
+      },
+      "eidolon.livekit.tests.agent.test_avatar": {
+        "passed": 16
+      },
+      "eidolon.livekit.tests.agent.test_avatar_face_source": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_cancel_drops_buffer": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_cancelled_resets_on_new_turn": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.test_channel_turn_events": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_cjk_fast_lane_rejected_regression": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.test_client_audio_state_contract": {
+        "passed": 18
+      },
+      "eidolon.livekit.tests.agent.test_client_control_helpers": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_commit_guard": {
+        "passed": 26
+      },
+      "eidolon.livekit.tests.agent.test_context_error_notify": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.agent.test_conversation_end_signal": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_decision_effect_applier": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_duck_suspend_timeout_handler": {
+        "passed": 10
+      },
+      "eidolon.livekit.tests.agent.test_ducking_mixer": {
+        "passed": 23
+      },
+      "eidolon.livekit.tests.agent.test_ducking_played_seconds": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_eidolon_agent_grpc_llm": {
+        "passed": 29
+      },
+      "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract": {
+        "xfail": 11,
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_eot_session_isolation": {
+        "passed": 1
+      },
+      "eidolon.livekit.tests.agent.test_false_interrupt_no_evidence_resume": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_first_signal_trigger": {
+        "passed": 22
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_client_audio": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_explicit_client_preempt": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_output_flow": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_playback_turn_evidence": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_semantic_interrupt_gate": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle": {
+        "passed": 12
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_state_machine": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_transcript_admission": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_transcript_event": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_transcript_handler": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_turn_completion_policy": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_user_state_event": {
+        "passed": 4
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_user_state_handler": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_voiceprint_commit_state": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_half_duplex_ptt_segment_mode": {
+        "passed": 31
+      },
+      "eidolon.livekit.tests.agent.test_half_duplex_streaming_barge_in": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_idle_watchdog": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_idle_watchdog_controller": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.test_integration_package": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.agent.test_interaction_mode": {
+        "passed": 27
+      },
+      "eidolon.livekit.tests.agent.test_interrupt_decider": {
+        "passed": 54
+      },
+      "eidolon.livekit.tests.agent.test_interrupt_force": {
+        "passed": 4
+      },
+      "eidolon.livekit.tests.agent.test_interrupt_model_config": {
+        "passed": 18
+      },
+      "eidolon.livekit.tests.agent.test_interrupted_context": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.agent.test_interrupted_context_manager": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_interrupted_context_pushed_text": {
+        "passed": 11
+      },
+      "eidolon.livekit.tests.agent.test_interruption_orchestrator": {
+        "passed": 20
+      },
+      "eidolon.livekit.tests.agent.test_interruption_owner_profile": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_output_ducking_controller": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_output_lifecycle_races": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_output_package": {
+        "passed": 1
+      },
+      "eidolon.livekit.tests.agent.test_phase0b_triage_locks": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_preemptive_warmer": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.test_proactive_subscriber": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.agent.test_proactive_welcome_suppression": {
+        "passed": 4
+      },
+      "eidolon.livekit.tests.agent.test_provider_event_observer": {
+        "passed": 15
+      },
+      "eidolon.livekit.tests.agent.test_reply_latency_measurement": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.agent.test_room_data_handler": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_semantic_interrupt_handler": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_server_logging": {
+        "passed": 3
+      },
+      "eidolon.livekit.tests.agent.test_server_session_metadata": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_server_worker_options": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.test_session_close_teardown": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_session_metadata_bus_matrix": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.agent.test_session_signal_bridge": {
+        "passed": 4
+      },
+      "eidolon.livekit.tests.agent.test_soft_interrupt_controller": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.agent.test_speaker_verification": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.agent.test_stable_signal_recheck": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.agent.test_state_mirror": {
+        "passed": 5
+      },
+      "eidolon.livekit.tests.agent.test_streaming_pipeline_init": {
+        "passed": 1
+      },
+      "eidolon.livekit.tests.agent.test_timeline": {
+        "passed": 42
+      },
+      "eidolon.livekit.tests.agent.test_transcript_evidence": {
+        "passed": 22
+      },
+      "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_transcript_recorder": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.agent.test_turn_decision_architecture": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_turn_handling_config": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_turn_policy_runtime": {
+        "passed": 23
+      },
+      "eidolon.livekit.tests.agent.test_user_turn_coordinator": {
+        "passed": 19
+      },
+      "eidolon.livekit.tests.agent.test_voiceprint_turn_observer": {
+        "passed": 8
+      },
+      "eidolon.livekit.tests.eot.test_eot_model": {
+        "passed": 21
+      },
+      "eidolon.livekit.tests.eot.test_eot_policies": {
+        "passed": 15
+      },
+      "eidolon.livekit.tests.eot.test_eot_scoring": {
+        "passed": 18
+      },
+      "eidolon.livekit.tests.eot.test_streaming_score_cadence": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.common.test_config_sanitization": {
+        "passed": 1
+      },
+      "eidolon.livekit.tests.common.test_effective_config": {
+        "passed": 17
+      },
+      "eidolon.livekit.tests.common.test_llm_config.TestOptionalParsers": {
+        "passed": 4
+      },
+      "eidolon.livekit.tests.common.test_llm_config.TestLLMConfigDefaults": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.common.test_token": {
+        "passed": 1
+      }
+    },
+    "cases": [
+      {
+        "case": "test_consumed_shape_matches_kernel_normative_body_endpoint_schema",
+        "status": "skipped"
+      },
+      {
+        "case": "test_the_derived_endpoint_id_this_consumer_composes_matches_the_producer",
+        "status": "skipped"
+      },
+      {
+        "case": "test_runtime_services_cache_one_context_and_close_once",
+        "status": "passed"
+      },
+      {
+        "case": "test_complete_utterance_clears_framework_eot_threshold[\\u4e0d\\u8981\\u8bb2\\u4e86]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_complete_utterance_clears_framework_eot_threshold[\\u6362\\u4e2a\\u8bdd\\u9898\\u5427]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_complete_utterance_clears_framework_eot_threshold[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_complete_utterance_clears_framework_eot_threshold[\\u5c31\\u8fd9\\u6837\\u5427]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_livekit_session_commits_complete_turn_within_hard_slo",
+        "status": "xfail"
+      },
+      {
+        "case": "test_playback_interruption_semantics_do_not_depend_on_eot_completeness[hard_stop_short]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_playback_interruption_semantics_do_not_depend_on_eot_completeness[hard_stop_phrase]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_playback_interruption_semantics_do_not_depend_on_eot_completeness[topic_switch]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_playback_interruption_semantics_do_not_depend_on_eot_completeness[correction]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_playback_interruption_semantics_do_not_depend_on_eot_completeness[backchannel]",
+        "status": "xfail"
+      },
+      {
+        "case": "test_final_transcript_hold_cannot_extend_duck_to_six_seconds",
+        "status": "xfail"
+      },
+      {
+        "case": "test_disabled_intent_does_not_construct_llm",
+        "status": "passed"
+      },
+      {
+        "case": "test_native_interruption_owner_does_not_construct_channel_classifier",
+        "status": "passed"
+      },
+      {
+        "case": "test_direct_model_requirement_follows_actual_consumer[channel-eidolon_agent-True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_direct_model_requirement_follows_actual_consumer[livekit_native_adaptive-eidolon_agent-False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_direct_model_requirement_follows_actual_consumer[livekit_native_adaptive-direct_llm-True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_enabled_intent_reuses_adapter_with_bounded_request_and_closes",
+        "status": "passed"
+      },
+      {
+        "case": "test_invalid_intent_policy_rejected[kwargs0]",
+        "status": "passed"
+      },
+      {
+        "case": "test_invalid_intent_policy_rejected[kwargs1]",
+        "status": "passed"
+      },
+      {
+        "case": "test_invalid_intent_policy_rejected[kwargs2]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_preserves_eot_probability_after_settlement",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_adapter_preserves_existing_endpointing_bounds[False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_adapter_preserves_existing_endpointing_bounds[True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_warmup_is_stateless_and_bounded",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[full_duplex-channel-llm-True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[half_duplex-channel-llm-False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[full_duplex-livekit_native_adaptive-llm-False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_stage_and_endpoint_adapter_follow_policy_owner[full_duplex-channel-none-False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_llm_transport_body_reuses_native_adapter",
+        "status": "passed"
+      },
+      {
+        "case": "test_voiceprint_turn_observer_reuses_accept_cache_for_short_turn",
+        "status": "passed"
+      },
+      {
+        "case": "test_voiceprint_accept_cache_short_audio_window_is_configurable",
+        "status": "passed"
+      },
+      {
+        "case": "test_slow_inference_is_shared_by_asr_and_endpoint_within_cache_window",
+        "status": "passed"
+      },
+      {
+        "case": "test_eot_cache_expiry_uses_elapsed_time_even_if_wall_clock_moves_back",
+        "status": "passed"
+      }
+    ]
+  },
+  "behavior_after": {
+    "counts": {
+      "passed": 76,
+      "xfail": 3
+    },
+    "groups": {
+      "eidolon.livekit.tests.scenarios.test_human_speaking": {
+        "passed": 38,
+        "xfail": 3
+      },
+      "eidolon.livekit.tests.scenarios.test_human_ptt": {
+        "passed": 17
+      },
+      "eidolon.livekit.tests.scenarios.test_interrupt_model_timing": {
+        "passed": 18
+      },
+      "eidolon.livekit.tests.scenarios.test_complete_turn_latency": {
+        "passed": 3
+      }
+    },
+    "cases": [
+      {
+        "case": "test_overlap_intent_contract[\\u597d\\u7684-False]",
+        "status": "xfail",
+        "properties": {
+          "expected_interrupt": "False",
+          "observed_interrupt": "True",
+          "output_state": "NORMAL"
+        }
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+        "status": "xfail",
+        "properties": {
+          "expected_interrupt": "False",
+          "observed_interrupt": "True",
+          "output_state": "NORMAL"
+        }
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+        "status": "xfail",
+        "properties": {
+          "expected_interrupt": "True",
+          "observed_interrupt": "False",
+          "output_state": "NORMAL"
+        }
+      },
+      {
+        "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+        "status": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "783.1",
+          "complete_to_reply_audio_ms": "659.1",
+          "budget_ms": "1000"
+        }
+      },
+      {
+        "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+        "status": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "768.9",
+          "complete_to_reply_audio_ms": "655.4",
+          "budget_ms": "1000"
+        }
+      },
+      {
+        "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+        "status": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "843.6",
+          "complete_to_reply_audio_ms": "727.6",
+          "budget_ms": "1500"
+        }
+      }
+    ]
+  },
+  "real_intent_model_after": {
+    "counts": {
+      "passed": 12
+    },
+    "groups": {
+      "eidolon.livekit.tests.scenarios.test_model_overlap": {
+        "passed": 12
+      }
+    },
+    "cases": [
+      {
+        "case": "test_real_model_overlap_effects[\\u597d\\u7684-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-reply]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "reply",
+          "interrupted": "True",
+          "output_state": "CANCELLED",
+          "intent": "InterruptIntent.NORMAL_INTERRUPT"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u505c-stop]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "stop",
+          "interrupted": "True",
+          "output_state": "CANCELLED",
+          "intent": "InterruptIntent.HARD_STOP"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u4e0d\\u7528\\u56de\\u7b54\\u6211\\u521a\\u521a\\u7684\\u95ee\\u9898\\uff0c\\u7ee7\\u7eed\\u4f60\\u539f\\u6765\\u8bb2\\u7684-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u4ed6\\u8bf4\\u4e0d\\u8981\\u8bb2\\u4e86\\uff0c\\u4f46\\u6211\\u8fd8\\u60f3\\u542c\\u4f60\\u7ee7\\u7eed\\u89e3\\u91ca-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u5148\\u4e0d\\u8bb2\\u80cc\\u666f\\uff0c\\u544a\\u8bc9\\u6211\\u8d39\\u7528-reply]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "reply",
+          "interrupted": "True",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.NORMAL_INTERRUPT"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u6211\\uff0c\\u6211\\u60f3\\u95ee\\u7684\\u662f\\uff0c\\u8fd9\\u4e2a\\u65b9\\u6848\\u6bcf\\u4e2a\\u6708\\u8981\\u82b1\\u591a\\u5c11\\u94b1\\uff1f-reply]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "reply",
+          "interrupted": "True",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.NORMAL_INTERRUPT"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u5443\\u2026\\u2026\\u55ef\\uff0c\\u660e\\u767d\\u4e86\\uff0c\\u4f60\\u63a5\\u7740\\u8bf4-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u4e0d\\u662f\\u8ba9\\u4f60\\u505c\\uff0c\\u6211\\u662f\\u8bf4\\u8fd9\\u4e2a\\u8bcd\\u53eb stop\\uff0c\\u63a5\\u7740\\u89e3\\u91ca\\u5427-resume]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "resume",
+          "interrupted": "False",
+          "output_state": "NORMAL",
+          "intent": "InterruptIntent.BACKCHANNEL"
+        }
+      },
+      {
+        "case": "test_real_model_overlap_effects[\\u7b49\\u7b49\\uff0c\\u5148\\u522b\\u8bf4\\u4e86\\uff0c\\u6211\\u9700\\u8981\\u60f3\\u4e00\\u60f3-stop]",
+        "status": "passed",
+        "properties": {
+          "expected_action": "stop",
+          "interrupted": "True",
+          "output_state": "CANCELLED",
+          "intent": "InterruptIntent.HARD_STOP"
+        }
+      }
+    ]
+  },
+  "model_test_boundary": "Real configured intent LLM, local EOT and LiveKit SDK with production stage warmup. Scripted ASR/VAD/reply LLM/TTS, memory PCM output; not real ASR/RTC/device or Agent RPC acceptance.",
+  "local_eot_profile": {
+    "scope": "Three local ONNX scoring cycles; model loading excluded, first cycle may be cold. Not user stop-to-audio latency or a before/after service comparison.",
+    "cycles": [
+      {
+        "text": "帮我详细介绍一下这个方案。",
+        "asr_scoring_ms": 4.599,
+        "immediate_endpoint_scoring_ms": 0.023,
+        "backend_calls": 1,
+        "score": 0.9197000917949641
+      },
+      {
+        "text": "关于这个方案，我还没有说完",
+        "asr_scoring_ms": 3.165,
+        "immediate_endpoint_scoring_ms": 0.013,
+        "backend_calls": 1,
+        "score": 0.1596520154000531
+      },
+      {
+        "text": "不是，我说的是明天",
+        "asr_scoring_ms": 2.353,
+        "immediate_endpoint_scoring_ms": 0.008,
+        "backend_calls": 1,
+        "score": 0.11818541370934937
+      }
+    ],
+    "physical_inferences": [
+      {
+        "text": "帮我详细介绍一下这个方案。",
+        "inference_ms": 4.581
+      },
+      {
+        "text": "关于这个方案，我还没有说完",
+        "inference_ms": 3.151
+      },
+      {
+        "text": "不是，我说的是明天",
+        "inference_ms": 2.344
+      }
+    ]
+  },
+  "rpc_availability": {
+    "checked_at": "2026-09-05T15:33:12.216192+00:00",
+    "scope": "TCP availability only; no application messages sent",
+    "services": [
+      {
+        "service": "Agent RPC",
+        "host": "127.0.0.1",
+        "port": 45051,
+        "tcp_status": "ConnectionRefusedError"
+      },
+      {
+        "service": "Kernel",
+        "host": "127.0.0.1",
+        "port": 8083,
+        "tcp_status": "ConnectionRefusedError"
+      },
+      {
+        "service": "Data",
+        "host": "127.0.0.1",
+        "port": 8084,
+        "tcp_status": "ConnectionRefusedError"
+      }
+    ]
+  },
+  "checks": {
+    "ruff": "passed",
+    "git_diff_check": "passed"
+  },
+  "limitations": "No before/after real stop-to-reply-audio speedup claim. Preserve existing expected failures. Agent RPC/RTC/device path still unverified."
+}

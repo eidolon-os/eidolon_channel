@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -11,6 +12,7 @@ from eidolon.livekit.agent.output import DuckingStats
 from eidolon.livekit.agent.turn_policy import (
     Decision,
     InterruptIntent,
+    InterruptIntentResult,
     TurnPolicyRuntime,
 )
 
@@ -41,6 +43,10 @@ class SemanticInterruptHandler:
         interrupt_current_turn: Callable[[], None],
         enter_soft_interrupt: Callable[[], None],
         decide_from_transcript: Callable[..., Decision] | None = None,
+        intent_classifier: Any = None,
+        get_candidate_scope: Callable[[], Any] = lambda: None,
+        get_final_transcript: Callable[[], str] = lambda: "",
+        get_assistant_text: Callable[[], str] = lambda: "",
     ) -> None:
         self._get_eot_model = get_eot_model
         self._turn_runtime = turn_runtime
@@ -54,9 +60,46 @@ class SemanticInterruptHandler:
         self._interrupt_current_turn = interrupt_current_turn
         self._enter_soft_interrupt = enter_soft_interrupt
         self._decide_from_transcript = decide_from_transcript or turn_runtime.decide_from_transcript
+        self._intent_classifier = intent_classifier
+        self._get_candidate_scope = get_candidate_scope
+        self._get_final_transcript = get_final_transcript
+        self._get_assistant_text = get_assistant_text
+        self._intent_task: asyncio.Task | None = None
+        self._intent_tasks: set[asyncio.Task] = set()
+        self._intent_key: Any = None
+        self._intent_result: InterruptIntentResult | None = None
+        self._closed = False
+
+    @property
+    def uses_model_intent(self) -> bool:
+        return self._turn_runtime.config.interrupt.intent_provider == "llm"
+
+    async def wait_for_pending_intent(self) -> None:
+        # Endpointing cancellation must not cancel the candidate's shared
+        # inference. A revised final owns a new task and its own timeout.
+        # Superseded candidates must not delay the current endpoint.
+        task = self._intent_task
+        if task is not None and not task.done() and self._owns_current_candidate(self._intent_key):
+            await asyncio.shield(task)
+
+    def _owns_current_candidate(self, key: Any) -> bool:
+        return (
+            key is not None and not self._closed and self._intent_key == key
+            and self._get_candidate_scope() == key[0]
+            and self._get_final_transcript() == key[1]
+            and self._get_duck_active()
+        )
+
+    async def aclose(self) -> None:
+        self._closed = True
+        tasks = list(self._intent_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._intent_task = None
 
     def run(self, text: str, *, is_final: bool = False) -> None:
-        """Run the synchronous EOT semantic check for one transcript update."""
+        """Route one transcript through the configured interruption evidence path."""
         if not text or not text.strip():
             return
 
@@ -65,11 +108,10 @@ class SemanticInterruptHandler:
         vad_active = self._get_vad_active()
         score = eot_model.current_eot_score
 
-        should_cut = eot_model.should_interrupt(
-            text,
-            vad_active=vad_active,
-            is_final=is_final,
-        )
+        if self.uses_model_intent:
+            if duck_active and not self._closed:
+                self._handle_model_intent(text, score=score, vad_active=vad_active, is_final=is_final)
+            return
 
         if duck_active:
             self._handle_duck_active(
@@ -79,6 +121,16 @@ class SemanticInterruptHandler:
                 is_final=is_final,
             )
             return
+
+        # The suspended-output path already has a policy owner. Legacy EOT
+        # evaluation can mutate its score and cooldown, so run it only where
+        # its verdict is actually consumed.
+        should_cut = eot_model.should_interrupt(
+            text,
+            vad_active=vad_active,
+            is_final=is_final,
+        )
+        score = eot_model.current_eot_score
 
         if self._handle_fallback_semantic(
             text,
@@ -97,16 +149,52 @@ class SemanticInterruptHandler:
 
         if should_cut:
             self._handle_fallback_eot_score(
-                text,
-                score=score,
-                vad_active=vad_active,
+                text, score=score, vad_active=vad_active,
                 hard_threshold=eot_model.hard_interrupt_score_threshold,
             )
         else:
-            logger.info(
-                "[SemanticInterruptHandler] EOT: should_interrupt=False, text=%r",
-                text[:80],
+            logger.info("[SemanticInterruptHandler] EOT: should_interrupt=False, text=%r", text[:80])
+
+    def _handle_model_intent(self, text: str, *, score: float, vad_active: bool, is_final: bool) -> None:
+        scope = self._get_candidate_scope()
+        if scope is None:
+            return
+        key = (scope, text)
+        if key != self._intent_key:
+            if self._intent_task is not None:
+                self._intent_task.cancel()
+            self._intent_key = key
+            self._intent_result = None
+            self._intent_task = None
+        if is_final and self._intent_task is None and self._intent_result is None:
+            self._intent_task = asyncio.create_task(
+                self._classify_final(key, text, self._get_assistant_text()),
+                name="interrupt_intent",
             )
+            self._intent_tasks.add(self._intent_task)
+            self._intent_task.add_done_callback(self._intent_tasks.discard)
+        decision = self._decide_from_transcript(
+            text, score, vad_active=vad_active, agent_speaking=True,
+            is_final=is_final, intent_result=self._intent_result,
+        )
+        self._apply_decision(decision, transcript=text, vad_active=vad_active, eot_score=score)
+
+    async def _classify_final(self, key: Any, text: str, assistant_text: str) -> None:
+        try:
+            timeout = max(.001, self._turn_runtime.config.interrupt.intent_timeout_ms / 1000)
+            async with asyncio.timeout(timeout):
+                result = await self._intent_classifier.classify(text, assistant_text=assistant_text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[SemanticInterruptHandler] intent unavailable: %s", type(exc).__name__)
+            result = InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, "unavailable", type(exc).__name__)
+        # Cancellation alone is insufficient: a provider can finish after
+        # supersession. Recheck the acoustic generation, response and final text.
+        if not self._owns_current_candidate(key):
+            return
+        self._intent_result = result
+        self.run(text, is_final=True)
 
     def _handle_duck_active(
         self,

@@ -1,0 +1,285 @@
+{
+  "layer": "model admission experiment only; fresh client each case, default thinking",
+  "counts": {
+    "passed": 9,
+    "failed": 11,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_configured_llm_interrupt_intent[acknowledgement]",
+      "seconds": 1.42,
+      "status": "failed",
+      "properties": {
+        "text": "好的",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1303.4",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[encouragement]",
+      "seconds": 1.126,
+      "status": "failed",
+      "properties": {
+        "text": "嗯嗯你继续",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1112.6",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[negated_stop]",
+      "seconds": 1.04,
+      "status": "failed",
+      "properties": {
+        "text": "不要停止，请继续刚才的解释",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1021.8",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[correction]",
+      "seconds": 1.183,
+      "status": "failed",
+      "properties": {
+        "text": "不是，我说的是明天",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "1154.7",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[short_stop]",
+      "seconds": 1.761,
+      "status": "failed",
+      "properties": {
+        "text": "停",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "1738.6",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[listening]",
+      "seconds": 3.933,
+      "status": "failed",
+      "properties": {
+        "text": "你接着说，我在听",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "3901.6",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[acknowledge_continue]",
+      "seconds": 1.165,
+      "status": "failed",
+      "properties": {
+        "text": "我明白前面这部分了，接着往下讲吧",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1140.3",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[quoted_stop]",
+      "seconds": 1.519,
+      "status": "failed",
+      "properties": {
+        "text": "刚才他说别说了，但我还想听你把这个讲完",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1492.7",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[stutter_correction]",
+      "seconds": 0.986,
+      "status": "passed",
+      "properties": {
+        "text": "我我我是想问后天，不是明天",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "960.5",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[repeated_acknowledgement]",
+      "seconds": 1.12,
+      "status": "failed",
+      "properties": {
+        "text": "对对对，我听懂了",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1091.2",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[redirect]",
+      "seconds": 1.02,
+      "status": "passed",
+      "properties": {
+        "text": "先别介绍背景了，直接说费用",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "996.1",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[deferred_question]",
+      "seconds": 1.196,
+      "status": "failed",
+      "properties": {
+        "text": "等你讲完我再问，你继续",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "1169.3",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": false
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[new_question]",
+      "seconds": 0.7,
+      "status": "passed",
+      "properties": {
+        "text": "还有个问题，这个支持离线吗",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "677.3",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[unfinished]",
+      "seconds": 0.877,
+      "status": "passed",
+      "properties": {
+        "text": "嗯那个我想",
+        "expected": "wait",
+        "observed": "wait",
+        "latency_ms": "848.8",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[acknowledge_then_correct]",
+      "seconds": 0.808,
+      "status": "passed",
+      "properties": {
+        "text": "对，但是这里的时间不对，应该是下午",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "781.4",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[withdraw_question]",
+      "seconds": 0.818,
+      "status": "passed",
+      "properties": {
+        "text": "不用回答我刚刚的问题，继续你原来讲的",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "791.8",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[english_continue]",
+      "seconds": 0.677,
+      "status": "passed",
+      "properties": {
+        "text": "Yes, please go on.",
+        "expected": "keep",
+        "observed": "keep",
+        "latency_ms": "649.6",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[english_correction]",
+      "seconds": 1.016,
+      "status": "passed",
+      "properties": {
+        "text": "No, I meant tomorrow, not today.",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "988.5",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[mixed_language_question]",
+      "seconds": 0.84,
+      "status": "passed",
+      "properties": {
+        "text": "先等一下，API timeout 是什么意思",
+        "expected": "take",
+        "observed": "take",
+        "latency_ms": "812.7",
+        "model": "deepseek-v4-flash"
+      },
+      "semantic_match": true,
+      "latency_within_probe_budget": true
+    },
+    {
+      "name": "test_configured_llm_interrupt_intent[label_in_user_data]",
+      "seconds": 5.028,
+      "status": "failed",
+      "properties": {},
+      "semantic_match": null,
+      "latency_within_probe_budget": null
+    }
+  ]
+}

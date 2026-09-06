@@ -34,12 +34,12 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not (1 <= cfg.core.port <= 65535):
         errors.append("core.port must be in [1, 65535]")
 
-    if cfg.providers.brain_provider == "direct_llm":
+    if cfg.providers.brain_provider == "direct_llm" or cfg.turn_policy.uses_channel_model_intent:
         if not cfg.llm.model:
-            errors.append("llm.model is required for direct_llm")
+            errors.append("llm.model is required for direct_llm or llm interruption intent")
         if not cfg.llm.base_url:
-            errors.append("llm.base_url is required for direct_llm")
-    else:
+            errors.append("llm.base_url is required for direct_llm or llm interruption intent")
+    if cfg.providers.brain_provider == "eidolon_agent":
         if not cfg.remote_agent_rpc.target:
             errors.append("remote_agent_rpc.target is required for eidolon_agent")
         # Phase 32.D: device_token check moved out — token signing
@@ -77,6 +77,12 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.eot.speech_merge_grace_ms must be in [0, 5000]")
 
     intr = cfg.turn_policy.interrupt
+    if intr.intent_provider not in ("none", "llm"):
+        errors.append("turn_policy.interrupt.intent_provider must be 'none' or 'llm'")
+    if not 0 < intr.intent_timeout_ms <= intr.post_speech_evidence_timeout_ms:
+        errors.append(
+            "turn_policy.interrupt.intent_timeout_ms must be in (0, post_speech_evidence_timeout_ms]"
+        )
     if not 200 <= intr.decision_timeout_ms <= 1_000:
         errors.append("turn_policy.interrupt.decision_timeout_ms must be in [200, 1000]")
     if not 0 <= intr.framework_false_interruption_timeout_ms <= 30_000:

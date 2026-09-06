@@ -1,0 +1,144 @@
+{
+  "layer": "Recorded cold model timeout; original observation window incorrectly started before final",
+  "counts": {
+    "passed": 11,
+    "failed": 1,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_real_model_overlap_effects[\\u597d\\u7684-resume]",
+      "seconds": 7.2,
+      "status": "failed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "SUSPENDED",
+        "intent": "None"
+      },
+      "failure": "AssertionError: assert 'SUSPENDED' == 'NORMAL'\n  \n  - NORMAL\n  + SUSPENDED"
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-resume]",
+      "seconds": 4.031,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-reply]",
+      "seconds": 6.331,
+      "status": "passed",
+      "properties": {
+        "expected_action": "reply",
+        "interrupted": "True",
+        "output_state": "CANCELLED",
+        "intent": "InterruptIntent.NORMAL_INTERRUPT"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u505c-stop]",
+      "seconds": 4.544,
+      "status": "passed",
+      "properties": {
+        "expected_action": "stop",
+        "interrupted": "True",
+        "output_state": "CANCELLED",
+        "intent": "InterruptIntent.HARD_STOP"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-resume]",
+      "seconds": 4.042,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u7528\\u56de\\u7b54\\u6211\\u521a\\u521a\\u7684\\u95ee\\u9898\\uff0c\\u7ee7\\u7eed\\u4f60\\u539f\\u6765\\u8bb2\\u7684-resume]",
+      "seconds": 4.038,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4ed6\\u8bf4\\u4e0d\\u8981\\u8bb2\\u4e86\\uff0c\\u4f46\\u6211\\u8fd8\\u60f3\\u542c\\u4f60\\u7ee7\\u7eed\\u89e3\\u91ca-resume]",
+      "seconds": 4.047,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u5148\\u4e0d\\u8bb2\\u80cc\\u666f\\uff0c\\u544a\\u8bc9\\u6211\\u8d39\\u7528-reply]",
+      "seconds": 4.043,
+      "status": "passed",
+      "properties": {
+        "expected_action": "reply",
+        "interrupted": "True",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.NORMAL_INTERRUPT"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u6211\\uff0c\\u6211\\u60f3\\u95ee\\u7684\\u662f\\uff0c\\u8fd9\\u4e2a\\u65b9\\u6848\\u6bcf\\u4e2a\\u6708\\u8981\\u82b1\\u591a\\u5c11\\u94b1\\uff1f-reply]",
+      "seconds": 4.04,
+      "status": "passed",
+      "properties": {
+        "expected_action": "reply",
+        "interrupted": "True",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.NORMAL_INTERRUPT"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u5443\\u2026\\u2026\\u55ef\\uff0c\\u660e\\u767d\\u4e86\\uff0c\\u4f60\\u63a5\\u7740\\u8bf4-resume]",
+      "seconds": 4.026,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u662f\\u8ba9\\u4f60\\u505c\\uff0c\\u6211\\u662f\\u8bf4\\u8fd9\\u4e2a\\u8bcd\\u53eb stop\\uff0c\\u63a5\\u7740\\u89e3\\u91ca\\u5427-resume]",
+      "seconds": 4.041,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u7b49\\u7b49\\uff0c\\u5148\\u522b\\u8bf4\\u4e86\\uff0c\\u6211\\u9700\\u8981\\u60f3\\u4e00\\u60f3-stop]",
+      "seconds": 4.547,
+      "status": "passed",
+      "properties": {
+        "expected_action": "stop",
+        "interrupted": "True",
+        "output_state": "CANCELLED",
+        "intent": "InterruptIntent.HARD_STOP"
+      }
+    }
+  ]
+}

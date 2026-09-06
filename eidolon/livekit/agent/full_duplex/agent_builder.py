@@ -22,7 +22,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
 
     class VoiceAgent(Agent):
         async def stt_node(self, audio: Any, model_settings: Any):
-            """Tap public SpeechEvents so optional provider evidence is retained."""
+            """Admit provider revisions and retain evidence before SDK consumption."""
 
             events: Any = super().stt_node(audio, model_settings)
             if inspect.isawaitable(events):
@@ -30,7 +30,8 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             if events is None:
                 return
             async for event in events:
-                pipeline._observe_stt_speech_event(event)
+                if pipeline._observe_stt_speech_event(event) is False:
+                    continue
                 yield event
 
         async def tts_node(self, text: Any, model_settings: Any):
@@ -80,7 +81,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             # ``session.generate_reply()`` for the initial greeting.
             # generate_reply with no user message hands an empty context to the
             # LLM, which then frequently echoes the system prompt template back.
-            self.session.say(welcome, allow_interruptions=True)
+            self.session.say(welcome)
 
         async def on_user_turn_completed(
             self,
@@ -98,11 +99,26 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
     # LiveKit 1.7 prefers the structured ``turn_handling`` option over the
     # deprecated individual ``turn_detection`` argument; the per-agent turn
     # detector still overrides the session default through that structure.
+    from eidolon.livekit.plugins.eot.models.base import EidolonEOTModel
+    from ..session.eot_model import InterruptAwareTurnDetector
+
+    detector = pipeline._turn_detection()
+    turn_handling: dict[str, Any] = {"turn_detection": detector}
+    eot_model = detector.eot_model if isinstance(detector, InterruptAwareTurnDetector) else detector
+    if isinstance(eot_model, EidolonEOTModel):
+        # Bind the complete-turn fast path through the public SDK contract.
+        # Incomplete turns retain the session's maximum (SDK default: 3 s);
+        # the model helper's 2 s bound can split a slowly completed question.
+        turn_handling["endpointing"] = {
+            "min_delay": eot_model.get_dynamic_silence_threshold(
+                "", p_complete=1.0, is_final=False,
+            ),
+        }
     return VoiceAgent(
         instructions=pipeline._instructions,
         stt=pipeline._factory.stt.stt,
         llm=pipeline._factory.llm.llm,
         tts=pipeline._factory.tts.tts,
         vad=pipeline._factory.vad.vad if pipeline._factory.vad else None,
-        turn_handling={"turn_detection": pipeline._turn_detection()},
+        turn_handling=turn_handling,
     )

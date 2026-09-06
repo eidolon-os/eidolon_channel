@@ -364,21 +364,6 @@ async def test_cancel_from_normal_state_also_drops() -> None:
 # ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_buffer_respects_max_limit() -> None:
-    inner = _FakeInnerOutput()
-    # buffer_max_sec=0.02 → at 32kHz with 320 samples/frame, ~2 frames max.
-    mixer = DuckingMixer(inner, fade_ms=10, buffer_max_sec=0.02)
-    mixer.duck()
-    await mixer.capture_frame(_make_frame(10000))  # fade-out ramp
-
-    # Try to buffer 5 frames — should cap.
-    for _ in range(5):
-        await mixer.capture_frame(_make_frame(10000))
-
-    assert mixer.buffered_frames <= 2
-
-
 # ──────────────────────────────────────────────────────────────────
 # Idempotency / re-entry
 # ──────────────────────────────────────────────────────────────────

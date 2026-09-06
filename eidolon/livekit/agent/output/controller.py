@@ -3,158 +3,40 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 
-"""Output controller — the audio-sink middleware between TTS and RoomIO.
+"""Audio-sink middleware with reversible suspension and generation-scoped writes.
 
-============================================================================
-G17b (2026-05-18) RENAME NOTE
-============================================================================
-
-This module was ``ducking.py`` / class ``DuckingMixer`` until Phase 2 of the
-G17–G22 refactor. The new name reflects what the class actually does after
-G18a + G17a removed the "wait for confidence" semantics: it's no longer
-just a volume ducker, it's the **OutputController** that decides whether
-TTS audio reaches the user (NORMAL), is held back during the interrupt-
-decision window (SUSPENDED), or is dropped permanently after a confirmed
-real interrupt (CANCELLED).
-
-The class still implements three states for now — SUSPENDED retains the
-fade-out + buffer machinery used by the fast-path soft-unduck. G17c
-(Phase 2 tail) will collapse SUSPENDED → MUTED once we've verified
-production runs no longer need the soft-buffer/drain path.
-
-Import ``OutputController`` from ``eidolon.livekit.agent.output`` or
-``eidolon.livekit.agent.output.controller``.
-
-============================================================================
-WHY
-============================================================================
-
-When the user interrupts the agent, two reactions are possible:
-
-  1. **Hard cancel** — abruptly stop TTS and silence playback. Fast (~50 ms)
-     but acoustically jarring; if the interrupt turns out to be a false
-     positive (backchannel "嗯", echo, noise), framework's
-     ``resume_false_interruption`` path needs to hard-restart playback
-     from a partially-rendered TTS chunk, which sounds like a stutter or
-     a re-synthesis seam.
-
-  2. **Soft cancel + soft resume** (this module) — on VAD start, fade the
-     output volume down to silence over ~50 ms, then **buffer** TTS frames
-     in memory. While suspended, an "early-resume watcher" in
-     :class:`StreamingPipeline` listens to STT interim and decides:
-
-       * confirm cancel (real interrupt)  → call :meth:`cancel`; buffered
-         frames are discarded, downstream receives ``clear_buffer()``,
-         and our :meth:`capture_frame` drops subsequent frames.
-
-       * confirm false (backchannel/noise) → call :meth:`unduck`; buffered
-         frames are drained through the inner sink with a fade-in ramp,
-         so the user hears the agent's speech **from the point it was
-         suspended**, with no content loss and no seam.
-
-============================================================================
-FRAME BUFFERING (pause / resume at our layer)
-============================================================================
-
-During SUSPENDED the mixer operates in two sub-phases:
-
-  Phase 1 — FADE-OUT (first ``duck_fade_ms`` worth of frames):
-    Frames are attenuated via per-sample linear ramp (1.0 → suspend_volume)
-    and forwarded to the inner sink. The user hears the agent "yielding".
-
-  Phase 2 — BUFFERING (after ramp completes):
-    Frames are stored in ``_buffer`` and NOT forwarded. The user hears
-    silence. TTS continues generating in the background.
-
-  Optional — SUSPENDED PASSTHROUGH:
-    ``enable_suspended_passthrough(volume=...)`` is an explicit opt-in
-    primitive for future reversible "audible hold" strategies. After the
-    fade-out ramp completes, new live frames are forwarded at the capped
-    volume instead of being buffered. Default production behaviour remains
-    silent buffering until a caller deliberately enables passthrough.
-
-On unduck (default ``drop_buffered=False``), the buffered frames are
-drained through the inner sink with a fade-in ramp. LiveKit's
-``AudioSource`` has internal queue pacing, so burst-pushing buffered
-frames does NOT cause fast-forward — the downstream pipeline paces them
-at wall-clock speed.
-
-On unduck ``(drop_buffered=True)`` — used by the timeout fallback after
-~500 ms — buffered frames are discarded (G17a: they are stale by then,
-the user has been talking). Live TTS frames arriving after still go
-through with the fade-in ramp.
-
-On cancel, the buffer is discarded immediately.
-
-============================================================================
-ALL TUNABLES LIVE IN ``EidolonEOTConfig``
-============================================================================
-
-See ``plugins/eot/config.py`` for the full block. Quick reference:
-
-  * ``duck_enabled``                         master switch
-  * ``duck_fade_ms``                         fade-out duration (default 50 ms)
-  * ``duck_fade_in_ms``                      fade-in duration (default 200 ms)
-  * ``duck_suspend_volume``                  target during fade-out (0.0)
-  * ``duck_buffer_max_sec``                  max buffer duration (2.0 s)
-  * ``duck_suspend_timeout_sec``             decision-window deadline (now 0.5 s, G18a)
-  * ``duck_early_cancel_score_threshold``    real-interrupt score floor (0.7)
-  * ``duck_early_resume_score_threshold``    false-interrupt score ceiling (0.2)
-  * ``duck_cooldown_sec``                    min interval between unduck→duck
-  * ``interrupt_min_interim_chars``          first-signal threshold (G18a, default 2)
+The SDK owns synthesis and playback pacing. This interposer owns admission to
+its sink: one serialized writer preserves frame order; bounded buffering applies
+backpressure to synthesis; resume drains even after synthesis has finished.
+Cancel/clear/reset invalidate pending writes before touching the sink queue.
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 import logging
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import numpy as np
 from livekit import rtc
 from livekit.agents.voice import io as lk_io
 
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("agent.output.controller")
 
 
-# G17c (2026-05-18) Note on state names:
-# SUSPENDED is conceptually MUTED in the new flow. We keep the literal
-# "SUSPENDED" string for API stability (StreamingPipeline + tests reference
-# it by name in many places); a future cleanup may rename to MUTED. The
-# buffer-and-drain machinery still exists for the rare fast-soft-unduck
-# path (user_silent transition <300ms with score-based low EOT signal),
-# but it is no longer the primary unduck behaviour — the timeout-deadline
-# path (much more common) uses drop_buffered=True and short fades.
 _State = Literal["NORMAL", "SUSPENDED", "CANCELLED"]
 
 
 class OutputController(lk_io.AudioOutput):
-    """Output middleware: mute / cancel / fade-in-on-resume around TTS.
+    """NORMAL forwards, SUSPENDED buffers, CANCELLED rejects until reset.
 
-    Three states:
-
-      * NORMAL — frames pass through with volume 1.0.
-      * SUSPENDED — interrupt decision window active. Default flow (G18a):
-        first fade-out frame is sent (anti-click ramp), subsequent frames
-        are HELD (buffered) until decision lands. On cancel they are
-        discarded. On unduck(drop_buffered=True) — the timeout path —
-        they are also discarded and live frames resume with a fade-in
-        ramp. On unduck(drop_buffered=False) — the legacy soft-resume
-        path — they are drained with fade-in (kept for now; G18a's
-        first-signal path makes this rare).
-      * CANCELLED — terminal until reset; all frames dropped.
-
-    Args:
-        inner: The audio sink to forward frames to.
-        fade_ms: Linear ramp duration for fade-out (duck), in ms.
-            G17c default reduced to 30ms (anti-click only).
-        fade_in_ms: Linear ramp duration for fade-in (unduck), in ms.
-            G17c default reduced to 30ms (anti-click only).
-        suspend_volume: Target gain at end of fade-out. 0.0 = full silence.
-        buffer_max_sec: Safety cap on buffer duration to bound memory.
+    Fade durations are milliseconds. ``buffer_max_sec`` bounds queued audio;
+    one oversized provider frame is accepted to avoid a capacity deadlock.
+    Only an explicit ``drop_buffered`` decision discards suspended content.
+    Metrics describe samples forwarded to the sink, not physical device ACKs.
     """
 
     def __init__(
@@ -167,41 +49,20 @@ class OutputController(lk_io.AudioOutput):
         buffer_max_sec: float = 2.0,
         sample_rate: int | None = None,
     ) -> None:
-        # G17c (2026-05-18): default fade durations reduced 50→30ms (out)
-        # and 200→30ms (in). After G18a moved decisions onto a 500ms
-        # budget, long fades have no design role — they were a holdover
-        # from the original soft-duck model that assumed multi-second
-        # suspend windows. 30ms is the minimum that avoids click/pop
-        # artifacts on hard cut+resume (anti-click ramp only).
-        # The constructor still accepts custom values; callers that
-        # want a longer fade for special cases can opt in.
-        # F4 (2026-05-16): advertise pause=True so framework's
-        # ``resume_false_interruption`` mechanism actually runs. Previously
-        # DuckingMixer declared pause=False, which caused framework to log
-        # a warning and silently ignore the configured ``false_interruption_timeout``
-        # (e.g. 6.0s). With pause=True the base-class pause/resume methods
-        # (``AudioOutput.pause`` / ``resume``) cascade through to the inner
-        # sink (TranscriptSynchronizer → RoomIO), which physically pauses
-        # the rtc.AudioSource playback queue — frames already queued are
-        # resumed-from-where-left-off when the framework calls resume().
-        #
-        # Coexistence with DuckingMixer's own duck/unduck state machine:
-        # the framework calls pause() only when ``agent_state != "speaking"``
-        # (agent_activity.py:1684), and (after F3) DuckingMixer.duck() only
-        # runs when ``agent_state == speaking``. The two paths are mutually
-        # exclusive, no double-pause race.
         super().__init__(
             label=f"OutputController→{inner.label}",
             capabilities=lk_io.AudioOutputCapabilities(pause=True),
             next_in_chain=inner,
             sample_rate=sample_rate or inner.sample_rate,
         )
-        self._inner = inner
+        # LiveKit may insert a sink proxy; frames and playback events must
+        # traverse the same chain or its segment accounting never completes.
+        self._inner = self.next_in_chain
         self._fade_ms = max(1, int(fade_ms))
         self._fade_in_ms = max(1, int(fade_in_ms))
         self._suspend_volume = max(0.0, min(1.0, float(suspend_volume)))
 
-        self._buffer_max_sec = buffer_max_sec
+        self._buffer_max_sec = max(0.0, buffer_max_sec)
 
         self._state: _State = "NORMAL"
         self._volume_current: float = 1.0
@@ -210,7 +71,13 @@ class OutputController(lk_io.AudioOutput):
         self._ramp_step_per_sample: float = 0.0
 
         # Frame buffer for SUSPENDED state (Phase 2).
-        self._buffer: list[rtc.AudioFrame] = []
+        self._buffer: deque[rtc.AudioFrame] = deque()
+        self._write_lock = asyncio.Lock()
+        self._state_changed = asyncio.Event()
+        self._generation = 0
+        self._write_task: asyncio.Task | None = None
+        self._drain_task: asyncio.Task | None = None
+        self._flush_pending = False
         self._buffer_duration_sec: float = 0.0
         self._suspended_passthrough_volume: float | None = None
         self._suspended_passthrough_enabled_at: float | None = None
@@ -333,8 +200,8 @@ class OutputController(lk_io.AudioOutput):
     def duck(self) -> None:
         """Begin fade-out and arm frame buffering.
 
-        Idempotent — calling while already SUSPENDED restarts the ramp
-        from current volume (so duck-during-unduck reverses cleanly).
+        Repeated suspension is a no-op. Suspending during resume reverses
+        the ramp while preserving every buffered, unheard frame.
 
         G22 (2026-05-18): no longer resets ``_played_samples_this_turn``.
         The previous behaviour was buggy: within a single agent turn the
@@ -346,14 +213,13 @@ class OutputController(lk_io.AudioOutput):
         ``on_agent_started_speaking()``), which is the genuine turn
         boundary.
         """
-        if self._state == "CANCELLED":
+        if self._state in ("CANCELLED", "SUSPENDED"):
             return
         prev = self._state
         self._state = "SUSPENDED"
         self._total_ducks += 1
         self._duck_start_time = time.monotonic()
-        self._buffer.clear()
-        self._buffer_duration_sec = 0.0
+        # A new speech onset during resume must retain the unheard tail.
         self._suspended_passthrough_volume = None
         self._suspended_passthrough_enabled_at = None
         self._first_suspended_passthrough_frame_at = None
@@ -406,6 +272,7 @@ class OutputController(lk_io.AudioOutput):
             self._buffer.clear()
             self._buffer_duration_sec = 0.0
         self._suspended_passthrough_volume = clamped
+        self._state_changed.set()
         self._suspended_passthrough_enabled_at = time.monotonic()
         logger.info(
             "[OutputController] suspended passthrough enabled  "
@@ -422,9 +289,8 @@ class OutputController(lk_io.AudioOutput):
     def unduck(self, *, drop_buffered: bool = False) -> None:
         """Drain buffered frames with fade-in, then resume normal flow.
 
-        No-op if CANCELLED. The actual drain happens in the next
-        ``capture_frame`` call(s) — this method only transitions state
-        and sets up the fade-in ramp.
+        No-op unless suspended. Resume schedules the same serialized writer
+        used by capture_frame, including when no further TTS frames arrive.
 
         Args:
             drop_buffered: If True, discard the buffered frames instead of
@@ -437,7 +303,7 @@ class OutputController(lk_io.AudioOutput):
                 transition <300ms) keeps the default drain-with-fade-in
                 because the buffer is genuinely fresh there.
         """
-        if self._state == "CANCELLED":
+        if self._state != "SUSPENDED":
             return
         suspend_ms = 0.0
         if self._duck_start_time > 0:
@@ -471,11 +337,16 @@ class OutputController(lk_io.AudioOutput):
             suspend_ms, self._fade_in_ms,
         )
 
+        self._state_changed.set()
+        if self._buffer or self._flush_pending:
+            self._schedule_drain()
+
     def cancel(self) -> None:
         """Mark CANCELLED — discard buffer and drop all subsequent frames.
 
         Caller must also invoke ``session.interrupt(force=True)`` to stop TTS.
         """
+        self._invalidate_writes()
         previous = self._state
         dropped = len(self._buffer)
         dropped_sec = self._buffer_duration_sec
@@ -503,6 +374,7 @@ class OutputController(lk_io.AudioOutput):
 
     def reset(self) -> None:
         """Reset to NORMAL/v=1.0 without ramp. For session boundaries."""
+        self._invalidate_writes()
         self._state = "NORMAL"
         self._volume_current = 1.0
         self._ramp_target = 1.0
@@ -520,35 +392,107 @@ class OutputController(lk_io.AudioOutput):
     # ------------------------------------------------------------------
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        """Route frame based on state: forward, buffer, or drop."""
-        await super().capture_frame(frame)
-
-        if self._state == "CANCELLED":
-            return
-
-        if self._state == "SUSPENDED":
-            await self._handle_suspended(frame)
-            return
-
-        # NORMAL state — drain any buffered frames first, then forward.
-        if self._buffer:
-            await self._drain_buffer()
-
-        await self._forward_with_gain(frame)
+        """Serialize admission, applying backpressure when suspended and full."""
+        generation = self._generation
+        async with self._write_lock:
+            if generation != self._generation or self._state == "CANCELLED":
+                return
+            await super().capture_frame(frame)
+            while generation == self._generation and self._state != "CANCELLED":
+                if self._state == "NORMAL":
+                    await self._drain_buffer()
+                    if generation != self._generation:
+                        return
+                    if self._state != "NORMAL":
+                        continue
+                    await self._forward_with_gain(frame)
+                    break
+                if self._can_accept_suspended(frame):
+                    await self._handle_suspended(frame)
+                    break
+                # No data is discarded at capacity. A mode transition wakes the
+                # producer; cancellation also invalidates this waiting frame.
+                self._state_changed.clear()
+                await self._state_changed.wait()
+        self._flush_if_ready()
 
     def flush(self) -> None:
-        super().flush()
-        self._inner.flush()
+        self._flush_pending = True
+        self._flush_if_ready()
+
+    def _flush_if_ready(self) -> None:
+        if self._flush_pending and not self._buffer and not self._write_lock.locked():
+            self._flush_pending = False
+            super().flush()
+            self._inner.flush()
+
+    def _invalidate_writes(self) -> None:
+        self._generation += 1
+        self._flush_pending = False
+        self._state_changed.set()
+        if self._write_task is not None:
+            self._write_task.cancel()
+        if self._drain_task is not None:
+            self._drain_task.cancel()
+            self._drain_task = None
 
     def clear_buffer(self) -> None:
+        self._invalidate_writes()
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
         self._inner.clear_buffer()
+
+    def _can_accept_suspended(self, frame: rtc.AudioFrame) -> bool:
+        return (
+            self._ramp_samples_remaining > 0
+            or self._suspended_passthrough_volume is not None
+            # One oversized provider frame is allowed; never deadlock at zero
+            # capacity or if the provider's chunk is larger than the limit.
+            or not self._buffer
+            or self._buffer_duration_sec + frame.duration <= self._buffer_max_sec + 1e-9
+        )
+
+    def _schedule_drain(self) -> None:
+        if self._drain_task is None or self._drain_task.done():
+            self._drain_task = asyncio.create_task(self._resume_output())
+            self._drain_task.add_done_callback(self._drain_done)
+
+    def _drain_done(self, task: asyncio.Task) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            # No capture_frame caller remains when a finished TTS tail drains.
+            # Terminate the segment through the sink's normal clear contract
+            # rather than leave playback waiters suspended indefinitely.
+            self.cancel()
+            logger.error("[OutputController] resume failed", exc_info=error)
+
+    async def _resume_output(self) -> None:
+        async with self._write_lock:
+            await self._drain_buffer()
+        self._flush_if_ready()
+
+    async def _write(self, frame: rtc.AudioFrame) -> bool:
+        """Only writer to the sink; invalidation cancels an in-flight await."""
+        generation = self._generation
+        task = asyncio.create_task(self._inner.capture_frame(frame))
+        self._write_task = task
+        try:
+            await task
+            return generation == self._generation
+        except asyncio.CancelledError:
+            if generation == self._generation or asyncio.current_task().cancelling():
+                raise
+            return False
+        finally:
+            if self._write_task is task:
+                self._write_task = None
 
     def on_attached(self) -> None:
         super().on_attached()
 
     def on_detached(self) -> None:
+        self._invalidate_writes()
+        self._buffer.clear()
+        self._buffer_duration_sec = 0.0
         super().on_detached()
 
     # ------------------------------------------------------------------
@@ -561,7 +505,8 @@ class OutputController(lk_io.AudioOutput):
         suspended passthrough is enabled."""
         if self._ramp_samples_remaining > 0:
             scaled = self._scale_frame(frame)
-            await self._inner.capture_frame(scaled)
+            if not await self._write(scaled):
+                return
             # G6 (2026-05-17): fade-out frames ARE played (just attenuated)
             # — the user heard them. Count toward played_seconds.
             self._played_samples_this_turn += frame.samples_per_channel
@@ -578,34 +523,21 @@ class OutputController(lk_io.AudioOutput):
         else:
             sr = frame.sample_rate or self._sample_rate or 16000
             frame_sec = frame.samples_per_channel / sr
-            if self._buffer_duration_sec + frame_sec <= self._buffer_max_sec:
-                self._buffer.append(frame)
-                self._buffer_duration_sec += frame_sec
+            self._buffer.append(frame)
+            self._buffer_duration_sec += frame_sec
 
     async def _drain_buffer(self) -> None:
-        """Drain all buffered frames through the inner sink with gain ramp.
-
-        Called from ``capture_frame`` when state transitions back to NORMAL.
-        LiveKit's AudioSource applies backpressure via queue_size_ms, so
-        burst-pushing frames here is safe — they play at normal speed.
-        """
-        count = len(self._buffer)
-        dur = self._buffer_duration_sec
+        """Drain with sink pacing; recheck admission after every awaited write."""
+        generation = self._generation
+        if not self._buffer or self._state != "NORMAL":
+            return
         self._total_buffer_drains += 1
-        self._total_buffer_frames_drained += count
-
-        t0 = time.monotonic()
-        for frame in self._buffer:
+        while self._buffer and self._state == "NORMAL" and generation == self._generation:
+            frame = self._buffer.popleft()
+            self._buffer_duration_sec = max(0.0, self._buffer_duration_sec - frame.duration)
             await self._forward_with_gain(frame)
-        self._buffer.clear()
-        self._buffer_duration_sec = 0.0
-        drain_ms = (time.monotonic() - t0) * 1000
-
-        logger.info(
-            "[OutputController] drain  frames=%d  buffered=%.3fs  "
-            "drain_ms=%.1f  vol_after=%.2f",
-            count, dur, drain_ms, self._volume_current,
-        )
+            if generation == self._generation:
+                self._total_buffer_frames_drained += 1
 
     async def _forward_with_gain(self, frame: rtc.AudioFrame) -> None:
         """Forward a frame with current gain ramp applied. Fast-path
@@ -614,12 +546,14 @@ class OutputController(lk_io.AudioOutput):
             self._ramp_samples_remaining == 0
             and abs(self._volume_current - 1.0) < 1e-6
         ):
-            await self._inner.capture_frame(frame)
+            if not await self._write(frame):
+                return
             # G6 (2026-05-17): count frames actually played to user.
             self._played_samples_this_turn += frame.samples_per_channel
             return
         scaled = self._scale_frame(frame)
-        await self._inner.capture_frame(scaled)
+        if not await self._write(scaled):
+            return
         # G6 (2026-05-17): fade-in frames count too — user hears them at
         # ramp-up volume but they ARE played.
         self._played_samples_this_turn += frame.samples_per_channel
@@ -632,10 +566,12 @@ class OutputController(lk_io.AudioOutput):
         """Forward a frame at a fixed gain without touching ramp state."""
         gain = max(0.0, min(1.0, float(gain)))
         if abs(gain - 1.0) < 1e-6:
-            await self._inner.capture_frame(frame)
+            if not await self._write(frame):
+                return
         else:
             scaled = self._scale_frame_static(frame, gain)
-            await self._inner.capture_frame(scaled)
+            if not await self._write(scaled):
+                return
         self._played_samples_this_turn += frame.samples_per_channel
 
     def _begin_ramp(self, *, target: float, duration_ms: int | None = None) -> None:

@@ -171,6 +171,8 @@ async def test_full_interrupt_then_new_turn_unblocks_audio() -> None:
 
     # Stage 2: TTS keeps generating (e.g. in_flight frame arrives) — dropped
     inner = mixer._inner
+    while inner.next_in_chain is not None:
+        inner = inner.next_in_chain
     captured_after_cancel = inner.captured
     await mixer.capture_frame(_frame())
     assert inner.captured == captured_after_cancel, "frame should be dropped"

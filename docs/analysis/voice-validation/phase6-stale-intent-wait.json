@@ -1,0 +1,278 @@
+{
+  "scope": "Current-candidate ownership shared by intent application and SDK endpoint wait; scripted providers, real SDK/EOT, memory PCM sink. No Agent RPC, RTC, device or cloud latency acceptance.",
+  "production_change": "Reuse the existing candidate/generation/response/final ownership check before awaiting pending intent. Production timeout remains 1500 ms.",
+  "causal_e2e": "During a paused question, a client PTT packet preempts old speech. The old classifier is held pending with a test-only 10000 ms timeout. The completed question must produce new audible reply PCM before the old classifier is released. A 4000 ms assertion deadline is a dependency check, not measured provider latency savings.",
+  "unit_before": {
+    "counts": {
+      "failed": 4,
+      "passed": 1
+    },
+    "groups": {
+      "eidolon.livekit.tests.agent.test_async_interrupt_intent": {
+        "failed": 4,
+        "passed": 1
+      }
+    },
+    "cases": [
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[resolved]",
+        "status": "failed",
+        "failure": "TimeoutError"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[generation]",
+        "status": "failed",
+        "failure": "TimeoutError"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[response]",
+        "status": "failed",
+        "failure": "TimeoutError"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[final_revision]",
+        "status": "failed",
+        "failure": "TimeoutError"
+      },
+      {
+        "case": "test_endpointing_cancellation_does_not_cancel_current_intent",
+        "status": "passed"
+      }
+    ]
+  },
+  "unit_after": {
+    "counts": {
+      "passed": 16
+    },
+    "groups": {
+      "eidolon.livekit.tests.agent.test_async_interrupt_intent": {
+        "passed": 16
+      }
+    },
+    "cases": [
+      {
+        "case": "test_backchannel_waits_for_vad_end_and_reuses_final_result",
+        "status": "passed"
+      },
+      {
+        "case": "test_final_intent_can_cancel_without_high_eot[correction]",
+        "status": "passed"
+      },
+      {
+        "case": "test_final_intent_can_cancel_without_high_eot[topic_switch]",
+        "status": "passed"
+      },
+      {
+        "case": "test_final_intent_can_cancel_without_high_eot[hard_stop]",
+        "status": "passed"
+      },
+      {
+        "case": "test_repeated_final_starts_one_request_and_no_legacy_timer_cut",
+        "status": "passed"
+      },
+      {
+        "case": "test_late_result_cannot_control_revised_or_replaced_turn[text]",
+        "status": "passed"
+      },
+      {
+        "case": "test_late_result_cannot_control_revised_or_replaced_turn[generation]",
+        "status": "passed"
+      },
+      {
+        "case": "test_late_result_cannot_control_revised_or_replaced_turn[response]",
+        "status": "passed"
+      },
+      {
+        "case": "test_failed_intent_resumes_after_silence_without_destroying_audio[timeout]",
+        "status": "passed"
+      },
+      {
+        "case": "test_failed_intent_resumes_after_silence_without_destroying_audio[error]",
+        "status": "passed"
+      },
+      {
+        "case": "test_shutdown_cancels_pending_intent_without_late_effect",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[resolved]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[generation]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[response]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[final_revision]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_cancellation_does_not_cancel_current_intent",
+        "status": "passed"
+      }
+    ]
+  },
+  "e2e_before": {
+    "counts": {
+      "failed": 1
+    },
+    "groups": {
+      "eidolon.livekit.tests.scenarios.test_interrupt_model_timing": {
+        "failed": 1
+      }
+    },
+    "cases": [
+      {
+        "case": "test_explicit_preempt_during_question_does_not_wait_for_old_model_request",
+        "status": "failed",
+        "failure": "TimeoutError: event predicate not satisfied within 4s. recent events: [agent_state_changed, agent_state_changed, user_state_changed, user_input_transcribed, conversation_item_added, agent_state_changed, user_state_changed, user_state_changed, user_input_transcribed, user_state_changed]"
+      }
+    ]
+  },
+  "regression_after": {
+    "counts": {
+      "passed": 150,
+      "xfail": 3
+    },
+    "groups": {
+      "eidolon.livekit.tests.agent.test_async_interrupt_intent": {
+        "passed": 16
+      },
+      "eidolon.livekit.tests.agent.test_semantic_interrupt_handler": {
+        "passed": 7
+      },
+      "eidolon.livekit.tests.agent.test_interruption_orchestrator": {
+        "passed": 20
+      },
+      "eidolon.livekit.tests.agent.test_interrupt_model_config": {
+        "passed": 12
+      },
+      "eidolon.livekit.tests.agent.test_full_duplex_explicit_client_preempt": {
+        "passed": 9
+      },
+      "eidolon.livekit.tests.agent.test_reply_latency_measurement": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.scenarios.test_interrupt_model_timing": {
+        "passed": 18
+      },
+      "eidolon.livekit.tests.scenarios.test_human_speaking": {
+        "passed": 38,
+        "xfail": 3
+      },
+      "eidolon.livekit.tests.scenarios.test_human_ptt": {
+        "passed": 17
+      },
+      "eidolon.livekit.tests.scenarios.test_overlap_settlement": {
+        "passed": 6
+      },
+      "eidolon.livekit.tests.scenarios.test_stt_revision_order": {
+        "passed": 2
+      },
+      "eidolon.livekit.tests.scenarios.test_complete_turn_latency": {
+        "passed": 3
+      }
+    },
+    "cases": [
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[resolved]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[generation]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[response]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_does_not_wait_for_superseded_intent[final_revision]",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_cancellation_does_not_cancel_current_intent",
+        "status": "passed"
+      },
+      {
+        "case": "test_endpointing_preserves_eot_probability_after_settlement",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_adapter_preserves_existing_endpointing_bounds[False]",
+        "status": "passed"
+      },
+      {
+        "case": "test_intent_adapter_preserves_existing_endpointing_bounds[True]",
+        "status": "passed"
+      },
+      {
+        "case": "test_explicit_preempt_during_question_does_not_wait_for_old_model_request",
+        "status": "passed"
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u597d\\u7684-False]",
+        "status": "xfail",
+        "properties": {
+          "expected_interrupt": "False",
+          "observed_interrupt": "True",
+          "output_state": "NORMAL"
+        }
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+        "status": "xfail",
+        "properties": {
+          "expected_interrupt": "False",
+          "observed_interrupt": "True",
+          "output_state": "NORMAL"
+        }
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+        "status": "xfail",
+        "properties": {
+          "expected_interrupt": "True",
+          "observed_interrupt": "False",
+          "output_state": "NORMAL"
+        }
+      },
+      {
+        "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+        "status": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "783.3",
+          "complete_to_reply_audio_ms": "662.4",
+          "budget_ms": "1000"
+        }
+      },
+      {
+        "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+        "status": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "763.1",
+          "complete_to_reply_audio_ms": "663.6",
+          "budget_ms": "1000"
+        }
+      },
+      {
+        "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+        "status": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "832.0",
+          "complete_to_reply_audio_ms": "732.8",
+          "budget_ms": "1500"
+        }
+      }
+    ]
+  },
+  "verification": {
+    "ruff": "passed",
+    "git_diff_check": "passed"
+  },
+  "remaining": "Configured localhost Agent RPC/Kernel/Data ports 45051/8083/8084 still refuse connections. Full production-path and device latency remain unverified."
+}

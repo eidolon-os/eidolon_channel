@@ -152,7 +152,6 @@ def test_livekit_transcription_timeout_rejects_transcriptless_candidate() -> Non
     assert expiry["speech_duration"] == 1.2
     pipeline._session.say.assert_called_once_with(
         "抱歉，刚才没听清，请再说一遍好吗？",
-        allow_interruptions=True,
         add_to_chat_ctx=False,
     )
     assert timeline.attrs["timeline_flush_reason"] == ("speech_stopped_without_transcript_deadline")

@@ -1,0 +1,32 @@
+{
+  "config": {
+    "brain_provider": "eidolon_agent",
+    "stt_provider": "bailian",
+    "tts_provider": "bailian",
+    "vad_provider": "firered_pvad",
+    "turn_policy_profile": "balanced_semantic",
+    "remote_agent_configured": true,
+    "llm_base_url_configured": true
+  },
+  "results": [
+    {
+      "name": "stt",
+      "ok": true,
+      "elapsed_ms": 3307,
+      "detail": {
+        "chars": 13,
+        "text": "帮我详细介绍一下这个方案。"
+      }
+    },
+    {
+      "name": "tts",
+      "ok": true,
+      "elapsed_ms": 893,
+      "detail": {
+        "frames": 15,
+        "sample_rate": 16000,
+        "duration_ms": 2110
+      }
+    }
+  ]
+}

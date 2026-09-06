@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
 
@@ -130,6 +132,22 @@ def test_explicit_ingress_resolution_covers_pending_generation() -> None:
     assert coordinator.active.segments[0].coverage_reason == (
         "provider_final_equivalent_hypothesis"
     )
+
+
+@pytest.mark.parametrize('framework,pending,covered', [
+    ('帮我介绍一下这个方案。', '帮我介绍一下这个方案的优点和缺点', False),
+    ('Book a table', 'Book a table for seven people', False),
+    ('号码是1234', '号码是12345678', False),
+    ('帮我介绍一下这个方案的优点和缺点。', '帮我介绍一下这个方案', True),
+    ('BOOK a table for seven people.', 'Book a table for seven people', True),
+])
+def test_framework_coverage_is_directional(framework, pending, covered):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    coordinator.start_speech(timeline=None)
+    coordinator.add_transcript('好的。', is_final=True)
+    coordinator.add_transcript(pending, is_final=False)
+    readiness = coordinator.framework_completion_readiness(framework)
+    assert readiness.ready is covered
 
 
 def test_framework_completed_is_the_only_normal_commit_boundary() -> None:

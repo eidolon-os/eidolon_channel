@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from livekit.agents import llm as lk_llm
@@ -165,6 +166,7 @@ class SharedStageFactory:
         runtime_context_resolver: "Any | None" = None,
         runtime_services: "Any | None" = None,
         llm_params: LlmParams | None = None,
+        interrupt_classifier: Any = None,
     ) -> None:
         if llm is None:
             raise ValueError("llm must not be None")
@@ -176,6 +178,7 @@ class SharedStageFactory:
         self.stt: SttStage = stt
         self.tts: TtsStage = tts
         self.llm = LivekitLlmStage(llm=llm, params=llm_params or LlmParams())
+        self.interrupt_classifier = interrupt_classifier
         # Wrap raw VAD in VadStage for symmetry with stt / tts. AgentSession
         # still receives the raw VAD via stage.vad property.
         self.vad: VadStage | None = VadStage(vad) if vad is not None else None
@@ -219,6 +222,8 @@ class SharedStageFactory:
         """Close session-scoped authority clients owned by this factory."""
         if self.runtime_services is not None:
             await self.runtime_services.aclose()
+        if self.interrupt_classifier is not None:
+            await self.interrupt_classifier.aclose()
 
     # ------------------------------------------------------------------
     # Production path: build everything from AgentConfig
@@ -407,7 +412,27 @@ class SharedStageFactory:
                 model=cfg.llm.model,
                 temperature=cfg.llm.temperature or 0.6,
             ),
+            interrupt_classifier=cls.build_interrupt_classifier(cfg),
         )
+
+    @classmethod
+    def build_interrupt_classifier(cls, cfg: "AgentConfig") -> Any:
+        """Reuse the configured direct LLM adapter for stateless intent evidence."""
+        if not cfg.turn_policy.uses_channel_model_intent:
+            return None
+        from .turn_policy.intent_classifier import LlmInterruptClassifier
+
+        extra_body = dict(cfg.llm.extra_body)
+        if cfg.llm.model.startswith("deepseek-"):
+            extra_body["thinking"] = {"type": "disabled"}
+        model = cls._build_llm(replace(cfg, llm=replace(
+            cfg.llm, max_completion_tokens=24, temperature=0,
+            timeout=cfg.turn_policy.interrupt.intent_timeout_ms / 1000,
+            extra_body=extra_body,
+        )))
+        if model is None:
+            raise ValueError("interrupt intent requires the configured direct LLM adapter")
+        return LlmInterruptClassifier(model, timeout_sec=cfg.turn_policy.interrupt.intent_timeout_ms / 1000)
 
     @classmethod
     def components_from_config(
@@ -453,6 +478,8 @@ class SharedStageFactory:
         # default applies. (Mixing NOT_GIVEN/None semantics with **kwargs
         # filtering keeps us decoupled from the plugin's sentinel API.)
         extra_kwargs: dict[str, Any] = {}
+        if cfg.llm.extra_body:
+            extra_kwargs["extra_body"] = cfg.llm.extra_body
         if cfg.llm.temperature is not None:
             extra_kwargs["temperature"] = cfg.llm.temperature
         if cfg.llm.timeout is not None:
@@ -460,7 +487,15 @@ class SharedStageFactory:
 
             extra_kwargs["timeout"] = httpx.Timeout(cfg.llm.timeout)
         if cfg.llm.max_completion_tokens is not None:
-            extra_kwargs["max_completion_tokens"] = cfg.llm.max_completion_tokens
+            if urlsplit(cfg.llm.base_url or "").hostname == "api.deepseek.com":
+                # DeepSeek's API accepts max_tokens, not max_completion_tokens.
+                # Use the adapter's native body passthrough; unknown endpoints
+                # keep the OpenAI contract instead of guessing from model names.
+                extra_kwargs["extra_body"] = {
+                    **cfg.llm.extra_body, "max_tokens": cfg.llm.max_completion_tokens,
+                }
+            else:
+                extra_kwargs["max_completion_tokens"] = cfg.llm.max_completion_tokens
 
         return lk_openai.LLM(
             model=cfg.llm.model,

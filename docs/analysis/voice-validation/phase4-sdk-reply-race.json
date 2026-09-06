@@ -1,0 +1,100 @@
+{
+  "layer": "Before endpointing coordination; real model, scripted speech providers",
+  "counts": {
+    "passed": 7,
+    "failed": 1,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_real_model_overlap_effects[\\u597d\\u7684-resume]",
+      "seconds": 7.344,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-resume]",
+      "seconds": 4.04,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-reply]",
+      "seconds": 5.339,
+      "status": "passed",
+      "properties": {
+        "expected_action": "reply",
+        "interrupted": "True",
+        "output_state": "CANCELLED",
+        "intent": "InterruptIntent.NORMAL_INTERRUPT"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u505c-stop]",
+      "seconds": 4.547,
+      "status": "passed",
+      "properties": {
+        "expected_action": "stop",
+        "interrupted": "True",
+        "output_state": "CANCELLED",
+        "intent": "InterruptIntent.HARD_STOP"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-resume]",
+      "seconds": 4.045,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4e0d\\u7528\\u56de\\u7b54\\u6211\\u521a\\u521a\\u7684\\u95ee\\u9898\\uff0c\\u7ee7\\u7eed\\u4f60\\u539f\\u6765\\u8bb2\\u7684-resume]",
+      "seconds": 4.048,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u4ed6\\u8bf4\\u4e0d\\u8981\\u8bb2\\u4e86\\uff0c\\u4f46\\u6211\\u8fd8\\u60f3\\u542c\\u4f60\\u7ee7\\u7eed\\u89e3\\u91ca-resume]",
+      "seconds": 4.045,
+      "status": "passed",
+      "properties": {
+        "expected_action": "resume",
+        "interrupted": "False",
+        "output_state": "NORMAL",
+        "intent": "InterruptIntent.BACKCHANNEL"
+      }
+    },
+    {
+      "name": "test_real_model_overlap_effects[\\u5148\\u4e0d\\u8bb2\\u80cc\\u666f\\uff0c\\u544a\\u8bc9\\u6211\\u8d39\\u7528-reply]",
+      "seconds": 12.047,
+      "status": "failed",
+      "properties": {
+        "expected_action": "reply",
+        "interrupted": "True",
+        "output_state": "CANCELLED",
+        "intent": "InterruptIntent.NORMAL_INTERRUPT"
+      },
+      "failure": "TimeoutError: event predicate not satisfied within 8s. recent events: [conversation_item_added, speech_created, agent_state_changed, agent_state_changed, user_state_changed, user_input_transcribed, user_state_changed, conversation_item_added, agent_state_changed]"
+    }
+  ]
+}

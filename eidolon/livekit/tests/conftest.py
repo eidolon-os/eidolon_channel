@@ -13,12 +13,19 @@ os.environ["NO_PROXY"] = f"{_loop},{_no_proxy}" if _no_proxy else _loop
 _tests_dir = Path(__file__).parent
 _local_env = _tests_dir / ".env"
 _fixture_env = _tests_dir / "fixtures" / "minimal_test.env"
-_env = _local_env if _local_env.is_file() else _fixture_env
+_explicit_env = (
+    os.environ.get("EIDOLON_CHANNEL_ENV_FILE", "").strip()
+    or os.environ.get("EIDOLON_CHANNEL_LIVEKIT_ENV", "").strip()
+)
+_env = Path(_explicit_env) if _explicit_env else (
+    _local_env if _local_env.is_file() else _fixture_env
+)
 if not os.environ.get("EIDOLON_CHANNEL_LIVEKIT_ENV", "").strip():
     os.environ["EIDOLON_CHANNEL_LIVEKIT_ENV"] = str(_env)
 
 if _env.is_file():
-    load_dotenv(_env, override=True)
+    # An explicit integration environment must not be overwritten by dummy keys.
+    load_dotenv(_env, override=not bool(_explicit_env))
     print(f"[conftest] Loaded env from {_env}")
 else:
     print(

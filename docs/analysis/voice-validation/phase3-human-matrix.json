@@ -1,0 +1,546 @@
+{
+  "layer": "production callbacks + real SDK/EOT + scripted providers; after endpointing binding, before provider-order admission",
+  "counts": {
+    "passed": 61,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 3
+  },
+  "cases": [
+    {
+      "name": "test_human_delivery_commits_once[fast-full_duplex]",
+      "seconds": 5.64,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "fast",
+        "eot_score": "0.8753336455948835"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[fast-half_duplex]",
+      "seconds": 2.633,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "fast",
+        "eot_score": "0.8753336455948835"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[slow-full_duplex]",
+      "seconds": 5.73,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "slow",
+        "eot_score": "0.336627781177165"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[slow-half_duplex]",
+      "seconds": 5.732,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "slow",
+        "eot_score": "0.336627781177165"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[repeated_words-full_duplex]",
+      "seconds": 3.284,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "repeated_words",
+        "eot_score": "0.7089595200222549"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[repeated_words-half_duplex]",
+      "seconds": 3.278,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "repeated_words",
+        "eot_score": "0.7089595200222549"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[repeated_interims-full_duplex]",
+      "seconds": 3.177,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "repeated_interims",
+        "eot_score": "0.5390568404556224"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[repeated_interims-half_duplex]",
+      "seconds": 3.177,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "repeated_interims",
+        "eot_score": "0.5390568404556224"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[self_correction-full_duplex]",
+      "seconds": 5.232,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "self_correction",
+        "eot_score": "0.09025957487016455"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[self_correction-half_duplex]",
+      "seconds": 5.234,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "self_correction",
+        "eot_score": "0.09025957487016455"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[hesitation-full_duplex]",
+      "seconds": 3.582,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "hesitation",
+        "eot_score": "0.9654968416278613"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[hesitation-half_duplex]",
+      "seconds": 3.584,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "hesitation",
+        "eot_score": "0.9654968416278613"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[short_answer-full_duplex]",
+      "seconds": 2.621,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "short_answer",
+        "eot_score": "0.6676591315877032"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[short_answer-half_duplex]",
+      "seconds": 2.626,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "short_answer",
+        "eot_score": "0.6676591315877032"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[single_digit-full_duplex]",
+      "seconds": 2.627,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "single_digit",
+        "eot_score": "0.7146326567661291"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[single_digit-half_duplex]",
+      "seconds": 2.632,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "single_digit",
+        "eot_score": "0.7146326567661291"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[long_number-full_duplex]",
+      "seconds": 5.026,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "long_number",
+        "eot_score": "0.06904100061299581"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[long_number-half_duplex]",
+      "seconds": 5.027,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "long_number",
+        "eot_score": "0.06904100061299581"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[english-full_duplex]",
+      "seconds": 3.234,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "english",
+        "eot_score": "0.8453789750352818"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[english-half_duplex]",
+      "seconds": 3.24,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "english",
+        "eot_score": "0.8453789750352818"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[mixed_language-full_duplex]",
+      "seconds": 3.276,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "mixed_language",
+        "eot_score": "0.965523573577892"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[mixed_language-half_duplex]",
+      "seconds": 3.284,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "mixed_language",
+        "eot_score": "0.965523573577892"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[quoted_command-full_duplex]",
+      "seconds": 3.28,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "quoted_command",
+        "eot_score": "0.9086653473143634"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[quoted_command-half_duplex]",
+      "seconds": 3.28,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "quoted_command",
+        "eot_score": "0.9086653473143634"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[negated_command-full_duplex]",
+      "seconds": 3.284,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "negated_command",
+        "eot_score": "0.9348116395818845"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[negated_command-half_duplex]",
+      "seconds": 3.287,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "negated_command",
+        "eot_score": "0.9348116395818845"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[long_clause-full_duplex]",
+      "seconds": 3.787,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "long_clause",
+        "eot_score": "0.9998719959615752"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[long_clause-half_duplex]",
+      "seconds": 3.779,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "long_clause",
+        "eot_score": "0.9998719959615752"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[within_turn_pause-full_duplex]",
+      "seconds": 2.986,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "within_turn_pause",
+        "eot_score": "0.8995928713267823"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[within_turn_pause-half_duplex]",
+      "seconds": 2.987,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "within_turn_pause",
+        "eot_score": "0.8995928713267823"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[late_final-full_duplex]",
+      "seconds": 3.539,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "late_final",
+        "eot_score": "0.645472315315074"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[late_final-half_duplex]",
+      "seconds": 3.54,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "late_final",
+        "eot_score": "0.645472315315074"
+      }
+    },
+    {
+      "name": "test_welcome_inherits_interruption_owner[full_duplex]",
+      "seconds": 2.116,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_welcome_inherits_interruption_owner[half_duplex]",
+      "seconds": 2.115,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_brief_noise_during_reply_does_not_destroy_output[full_duplex]",
+      "seconds": 2.177,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_brief_noise_during_reply_does_not_destroy_output[half_duplex]",
+      "seconds": 2.195,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_overlap_intent_contract[\\u597d\\u7684-False]",
+      "seconds": 4.043,
+      "status": "xfail",
+      "properties": {
+        "expected_interrupt": "False",
+        "observed_interrupt": "True",
+        "output_state": "NORMAL"
+      },
+      "reason": "EOT completeness is still used as interruption intent; see execution report FD-INTENT"
+    },
+    {
+      "name": "test_overlap_intent_contract[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-False]",
+      "seconds": 4.033,
+      "status": "passed",
+      "properties": {
+        "expected_interrupt": "False",
+        "observed_interrupt": "False",
+        "output_state": "NORMAL"
+      }
+    },
+    {
+      "name": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+      "seconds": 4.044,
+      "status": "xfail",
+      "properties": {
+        "expected_interrupt": "False",
+        "observed_interrupt": "True",
+        "output_state": "NORMAL"
+      },
+      "reason": "Negated commands need intent evidence independent of EOT; see FD-INTENT"
+    },
+    {
+      "name": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+      "seconds": 4.04,
+      "status": "xfail",
+      "properties": {
+        "expected_interrupt": "True",
+        "observed_interrupt": "False",
+        "output_state": "NORMAL"
+      },
+      "reason": "Low EOT corrective interruption is not recognized; see FD-INTENT"
+    },
+    {
+      "name": "test_overlap_intent_contract[\\u505c-True]",
+      "seconds": 4.041,
+      "status": "passed",
+      "properties": {
+        "expected_interrupt": "True",
+        "observed_interrupt": "True",
+        "output_state": "NORMAL"
+      }
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[fast]",
+      "seconds": 2.063,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[slow]",
+      "seconds": 2.057,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[repeated_words]",
+      "seconds": 2.054,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[repeated_interims]",
+      "seconds": 2.053,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[self_correction]",
+      "seconds": 2.055,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[hesitation]",
+      "seconds": 2.057,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[short_answer]",
+      "seconds": 2.046,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[single_digit]",
+      "seconds": 2.049,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[long_number]",
+      "seconds": 2.049,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[english]",
+      "seconds": 2.045,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[mixed_language]",
+      "seconds": 2.053,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[quoted_command]",
+      "seconds": 2.053,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[negated_command]",
+      "seconds": 2.054,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[long_clause]",
+      "seconds": 2.055,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[within_turn_pause]",
+      "seconds": 2.064,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_release_is_only_commit_boundary[late_final]",
+      "seconds": 2.049,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_press_during_output_preempts_and_short_tap_does_not_submit_again",
+      "seconds": 2.047,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_final_and_silence_resume_same_speech[final_only-final_before_stop]",
+      "seconds": 3.542,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_final_and_silence_resume_same_speech[final_only-same_time]",
+      "seconds": 1.559,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_final_and_silence_resume_same_speech[final_only-final_after_stop]",
+      "seconds": 1.55,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_final_and_silence_resume_same_speech[repeated_interim-final_before_stop]",
+      "seconds": 3.537,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_final_and_silence_resume_same_speech[repeated_interim-same_time]",
+      "seconds": 1.56,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_final_and_silence_resume_same_speech[repeated_interim-final_after_stop]",
+      "seconds": 1.552,
+      "status": "passed",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "layer": "real Bailian ASR/TTS + configured direct LLM + real FireRed pVAD/EOT + in-memory PCM, 1.4x full duplex only",
+  "counts": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_real_speech_to_real_reply[fast-full_duplex]",
+      "seconds": 12.716,
+      "status": "passed",
+      "reason": null,
+      "properties": {
+        "speed": "1.4",
+        "mode": "full_duplex",
+        "input_seconds": "2.10325",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "29",
+        "output_bytes": "202880",
+        "elapsed_seconds": "5.6839827911462635",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    }
+  ]
+}

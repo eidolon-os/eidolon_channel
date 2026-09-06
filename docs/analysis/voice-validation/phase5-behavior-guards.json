@@ -1,0 +1,38 @@
+{
+  "scope": "Production callback behavior: speech profiles, full/half/PTT, timing faults",
+  "counts": {
+    "passed": 72,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 3
+  },
+  "cases": [
+    {
+      "case": "test_overlap_intent_contract[\\u597d\\u7684-False]",
+      "status": "xfail",
+      "properties": {
+        "expected_interrupt": "False",
+        "observed_interrupt": "True",
+        "output_state": "NORMAL"
+      }
+    },
+    {
+      "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+      "status": "xfail",
+      "properties": {
+        "expected_interrupt": "False",
+        "observed_interrupt": "True",
+        "output_state": "NORMAL"
+      }
+    },
+    {
+      "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+      "status": "xfail",
+      "properties": {
+        "expected_interrupt": "True",
+        "observed_interrupt": "False",
+        "output_state": "NORMAL"
+      }
+    }
+  ]
+}

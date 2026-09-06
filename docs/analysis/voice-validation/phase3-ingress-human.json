@@ -1,0 +1,89 @@
+{
+  "layer": "final production code; repeated interims, corrections, pauses, late finals in full and half duplex",
+  "counts": {
+    "passed": 8,
+    "failed": 0
+  },
+  "cases": [
+    {
+      "name": "test_human_delivery_commits_once[repeated_interims-full_duplex]",
+      "seconds": 5.958,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "repeated_interims",
+        "eot_score": "0.5390568404556224"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[repeated_interims-half_duplex]",
+      "seconds": 3.176,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "repeated_interims",
+        "eot_score": "0.5390568404556224"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[self_correction-full_duplex]",
+      "seconds": 5.231,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "self_correction",
+        "eot_score": "0.09025957487016455"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[self_correction-half_duplex]",
+      "seconds": 5.23,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "self_correction",
+        "eot_score": "0.09025957487016455"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[within_turn_pause-full_duplex]",
+      "seconds": 2.986,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "within_turn_pause",
+        "eot_score": "0.8995928713267823"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[within_turn_pause-half_duplex]",
+      "seconds": 2.983,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "within_turn_pause",
+        "eot_score": "0.8995928713267823"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[late_final-full_duplex]",
+      "seconds": 3.539,
+      "status": "passed",
+      "properties": {
+        "mode": "full_duplex",
+        "profile": "late_final",
+        "eot_score": "0.645472315315074"
+      }
+    },
+    {
+      "name": "test_human_delivery_commits_once[late_final-half_duplex]",
+      "seconds": 3.541,
+      "status": "passed",
+      "properties": {
+        "mode": "half_duplex",
+        "profile": "late_final",
+        "eot_score": "0.645472315315074"
+      }
+    }
+  ]
+}

@@ -52,11 +52,7 @@ from livekit.agents.voice import (
     AgentSession,
 )
 from livekit.agents.voice.events import (
-    AgentStateChangedEvent,
-    CloseEvent,
-    ConversationItemAddedEvent,
     UserInputTranscribedEvent,
-    UserStateChangedEvent,
 )
 from livekit.agents.voice.io import (
     AudioInput,
@@ -69,6 +65,7 @@ from .audio import (
     DEFAULT_SAMPLE_RATE,
     SAMPLE_WIDTH_BYTES,
     frames_from_pcm,
+    pcm_rms,
 )
 
 
@@ -107,6 +104,7 @@ class ScriptedAudioInput(AudioInput):
         # Track total bytes pushed for assertions / coordination.
         self._bytes_pushed: int = 0
         self._frames_consumed: int = 0
+        self.frame_delivered_at: list[float] = []
         # Pacing (default: real-time). Tests can disable via ``pacing=False``
         # for deterministic, fast scenario execution.
         self._real_time_pacing: bool = False
@@ -201,6 +199,7 @@ class ScriptedAudioInput(AudioInput):
             self._next_frame_at += self._frame_ms / 1000.0
 
         frame = self._queue.popleft()
+        self.frame_delivered_at.append(time.monotonic())
         self._frames_consumed += 1
         if not self._queue and not self._ended:
             self._has_data.clear()
@@ -220,6 +219,7 @@ class _Segment:
     started_at: float = field(default_factory=time.monotonic)
     ended_at: Optional[float] = None
     cleared: bool = False  # True if clear_buffer() was called (interrupt)
+    first_audible_at: float | None = None
 
     @property
     def pcm(self) -> bytes:
@@ -285,6 +285,13 @@ class RecordingAudioOutput(AudioOutput):
         return self._captured_bytes
 
     @property
+    def first_audible_at(self) -> float | None:
+        """First audible retained frame, including playback still in progress."""
+        segments = self._segments + ([self._current] if self._current is not None else [])
+        return min((s.first_audible_at for s in segments
+            if s.first_audible_at is not None and not s.cleared), default=None)
+
+    @property
     def first_audio_event(self) -> asyncio.Event:
         """Set when the first non-empty audio frame is captured."""
         return self._first_audio_event
@@ -301,6 +308,9 @@ class RecordingAudioOutput(AudioOutput):
         if new_segment:
             self._current = _Segment()
         data = bytes(frame.data)
+        if self._current.first_audible_at is None:
+            if pcm_rms(data) >= 120 / 32768:
+                self._current.first_audible_at = time.monotonic()
         self._current.pcm_chunks.append(data)
         self._captured_bytes += len(data)
         if data and not self._first_audio_event.is_set():
@@ -580,6 +590,9 @@ async def headless_session(
     aec_warmup_duration: Optional[float] = None,
     extra_session_kwargs: Optional[dict] = None,
     extra_agent_kwargs: Optional[dict] = None,
+    agent: Optional[Agent] = None,
+    configure_session: Optional[Callable[[AgentSession], None]] = None,
+    strict_cleanup: bool = False,
 ) -> AsyncIterator[HeadlessHandle]:
     """Async context manager wiring AgentSession + mocks + scripted IO.
 
@@ -624,7 +637,12 @@ async def headless_session(
     agent_kwargs: dict[str, Any] = {"instructions": instructions}
     if extra_agent_kwargs:
         agent_kwargs.update(extra_agent_kwargs)
-    agent = Agent(**agent_kwargs)
+    if agent is None:
+        agent = Agent(**agent_kwargs)
+    elif extra_agent_kwargs:
+        raise ValueError("provide agent or extra_agent_kwargs, not both")
+    if configure_session is not None:
+        configure_session(session)
 
     events = EventRecorder(session)
 
@@ -645,5 +663,8 @@ async def headless_session(
         try:
             await asyncio.wait_for(session.aclose(), timeout=5.0)
         except (asyncio.TimeoutError, Exception):
-            # Best-effort cleanup. Tests can re-raise if they care.
+            if strict_cleanup:
+                raise
+            # Compatibility for older component tests; production-chain tests
+            # opt into strict teardown so task leaks cannot become false passes.
             pass

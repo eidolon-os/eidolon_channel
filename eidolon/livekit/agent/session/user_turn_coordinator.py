@@ -16,6 +16,7 @@ from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
 from eidolon.livekit.agent.session.transcript_revision import (
     DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS,
+    normalize_revision_text,
     normalized_text_equal,
     transcript_revision_matches,
 )
@@ -642,6 +643,7 @@ class UserTurnCoordinator:
             return FrameworkCompletionReadiness(True, "interim_only_candidate")
 
         framework_text = transcript.strip()
+        framework_length = len(normalize_revision_text(framework_text))
         for segment in candidate.segments:
             pending = (
                 segment.text.strip()
@@ -651,7 +653,14 @@ class UserTurnCoordinator:
             )
             if not pending:
                 continue
-            if framework_text and self._text_matches_revision(pending, framework_text):
+            # Revision matching is symmetric; coverage is not. A shorter old
+            # framework boundary cannot cover a hypothesis that has grown while
+            # endpointing was pending. Keep waiting for the existing evidence
+            # notification instead of committing a still-changing transcript.
+            if (
+                framework_length >= len(normalize_revision_text(pending))
+                and self._text_matches_revision(pending, framework_text)
+            ):
                 continue
             return FrameworkCompletionReadiness(
                 False,

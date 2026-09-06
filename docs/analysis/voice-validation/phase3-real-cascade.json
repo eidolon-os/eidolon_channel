@@ -1,0 +1,155 @@
+{
+  "layer": "real ASR + direct LLM + TTS, streaming pVAD/EOT, in-memory PCM; final production changes",
+  "counts": {
+    "passed": 9,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_real_speech_to_real_reply[slow-full_duplex]",
+      "seconds": 14.65,
+      "status": "passed",
+      "properties": {
+        "speed": "0.7",
+        "mode": "full_duplex",
+        "input_seconds": "4.205625",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "39",
+        "output_bytes": "260480",
+        "elapsed_seconds": "8.054960000095889",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[slow-half_duplex]",
+      "seconds": 9.995,
+      "status": "passed",
+      "properties": {
+        "speed": "0.7",
+        "mode": "half_duplex",
+        "input_seconds": "4.205625",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "28",
+        "output_bytes": "210560",
+        "elapsed_seconds": "6.646922125015408",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[slow-ptt]",
+      "seconds": 18.458,
+      "status": "passed",
+      "properties": {
+        "speed": "0.7",
+        "mode": "ptt",
+        "input_seconds": "4.205625",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "195",
+        "output_bytes": "1171200",
+        "elapsed_seconds": "16.215831249952316",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "seconds": 9.165,
+      "status": "passed",
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "34",
+        "output_bytes": "232320",
+        "elapsed_seconds": "5.8969064590055496",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-half_duplex]",
+      "seconds": 10.395,
+      "status": "passed",
+      "properties": {
+        "speed": "1.0",
+        "mode": "half_duplex",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "38",
+        "output_bytes": "260480",
+        "elapsed_seconds": "7.1528934999369085",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-ptt]",
+      "seconds": 28.105,
+      "status": "passed",
+      "properties": {
+        "speed": "1.0",
+        "mode": "ptt",
+        "input_seconds": "2.948",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "355",
+        "output_bytes": "2005440",
+        "elapsed_seconds": "25.846179417101666",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-full_duplex]",
+      "seconds": 10.237,
+      "status": "passed",
+      "properties": {
+        "speed": "1.4",
+        "mode": "full_duplex",
+        "input_seconds": "2.10325",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "48",
+        "output_bytes": "305280",
+        "elapsed_seconds": "6.959876375040039",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-half_duplex]",
+      "seconds": 8.513,
+      "status": "passed",
+      "properties": {
+        "speed": "1.4",
+        "mode": "half_duplex",
+        "input_seconds": "2.10325",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "20",
+        "output_bytes": "149120",
+        "elapsed_seconds": "5.253777374979109",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "firered_pvad/real_eot"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-ptt]",
+      "seconds": 14.915,
+      "status": "passed",
+      "properties": {
+        "speed": "1.4",
+        "mode": "ptt",
+        "input_seconds": "2.10325",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "reply_chars": "146",
+        "output_bytes": "958080",
+        "elapsed_seconds": "12.69103904091753",
+        "providers": "bailian/direct_llm/bailian",
+        "turn_boundary": "button_release"
+      }
+    }
+  ]
+}

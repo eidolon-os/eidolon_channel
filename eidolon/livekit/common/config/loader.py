@@ -252,6 +252,7 @@ def load_effective_config() -> EffectiveAgentConfig:
             "temperature",
             "timeout",
             "max_completion_tokens",
+            "extra_body",
         },
     )
     _reject_unknown_fields(
@@ -310,6 +311,7 @@ def load_effective_config() -> EffectiveAgentConfig:
             temperature=_optional_float(llm_y.get("temperature")),
             timeout=_optional_float(llm_y.get("timeout")),
             max_completion_tokens=_optional_int(llm_y.get("max_completion_tokens")),
+            extra_body=_section(llm_y, "extra_body"),
         ),
         remote_agent_rpc=RemoteAgentRpcConfig(
             target=str(rpc_y.get("target") or "").strip(),

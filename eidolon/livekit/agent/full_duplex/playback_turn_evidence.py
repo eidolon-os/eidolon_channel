@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..turn_policy import Action, InterruptIntent
+from ..turn_policy import Action, InterruptIntent, intent_requires_reply
 
 
 @dataclass(frozen=True)
@@ -46,11 +46,11 @@ def resolve_playback_turn_decision(
 
 
 def playback_turn_decision_continues_to_llm(decision: Any) -> bool:
-    """True for confirmed normal interruptions that become a user turn."""
+    """True for confirmed takeovers that require a new reply."""
 
     return (
         decision.action is Action.CANCEL
-        and decision.intent is InterruptIntent.NORMAL_INTERRUPT
+        and intent_requires_reply(decision.intent)
     )
 
 
@@ -63,4 +63,4 @@ def playback_turn_decision_can_resolve(decision: Any) -> bool:
         return False
     if decision.intent is InterruptIntent.HARD_STOP:
         return True
-    return decision.intent is InterruptIntent.NORMAL_INTERRUPT
+    return intent_requires_reply(decision.intent)

@@ -18,7 +18,7 @@ To add a new STT provider:
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -62,6 +62,9 @@ class SttStage:
     ) -> None:
         self._stt = stt
         self._params = params or SttParams()
+        self._recognize_lock = asyncio.Lock()
+        self._stream_close_task: asyncio.Task[None] | None = None
+        self._closed = False
         logger.info(
             "[SttStage] initialized plugin=%s language=%s sample_rate=%d",
             type(stt).__name__,
@@ -97,16 +100,20 @@ class SttStage:
                 )
 
     async def shutdown(self) -> None:
-        """Close any persistent STT connection if the plugin supports it.
+        """Drain owned one-shot streams before shutting down the plugin.
 
-        Plugins without a ``shutdown()`` method are no-op'd.
+        Pipelines cancel and join active turn tasks before shutting down stages.
+        A direct caller may instead let its in-flight recognition finish here.
         """
-        if hasattr(self._stt, "shutdown"):
-            try:
-                logger.info("[SttStage] shutting down STT connection")
-                await self._stt.shutdown()
-            except Exception:
-                logger.exception("[SttStage] STT shutdown error")
+        async with self._recognize_lock:
+            self._closed = True
+            await self._wait_for_stream_close()
+            if hasattr(self._stt, "shutdown"):
+                try:
+                    logger.info("[SttStage] shutting down STT connection")
+                    await self._stt.shutdown()
+                except Exception:
+                    logger.exception("[SttStage] STT shutdown error")
 
     async def recognize(self, audio: bytes) -> str:
         """Transcribe a complete audio buffer in one-shot mode.
@@ -133,20 +140,33 @@ class SttStage:
             samples_per_channel=num_samples,
         )
 
-        result = await self._stt.recognize([frame])
+        async with self._recognize_lock:
+            if self._closed:
+                raise RuntimeError("STT stage is shut down")
+            await self._wait_for_stream_close()
+            result = await self._stt.recognize([frame])
         return self._extract_text(result)
 
     async def recognize_streaming(self, audio: bytes) -> str:
         """Transcribe audio via the plugin's streaming API (one-shot).
 
         Plugin-agnostic alternative to :meth:`recognize` — uses the streaming
-        path that every LiveKit STT plugin must support. Slightly higher
-        latency, but works with streaming-only plugins (e.g. SenseTime STT).
+        path that every LiveKit STT plugin must support. Once recognition ends,
+        return the text while this stage owns transport cleanup. The next
+        one-shot operation waits for cleanup, including for shared connections.
         """
+        async with self._recognize_lock:
+            if self._closed:
+                raise RuntimeError("STT stage is shut down")
+            await self._wait_for_stream_close()
+            return await self._recognize_streaming(audio)
+
+    async def _recognize_streaming(self, audio: bytes) -> str:
         from livekit.agents import stt as lk_stt
 
         stream = self._stt.stream()
         transcript_parts: list[str] = []
+        completed = False
         try:
             for frame in _frames_from_pcm(audio, sample_rate=self._params.sample_rate):
                 stream.push_frame(frame)
@@ -158,12 +178,30 @@ class SttStage:
                         transcript_parts.append(event.alternatives[0].text)
                 elif event.type == lk_stt.SpeechEventType.END_OF_SPEECH:
                     break
+            completed = True
         finally:
             if hasattr(stream, "aclose"):
-                with contextlib.suppress(Exception):
-                    await stream.aclose()
+                # Only one pending close is allowed. Keep it owned and shielded
+                # from cancellation of the next request or a shutdown waiter.
+                self._stream_close_task = asyncio.create_task(
+                    self._close_stream(stream), name="stt-stream-close"
+                )
+                if not completed:
+                    await self._wait_for_stream_close()
 
         return "".join(transcript_parts)
+
+    async def _wait_for_stream_close(self) -> None:
+        if self._stream_close_task is not None:
+            await asyncio.shield(self._stream_close_task)
+            self._stream_close_task = None
+
+    @staticmethod
+    async def _close_stream(stream: "lk_stt.RecognizeStream") -> None:
+        try:
+            await stream.aclose()
+        except Exception:
+            logger.exception("[SttStage] STT stream close failed")
 
     def stream(self) -> "lk_stt.RecognizeStream":
         """Create a streaming transcription session.

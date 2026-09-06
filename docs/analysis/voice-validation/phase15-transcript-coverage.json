@@ -1,0 +1,1607 @@
+{
+  "scope": "Fix directional transcript coverage at the existing framework-completed gate. One production file, reusing existing text normalization, revision comparison and event-driven settlement. No EOT threshold, silence timeout, SDK source, dependency, mode-owner or hotword change.",
+  "problem": "UserTurnCoordinator.framework_completion_readiness used symmetric transcript_revision_matches as a coverage test. A shorter old SDK completion text could therefore certify a longer pending interim after an earlier FINAL, committing the unfinished repetition/extension.",
+  "change": "Require normalized framework text to be at least as long as the pending text before accepting the existing revision match. Keep the same coordinator lease, evidence notifications and deadline behavior. Final ASR evidence wakes settlement; there is no new timer or polling.",
+  "case_design": {
+    "modes": [
+      "full_duplex",
+      "half_duplex"
+    ],
+    "sequences": [
+      {
+        "first": "帮我介绍一下这个方案。",
+        "interim": "帮我介绍一下这个方案的优点",
+        "final": "帮我介绍一下这个方案的优点和缺点。"
+      },
+      {
+        "first": "Book a table.",
+        "interim": "Book a table for seven",
+        "final": "Book a table for seven people."
+      },
+      {
+        "first": "号码是1234。",
+        "interim": "号码是123456",
+        "final": "号码是12345678。"
+      }
+    ],
+    "schedule_ms": {
+      "vad_start": 350,
+      "first_final": 1200,
+      "acoustic_stop_and_vad_end_event": 1500,
+      "growing_interim": 1600,
+      "latest_final": 2200
+    },
+    "score": "Test-process positive .99 prediction to isolate stale-boundary coverage from model classification quality. Not a calibrated or real semantic prediction.",
+    "pcm": "Real-time paced synthesized voiced PCM and silence, not recorded human speech. Scripted VAD, STT, LLM and TTS; real LiveKit SDK and production callback/commit/output effects.",
+    "assertions": [
+      "No user commit or reply audio while latest interim is pending.",
+      "Exactly one user commit with both complete spoken fragments and exactly one reply.",
+      "Acoustic-stop to first audible memory-sink reply <=1200 ms, including the scripted 700 ms final delay.",
+      "Latest final event to user commit <300 ms."
+    ]
+  },
+  "before": {
+    "source": "/tmp/phase15-before-valid-replay.xml",
+    "counts": {
+      "passed": 2,
+      "failed": 9,
+      "error": 0,
+      "xfail": 0,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9-False]",
+        "outcome": "failed",
+        "reason": "AssertionError: assert True is False\n +  where True = FrameworkCompletionReadiness(ready=True, reason='candidate_segments_covered', pending_transcript='').ready"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[Book a table-Book a table for seven people-False]",
+        "outcome": "failed",
+        "reason": "AssertionError: assert True is False\n +  where True = FrameworkCompletionReadiness(ready=True, reason='candidate_segments_covered', pending_transcript='').ready"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u53f7\\u7801\\u662f1234-\\u53f7\\u7801\\u662f12345678-False]",
+        "outcome": "failed",
+        "reason": "AssertionError: assert True is False\n +  where True = FrameworkCompletionReadiness(ready=True, reason='candidate_segments_covered', pending_transcript='').ready"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[BOOK a table for seven people.-Book a table for seven people-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-full_duplex]",
+        "outcome": "failed",
+        "reason": "AssertionError: old shorter boundary committed the growing input\nassert not ['帮我介绍一下这个方案。帮我介绍一下这个方案的优点']\n +  where ['帮我介绍一下这个方案。帮我介绍一下这个方案的优点'] = user_messages()\n +    where user_messages = <tests._harness.headless.EventRecorder object at 0x127bdaba0>.user_messages\n +      where <tests._harness.headless.EventRecorder object at 0x127bdaba0> = HeadlessHandle(session=<livekit.agents.voice.agent_session.AgentSession object at 0x127bd9940>, audio_in=ScriptedAudio...nt=<eidolon.livekit.agent.full_duplex.agent_builder.build_full_duplex_agent.<locals>.VoiceAgent object at 0x111e75d30>).events",
+        "properties": {
+          "premature_users": "['帮我介绍一下这个方案。帮我介绍一下这个方案的优点']",
+          "premature_audio_bytes": "1920"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-half_duplex]",
+        "outcome": "failed",
+        "reason": "AssertionError: old shorter boundary committed the growing input\nassert not ['帮我介绍一下这个方案。帮我介绍一下这个方案的优点']\n +  where ['帮我介绍一下这个方案。帮我介绍一下这个方案的优点'] = user_messages()\n +    where user_messages = <tests._harness.headless.EventRecorder object at 0x1287320d0>.user_messages\n +      where <tests._harness.headless.EventRecorder object at 0x1287320d0> = HeadlessHandle(session=<livekit.agents.voice.agent_session.AgentSession object at 0x128731310>, audio_in=ScriptedAudio...nt=<eidolon.livekit.agent.full_duplex.agent_builder.build_full_duplex_agent.<locals>.VoiceAgent object at 0x127bdb4d0>).events",
+        "properties": {
+          "premature_users": "['帮我介绍一下这个方案。帮我介绍一下这个方案的优点']",
+          "premature_audio_bytes": "1920"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[Book a table.-Book a table for seven-Book a table for seven people.-full_duplex]",
+        "outcome": "failed",
+        "reason": "AssertionError: old shorter boundary committed the growing input\nassert not ['Book a table. Book a table for seven']\n +  where ['Book a table. Book a table for seven'] = user_messages()\n +    where user_messages = <tests._harness.headless.EventRecorder object at 0x128773110>.user_messages\n +      where <tests._harness.headless.EventRecorder object at 0x128773110> = HeadlessHandle(session=<livekit.agents.voice.agent_session.AgentSession object at 0x128772210>, audio_in=ScriptedAudio...nt=<eidolon.livekit.agent.full_duplex.agent_builder.build_full_duplex_agent.<locals>.VoiceAgent object at 0x111e6d400>).events",
+        "properties": {
+          "premature_users": "['Book a table. Book a table for seven']",
+          "premature_audio_bytes": "1920"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[Book a table.-Book a table for seven-Book a table for seven people.-half_duplex]",
+        "outcome": "failed",
+        "reason": "AssertionError: old shorter boundary committed the growing input\nassert not ['Book a table. Book a table for seven']\n +  where ['Book a table. Book a table for seven'] = user_messages()\n +    where user_messages = <tests._harness.headless.EventRecorder object at 0x1287d6650>.user_messages\n +      where <tests._harness.headless.EventRecorder object at 0x1287d6650> = HeadlessHandle(session=<livekit.agents.voice.agent_session.AgentSession object at 0x1287911d0>, audio_in=ScriptedAudio...nt=<eidolon.livekit.agent.full_duplex.agent_builder.build_full_duplex_agent.<locals>.VoiceAgent object at 0x127bdb770>).events",
+        "properties": {
+          "premature_users": "['Book a table. Book a table for seven']",
+          "premature_audio_bytes": "1920"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u53f7\\u7801\\u662f1234\\u3002-\\u53f7\\u7801\\u662f123456-\\u53f7\\u7801\\u662f12345678\\u3002-full_duplex]",
+        "outcome": "failed",
+        "reason": "AssertionError: old shorter boundary committed the growing input\nassert not ['号码是1234。号码是123456']\n +  where ['号码是1234。号码是123456'] = user_messages()\n +    where user_messages = <tests._harness.headless.EventRecorder object at 0x128806b10>.user_messages\n +      where <tests._harness.headless.EventRecorder object at 0x128806b10> = HeadlessHandle(session=<livekit.agents.voice.agent_session.AgentSession object at 0x128792350>, audio_in=ScriptedAudio...nt=<eidolon.livekit.agent.full_duplex.agent_builder.build_full_duplex_agent.<locals>.VoiceAgent object at 0x1286d9e80>).events",
+        "properties": {
+          "premature_users": "['号码是1234。号码是123456']",
+          "premature_audio_bytes": "1920"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u53f7\\u7801\\u662f1234\\u3002-\\u53f7\\u7801\\u662f123456-\\u53f7\\u7801\\u662f12345678\\u3002-half_duplex]",
+        "outcome": "failed",
+        "reason": "AssertionError: old shorter boundary committed the growing input\nassert not ['号码是1234。号码是123456']\n +  where ['号码是1234。号码是123456'] = user_messages()\n +    where user_messages = <tests._harness.headless.EventRecorder object at 0x128855eb0>.user_messages\n +      where <tests._harness.headless.EventRecorder object at 0x128855eb0> = HeadlessHandle(session=<livekit.agents.voice.agent_session.AgentSession object at 0x128792d50>, audio_in=ScriptedAudio...nt=<eidolon.livekit.agent.full_duplex.agent_builder.build_full_duplex_agent.<locals>.VoiceAgent object at 0x1286da660>).events",
+        "properties": {
+          "premature_users": "['号码是1234。号码是123456']",
+          "premature_audio_bytes": "1920"
+        }
+      }
+    ]
+  },
+  "after_targeted": {
+    "source": "/tmp/phase15-after.xml",
+    "counts": {
+      "passed": 11,
+      "failed": 0,
+      "error": 0,
+      "xfail": 0,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[Book a table-Book a table for seven people-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u53f7\\u7801\\u662f1234-\\u53f7\\u7801\\u662f12345678-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[BOOK a table for seven people.-Book a table for seven people-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 744.0,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 10.6,
+            "commit_to_reply_audio_ms": 6.3,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1135.5,
+              "transcript_final_at": -282.0,
+              "speech_stopped_at": 14.7,
+              "transcript_interim_first_at": 114.9,
+              "framework_completed_turn_at": 267.5,
+              "turn_committed_at": 732.2,
+              "llm_started_at": 737.9,
+              "llm_first_delta_at": 738.6,
+              "tts_first_audio_at": 745.0,
+              "agent_audio_playback_done_at": 746.7,
+              "sdk_user_committed": 737.7,
+              "reply_audible": 744.0
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 15.6,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 733.4,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -267.2,
+                "score": 0.9337153847873584,
+                "text": "帮我介绍一下这个方案。"
+              },
+              {
+                "after_stop_ms": 731.4,
+                "score": 0.9633236988812724,
+                "text": "帮我介绍一下这个方案的优点和缺点。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 731.7,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 5.7,
+            "commit_to_reply_audio_ms": 2.8,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1141.4,
+              "transcript_final_at": -292.1,
+              "speech_stopped_at": 7.8,
+              "transcript_interim_first_at": 108.2,
+              "framework_completed_turn_at": 259.9,
+              "turn_committed_at": 725.3,
+              "llm_started_at": 729.0,
+              "llm_first_delta_at": 729.3,
+              "tts_first_audio_at": 732.0,
+              "agent_audio_playback_done_at": 733.8,
+              "sdk_user_committed": 728.9,
+              "reply_audible": 731.7
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 8.4,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 726.0,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -287.3,
+                "score": 0.9337153847873584,
+                "text": "帮我介绍一下这个方案。"
+              },
+              {
+                "after_stop_ms": 724.8,
+                "score": 0.9633236988812724,
+                "text": "帮我介绍一下这个方案的优点和缺点。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[Book a table.-Book a table for seven-Book a table for seven people.-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 730.1,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 7.1,
+            "commit_to_reply_audio_ms": 3.4,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1143.5,
+              "transcript_final_at": -294.7,
+              "speech_stopped_at": 5.4,
+              "transcript_interim_first_at": 106.0,
+              "framework_completed_turn_at": 257.4,
+              "turn_committed_at": 722.3,
+              "llm_started_at": 726.9,
+              "llm_first_delta_at": 727.2,
+              "tts_first_audio_at": 730.7,
+              "agent_audio_playback_done_at": 732.5,
+              "sdk_user_committed": 726.7,
+              "reply_audible": 730.1
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 6.0,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 723.1,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -291.1,
+                "score": 0.4266018923509902,
+                "text": "Book a table."
+              },
+              {
+                "after_stop_ms": 721.4,
+                "score": 0.7819583442593087,
+                "text": "Book a table for seven people."
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[Book a table.-Book a table for seven-Book a table for seven people.-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 723.8,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 5.6,
+            "commit_to_reply_audio_ms": 3.5,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1143.8,
+              "transcript_final_at": -293.9,
+              "speech_stopped_at": 6.9,
+              "transcript_interim_first_at": 106.7,
+              "framework_completed_turn_at": 258.8,
+              "turn_committed_at": 717.5,
+              "llm_started_at": 720.4,
+              "llm_first_delta_at": 720.6,
+              "tts_first_audio_at": 724.0,
+              "agent_audio_playback_done_at": 725.8,
+              "sdk_user_committed": 720.3,
+              "reply_audible": 723.8
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 8.0,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 718.2,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -284.5,
+                "score": 0.4266018923509902,
+                "text": "Book a table."
+              },
+              {
+                "after_stop_ms": 716.8,
+                "score": 0.7819583442593087,
+                "text": "Book a table for seven people."
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u53f7\\u7801\\u662f1234\\u3002-\\u53f7\\u7801\\u662f123456-\\u53f7\\u7801\\u662f12345678\\u3002-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 729.6,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 7.0,
+            "commit_to_reply_audio_ms": 4.1,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1141.2,
+              "transcript_final_at": -290.8,
+              "speech_stopped_at": 9.3,
+              "transcript_interim_first_at": 109.2,
+              "framework_completed_turn_at": 261.6,
+              "turn_committed_at": 722.1,
+              "llm_started_at": 725.7,
+              "llm_first_delta_at": 726.1,
+              "tts_first_audio_at": 730.1,
+              "agent_audio_playback_done_at": 731.7,
+              "sdk_user_committed": 725.6,
+              "reply_audible": 729.6
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 10.3,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 722.7,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -276.5,
+                "score": 0.043659478193723913,
+                "text": "号码是1234。"
+              },
+              {
+                "after_stop_ms": 721.4,
+                "score": 0.0690590547021926,
+                "text": "号码是12345678。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u53f7\\u7801\\u662f1234\\u3002-\\u53f7\\u7801\\u662f123456-\\u53f7\\u7801\\u662f12345678\\u3002-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 740.2,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 11.2,
+            "commit_to_reply_audio_ms": 8.1,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1140.4,
+              "transcript_final_at": -290.7,
+              "speech_stopped_at": 9.3,
+              "transcript_interim_first_at": 110.4,
+              "framework_completed_turn_at": 261.7,
+              "turn_committed_at": 728.4,
+              "llm_started_at": 732.2,
+              "llm_first_delta_at": 732.5,
+              "tts_first_audio_at": 740.3,
+              "agent_audio_playback_done_at": 741.8,
+              "sdk_user_committed": 732.1,
+              "reply_audible": 740.2
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 10.3,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 729.0,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -279.1,
+                "score": 0.043659478193723913,
+                "text": "号码是1234。"
+              },
+              {
+                "after_stop_ms": 726.9,
+                "score": 0.0690590547021926,
+                "text": "号码是12345678。"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "regression": {
+    "source": "/tmp/phase15-regression.xml",
+    "counts": {
+      "passed": 123,
+      "failed": 0,
+      "error": 0,
+      "xfail": 3,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_interim_after_final_starts_a_new_sentence_segment",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_policy_text_folds_provider_segment_boundary_without_changing_chat_text",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_vad_stop_records_boundary_without_terminal_decision",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_new_speech_before_framework_completion_stays_in_same_product_turn",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_new_speech_outside_merge_grace_starts_new_candidate",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_completion_resolves_exact_acoustic_generation",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_explicit_ingress_resolution_covers_pending_generation",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[Book a table-Book a table for seven people-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u53f7\\u7801\\u662f1234-\\u53f7\\u7801\\u662f12345678-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_coverage_is_directional[BOOK a table for seven people.-Book a table for seven people-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_completed_is_the_only_normal_commit_boundary",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_completion_keeps_final_then_interim_canonical_text",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_prepare_framework_completion_exposes_canonical_before_terminal_decision",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_late_final_revises_previous_segment_during_continuation",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_repeated_trailing_final_is_idempotent",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_duplicate_framework_completion_is_not_committed_twice",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_materially_different_duplicate_completion_on_same_timeline_is_noop",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_duplicate_speech_start_does_not_replace_open_candidate",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_boundary_does_not_classify_meta_language",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_framework_boundary_preserves_all_accepted_segments",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_empty_framework_turn_is_rejected",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_user_turn_coordinator::test_new_speech_after_terminal_turn_gets_new_candidate",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_vad_stop_never_commits_or_clears_product_turn[]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_vad_stop_never_commits_or_clears_product_turn[\\u4f60\\u597d\\u4e16\\u754c]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_completed_is_the_single_normal_commit_boundary",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_livekit_transcription_timeout_rejects_transcriptless_candidate",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_livekit_transcription_timeout_ignores_candidate_with_text",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_cross_vad_repeated_stt_hypothesis_commits_once",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_completion_covering_latest_interim_commits_complete_candidate",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_gate_waits_for_evidence_without_second_completion",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_stale_final_is_released_by_later_final_without_second_completion[\\u597d\\u7684\\u3002-\\u90a3\\u592a\\u597d-\\u597d\\u7684\\u3002\\u90a3\\u592a\\u597d]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_stale_final_is_released_by_later_final_without_second_completion[OK\\u5440\\u3002-\\u5230\\u65f6\\u5019\\u6211\\u8fd8\\u53ef\\u4ee5\\u5e26\\u51e0\\u4e2a\\u670b\\u53cb-OK\\u5440\\u3002\\u5230\\u65f6\\u5019\\u6211\\u8fd8\\u53ef\\u4ee5\\u5e26\\u51e0\\u4e2a\\u670b\\u53cb]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_correction_multi_final_starts_one_generation_with_complete_canonical_turn",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_orphan_interim_commits_best_known_text_at_hard_deadline",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_new_candidate_supersedes_turn_waiting_for_provider_evidence",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_interim_only_candidate_replaces_empty_framework_message",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_wrong_speaker_is_explicitly_rejected_without_clearing_next_audio",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_respects_observer_inconclusive_voiceprint_decision",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_terminal_boundary_is_text_agnostic[\\u6240]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_terminal_boundary_is_text_agnostic[OK]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_terminal_boundary_is_text_agnostic[\\u6211\\u518d\\u8bf4\\u4e00\\u4e0b]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_framework_terminal_boundary_is_text_agnostic[\\u7b49\\u4e0b\\u6211\\u518d\\u8bf4\\u5427]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_non_semantic_completed_turn_is_rejected_only_at_product_boundary",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_no_transcript_false_interruption_cannot_reject_later_real_speech",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_recorded_verdict_cannot_cross_generation_on_shared_timeline",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_confirmed_cjk_barge_in_stops_playback_and_reaches_output_once",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_duplicate_framework_completion_is_noop_without_audio_clear",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_commit_guard::test_hard_stop_terminal_closes_before_next_turn_consumes_context",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_capability_profiles_are_provider_neutral[minimal-evidence0-expected0]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_capability_profiles_are_provider_neutral[identity_only-evidence1-expected1]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_capability_profiles_are_provider_neutral[timestamps_only-evidence2-expected2]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_capability_profiles_are_provider_neutral[full-evidence3-expected3]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_malformed_metadata_degrades_to_available_fields",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_livekit_speech_event_is_the_evidence_transport",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_newer_revision_replaces_growing_optional_evidence",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_pairs_original_speech_event_with_normalized_callback",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_rejects_old_revision_even_after_callback_consumed_evidence",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_does_not_infer_sequence_order_across_unknown_or_different_identity[stream-2-revision-1]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_does_not_infer_sequence_order_across_unknown_or_different_identity[stream-1-revision-2]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_does_not_infer_sequence_order_across_unknown_or_different_identity[None-revision-1]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_does_not_infer_sequence_order_across_unknown_or_different_identity[stream-1-None]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_does_not_infer_sequence_order_across_unknown_or_different_identity[None-None]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_buffer_accepts_final_at_same_sequence_as_interim_and_resets_explicitly",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_provider_order_history_is_bounded",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_identity_strategy_updates_one_segment_even_when_text_is_rewritten",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_timestamp_strategy_updates_one_segment_without_identity",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_conflicting_identity_outranks_overlapping_timestamp",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_minimal_profile_remains_supported",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_normalized_livekit_item_id_is_optional_revision_identity",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_evidence::test_settlement_does_not_miss_evidence_arriving_during_readiness_check",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_final_covers_equivalent_interim_from_prior_generation",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_non_equivalent_hypothesis_is_not_covered",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_repeated_phrase_without_target_interim_is_not_treated_as_alias",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_final_then_interim_in_one_generation_tracks_each_segment",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_candidate_boundary_discards_prior_hypotheses",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_identity_covers_same_revision_without_text_heuristic",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.agent.test_transcript_hypothesis_reconciler::test_conflicting_identity_prevents_text_based_aliasing",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_delayed_old_final_cannot_replace_corrected_destination[full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_delayed_old_final_cannot_replace_corrected_destination[half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 735.7,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 8.8,
+            "commit_to_reply_audio_ms": 4.1,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1141.4,
+              "transcript_final_at": -290.6,
+              "speech_stopped_at": 8.2,
+              "transcript_interim_first_at": 109.2,
+              "framework_completed_turn_at": 260.1,
+              "turn_committed_at": 726.3,
+              "llm_started_at": 731.7,
+              "llm_first_delta_at": 732.0,
+              "tts_first_audio_at": 736.2,
+              "agent_audio_playback_done_at": 737.9,
+              "sdk_user_committed": 731.6,
+              "reply_audible": 735.7
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 8.6,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 726.8,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -272.4,
+                "score": 0.9337153847873584,
+                "text": "帮我介绍一下这个方案。"
+              },
+              {
+                "after_stop_ms": 725.5,
+                "score": 0.9633236988812724,
+                "text": "帮我介绍一下这个方案的优点和缺点。"
+              }
+            ]
+          },
+          "final_to_commit_ms": "23.3"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u3002-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9-\\u5e2e\\u6211\\u4ecb\\u7ecd\\u4e00\\u4e0b\\u8fd9\\u4e2a\\u65b9\\u6848\\u7684\\u4f18\\u70b9\\u548c\\u7f3a\\u70b9\\u3002-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 737.5,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 10.2,
+            "commit_to_reply_audio_ms": 7.1,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1141.6,
+              "transcript_final_at": -289.9,
+              "speech_stopped_at": 8.8,
+              "transcript_interim_first_at": 109.7,
+              "framework_completed_turn_at": 260.8,
+              "turn_committed_at": 726.6,
+              "llm_started_at": 730.6,
+              "llm_first_delta_at": 731.0,
+              "tts_first_audio_at": 737.7,
+              "agent_audio_playback_done_at": 738.6,
+              "sdk_user_committed": 730.4,
+              "reply_audible": 737.5
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 9.6,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 727.3,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -274.2,
+                "score": 0.9337153847873584,
+                "text": "帮我介绍一下这个方案。"
+              },
+              {
+                "after_stop_ms": 725.9,
+                "score": 0.9633236988812724,
+                "text": "帮我介绍一下这个方案的优点和缺点。"
+              }
+            ]
+          },
+          "final_to_commit_ms": "22.0"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[Book a table.-Book a table for seven-Book a table for seven people.-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 734.9,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 6.5,
+            "commit_to_reply_audio_ms": 3.7,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1140.7,
+              "transcript_final_at": -288.9,
+              "speech_stopped_at": 10.3,
+              "transcript_interim_first_at": 109.3,
+              "framework_completed_turn_at": 261.2,
+              "turn_committed_at": 727.9,
+              "llm_started_at": 731.4,
+              "llm_first_delta_at": 731.6,
+              "tts_first_audio_at": 735.4,
+              "agent_audio_playback_done_at": 736.6,
+              "sdk_user_committed": 731.2,
+              "reply_audible": 734.9
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 11.2,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 728.4,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -271.7,
+                "score": 0.4266018923509902,
+                "text": "Book a table."
+              },
+              {
+                "after_stop_ms": 727.3,
+                "score": 0.7819583442593087,
+                "text": "Book a table for seven people."
+              }
+            ]
+          },
+          "final_to_commit_ms": "21.5"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[Book a table.-Book a table for seven-Book a table for seven people.-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 733.0,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 7.3,
+            "commit_to_reply_audio_ms": 4.3,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1141.3,
+              "transcript_final_at": -291.4,
+              "speech_stopped_at": 9.1,
+              "transcript_interim_first_at": 108.5,
+              "framework_completed_turn_at": 261.1,
+              "turn_committed_at": 725.3,
+              "llm_started_at": 728.8,
+              "llm_first_delta_at": 729.2,
+              "tts_first_audio_at": 733.2,
+              "agent_audio_playback_done_at": 734.6,
+              "sdk_user_committed": 728.7,
+              "reply_audible": 733.0
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 9.9,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 725.7,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -284.4,
+                "score": 0.4266018923509902,
+                "text": "Book a table."
+              },
+              {
+                "after_stop_ms": 724.7,
+                "score": 0.7819583442593087,
+                "text": "Book a table for seven people."
+              }
+            ]
+          },
+          "final_to_commit_ms": "3.9"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u53f7\\u7801\\u662f1234\\u3002-\\u53f7\\u7801\\u662f123456-\\u53f7\\u7801\\u662f12345678\\u3002-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 727.9,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 6.1,
+            "commit_to_reply_audio_ms": 3.8,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1141.1,
+              "transcript_final_at": -291.1,
+              "speech_stopped_at": 9.2,
+              "transcript_interim_first_at": 107.9,
+              "framework_completed_turn_at": 261.1,
+              "turn_committed_at": 721.3,
+              "llm_started_at": 724.2,
+              "llm_first_delta_at": 724.3,
+              "tts_first_audio_at": 728.1,
+              "agent_audio_playback_done_at": 729.3,
+              "sdk_user_committed": 724.1,
+              "reply_audible": 727.9
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 10.0,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 721.8,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -281.8,
+                "score": 0.043659478193723913,
+                "text": "号码是1234。"
+              },
+              {
+                "after_stop_ms": 720.7,
+                "score": 0.0690590547021926,
+                "text": "号码是12345678。"
+              }
+            ]
+          },
+          "final_to_commit_ms": "15.7"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_stt_revision_order::test_short_framework_boundary_waits_for_growing_transcript[\\u53f7\\u7801\\u662f1234\\u3002-\\u53f7\\u7801\\u662f123456-\\u53f7\\u7801\\u662f12345678\\u3002-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "premature_users": "[]",
+          "premature_audio_bytes": "0",
+          "latency": {
+            "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+            "stop_to_reply_audio_ms": 722.1,
+            "complete_to_reply_audio_ms": null,
+            "sdk_complete_to_reply_audio_ms": 5.2,
+            "commit_to_reply_audio_ms": 3.0,
+            "from_acoustic_stop_ms": {
+              "speech_started_at": -1143.2,
+              "transcript_final_at": -294.2,
+              "speech_stopped_at": 6.3,
+              "transcript_interim_first_at": 106.6,
+              "framework_completed_turn_at": 258.1,
+              "turn_committed_at": 716.3,
+              "llm_started_at": 719.2,
+              "llm_first_delta_at": 719.9,
+              "tts_first_audio_at": 722.2,
+              "agent_audio_playback_done_at": 723.5,
+              "sdk_user_committed": 719.1,
+              "reply_audible": 722.1
+            },
+            "eot_predictions": [
+              {
+                "after_stop_ms": 7.1,
+                "score": 0.99,
+                "threshold": 0.5
+              },
+              {
+                "after_stop_ms": 716.8,
+                "score": 0.99,
+                "threshold": 0.5
+              }
+            ],
+            "final_eot_predictions": [
+              {
+                "after_stop_ms": -283.9,
+                "score": 0.043659478193723913,
+                "text": "号码是1234。"
+              },
+              {
+                "after_stop_ms": 715.8,
+                "score": 0.0690590547021926,
+                "text": "号码是12345678。"
+              }
+            ]
+          },
+          "final_to_commit_ms": "13.7"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[\\u597d-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "text": "好",
+          "mode": "full_duplex",
+          "stop_to_reply_audio_ms": "272.5",
+          "eot_predictions": "[{'after_stop_ms': 25.6, 'score': 0.6676591315877032, 'threshold': 0.5}]"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[\\u597d-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "text": "好",
+          "mode": "half_duplex",
+          "stop_to_reply_audio_ms": "274.0",
+          "eot_predictions": "[{'after_stop_ms': 25.5, 'score': 0.6676591315877032, 'threshold': 0.5}]"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[7-full_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "text": "7",
+          "mode": "full_duplex",
+          "stop_to_reply_audio_ms": "275.9",
+          "eot_predictions": "[{'after_stop_ms': 29.3, 'score': 0.7146326567661291, 'threshold': 0.5}]"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_short_answer_replies_promptly[7-half_duplex]",
+        "outcome": "passed",
+        "properties": {
+          "text": "7",
+          "mode": "half_duplex",
+          "stop_to_reply_audio_ms": "272.2",
+          "eot_predictions": "[{'after_stop_ms': 18.3, 'score': 0.7146326567661291, 'threshold': 0.5}]"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+        "outcome": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "788.0",
+          "complete_to_reply_audio_ms": "659.9",
+          "budget_ms": "1000"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+        "outcome": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "770.2",
+          "complete_to_reply_audio_ms": "654.8",
+          "budget_ms": "1000"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+        "outcome": "passed",
+        "properties": {
+          "stop_to_reply_audio_ms": "835.3",
+          "complete_to_reply_audio_ms": "731.7",
+          "budget_ms": "1500"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-full_duplex-none]",
+        "outcome": "passed",
+        "properties": {
+          "prefix_eot_score": "0.02449715357633552",
+          "premature_commits": "0",
+          "premature_audio_bytes": "0",
+          "stop_to_reply_audio_ms": "268.8",
+          "sdk_complete_to_reply_audio_ms": "243.5"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-full_duplex-llm]",
+        "outcome": "passed",
+        "properties": {
+          "prefix_eot_score": "0.02449715357633552",
+          "premature_commits": "0",
+          "premature_audio_bytes": "0",
+          "stop_to_reply_audio_ms": "247.8",
+          "sdk_complete_to_reply_audio_ms": "248.2"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u6211\\u60f3\\u95ee\\u7684\\u662f-\\u660e\\u5929\\u7684\\u5929\\u6c14\\u600e\\u4e48\\u6837\\u3002-half_duplex-none]",
+        "outcome": "passed",
+        "properties": {
+          "prefix_eot_score": "0.02449715357633552",
+          "premature_commits": "0",
+          "premature_audio_bytes": "0",
+          "stop_to_reply_audio_ms": "252.1",
+          "sdk_complete_to_reply_audio_ms": "253.0"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+        "outcome": "xfail",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause",
+        "properties": {
+          "prefix_eot_score": "0.6014498088087934",
+          "premature_commits": "1",
+          "premature_audio_bytes": "3200"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+        "outcome": "xfail",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause",
+        "properties": {
+          "prefix_eot_score": "0.6014498088087934",
+          "premature_commits": "1",
+          "premature_audio_bytes": "3200"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+        "outcome": "xfail",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause",
+        "properties": {
+          "prefix_eot_score": "0.6014498088087934",
+          "premature_commits": "1",
+          "premature_audio_bytes": "3200"
+        }
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[fast]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[slow]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[repeated_words]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[repeated_interims]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[self_correction]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[hesitation]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[short_answer]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[single_digit]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[long_number]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[english]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[mixed_language]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[quoted_command]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[negated_command]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[long_clause]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[within_turn_pause]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_release_is_only_commit_boundary[late_final]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_press_during_output_preempts_and_short_tap_does_not_submit_again",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_ptt::test_ptt_reply_plays_before_stt_cleanup_and_next_turn_stays_isolated",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_result_precedes_close_but_next_recognition_and_shutdown_drain_it",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_failed_or_cancelled_recognition_closes_before_propagating[True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_cancelled_next_request_cannot_cancel_previous_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_shutdown_waits_for_inflight_recognition_and_its_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_offline_recognition_also_waits_for_previous_stream_cleanup",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_repeated_cancellation_and_cancelled_shutdown_keep_cleanup_owned",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.pipeline.test_stt_stage_lifecycle::test_close_failure_is_observed_and_does_not_replace_recognition_error",
+        "outcome": "passed"
+      }
+    ]
+  },
+  "test_setup_failures": [
+    {
+      "source": "/tmp/phase15-before.xml",
+      "issue": "New parametrized unit test initially omitted pytest import; collection error, corrected before production changes."
+    },
+    {
+      "source": "/tmp/phase15-before-fixed-test.xml",
+      "issue": "New replay initially omitted ScriptedTranscript.interims, so final=False emitted no interim and wait timed out. Corrected the test input before the valid before/after runs; not counted as product behavior evidence."
+    }
+  ],
+  "observed_before": "Three negative unit cases failed coverage assertions; all six valid SDK replays prematurely committed the growing interim and emitted 1920 bytes of reply audio. The two positive coverage checks passed.",
+  "observed_after": "All eleven new targeted checks passed. In the broader run the six replays had no premature user commit/audio, exactly one complete user message/reply, 722.1-737.5 ms acoustic-stop to reply and 3.9-23.3 ms latest-final to commit.",
+  "limits": [
+    "This repairs a stale-boundary logic error, not the EOT model false positives/negatives. Existing conditional-prefix premature reply remains strict xfail.",
+    "When final evidence never arrives, the existing settlement deadline/fallback still applies; this change can make previously premature replies wait for that existing deadline. No claim that all tail latency is resolved.",
+    "Interim-only admission remains unchanged; this fix concerns earlier FINAL followed by a longer pending INTERIM.",
+    "No real ASR/service or RTC/device/AEC latency acceptance run this phase. No direct mapping to phase13 audio-detector replacement failures is asserted.",
+    "PTT behavior and its phase14 cleanup optimization are unchanged and included in regression."
+  ],
+  "checks": {
+    "ruff": "passed on three changed Python files",
+    "git_diff_check": "passed",
+    "deployment": "not committed or deployed",
+    "sdk_integrity": {
+      "version": "1.7.1",
+      "checked_python_files": 207,
+      "mismatches": []
+    }
+  },
+  "human_and_overlap_regression": {
+    "source": "/tmp/phase15-human-modes.xml",
+    "counts": {
+      "passed": 44,
+      "failed": 0,
+      "xfail": 3,
+      "skipped": 0
+    },
+    "cases": [
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[fast-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[fast-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[slow-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[slow-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_words-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_words-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_interims-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[repeated_interims-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[self_correction-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[self_correction-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[hesitation-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[hesitation-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[short_answer-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[short_answer-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[single_digit-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[single_digit-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_number-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_number-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[english-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[english-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[mixed_language-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[mixed_language-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[quoted_command-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[quoted_command-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[negated_command-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[negated_command-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_clause-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[long_clause-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[within_turn_pause-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[within_turn_pause-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[late_final-full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_human_delivery_commits_once[late_final-half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_welcome_inherits_interruption_owner[full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_welcome_inherits_interruption_owner[half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_brief_noise_during_reply_does_not_destroy_output[full_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_brief_noise_during_reply_does_not_destroy_output[half_duplex]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u597d\\u7684-False]",
+        "outcome": "xfail",
+        "reason": "EOT completeness is still used as interruption intent; see execution report FD-INTENT"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u55ef\\u55ef\\u4f60\\u7ee7\\u7eed-False]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+        "outcome": "xfail",
+        "reason": "Negated commands need intent evidence independent of EOT; see FD-INTENT"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+        "outcome": "xfail",
+        "reason": "Low EOT corrective interruption is not recognized; see FD-INTENT"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u505c-True]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_overlap_settlement::test_final_and_silence_resume_same_speech[final_only-final_before_stop]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_overlap_settlement::test_final_and_silence_resume_same_speech[final_only-same_time]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_overlap_settlement::test_final_and_silence_resume_same_speech[final_only-final_after_stop]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_overlap_settlement::test_final_and_silence_resume_same_speech[repeated_interim-final_before_stop]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_overlap_settlement::test_final_and_silence_resume_same_speech[repeated_interim-same_time]",
+        "outcome": "passed"
+      },
+      {
+        "name": "eidolon.livekit.tests.scenarios.test_overlap_settlement::test_final_and_silence_resume_same_speech[repeated_interim-final_after_stop]",
+        "outcome": "passed"
+      }
+    ]
+  }
+}

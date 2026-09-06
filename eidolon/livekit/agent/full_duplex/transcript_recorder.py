@@ -38,16 +38,6 @@ class FullDuplexTranscriptRecorder:
         # trips the idle watchdog.
         pipeline._mark_activity()
         pipeline._latest_asr_text = transcript_event.transcript
-        orchestrator = getattr(pipeline, "_interruption_orchestrator", None)
-        if (
-            orchestrator is not None
-            and pipeline._barge_in_enabled
-            and not pipeline._uses_livekit_native_adaptive_interruption()
-        ):
-            orchestrator.note_transcript(
-                transcript_event.transcript,
-                is_final=transcript_event.is_final,
-            )
         pipeline._ensure_user_turn_coordinator()
         buffered_evidence = pipeline._ensure_transcript_evidence_buffer().take(
             transcript_event.transcript,
@@ -98,6 +88,18 @@ class FullDuplexTranscriptRecorder:
             if isinstance(selected_policy_text, str) and selected_policy_text.strip()
             else transcript_event.transcript
         )
+        orchestrator = getattr(pipeline, "_interruption_orchestrator", None)
+        if (
+            orchestrator is not None
+            and pipeline._barge_in_enabled
+            and not pipeline._uses_livekit_native_adaptive_interruption()
+        ):
+            # Use the same assembled evidence as the semantic decision. A raw
+            # provider segment is not a revision of the whole candidate.
+            orchestrator.note_transcript(
+                policy_transcript,
+                is_final=transcript_event.is_final,
+            )
         if pipeline._timeline is not None:
             pipeline._timeline.mark(transcript_event.timeline_mark)
         try:

@@ -37,7 +37,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from livekit.agents.stt import (
     STT,
@@ -83,6 +83,9 @@ class ScriptedTranscript:
     language: str = "zh"
 
     confidence: float = 0.95
+
+    metadata: dict[str, Any] | None = None
+    """Optional public provider evidence, forwarded without interpreting it."""
 
     final: Optional[bool] = True
     """When False, only interims are emitted (no FINAL_TRANSCRIPT
@@ -282,6 +285,7 @@ class _MockSTTStream(RecognizeStream):
                                 language=entry.language,
                                 text=interim,
                                 confidence=entry.confidence,
+                                metadata=entry.metadata,
                             )
                         ],
                     )
@@ -300,6 +304,7 @@ class _MockSTTStream(RecognizeStream):
                                 language=entry.language,
                                 text=entry.text,
                                 confidence=entry.confidence,
+                                metadata=entry.metadata,
                             )
                         ],
                     )

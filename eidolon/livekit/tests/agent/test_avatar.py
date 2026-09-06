@@ -61,7 +61,7 @@ def test_turn_handling_non_avatar_unchanged():
         avatar_mode=False,
     )
     # channel-owned (non-adaptive) mode does not force resume_false_interruption.
-    assert "resume_false_interruption" not in th["interruption"]
+    assert th["interruption"]["resume_false_interruption"] is False
 
 
 # --------------------------------------------------------------------- config

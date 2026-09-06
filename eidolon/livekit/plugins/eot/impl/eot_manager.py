@@ -111,14 +111,16 @@ class EotManager:
         if not stripped:
             return 0.0
 
-        now = time.time()
+        now = time.monotonic()
         if stripped == self._cache_text and (now - self._cache_time) < self._CACHE_TTL:
             return self._cache_score
 
         score = float(self._backend.score(stripped))
         self._cache_text = stripped
         self._cache_score = score
-        self._cache_time = now
+        # The reuse window starts when the score is available. Cold inference
+        # can itself exceed the TTL; ASR and endpointing must still share it.
+        self._cache_time = time.monotonic()
         return score
 
 

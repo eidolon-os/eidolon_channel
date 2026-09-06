@@ -1,0 +1,96 @@
+{
+  "layer": "Production SDK/output chain with model boundary fault injection; not semantic model accuracy",
+  "counts": {
+    "passed": 17,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[normal_interrupt-0.05]",
+      "seconds": 8.031,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[normal_interrupt-0.7]",
+      "seconds": 5.248,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[normal_interrupt-1.2]",
+      "seconds": 5.246,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[backchannel-0.05]",
+      "seconds": 1.082,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[backchannel-0.7]",
+      "seconds": 3.45,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[backchannel-1.2]",
+      "seconds": 3.961,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[hard_stop-0.05]",
+      "seconds": 4.541,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[hard_stop-0.7]",
+      "seconds": 4.523,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_result_on_either_side_of_sdk_endpoint[hard_stop-1.2]",
+      "seconds": 4.527,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_unavailable_resumes_original_speech_after_vad_end[timeout]",
+      "seconds": 3.527,
+      "status": "passed"
+    },
+    {
+      "name": "test_model_unavailable_resumes_original_speech_after_vad_end[error]",
+      "seconds": 3.528,
+      "status": "passed"
+    },
+    {
+      "name": "test_resume_does_not_leak_overlap_into_next_user_turn",
+      "seconds": 9.929,
+      "status": "passed"
+    },
+    {
+      "name": "test_overlap_delivery_waits_for_final_and_replies_once[fast]",
+      "seconds": 3.194,
+      "status": "passed"
+    },
+    {
+      "name": "test_overlap_delivery_waits_for_final_and_replies_once[slow]",
+      "seconds": 6.291,
+      "status": "passed"
+    },
+    {
+      "name": "test_overlap_delivery_waits_for_final_and_replies_once[repeated_interims]",
+      "seconds": 3.735,
+      "status": "passed"
+    },
+    {
+      "name": "test_overlap_delivery_waits_for_final_and_replies_once[within_turn_pause]",
+      "seconds": 3.544,
+      "status": "passed"
+    },
+    {
+      "name": "test_overlap_delivery_waits_for_final_and_replies_once[late_final]",
+      "seconds": 4.089,
+      "status": "passed"
+    }
+  ]
+}

@@ -16,6 +16,27 @@ from eidolon.livekit.agent.session.interruption_orchestrator import (
 from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
 
 
+def test_final_evidence_is_invalidated_by_revision_resolution_or_new_generation() -> None:
+    owner = InterruptionOrchestrator(evidence_timeout_sec=6.0, min_speech_sec=.25)
+    timeline = TurnTimeline("final-evidence")
+    assert owner.current_final_transcript == ""
+    owner.start_candidate(timeline=timeline)
+    owner.note_transcript("我想了解一下", is_final=True)
+    assert owner.current_final_transcript == "我想了解一下"
+    owner.note_transcript("我想了解一下", is_final=False)
+    assert owner.current_final_transcript == "我想了解一下"
+    owner.note_transcript("我想了解一下明天", is_final=False)
+    assert owner.current_final_transcript == ""
+    owner.note_transcript("我想了解一下", is_final=False)
+    assert owner.current_final_transcript == ""
+    owner.note_transcript("我想了解一下", is_final=True)
+    owner.start_candidate(timeline=timeline, generation_id=2)
+    assert owner.current_final_transcript == ""
+    owner.note_transcript("新的问题", is_final=True)
+    owner.resolve(action="rollback", reason="test")
+    assert owner.current_final_transcript == ""
+
+
 def test_vad_end_without_transcript_waits_for_evidence_when_ducked() -> None:
     now = 10.0
 

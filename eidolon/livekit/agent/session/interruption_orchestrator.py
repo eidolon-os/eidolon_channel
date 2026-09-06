@@ -14,7 +14,9 @@ from eidolon.livekit.agent.turn_policy import (
     Action,
     Decision,
     InterruptIntent,
+    InterruptIntentResult,
     TurnPolicyRuntime,
+    intent_requires_reply,
 )
 
 logger = logging.getLogger("agent.session.interruption_orchestrator")
@@ -177,6 +179,23 @@ class InterruptionOrchestrator:
             return ""
         return candidate.final_transcript or candidate.transcript
 
+    @property
+    def current_final_transcript(self) -> str:
+        """Final evidence for the active candidate, unless later text superseded it."""
+        candidate = self._candidate
+        if candidate is None or candidate.resolved:
+            return ""
+        if candidate.final_transcript != candidate.transcript:
+            return ""
+        return candidate.final_transcript
+
+    @property
+    def active_key(self) -> tuple[str | None, int] | None:
+        candidate = self._candidate
+        if candidate is None or candidate.resolved:
+            return None
+        return candidate.candidate_id, candidate.generation_id
+
     def verdict_for(
         self,
         candidate_id: str | None,
@@ -253,6 +272,8 @@ class InterruptionOrchestrator:
         candidate.transcript = text
         if is_final:
             candidate.final_transcript = text
+        elif text != candidate.final_transcript:
+            candidate.final_transcript = ""
         self._record_event(
             "transcript_evidence",
             is_final=bool(is_final),
@@ -269,6 +290,7 @@ class InterruptionOrchestrator:
         agent_speaking: bool,
         is_final: bool = False,
         event_time_ms: float | None = None,
+        intent_result: InterruptIntentResult | None = None,
     ) -> Decision:
         """Route transcript evidence through the owner-owned policy path."""
 
@@ -280,6 +302,7 @@ class InterruptionOrchestrator:
             agent_speaking=agent_speaking,
             is_final=is_final,
             event_time_ms=event_time_ms,
+            **({"intent_result": intent_result} if intent_result is not None else {}),
         )
         return decision
 
@@ -680,7 +703,7 @@ class InterruptionOrchestrator:
             verdict_action = InterruptionVerdictAction.CONFIRMED_CANCEL
             continue_to_llm = (
                 candidate.last_policy_action is Action.CANCEL
-                and intent is InterruptIntent.NORMAL_INTERRUPT
+                and intent_requires_reply(intent)
             )
         elif normalized_action in {"rollback", "resume", "unduck"}:
             verdict_action = (

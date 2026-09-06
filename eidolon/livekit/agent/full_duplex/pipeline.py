@@ -115,7 +115,7 @@ from .speech_lifecycle import FullDuplexSpeechLifecycle
 from .user_state_handler import FullDuplexUserStateHandler
 from ..session.decision_effects import DecisionEffectApplier
 from ..session.duck_timeout import DuckSuspendTimeoutHandler
-from ..session.eot_model import get_shared_eot_model
+from ..session.eot_model import create_session_eot_model
 from ..session.interruption_orchestrator import (
     InterruptionOrchestrator,
     InterruptionVerdict,
@@ -402,12 +402,14 @@ class StreamingPipeline(BasePipeline):
         # Eagerly trigger EOT model loading so the ONNX session is ready before
         # the first user audio frame arrives. This avoids cold-start delay after
         # session.start() is called.
-        get_shared_eot_model(self._turn_policy)
+        self._get_eot_model()
         self._install_provider_observers()
 
     def _get_eot_model(self) -> Any:
-        """Return the shared EOT model instance."""
-        return get_shared_eot_model(self._turn_policy)
+        """Keep conversation state local while EotManager shares model weights."""
+        if getattr(self, "_eot_model", None) is None:
+            self._eot_model = create_session_eot_model(self._turn_policy)
+        return self._eot_model
 
     def _ensure_ducking_controller(self) -> None:
         if not hasattr(self, "_ducking"):
@@ -1025,10 +1027,10 @@ class StreamingPipeline(BasePipeline):
             self._transcript_evidence_buffer = TranscriptEvidenceBuffer()
         return self._transcript_evidence_buffer
 
-    def _observe_stt_speech_event(self, event: Any) -> None:
-        """Observe a public LiveKit SpeechEvent before framework normalization."""
+    def _observe_stt_speech_event(self, event: Any) -> bool:
+        """Check provider order and retain evidence before framework normalization."""
 
-        self._ensure_transcript_evidence_buffer().observe_speech_event(event)
+        return self._ensure_transcript_evidence_buffer().observe_speech_event(event)
 
     def _build_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
         return FullDuplexSpeechLifecycle(self)
@@ -1169,6 +1171,14 @@ class StreamingPipeline(BasePipeline):
             apply_decision=self._decision_effects.apply,
             interrupt_current_turn=lambda: interruption_effects.interrupt_current_turn(),
             enter_soft_interrupt=lambda: interruption_effects.enter_soft_interrupt(),
+            intent_classifier=getattr(getattr(self, "_factory", None), "interrupt_classifier", None),
+            get_candidate_scope=lambda: (
+                (self._interruption_orchestrator.active_key, id(self._session.current_speech))
+                if self._interruption_orchestrator.active_key is not None and self._session is not None
+                else None
+            ),
+            get_final_transcript=lambda: self._interruption_orchestrator.current_final_transcript,
+            get_assistant_text=self._current_assistant_speech_text,
             decide_from_transcript=(
                 lambda text, score, **kwargs: (
                     self._interruption_orchestrator.decide_from_transcript(
@@ -1195,7 +1205,9 @@ class StreamingPipeline(BasePipeline):
             get_duck_stats=lambda: self._ducking.stats(),
             get_suspend_start=lambda: self._ducking.suspend_start,
             set_timeout_task=lambda task: setattr(self._ducking, "timeout_task", task),
-            get_latest_asr_text=lambda: self._latest_asr_text,
+            get_latest_asr_text=lambda: (
+                self._interruption_orchestrator.current_transcript or self._latest_asr_text
+            ),
             get_vad_active=lambda: (
                 self._session is not None and self._session.user_state == "speaking"
             ),
@@ -1280,9 +1292,8 @@ class StreamingPipeline(BasePipeline):
         AgentSession, not the Agent — ``AgentActivity`` reads
         ``session._opts.turn_handling.interruption``).
 
-        ``StreamingPipeline`` is the full-duplex realtime path. Half-duplex
-        sessions are routed to ``HalfDuplexPttPipeline`` before this class is
-        constructed.
+        StreamingPipeline serves full_duplex and half_duplex. Only explicit
+        button-driven PTT is routed to HalfDuplexPttPipeline.
 
         ``preemptive_generation`` (Phase 2, 2026-05-30): speculative brain
         generation gated via ``turn_policy.preemptive`` — hides the STT-final
@@ -1404,7 +1415,24 @@ class StreamingPipeline(BasePipeline):
 
     def _turn_detection(self) -> Any:
         """The full-duplex Agent ``turn_detection`` model."""
+        if self._barge_in_enabled and self._turn_policy.uses_channel_model_intent:
+            from ..session.eot_model import InterruptAwareTurnDetector
+
+            return InterruptAwareTurnDetector(self._get_eot_model(), self._settle_interrupt_before_endpointing)
         return self._get_eot_model()
+
+    def _lifecycle_stages(self) -> list[Any]:
+        stages = super()._lifecycle_stages()
+        classifier = getattr(self._factory, "interrupt_classifier", None)
+        if self._barge_in_enabled and self._turn_policy.uses_channel_model_intent and classifier is not None:
+            stages.append(classifier)
+        return stages
+
+    async def _settle_interrupt_before_endpointing(self) -> None:
+        speech = self._session.current_speech if self._session is not None else None
+        await self._semantic_interrupts.wait_for_pending_intent()
+        if speech is not None and speech.interrupted:
+            await speech.wait_for_playout()
 
     def _welcome_on_enter_text(self) -> str | None:
         """Welcome line to speak on session start, or None to stay silent.

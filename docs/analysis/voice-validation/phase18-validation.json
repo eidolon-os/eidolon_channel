@@ -1,0 +1,578 @@
+{
+  "scope": "Phase 18: repair canonical interruption transcript ownership. Overall semantic/latency/RPC/device acceptance remains incomplete.",
+  "changes": {
+    "production": [
+      "Record the existing UserTurnCoordinator assembled policy text in the interruption owner after transcript reconciliation.",
+      "VAD-end and duck deadline callbacks reuse the same owner transcript, with the existing raw-ASR fallback when no candidate text exists."
+    ],
+    "unchanged": [
+      "LiveKit SDK and public API usage",
+      "PTT release ownership and half-duplex no barge-in",
+      "Default intent_provider=none, EOT model/threshold, semantic prompts and all deadline values",
+      "No new matcher, task, state holder, hotword or dependency"
+    ]
+  },
+  "verification": {
+    "reproduction_before": {
+      "source": "/tmp/phase18-fragments-before.xml",
+      "passed": 0,
+      "failed": 4,
+      "xfailed": 0,
+      "skipped": 0
+    },
+    "reproduction_after": {
+      "source": "/tmp/phase18-fragments-after.xml",
+      "passed": 4,
+      "failed": 0,
+      "xfailed": 0,
+      "skipped": 0
+    },
+    "core": {
+      "source": "/tmp/phase18-core.xml",
+      "passed": 1007,
+      "failed": 0,
+      "xfailed": 11,
+      "skipped": 2
+    },
+    "non_integration_scenarios": {
+      "source": "/tmp/phase18-scenarios.xml",
+      "passed": 114,
+      "failed": 0,
+      "xfailed": 6,
+      "skipped": 0
+    },
+    "real_cascade": {
+      "source": "/tmp/phase18-real-cascade-verified.xml",
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "count_note": "The four focused reproduction tests are also included in the 114 passing scenario tests; do not add them twice.",
+  "sdk_record": {
+    "version": "1.7.1",
+    "python_files": 207,
+    "changed": []
+  },
+  "completion_candidates_rejected": [
+    {
+      "source": "/tmp/phase18-completion.json",
+      "total": 138,
+      "passed": 138,
+      "failures": []
+    },
+    {
+      "source": "/tmp/phase18b-completion.json",
+      "total": 163,
+      "passed": 160,
+      "failures": [
+        {
+          "text": "虽然距离比较远",
+          "assistant_text": "",
+          "expected": "incomplete",
+          "set": "previous_98",
+          "label": "complete",
+          "elapsed_ms": 700.4,
+          "correct": false
+        },
+        {
+          "text": "If the earlier train is full",
+          "assistant_text": "",
+          "expected": "incomplete",
+          "set": "previous_98",
+          "label": "complete",
+          "elapsed_ms": 1136.7,
+          "correct": false
+        },
+        {
+          "text": "不考虑价格的话",
+          "assistant_text": "",
+          "expected": "incomplete",
+          "set": "held_out_18",
+          "label": "complete",
+          "elapsed_ms": 1057.3,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "source": "/tmp/phase18c-completion.json",
+      "total": 163,
+      "passed": 161,
+      "failures": [
+        {
+          "text": "请继续解释一下为什么",
+          "assistant_text": "",
+          "expected": "incomplete",
+          "set": "previous_98",
+          "label": "complete",
+          "elapsed_ms": 1131.3,
+          "correct": false
+        },
+        {
+          "text": "前面的例子",
+          "assistant_text": "",
+          "expected": "complete",
+          "set": "bare_answer_18b",
+          "label": "incomplete",
+          "elapsed_ms": 930.1,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "source": "/tmp/phase18-completion-overlap.json",
+      "total": 12,
+      "passed": 9,
+      "failures": [
+        {
+          "kind": "answer",
+          "mode": "full_duplex",
+          "text": "7",
+          "continuation": "",
+          "passed": false,
+          "failure": "AssertionError: ",
+          "properties": {
+            "text": "7",
+            "mode": "full_duplex",
+            "stop_to_reply_audio_ms": 3017.5,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 631.6,
+                "score": 0.0,
+                "threshold": 0.5
+              }
+            ]
+          },
+          "completion_calls": [
+            {
+              "text": "7",
+              "label": "incomplete",
+              "elapsed_ms": 910.6,
+              "started": 1464085.018864416,
+              "finished": 1464085.92970875
+            },
+            {
+              "consumer_text": "7",
+              "reused": true,
+              "consumer_wait_ms": 618.6
+            }
+          ]
+        },
+        {
+          "kind": "answer",
+          "mode": "half_duplex",
+          "text": "7",
+          "continuation": "",
+          "passed": false,
+          "failure": "AssertionError: ",
+          "properties": {
+            "text": "7",
+            "mode": "half_duplex",
+            "stop_to_reply_audio_ms": 3024.6,
+            "eot_predictions": [
+              {
+                "after_stop_ms": 425.2,
+                "score": 0.0,
+                "threshold": 0.5
+              }
+            ]
+          },
+          "completion_calls": [
+            {
+              "text": "7",
+              "label": "incomplete",
+              "elapsed_ms": 703.5,
+              "started": 1464098.235516375,
+              "finished": 1464098.939147708
+            },
+            {
+              "consumer_text": "7",
+              "reused": true,
+              "consumer_wait_ms": 407.4
+            }
+          ]
+        },
+        {
+          "kind": "pause",
+          "mode": "full_duplex",
+          "text": "我想问的是",
+          "continuation": "明天的天气怎么样。",
+          "passed": false,
+          "failure": "AssertionError: ",
+          "properties": {
+            "prefix_eot_score": 0.02449715357633552,
+            "premature_commits": 0,
+            "premature_audio_bytes": 0,
+            "stop_to_reply_audio_ms": 1171.9,
+            "sdk_complete_to_reply_audio_ms": 9.3
+          },
+          "completion_calls": [
+            {
+              "text": "我想问的是",
+              "label": "incomplete",
+              "elapsed_ms": 904.8,
+              "started": 1464107.742484666,
+              "finished": 1464108.6473805
+            },
+            {
+              "consumer_text": "我想问的是",
+              "reused": true,
+              "consumer_wait_ms": 619.6
+            },
+            {
+              "text": "明天的天气怎么样。",
+              "label": "complete",
+              "elapsed_ms": 955.9,
+              "started": 1464110.589380458,
+              "finished": 1464111.545377083
+            },
+            {
+              "text": "我想问的是 明天的天气怎么样。",
+              "label": "complete",
+              "elapsed_ms": 1160.9,
+              "started": 1464110.926263833,
+              "finished": 1464112.087322333
+            },
+            {
+              "consumer_text": "我想问的是 明天的天气怎么样。",
+              "reused": false,
+              "consumer_wait_ms": 1161.1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "rtc_audit": [
+    {
+      "run": "measured",
+      "case_id": "fd_gate_correction_cancels_and_replies_001",
+      "reported_passed": false,
+      "errors_as_reported": [
+        "timeline expected action=cancel, got ['rollback']",
+        "timeline expected intent=normal_interrupt, got ['uncertain']",
+        "timeline expected decision_action=cancel, got ['rollback']",
+        "timeline expected decision_intent=normal_interrupt, got ['uncertain']",
+        "timeline missing STT speech-to-actionable-transcript duration",
+        "timeline missing actionable-transcript-to-interrupt-resolution duration",
+        "timeline missing speech-start-to-suspend duration"
+      ],
+      "unique_direct_llm_requests": 1,
+      "new_correction_tts_observed": false,
+      "source": "/tmp/eidolon-phase18-intent-rtc-measured/results.json",
+      "metrics": {
+        "timeline_decision_intents": "uncertain",
+        "timeline_speech_stop_to_commit_ms": 465.8179171383381,
+        "timeline_interruption_owner_resolved_elapsed_ms": 7302.033541956916,
+        "functional_outcome_passed": false,
+        "experience_slo_passed": false
+      }
+    },
+    {
+      "run": "measured",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "reported_passed": false,
+      "errors_as_reported": [
+        "expected 1 direct LLM requests, observed 2"
+      ],
+      "unique_direct_llm_requests": 1,
+      "new_correction_tts_observed": null,
+      "source": "/tmp/eidolon-phase18-intent-rtc-measured/results.json",
+      "metrics": {
+        "timeline_decision_intents": "",
+        "timeline_speech_stop_to_commit_ms": 103.80337503738701,
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true
+      }
+    },
+    {
+      "run": "after",
+      "case_id": "fd_gate_correction_cancels_and_replies_001",
+      "reported_passed": false,
+      "errors_as_reported": [
+        "timeline STT speech-to-actionable-transcript exceeded 2500ms: [2523.2]"
+      ],
+      "unique_direct_llm_requests": 2,
+      "new_correction_tts_observed": false,
+      "source": "/tmp/eidolon-phase18-intent-rtc-after/results.json",
+      "metrics": {
+        "timeline_decision_intents": "normal_interrupt",
+        "timeline_interrupt_actionable_transcript_to_cancel_resolved_ms": 0.9498340077698231,
+        "timeline_speech_stop_to_commit_ms": 2495.253083994612,
+        "timeline_stt_speech_to_actionable_transcript_ms": 2523.23441603221,
+        "timeline_interruption_owner_resolved_elapsed_ms": 2523.833416868001,
+        "functional_outcome_passed": true,
+        "experience_slo_passed": false
+      }
+    },
+    {
+      "run": "after",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "reported_passed": true,
+      "errors_as_reported": [],
+      "unique_direct_llm_requests": 1,
+      "new_correction_tts_observed": null,
+      "source": "/tmp/eidolon-phase18-intent-rtc-after/results.json",
+      "metrics": {
+        "timeline_decision_intents": "",
+        "timeline_speech_stop_to_commit_ms": 340.9686251543462,
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true
+      }
+    },
+    {
+      "run": "output",
+      "case_id": "fd_gate_correction_cancels_and_replies_001",
+      "reported_passed": false,
+      "errors_as_reported": [
+        "case hard timeout after 78.0s",
+        "timeline expected intent=normal_interrupt, got ['hard_stop']",
+        "timeline expected decision_intent=normal_interrupt, got ['hard_stop']",
+        "timeline STT speech-to-actionable-transcript exceeded 2500ms: [2634.9]",
+        "real-call: agent_audio_bytes=None < 8000 (dead/mock agent?)",
+        "expected 2 direct LLM requests, observed 0",
+        "no new TTS output after correction cancellation"
+      ],
+      "unique_direct_llm_requests": 1,
+      "new_correction_tts_observed": false,
+      "source": "/tmp/eidolon-phase18-intent-rtc-output/results.json",
+      "metrics": {
+        "timeline_decision_intents": "hard_stop",
+        "timeline_interrupt_actionable_transcript_to_cancel_resolved_ms": 1.1852909810841084,
+        "timeline_speech_stop_to_commit_ms": 34.336459124460816,
+        "timeline_stt_speech_to_actionable_transcript_ms": 2634.8576250020415,
+        "timeline_interruption_owner_resolved_elapsed_ms": 2635.7981669716537,
+        "functional_outcome_passed": false,
+        "experience_slo_passed": false
+      }
+    },
+    {
+      "run": "output",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "reported_passed": true,
+      "errors_as_reported": [],
+      "unique_direct_llm_requests": 1,
+      "new_correction_tts_observed": null,
+      "source": "/tmp/eidolon-phase18-intent-rtc-output/results.json",
+      "metrics": {
+        "timeline_decision_intents": "",
+        "timeline_speech_stop_to_commit_ms": 1.3315421529114246,
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true
+      }
+    }
+  ],
+  "rtc_count_correction": "Initial temporary counter counted duplicate timeline snapshots as extra requests. Audit deduplicates (turn_id,llm_started_at), selects each case by its observed room-name prefix even if timeout drops result room metadata. All three backchannel runs made one main LLM request. Timeout run made one, not zero, main LLM request. Original raw reports are retained; their request-count errors are superseded by this audit.",
+  "rtc_remaining_failures": [
+    "After ownership repair, correction resolves normal_interrupt and starts the second request; original 2500 ms speech-start-to-actionable budget still fails at 2523.2 ms. No new TTS output was captured in that observation window; continuing old audio is not a useful reply.",
+    "Same sample scores raw tail 我刚才说错了。 at 0.295 in SDK EOT after cancellation, versus assembled 不是我刚才说错了。 at 0.669 in Channel; cancellation-to-commit is 1924 ms. Do not force semantic interrupt intent to imply complete grammar.",
+    "Longer-window repeat classifies that correction as hard_stop in another assistant context; no new reply, hard timeout. This is an independent real-model semantic failure. No prompt/phrase patch was added."
+  ],
+  "environment_retry": "Initial real-cascade invocation omitted the explicit provider env and used test fixtures, causing HTTP 401. Stopped after first failed test; rerunning with EIDOLON_CHANNEL_LIVEKIT_ENV pointing at configured Channel env. Explicit-env rerun completed: all 15 passed.",
+  "limits": [
+    "Synthetic voices and scripted timing are not comprehensive human recordings.",
+    "RTC uses direct_llm, avatar/voiceprint disabled, optional LLM intent, virtual clients; not production authenticated Agent RPC or physical device/AEC validation.",
+    "Default complete-turn latency and premature conditional commits, plus optional intent instability, remain open.",
+    "Authenticated test Owner/Companion identity is still unavailable."
+  ],
+  "real_cascade_samples": [
+    {
+      "name": "test_real_speech_to_real_reply[slow-full_duplex]",
+      "properties": {
+        "speed": "0.7",
+        "mode": "full_duplex",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "152320"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1492.6,
+        "complete_to_reply_audio_ms": 975.2,
+        "sdk_complete_to_reply_audio_ms": 974.4,
+        "commit_to_reply_audio_ms": 963.9
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[slow-half_duplex]",
+      "properties": {
+        "speed": "0.7",
+        "mode": "half_duplex",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "160000"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1827.3,
+        "complete_to_reply_audio_ms": 1303.3,
+        "sdk_complete_to_reply_audio_ms": 1302.7,
+        "commit_to_reply_audio_ms": 1296.4
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[slow-ptt]",
+      "properties": {
+        "release_to_reply_audio_ms": "1906.3",
+        "speed": "0.7",
+        "mode": "ptt",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "216320"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[slow-ptt_without_brief_instruction]",
+      "properties": {
+        "release_to_reply_audio_ms": "1911.1",
+        "speed": "0.7",
+        "mode": "ptt",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "976000"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-full_duplex]",
+      "properties": {
+        "speed": "1.0",
+        "mode": "full_duplex",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "239360"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1802.0,
+        "complete_to_reply_audio_ms": 1282.7,
+        "sdk_complete_to_reply_audio_ms": 1278.7,
+        "commit_to_reply_audio_ms": 1274.9
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-half_duplex]",
+      "properties": {
+        "speed": "1.0",
+        "mode": "half_duplex",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "133120"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1882.3,
+        "complete_to_reply_audio_ms": 1370.1,
+        "sdk_complete_to_reply_audio_ms": 1359.1,
+        "commit_to_reply_audio_ms": 1356.8
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-ptt]",
+      "properties": {
+        "release_to_reply_audio_ms": "1512.6",
+        "speed": "1.0",
+        "mode": "ptt",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "163840"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[normal-ptt_without_brief_instruction]",
+      "properties": {
+        "release_to_reply_audio_ms": "1927.2",
+        "speed": "1.0",
+        "mode": "ptt",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "1058560"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-full_duplex]",
+      "properties": {
+        "speed": "1.4",
+        "mode": "full_duplex",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "184320"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2719.7,
+        "complete_to_reply_audio_ms": 2150.7,
+        "sdk_complete_to_reply_audio_ms": 2150.3,
+        "commit_to_reply_audio_ms": 2146.1
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-half_duplex]",
+      "properties": {
+        "speed": "1.4",
+        "mode": "half_duplex",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "133120"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 1642.2,
+        "complete_to_reply_audio_ms": 1019.0,
+        "sdk_complete_to_reply_audio_ms": 1018.6,
+        "commit_to_reply_audio_ms": 1014.6
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-ptt]",
+      "properties": {
+        "release_to_reply_audio_ms": "1719.0",
+        "speed": "1.4",
+        "mode": "ptt",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "179200"
+      }
+    },
+    {
+      "name": "test_real_speech_to_real_reply[fast-ptt_without_brief_instruction]",
+      "properties": {
+        "release_to_reply_audio_ms": "3018.0",
+        "speed": "1.4",
+        "mode": "ptt",
+        "stt_text": "帮我详细介绍一下这个方案。",
+        "output_bytes": "992000"
+      }
+    },
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[backchannel_ok-resume]",
+      "properties": {
+        "intent": "backchannel",
+        "source": "llm",
+        "stt_text": "好。"
+      }
+    },
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "properties": {
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。",
+        "reply_audio_bytes": "175360"
+      },
+      "latency": {
+        "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+        "stop_to_reply_audio_ms": 2206.3,
+        "complete_to_reply_audio_ms": 1649.1,
+        "sdk_complete_to_reply_audio_ms": 1120.3,
+        "commit_to_reply_audio_ms": 1112.2
+      }
+    },
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[hard_stop_stop-stop]",
+      "properties": {
+        "intent": "hard_stop",
+        "source": "llm",
+        "stt_text": "停一下！"
+      }
+    }
+  ],
+  "worker_cleanup": {
+    "port": 18772,
+    "listening": false,
+    "check": "lsof -nP -iTCP:18772 -sTCP:LISTEN returned no listener after ManagedWorker.stop"
+  },
+  "static_checks": {
+    "ruff": "passed",
+    "git_diff_check": "passed"
+  }
+}

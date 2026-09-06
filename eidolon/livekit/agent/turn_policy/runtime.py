@@ -19,7 +19,7 @@ from .constants import (
     WEAK_SIGNAL_HOLD_REASON_PREFIXES,
 )
 from .decider import Action, Decision, InterruptDecider
-from .intent_classifier import InterruptIntent, normalize_transcript_text
+from .intent_classifier import InterruptIntent, InterruptIntentResult, normalize_transcript_text
 from .tiers.chain import TierPolicyChain
 
 
@@ -77,6 +77,7 @@ class TurnPolicyRuntime:
         agent_speaking: bool,
         is_final: bool = False,
         event_time_ms: float | None = None,
+        intent_result: InterruptIntentResult | None = None,
     ) -> Decision:
         decision = self.decider.on_stt_interim(
             text,
@@ -84,6 +85,7 @@ class TurnPolicyRuntime:
             vad_active=vad_active,
             agent_speaking=agent_speaking,
             is_final=is_final,
+            **({"intent_result": intent_result} if intent_result is not None else {}),
         )
         now_ms = event_time_ms if event_time_ms is not None else time.monotonic() * 1000
         decision = self._stable_signal.apply(

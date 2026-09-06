@@ -1,0 +1,22 @@
+{
+  "layer": "Synthetic correction WAV -> real VAD/ASR/intent/LLM/TTS -> user commit -> new assistant message and new PCM segment",
+  "counts": {
+    "passed": 1,
+    "failed": 0
+  },
+  "cases": [
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "seconds": 19.576,
+      "status": "passed",
+      "properties": {
+        "clip": "correction",
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。",
+        "reply_chars": "28",
+        "reply_audio_bytes": "193920"
+      }
+    }
+  ]
+}

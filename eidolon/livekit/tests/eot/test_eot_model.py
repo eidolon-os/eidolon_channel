@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from livekit.agents.llm import ChatContext
@@ -17,6 +20,47 @@ from eidolon.livekit.plugins.eot.impl.eot_backend import OnnxEotBackend
 from eidolon.livekit.plugins.eot.impl.eot_manager import _resolve_default_model_dir
 
 
+@pytest.mark.asyncio
+async def test_slow_inference_is_shared_by_asr_and_endpoint_within_cache_window(monkeypatch):
+    from eidolon.livekit.plugins.eot.impl import eot_manager
+
+    now = [10.0]
+    def score(text):
+        now[0] += .08  # Cold inference takes longer than the existing 50 ms TTL.
+        return .9
+    backend = SimpleNamespace(score=Mock(side_effect=score))
+    monkeypatch.setattr(eot_manager, '_create_eot_backend', lambda cfg: backend)
+    monkeypatch.setattr(eot_manager.EotManager, '_instances', {})
+    monkeypatch.setattr(eot_manager, 'time', SimpleNamespace(time=lambda: now[0], monotonic=lambda: now[0]))
+    model = ChineseModel()
+    text = '帮我详细介绍一下这个方案。'
+    chat = ChatContext()
+    chat.add_message(role='user', content=text)
+
+    assert model.update_asr(text, is_final=True) == .9
+    assert await model.predict_end_of_turn(chat) == .9
+    backend.score.assert_called_once_with(text)
+    now[0] += .051
+    assert await model.predict_end_of_turn(chat) == .9
+    assert backend.score.call_count == 2
+
+
+def test_eot_cache_expiry_uses_elapsed_time_even_if_wall_clock_moves_back(monkeypatch):
+    from eidolon.livekit.plugins.eot.impl import eot_manager
+
+    monotonic = [10.0]
+    wall = [100.0]
+    backend = SimpleNamespace(score=Mock(side_effect=[.2, .8]))
+    monkeypatch.setattr(eot_manager, '_create_eot_backend', lambda cfg: backend)
+    monkeypatch.setattr(eot_manager.EotManager, '_instances', {})
+    monkeypatch.setattr(eot_manager, 'time', SimpleNamespace(time=lambda: wall[0], monotonic=lambda: monotonic[0]))
+    manager = eot_manager.EotManager()
+    assert manager.p_complete_score('同一文本') == .2
+    monotonic[0] += .1
+    wall[0] -= 60
+    assert manager.p_complete_score('同一文本') == .8
+
+
 def test_bundled_model_artifacts_are_complete() -> None:
     model_dir = _resolve_default_model_dir()
 
@@ -28,7 +72,8 @@ def test_bundled_model_artifacts_are_complete() -> None:
 
 @pytest.fixture(scope="module")
 def chinese_backend() -> OnnxEotBackend:
-    return OnnxEotBackend(_resolve_default_model_dir(), prefer_multilingual=False)
+    model_dir = Path(os.environ.get("EIDOLON_EOT_MODEL_DIR") or _resolve_default_model_dir())
+    return OnnxEotBackend(model_dir, prefer_multilingual=False)
 
 
 def test_onnx_backend_loads(chinese_backend: OnnxEotBackend) -> None:

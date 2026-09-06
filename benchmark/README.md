@@ -69,6 +69,38 @@ merged `metrics.json` / `report.*` at the runner root carry:
 Run at least 5 repeats (ideally 10-20) before treating real-provider SLO gates
 as hard pass/fail rather than advisory.
 
+### Room latency reference
+
+Room `user_audio_done_ms` now records the last voiced 20 ms microphone frame
+(PCM16 RMS >= 120), or the PTT release edge. `user_audio_done_reference` identifies
+that reference; silence-only input is explicitly marked as a fallback.
+`input_feed_done_ms` separately records completion of the fixture and its trailing
+feed silence. A reply heard during that silence is still counted, including one
+that has already finished when feeding completes. Each subsequent input replaces
+the previous boundary and its response evidence.
+
+`user_done_to_agent_audio_after_user_done_ms` measures from this boundary to the
+next audible frame received by the virtual RTC client. It is not device speaker
+latency. During overlap it can describe resumed old audio, so a useful new reply
+also requires the case's interruption/commit checks. Rebuild room latency
+baselines before comparing: historical reports without `user_audio_done_reference`
+used the end of the entire feed, including an extra 800 ms of silence, and are
+not directly comparable. Existing SLO thresholds have not been relaxed.
+
+### PTT transcript evidence
+
+For a PTT device case, `min_user_finals` requires distinct, nonempty committed
+transcripts received through the existing `eidolon.control` / `ptt.turn_status`
+protocol from an agent participant. PTT submits a closed segment directly to
+`AgentSession.generate_reply`, so it does not produce streaming STT final events.
+The runner records these receipts as `ptt_turn_status`, retaining their turn ID,
+outcome and transcript preview; it does not synthesize transcription events.
+The preview proves recognized text is present, not that the full transcript is
+correct (the wire contract caps it at 80 characters). Duplicate turn IDs, rejected
+or pending outcomes, empty previews and non-agent senders cannot satisfy the gate.
+Streaming cases continue to require actual user STT finals. PTT timeline commit
+and audible reply expectations remain separate checks.
+
 ## Real-Call Verification
 
 `component` and `livekit_room` must provably hit real providers, not mocks or a

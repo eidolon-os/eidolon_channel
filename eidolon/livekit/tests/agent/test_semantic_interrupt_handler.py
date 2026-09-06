@@ -78,6 +78,24 @@ def test_hard_stop_hint_without_evidence_has_no_direct_side_effect() -> None:
     calls.interrupt_current_turn.assert_not_called()
 
 
+def test_fallback_uses_score_from_its_own_evaluation() -> None:
+    runtime = MagicMock()
+    runtime.decide_from_transcript.return_value = Decision(action=Action.HOLD, reason="wait")
+    model = _eot_model(score=.1)
+
+    def evaluate(*args, **kwargs):
+        model.current_eot_score = .9
+        return True
+
+    model.should_interrupt.side_effect = evaluate
+    handler, calls = _handler(eot_model=model, turn_runtime=runtime)
+
+    handler.run("现在换一个问题", is_final=True)
+
+    calls.interrupt_current_turn.assert_called_once()
+    calls.enter_soft_interrupt.assert_not_called()
+
+
 def test_strong_interrupt_with_duck_uses_decision_effect_path() -> None:
     runtime = MagicMock()
     decision = Decision(

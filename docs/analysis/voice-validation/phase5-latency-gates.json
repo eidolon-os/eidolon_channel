@@ -1,0 +1,36 @@
+{
+  "scope": "Channel latency gates with fixed mock provider delays; real SDK/EOT; excludes service P95",
+  "counts": {
+    "passed": 3,
+    "failed": 0
+  },
+  "cases": [
+    {
+      "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[False-0-1000]",
+      "status": "passed",
+      "properties": {
+        "stop_to_reply_audio_ms": "782.3",
+        "complete_to_reply_audio_ms": "648.4",
+        "budget_ms": "1000"
+      }
+    },
+    {
+      "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.25-1000]",
+      "status": "passed",
+      "properties": {
+        "stop_to_reply_audio_ms": "760.5",
+        "complete_to_reply_audio_ms": "646.4",
+        "budget_ms": "1000"
+      }
+    },
+    {
+      "case": "test_complete_turn_does_not_add_a_second_endpoint_wait[True-0.7-1500]",
+      "status": "passed",
+      "properties": {
+        "stop_to_reply_audio_ms": "847.2",
+        "complete_to_reply_audio_ms": "738.8",
+        "budget_ms": "1500"
+      }
+    }
+  ]
+}

@@ -35,7 +35,7 @@ from eidolon.livekit.agent.turn_policy import (
 from eidolon.livekit.common.config import TurnPolicyConfig
 from eidolon.livekit.plugins.eot import ChineseModel
 from eidolon.livekit.tests._harness.audio import synth_voiced
-from eidolon.livekit.tests._harness.headless import headless_session
+from eidolon.livekit.tests._harness.production import production_session
 from eidolon.livekit.tests._harness.mocks import (
     MockLLM,
     MockSTT,
@@ -54,13 +54,9 @@ _KNOWN_INTERRUPT_SEMANTICS_GAP = pytest.mark.xfail(
     strict=True,
     reason="production has no non-lexical interruption intent implementation",
 )
-_KNOWN_ENDPOINTING_GAP = pytest.mark.xfail(
+_KNOWN_COMPLETION_LATENCY_GAP = pytest.mark.xfail(
     strict=True,
-    reason="Eidolon endpointing bounds are not bound to LiveKit Agent options",
-)
-_KNOWN_SINGLE_OWNER_GAP = pytest.mark.xfail(
-    strict=True,
-    reason="ducked transcripts currently run both EOT and turn-runtime policies",
+    reason="learned EOT still delays a complete short turn beyond the product latency budget",
 )
 _KNOWN_TERMINAL_HOLD_GAP = pytest.mark.xfail(
     strict=True,
@@ -121,13 +117,12 @@ async def test_incomplete_utterance_stays_below_framework_eot_threshold(
     assert score < threshold
 
 
-@_KNOWN_ENDPOINTING_GAP
+@_KNOWN_COMPLETION_LATENCY_GAP
 @pytest.mark.asyncio
 async def test_livekit_session_commits_complete_turn_within_hard_slo() -> None:
     """Exercise the real LiveKit endpointing task instead of a policy helper."""
 
-    model = ChineseModel()
-    async with headless_session(
+    async with production_session(
         llm=MockLLM.scripted([("就这样吧", "好的")]),
         stt=MockSTT.scripted(
             [ScriptedTranscript(text="就这样吧", trigger_after_ms=80)]
@@ -139,8 +134,7 @@ async def test_livekit_session_commits_complete_turn_within_hard_slo() -> None:
                 MockVADEvent("end", at_ms=180, probability=0.1),
             ]
         ),
-        extra_agent_kwargs={"turn_handling": {"turn_detection": model}},
-    ) as handle:
+    ) as (_, handle):
         handle.audio_in.feed_pcm(synth_voiced(0.2))
         handle.audio_in.feed_silence(0.2)
 
@@ -305,7 +299,6 @@ def test_final_transcript_hold_cannot_extend_duck_to_six_seconds() -> None:
     assert remaining <= 0.9
 
 
-@_KNOWN_SINGLE_OWNER_GAP
 def test_duck_active_transcript_has_one_interruption_decision_owner() -> None:
     """The turn runtime owns ducked decisions; EOT must not run a second policy."""
 
@@ -340,11 +333,11 @@ def test_duck_active_transcript_has_one_interruption_decision_owner() -> None:
     apply_decision.assert_called_once()
 
 
-@_KNOWN_ENDPOINTING_GAP
-def test_agent_explicitly_binds_eot_endpointing_band(
+def test_agent_binds_complete_turn_minimum_without_shortening_incomplete_turns(
     eot_model: ChineseModel,
 ) -> None:
-    """Do not silently fall back to LiveKit's unrelated 0.5s/3.0s defaults."""
+    """Speed up complete turns while preserving the session's maximum."""
+    from livekit.agents.types import NOT_GIVEN
 
     pipeline = SimpleNamespace(
         _instructions="test",
@@ -363,11 +356,5 @@ def test_agent_explicitly_binds_eot_endpointing_band(
         p_complete=1.0,
         is_final=False,
     )
-    expected_deep = eot_model.get_dynamic_silence_threshold(
-        "",
-        p_complete=0.0,
-        is_final=False,
-    )
-
     assert agent.min_endpointing_delay == pytest.approx(expected_fast)
-    assert agent.max_endpointing_delay == pytest.approx(expected_deep)
+    assert agent.max_endpointing_delay is NOT_GIVEN

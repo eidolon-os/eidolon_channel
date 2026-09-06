@@ -1,0 +1,44 @@
+{
+  "layer": "Synthetic benchmark WAV through real VAD/ASR/intent/LLM/TTS; direct LLM, memory sink; reply case strengthened in separate record",
+  "counts": {
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[backchannel_ok-resume]",
+      "seconds": 12.695,
+      "status": "passed",
+      "properties": {
+        "clip": "backchannel_ok",
+        "intent": "backchannel",
+        "source": "llm",
+        "stt_text": "好。"
+      }
+    },
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[correction-reply]",
+      "seconds": 10.698,
+      "status": "passed",
+      "properties": {
+        "clip": "correction",
+        "intent": "normal_interrupt",
+        "source": "llm",
+        "stt_text": "不是，我刚才说错了。"
+      }
+    },
+    {
+      "name": "test_real_audio_overlap_to_playback_effects[hard_stop_stop-stop]",
+      "seconds": 6.784,
+      "status": "passed",
+      "properties": {
+        "clip": "hard_stop_stop",
+        "intent": "hard_stop",
+        "source": "llm",
+        "stt_text": "停一下！"
+      }
+    }
+  ]
+}

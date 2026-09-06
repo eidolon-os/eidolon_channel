@@ -178,6 +178,50 @@ def test_buffer_pairs_original_speech_event_with_normalized_callback() -> None:
     assert buffer.take("先记一下", is_final=False) is None
 
 
+def _sequenced_event(sequence, *, stream="stream-1", revision="revision-1", final=True):
+    return SpeechEvent(
+        type=SpeechEventType.FINAL_TRANSCRIPT if final else SpeechEventType.INTERIM_TRANSCRIPT,
+        alternatives=[SpeechData(language="zh", text=f"转写版本{sequence}", metadata=TranscriptEvidence(
+            stream_key=stream, revision_key=revision, sequence=sequence,
+        ).as_metadata())],
+    )
+
+
+def test_buffer_rejects_old_revision_even_after_callback_consumed_evidence() -> None:
+    buffer = TranscriptEvidenceBuffer()
+    assert buffer.observe_speech_event(_sequenced_event(2)) is True
+    assert buffer.take("转写版本2", is_final=True).sequence == 2
+    assert buffer.observe_speech_event(_sequenced_event(1)) is False
+    assert buffer.take("转写版本1", is_final=True) is None
+    assert buffer.observe_speech_event(_sequenced_event(3)) is True
+
+
+@pytest.mark.parametrize("stream,revision", [
+    ("stream-2", "revision-1"), ("stream-1", "revision-2"),
+    (None, "revision-1"), ("stream-1", None), (None, None),
+])
+def test_buffer_does_not_infer_sequence_order_across_unknown_or_different_identity(stream, revision):
+    buffer = TranscriptEvidenceBuffer()
+    assert buffer.observe_speech_event(_sequenced_event(8)) is True
+    assert buffer.observe_speech_event(_sequenced_event(1, stream=stream, revision=revision)) is True
+
+
+def test_buffer_accepts_final_at_same_sequence_as_interim_and_resets_explicitly() -> None:
+    buffer = TranscriptEvidenceBuffer()
+    assert buffer.observe_speech_event(_sequenced_event(2, final=False)) is True
+    assert buffer.observe_speech_event(_sequenced_event(2, final=True)) is True
+    buffer.clear()
+    assert buffer.observe_speech_event(_sequenced_event(1)) is True
+
+
+def test_provider_order_history_is_bounded() -> None:
+    buffer = TranscriptEvidenceBuffer(max_entries=2)
+    for sequence in range(5):
+        buffer.observe_speech_event(_sequenced_event(sequence, revision=f"revision-{sequence}"))
+    assert len(buffer._sequences) == 2
+    assert list(buffer._sequences) == [("stream-1", "revision-3"), ("stream-1", "revision-4")]
+
+
 def test_identity_strategy_updates_one_segment_even_when_text_is_rewritten() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     coordinator.start_speech(timeline=None)

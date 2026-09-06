@@ -1,0 +1,23 @@
+{
+  "layer": "production full/half duplex callback chain; final revision sequence 2 then 1",
+  "counts": {
+    "passed": 2,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0
+  },
+  "cases": [
+    {
+      "name": "test_delayed_old_final_cannot_replace_corrected_destination[full_duplex]",
+      "seconds": 7.387,
+      "status": "passed",
+      "properties": {}
+    },
+    {
+      "name": "test_delayed_old_final_cannot_replace_corrected_destination[half_duplex]",
+      "seconds": 4.68,
+      "status": "passed",
+      "properties": {}
+    }
+  ]
+}

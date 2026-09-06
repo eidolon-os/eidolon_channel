@@ -15,6 +15,7 @@ import math
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,11 +25,14 @@ from livekit import rtc
 
 from eidolon_sdk.biz.contracts import (
     CLIENT_AUDIO_STATE_TOPIC,
+    CONTROL_OP_PTT_TURN_STATUS,
+    CONTROL_TOPIC,
     INPUT_MODE_AUTO,
     INPUT_MODE_PTT,
     SESSION_CONVERSATION_ID_FIELD,
     WIRE_SCHEMA_VERSION,
 )
+from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION
 
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
@@ -317,6 +321,10 @@ async def _run_room_case(
     state = _RoomCaseState(started=started, events=events)
     audio_tasks: list[asyncio.Task] = []
 
+    @room.on("data_received")
+    def _on_data_received(packet: rtc.DataPacket) -> None:
+        _record_ptt_turn_status(packet, state)
+
     @room.on("participant_connected")
     def _on_participant_connected(participant_obj) -> None:
         state.mark("participant_connected_at")
@@ -412,7 +420,9 @@ async def _run_room_case(
             options=options,
             local_participant=room.local_participant,
         )
-        state.mark("user_audio_done_at")
+        state.mark("input_feed_done_at")
+        if "user_audio_done_at" not in state.timestamps:
+            state.finish_user_input(_elapsed_ms(started), reference="input_feed_end_no_user_step")
 
         try:
             wait_mode = _agent_audio_wait_mode(case)
@@ -581,8 +591,17 @@ async def _feed_case_audio(
             if publish_client_state
             else None
         )
+        last_voiced_at: int | None = None
+
+        def observe_input(frame: rtc.AudioFrame) -> None:
+            nonlocal last_voiced_at
+            if _pcm16_rms(bytes(frame.data)) >= 120.0:
+                last_voiced_at = _elapsed_ms(started)
+
         try:
-            clip_ms = await _capture_pcm(source, pcm, sample_rate=sample_rate)
+            clip_ms = await _capture_pcm(
+                source, pcm, sample_rate=sample_rate, on_frame=observe_input,
+            )
         finally:
             if refresh_task is not None:
                 refresh_task.cancel()
@@ -593,6 +612,7 @@ async def _feed_case_audio(
             # release. In half-duplex/manual mode that edge is the turn boundary;
             # without it, room benchmarks only validate "press cancels" and never
             # exercise release-driven commit.
+            released_at = _elapsed_ms(started)
             await _publish_client_audio_state(
                 local_participant,
                 events=events,
@@ -602,6 +622,12 @@ async def _feed_case_audio(
                 ptt=False,
                 manual_interrupt=False,
                 mic_muted=True,
+            )
+            state.finish_user_input(released_at, reference="ptt_release")
+        else:
+            state.finish_user_input(
+                last_voiced_at if last_voiced_at is not None else _elapsed_ms(started),
+                reference="last_voiced_frame" if last_voiced_at is not None else "clip_end_no_voiced_frame",
             )
         events.append(
             {
@@ -858,10 +884,13 @@ async def _capture_pcm(
     pcm: bytes,
     *,
     sample_rate: int = 16_000,
+    on_frame: Callable[[rtc.AudioFrame], None] | None = None,
 ) -> int:
     frame_count = 0
     for frame in frames_from_pcm(pcm, sample_rate=sample_rate, frame_ms=20):
         await source.capture_frame(frame)
+        if on_frame is not None:
+            on_frame(frame)
         frame_count += 1
         await asyncio.sleep(0.02)
     return frame_count * 20
@@ -950,6 +979,39 @@ def _user_done_audio_latency_errors(
     return []
 
 
+def _record_ptt_turn_status(packet: rtc.DataPacket, state: _RoomCaseState) -> None:
+    """Observe the existing PTT wire contract without fabricating STT events."""
+    participant = packet.participant
+    if (
+        packet.topic != CONTROL_TOPIC
+        or participant is None
+        or participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+    ):
+        return
+    try:
+        envelope = json.loads(packet.data)
+    except (ValueError, UnicodeDecodeError):
+        return
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("v") != CONTROL_PROTOCOL_VERSION
+        or envelope.get("kind") != "cmd"
+        or envelope.get("op") != CONTROL_OP_PTT_TURN_STATUS
+    ):
+        return
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        return
+    state.events.append({
+        "type": "ptt_turn_status",
+        "timestamp_ms": _elapsed_ms(state.started),
+        "participant": participant.identity,
+        "outcome": payload.get("outcome"),
+        "turn_id": payload.get("turn_id"),
+        "transcript_preview": payload.get("transcript_preview"),
+    })
+
+
 def _transcription_expectation_errors(
     case: BenchmarkCase,
     events: list[dict[str, Any]],
@@ -960,6 +1022,27 @@ def _transcription_expectation_errors(
     do the same or an acoustic rollback with no recognized backchannel can
     masquerade as a semantic backchannel pass.
     """
+
+    # Manual PTT transcribes a closed segment and calls generate_reply directly;
+    # it does not emit streaming STT finals. Require its actual client-visible
+    # committed transcript, once per turn, rather than accepting a server log.
+    if _case_input_mode(case) == INPUT_MODE_PTT:
+        committed_turns = {
+            event["turn_id"]
+            for event in events
+            if event.get("type") == "ptt_turn_status"
+            and event.get("outcome") == "committed"
+            and isinstance(event.get("turn_id"), str)
+            and event["turn_id"].strip()
+            and isinstance(event.get("transcript_preview"), str)
+            and event["transcript_preview"].strip()
+        }
+        if len(committed_turns) < case.expectations.min_user_finals:
+            return [
+                f"expected at least {case.expectations.min_user_finals} "
+                f"PTT committed transcripts, got {len(committed_turns)}"
+            ]
+        return []
 
     user_finals = sum(
         1
@@ -1035,6 +1118,25 @@ class _RoomCaseState:
         self.agent_connected = asyncio.Event()
         self.first_agent_audio = asyncio.Event()
         self.agent_audio_after_user_done = asyncio.Event()
+        self.user_audio_done_reference = "not_observed"
+
+    def finish_user_input(self, timestamp_ms: int, *, reference: str) -> None:
+        """Measure from speech end (or PTT release), never trailing feed silence.
+
+        A short reply may already have finished while the fixture's silence was
+        being published. Retain that evidence, but reset it for each newer input.
+        This observes the next audible RTC frame; overlap cases still need their
+        separate interruption/commit evidence to attribute it to a new reply.
+        """
+        self.timestamps["user_audio_done_at"] = timestamp_ms
+        self.user_audio_done_reference = reference
+        self.agent_audio_after_user_done.clear()
+        if any(at >= timestamp_ms for at in self.agent_audio_frame_timestamps):
+            self.agent_audio_after_user_done.set()
+        self.events.append({
+            "type": "user_input_boundary", "timestamp_ms": timestamp_ms,
+            "reference": reference,
+        })
 
     def mark(self, key: str) -> None:
         self.timestamps.setdefault(key, _elapsed_ms(self.started))
@@ -1087,6 +1189,8 @@ class _RoomCaseState:
             "transcript_first_ms": self.timestamps.get("transcript_first_at"),
             "transcript_final_ms": self.timestamps.get("transcript_final_at"),
             "user_audio_done_ms": user_done,
+            "user_audio_done_reference": self.user_audio_done_reference,
+            "input_feed_done_ms": self.timestamps.get("input_feed_done_at"),
             "agent_audio_first_ms": first_audio,
             "agent_audio_first_after_user_done_ms": first_audio_after_user_done,
             "publish_to_agent_audio_first_ms": (

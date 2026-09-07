@@ -224,10 +224,13 @@ class SentenceAggregator:
         text = "".join(self._buf).strip()
         self._buf.clear()
         self._buf_len = 0
-        # Cancel any pending idle timer — buffer is empty now.
-        if self._idle_task is not None and not self._idle_task.done():
-            self._idle_task.cancel()
-        self._idle_task = None
+        # Cancel a pending timer, but keep an executing idle send owned until
+        # it finishes or aclose() cancels it. Self-cancellation drops text at
+        # the transport's next await after the buffer has already been cleared.
+        if self._idle_task is not asyncio.current_task():
+            if self._idle_task is not None and not self._idle_task.done():
+                self._idle_task.cancel()
+            self._idle_task = None
 
         if not text:
             return

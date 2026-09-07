@@ -197,11 +197,13 @@ eidolon/livekit/agent/
 
 `full_duplex/voiceprint_commit_state.py` 是 full-duplex voiceprint task/result/timeline 的 runtime state adapter。它只管理 candidate tasks 和 completed-turn task/result；不再存在 pending direct-commit task 集合。
 
-`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。这个边界原子收口同一个产品结果的三种投影：`UserTurnCoordinator` 的 `committed/rejected`、`FullDuplexStateMachine` 的 terminal transition，以及 timeline terminal flush；任何 reject 都不能只关闭其中一层。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
+`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。 SDK hook 可以携带同一产品轮次的较早 FINAL；必须先通过既有 transcript settlement 收集后续证据并确认候选未被替换，再用组装后的候选当前声学 generation 读取裁决。不能用旧 hook 文本反查的 generation 拒绝整轮，也不能用旧片段的放行越过当前拒绝。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。这个边界原子收口同一个产品结果的三种投影：`UserTurnCoordinator` 的 `committed/rejected`、`FullDuplexStateMachine` 的 terminal transition，以及 timeline terminal flush；任何 reject 都不能只关闭其中一层。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
 
 当打断 owner 为 `channel` 且 `turn_policy.interrupt.intent_provider=llm` 时，现有 `SemanticInterruptHandler` 只在全双工重叠输入的 final 到达后异步获取语义证据，复用 `SharedStageFactory` 的 LLM 适配器。结果绑定候选、声学 generation、SpeechHandle 和 final 文本；过期结果不能操作新回答。附和/不确定结果在用户停止说话后恢复原缓冲，纯停止不进入回复生成，明确接管交给原有裁决 owner。超时或错误也恢复原播报，不冒充高置信度判断。共享配置保留 `none`，沿用原 EOT 策略的兼容路径及其已知语义缺口；`llm` 由集成测试显式启用，尚未通过生产 RPC/RTC 链路验收。
 
 `server.run_agent` 先解析 participant metadata，再通过既有 `apply_interaction_mode` 得到 session policy，最后用该策略构造 factory 和 pipeline。half duplex/PTT 将 `intent_provider` 设为 `none`，既不构造也不调用可选意图模型，不修改共享配置；选择 SDK 原生打断时，factory 的既有 owner 门禁同样禁止构造通道意图客户端。仅通道拥有打断且显式启用模型意图的全双工沿用 stage warmup 预热分类模型，预热有截止时间且不消费用户输入。意图客户端只对已知的 DeepSeek 官方 endpoint 自动设置供应商专用思考参数，其他 endpoint 仅透传显式配置，不根据模型名称猜测协议。
+
+`turn_policy.preemptive.enabled` 同时约束 SDK 预生成和现有 RPC interim 预热钩子的绑定；关闭时不因收到 interim 而启动投机 RPC。RPC 预热的结果被丢弃，并非 SDK 可复用的正式回复，不能将两者混称为同一个请求。正式回复 trace 的计数不包含投机请求；排查实际调用量应同时核对 `EidolonAgentSession.start_turn` 日志中的 `speculative` 字段。PTT 不绑定流式 interim 预热钩子。
 
 `InterruptAwareTurnDetector` 安装于通道拥有打断的全双工，包括 `none` 和 `llm` 两种配置；half duplex/PTT 和 SDK 原生打断不安装。它通过 SDK 公开 turn-detector 协议，先对当前候选转写取快照，再等候在途意图裁决（如有）和已取消 SpeechHandle 的公开 `wait_for_playout()` 收尾，随后仍由原 EOT 模型返回完成度。该适配用于对齐 Channel 取消与 SDK 回复调度，避免新问题在进入完成 hook 前被不可打断的旧播报丢弃；不接管 SDK 调度。完整句最小等待绑定既有 0.25 秒策略，不完整句最大等待继承 Session 配置（SDK 默认 3 秒）。
 

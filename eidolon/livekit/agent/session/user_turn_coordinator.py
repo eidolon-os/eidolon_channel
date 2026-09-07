@@ -690,28 +690,6 @@ class UserTurnCoordinator:
             )
         return FrameworkCompletionReadiness(True, "candidate_segments_covered")
 
-    def framework_completion_generation(self, transcript: str) -> int | None:
-        """Resolve the acoustic generation that produced a framework completion.
-
-        Provider callbacks can arrive after a later VAD segment has begun.  Match
-        the completed transcript against recorded revisions instead of assuming
-        the candidate's current segment owns it.
-        """
-
-        candidate = self._active
-        if candidate is None:
-            return None
-        text = transcript.strip()
-        if text:
-            for final_only in (True, False):
-                for revision in reversed(candidate.revisions):
-                    if final_only and not revision.is_final:
-                        continue
-                    if self._text_matches_revision(revision.text, text):
-                        return revision.generation_id
-        segment = candidate.current_segment
-        return segment.generation_id if segment is not None else None
-
     def reject_active(
         self,
         reason: str,

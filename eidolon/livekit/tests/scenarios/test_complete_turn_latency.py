@@ -128,6 +128,45 @@ async def test_cancelled_reply_waits_for_late_tail_without_second_endpoint_delay
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('tail_final_ms', [3100, 3460], ids=['final_before_stop', 'final_after_stop'])
+async def test_correction_across_merged_vad_segments_replies_once(tail_final_ms, record_property):
+    """RTC regression: a superseded fragment must not reject the complete correction."""
+    prefix, tail, reply = '我想改一下。', '不是明天，是后天。', '收到更正。'
+    async with production_session(
+        welcome='我先介绍一些背景，接下来会逐项说明时间、地点和需要准备的材料。',
+        llm=MockLLM.scripted([(tail.rstrip('。'), reply)]),
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text='我想改', interims=['我想改'], final=False, trigger_after_ms=800),
+            ScriptedTranscript(text=prefix, trigger_after_ms=1780),
+            ScriptedTranscript(text='不是明天', interims=['不是明天'], final=False, trigger_after_ms=2200),
+            ScriptedTranscript(text=tail.rstrip('。'), interims=[tail.rstrip('。')], final=False, trigger_after_ms=2900),
+            ScriptedTranscript(text=tail, trigger_after_ms=tail_final_ms),
+        ]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1550, .1),
+            MockVADEvent('start', 1700), MockVADEvent('end', 3300, .1, silence_duration=.5),
+        ]),
+        real_time_audio=True,
+    ) as (pipeline, h):
+        probe = ReplyLatencyProbe(pipeline, h)
+        pcm = synth_silence(.35) + synth_voiced(2.45) + synth_silence(2)
+        try:
+            h.audio_in.feed_pcm(pcm)
+            await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+                and getattr(e.payload.item, 'text_content', '') == reply, timeout=7)
+            await asyncio.sleep(.5)
+            assert len(h.events.user_messages()) == 1
+            assert h.events.user_messages()[0].replace(' ', '') == prefix + tail
+            assert h.events.agent_messages()[-1] == reply
+            report = probe.report(pcm)
+            record_property('latency', json.dumps(report, ensure_ascii=False))
+            assert 0 <= report['stop_to_reply_audio_ms'] <= 1500
+        finally:
+            probe.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['full_duplex', 'half_duplex'])
 @pytest.mark.parametrize('text', ['好', '7'])
 async def test_short_answer_replies_promptly(text, mode, record_property):

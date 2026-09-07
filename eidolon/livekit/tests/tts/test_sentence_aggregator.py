@@ -97,3 +97,56 @@ async def test_idle_and_explicit_flush_do_not_repeat_emitted_text():
         assert sent == ['已完成。余下内容', '还有尾段']
     finally:
         await aggregator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_idle_flush_finishes_async_send_before_next_segment():
+    """A stalled LLM must still deliver its text through a yielding transport."""
+    entered, release = asyncio.Event(), asyncio.Event()
+    sent = []
+
+    async def emit(text):
+        if text == '首段内容':
+            entered.set()
+            await release.wait()
+        sent.append(text)
+
+    aggregator = SentenceAggregator(emit, idle_ms=20)
+    next_segment = None
+    try:
+        await aggregator.feed('首段内容')
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        next_segment = asyncio.create_task(aggregator.feed('随后一句。'))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(next_segment, timeout=1)
+        await aggregator.flush()
+        assert sent == ['首段内容', '随后一句。']
+    finally:
+        release.set()
+        if next_segment is not None:
+            await asyncio.gather(next_segment, return_exceptions=True)
+        await aggregator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_inflight_idle_send():
+    """An interruption must retain ownership of a blocked transport send."""
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def emit(text):
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    aggregator = SentenceAggregator(emit, idle_ms=20)
+    try:
+        await aggregator.feed('未完成发送的内容')
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert not cancelled.is_set(), 'idle flush cancelled its own send'
+    finally:
+        await asyncio.wait_for(aggregator.aclose(), timeout=1)
+    assert cancelled.is_set()

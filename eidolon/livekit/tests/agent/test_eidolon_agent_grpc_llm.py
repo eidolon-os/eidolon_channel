@@ -289,6 +289,67 @@ async def test_forwards_deltas_then_finishes() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["full_duplex", "half_duplex"])
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_pipeline_preemptive_policy_controls_speculative_rpc(mode, enabled):
+    """Count actual StartTurn messages, including warm-ups outside reply metrics."""
+    from dataclasses import replace
+
+    from eidolon.livekit.common.config import TurnPolicyConfig
+
+    from .._harness.audio import synth_silence, synth_voiced
+    from .._harness.latency import ReplyLatencyProbe
+    from .._harness.mocks import MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedTranscript
+    from .._harness.production import production_session
+
+    class Servicer(_UsageStateServicer):
+        async def Chat(self, request_iterator, context):
+            async for request in request_iterator:
+                if request.WhichOneof("payload") == "start":
+                    self.starts.append(request.start)
+                    yield _delta(request.start.turn_id, 1, "收到。")
+                    yield _done(request.start.turn_id, 2)
+
+    servicer = Servicer()
+    server, target = await _serve(servicer)
+    adapter = EidolonAgentGrpcLlm(
+        target=target, device_token=lambda: "test-token", conversation_id="preemptive-policy",
+    )
+    policy = TurnPolicyConfig()
+    policy = replace(policy, preemptive=replace(policy.preemptive, enabled=enabled))
+    partial, final = "帮我介绍一下方案", "帮我介绍一下方案的优点。"
+    try:
+        async with production_session(
+            llm=adapter, mode=mode, turn_policy=policy, real_time_audio=True,
+            stt=MockSTT.scripted([
+                ScriptedTranscript(text=partial, interims=[partial], final=False, trigger_after_ms=500),
+                ScriptedTranscript(text=final, trigger_after_ms=1050),
+            ]),
+            tts=MockTTS(char_seconds=.03),
+            vad=MockVAD.scripted([
+                MockVADEvent("start", 200), MockVADEvent("end", 1200, .1, silence_duration=.2),
+            ]),
+        ) as (pipeline, h):
+            probe = ReplyLatencyProbe(pipeline, h)
+            pcm = synth_silence(.2) + synth_voiced(.8) + synth_silence(1)
+            try:
+                h.audio_in.feed_pcm(pcm)
+                await h.events.wait_for(lambda e: e.type == "conversation_item_added"
+                    and getattr(e.payload.item, "text_content", "") == "收到。", timeout=5)
+                await h.audio_out.wait_for_first_audio()
+                assert h.events.user_messages() == [final]
+                assert h.events.agent_messages() == ["收到。"]
+                assert [s.text for s in servicer.starts if not s.speculative] == [final]
+                assert [s.text for s in servicer.starts if s.speculative] == ([partial] if enabled else [])
+                assert 0 <= probe.report(pcm)["stop_to_reply_audio_ms"] <= 1000
+            finally:
+                probe.close()
+    finally:
+        await adapter.aclose()
+        await server.stop(grace=.5)
+
+
+@pytest.mark.asyncio
 async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
     from livekit.agents._exceptions import APIConnectionError
     from livekit.agents.types import APIConnectOptions

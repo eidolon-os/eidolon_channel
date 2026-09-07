@@ -295,10 +295,11 @@ class EidolonAgentSession:
             if metadata:
                 md.update(metadata)
             logger.debug(
-                "[EidolonAgentSession] start_turn turn_id=%s trace_id=%s conv=%s",
+                "[EidolonAgentSession] start_turn turn_id=%s trace_id=%s conv=%s speculative=%s",
                 turn_id,
                 trace_id,
                 conversation_id,
+                speculative,
             )
             await self._write(
                 pb.ChatRequest(

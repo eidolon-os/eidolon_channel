@@ -127,19 +127,6 @@ def test_new_speech_outside_merge_grace_starts_new_candidate() -> None:
     assert second.latest_generation_id == 2
 
 
-def test_framework_completion_resolves_exact_acoustic_generation() -> None:
-    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
-    timeline = TurnTimeline("turn-generations")
-    coordinator.start_speech(timeline=timeline, now=0.0)
-    coordinator.add_transcript("第一段", is_final=True, now=0.1)
-    coordinator.note_speech_stopped(eot_score=0.0, now=0.2)
-    coordinator.start_speech(timeline=timeline, now=0.5)
-    coordinator.add_transcript("第二段", is_final=True, now=0.6)
-
-    assert coordinator.framework_completion_generation("第一段") == 1
-    assert coordinator.framework_completion_generation("第二段") == 2
-
-
 def test_explicit_ingress_resolution_covers_pending_generation() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-repeated-hypothesis")

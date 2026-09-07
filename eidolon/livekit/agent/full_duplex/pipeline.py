@@ -943,7 +943,10 @@ class StreamingPipeline(BasePipeline):
             record_transcript_ingress_event=self._record_transcript_ingress_event,
             record_transcript_admission_event=self._record_transcript_admission_event,
             record_semantic_gate_event=self._record_semantic_gate_event,
-            warm_preemptive=self._warm_preemptive_from_partial,
+            warm_preemptive=(
+                self._warm_preemptive_from_partial
+                if self._turn_policy.preemptive.enabled else None
+            ),
         )
 
     def _record_transcript_ingress_event(self, payload: dict[str, object]) -> None:
@@ -1295,11 +1298,10 @@ class StreamingPipeline(BasePipeline):
         StreamingPipeline serves full_duplex and half_duplex. Only explicit
         button-driven PTT is routed to HalfDuplexPttPipeline.
 
-        ``preemptive_generation`` (Phase 2, 2026-05-30): speculative brain
-        generation gated via ``turn_policy.preemptive`` — hides the STT-final
-        wait by starting the brain on a stable interim; framework reuses it if
-        the final matches, else cancels via gRPC CancelTurn. ``preemptive_tts``
-        stays gated by our commit so no partial audio leaks.
+        ``preemptive_generation`` controls the SDK's pre-completion LLM work.
+        The separate RPC partial-transcript warm-up follows the same opt-in;
+        its ephemeral result is discarded, not reused as the accepted reply.
+        Neither mechanism owns the product turn's commit decision.
         """
         return build_full_duplex_turn_handling(
             turn_policy=self._turn_policy,

@@ -211,12 +211,12 @@ class IdlePolicyConfig:
 
 @dataclass(frozen=True)
 class PreemptivePolicyConfig:
-    """Speculative brain generation (LiveKit native preemptive_generation).
+    """Opt in to SDK pre-completion generation and Channel RPC warm-up.
 
-    Starts the brain on a stable interim/preflight transcript before commit;
-    the framework reuses it if the final transcript matches, else cancels via
-    our gRPC CancelTurn. ``preemptive_tts`` keeps output gated by our commit
-    when False (no partial-audio leak); only the LLM is pre-warmed.
+    SDK generation can reuse a matching pre-completion result. Channel's
+    separate partial-transcript RPC warm-up discards its ephemeral result;
+    it is not the accepted reply. The existing product-turn commit boundary
+    retains ownership of output admission.
 
     Default OFF: a real-room A/B (2026-05-31) showed it adds no measurable
     first-audio benefit once ``bailian_stt.max_sentence_silence_ms`` is low

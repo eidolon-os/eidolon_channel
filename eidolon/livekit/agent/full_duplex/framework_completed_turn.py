@@ -172,9 +172,6 @@ class FullDuplexFrameworkCompletedTurnGate:
         owner._ensure_user_turn_coordinator()
         candidate = owner._user_turns.active
         candidate_id = candidate.candidate_id if candidate is not None else None
-        completion_generation = owner._user_turns.framework_completion_generation(
-            completed_transcript
-        )
         settlement = await TranscriptSettlementLease(
             owner._user_turns,
             timeout_sec=getattr(owner, "_stt_commit_transcript_timeout", 1.5),
@@ -233,6 +230,11 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript=completed_transcript,
             timeline=timeline,
         )
+        # Settlement may assemble later acoustic fragments of the same product
+        # turn. Judge that candidate using its current generation's verdict,
+        # not the stale SDK prefix's generation. The lease above rejects a
+        # replaced product candidate before this boundary can affect it.
+        completion_generation = owner._user_turns.current_generation_id
         if timeline is not None:
             timeline.set_attr(
                 "framework_completed_candidate",

@@ -624,9 +624,65 @@ async def test_recorded_verdict_cannot_cross_generation_on_shared_timeline() -> 
         new_message=message,
     )
 
-    assert pipeline._user_turns.framework_completion_generation("新的真实语音") == 2
+    assert pipeline._user_turns.current_generation_id == 2
     assert allowed is True
     assert pipeline._user_turns.snapshot()["state"] == "committed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('latest_allows', [True, False])
+async def test_settled_merged_turn_uses_its_latest_generation_verdict(latest_allows):
+    """A stale SDK prefix must not decide the fate of the assembled product turn."""
+    from eidolon.livekit.agent.session.interruption_orchestrator import InterruptionOrchestrator
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline('merged-correction')
+    pipeline._timeline = timeline
+    turns = pipeline._user_turns
+    interruption = InterruptionOrchestrator(evidence_timeout_sec=6.0, min_speech_sec=.25)
+    pipeline._interruption_orchestrator = interruption
+    prefix, tail = '我想改一下。', '不是明天，是后天。'
+    turns.start_speech(timeline=timeline, now=0.0)
+    turns.add_transcript(prefix, is_final=True, now=.1)
+    turns.note_speech_stopped(eot_score=.55, now=.2)
+    interruption.start_candidate(timeline=timeline, generation_id=1)
+    if not latest_allows:
+        interruption.note_turn_policy_decision(
+            Decision(Action.CANCEL, 'confirmed', intent=InterruptIntent.NORMAL_INTERRUPT),
+            transcript=prefix, vad_active=False,
+        )
+        interruption.resolve(action='cancel', reason='confirmed')
+
+    turns.start_speech(timeline=timeline, now=.35)
+    turns.add_transcript(tail.rstrip('。'), is_final=False, now=.4)
+    interruption.start_candidate(timeline=timeline, generation_id=2)
+    interruption.note_turn_policy_decision(
+        Decision(Action.CANCEL if latest_allows else Action.ROLLBACK, 'latest_evidence',
+            intent=InterruptIntent.NORMAL_INTERRUPT if latest_allows else InterruptIntent.BACKCHANNEL),
+        transcript=prefix + tail, vad_active=False,
+    )
+    interruption.resolve(action='cancel' if latest_allows else 'rollback', reason='latest_evidence')
+    turns.note_speech_stopped(eot_score=.85, now=.5)
+    message = ChatMessage(role='user', content=[prefix])
+    completion = asyncio.create_task(pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(), new_message=message,
+    ))
+    try:
+        await asyncio.sleep(0)
+        assert not completion.done(), 'must wait for the trailing final'
+        turns.add_transcript(tail, is_final=True, now=.6)
+        assert await completion is latest_allows
+        assert turns.snapshot()['state'] == ('committed' if latest_allows else 'rejected')
+        verdict = next(e for e in timeline.attrs['framework_completed_gate_events']
+            if e['stage'] == 'interruption_verdict')
+        assert verdict['generation_id'] == 2
+        if latest_allows:
+            assert message.text_content == prefix + tail
+    finally:
+        if not completion.done():
+            completion.cancel()
+        await asyncio.gather(completion, return_exceptions=True)
 
 
 @pytest.mark.asyncio

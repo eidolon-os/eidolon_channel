@@ -93,6 +93,20 @@ class LiveKitChannelAdapter:
     def carries_media(self) -> bool:
         return True
 
+    @property
+    def serves_dataonly(self) -> bool:
+        """No: a room for a Body with nothing to say is a room nobody serves.
+
+        LiveKit could carry such a channel technically. It is refused because a
+        Manifest that declares no media produces no serving spec, so no agent
+        is dispatched — and that combination is what silently handed a device a
+        room where nothing would ever answer it. When a sensor-only Body is a
+        real product, this becomes a real answer, and everything it needs
+        beyond a room can be built behind it.
+        """
+
+        return False
+
     def resource_identity(self, handle: dict[str, Any]) -> str:
         room = str(handle.get("room") or "")
         return f"livekit:room:{room}" if room else ""
@@ -548,7 +562,7 @@ class LiveKitChannelAdapter:
             "kind": "device",
             "device_id": spec.device_id,
             "owner_id": spec.owner_id,
-            "device_kind": spec.device_kind,
+            "manifest_id": spec.manifest_id,
             "session_intent": "user_initiated",
         }
         if spec.serving is not None:

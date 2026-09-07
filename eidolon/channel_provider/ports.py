@@ -86,6 +86,21 @@ class ChannelAdapter(Protocol):
         """Whether this transport can carry audio or video, not just data."""
         ...
 
+    @property
+    def serves_dataonly(self) -> bool:
+        """Whether this adapter will carry a Body that declares no media.
+
+        Not "can this transport carry data" — every one of them can, which is
+        exactly why that question could not be the gate. A Body declaring no
+        media gets no serving spec, so no agent is dispatched to it, and while
+        a media-less spec trivially "needed nothing" every adapter qualified:
+        the device was handed a channel, joined it, and was never answered, by
+        anyone, with nothing raised anywhere. So this is the narrower question
+        an adapter must answer for itself, and answering it `False` is how a
+        deployment says it has nothing to offer such a device yet.
+        """
+        ...
+
     async def healthcheck(self) -> None:
         """Raise `BackendUnavailable` if this adapter cannot serve right now."""
         ...

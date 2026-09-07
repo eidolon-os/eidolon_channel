@@ -369,12 +369,44 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             session_end_state["sent"] = True
             logger.info("[lifecycle] session_end reason=%s room=%s sent", reason, room.name)
         except Exception:
-            logger.debug(
-                "[lifecycle] session_end reason=%s room=%s publish failed",
-                reason,
-                room.name,
-                exc_info=True,
-            )
+            # Two situations reach here and only one of them is a defect.
+            #
+            # The room is still up: the device is sitting in it, reachable, and
+            # was not told. Every remaining surface — the phone, the Provider,
+            # this log — goes on showing a healthy session, so the silence has
+            # to be loud here or it is nowhere.
+            #
+            # The room is already gone: nobody could have delivered this, and
+            # the device knows the channel dropped because it is usually the
+            # party that dropped it. The framework tears the room down before
+            # shutdown callbacks run, so the backstop lands here on every
+            # ordinary user-ended conversation — measured on hardware, an end
+            # the Owner asked for arrives as ParticipantRemoved first and
+            # `engine is closed` second. Warning on that teaches the reader to
+            # skip the warning, and then it is not there for the case above.
+            #
+            # `reason` cannot make this call: `user_left` is what
+            # _end_serving_cb assigns to every non-error shutdown, not a signal
+            # that the device asked to stop. The channel's own state can.
+            try:
+                reachable = bool(room.isconnected())
+            except Exception:
+                reachable = False
+            if reachable:
+                logger.warning(
+                    "[lifecycle] session_end reason=%s room=%s publish FAILED — the device "
+                    "was not told the conversation ended",
+                    reason,
+                    room.name,
+                    exc_info=True,
+                )
+            else:
+                logger.info(
+                    "[lifecycle] session_end reason=%s room=%s not sent: the channel was "
+                    "already gone",
+                    reason,
+                    room.name,
+                )
 
     async def _end_serving(context: str) -> None:
         """End this conversation by withdrawing our own dispatch, not the room.
@@ -551,7 +583,20 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         await _end_serving("shutdown callback")
 
     ctx.add_shutdown_callback(_end_serving_cb)
-    await pipeline.run(room)
+    try:
+        await pipeline.run(room)
+    except Exception:
+        # A job that dies before it has a running session still owes the device
+        # an answer, and _end_serving_cb cannot give one: the framework
+        # disconnects the room before shutdown callbacks run, so publish_data
+        # there always raises and the device is left holding an open microphone
+        # against a room with nothing in it. This is the last point at which the
+        # room is still live, so send session_end{error} here — the same
+        # "failure to be served" reason the contract already defines — and then
+        # let the job fail exactly as it would have. _publish_session_end is
+        # idempotent, so the shutdown callback stays a no-op backstop.
+        await _publish_session_end(SESSION_END_ERROR)
+        raise
 
 
 def _use_ptt_pipeline(interaction_mode: str) -> bool:

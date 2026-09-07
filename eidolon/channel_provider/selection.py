@@ -12,12 +12,24 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from .contracts import DomainError
 from .ports import ChannelAdapter
 from .spec import ChannelSpec
 
 
-class NoAdapterAvailable(RuntimeError):
-    """No configured adapter can satisfy what the device declared."""
+class NoAdapterAvailable(DomainError):
+    """No configured adapter can satisfy what the device declared.
+
+    A domain problem, not a bare RuntimeError. As a RuntimeError it escaped the
+    HTTP surface unhandled, so the Authority read a bodyless 500 as retryable
+    and recorded a binding still pending — which is the same lie in a different
+    place: nothing about this converges by waiting until the deployment gains an
+    adapter or the device declares something else.
+    """
+
+    code = "FAILED_PRECONDITION"
+    category = "conflict"
+    http_status = 409
 
 
 class AdapterRegistry:
@@ -52,9 +64,14 @@ class AdapterRegistry:
             adapter = self._by_name[name]
             if supports(adapter, spec):
                 return adapter
+        if not spec.needs_media:
+            raise NoAdapterAvailable(
+                "no adapter carries a Body that declares no media; "
+                f"manifest {spec.manifest_id!r}"
+            )
         raise NoAdapterAvailable(
             f"no adapter carries audio={spec.audio.value} video={spec.video.value} "
-            f"for device kind {spec.device_kind!r}"
+            f"for manifest {spec.manifest_id!r}"
         )
 
     async def healthcheck(self) -> None:
@@ -67,12 +84,17 @@ class AdapterRegistry:
 
 
 def supports(adapter: ChannelAdapter, spec: ChannelSpec) -> bool:
-    """Whether an adapter can carry everything the spec asks for.
+    """Whether an adapter will carry everything the spec asks for.
 
-    Media capability is the only hard constraint today: every adapter carries
-    data, so a data-only device can run on any of them, while a device that
-    needs audio or video rules out transports that carry no media at all.
+    Two questions, not one. A device that needs audio or video rules out
+    transports that carry no media. A device that declares no media used to
+    rule out nothing at all — "needs nothing" was read as "anything will do",
+    and since a media-less spec also gets no serving spec, the result was a
+    channel with no agent in it: the device connected and was never answered,
+    and no component reported anything. Whether such a Body is carried is now
+    a question each adapter answers, and it is separately answerable because
+    the two are separately true.
     """
     if not spec.needs_media:
-        return True
+        return adapter.serves_dataonly
     return adapter.carries_media

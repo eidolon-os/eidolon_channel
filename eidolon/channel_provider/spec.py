@@ -66,7 +66,7 @@ class ChannelSpec:
 
     device_id: str
     owner_id: str
-    device_kind: str
+    manifest_id: str
     audio: MediaFlow
     video: MediaFlow
     serving: ServingSpec | None
@@ -145,7 +145,7 @@ def derive_spec(
     return ChannelSpec(
         device_id=device_instance_id,
         owner_id=str(device.owner_id),
-        device_kind=device.device_kind,
+        manifest_id=device.manifest_id,
         audio=audio,
         video=video,
         serving=serving,

@@ -30,6 +30,7 @@ import signal
 import sys
 import time
 import multiprocessing
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -310,19 +311,6 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
     runtime_session_id = _resolve_runtime_session_id(ctx)
-    # session_key still passed as a synchronous fallback (Room.sid is async,
-    # Room.name is set pre-connect). D1: also pass the room reference so the
-    # remote-agent adapter can lazily build conversation_id="<prefix>:<participant_identity>:<room_name>"
-    # at chat() time, when the user has connected and we know who they are.
-    session_key = room.name or ""
-    factory = SharedStageFactory.from_config(
-        cfg,
-        prebuilt_vad=prebuilt_vad,
-        prebuilt_voiceprint_provider=prebuilt_voiceprint_provider,
-        livekit_session_key=session_key,
-        livekit_room=room,
-        runtime_session_id=runtime_session_id,
-    )
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
@@ -463,6 +451,19 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         allow_interruptions=True,
         interaction_mode=interaction_mode,
     )
+    # Construct optional stages from the same effective policy as the pipeline.
+    # Non-barge-in sessions must not allocate a channel intent model.
+    # Preserve the room reference for the existing lazy brain identity resolver.
+    session_key = room.name or ""
+    factory = SharedStageFactory.from_config(
+        replace(cfg, turn_policy=session_turn_policy),
+        prebuilt_vad=prebuilt_vad,
+        prebuilt_voiceprint_provider=prebuilt_voiceprint_provider,
+        livekit_session_key=session_key,
+        livekit_room=room,
+        runtime_session_id=runtime_session_id,
+    )
+
     # Video avatar is enabled for this session only if globally available AND the
     # client declared it (full-duplex path for M1). Default off → audio-only.
     avatar_enabled = bool(cfg.avatar.enabled and avatar_requested)

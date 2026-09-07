@@ -15,7 +15,8 @@ modes (authoritative descriptions in ``eidolon_sdk.biz.contracts``):
     AEC. The mic is closed while the agent speaks, so the turn is not
     interruptible; STT is committed via the SAME end-of-turn (EOT) judgment as
     ``full_duplex``. Barge-in is off, so we force ``allow_interruptions=False``
-    + ``attention.enabled=False``. For boards without a clean AEC reference
+    + ``attention.enabled=False`` + ``interrupt.intent_provider=none``.
+    For boards without a clean AEC reference
     (e.g. m5stack-stackchan). NOTE: ``half_duplex`` is NOT push-to-talk — that
     is now the separate ``ptt`` mode.
   - ``ptt`` → push-to-talk: the mic is open only while the device button is
@@ -222,6 +223,7 @@ def apply_interaction_mode(
         no_barge_in_policy = dataclasses.replace(
             turn_policy,
             attention=dataclasses.replace(turn_policy.attention, enabled=False),
+            interrupt=dataclasses.replace(turn_policy.interrupt, intent_provider="none"),
         )
         return no_barge_in_policy, False
     return turn_policy, allow_interruptions

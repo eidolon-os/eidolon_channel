@@ -135,3 +135,78 @@ async def test_session_metadata_propagates_runtime_actor_failure(monkeypatch):
         await _resolve_session_metadata(ctx)
 
     assert ctx.connect_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['full_duplex', 'half_duplex', 'ptt'])
+@pytest.mark.parametrize('owner', ['channel', 'livekit_native_adaptive'])
+async def test_job_constructs_intent_only_for_its_selected_mode(monkeypatch, mode, owner):
+    """Global opt-in must not allocate a model for a non-consuming session."""
+    from dataclasses import replace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from eidolon.livekit.agent import full_duplex
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.agent.half_duplex import pipeline as ptt_module
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
+
+    cfg = EffectiveAgentConfig()
+    cfg = replace(cfg, turn_policy=replace(cfg.turn_policy, interruption_owner=owner,
+        interrupt=replace(cfg.turn_policy.interrupt, intent_provider='llm')))
+    created = []
+    build_model = MagicMock(return_value=SimpleNamespace(aclose=AsyncMock()))
+    monkeypatch.setattr(SharedStageFactory, '_build_llm', build_model)
+
+    def factory_from_config(session_cfg, **kwargs):
+        factory = SimpleNamespace(
+            interrupt_classifier=SharedStageFactory.build_interrupt_classifier(session_cfg))
+        created.append((session_cfg, factory))
+        return factory
+
+    monkeypatch.setattr(SharedStageFactory, 'from_config', factory_from_config)
+    resolve = AsyncMock(return_value=(mode, 'user_initiated', False))
+    monkeypatch.setattr(server, '_resolve_session_metadata', resolve)
+    streaming = MagicMock(return_value=SimpleNamespace(run=AsyncMock()))
+    ptt = MagicMock(return_value=SimpleNamespace(run=AsyncMock()))
+    monkeypatch.setattr(full_duplex, 'StreamingPipeline', streaming)
+    monkeypatch.setattr(ptt_module, 'HalfDuplexPttPipeline', ptt)
+    ctx = _FakeContext({})
+    ctx.room.name = 'mode-boundary'
+    ctx.proc = SimpleNamespace(userdata={})
+    ctx.add_shutdown_callback = MagicMock()
+
+    await server.run_agent(ctx, cfg)
+
+    resolve.assert_awaited_once_with(ctx)
+    assert len(created) == 1
+    _, factory = created[0]
+    consumes = mode == 'full_duplex' and owner == 'channel'
+    assert build_model.call_count == int(consumes)
+    assert (factory.interrupt_classifier is not None) is consumes
+    assert cfg.turn_policy.interrupt.intent_provider == 'llm', 'shared config was mutated'
+    selected = ptt if mode == 'ptt' else streaming
+    unused = streaming if mode == 'ptt' else ptt
+    unused.assert_not_called()
+    assert selected.call_args.args[0] is factory
+    if mode != 'ptt':
+        assert selected.call_args.kwargs['allow_interruptions'] is (mode == 'full_duplex')
+    selected.return_value.run.assert_awaited_once_with(ctx.room)
+
+
+@pytest.mark.asyncio
+async def test_failed_actor_resolution_does_not_allocate_provider_clients(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
+
+    build = MagicMock()
+    monkeypatch.setattr(SharedStageFactory, 'from_config', build)
+    monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(
+        side_effect=DeviceTokenResolverError('runtime actor unavailable')))
+    ctx = _FakeContext({})
+    ctx.room.name = 'missing-actor'
+    ctx.proc = SimpleNamespace(userdata={})
+    with pytest.raises(DeviceTokenResolverError, match='runtime actor unavailable'):
+        await server.run_agent(ctx, EffectiveAgentConfig())
+    build.assert_not_called()

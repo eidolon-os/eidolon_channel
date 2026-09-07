@@ -423,7 +423,7 @@ class SharedStageFactory:
         from .turn_policy.intent_classifier import LlmInterruptClassifier
 
         extra_body = dict(cfg.llm.extra_body)
-        if cfg.llm.model.startswith("deepseek-"):
+        if urlsplit(cfg.llm.base_url or "").hostname == "api.deepseek.com":
             extra_body["thinking"] = {"type": "disabled"}
         model = cls._build_llm(replace(cfg, llm=replace(
             cfg.llm, max_completion_tokens=24, temperature=0,

@@ -199,7 +199,11 @@ eidolon/livekit/agent/
 
 `full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。这个边界原子收口同一个产品结果的三种投影：`UserTurnCoordinator` 的 `committed/rejected`、`FullDuplexStateMachine` 的 terminal transition，以及 timeline terminal flush；任何 reject 都不能只关闭其中一层。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
 
-当打断 owner 为 `channel` 且 `turn_policy.interrupt.intent_provider=llm` 时，现有 `SemanticInterruptHandler` 只在全双工重叠输入的 final 到达后异步获取语义证据，复用 `SharedStageFactory` 的 LLM 适配器。结果绑定候选、声学 generation、SpeechHandle 和 final 文本；过期结果不能操作新回答。附和/不确定结果在用户停止说话后恢复原缓冲，纯停止不进入回复生成，明确接管交给原有裁决 owner。超时或错误也恢复原播报，不冒充高置信度判断。`InterruptAwareTurnDetector` 使用 SDK 公开 turn-detector 协议，等候当前候选的在途裁决和已取消播报的收尾，随后仍由原 EOT 模型返回完成度；完整句最小等待绑定既有 0.25 秒策略，不完整句最大等待继承 Session 配置（SDK 默认 3 秒）；否则 SDK 会在完成 hook 之前丢掉尚未取消的不可打断播报所对应的新问题。通道拥有打断的全双工沿用 stage warmup 预热该无状态模型，预热有截止时间且不消费用户输入；half duplex/PTT 不调用该意图模型。选择 SDK 原生打断时不创建通道意图客户端，也不安装其端点等待或预热。共享配置保留 `none`，沿用原 EOT 策略的兼容路径及其已知语义缺口；`llm` 由集成测试显式启用，尚未通过生产 RPC/RTC 链路验收。
+当打断 owner 为 `channel` 且 `turn_policy.interrupt.intent_provider=llm` 时，现有 `SemanticInterruptHandler` 只在全双工重叠输入的 final 到达后异步获取语义证据，复用 `SharedStageFactory` 的 LLM 适配器。结果绑定候选、声学 generation、SpeechHandle 和 final 文本；过期结果不能操作新回答。附和/不确定结果在用户停止说话后恢复原缓冲，纯停止不进入回复生成，明确接管交给原有裁决 owner。超时或错误也恢复原播报，不冒充高置信度判断。共享配置保留 `none`，沿用原 EOT 策略的兼容路径及其已知语义缺口；`llm` 由集成测试显式启用，尚未通过生产 RPC/RTC 链路验收。
+
+`server.run_agent` 先解析 participant metadata，再通过既有 `apply_interaction_mode` 得到 session policy，最后用该策略构造 factory 和 pipeline。half duplex/PTT 将 `intent_provider` 设为 `none`，既不构造也不调用可选意图模型，不修改共享配置；选择 SDK 原生打断时，factory 的既有 owner 门禁同样禁止构造通道意图客户端。仅通道拥有打断且显式启用模型意图的全双工沿用 stage warmup 预热分类模型，预热有截止时间且不消费用户输入。意图客户端只对已知的 DeepSeek 官方 endpoint 自动设置供应商专用思考参数，其他 endpoint 仅透传显式配置，不根据模型名称猜测协议。
+
+`InterruptAwareTurnDetector` 安装于通道拥有打断的全双工，包括 `none` 和 `llm` 两种配置；half duplex/PTT 和 SDK 原生打断不安装。它通过 SDK 公开 turn-detector 协议，先对当前候选转写取快照，再等候在途意图裁决（如有）和已取消 SpeechHandle 的公开 `wait_for_playout()` 收尾，随后仍由原 EOT 模型返回完成度。该适配用于对齐 Channel 取消与 SDK 回复调度，避免新问题在进入完成 hook 前被不可打断的旧播报丢弃；不接管 SDK 调度。完整句最小等待绑定既有 0.25 秒策略，不完整句最大等待继承 Session 配置（SDK 默认 3 秒）。
 
 `full_duplex/playback_turn_evidence.py` 是 active interruption candidate 在 framework-final evidence 到达时使用的纯决策 contract。它只消费 typed `turn_policy.Decision`，输出 `should_apply / continue_to_llm / reason`；不读取 timeline dict、LiveKit、Room、AgentSession 或 pipeline 私有状态。由 policy 确认的 `NORMAL_INTERRUPT`、`CORRECTION`、`TOPIC_SWITCH` 接管共用 `intent_requires_reply`，在 CANCEL 后成为用户 turn，不依赖关键词；hard-stop 与 rollback 只终结 interruption，不进入 LLM。
 
@@ -229,7 +233,7 @@ eidolon/livekit/agent/
    - PTT/tap-to-stop 是高优先级 explicit evidence；发生在 agent playback 时由 ptt owner 抢占输出并发送 `playback.stop`；发生在空闲时则按音频段长度/能量裁决为空按或真实 turn。
 
 2. **半双工自动录音（`half_duplex` → `StreamingPipeline`，无 barge-in）** — session 开始后自动录音（无按钮），设备 **无可用 AEC 参考**（如 m5stack-stackchan），agent 播放期间设备关麦，因此不可被打断。
-   - 与 `full_duplex` 共用同一条 `StreamingPipeline`：流式 VAD/STT + EOT 轮次提交完全相同；唯一差别是 barge-in 关闭——`apply_interaction_mode` 返回 `allow_interruptions=False` + `attention.enabled=False`（不做 barge-in / evidence-gate / 打断猜测）。
+   - 与 `full_duplex` 共用同一条 `StreamingPipeline`：流式 VAD/STT + EOT 轮次提交完全相同；唯一差别是 barge-in 关闭——`apply_interaction_mode` 返回 `allow_interruptions=False` + `attention.enabled=False` + `interrupt.intent_provider=none`（不做 barge-in / evidence-gate / 打断猜测，也不构造意图客户端）。
    - `StreamingPipeline` 保留真实 `interaction_mode=half_duplex`（不再改写成 `full_duplex`）；barge-in 关闭只经由 `allow_interruptions`，其余流式编排与 full-duplex 一致。
    - 因为 mic 在播放期关闭，实践中不会出现“播放中打断”证据；轮次边界仍来自 VAD/EOT 提交，而不是按钮 release。
 

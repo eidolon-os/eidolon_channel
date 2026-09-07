@@ -185,13 +185,14 @@ def test_llm_transport_body_reuses_native_adapter(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('purpose', ['reply', 'intent'])
 @pytest.mark.parametrize('base_url,token_field', [
     ('https://api.deepseek.com', 'max_tokens'),
     ('https://api.deepseek.com/v1', 'max_tokens'),
     ('https://api.openai.com/v1', 'max_completion_tokens'),
     ('https://proxy.example/v1', 'max_completion_tokens'),
 ])
-async def test_token_limit_reaches_the_endpoint_in_its_supported_field(monkeypatch, base_url, token_field):
+async def test_token_limit_reaches_the_endpoint_in_its_supported_field(monkeypatch, base_url, token_field, purpose):
     """Inspect the actual SDK HTTP body, rather than just constructor kwargs."""
     import json
     import httpx
@@ -210,11 +211,12 @@ async def test_token_limit_reaches_the_endpoint_in_its_supported_field(monkeypat
     async with AsyncOpenAI(api_key='test', base_url=base_url,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond))) as client:
         monkeypatch.setattr(openai, 'LLM', lambda **kwargs: adapter(client=client, **kwargs))
-        cfg = config()
-        body = {'thinking': {'type': 'disabled'}}
+        cfg = config(intent_provider='llm')
+        body = {'thinking': {'type': 'disabled'}} if purpose == 'reply' else {}
         cfg = replace(cfg, llm=replace(cfg.llm, api_key='test', base_url=base_url,
             model='deepseek-v4-flash', max_completion_tokens=24, extra_body=body))
-        model = SharedStageFactory._build_llm(cfg)
+        model = (SharedStageFactory.build_interrupt_classifier(cfg)._model
+            if purpose == 'intent' else SharedStageFactory._build_llm(cfg))
         context = ChatContext()
         context.add_message(role='user', content='测试')
         try:
@@ -226,8 +228,11 @@ async def test_token_limit_reaches_the_endpoint_in_its_supported_field(monkeypat
         assert bodies[0].get(token_field) == 24
         other = 'max_completion_tokens' if token_field == 'max_tokens' else 'max_tokens'
         assert other not in bodies[0]
-        assert bodies[0]['thinking'] == body['thinking']
-        assert cfg.llm.extra_body == {'thinking': {'type': 'disabled'}}
+        if purpose == 'reply' or base_url.startswith('https://api.deepseek.com'):
+            assert bodies[0]['thinking'] == {'type': 'disabled'}
+        else:
+            assert 'thinking' not in bodies[0], 'unknown endpoints must not inherit vendor options'
+        assert cfg.llm.extra_body == body
 
 
 @pytest.mark.integration

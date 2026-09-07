@@ -592,10 +592,23 @@ class SharedStageFactory:
         if provider in ("none", "disabled"):
             return None
 
-        try:
-            from livekit.agents.plugins import silero_vad
-
-            return silero_vad.VAD.load()
-        except ImportError:
-            logger.warning("[SharedStageFactory] silero_vad not installed; VAD disabled")
-            return None
+        # There is no VAD fallback in this build, and saying "not installed"
+        # invited the reading that installing it would help. Two things are
+        # wrong at once: `livekit.agents.plugins` does not exist in
+        # livekit-agents 1.7.1, and the modern `livekit-plugins-silero` is not
+        # a declared dependency either (`silero` appears zero times in
+        # pyproject.toml and uv.lock). Correcting only the import would produce
+        # a fallback that looks repaired and behaves identically, which is
+        # worse than a message that is honest about arriving at None.
+        #
+        # Losing VAD is a degradation, not deafness — the SDK substitutes
+        # transcript activity for VAD activity (agent_activity.py:2313) and the
+        # streaming STT keeps its own endpointing — so this is deliberately not
+        # fatal. It is only that the degradation had five warnings across four
+        # layers and no statement of what the session actually loses.
+        logger.warning(
+            "[SharedStageFactory] no VAD available; this session runs with vad=None: "
+            "the semantic EOT turn detector is disabled and barge-in falls back to "
+            "transcript activity"
+        )
+        return None

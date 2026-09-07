@@ -70,7 +70,15 @@ class FullDuplexSessionLifecycle:
 
         room.on("disconnected", self._on_room_disconnected)
 
-        pipeline._session_signals.register_vad_inference_callback()
+        if not pipeline._session_signals.register_vad_inference_callback():
+            # Measured across 18 consecutive real sessions: this registers every
+            # time. A False here is the abnormal case, and it was the one step
+            # in the VAD degradation chain that reported nothing at all — the
+            # EOT model silently stops being fed per-frame speech probability.
+            logger.warning(
+                "[StreamingPipeline] VAD inference callback not registered; "
+                "EOT is running without per-frame speech probability"
+            )
 
         await pipeline._warmup_stages()
         if pipeline._filler is not None:

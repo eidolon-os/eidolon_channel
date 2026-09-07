@@ -1,0 +1,249 @@
+{
+  "date": "2026-09-08",
+  "status": "engineering_delivery_closed",
+  "full_experience_acceptance_passed": false,
+  "closure_basis": "用户同意收敛交付已验证工程修复；原体验门槛、失败记录和设备验收缺口保留，不表示完整体验目标通过。",
+  "fix_commit": "d110d2b",
+  "integration_and_deployed_commit": "942ccc0",
+  "scope": [
+    "TTS idle 发送避免取消自身",
+    "完成转写收集后使用当前产品候选的代次裁决",
+    "preemptive.enabled=False 时不绑定 RPC 投机预热回调"
+  ],
+  "environment_boundary": "Mac 为测试环境；实际部署服务经真实 ASR / Agent RPC / TTS / RTC 验证，客户端按钮和播放状态由测试模拟，未测实体扬声器起声。生产目录后续其他工作的未提交修改不属于本次保证。",
+  "core_regression": {
+    "source": "/tmp/voice-stage-core-preemptive-final.xml",
+    "passed": 1117,
+    "failed": 0,
+    "skipped": 2,
+    "xfailed": 11,
+    "failed_cases": []
+  },
+  "scenario_regression_runxfail": {
+    "source": "/tmp/voice-stage-scenarios-final.xml",
+    "passed": 87,
+    "failed": 6,
+    "skipped": 0,
+    "xfailed": 0,
+    "failed_cases": [
+      "test_incomplete_turn_survives_long_pause_then_replies_promptly[如果预算不够的话-就选便宜的。-full_duplex-none]",
+      "test_incomplete_turn_survives_long_pause_then_replies_promptly[如果预算不够的话-就选便宜的。-full_duplex-llm]",
+      "test_incomplete_turn_survives_long_pause_then_replies_promptly[如果预算不够的话-就选便宜的。-half_duplex-none]",
+      "test_overlap_intent_contract[好的-False-]",
+      "test_overlap_intent_contract[不要停止，请继续刚才的解释-False-]",
+      "test_overlap_intent_contract[不是，我说的是明天-True-目前先按后天来安排，我接下来会逐项说明时间、地点和需要准备的材料。]"
+    ]
+  },
+  "integration_regression": {
+    "initial": {
+      "source": "/tmp/voice-mac-integration.xml",
+      "passed": 200,
+      "failed": 2,
+      "skipped": 0,
+      "xfailed": 0,
+      "failed_cases": [
+        "test_http_surface_auth_contract_health_and_revoke",
+        "test_http_preserves_domain_error_codes_from_the_adapter"
+      ]
+    },
+    "localhost_permitted_rerun": {
+      "source": "/tmp/voice-mac-integration-http.xml",
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "xfailed": 0,
+      "failed_cases": []
+    },
+    "interpretation": "首轮两项 localhost 监听受沙箱限制；补跑 8 项中 6 项重叠，202 项独立用例最终覆盖通过，不相加为 208。"
+  },
+  "deployed_three_mode_runs": [
+    {
+      "source": "/tmp/voice-stage-rpc/deployed-full-duplex/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "mode": "full_duplex",
+      "case_id": "fd_gate_normal_turn_replies_001",
+      "passed": false,
+      "errors": [
+        "RuntimeError: timed out waiting for the previous agent reply to complete before user step '帮我详细介绍一下这个方案'",
+        "timeline missing for case=fd_gate_normal_turn_replies_001",
+        "real-call: no worker timeline records (cannot prove real call)",
+        "real-call: no real eidolon_agent brain RPC evidence in the whole run (provider/request_id + brain_request_sent/first_delta marks)"
+      ],
+      "metrics": {
+        "real_call_verified": false,
+        "user_audio_done_reference": "not_observed",
+        "user_audio_done_ms": null,
+        "user_done_to_agent_audio_after_user_done_ms": null,
+        "agent_audio_bytes": 1922560,
+        "retry_attempts": 1
+      },
+      "limitation": "首轮及 runner 自动重试均在发送用户音频前等待欢迎语完成超时；后续原用例复验通过，根因尚未证实。"
+    },
+    {
+      "source": "/tmp/voice-stage-rpc/deployed-full-duplex-recheck/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "mode": "full_duplex",
+      "case_id": "fd_gate_normal_turn_replies_001",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "real_call_verified": true,
+        "user_audio_done_reference": "last_voiced_frame",
+        "user_audio_done_ms": 8266,
+        "user_done_to_agent_audio_after_user_done_ms": 2362,
+        "agent_audio_bytes": 631040
+      },
+      "formal_rpc_requests_verified_from_timeline": 1
+    },
+    {
+      "source": "/tmp/voice-stage-rpc/deployed-half-duplex/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "mode": "half_duplex",
+      "case_id": "streaming_three_short_rounds_commit_each_001",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "real_call_verified": true,
+        "user_audio_done_reference": "last_voiced_frame",
+        "user_audio_done_ms": 72901,
+        "user_done_to_agent_audio_after_user_done_ms": 1779,
+        "agent_audio_bytes": 2680320
+      },
+      "formal_rpc_requests_verified_from_timeline": 3
+    },
+    {
+      "source": "/tmp/voice-stage-rpc/deployed-ptt/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "mode": "ptt",
+      "case_id": "phase_a_ptt_normal_release_commits_001",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "real_call_verified": true,
+        "user_audio_done_reference": "ptt_release",
+        "user_audio_done_ms": 9095,
+        "user_done_to_agent_audio_after_user_done_ms": 1804,
+        "agent_audio_bytes": 640000
+      },
+      "formal_rpc_requests_verified_from_timeline": 1
+    }
+  ],
+  "deployed_corrections": {
+    "budget_ms": 2500,
+    "metric": "客户端末个有声帧到新 TTS 对应的 RTC 有声帧",
+    "source": "/tmp/voice-deployed-corrections-summary.json",
+    "results": [
+      {
+        "repeat": "repeat-00",
+        "case": "fd_default_correction_date_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2788.0"
+        ],
+        "formal_rpc": 2,
+        "stop_to_new_tts_ms": 2788,
+        "real_call": true
+      },
+      {
+        "repeat": "repeat-00",
+        "case": "fd_default_correction_cost_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2956.0"
+        ],
+        "formal_rpc": 2,
+        "stop_to_new_tts_ms": 2956,
+        "real_call": true
+      },
+      {
+        "repeat": "repeat-01",
+        "case": "fd_default_correction_date_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2842.0"
+        ],
+        "formal_rpc": 2,
+        "stop_to_new_tts_ms": 2842,
+        "real_call": true
+      },
+      {
+        "repeat": "repeat-01",
+        "case": "fd_default_correction_cost_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2895.0"
+        ],
+        "formal_rpc": 2,
+        "stop_to_new_tts_ms": 2895,
+        "real_call": true
+      },
+      {
+        "repeat": "repeat-02",
+        "case": "fd_default_correction_date_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2580.0"
+        ],
+        "formal_rpc": 2,
+        "stop_to_new_tts_ms": 2580,
+        "real_call": true
+      },
+      {
+        "repeat": "repeat-02",
+        "case": "fd_default_correction_cost_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2694.0"
+        ],
+        "formal_rpc": 2,
+        "stop_to_new_tts_ms": 2694,
+        "real_call": true
+      }
+    ]
+  },
+  "colloquial_complete_turn": {
+    "source": "/tmp/voice-mac-colloquial-replay.json",
+    "boundary": "真实本地 EOT 与 LiveKit SDK，模拟 ASR / TTS；复用既有短答用例和 1000 ms 门槛。",
+    "results": [
+      {
+        "mode": "full_duplex",
+        "text": "你叫啥名儿？",
+        "budget_ms": 1000,
+        "stop_to_reply_audio_ms": 3030.1,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 35.0,
+            "score": 0.24667603444056702,
+            "threshold": 0.5
+          }
+        ],
+        "passed": false,
+        "error": ""
+      },
+      {
+        "mode": "half_duplex",
+        "text": "你叫啥名儿？",
+        "budget_ms": 1000,
+        "stop_to_reply_audio_ms": 3023.8,
+        "eot_predictions": [
+          {
+            "after_stop_ms": 29.6,
+            "score": 0.24667603444056702,
+            "threshold": 0.5
+          }
+        ],
+        "passed": false,
+        "error": ""
+      }
+    ]
+  },
+  "sdk_integrity": {
+    "livekit_agents_version": "1.7.1",
+    "python_files_matching_record": 207,
+    "sdk_modified": false
+  },
+  "remaining": [
+    "六项既有语义反例：条件句停顿三配置、附和、否定停止、日期纠正",
+    "口语完整问句被判未完成，受控全／半双工回放超出 1000 ms",
+    "部署服务日期／费用六次均超出 2500 ms；此前 direct LLM 4/6 通过作为不同配置历史证据保留",
+    "欢迎语完成事件等待偶发超时，根因未证实",
+    "OPI5 Max 部署后验证 AEC、长输出及实体播放体验"
+  ],
+  "reentry_criteria": "仅在有可验证根因与最小修复方案、明确候选能力／服务配置，或目标设备部署就绪时启动对应剩余项；复用原用例和门槛，三模式回归必须保持。"
+}

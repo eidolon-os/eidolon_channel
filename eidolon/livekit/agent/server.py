@@ -381,8 +381,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             session_end_state["sent"] = True
             logger.info("[lifecycle] session_end reason=%s room=%s sent", reason, room.name)
         except Exception:
-            logger.debug(
-                "[lifecycle] session_end reason=%s room=%s publish failed",
+            # Not debug: this is the failure of the notification itself. If the
+            # device cannot be told the conversation ended, every remaining
+            # surface — the phone, the Provider, this log — shows a healthy
+            # session, so the silence has to be loud here or it is nowhere.
+            logger.warning(
+                "[lifecycle] session_end reason=%s room=%s publish FAILED — the device "
+                "was not told the conversation ended",
                 reason,
                 room.name,
                 exc_info=True,
@@ -550,7 +555,20 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         await _end_serving("shutdown callback")
 
     ctx.add_shutdown_callback(_end_serving_cb)
-    await pipeline.run(room)
+    try:
+        await pipeline.run(room)
+    except Exception:
+        # A job that dies before it has a running session still owes the device
+        # an answer, and _end_serving_cb cannot give one: the framework
+        # disconnects the room before shutdown callbacks run, so publish_data
+        # there always raises and the device is left holding an open microphone
+        # against a room with nothing in it. This is the last point at which the
+        # room is still live, so send session_end{error} here — the same
+        # "failure to be served" reason the contract already defines — and then
+        # let the job fail exactly as it would have. _publish_session_end is
+        # idempotent, so the shutdown callback stays a no-op backstop.
+        await _publish_session_end(SESSION_END_ERROR)
+        raise
 
 
 def _use_ptt_pipeline(interaction_mode: str) -> bool:

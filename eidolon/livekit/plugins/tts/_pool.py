@@ -71,7 +71,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable, Generic, Optional, TypeVar
+from typing import Awaitable, Callable, Generic, TypeVar
 
 logger = logging.getLogger("plugins.tts.pool")
 
@@ -322,6 +322,9 @@ class TTSConnectionPool(Generic[T]):
         # Hard-cap mode: don't create inline overflow connections.
         # Wait for a refilled warm connection within timeout.
         if not self._enable_inline_slow_path:
+            # Cold start or a completed failed refill leaves no producer for
+            # the queue. Reuse the bounded scheduler before waiting on it.
+            self._maybe_refill()
             timeout = self._acquire_wait_timeout
             try:
                 if timeout is None:

@@ -89,6 +89,33 @@ async def test_endpointing_preserves_eot_probability_after_settlement():
     detector.predict_end_of_turn.assert_awaited_once_with(ctx, timeout=1.2)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('score', [.2, .8])
+async def test_endpointing_context_is_a_snapshot_and_preserves_model_score(score):
+    from livekit.agents.llm import ChatContext
+
+    selected = '不是我刚才说错了。'
+    def resolve(text):
+        assert text == '我刚才说错了。'
+        return selected
+    async def settle():
+        nonlocal selected
+        selected = '下一轮完全不同的请求。'
+    detector = SimpleNamespace(predict_end_of_turn=AsyncMock(return_value=score))
+    wrapper = InterruptAwareTurnDetector(detector, settle, resolve_transcript=resolve)
+    ctx = ChatContext()
+    ctx.add_message(role='assistant', content='旧回答。')
+    ctx.add_message(role='user', content='我刚才说错了。')
+    original = ctx.items[-1]
+    assert await wrapper.predict_end_of_turn(ctx, timeout=1.2) == score
+    scored = detector.predict_end_of_turn.call_args.args[0]
+    assert scored.items[-1].text_content == '不是我刚才说错了。'
+    assert scored.items[-1].id == original.id
+    assert scored.items[0] is ctx.items[0]
+    assert original.text_content == '我刚才说错了。'
+    assert ctx.items[-1] is original
+
+
 @pytest.mark.parametrize('wrapped', [False, True])
 def test_complete_turn_fast_path_preserves_session_endpoint_maximum(wrapped):
     from livekit.agents.types import NOT_GIVEN
@@ -126,13 +153,15 @@ async def test_intent_warmup_is_stateless_and_bounded():
         await classifier.warmup()
 
 
-@pytest.mark.parametrize('mode,owner,provider,included', [
-    ('full_duplex', 'channel', 'llm', True),
-    ('half_duplex', 'channel', 'llm', False),
-    ('full_duplex', 'livekit_native_adaptive', 'llm', False),
-    ('full_duplex', 'channel', 'none', False),
+@pytest.mark.parametrize('mode,owner,provider,stage_included,adapter_included', [
+    ('full_duplex', 'channel', 'llm', True, True),
+    ('half_duplex', 'channel', 'llm', False, False),
+    ('full_duplex', 'livekit_native_adaptive', 'llm', False, False),
+    ('full_duplex', 'channel', 'none', False, True),
 ])
-def test_intent_stage_and_endpoint_adapter_follow_policy_owner(mode, owner, provider, included):
+def test_intent_stage_and_endpoint_adapter_follow_policy_owner(
+    mode, owner, provider, stage_included, adapter_included,
+):
     from eidolon.livekit.agent.full_duplex.pipeline import StreamingPipeline
 
     classifier = object()
@@ -141,8 +170,8 @@ def test_intent_stage_and_endpoint_adapter_follow_policy_owner(mode, owner, prov
     policy = config(intent_provider=provider).turn_policy
     policy = replace(policy, interruption_owner=owner)
     pipeline = StreamingPipeline(factory, interaction_mode=mode, allow_interruptions=mode == 'full_duplex', turn_policy=policy)
-    assert (classifier in pipeline._lifecycle_stages()) is included
-    assert isinstance(pipeline._turn_detection(), InterruptAwareTurnDetector) is included
+    assert (classifier in pipeline._lifecycle_stages()) is stage_included
+    assert isinstance(pipeline._turn_detection(), InterruptAwareTurnDetector) is adapter_included
 
 
 def test_llm_transport_body_reuses_native_adapter(monkeypatch):

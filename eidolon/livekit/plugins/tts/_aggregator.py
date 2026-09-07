@@ -191,15 +191,17 @@ class SentenceAggregator:
     def _classify_buffer(self) -> str:
         """Return ``"hard_flush"``, ``"soft_flush"``, or ``"hold"``."""
         joined = "".join(self._buf)
-        last_char = joined[-1] if joined else ""
+        # Streaming chunks need not end at punctuation: the SDK's Markdown
+        # filter can put a boundary at the start of the next chunk. Keep the
+        # existing whole-buffer batching, but recognize boundaries anywhere.
+        hard_boundary = any(char in _HARD_PUNCT for char in joined)
+        soft_boundary = max(joined.rfind(char) for char in _SOFT_PUNCT)
 
         # G5 (2026-05-16): first-sentence aggressive mode. Only applies
         # BEFORE the first successful flush of this stream; after that,
         # standard thresholds resume so subsequent sentences batch cleanly.
         if not self._first_emit_done:
-            if self._first_sentence_flush_any_punct and last_char in (
-                _HARD_PUNCT + _SOFT_PUNCT
-            ):
+            if self._first_sentence_flush_any_punct and (hard_boundary or soft_boundary >= 0):
                 return "hard_flush"
             soft_min = (
                 self._first_sentence_soft_min_chars
@@ -209,11 +211,11 @@ class SentenceAggregator:
         else:
             soft_min = self._soft_min_chars
 
-        if last_char in _HARD_PUNCT:
+        if hard_boundary:
             return "hard_flush"
         if self._buf_len >= self._hard_max_chars:
             return "hard_flush"
-        if last_char in _SOFT_PUNCT and self._buf_len >= soft_min:
+        if soft_boundary + 1 >= soft_min:
             return "soft_flush"
         return "hold"
 

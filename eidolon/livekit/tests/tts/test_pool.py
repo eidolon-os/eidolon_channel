@@ -309,6 +309,80 @@ class TestPoolEdgeCases:
 
 class TestPoolConcurrency:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize('initial_state', ['cold', 'failed_warmup', 'failed_refill'])
+    async def test_empty_bounded_pool_recovers_on_acquire(self, initial_state):
+        """After an outage, acquire must start work before waiting for it."""
+        unavailable = initial_state == 'failed_warmup'
+        opened = []
+
+        async def factory():
+            if unavailable:
+                raise RuntimeError('temporary connection failure')
+            conn = FakeConn()
+            opened.append(conn)
+            return conn
+
+        disposer, _ = _make_disposer()
+        pool = TTSConnectionPool(
+            factory=factory, disposer=disposer, size=1,
+            enable_inline_slow_path=False, acquire_wait_timeout=.2,
+            refill_failure_backoff=.01,
+        )
+        try:
+            if initial_state == 'failed_warmup':
+                with pytest.raises(RuntimeError, match='warmup failed'):
+                    await pool.warmup()
+            elif initial_state == 'failed_refill':
+                await pool.warmup()
+                unavailable = True
+                await pool.mark_dirty(await pool.acquire())
+                await _wait_until(lambda: pool.in_flight_refills == 0)
+            assert pool.warm_count == pool.in_flight_refills == 0
+            unavailable = False
+            conn = await pool.acquire()
+            assert not conn.disposed
+            await pool.mark_dirty(conn)
+        finally:
+            await pool.shutdown()
+        assert all(conn.disposed for conn in opened)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_cold_acquires_share_bounded_refills(self):
+        active = peak = 0
+        ready = asyncio.Event()
+
+        async def factory():
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await ready.wait()
+                return FakeConn()
+            finally:
+                active -= 1
+
+        disposer, _ = _make_disposer()
+        pool = TTSConnectionPool(
+            factory=factory, disposer=disposer, size=2,
+            enable_inline_slow_path=False, acquire_wait_timeout=1,
+        )
+        async def acquire_and_dispose():
+            await pool.mark_dirty(await pool.acquire())
+
+        tasks = [asyncio.create_task(acquire_and_dispose()) for _ in range(6)]
+        try:
+            await _wait_until(lambda: active == 2, timeout=.2)
+            assert peak == 2
+            ready.set()
+            await asyncio.gather(*tasks)
+            assert peak == 2
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await pool.shutdown()
+
+    @pytest.mark.asyncio
     async def test_concurrent_acquires_dont_overshoot(self):
         """Many concurrent acquire+mark_dirty pairs; pool should converge
         back to size N without leaking conns or growing past N."""

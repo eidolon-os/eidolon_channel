@@ -13,6 +13,48 @@ def _owner_events(timeline: TurnTimeline) -> list[tuple[str, str, str]]:
     ]
 
 
+@pytest.mark.parametrize('query,expected', [
+    ('我刚才说错了。', '不是我刚才说错了。'),
+    ('不是。 我刚才说错了。', '不是我刚才说错了。'),
+    ('不是。', '不是。'),
+    ('我刚才说', '我刚才说'),
+    ('完全不同的话', '完全不同的话'),
+    ('', ''),
+])
+def test_endpointing_resolves_only_current_complete_candidate(query, expected):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    coordinator.start_speech(timeline=TurnTimeline('candidate'))
+    coordinator.add_transcript('不是。', is_final=True)
+    coordinator.add_transcript('我刚才说', is_final=False)
+    coordinator.add_transcript('我刚才说错了。', is_final=True)
+    version = coordinator.transcript_change_version
+    assert coordinator.endpointing_text(query) == expected
+    assert coordinator.transcript_change_version == version
+    assert coordinator.active.state == 'open'
+
+
+@pytest.mark.parametrize('state', ['pending_interim', 'new_speech', 'rejected', 'committed'])
+def test_endpointing_does_not_borrow_pending_or_terminal_context(state):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    timeline = TurnTimeline('candidate')
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript('不是。', is_final=True)
+    coordinator.add_transcript('我刚才说错了。', is_final=False)
+    coordinator.add_transcript('我刚才说错了。', is_final=True)
+    if state == 'pending_interim':
+        coordinator.add_transcript('还有', is_final=False)
+    elif state == 'new_speech':
+        coordinator.note_speech_stopped(eot_score=.6)
+        coordinator.start_speech(timeline=timeline)
+    elif state == 'rejected':
+        coordinator.reject_active('test rejection')
+    else:
+        coordinator.mark_framework_completed(
+            transcript=coordinator.selected_text, timeline=timeline, reason='test completion',
+        )
+    assert coordinator.endpointing_text('我刚才说错了。') == '我刚才说错了。'
+
+
 def test_interim_after_final_starts_a_new_sentence_segment() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     coordinator.start_speech(timeline=TurnTimeline("turn-final-then-interim"))

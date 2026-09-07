@@ -94,15 +94,17 @@ async def test_brief_noise_during_reply_does_not_destroy_output(mode, caplog):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('text,should_interrupt', [
-    pytest.param('好的', False, marks=pytest.mark.xfail(strict=True, reason='EOT completeness is still used as interruption intent; see execution report FD-INTENT')),
-    ('嗯嗯你继续', False),
-    pytest.param('不要停止，请继续刚才的解释', False, marks=pytest.mark.xfail(strict=True, reason='Negated commands need intent evidence independent of EOT; see FD-INTENT')),
-    pytest.param('不是，我说的是明天', True, marks=pytest.mark.xfail(strict=True, reason='Low EOT corrective interruption is not recognized; see FD-INTENT')),
-    ('停', True),
+@pytest.mark.parametrize('text,should_interrupt,context', [
+    pytest.param('好的', False, '', marks=pytest.mark.xfail(strict=True, reason='EOT completeness is still used as interruption intent; see execution report FD-INTENT')),
+    ('嗯嗯你继续', False, ''),
+    pytest.param('不要停止，请继续刚才的解释', False, '', marks=pytest.mark.xfail(strict=True, reason='Negated commands need intent evidence independent of EOT; see FD-INTENT')),
+    pytest.param('不是，我说的是明天', True, '目前先按后天来安排，我接下来会逐项说明时间、地点和需要准备的材料。', marks=pytest.mark.xfail(strict=True, reason='Low EOT corrective interruption is not recognized; see FD-INTENT')),
+    ('停', True, ''),
 ])
-async def test_overlap_intent_contract(text, should_interrupt, record_property):
-    welcome = '我们接着讨论这个问题，我先介绍一下背景，然后慢慢说明各个细节。'
+async def test_overlap_intent_contract(text, should_interrupt, context, record_property):
+    # These are contextual speech acts, not a global phrase classification.
+    # A correction needs an actual mistaken proposition in the playing answer.
+    welcome = context or '我们接着讨论这个问题，我先介绍一下背景，然后慢慢说明各个细节。'
     async with production_session(
         welcome=welcome, llm=MockLLM.scripted([(text, '收到。')]),
         stt=MockSTT.scripted([ScriptedTranscript(text=text, trigger_after_ms=700)]),

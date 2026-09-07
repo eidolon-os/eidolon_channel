@@ -1,0 +1,181 @@
+{
+  "scope": "Phase23: late-final ordering regression, contextual correction fixture, unchanged-production RTC diagnosis. No production code, SDK, thresholds, intent defaults or mode ownership changes in this batch. Overall goal NOT achieved.",
+  "invalid_attempts": [
+    {
+      "log": "/tmp/phase23-default-rtc.log",
+      "reason": "sandbox network DNS unavailable; preflight failed, no valid case"
+    },
+    {
+      "log": "/tmp/phase23-default-rtc-network.log",
+      "reason": "VAD model path omitted, worktree contains non-loadable model; replay excluded from validation"
+    }
+  ],
+  "controlled_late_final": {
+    "source": "/tmp/phase23-late-final.xml",
+    "passed": 2,
+    "injected_final_at_ms": [
+      2000,
+      4250
+    ],
+    "final_to_reply_audio_ms": [
+      17.018,
+      40.897
+    ],
+    "qualification": "Fake ASR/LLM/TTS over real AgentSession/EOT; exact timings are single observations, final-to-audio ceiling 500 ms. Existing speech-stop ceiling not loosened."
+  },
+  "rtc": [
+    {
+      "case_id": "fd_default_correction_date_001",
+      "passed": false,
+      "errors": [
+        "no new TTS output after correction cancellation"
+      ],
+      "metrics": {
+        "direct_llm_request_count": 2,
+        "new_reply_tts_observed": false
+      },
+      "timestamps": {
+        "speech_started_at": 1530102.026170333,
+        "interrupt_started_at": 1530102.026542916,
+        "stt_first_audio_sent_at": 1530102.071301791,
+        "transcript_interim_first_at": 1530102.746164166,
+        "transcript_evidence_sufficient_first_at": 1530102.857204125,
+        "transcript_final_at": 1530104.525007333,
+        "speech_stopped_at": 1530104.928083541,
+        "transcript_actionable_first_at": 1530106.752699875,
+        "playback_stop_sent_at": 1530106.752827583,
+        "interrupt_resolved_at": 1530106.75356875,
+        "interrupt_cancel_resolved_at": 1530106.75356875,
+        "framework_completed_turn_at": 1530106.846609541,
+        "turn_committed_at": 1530106.8467935,
+        "llm_started_at": 1530106.852308833
+      },
+      "server_stages_ms": {
+        "vad_to_sdk_completion": 1918.526,
+        "completion_to_commit": 0.184,
+        "commit_to_llm": 5.515
+      }
+    },
+    {
+      "case_id": "fd_default_correction_cost_001",
+      "passed": false,
+      "errors": [
+        "new reply after speech end exceeded 2500 ms: 6238.0"
+      ],
+      "metrics": {
+        "direct_llm_request_count": 2,
+        "new_reply_tts_observed": true,
+        "client_started_monotonic": 1530115.924289458,
+        "client_stop_monotonic": 1530135.420289458,
+        "client_stop_to_server_vad_stop_ms": 603.4593749791384,
+        "server_tts_to_client_rtc_ms": 309.5674579963088,
+        "cancel_to_commit_ms": 16.22870797291398,
+        "stop_to_new_tts_rtc_audio_ms": 6237.999999895692
+      },
+      "timestamps": {
+        "speech_started_at": 1530133.376787916,
+        "interrupt_started_at": 1530133.377066916,
+        "stt_first_audio_sent_at": 1530133.420020916,
+        "transcript_interim_first_at": 1530133.780287541,
+        "transcript_evidence_sufficient_first_at": 1530134.699133041,
+        "transcript_final_at": 1530135.144927958,
+        "speech_stopped_at": 1530136.023748833,
+        "transcript_actionable_first_at": 1530136.331186708,
+        "playback_stop_sent_at": 1530136.331421916,
+        "interrupt_resolved_at": 1530136.332535333,
+        "interrupt_cancel_resolved_at": 1530136.332535333,
+        "framework_completed_turn_at": 1530136.348610666,
+        "turn_committed_at": 1530136.348764041,
+        "llm_started_at": 1530136.354250166,
+        "tts_stream_started_at": 1530137.72985475,
+        "tts_request_started_at": 1530137.729906833,
+        "tts_connection_acquired_at": 1530138.435633416,
+        "tts_first_text_sent_at": 1530138.436076666,
+        "llm_first_delta_at": 1530137.7314672912,
+        "tts_provider_first_audio_at": 1530140.825901083,
+        "tts_first_audio_at": 1530141.348722,
+        "agent_audio_playback_done_at": 1530151.664096208
+      },
+      "server_stages_ms": {
+        "vad_to_sdk_completion": 324.862,
+        "completion_to_commit": 0.153,
+        "commit_to_llm": 5.486,
+        "llm_to_first_delta": 1377.217,
+        "delta_to_tts_text": 704.609,
+        "tts_text_to_provider_audio": 2389.824,
+        "provider_to_server_audio": 522.821
+      }
+    }
+  ],
+  "rtc_sources": {
+    "results": "/tmp/eidolon-phase23-default-rtc-valid/results.json",
+    "timeline": "/tmp/eidolon-phase23-default-rtc-valid/full_duplex/timeline.jsonl",
+    "log": "/tmp/eidolon-phase23-default-rtc-valid/worker.log",
+    "script": "/tmp/eidolon_phase23_default_rtc.py"
+  },
+  "interpretation": [
+    "Original phase22 2996/6100 ms retained; phase23 is another observation, not a production-change A/B.",
+    "Cost turn: cancellation-to-commit 16 ms, TTS acquired mark includes provider run-task acknowledgement, not only pool queue waiting.",
+    "Date turn: complete request and second LLM started, but no new TTS before observation ended; TLS start without completion is the last observed transport step, not proof of permanent failure.",
+    "Client/worker monotonic clocks correlated only because both run on the same machine. RTC marker does not certify physical playout or audio content identity."
+  ],
+  "regression": {
+    "source": "/tmp/phase23-regression.xml",
+    "passed": 61,
+    "xfailed": 6,
+    "failed": 0,
+    "qualification": "6 expected failures remain blockers, not accepted behavior. Includes the two new late-final cases and corrected date context. No new PTT run in this batch because production code was unchanged.",
+    "semantic_failures": [
+      {
+        "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+      },
+      {
+        "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+      },
+      {
+        "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+        "reason": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u597d\\u7684-False-]",
+        "reason": "EOT completeness is still used as interruption intent; see execution report FD-INTENT"
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False-]",
+        "reason": "Negated commands need intent evidence independent of EOT; see FD-INTENT"
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True-\\u76ee\\u524d\\u5148\\u6309\\u540e\\u5929\\u6765\\u5b89\\u6392\\uff0c\\u6211\\u63a5\\u4e0b\\u6765\\u4f1a\\u9010\\u9879\\u8bf4\\u660e\\u65f6\\u95f4\\u3001\\u5730\\u70b9\\u548c\\u9700\\u8981\\u51c6\\u5907\\u7684\\u6750\\u6599\\u3002]",
+        "reason": "Low EOT corrective interruption is not recognized; see FD-INTENT"
+      }
+    ]
+  },
+  "checks": {
+    "ruff": "two touched scenario files passed with existing project Ruff binary",
+    "git_diff_check": "passed",
+    "production_files_modified_this_batch": [],
+    "temporary_workers": "valid and invalid network replay processes exited and their managed-worker finally cleanup ran; no deployment or commit"
+  },
+  "explicit_intent_gate": {
+    "command_option": "--runxfail",
+    "source": "/tmp/phase23-intent-gate.xml",
+    "passed": 2,
+    "failed": 3,
+    "failures": [
+      {
+        "case": "test_overlap_intent_contract[\\u597d\\u7684-False-]",
+        "message": "assert True is False\n +  where True = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x127138050>.interrupted"
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False-]",
+        "message": "assert True is False\n +  where True = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x12653bce0>.interrupted"
+      },
+      {
+        "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True-\\u76ee\\u524d\\u5148\\u6309\\u540e\\u5929\\u6765\\u5b89\\u6392\\uff0c\\u6211\\u63a5\\u4e0b\\u6765\\u4f1a\\u9010\\u9879\\u8bf4\\u660e\\u65f6\\u95f4\\u3001\\u5730\\u70b9\\u548c\\u9700\\u8981\\u51c6\\u5907\\u7684\\u6750\\u6599\\u3002]",
+        "message": "assert False is True\n +  where False = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x12713fbf0>.interrupted"
+      }
+    ]
+  }
+}

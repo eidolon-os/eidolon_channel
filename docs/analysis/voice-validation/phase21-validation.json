@@ -1,0 +1,126 @@
+{
+  "scope": "Phase 21: review phase19/20 architecture, then fix the demonstrated empty TTS pool recovery dead end. Overall voice optimization is incomplete.",
+  "architecture_review": {
+    "retain": [
+      "Candidate assembly remains exclusively in UserTurnCoordinator; endpointing_text is a guarded read-only lookup, not a second merger.",
+      "InterruptAwareTurnDetector uses public ChatContext copies and SpeechHandle completion; the SDK remains responsible for score-based endpointing, final submission and playback scheduling.",
+      "Default none does not enable the optional model; half duplex, PTT and native adaptive ownership remain outside the adapter."
+    ],
+    "correction_to_work_direction": "Stop repeated intent label/prompt experiments; rejected candidates were only temporary and never entered production. No unnecessary production prompt implementation exists to remove.",
+    "limit": "This review covers current phase19/20 changes and relevant TTS lifecycle, not a fresh line-by-line approval of all 112 files in commit 67cf3b0."
+  },
+  "evidence_from_phase20": {
+    "source": "/tmp/phase20-real-repeat.log",
+    "fast_half_duplex": "ASR WebSocket opening handshake timed out; channel emitted non-retryable APIError and the SDK recreated the stream.",
+    "correction": "Intent warmup and current classification timed out; the existing noninterruptible speech guard skipped the reply.",
+    "stop": "All 3 bootstrap TTS connections failed; subsequent acquire waited 12s with in_flight=0.",
+    "qualification": "These are observed failure paths, not proof all failures share a cause. STT close timeout remains unresolved."
+  },
+  "production_change": {
+    "file": "eidolon/livekit/plugins/tts/_pool.py",
+    "root_cause": "The bounded-mode empty-queue branch waited for an item without invoking the existing producer scheduler. Total warmup failure or a completed failed refill left neither a warm connection nor a running producer, so retries repeated an idle queue wait.",
+    "fix": "Call existing _maybe_refill() before bounded queue wait. No new scheduler, task type, connection pool, retry loop, timeout, threshold, model, dependency or conversation policy.",
+    "limits": "Existing deficit calculation, failure backoff, acquire deadline and SDK retry remain. A provider outage can still fail; recovery is initiated on a subsequent acquire, not promised during an ongoing outage. Legacy inline mode and healthy fast path are unchanged.",
+    "cleanup": "Removed one pre-existing unused Optional import flagged by Ruff in the touched module."
+  },
+  "controlled_tests": {
+    "pool_before": {
+      "source": "/tmp/phase21-pool-before.xml",
+      "passed": 0,
+      "failed": 4,
+      "skipped": 0,
+      "failures": [
+        {
+          "case": "test_empty_bounded_pool_recovers_on_acquire[cold]",
+          "message": "RuntimeError: [TTSConnectionPool] acquire timeout waiting for warm connection (timeout=0.2s, in_flight=0)"
+        },
+        {
+          "case": "test_empty_bounded_pool_recovers_on_acquire[failed_warmup]",
+          "message": "RuntimeError: [TTSConnectionPool] acquire timeout waiting for warm connection (timeout=0.2s, in_flight=0)"
+        },
+        {
+          "case": "test_empty_bounded_pool_recovers_on_acquire[failed_refill]",
+          "message": "RuntimeError: [TTSConnectionPool] acquire timeout waiting for warm connection (timeout=0.2s, in_flight=0)"
+        },
+        {
+          "case": "test_concurrent_cold_acquires_share_bounded_refills",
+          "message": "AssertionError: predicate never became truthy within 0.2s"
+        }
+      ]
+    },
+    "same_final_pipeline_fixture_old_acquire": {
+      "source": "/tmp/phase21-output-baseline.xml",
+      "passed": 0,
+      "failed": 3,
+      "skipped": 0,
+      "failures": [
+        {
+          "case": "test_reply_reaches_audio_after_failed_tts_warmup[full_duplex]",
+          "message": "TimeoutError: expected 1 agent messages within 3s, got 0"
+        },
+        {
+          "case": "test_reply_reaches_audio_after_failed_tts_warmup[half_duplex]",
+          "message": "TimeoutError: expected 1 agent messages within 3s, got 0"
+        },
+        {
+          "case": "test_reply_reaches_audio_after_failed_tts_warmup[ptt]",
+          "message": "TimeoutError: expected 1 agent messages within 3s, got 0"
+        }
+      ]
+    },
+    "tts_scope_after": {
+      "source": "/tmp/phase21-tts-verified.xml",
+      "passed": 51,
+      "failed": 0,
+      "skipped": 0
+    },
+    "boundaries": {
+      "source": "/tmp/phase21-boundaries.xml",
+      "passed": 58,
+      "failed": 0,
+      "skipped": 0
+    },
+    "coverage": [
+      "Cold pool; total warmup failure; completed refill failure; concurrent cold acquires preserve the existing refill concurrency cap.",
+      "Full duplex, half duplex and PTT: failed provider bootstrap, then restored connection factory, one user commit, one reply, nonzero output audio and exact emitted reply text; all acquired connected clients disposed."
+    ],
+    "provenance": "Real production pipelines, AgentSession, Bailian TTS stream, aggregator and pool. STT/LLM and TTS network client are test doubles. This is controlled end-to-end orchestration, not a real cloud latency sample.",
+    "baseline_method": "A temporary pytest fixture uses the committed HEAD acquire method against the same final test input; workspace production code stays at the fix. All three fail with empty queue/in_flight=0.",
+    "fixture_correction": "An initial test import failed, then a short request also hit existing EOT wait. The final fixture reuses an already validated complete request. Baseline and after use exactly the same final fixture; no production threshold/deadline changes.",
+    "eot_fixture_scores": [
+      {
+        "text": "介绍这个方案。",
+        "score": 0.43912557230507476
+      },
+      {
+        "text": "帮我详细介绍一下这个方案。",
+        "score": 0.9197000917949641
+      }
+    ],
+    "counts": "The 4 new pool cases and 3 new pipeline cases are included in the 51 TTS-scope passes; do not add them again."
+  },
+  "real_cascade": {
+    "source": "/tmp/phase21-real-cascade.xml",
+    "passed": 15,
+    "failed": 0,
+    "skipped": 0
+  },
+  "real_diagnostic": "Existing 15 real-service cases and acceptance budgets unchanged. A temporary observer records the original body failure, input consumption, timeline and coroutine wait chains before the session closes. It does not suppress errors or modify provider behavior.",
+  "checks": {
+    "ruff": "passed for the 3 new/changed Python files this phase",
+    "git_diff_check": "passed",
+    "sdk": {
+      "version": "1.7.1",
+      "python_files": 207,
+      "changed": []
+    }
+  },
+  "remaining": [
+    "Default semantic completion still has conditional-clause premature replies and slow short answers.",
+    "Optional intent model remains context-sensitive and can time out.",
+    "Real RTC 2797ms result from phase20 has not been remeasured or converted into a pass.",
+    "STT close timeout and real-service failures require further evidence; no blanket external-service blame.",
+    "Authenticated production Agent RPC, physical-device AEC and long-output acceptance are unverified."
+  ],
+  "delivery": "Phase19/20/21 working changes are uncommitted; no deployment or overall completion claim."
+}

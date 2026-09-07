@@ -1,0 +1,314 @@
+{
+  "scope": "Phase 19: score a current finalized product candidate when SDK endpointing queries only its final suffix. This applies to existing Channel-owned optional LLM-intent full duplex; no default policy promotion.",
+  "base_commit": "67cf3b0",
+  "production_changes": [
+    "UserTurnCoordinator provides a read-only endpointing_text lookup for an open candidate with all uncovered segments finalized. Only an exact normalized match to its latest final segment or assembled text can use the assembled policy text.",
+    "Existing InterruptAwareTurnDetector snapshots the resolved text before awaiting settlement, copying the context and message through public SDK methods without changing the original SDK context.",
+    "The original learned score, threshold, endpointing delays and sole SDK completion boundary remain authoritative. No keyword, extra state owner, model, cache, task or dependency is added."
+  ],
+  "reproduction": {
+    "fixture_gap": "Mock VAD previously always emitted END_OF_SPEECH with zero accumulated silence; that did not reproduce real VAD endpoint anchoring. Added optional silence_duration (default zero), used 500 ms trailing silence and a final 40 ms after VAD end.",
+    "before": {
+      "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+      "stop_to_reply_audio_ms": 3554.8,
+      "complete_to_reply_audio_ms": null,
+      "sdk_complete_to_reply_audio_ms": 3044.1,
+      "commit_to_reply_audio_ms": 5.9,
+      "from_acoustic_stop_ms": {
+        "speech_started_at": -592.9,
+        "interrupt_started_at": -592.1,
+        "transcript_final_at": -243.4,
+        "transcript_interim_first_at": -94.1,
+        "speech_stopped_at": 505.3,
+        "transcript_evidence_sufficient_first_at": 1252.6,
+        "transcript_actionable_first_at": 1252.6,
+        "interrupt_resolved_at": 1253.9,
+        "interrupt_cancel_resolved_at": 1253.9,
+        "framework_completed_turn_at": 3546.2,
+        "turn_committed_at": 3546.4,
+        "llm_started_at": 3549.0,
+        "llm_first_delta_at": 3549.2,
+        "tts_first_audio_at": 3555.0,
+        "agent_audio_playback_done_at": 3678.0,
+        "sdk_user_committed": 3548.9,
+        "reply_audible": 3554.8
+      },
+      "eot_predictions": [
+        {
+          "after_stop_ms": 510.7,
+          "score": 0.7033010340138348,
+          "threshold": 0.5
+        },
+        {
+          "after_stop_ms": 1268.4,
+          "score": 0.2945479814084923,
+          "threshold": 0.5
+        }
+      ],
+      "final_eot_predictions": [
+        {
+          "after_stop_ms": -237.5,
+          "score": 0.7033010340138348,
+          "text": "不是。"
+        },
+        {
+          "after_stop_ms": 551.5,
+          "score": 0.668601563373425,
+          "text": "不是我刚才说错了。"
+        }
+      ]
+    },
+    "after": {
+      "reference": "last voiced 20ms input frame to first audible reply frame at memory sink",
+      "stop_to_reply_audio_ms": 1283.5,
+      "complete_to_reply_audio_ms": null,
+      "sdk_complete_to_reply_audio_ms": 13.1,
+      "commit_to_reply_audio_ms": 8.6,
+      "from_acoustic_stop_ms": {
+        "speech_started_at": -592.0,
+        "interrupt_started_at": -591.8,
+        "transcript_final_at": -240.5,
+        "transcript_interim_first_at": -90.7,
+        "speech_stopped_at": 509.0,
+        "transcript_evidence_sufficient_first_at": 1253.9,
+        "transcript_actionable_first_at": 1253.9,
+        "interrupt_resolved_at": 1255.1,
+        "interrupt_cancel_resolved_at": 1255.1,
+        "framework_completed_turn_at": 1271.2,
+        "turn_committed_at": 1271.4,
+        "llm_started_at": 1274.9,
+        "llm_first_delta_at": 1275.1,
+        "tts_first_audio_at": 1283.7,
+        "agent_audio_playback_done_at": 1409.4,
+        "sdk_user_committed": 1274.8,
+        "reply_audible": 1283.5
+      },
+      "eot_predictions": [
+        {
+          "after_stop_ms": 520.5,
+          "score": 0.7033010340138348,
+          "threshold": 0.5
+        },
+        {
+          "after_stop_ms": 1270.4,
+          "score": 0.668601563373425,
+          "threshold": 0.5
+        }
+      ],
+      "final_eot_predictions": [
+        {
+          "after_stop_ms": -229.4,
+          "score": 0.7033010340138348,
+          "text": "不是。"
+        },
+        {
+          "after_stop_ms": 552.5,
+          "score": 0.668601563373425,
+          "text": "不是我刚才说错了。"
+        }
+      ]
+    },
+    "limits": "Scripted external providers and 700 ms intent delay; real SDK and EOT, memory audio sink. These are controlled channel-overhead samples, not real-service latency or production P95."
+  },
+  "verification": {
+    "ownership_focused": {
+      "source": "/tmp/phase19-ownership-verified.xml",
+      "passed": 58,
+      "failed": 0,
+      "xfailed": 0,
+      "skipped": 0
+    },
+    "core": {
+      "source": "/tmp/phase19-core.xml",
+      "passed": 1019,
+      "failed": 0,
+      "xfailed": 11,
+      "skipped": 2
+    },
+    "real_cascade": {
+      "source": "/tmp/phase19-real-cascade.xml",
+      "passed": 15,
+      "failed": 0,
+      "xfailed": 0,
+      "skipped": 0
+    },
+    "scenarios": {
+      "source": "/tmp/phase19-scenarios.xml",
+      "passed": 115,
+      "failed": 0,
+      "xfailed": 6,
+      "skipped": 0
+    }
+  },
+  "count_note": "Focused ownership tests are included in core. Focused latency replay is included in scenarios; do not add either scope twice.",
+  "sdk_record": {
+    "version": "1.7.1",
+    "python_files": 207,
+    "changed": []
+  },
+  "intent_failure_investigation": {
+    "baseline_six_inputs": [
+      {
+        "context": "after",
+        "text": "不是我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 1263.2
+      },
+      {
+        "context": "after",
+        "text": "不是。我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 1007.4
+      },
+      {
+        "context": "after",
+        "text": "不是，我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 861.8
+      },
+      {
+        "context": "output",
+        "text": "不是我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 1147.7
+      },
+      {
+        "context": "output",
+        "text": "不是。我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 1133.6
+      },
+      {
+        "context": "output",
+        "text": "不是，我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 923.9
+      }
+    ],
+    "general_contract_candidate_six_inputs": [
+      {
+        "context": "after",
+        "text": "不是我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 1097.8
+      },
+      {
+        "context": "after",
+        "text": "不是。我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 906.2
+      },
+      {
+        "context": "after",
+        "text": "不是，我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 999.5
+      },
+      {
+        "context": "output",
+        "text": "不是我刚才说错了。",
+        "intent": "normal_interrupt",
+        "ms": 1051.8
+      },
+      {
+        "context": "output",
+        "text": "不是。我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 1015.0
+      },
+      {
+        "context": "output",
+        "text": "不是，我刚才说错了。",
+        "intent": "hard_stop",
+        "ms": 921.2
+      }
+    ],
+    "decision": "Neither punctuation loss nor a general clarification of stop versus reply resolved the contextual error. No punctuation rule or prompt change was adopted."
+  },
+  "limits": [
+    "Default semantic completion/short-turn latency gaps and optional intent misclassification remain open.",
+    "No production Agent RPC identity, physical device/AEC or long-output acceptance is claimed.",
+    "Real RTC uses direct_llm, virtual clients, avatar/voiceprint disabled and optional intent; contrast contexts are separate experiments, not a replacement for retained failures."
+  ],
+  "rtc": [
+    {
+      "source": "/tmp/eidolon-phase19-intent-rtc-output/results.json",
+      "context": "plan unspecified; assistant asks for clarification",
+      "case_id": "fd_gate_correction_cancels_and_replies_001",
+      "passed": false,
+      "errors": [
+        "timeline expected intent=normal_interrupt, got ['hard_stop']",
+        "timeline expected decision_intent=normal_interrupt, got ['hard_stop']",
+        "timeline STT speech-to-actionable-transcript exceeded 2500ms: [2810.6]",
+        "expected 2 direct LLM requests, observed 1",
+        "no new TTS output after correction cancellation"
+      ],
+      "metrics": {
+        "timeline_decision_intents": "hard_stop",
+        "timeline_stt_speech_to_actionable_transcript_ms": 2810.6360421516,
+        "functional_outcome_passed": false,
+        "experience_slo_passed": false,
+        "direct_llm_request_count": 1,
+        "new_reply_tts_observed": false
+      }
+    },
+    {
+      "source": "/tmp/eidolon-phase19-intent-rtc-output/results.json",
+      "context": "plan unspecified; assistant asks for clarification",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "timeline_decision_intents": "",
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true,
+        "direct_llm_request_count": 1
+      }
+    },
+    {
+      "source": "/tmp/eidolon-phase19-intent-rtc-context/results.json",
+      "context": "plan background supplied",
+      "case_id": "fd_gate_correction_cancels_and_replies_001",
+      "passed": false,
+      "errors": [
+        "timeline STT speech-to-actionable-transcript exceeded 2500ms: [2806.8]"
+      ],
+      "metrics": {
+        "timeline_decision_intents": "normal_interrupt",
+        "timeline_stt_speech_to_actionable_transcript_ms": 2806.8040830548853,
+        "functional_outcome_passed": true,
+        "experience_slo_passed": false,
+        "direct_llm_request_count": 2,
+        "new_reply_tts_observed": true,
+        "new_reply_rtc_after_tts_observed": true,
+        "cancel_to_commit_ms": 18.08462501503527,
+        "stop_to_new_tts_rtc_audio_ms": 2854.0000000502914
+      }
+    },
+    {
+      "source": "/tmp/eidolon-phase19-intent-rtc-context/results.json",
+      "context": "plan background supplied",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "timeline_decision_intents": "",
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true,
+        "direct_llm_request_count": 1
+      }
+    }
+  ],
+  "rtc_measurement_note": "Same-host monotonic clocks: last voiced input frame to first audible RTC frame after the correction turn starts new TTS. Verify cancellation, distinct second LLM request, new TTS and RTC reception together; do not count continuing old audio. No physical loudspeaker or phonetic content verification.",
+  "static_checks": {
+    "ruff": "passed",
+    "git_diff_check": "passed"
+  },
+  "worker_cleanup": {
+    "ports": [
+      18773,
+      18774
+    ],
+    "listening": false
+  }
+}

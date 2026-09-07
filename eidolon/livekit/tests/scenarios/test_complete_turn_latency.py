@@ -4,6 +4,7 @@ These budgets constrain channel overhead, not real provider or device P95.
 The slow/paused/revised speech suite separately constrains premature replies.
 """
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,6 +17,114 @@ from .._harness.audio import synth_silence, synth_voiced
 from .._harness.latency import ReplyLatencyProbe
 from .._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedTranscript
 from .._harness.production import production_session
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider,prefix,tail', [
+    ('llm', '不是。', '我刚才说错了。'),
+    ('none', '我想改一下。', '不是明天是后天。'),
+    ('none', '先别介绍背景。', '告诉我费用。'),
+])
+async def test_fragmented_correction_scores_whole_turn_without_extra_endpoint_wait(
+    provider, prefix, tail, record_property,
+):
+    async def classify(*args, **kwargs):
+        await asyncio.sleep(.7)
+        return InterruptIntentResult(InterruptIntent.NORMAL_INTERRUPT, 0, 'fault_injection', '')
+
+    classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
+    policy = TurnPolicyConfig()
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider=provider))
+    reply = '收到更正。'
+    async with production_session(
+        welcome='这里正在播放原本的回答，后面还有几个细节需要继续说明。',
+        llm=MockLLM.scripted([(tail.rstrip('。'), reply)]),
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix, trigger_after_ms=700),
+            ScriptedTranscript(text=tail[:3], interims=[tail[:3]], final=False, trigger_after_ms=850),
+            ScriptedTranscript(text=tail, trigger_after_ms=1490),
+        ]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1450, .1, silence_duration=.5),
+        ]),
+        interrupt_classifier=classifier, turn_policy=policy, real_time_audio=True,
+    ) as (pipeline, h):
+        probe = ReplyLatencyProbe(pipeline, h)
+        pcm = synth_silence(.35) + synth_voiced(.6) + synth_silence(4)
+        try:
+            h.audio_in.feed_pcm(pcm)
+            await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+                and getattr(e.payload.item, 'text_content', '') == reply, timeout=7)
+            report = probe.report(pcm)
+            record_property('latency', json.dumps(report, ensure_ascii=False))
+            record_property('intent_provider', provider)
+            assert len(h.events.user_messages()) == 1
+            assert prefix.rstrip('。') in h.events.user_messages()[0]
+            assert tail.rstrip('。') in h.events.user_messages()[0]
+            assert h.events.agent_messages()[-1] == reply
+            if provider == 'none':
+                classifier.classify.assert_not_awaited()
+            assert 0 <= report['stop_to_reply_audio_ms'] <= 1500
+        finally:
+            probe.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('final_at_ms', [2000, 4250])
+async def test_cancelled_reply_waits_for_late_tail_without_second_endpoint_delay(
+    final_at_ms, record_property,
+):
+    """Late ASR final before/after the SDK deadline must preserve one reply.
+
+    The budget starts at actual final delivery, not at speech stop: provider
+    delay is injected deliberately and must not be hidden as channel overhead.
+    """
+    prefix, tail, reply = '先别介绍背景。', '告诉我费用。', '费用取决于用量。'
+    async with production_session(
+        welcome='我先详细介绍一下方案背景，然后介绍实现步骤和各项细节。',
+        llm=MockLLM.scripted([(tail.rstrip('。'), reply)]),
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix, trigger_after_ms=700),
+            ScriptedTranscript(text=tail, interims=[tail], final=False, trigger_after_ms=1550),
+            ScriptedTranscript(text=tail, trigger_after_ms=final_at_ms),
+        ]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1450, .1, silence_duration=.5),
+        ]),
+        real_time_audio=True,
+    ) as (pipeline, h):
+        await h.audio_out.wait_for_first_audio()
+        speech = h.session.current_speech
+        probe = ReplyLatencyProbe(pipeline, h)
+        pcm = synth_silence(.35) + synth_voiced(.6) + synth_silence(4.5)
+        try:
+            h.audio_in.feed_pcm(pcm)
+            await h.events.wait_for(lambda e: e.type == 'user_input_transcribed'
+                and e.payload.transcript == tail and not e.payload.is_final, timeout=3)
+            await asyncio.sleep(.15)
+            assert speech.interrupted
+            assert not h.events.user_messages(), 'pending tail must not be committed as final'
+            await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+                and getattr(e.payload.item, 'text_content', '') == reply, timeout=5)
+            assert len(h.events.user_messages()) == 1
+            assert prefix.rstrip('。') in h.events.user_messages()[0]
+            assert tail.rstrip('。') in h.events.user_messages()[0]
+            assert h.events.agent_messages()[-1] == reply
+            final_event = next(e for e in h.events.of_type('user_input_transcribed')
+                if e.payload.transcript == tail and e.payload.is_final)
+            user = next(e for e in h.events.of_type('conversation_item_added')
+                if getattr(e.payload.item, 'role', '') == 'user')
+            report = probe.report(pcm)
+            final_to_audio = ((user.timestamp - final_event.timestamp) * 1000
+                + report['commit_to_reply_audio_ms'])
+            record_property('injected_final_at_ms', final_at_ms)
+            record_property('final_to_reply_audio_ms', final_to_audio)
+            record_property('latency', json.dumps(report, ensure_ascii=False))
+            assert 0 <= final_to_audio <= 500
+        finally:
+            probe.close()
 
 
 @pytest.mark.asyncio

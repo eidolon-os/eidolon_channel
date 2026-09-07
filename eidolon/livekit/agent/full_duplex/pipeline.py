@@ -1415,10 +1415,13 @@ class StreamingPipeline(BasePipeline):
 
     def _turn_detection(self) -> Any:
         """The full-duplex Agent ``turn_detection`` model."""
-        if self._barge_in_enabled and self._turn_policy.uses_channel_model_intent:
+        if self._barge_in_enabled and not self._uses_livekit_native_adaptive_interruption():
             from ..session.eot_model import InterruptAwareTurnDetector
 
-            return InterruptAwareTurnDetector(self._get_eot_model(), self._settle_interrupt_before_endpointing)
+            return InterruptAwareTurnDetector(
+                self._get_eot_model(), self._settle_interrupt_before_endpointing,
+                resolve_transcript=lambda text: self._user_turns.endpointing_text(text),
+            )
         return self._get_eot_model()
 
     def _lifecycle_stages(self) -> list[Any]:

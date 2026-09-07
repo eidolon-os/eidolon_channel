@@ -1,0 +1,365 @@
+{
+  "scope": "Phase22: preserve the existing TTS aggregator and recognize punctuation carried inside SDK text chunks; run fixed user-experience acceptance gates. Overall goal NOT achieved.",
+  "finish_criteria": [
+    {
+      "gate": "Mode ownership and output correctness",
+      "requirement": "Existing full/half/PTT speaking-profile, button, cancellation and reply regressions pass; real 15-case cascade passes."
+    },
+    {
+      "gate": "Semantic behavior",
+      "requirement": "Resolve the 3 conditional-pause cases and 3 default overlapping-intent counterexamples. They may not remain xfailed for completion. Keep existing short-answer and complete-turn latency ceilings."
+    },
+    {
+      "gate": "Real default full-duplex response",
+      "requirement": "The existing date/cost audio fixtures both cancel correctly, produce a single new reply and reach new-TTS-correlated RTC audio within 2500 ms from actual input speech end."
+    }
+  ],
+  "external_acceptance": "Authenticated production Agent RPC, physical AEC and long device output remain separately tracked, not claimed tested by direct_llm virtual RTC.",
+  "production_change": {
+    "file": "eidolon/livekit/plugins/tts/_aggregator.py",
+    "cause": "LiveKit filter_markdown can emit punctuation at the start of a subsequent chunk. Checking only the last character misses an available sentence, sometimes until EOF or the maximum length.",
+    "fix": "Inspect the existing whole buffer for hard punctuation and the last soft boundary position. Retain whole-buffer batching and existing first-segment/soft minimum/hard maximum/idle/explicit flush settings. No second tokenizer, timer, model, cache or SDK edit.",
+    "qualification": "The outgoing batch may include an available suffix after the punctuation, as with existing whole-buffer behavior; this is not a new exact sentence tokenizer."
+  },
+  "verification": {
+    "aggregation-before": {
+      "source": "/tmp/phase22-aggregation-before.xml",
+      "passed": 0,
+      "failed": 7,
+      "xfailed": 0,
+      "skipped": 0,
+      "failures": [
+        {
+          "case": "test_complete_text_is_sent_before_end_of_input[chunks0]",
+          "status": "failed",
+          "message": "AssertionError: an available sentence boundary must not wait for EOF/idle\nassert []"
+        },
+        {
+          "case": "test_complete_text_is_sent_before_end_of_input[chunks1]",
+          "status": "failed",
+          "message": "AssertionError: an available sentence boundary must not wait for EOF/idle\nassert []"
+        },
+        {
+          "case": "test_complete_text_is_sent_before_end_of_input[chunks2]",
+          "status": "failed",
+          "message": "AssertionError: an available sentence boundary must not wait for EOF/idle\nassert []"
+        },
+        {
+          "case": "test_complete_text_is_sent_before_end_of_input[chunks3]",
+          "status": "failed",
+          "message": "AssertionError: an available sentence boundary must not wait for EOF/idle\nassert []"
+        },
+        {
+          "case": "test_sdk_filtered_stream_starts_before_last_sentence_arrives",
+          "status": "failed",
+          "message": "AssertionError: SDK filter moves punctuation to the start of the next chunk\nassert []"
+        },
+        {
+          "case": "test_soft_boundary_keeps_minimum_and_first_segment_scope",
+          "status": "failed",
+          "message": "assert 0 == 1\n +  where 0 = len([])"
+        },
+        {
+          "case": "test_idle_and_explicit_flush_do_not_repeat_emitted_text",
+          "status": "failed",
+          "message": "AssertionError: assert [] == ['已完成。余下内容']\n  \n  Right contains one more item: '已完成。余下内容'\n  Use -v to get more diff"
+        }
+      ]
+    },
+    "streaming-before-valid": {
+      "source": "/tmp/phase22-streaming-before-valid.xml",
+      "passed": 0,
+      "failed": 3,
+      "xfailed": 0,
+      "skipped": 0,
+      "failures": [
+        {
+          "case": "test_reply_reaches_audio_after_failed_tts_warmup[streaming-full_duplex]",
+          "status": "failed",
+          "message": "AssertionError: speech must start while the LLM is still generating\nassert [LLMMetrics(l...dolon-test'})] == []\n  \n  Left contains one more item: LLMMetrics(label='eidolon.livekit.tests._harness.mocks.mock_llm.MockLLM', request_id='mock-954c4d74', timestamp=178876...85903866797916, speech_id='speech_b39ca3a94937', metadata={'model_name': 'mock-llm', 'model_provider': 'eidolon-test'})\n  Use -v to get more diff"
+        },
+        {
+          "case": "test_reply_reaches_audio_after_failed_tts_warmup[streaming-half_duplex]",
+          "status": "failed",
+          "message": "AssertionError: speech must start while the LLM is still generating\nassert [LLMMetrics(l...dolon-test'})] == []\n  \n  Left contains one more item: LLMMetrics(label='eidolon.livekit.tests._harness.mocks.mock_llm.MockLLM', request_id='mock-d732037e', timestamp=178876...92104688276346, speech_id='speech_cdabd71d3ef2', metadata={'model_name': 'mock-llm', 'model_provider': 'eidolon-test'})\n  Use -v to get more diff"
+        },
+        {
+          "case": "test_reply_reaches_audio_after_failed_tts_warmup[streaming-ptt]",
+          "status": "failed",
+          "message": "AssertionError: speech must start while the LLM is still generating\nassert [LLMMetrics(l...dolon-test'})] == []\n  \n  Left contains one more item: LLMMetrics(label='eidolon.livekit.tests._harness.mocks.mock_llm.MockLLM', request_id='mock-1e7eb116', timestamp=178876...57532086823693, speech_id='speech_b8f66f0757fa', metadata={'model_name': 'mock-llm', 'model_provider': 'eidolon-test'})\n  Use -v to get more diff"
+        }
+      ]
+    },
+    "tts-final": {
+      "source": "/tmp/phase22-tts-final.xml",
+      "passed": 61,
+      "failed": 0,
+      "xfailed": 0,
+      "skipped": 0
+    },
+    "real-cascade": {
+      "source": "/tmp/phase22-real-cascade.xml",
+      "passed": 15,
+      "failed": 0,
+      "xfailed": 0,
+      "skipped": 0
+    },
+    "acceptance": {
+      "source": "/tmp/phase22-acceptance.xml",
+      "passed": 69,
+      "failed": 0,
+      "xfailed": 6,
+      "skipped": 0,
+      "failures": [
+        {
+          "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+          "status": "xfailed",
+          "message": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+        },
+        {
+          "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+          "status": "xfailed",
+          "message": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+        },
+        {
+          "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+          "status": "xfailed",
+          "message": "learned EOT treats an unfinished conditional clause as complete and replies during the pause"
+        },
+        {
+          "case": "test_overlap_intent_contract[\\u597d\\u7684-False]",
+          "status": "xfailed",
+          "message": "EOT completeness is still used as interruption intent; see execution report FD-INTENT"
+        },
+        {
+          "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+          "status": "xfailed",
+          "message": "Negated commands need intent evidence independent of EOT; see FD-INTENT"
+        },
+        {
+          "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+          "status": "xfailed",
+          "message": "Low EOT corrective interruption is not recognized; see FD-INTENT"
+        }
+      ]
+    },
+    "blockers": {
+      "source": "/tmp/phase22-blockers.xml",
+      "passed": 5,
+      "failed": 6,
+      "xfailed": 0,
+      "skipped": 0,
+      "failures": [
+        {
+          "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+          "status": "failed",
+          "message": "AssertionError: incomplete prefix was committed before continuation\nassert ['如果预算不够的话'] == []\n  \n  Left contains one more item: '如果预算不够的话'\n  Use -v to get more diff"
+        },
+        {
+          "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+          "status": "failed",
+          "message": "AssertionError: incomplete prefix was committed before continuation\nassert ['如果预算不够的话'] == []\n  \n  Left contains one more item: '如果预算不够的话'\n  Use -v to get more diff"
+        },
+        {
+          "case": "test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+          "status": "failed",
+          "message": "AssertionError: incomplete prefix was committed before continuation\nassert ['如果预算不够的话'] == []\n  \n  Left contains one more item: '如果预算不够的话'\n  Use -v to get more diff"
+        },
+        {
+          "case": "test_overlap_intent_contract[\\u597d\\u7684-False]",
+          "status": "failed",
+          "message": "assert True is False\n +  where True = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x12b719040>.interrupted"
+        },
+        {
+          "case": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False]",
+          "status": "failed",
+          "message": "assert True is False\n +  where True = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x12b6a9250>.interrupted"
+        },
+        {
+          "case": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True]",
+          "status": "failed",
+          "message": "assert False is True\n +  where False = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x12b72a8a0>.interrupted"
+        }
+      ]
+    }
+  },
+  "controlled_test_notes": [
+    "Seven boundary/SDK-filter/soft-threshold/flush tests fail before the change.",
+    "Three added production-pipeline scenarios require audio before LLM metrics completion, preserve exact text, and cover full/half/PTT with the real Bailian TTS adapter and simulated external services.",
+    "Initial 40ms token spacing allowed the old 300ms idle flush to mask the fault. Final comparison uses the same 15ms spacing on committed and updated classifiers; committed code fails all 3. No production timeout changed.",
+    "Final TTS total includes the new tests and the previous pool-recovery tests; do not add subgroup counts."
+  ],
+  "rtc": {
+    "source": "/tmp/eidolon-phase22-default-rtc",
+    "cases": [
+      {
+        "case": "fd_default_correction_date_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 2996.0"
+        ],
+        "metrics": {
+          "direct_llm_request_count": 2,
+          "new_reply_tts_observed": true,
+          "new_reply_rtc_after_tts_observed": true,
+          "cancel_to_commit_ms": 464.9480839725584,
+          "stop_to_new_tts_rtc_audio_ms": 2995.99999981001
+        }
+      },
+      {
+        "case": "fd_default_correction_cost_001",
+        "passed": false,
+        "errors": [
+          "new reply after speech end exceeded 2500 ms: 6100.0"
+        ],
+        "metrics": {
+          "direct_llm_request_count": 2,
+          "new_reply_tts_observed": true,
+          "new_reply_rtc_after_tts_observed": true,
+          "cancel_to_commit_ms": 2955.3745419252664,
+          "stop_to_new_tts_rtc_audio_ms": 6099.999999860302
+        }
+      }
+    ],
+    "timing": {
+      "date": {
+        "llm_first_delta_to_tts_text_ms": 151.4,
+        "from_server_vad_end_ms": {
+          "turn_committed_at": 70.4,
+          "llm_started_at": 79.7,
+          "tts_first_text_sent_at": 1570.0,
+          "llm_first_delta_at": 1418.6,
+          "tts_provider_first_audio_at": 2061.5,
+          "tts_first_audio_at": 2065.8
+        },
+        "canonical_user_text": {
+          "source": "framework_completed_turn",
+          "text_preview": "我想改一下。不是明天，是后天。",
+          "text_length": 15
+        },
+        "framework_completed_candidate": {
+          "framework_text_preview": "我想改一下。",
+          "framework_text_length": 6,
+          "canonical_text_preview": "我想改一下。不是明天，是后天。",
+          "canonical_text_length": 15
+        },
+        "settlement": [
+          {
+            "stage": "received",
+            "action": "observe",
+            "reason": "framework_completed_turn",
+            "transcript_preview": "我想改一下。",
+            "text_length": 6
+          },
+          {
+            "stage": "transcript_settlement",
+            "action": "continue",
+            "reason": "candidate_segments_covered",
+            "transcript_preview": "我想改一下。",
+            "text_length": 6,
+            "outcome": "ready",
+            "elapsed_ms": 63.3585408795625,
+            "evidence_updates": 1,
+            "pending_text_preview": ""
+          },
+          {
+            "stage": "candidate_assembled",
+            "action": "evaluate",
+            "reason": "canonical_user_turn_candidate",
+            "transcript_preview": "我想改一下。不是明天，是后天。",
+            "text_length": 15,
+            "framework_text_preview": "我想改一下。",
+            "framework_text_length": 6
+          },
+          {
+            "stage": "interruption_verdict",
+            "action": "continue",
+            "reason": "eot_cancel",
+            "transcript_preview": "我想改一下不是明天，是后天",
+            "text_length": 13,
+            "verdict": "confirmed_cancel",
+            "intent": "normal_interrupt",
+            "turn_policy_action": "cancel",
+            "generation_id": 2
+          }
+        ]
+      },
+      "cost": {
+        "llm_first_delta_to_tts_text_ms": 119.7,
+        "from_server_vad_end_ms": {
+          "turn_committed_at": 3166.4,
+          "llm_started_at": 3177.1,
+          "tts_first_text_sent_at": 4563.1,
+          "tts_provider_first_audio_at": 5130.3,
+          "tts_first_audio_at": 5161.3,
+          "llm_first_delta_at": 4443.4
+        },
+        "canonical_user_text": {
+          "source": "framework_completed_turn",
+          "text_preview": "先别介绍背景。告诉我费用。",
+          "text_length": 13
+        },
+        "framework_completed_candidate": {
+          "framework_text_preview": "先别介绍背景。",
+          "framework_text_length": 7,
+          "canonical_text_preview": "先别介绍背景。告诉我费用。",
+          "canonical_text_length": 13
+        },
+        "settlement": [
+          {
+            "stage": "received",
+            "action": "observe",
+            "reason": "framework_completed_turn",
+            "transcript_preview": "先别介绍背景。",
+            "text_length": 7
+          },
+          {
+            "stage": "transcript_settlement",
+            "action": "continue",
+            "reason": "candidate_segments_covered",
+            "transcript_preview": "先别介绍背景。",
+            "text_length": 7,
+            "outcome": "ready",
+            "elapsed_ms": 664.1196249984205,
+            "evidence_updates": 1,
+            "pending_text_preview": ""
+          },
+          {
+            "stage": "candidate_assembled",
+            "action": "evaluate",
+            "reason": "canonical_user_turn_candidate",
+            "transcript_preview": "先别介绍背景。告诉我费用。",
+            "text_length": 13,
+            "framework_text_preview": "先别介绍背景。",
+            "framework_text_length": 7
+          },
+          {
+            "stage": "interruption_verdict",
+            "action": "continue",
+            "reason": "eot_cancel",
+            "transcript_preview": "先别介绍背景告诉我费用",
+            "text_length": 11,
+            "verdict": "confirmed_cancel",
+            "intent": "normal_interrupt",
+            "turn_policy_action": "cancel",
+            "generation_id": 2
+          }
+        ]
+      }
+    },
+    "settings": "Same phase20 date/cost audio, 192-token direct_llm overlay, default intent none, avatar/voiceprint disabled, same 2500ms budget.",
+    "limits": "Correlated virtual RTC frame after a new TTS turn, not physical playout or phonetic identity. Different generated replies/network timing mean phase20/22 totals are not a controlled causal comparison.",
+    "cost_wait": "SDK scored only 先别介绍背景。 at 0.380 and entered a long endpoint wait. The completion hook subsequently waited another 664ms for the remaining transcript. The canonical committed user turn was the full request. The 6.1s total cannot all be attributed to aggregation or endpointing alone.",
+    "setup_correction": "A first temporary invocation pointed at an accidentally renamed missing audio-manifest path and reached no cases. The valid run restored the original audio path; the setup error is not counted as a voice result."
+  },
+  "checks": {
+    "ruff": "passed for changed aggregator and test files",
+    "git_diff_check": "passed",
+    "sdk": {
+      "version": "1.7.1",
+      "python_files": 207,
+      "changed": []
+    }
+  },
+  "state": "Uncommitted, not deployed. Existing semantic xfails and failed RTC latency remain blocking; no completion percentage or production P95 claim."
+}

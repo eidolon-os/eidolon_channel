@@ -33,7 +33,7 @@ import asyncio
 import math
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Literal, Optional
 
@@ -61,6 +61,9 @@ class MockVADEvent:
     probability: float = 0.95
     """Probability emitted in the corresponding INFERENCE_DONE just
     before the START/END is signalled. Must be in [0, 1]."""
+
+    silence_duration: float = 0.0
+    """Seconds of trailing silence already accumulated when END is emitted."""
 
 
 class MockVAD(lk_vad.VAD):
@@ -241,7 +244,7 @@ class _MockVADStream(lk_vad.VADStream):
             if ev.type == "start":
                 self._emit_start(probability=ev.probability)
             else:
-                self._emit_end(probability=ev.probability)
+                self._emit_end(probability=ev.probability, silence_duration=ev.silence_duration)
 
     # ── emitters
 
@@ -304,20 +307,20 @@ class _MockVADStream(lk_vad.VADStream):
             )
         )
 
-    def _emit_end(self, *, probability: float) -> None:
+    def _emit_end(self, *, probability: float, silence_duration: float = 0.0) -> None:
         if self._phase == _Phase.SILENT:
             return
-        speech_dur = self._segment_duration()
+        speech_dur = max(0.0, self._segment_duration() - silence_duration)
         self._phase = _Phase.SILENT
         self._segment_start_t = None
-        self._silence_start_t = self._now()
+        self._silence_start_t = self._now() - silence_duration
         self._send(
             lk_vad.VADEvent(
                 type=lk_vad.VADEventType.END_OF_SPEECH,
                 samples_index=int(speech_dur * self._mock._sample_rate),
                 timestamp=time.time(),
                 speech_duration=speech_dur,
-                silence_duration=0.0,
+                silence_duration=silence_duration,
                 frames=self._segment_frames,
                 probability=probability,
                 speaking=False,

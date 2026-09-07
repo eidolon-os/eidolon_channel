@@ -191,6 +191,27 @@ class UserTurnCoordinator:
     def selected_policy_text(self) -> str:
         return self._active.selected_policy_text if self._active is not None else ""
 
+    def endpointing_text(self, transcript: str) -> str:
+        """Resolve a current final fragment without advancing the turn boundary.
+
+        SDK endpointing can consume a prefix while Channel is still settling
+        an interruption. Its next query then contains only the final suffix.
+        Only a fully finalized, open candidate can supply the missing context;
+        older finals, pending revisions and terminal turns retain the SDK input.
+        """
+        candidate = self._active
+        if candidate is None or candidate.state != "open":
+            return transcript
+        segments = [s for s in candidate.segments if s.covered_by_generation_id is None]
+        if not segments or any(not s.final_text.strip() for s in segments):
+            return transcript
+        if not (
+            normalized_text_equal(transcript, segments[-1].final_text)
+            or normalized_text_equal(transcript, candidate.selected_text)
+        ):
+            return transcript
+        return candidate.selected_policy_text
+
     @property
     def current_generation_id(self) -> int | None:
         candidate = self._active

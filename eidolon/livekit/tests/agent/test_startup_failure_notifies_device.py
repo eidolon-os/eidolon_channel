@@ -52,18 +52,19 @@ class _LocalParticipant:
 
 
 class _Room:
-    def __init__(self, local: _LocalParticipant | None) -> None:
+    def __init__(self, local: _LocalParticipant | None, *, connected: bool = True) -> None:
         self.name = "eidolon-device-5582b08fb6be2decd55a46c3"
         self.local_participant = local
         self.remote_participants = {"device-instance-08b2358f": SimpleNamespace(identity="dev")}
+        self._connected = connected
 
     def isconnected(self) -> bool:
-        return True
+        return self._connected
 
 
 class _Context:
-    def __init__(self, local: _LocalParticipant | None) -> None:
-        self.room = _Room(local)
+    def __init__(self, local: _LocalParticipant | None, *, connected: bool = True) -> None:
+        self.room = _Room(local, connected=connected)
         self.job = SimpleNamespace(
             metadata=json.dumps({"conversation_id": _CONVERSATION_ID}),
             agent_name="eidolon",
@@ -202,3 +203,31 @@ async def test_a_session_that_starts_is_not_told_it_failed(monkeypatch) -> None:
 
     assert runs, "the pipeline must actually have run"
     assert _session_ends(local) == []
+
+
+@pytest.mark.asyncio
+async def test_an_end_the_channel_can_no_longer_carry_is_not_a_warning(monkeypatch, caplog) -> None:
+    """The happy path must stay quiet or the warning above stops being read.
+
+    Measured on hardware (2026-09-07 23:21): an end the Owner asked for arrives
+    as `ParticipantRemoved` first and `engine is closed` second, so the backstop
+    tries to publish into a room that is already gone. That is every ordinary
+    conversation, and `reason` cannot tell it apart — `user_left` is what
+    _end_serving_cb assigns to any non-error shutdown, not a claim about who
+    hung up. Nobody could have delivered this notice and the device already
+    knows the channel dropped, so it is not a defect and must not read as one.
+    """
+    local = _LocalParticipant(fail=True)
+    ctx = _Context(local, connected=False)
+    _install(monkeypatch, run_raises=RuntimeError("startup died"))
+
+    with caplog.at_level(logging.INFO, logger="agent_server"):
+        with pytest.raises(RuntimeError):
+            await server.run_agent(ctx, server.AgentConfig())
+
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING], (
+        "a channel that is already gone must not raise a warning"
+    )
+    assert [r for r in caplog.records if "already gone" in r.getMessage()], (
+        "but it must still leave a trace that the notice never went out"
+    )

@@ -548,17 +548,6 @@ async def test_token_carries_no_server_side_orchestration() -> None:
     assert "roomPreset" not in claims
 
 
-async def test_binding_describes_one_session() -> None:
-    adapter, _ = _adapter()
-
-    grant = await adapter.open(_spec(), issued_at_ms=1_000)
-
-    binding = json.loads(grant.payload)
-    assert binding["schema_version"] == 2
-    assert set(binding) == {"schema_version", "session", "audio"}
-    assert binding["session"]["room_name"] == grant.handle["room"]
-
-
 async def test_close_releases_the_room_named_in_the_handle() -> None:
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)

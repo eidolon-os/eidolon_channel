@@ -120,11 +120,19 @@ class FakeAdapter:
         carries_media: bool = True,
         serves_dataonly: bool = False,
         ttl_seconds: int = 1800,
+        binding_format: str | None = None,
+        payload: bytes | None = None,
     ):
         self._name = name
         self._carries_media = carries_media
         self._serves_dataonly = serves_dataonly
         self.ttl_seconds = ttl_seconds
+        # Overridable so a test can hand the service the exact bytes a golden
+        # vector pins and read back what the wire made of them. The service
+        # owns the encoding, not the adapter, so that is the only place it can
+        # be observed.
+        self._binding_format = binding_format
+        self._payload = payload
         self.opened: list[ChannelSpec] = []
         self.closed: list[dict[str, Any]] = []
         self.sessions_opened: list[tuple[dict[str, Any], str]] = []
@@ -160,8 +168,10 @@ class FakeAdapter:
     async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
         self.opened.append(spec)
         return ChannelGrant(
-            binding_format=f"application/vnd.eidolon.{self._name}-session+json;v=2",
-            payload=json.dumps(
+            binding_format=self._binding_format
+            or f"application/vnd.eidolon.{self._name}-session+json;v=2",
+            payload=self._payload
+            or json.dumps(
                 {"device": spec.device_id, "resource": f"{self._name}:{spec.device_id}"}
             ).encode(),
             expires_at_ms=issued_at_ms + self.ttl_seconds * 1000,

@@ -102,12 +102,28 @@ def _url(
     client: bool,
     allow_insecure_lan: bool = False,
 ) -> str:
+    """One plain URL, and for the client one legal way to omit the host.
+
+    ``ws://:7880`` — a scheme and a port with no host — means "this Host, at
+    whichever of its addresses is routable when a binding is minted". It is
+    written that way because that is the truth: nothing at configuration time
+    knows the answer.
+
+    What it replaces is an address observed once, at deploy, and repeated to
+    every device until the next deploy. A Host that moved networks, or renewed
+    a lease, went on handing out the address it used to have — and unlike the
+    Local API there is no second candidate and no re-locating, so the device
+    had one URL and it was wrong. Only ``client_url`` may do this; ``api_url``
+    is this process talking to LiveKit over loopback and has a real host.
+    """
+
     text = str(value or "").strip()
     parsed = urlparse(text)
     allowed = {"ws", "wss"} if client else {"http", "https"}
+    host_deferred = client and parsed.hostname is None and parsed.port is not None
     if (
         parsed.scheme not in allowed
-        or not parsed.hostname
+        or not (parsed.hostname or host_deferred)
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path not in {"", "/"}

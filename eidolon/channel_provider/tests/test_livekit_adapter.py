@@ -798,3 +798,44 @@ async def test_a_confirmation_that_could_not_look_does_not_accuse(monkeypatch, c
         await _settle(adapter)
 
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_a_configured_client_url_is_handed_over_unchanged() -> None:
+    """A LiveKit that is not on this Host has a real host, and it is kept."""
+
+    adapter, _client = _adapter()
+
+    assert adapter._client_url() == "wss://livekit.example.test"
+
+
+def test_a_host_deferred_client_url_is_answered_when_the_binding_is_minted(
+    monkeypatch,
+) -> None:
+    """The address is decided per binding, not frozen at deploy.
+
+    Ops observed one address at deploy and froze it into an environment
+    variable. A Host that then moved networks or renewed a lease went on
+    handing out the address it used to have — and a session binding names one
+    server, with no second candidate and no re-locating, so the device had one
+    URL and it was wrong.
+    """
+
+    adapter = LiveKitChannelAdapter(livekit_config(client_url="ws://:7880"))
+    monkeypatch.setattr(adapter_mod, "_routable_address", lambda: "192.168.1.33")
+
+    assert adapter._client_url() == "ws://192.168.1.33:7880"
+
+
+@pytest.mark.asyncio
+async def test_the_binding_carries_the_address_decided_at_mint_time(
+    monkeypatch,
+) -> None:
+    adapter, _client = _adapter()
+    monkeypatch.setattr(
+        adapter, "_config", livekit_config(client_url="ws://:7880"), raising=True
+    )
+    monkeypatch.setattr(adapter_mod, "_routable_address", lambda: "10.0.0.7")
+
+    grant = await adapter.open(_spec(), issued_at_ms=1_700_000_000_000)
+
+    assert json.loads(grant.payload)["session"]["server_url"] == "ws://10.0.0.7:7880"

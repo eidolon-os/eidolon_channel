@@ -11,9 +11,11 @@ import asyncio
 import hashlib
 import json
 import logging
+import socket
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
@@ -39,6 +41,25 @@ logger = logging.getLogger("eidolon.channel_provider.livekit")
 
 ADAPTER_NAME = "livekit"
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
+
+def _routable_address() -> str:
+    """This machine's address on the interface it would leave by.
+
+    A UDP socket connected to a documentation address (RFC 5737 TEST-NET-1)
+    sends nothing and reaches nothing; it only makes the kernel choose a route,
+    and the local end of that choice is the address. Asked rather than
+    configured because a Host grows and loses addresses on its own — a
+    maintenance cable, a new access point — and no file written earlier knows
+    which one is current.
+    """
+
+    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        connection.connect(("192.0.2.1", 9))
+        return str(connection.getsockname()[0])
+    finally:
+        connection.close()
+
 
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
 _ENDED_JOB_STATUSES = frozenset({JobStatus.JS_SUCCESS, JobStatus.JS_FAILED})
@@ -179,6 +200,36 @@ class LiveKitChannelAdapter:
     # Resource names are this adapter's business. Another adapter names topics
     # or endpoints instead, and nothing above this line has to care.
 
+    def _client_url(self) -> str:
+        """Where a device should reach this Host's LiveKit, decided now.
+
+        A configured ``ws://:7880`` — scheme and port, no host — says the host
+        is not knowable at configuration time, which is the truth: Ops observed
+        one address at deploy and froze it into an environment variable, and a
+        Host that then moved networks or renewed a lease went on handing out the
+        address it used to have. The Local API survives that by offering every
+        candidate and being re-located; a session binding names one server and
+        has neither.
+
+        So it is answered per binding, from the address the kernel says it would
+        use to leave this machine. That is the same question
+        ``eidolon-livekit-launch`` asks for ``rtc.node_ip``, asked the same way
+        and answered on the same interface, so the URL a device is handed and
+        the address LiveKit advertises itself at cannot drift apart.
+
+        Not the same as knowing where the *device* is — a Host with two networks
+        still has to pick one, and picking the routable one is a rule, not
+        knowledge. What this removes is staleness, not the assumption.
+        """
+
+        parsed = urlparse(self._config.client_url)
+        if parsed.hostname is not None:
+            return self._config.client_url
+        port = parsed.port
+        return urlunparse(
+            (parsed.scheme, f"{_routable_address()}:{port}", "", "", "", "")
+        )
+
     def _room_name(self, spec: ChannelSpec) -> str:
         digest = hashlib.sha256(
             f"{self._config.room_prefix}\0{spec.device_id}".encode()
@@ -195,7 +246,7 @@ class LiveKitChannelAdapter:
             {
                 "schema_version": 2,
                 "session": {
-                    "server_url": self._config.client_url,
+                    "server_url": self._client_url(),
                     "token": self._token(room, spec, ttl_seconds=ttl),
                     "identity": spec.device_id,
                     "room_name": room,

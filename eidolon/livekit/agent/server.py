@@ -50,6 +50,7 @@ from eidolon_sdk.biz.contracts import (
     normalize_conversation_id,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
+from eidolon.locked_environment import require_locked_environment
 
 # Load the session-contract resolver with the worker, not lazily per job.
 # LiveKit job processes inherit the worker's module snapshot; eager loading
@@ -772,6 +773,10 @@ def main() -> None:
     log_dir = _resolve_log_dir()
     _normalize_optional_log_file_env("EIDOLON_EOT_DEBUG_LOG", log_dir)
     _configure_logging(env, log_dir=log_dir, log_to_file=True)
+    # Right after logging, before plugins and before any room is joined: a venv
+    # below the declared floor shows up as a TypeError 1.5 s into every session
+    # otherwise, which is the one place nobody is watching.
+    require_locked_environment(logger=logger)
     _register_plugins()
 
     loop = asyncio.new_event_loop()

@@ -11,6 +11,8 @@ import logging
 
 from aiohttp import web
 
+from eidolon.locked_environment import require_locked_environment
+
 from .adapters.livekit import LiveKitChannelAdapter
 from .config import load_provider_config
 from .http import create_app
@@ -18,12 +20,18 @@ from .selection import AdapterRegistry
 from .service import ChannelProviderService
 from .store import ChannelProviderStore
 
+logger = logging.getLogger("eidolon.channel_provider.server")
+
 
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # Before anything else: the Provider answering 200 while the worker cannot
+    # run is the failure this repository has already paid for once. Refuse here
+    # rather than hand out room contracts nothing can serve.
+    require_locked_environment(logger=logger)
     config = load_provider_config()
     registry = AdapterRegistry(
         [LiveKitChannelAdapter(config.livekit)],

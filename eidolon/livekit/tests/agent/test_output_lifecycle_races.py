@@ -135,3 +135,31 @@ async def test_failed_tail_drain_terminates_playback_waiters():
     assert finished.interrupted
     assert mixer.state == 'CANCELLED'
     assert mixer.buffered_frames == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('transition', ['unduck', 'cancel', 'clear_buffer', 'reset'])
+async def test_fade_remainder_obeys_transition_while_sink_write_is_pending(transition):
+    import numpy as np
+    from livekit import rtc
+
+    inner = BlockingOutput()
+    mixer = DuckingMixer(inner, fade_ms=30, fade_in_ms=1)
+    frame = rtc.AudioFrame(np.full(6400, 10000, dtype=np.int16).tobytes(), 32000, 1, 6400)
+    mixer.duck()
+    inner.block = True
+    producer = asyncio.create_task(mixer.capture_frame(frame))
+    try:
+        await asyncio.wait_for(inner.entered.wait(), 1)
+        getattr(mixer, transition)()
+        inner.release.set()
+        await asyncio.wait_for(producer, 1)
+        assert mixer.buffered_frames == 0
+        if transition == 'unduck':
+            assert sum(f.samples_per_channel for f in inner.frames) == 6400
+            assert _samples_of(inner.frames[-1])[-1] == 10000
+        else:
+            assert inner.frames == [], 'invalidated remainder must never leak into a later reply'
+    finally:
+        producer.cancel()
+        await asyncio.gather(producer, return_exceptions=True)

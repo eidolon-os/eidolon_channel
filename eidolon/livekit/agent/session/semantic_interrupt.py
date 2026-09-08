@@ -47,6 +47,7 @@ class SemanticInterruptHandler:
         get_candidate_scope: Callable[[], Any] = lambda: None,
         get_final_transcript: Callable[[], str] = lambda: "",
         get_assistant_text: Callable[[], str] = lambda: "",
+        get_candidate_active: Callable[[], bool] = lambda: False,
     ) -> None:
         self._get_eot_model = get_eot_model
         self._turn_runtime = turn_runtime
@@ -64,6 +65,7 @@ class SemanticInterruptHandler:
         self._get_candidate_scope = get_candidate_scope
         self._get_final_transcript = get_final_transcript
         self._get_assistant_text = get_assistant_text
+        self._get_candidate_active = get_candidate_active
         self._intent_task: asyncio.Task | None = None
         self._intent_tasks: set[asyncio.Task] = set()
         self._intent_key: Any = None
@@ -87,7 +89,7 @@ class SemanticInterruptHandler:
             key is not None and not self._closed and self._intent_key == key
             and self._get_candidate_scope() == key[0]
             and self._get_final_transcript() == key[1]
-            and self._get_duck_active()
+            and (self._get_duck_active() or self._get_candidate_active())
         )
 
     async def aclose(self) -> None:
@@ -105,15 +107,16 @@ class SemanticInterruptHandler:
 
         eot_model = self._get_eot_model()
         duck_active = self._get_duck_active()
+        candidate_active = self._get_candidate_active()
         vad_active = self._get_vad_active()
         score = eot_model.current_eot_score
 
         if self.uses_model_intent:
-            if duck_active and not self._closed:
+            if (duck_active or candidate_active) and not self._closed:
                 self._handle_model_intent(text, score=score, vad_active=vad_active, is_final=is_final)
             return
 
-        if duck_active:
+        if duck_active or candidate_active:
             self._handle_duck_active(
                 text,
                 score=score,

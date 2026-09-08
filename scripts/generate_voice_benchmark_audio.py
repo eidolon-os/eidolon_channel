@@ -45,6 +45,9 @@ DEFAULT_CLIPS: dict[str, str] = {
 # Speech segments joined by trailing silence — utterances with natural internal
 # pauses for turn-merge and hesitation scenarios.
 COMPOSITE_CLIPS: dict[str, CompositeParts] = {
+    "continuation_people_500": [("人数方面。", 500), ("改成两个人。", 0)],
+    "continuation_people_900": [("人数方面。", 900), ("改成两个人。", 0)],
+    "continuation_cost_500": [("费用方面。", 500), ("控制在五百元以内。", 0)],
     "pause_plan_two_parts": [
         ("今天想讨论一下那个方案。", 900),
         ("就是上次说的实时语音方案。", 0),

@@ -16,12 +16,17 @@ import subprocess
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from eidolon_sdk.integrations.livekit import build_livekit_token
 from livekit import rtc
+
+from eidolon.livekit.agent.runtime.interaction_mode import (
+    resolve_session_intent,
+    resolve_welcome_text,
+)
 
 from eidolon_sdk.biz.contracts import (
     CLIENT_AUDIO_STATE_TOPIC,
@@ -38,6 +43,7 @@ from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
 from .audio_assets import load_clip_pcm
+from .barge_in_latency import receiver_attenuation_ms
 from .device_envelope import (
     audio_state_interval_sec,
     device_envelope_metrics,
@@ -60,10 +66,12 @@ class LiveKitRoomOptions:
     agent_ready_timeout_sec: float = 12.0
     agent_quiet_ms: int = 800
     agent_speaking_wait_sec: float = 8.0
-    # A brain-generated greeting can take ~1-3s to produce its first audio. If
-    # the first-audio wait is shorter, a normal user turn gets fed into the
-    # incoming greeting and turns into an accidental interrupt.
+    # Worker startup and welcome synthesis can delay the first audio. A missing
+    # expected greeting must fail setup, not turn an idle case into barge-in.
     agent_first_audio_wait_sec: float = 6.0
+    # Derived from the effective welcome policy by run_livekit_room_suite.
+    # Missing expected greeting audio is setup failure, not proof of silence.
+    greeting_expected: bool = False
     # Deadline for a polite user turn waiting out the agent's previous answer.
     # Real-brain answers regularly exceed 8s; expiring early injects an
     # unintended interrupt, so this is deliberately generous.
@@ -116,6 +124,13 @@ async def run_livekit_room_suite(
 ) -> RunResult:
     cfg = load_effective_config()
     options = options or LiveKitRoomOptions()
+    options = replace(
+        options,
+        greeting_expected=resolve_welcome_text(
+            session_intent=resolve_session_intent(options.participant_metadata),
+            welcome_message=cfg.behavior.welcome_message,
+        ) is not None,
+    )
     results: list[CaseResult] = []
     for suite in suites:
         for case in suite.cases:
@@ -531,6 +546,7 @@ async def _feed_case_audio(
                 timeout_sec=options.agent_quiet_wait_sec,
                 first_audio_wait_sec=options.agent_first_audio_wait_sec,
                 after_elapsed_ms=last_user_step_finished_ms,
+                greeting_expected=options.greeting_expected,
             )
             if not quiet:
                 events.append(
@@ -592,11 +608,19 @@ async def _feed_case_audio(
             else None
         )
         last_voiced_at: int | None = None
+        state.user_speech_started_ms = None
 
         def observe_input(frame: rtc.AudioFrame) -> None:
             nonlocal last_voiced_at
             if _pcm16_rms(bytes(frame.data)) >= 120.0:
                 last_voiced_at = _elapsed_ms(started)
+                if state.user_speech_started_ms is None:
+                    state.user_speech_started_ms = last_voiced_at
+                    events.append({
+                        "type": "user_speech_started",
+                        "timestamp_ms": last_voiced_at,
+                        "reference": "first_voiced_frame_published",
+                    })
 
         try:
             clip_ms = await _capture_pcm(
@@ -805,6 +829,7 @@ async def _wait_for_agent_quiet(
     timeout_sec: float,
     first_audio_wait_sec: float = 2.0,
     after_elapsed_ms: int | None = None,
+    greeting_expected: bool = False,
 ) -> bool:
     """Wait until the room has observed a quiet window in agent audio.
 
@@ -812,9 +837,9 @@ async def _wait_for_agent_quiet(
     not an interruption of the greeting. Waiting here keeps that scenario honest
     without changing the Channel runtime.
 
-    Returns True when a quiet window was observed (or no agent audio exists),
-    False when the deadline expired while the agent was still speaking — the
-    caller is about to inject an unintended interrupt and should record that.
+    Returns True when a quiet window was observed, or when no greeting is
+    expected and no audio arrives. Missing expected audio or completion returns
+    False: injecting user audio then could create an unintended interruption.
     """
     deadline = time.monotonic() + timeout_sec
     if after_elapsed_ms is None:
@@ -823,6 +848,8 @@ async def _wait_for_agent_quiet(
                 state.first_agent_audio.wait(),
                 timeout=min(first_audio_wait_sec, timeout_sec),
             )
+        if greeting_expected and not state.first_agent_audio.is_set():
+            return False
         # The greeting is streamed in multiple TTS chunks. A quiet gap between
         # chunks is not an idle agent, so once greeting audio has been observed,
         # require its final synchronized transcript before applying the playout
@@ -903,7 +930,9 @@ async def _consume_agent_audio(track: rtc.Track, state: "_RoomCaseState") -> Non
             payload = bytes(event.frame.data)
             state.agent_audio_frames += 1
             state.agent_audio_bytes += len(payload)
-            if _pcm16_rms(payload) >= 120.0:
+            rms = _pcm16_rms(payload)
+            state.agent_audio_levels.append((_elapsed_ms(state.started), rms))
+            if rms >= 120.0:
                 state.mark("agent_audio_first_at")
                 state.agent_audio_frame_timestamps.append(_elapsed_ms(state.started))
                 if not state.first_agent_audio.is_set():
@@ -1113,6 +1142,8 @@ class _RoomCaseState:
     def __post_init__(self) -> None:
         self.timestamps: dict[str, int] = {}
         self.agent_audio_frame_timestamps: list[int] = []
+        self.agent_audio_levels: list[tuple[float, float]] = []
+        self.user_speech_started_ms: int | None = None
         self.agent_transcript_final_timestamps: list[int] = []
         self.last_agent_audio_monotonic: float | None = None
         self.agent_connected = asyncio.Event()
@@ -1190,6 +1221,13 @@ class _RoomCaseState:
             "transcript_final_ms": self.timestamps.get("transcript_final_at"),
             "user_audio_done_ms": user_done,
             "user_audio_done_reference": self.user_audio_done_reference,
+            "user_speech_started_ms": self.user_speech_started_ms,
+            "user_start_to_rtc_attenuation_ms": (
+                receiver_attenuation_ms(
+                    self.agent_audio_levels, onset_ms=self.user_speech_started_ms,
+                )
+                if self.user_speech_started_ms is not None else None
+            ),
             "input_feed_done_ms": self.timestamps.get("input_feed_done_at"),
             "agent_audio_first_ms": first_audio,
             "agent_audio_first_after_user_done_ms": first_audio_after_user_done,

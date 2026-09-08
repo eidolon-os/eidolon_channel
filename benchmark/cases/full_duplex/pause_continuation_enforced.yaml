@@ -1,0 +1,145 @@
+# Generated audio uses an inserted silence; measured VAD boundaries remain authoritative.
+suite_id: full_duplex_pause_continuation_enforced
+suite_mode: full_duplex
+cases:
+- case_id: fd_continuation_people_500
+  suite: full_duplex_pause_continuation
+  description: 播放中先说主题再补充修改；音频片段间插入静音，真实 ASR / EOT 不注入分数。
+  timeout_sec: 60
+  tags:
+  - full_duplex
+  - pause_continuation
+  - real_audio
+  audio_clips:
+  - id: ask_intro
+    text: 帮我详细介绍一下这个方案。
+    path: benchmark/audio/generated/normal_ask_intro.wav
+    intent: normal
+  - id: continuation_people_500
+    text: 人数方面。改成两个人。
+    path: benchmark/audio/generated/continuation_people_500.wav
+    intent: normal
+  user_steps:
+  - text: 帮我详细介绍一下这个方案
+    audio: ask_intro
+    start_ms: 80
+    duration_ms: 1100
+    final_delay_ms: 120
+    agent_speaking: false
+    client_playback_state: idle
+  - text: 人数方面。改成两个人。
+    audio: continuation_people_500
+    start_ms: 1600
+    duration_ms: 4000
+    agent_speaking: true
+    client_playback_state: idle
+  agent_replies:
+  - when: 详细介绍
+    reply: 我先从架构说起，然后补充交互体验、延迟、可靠性和测试方法。
+  expect:
+    action: cancel
+    decision_action: cancel
+    decision_intent: normal_interrupt
+    agent_audio_response: after_user_done
+    min_user_finals: 2
+    min_agent_messages: 1
+    min_brain_requests: 2
+    max_brain_requests: 2
+    canonical_contains:
+    - 人数方面
+    - 改成两个人
+    playback_stop_sent: true
+- case_id: fd_continuation_people_900
+  suite: full_duplex_pause_continuation
+  description: 播放中先说主题再补充修改；音频片段间插入静音，真实 ASR / EOT 不注入分数。
+  timeout_sec: 60
+  tags:
+  - full_duplex
+  - pause_continuation
+  - real_audio
+  audio_clips:
+  - id: ask_intro
+    text: 帮我详细介绍一下这个方案。
+    path: benchmark/audio/generated/normal_ask_intro.wav
+    intent: normal
+  - id: continuation_people_900
+    text: 人数方面。改成两个人。
+    path: benchmark/audio/generated/continuation_people_900.wav
+    intent: normal
+  user_steps:
+  - text: 帮我详细介绍一下这个方案
+    audio: ask_intro
+    start_ms: 80
+    duration_ms: 1100
+    final_delay_ms: 120
+    agent_speaking: false
+    client_playback_state: idle
+  - text: 人数方面。改成两个人。
+    audio: continuation_people_900
+    start_ms: 1600
+    duration_ms: 4000
+    agent_speaking: true
+    client_playback_state: idle
+  agent_replies:
+  - when: 详细介绍
+    reply: 我先从架构说起，然后补充交互体验、延迟、可靠性和测试方法。
+  expect:
+    action: cancel
+    decision_action: cancel
+    decision_intent: normal_interrupt
+    agent_audio_response: after_user_done
+    min_user_finals: 2
+    min_agent_messages: 1
+    min_brain_requests: 2
+    max_brain_requests: 2
+    canonical_contains:
+    - 人数方面
+    - 改成两个人
+    playback_stop_sent: true
+- case_id: fd_continuation_cost_500
+  suite: full_duplex_pause_continuation
+  description: 播放中先说主题再补充修改；音频片段间插入静音，真实 ASR / EOT 不注入分数。
+  timeout_sec: 60
+  tags:
+  - full_duplex
+  - pause_continuation
+  - real_audio
+  audio_clips:
+  - id: ask_intro
+    text: 帮我详细介绍一下这个方案。
+    path: benchmark/audio/generated/normal_ask_intro.wav
+    intent: normal
+  - id: continuation_cost_500
+    text: 费用方面。控制在五百元以内。
+    path: benchmark/audio/generated/continuation_cost_500.wav
+    intent: normal
+  user_steps:
+  - text: 帮我详细介绍一下这个方案
+    audio: ask_intro
+    start_ms: 80
+    duration_ms: 1100
+    final_delay_ms: 120
+    agent_speaking: false
+    client_playback_state: idle
+  - text: 费用方面。控制在五百元以内。
+    audio: continuation_cost_500
+    start_ms: 1600
+    duration_ms: 4000
+    agent_speaking: true
+    client_playback_state: idle
+  agent_replies:
+  - when: 详细介绍
+    reply: 我先从架构说起，然后补充交互体验、延迟、可靠性和测试方法。
+  expect:
+    action: cancel
+    decision_action: cancel
+    decision_intent: normal_interrupt
+    agent_audio_response: after_user_done
+    min_user_finals: 2
+    min_agent_messages: 1
+    min_brain_requests: 2
+    max_brain_requests: 2
+    canonical_contains:
+    - 费用方面
+    - 500元
+    playback_stop_sent: true

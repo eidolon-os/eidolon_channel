@@ -45,6 +45,8 @@ class DuckSuspendTimeoutHandler:
         should_hold_for_evidence: Callable[[], bool] | None = None,
         get_hold_remaining_sec: Callable[[], float | None] | None = None,
         deadline_decision: Callable[..., Decision] | None = None,
+        get_candidate_active: Callable[[], bool] = lambda: False,
+        get_playback_hold_remaining_sec: Callable[[], float | None] = lambda: None,
     ) -> None:
         self._turn_runtime = turn_runtime
         self._sleep = sleep
@@ -60,12 +62,14 @@ class DuckSuspendTimeoutHandler:
         self._should_hold_for_evidence = should_hold_for_evidence or (lambda: False)
         self._get_hold_remaining_sec = get_hold_remaining_sec or (lambda: None)
         self._deadline_decision = deadline_decision or turn_runtime.deadline_decision
+        self._get_candidate_active = get_candidate_active
+        self._get_playback_hold_remaining_sec = get_playback_hold_remaining_sec
 
     async def run(self, timeout_sec: float) -> None:
         """Wait for the decision budget, then resolve or re-arm ducking."""
         try:
             await self._sleep(timeout_sec)
-            if not self._get_duck_suspended():
+            if not self._get_duck_suspended() and not self._get_candidate_active():
                 return
 
             stats = self._get_duck_stats()
@@ -114,6 +118,10 @@ class DuckSuspendTimeoutHandler:
                 transcript=latest_asr_text,
                 vad_active=vad_still_active,
             )
+            if decision.action is Action.RESUME and not vad_still_active:
+                # Unducking cancels the old output timer. Reuse its slot for
+                # the still-live candidate's bounded evidence wait.
+                self._set_timeout_task(self._create_task(self.run(timeout_sec)))
         except asyncio.CancelledError:
             pass
 
@@ -127,6 +135,13 @@ class DuckSuspendTimeoutHandler:
         owner_remaining_sec = self._get_hold_remaining_sec()
         if owner_remaining_sec is not None:
             if owner_remaining_sec <= 0:
+                if self._get_vad_active() and self._get_latest_asr_text().strip():
+                    # A playback budget cannot end ongoing user speech. VAD
+                    # end arms the existing post-speech evidence deadline.
+                    return Decision(
+                        Action.RESUME, "active_speech_playback_budget_elapsed",
+                        intent=InterruptIntent.UNCERTAIN, intent_source="timeout",
+                    )
                 return self._bounded_rollback(
                     decision,
                     reason=(
@@ -153,6 +168,17 @@ class DuckSuspendTimeoutHandler:
                 )
             next_timeout = max(0.0, max_suspend_sec - suspend_sec)
 
+        playback_remaining = self._get_playback_hold_remaining_sec()
+        if self._get_duck_suspended() and playback_remaining is not None:
+            if playback_remaining <= 0:
+                return Decision(
+                    action=Action.RESUME,
+                    reason="continuation_grace_elapsed_pending_evidence",
+                    intent=InterruptIntent.UNCERTAIN,
+                    intent_source="timeout",
+                )
+            next_timeout = min(next_timeout, playback_remaining)
+
         if decision.hold_recheck_ms is not None:
             next_timeout = min(
                 next_timeout,
@@ -167,7 +193,9 @@ class DuckSuspendTimeoutHandler:
         rollback = Decision(
             action=Action.ROLLBACK,
             reason=reason,
-            rollback_drop_buffered=True,
+            # Expiry releases the decision hold; it is not evidence that the
+            # unheard part of the original reply should be discarded.
+            rollback_drop_buffered=False,
             intent=InterruptIntent.UNCERTAIN,
             intent_source="timeout",
             intent_confidence=0.0,

@@ -1,0 +1,290 @@
+{
+  "date": "2026-09-08",
+  "status": "measurement_validated_no_production_fix_accepted",
+  "target_passed": false,
+  "target": {
+    "attenuation_db": 12,
+    "receiver_p95_budget_ms": 300,
+    "origin": "first voiced microphone frame published; physical onset requires device measurement",
+    "resume_requirement": "preserve original reply without missing or repeated words",
+    "physical_mobile_test": "deferred at user request"
+  },
+  "runtime_changes": false,
+  "sdk_integrity": {
+    "sdk_version": "1.7.1",
+    "record_checked_python_files": 207,
+    "mismatches": []
+  },
+  "measurement_changes": [
+    "server interrupt_started_at renamed duck_requested in timeline report, not client silence",
+    "existing RTC runner records first voiced published frame and receiver RMS drop",
+    "requires 100 ms sustained reduction; missing/quiet/stale baseline or packet gaps cannot establish success",
+    "natural speech pauses may qualify; speech-case attenuation is observational, not a causal SLO pass"
+  ],
+  "queue_probe": [
+    {
+      "candidate": "current_duck",
+      "boundary": "AudioSource submission, not RTC or physical playback",
+      "post_duck_full_volume_frames": 13,
+      "last_full_volume_submission_after_duck_ms": 609.1,
+      "discarded_queued_audio_ms": 0
+    },
+    {
+      "candidate": "public_pause",
+      "boundary": "AudioSource submission, not RTC or physical playback",
+      "post_duck_full_volume_frames": 0,
+      "last_full_volume_submission_after_duck_ms": null,
+      "discarded_queued_audio_ms": 200.1
+    }
+  ],
+  "controlled_rtc_method": {
+    "input": "440 Hz continuous tone; 2 seconds submitted in 200 ms provider chunks before duck, then one 200 ms fade frame",
+    "onset": "server duck request 150 ms after first audible received frame",
+    "hold_sec": 2.2,
+    "baseline_window_ms": 150,
+    "attenuation_db": 12,
+    "sustain_ms": 100,
+    "receiver": "real RTC between isolated participants; no Agent RPC, user mic, VAD or physical speaker",
+    "resume_content_verified": false,
+    "discard_metric": "observed AudioSource.clear_queue calls and queued_duration estimates; zero does not prove word-level preservation"
+  },
+  "controlled_rtc": [
+    {
+      "candidate": "current_duck",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7109.8,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 1908.6,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 0
+    },
+    {
+      "candidate": "public_pause",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7109.8,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 108.5,
+      "native_queue_discarded_ms": 208.7,
+      "receiver_frames_in_hold": 110,
+      "repeat": 0
+    },
+    {
+      "candidate": "current_duck",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7100.6,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 1888.3,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 1
+    },
+    {
+      "candidate": "public_pause",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7056.5,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 107.8,
+      "native_queue_discarded_ms": 210.0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 1
+    },
+    {
+      "candidate": "current_duck",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7109.8,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 1888.9,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 2
+    },
+    {
+      "candidate": "public_pause",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7109.8,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 109.8,
+      "native_queue_discarded_ms": 203.9,
+      "receiver_frames_in_hold": 110,
+      "repeat": 2
+    }
+  ],
+  "review_only_draft_rtc": [
+    {
+      "candidate": "draft_drain_before_pause",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7111.5,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 312.1,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 0
+    },
+    {
+      "candidate": "draft_drain_before_pause",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7109.8,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 307.7,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 1
+    },
+    {
+      "candidate": "draft_drain_before_pause",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7104.0,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 369.4,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 2
+    }
+  ],
+  "candidate_decisions": {
+    "public_pause": "rejected: receiver tail reduced but clear_queue discards about 204–210 ms unplayed audio; cannot accept as lossless resume",
+    "draft_drain_before_pause": "not adopted: process-local SDK method experiment, no installed-file changes; observed output-stage delays 308–369 ms already exceed 300 ms before uplink/VAD. No overall P95 or word-level continuity claim",
+    "draft_drain_queue_60ms": "Withdrawn after user rejected SDK modification. Historical diagnostic only; no onset-to-attenuation P95 or full resume validation."
+  },
+  "dialogue_runs": [
+    {
+      "source": "/tmp/voice-stage-rpc/duck-receiver-baseline/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "passed": false,
+      "errors": [
+        "timeline speech-start-to-resume exceeded 900ms: [1444.2]"
+      ],
+      "metrics": {
+        "user_speech_started_ms": 11912,
+        "user_start_to_rtc_attenuation_ms": 679,
+        "real_call_verified": true,
+        "timeline_interrupt_speech_to_started_ms": 0.24654087610542774,
+        "timeline_interrupt_speech_to_resolved_ms": 1444.22608288005,
+        "functional_outcome_passed": true
+      },
+      "user_onsets": [
+        {
+          "type": "user_speech_started",
+          "timestamp_ms": 6577,
+          "reference": "first_voiced_frame_published"
+        },
+        {
+          "type": "user_speech_started",
+          "timestamp_ms": 11912,
+          "reference": "first_voiced_frame_published"
+        }
+      ]
+    },
+    {
+      "source": "/tmp/voice-stage-rpc/duck-receiver-hard-stop/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "case_id": "fd_gate_hard_stop_cancels_001",
+      "passed": false,
+      "errors": [
+        "RuntimeError: timed out waiting for the previous agent reply to complete before user step '帮我详细介绍一下这个方案'",
+        "timeline expected action=cancel, got ['<none>']",
+        "timeline expected intent=normal_interrupt, got ['<none>']",
+        "timeline expected decision_action=cancel, got ['<none>']",
+        "timeline expected decision_intent=normal_interrupt, got ['<none>']",
+        "timeline missing STT speech-to-actionable-transcript duration",
+        "timeline missing actionable-transcript-to-interrupt-resolution duration",
+        "timeline missing speech-start-to-suspend duration",
+        "timeline expected playback.stop client control",
+        "timeline missing for case=fd_gate_hard_stop_cancels_001",
+        "real-call: no worker timeline records (cannot prove real call)",
+        "real-call: no real eidolon_agent brain RPC evidence in the whole run (provider/request_id + brain_request_sent/first_delta marks)"
+      ],
+      "metrics": {
+        "user_speech_started_ms": null,
+        "user_start_to_rtc_attenuation_ms": null,
+        "real_call_verified": false,
+        "functional_outcome_passed": false,
+        "retry_attempts": 1
+      },
+      "user_onsets": []
+    }
+  ],
+  "automated_regression": {
+    "source": "/tmp/voice-duck-measurement-final.xml",
+    "passed": 170,
+    "failures": 0
+  },
+  "upstream_review": {
+    "url": "https://raw.githubusercontent.com/livekit/agents/main/livekit-agents/livekit/agents/voice/room_io/_output.py",
+    "observation": "reviewed main still clears AudioSource queue in pause forwarding branch; no basis to assume a blind upgrade fixes this"
+  },
+  "diagnostic_sources": [
+    {
+      "path": "/tmp/voice_duck_queue_probe.py",
+      "sha256": "8827ecec0d2ceb24d4e77b0df6c2cde8c99489b325cbe20af38bff80fb0e1ab9"
+    },
+    {
+      "path": "/tmp/voice_duck_rtc_probe.py",
+      "sha256": "b85f15a7e67354dfc9b59bc5e68eb0d33e48785636b0d5aa3ddf534b3dd3d334"
+    },
+    {
+      "path": "/tmp/voice_duck_rtc_draft.py",
+      "sha256": "e3c2b4d71f4d4ab5d3b1284b507ff833bf59725d8e7ca2ce116b51311a4eefc1"
+    },
+    {
+      "path": "/tmp/voice_duck_rtc_budget_draft.py",
+      "sha256": "90ba60692ff1c2646eff432c823e69c690173d043b7359f5d69bfd0b86d2434d"
+    }
+  ],
+  "remaining": [
+    "no accepted output-control fix within current unchanged-SDK boundary",
+    "800 ms cooldown remains a separate static finding, not established as cause of tested first duck",
+    "hard-stop dialogue failed greeting setup before user audio; input interruption not verified by that run",
+    "mobile physical playout deferred; full/half/PTT behavior has not been requalified for a new runtime implementation because none was adopted"
+  ],
+  "next_boundary": "User requires unchanged third-party livekit-agents. Withdraw SDK modification proposal; investigate existing Channel admission and resume using verified application-side evidence. No second playback clock/queue or private SDK access.",
+  "review_only_budget_draft_rtc": [
+    {
+      "candidate": "draft_drain_queue_60ms",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7104.0,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 189.2,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 0
+    },
+    {
+      "candidate": "draft_drain_queue_60ms",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7111.5,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 212.8,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 1
+    },
+    {
+      "candidate": "draft_drain_queue_60ms",
+      "boundary": "server duck request -> receiver RTC attenuation, excludes microphone/VAD and physical speaker",
+      "baseline_rms": 7104.0,
+      "attenuation_db": 12,
+      "sustain_ms": 100,
+      "duck_to_receiver_attenuation_ms": 189.1,
+      "native_queue_discarded_ms": 0,
+      "receiver_frames_in_hold": 110,
+      "repeat": 2
+    }
+  ],
+  "diagnostic_setup_failures": [
+    "Initial direct RTC run blocked by sandbox networking; no audio measurement. Authorized network rerun completed.",
+    "Initial queue-budget draft could not initialize copied SDK constructor due to missing __class__ cell; corrected test assembly before the three reported runs."
+  ],
+  "phase": "Initial receiver measurement, before subsequent application-side fixes"
+}

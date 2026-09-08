@@ -153,12 +153,10 @@ async def test_played_seconds_excludes_buffered_suspended_frames() -> None:
     # which should be buffered (silent to user).
     for _ in range(5):
         await mixer.capture_frame(_silent_frame(800))  # 50ms each
-    # Ramp consumed ~10ms inside the first frame; that frame WAS forwarded.
-    # Frames 2-5 should be in buffer (NOT played).
-    assert 0.04 < mixer.played_seconds < 0.06, (
-        f"played_seconds={mixer.played_seconds}: expected only fade-out "
-        f"chunk (~50ms) to count, buffered frames must not bump the counter"
-    )
+    # Only the 10 ms fade prefix was forwarded. The other 40 ms of the first
+    # frame must remain recoverable along with frames 2-5, not be counted as heard.
+    assert mixer.played_seconds == pytest.approx(0.01)
+    assert mixer.buffered_sec == pytest.approx(0.24)
     assert mixer.buffered_frames > 0, "later frames should be buffered"
 
 

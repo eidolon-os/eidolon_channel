@@ -29,6 +29,7 @@ class InterruptionState(str, Enum):
     CANDIDATE_STARTED = "candidate_started"
     SUSPENDED_WAITING_EVIDENCE = "suspended_waiting_evidence"
     SUSPENDED_POST_SPEECH_WAIT = "suspended_post_speech_wait"
+    RESUMED_WAITING_EVIDENCE = "resumed_waiting_evidence"
     CONFIRMED_CANCELLED = "confirmed_cancelled"
     CONFIRMED_CANCEL_COLLECTING_TURN = "confirmed_cancel_collecting_turn"
     CONFIRMED_FALSE_RESUME = "confirmed_false_resume"
@@ -132,6 +133,7 @@ class InterruptionOrchestrator:
         evidence_timeout_sec: float,
         min_speech_sec: float,
         no_evidence_timeout_sec: float | None = None,
+        continuation_grace_sec: float | None = None,
         on_terminal_verdict: Callable[[InterruptionVerdict], None] | None = None,
         clock: Any | None = None,
     ) -> None:
@@ -146,6 +148,7 @@ class InterruptionOrchestrator:
             else max(0.0, float(no_evidence_timeout_sec))
         )
         self._clock = clock or time.monotonic
+        self._continuation_grace_sec = continuation_grace_sec
         self._on_terminal_verdict = on_terminal_verdict
         self._candidate: InterruptionCandidate | None = None
         self._timeline: TurnTimeline | None = None
@@ -295,6 +298,22 @@ class InterruptionOrchestrator:
         """Route transcript evidence through the owner-owned policy path."""
 
         self.note_transcript(text, is_final=is_final)
+        candidate = self._candidate
+        if (
+            candidate is not None and not vad_active
+            and candidate.stopped_at is not None
+            and self._continuation_grace_sec is not None
+            and turn_runtime.config.interrupt.intent_provider == "none"
+            and turn_runtime.config.interrupt.early_resume_score_threshold < eot_score
+            < turn_runtime.config.interrupt.early_cancel_score_threshold
+        ):
+            remaining = self._continuation_grace_sec - (self._now() - candidate.stopped_at)
+            if remaining > 0:
+                return Decision(
+                    Action.HOLD, "continuation_grace_wait_for_speech",
+                    intent=InterruptIntent.UNCERTAIN,
+                    hold_recheck_ms=remaining * 1000.0,
+                )
         decision = turn_runtime.decide_from_transcript(
             text,
             eot_score,
@@ -385,8 +404,18 @@ class InterruptionOrchestrator:
                 transcript_preview=transcript[:80],
                 drop_buffered=decision.rollback_drop_buffered,
             )
+        if decision.action is Action.RESUME:
+            candidate.state = InterruptionState.RESUMED_WAITING_EVIDENCE
+            return self._decision(
+                InterruptionDecisionAction.RESUME_OUTPUT,
+                decision.reason,
+                turn_policy_action=decision.action.value,
+                transcript_preview=transcript[:80],
+            )
         if decision.action is Action.HOLD:
-            if candidate.awaiting_post_speech_evidence:
+            if candidate.state is InterruptionState.RESUMED_WAITING_EVIDENCE:
+                pass
+            elif candidate.awaiting_post_speech_evidence:
                 candidate.state = InterruptionState.SUSPENDED_POST_SPEECH_WAIT
             else:
                 candidate.state = InterruptionState.SUSPENDED_WAITING_EVIDENCE
@@ -422,8 +451,6 @@ class InterruptionOrchestrator:
         if candidate is None or candidate.resolved:
             return False
         candidate.stopped_at = self._now()
-        if not duck_suspended:
-            return False
         text = transcript.strip()
         if text:
             candidate.transcript = text
@@ -449,7 +476,7 @@ class InterruptionOrchestrator:
         should_wait_for_evidence = (
             not text
             or candidate.last_policy_action is None
-            or candidate.last_policy_action is Action.HOLD
+            or candidate.last_policy_action in (Action.HOLD, Action.RESUME)
         )
         if not should_wait_for_evidence:
             return False
@@ -462,7 +489,10 @@ class InterruptionOrchestrator:
             )
             return False
         candidate.awaiting_post_speech_evidence = True
-        candidate.state = InterruptionState.SUSPENDED_POST_SPEECH_WAIT
+        candidate.state = (
+            InterruptionState.SUSPENDED_POST_SPEECH_WAIT if duck_suspended
+            else InterruptionState.RESUMED_WAITING_EVIDENCE
+        )
         self._record_event(
             "post_speech_evidence_wait",
             speech_ms=duration_sec * 1000.0,
@@ -515,7 +545,7 @@ class InterruptionOrchestrator:
             return None
         if (
             candidate.stopped_at is None
-            and candidate.last_policy_action in (None, Action.HOLD)
+            and candidate.last_policy_action in (None, Action.HOLD, Action.RESUME)
         ):
             return max(
                 0.0,
@@ -530,6 +560,23 @@ class InterruptionOrchestrator:
             else self._evidence_timeout_sec
         )
         return max(0.0, timeout_sec - (self._now() - candidate.stopped_at))
+
+    def playback_hold_remaining_sec(self) -> float | None:
+        """Keep output paused through the existing continuation grace only.
+
+        The candidate retains its separate evidence deadline after playback
+        resumes. Empty/noise candidates still follow their terminal timeout.
+        """
+        candidate = self._candidate
+        if (
+            candidate is None or candidate.resolved
+            or self._continuation_grace_sec is None
+            or candidate.stopped_at is None
+            or not self.current_transcript
+            or candidate.state is InterruptionState.RESUMED_WAITING_EVIDENCE
+        ):
+            return None
+        return max(0.0, self._continuation_grace_sec - (self._now() - candidate.stopped_at))
 
     @staticmethod
     def _has_provisional_short_latin_artifact(

@@ -147,6 +147,7 @@ async def test_owner_elapsed_budget_rolls_back_without_rearming() -> None:
     applied = calls.apply_decision.call_args.args[0]
     assert applied.action is Action.ROLLBACK
     assert applied.reason.startswith("deadline_hold_owner_budget_elapsed")
+    assert applied.rollback_drop_buffered is False
 
 
 @pytest.mark.asyncio
@@ -201,7 +202,7 @@ async def test_hold_rolls_back_after_max_suspend_budget() -> None:
     calls.create_task.assert_not_called()
     applied = calls.apply_decision.call_args.args[0]
     assert applied.action is Action.ROLLBACK
-    assert applied.rollback_drop_buffered is True
+    assert applied.rollback_drop_buffered is False
     assert applied.intent is InterruptIntent.UNCERTAIN
 
 
@@ -210,8 +211,8 @@ async def test_vad_idle_can_hold_for_post_speech_evidence_window() -> None:
     runtime = MagicMock()
     runtime.deadline_decision.return_value = Decision(
         action=Action.ROLLBACK,
-        reason="deadline_vad_idle_drop_stale",
-        rollback_drop_buffered=True,
+        reason="deadline_vad_idle_resume",
+        rollback_drop_buffered=False,
         intent=InterruptIntent.UNCERTAIN,
     )
     handler, calls = _handler(
@@ -293,8 +294,8 @@ def _owner_handler(
     runtime = MagicMock()
     runtime.deadline_decision.return_value = Decision(
         action=Action.ROLLBACK,
-        reason="deadline_vad_idle_drop_stale",
-        rollback_drop_buffered=True,
+        reason="deadline_vad_idle_resume",
+        rollback_drop_buffered=False,
         intent=InterruptIntent.UNCERTAIN,
     )
     runtime.tiers.annotate_decision.side_effect = lambda d: d

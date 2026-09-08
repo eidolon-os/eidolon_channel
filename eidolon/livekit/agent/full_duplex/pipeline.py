@@ -524,7 +524,9 @@ class StreamingPipeline(BasePipeline):
             allow_interruptions=lambda: self._allow_interruptions,
             get_eot_model=lambda: self._get_eot_model(),
             get_timeline=lambda: getattr(self, "_timeline", None),
-            get_latest_asr_text=lambda: self._latest_asr_text,
+            get_latest_asr_text=lambda: (
+                self._interruption_orchestrator.current_transcript or self._latest_asr_text
+            ),
             get_state_label=self._pipeline_state_label,
             get_interruption_orchestrator=lambda: self._interruption_orchestrator,
             publish_playback_stop=lambda reason: self._publish_client_control(
@@ -536,7 +538,7 @@ class StreamingPipeline(BasePipeline):
             cancel_residual_commit_suppress_sec=self._cancel_residual_commit_suppress_sec,
             semantic_interrupt_run=lambda text: self._semantic_interrupts.run(
                 text,
-                is_final=False,
+                is_final=text == self._interruption_orchestrator.current_final_transcript,
             ),
             correction_topic_stability_window_ms=(
                 lambda: self._turn_policy.interrupt.correction_topic_stability_window_ms
@@ -581,6 +583,7 @@ class StreamingPipeline(BasePipeline):
                 drop_buffered=drop_buffered,
             ),
             on_hold=interruption_effects.handle_hold_decision,
+            on_resume=interruption_effects.resume_pending_output,
             on_decision=lambda decision, **kwargs: (
                 self._interruption_orchestrator.note_turn_policy_decision(
                     decision,
@@ -603,6 +606,7 @@ class StreamingPipeline(BasePipeline):
             evidence_timeout_sec=timeout_sec,
             min_speech_sec=min_speech_sec,
             no_evidence_timeout_sec=(interrupt_policy.post_speech_no_evidence_timeout_ms / 1000.0),
+            continuation_grace_sec=self._turn_policy.eot.speech_merge_grace_ms / 1000.0,
             on_terminal_verdict=self._on_terminal_interruption_verdict,
         )
 
@@ -665,6 +669,7 @@ class StreamingPipeline(BasePipeline):
                 self._ensure_client_audio_state_view().agent_output_active_for_interrupts()
             ),
             get_duck_active=lambda: self._ducking.is_suspended,
+            get_candidate_active=lambda: self._interruption_orchestrator.active,
             latest_client_audio_state=lambda participant_identity: (
                 self._ensure_client_audio_state_view().latest_state(
                     participant_identity=participant_identity,
@@ -759,11 +764,12 @@ class StreamingPipeline(BasePipeline):
                 details=details,
             )
             return
-        if action == "hold":
+        if action in {"hold", "resume"}:
             self._record_full_duplex_transition(
                 FullDuplexPhase.EVIDENCE_ARBITRATION,
-                event="turn_policy_hold",
+                event="output_resume_pending_evidence" if action == "resume" else "turn_policy_hold",
                 reason=reason,
+                side_effect="reversible" if action == "resume" else "none",
                 transcript=transcript,
                 details=details,
             )
@@ -1182,6 +1188,7 @@ class StreamingPipeline(BasePipeline):
             ),
             get_final_transcript=lambda: self._interruption_orchestrator.current_final_transcript,
             get_assistant_text=self._current_assistant_speech_text,
+            get_candidate_active=lambda: self._interruption_orchestrator.active,
             decide_from_transcript=(
                 lambda text, score, **kwargs: (
                     self._interruption_orchestrator.decide_from_transcript(
@@ -1205,6 +1212,12 @@ class StreamingPipeline(BasePipeline):
             sleep=lambda timeout_sec: asyncio.sleep(timeout_sec),
             create_task=lambda coro: asyncio.create_task(coro),
             get_duck_suspended=lambda: self._ducking.is_suspended,
+            get_candidate_active=lambda: self._interruption_orchestrator.active,
+            get_playback_hold_remaining_sec=lambda: (
+                self._interruption_orchestrator.playback_hold_remaining_sec()
+                if self._turn_policy.interrupt.intent_provider == "none"
+                else None
+            ),
             get_duck_stats=lambda: self._ducking.stats(),
             get_suspend_start=lambda: self._ducking.suspend_start,
             set_timeout_task=lambda task: setattr(self._ducking, "timeout_task", task),
@@ -1649,6 +1662,7 @@ class StreamingPipeline(BasePipeline):
         """Return true while an actual interrupt decision window is open."""
         return (
             self._ducking.is_suspended
+            or self._interruption_orchestrator.active
             or self._ensure_interruption_effects().soft_interrupt_active()
         )
 

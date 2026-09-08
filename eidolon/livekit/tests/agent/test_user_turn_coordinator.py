@@ -127,6 +127,23 @@ def test_new_speech_outside_merge_grace_starts_new_candidate() -> None:
     assert second.latest_generation_id == 2
 
 
+def test_pending_interruption_can_continue_beyond_acoustic_grace():
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    timeline = TurnTimeline("pending-interruption")
+    first = coordinator.start_speech(timeline=timeline, now=0)
+    coordinator.add_transcript("交付时间方面。", is_final=True, now=.1)
+    coordinator.note_speech_stopped(eot_score=.003, now=.2)
+    assert not coordinator.can_merge_new_speech(now=1.4)
+    second = coordinator.start_speech(timeline=timeline, now=1.4, continue_pending=True)
+    coordinator.add_transcript("改到下周。", is_final=True, now=1.6)
+    assert second is first
+    assert coordinator.selected_text == "交付时间方面。改到下周。"
+    assert second.latest_generation_id == 2
+    coordinator.reject_active("evidence_expired")
+    assert not coordinator.can_merge_new_speech(now=1.7, continue_pending=True)
+
+
+
 def test_explicit_ingress_resolution_covers_pending_generation() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-repeated-hypothesis")

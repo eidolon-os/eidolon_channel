@@ -28,6 +28,7 @@ class Action(Enum):
     NONE = "none"
     CANCEL = "cancel"
     ROLLBACK = "rollback"
+    RESUME = "resume"
     HOLD = "hold"
 
 
@@ -178,19 +179,8 @@ class InterruptDecider:
                 intent_confidence=score,
             )
 
-        if is_final and not vad_active and 0.0 < score <= self._config.early_resume_score_threshold:
-            return Decision(
-                action=Action.ROLLBACK,
-                reason=(
-                    "final_terminal_eot_low "
-                    f"score={score:.2f}<={self._config.early_resume_score_threshold:.2f}"
-                ),
-                rollback_drop_buffered=False,
-                intent=InterruptIntent.UNCERTAIN,
-                intent_source="eot",
-                intent_confidence=score,
-            )
-
+        # Sentence finality and low completeness are not evidence of a false
+        # interruption. The owner bounds waiting and playback separately.
         return Decision(
             action=Action.HOLD,
             reason=(
@@ -283,8 +273,8 @@ class InterruptDecider:
             )
         return Decision(
             action=Action.ROLLBACK,
-            reason="deadline_vad_idle_drop_stale",
-            rollback_drop_buffered=True,
+            reason="deadline_vad_idle_resume",
+            rollback_drop_buffered=False,
             intent=InterruptIntent.UNCERTAIN,
             intent_source="timeout",
         )

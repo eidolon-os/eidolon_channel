@@ -1,0 +1,326 @@
+{
+  "date": "2026-09-08",
+  "runtime_changes_this_followup": false,
+  "overall_target_passed": false,
+  "priority_order": "Bounded HOLD diagnosis; independent fast-duck public API validation; original reply-latency stage analysis and environment preflight.",
+  "hold_policy": {
+    "source": "/tmp/voice-priority-hold-policy.json",
+    "independent_calls": [
+      {
+        "score": 0.19,
+        "final_action": "rollback",
+        "final_reason": "final_terminal_eot_low score=0.19<=0.20",
+        "deadline_action": "hold",
+        "deadline_reason": "deadline_wait_for_final_commit"
+      },
+      {
+        "score": 0.668,
+        "final_action": "hold",
+        "final_reason": "semantic_score_wait score=0.67 evidence=final_transcript final=true",
+        "deadline_action": "hold",
+        "deadline_reason": "deadline_wait_for_final_commit"
+      },
+      {
+        "score": 0.71,
+        "final_action": "cancel",
+        "final_reason": "eot_score_high score=0.71>=0.70 evidence=final_transcript",
+        "deadline_action": "hold",
+        "deadline_reason": "deadline_wait_for_final_commit"
+      }
+    ],
+    "interpretation": "Default final score 0.668 yields HOLD without a framework callback. Deadline calls are independent probes, not an override of already resolved candidates. SDK completion is not interruption intent evidence."
+  },
+  "framework_hold": {
+    "content_test_exit": 0,
+    "duck_to_unduck_ms": 6702.24,
+    "resume_budget_ms": 900,
+    "resume_budget_passed": false,
+    "events": [
+      {
+        "at": 1610715.513261833,
+        "event": "duck",
+        "since_duck_ms": 0.0
+      },
+      {
+        "at": 1610715.883006041,
+        "event": "semantic_run",
+        "text": "好。",
+        "is_final": true,
+        "vad_active": true,
+        "eot_score": 0.6676591315877032,
+        "since_duck_ms": 369.74
+      },
+      {
+        "at": 1610722.215504958,
+        "event": "unduck",
+        "since_duck_ms": 6702.24
+      }
+    ]
+  },
+  "framework_hold_limits": "Existing content-preservation test with real SDK/EOT and scripted speech/TTS. Instrumented only Channel methods in a diagnostic process. No framework-completed product hook observed while unresolved current speech remained uninterruptible. 6702 ms is duck-to-unduck, not receiver/physical resume; the content assertion passes while the 900 ms diagnostic budget fails.",
+  "public_output_options_fields": [
+    "sample_rate",
+    "num_channels",
+    "track_publish_options",
+    "track_name"
+  ],
+  "controlled_rtc": [
+    {
+      "prebuffer_ms": 400,
+      "admission_ms": 2.979,
+      "duck_to_receiver_attenuation_ms": 308.804,
+      "progress_events_before_resume": 0,
+      "wait_for_playout_done_before_flush": false,
+      "held_content_ms": 170.0,
+      "all_received_frames": 130,
+      "repeat": 0,
+      "progress_events_by_completion": [
+        {
+          "at": 1610637143.625583,
+          "offset": 0.0,
+          "duration": 0.41
+        },
+        {
+          "at": 1610637334.406375,
+          "offset": 0.41,
+          "duration": 0.1900000000000001
+        }
+      ],
+      "boundary": "server duck request to receiver sustained 12 dB attenuation; no microphone, VAD, ASR, Agent RPC or physical speaker"
+    },
+    {
+      "prebuffer_ms": 2000,
+      "admission_ms": 32.662,
+      "duck_to_receiver_attenuation_ms": 1909.157,
+      "progress_events_before_resume": 0,
+      "wait_for_playout_done_before_flush": false,
+      "held_content_ms": 170.0,
+      "all_received_frames": 129,
+      "repeat": 0,
+      "progress_events_by_completion": [
+        {
+          "at": 1610640021.430166,
+          "offset": 0.0,
+          "duration": 2.010000000000001
+        },
+        {
+          "at": 1610640212.034416,
+          "offset": 2.010000000000001,
+          "duration": 0.1899999999999995
+        }
+      ],
+      "boundary": "server duck request to receiver sustained 12 dB attenuation; no microphone, VAD, ASR, Agent RPC or physical speaker"
+    },
+    {
+      "prebuffer_ms": 400,
+      "admission_ms": 29.834,
+      "duck_to_receiver_attenuation_ms": 309.326,
+      "progress_events_before_resume": 0,
+      "wait_for_playout_done_before_flush": false,
+      "held_content_ms": 170.0,
+      "all_received_frames": 130,
+      "repeat": 1,
+      "progress_events_by_completion": [
+        {
+          "at": 1610642812.576916,
+          "offset": 0.0,
+          "duration": 0.41
+        },
+        {
+          "at": 1610643003.36325,
+          "offset": 0.41,
+          "duration": 0.1900000000000001
+        }
+      ],
+      "boundary": "server duck request to receiver sustained 12 dB attenuation; no microphone, VAD, ASR, Agent RPC or physical speaker"
+    },
+    {
+      "prebuffer_ms": 2000,
+      "admission_ms": 32.714,
+      "duck_to_receiver_attenuation_ms": 1889.766,
+      "progress_events_before_resume": 0,
+      "wait_for_playout_done_before_flush": false,
+      "held_content_ms": 170.0,
+      "all_received_frames": 129,
+      "repeat": 1,
+      "progress_events_by_completion": [
+        {
+          "at": 1610645641.56325,
+          "offset": 0.0,
+          "duration": 2.010000000000001
+        },
+        {
+          "at": 1610645832.245375,
+          "offset": 2.010000000000001,
+          "duration": 0.1899999999999995
+        }
+      ],
+      "boundary": "server duck request to receiver sustained 12 dB attenuation; no microphone, VAD, ASR, Agent RPC or physical speaker"
+    }
+  ],
+  "public_api_conclusion": [
+    "AgentSession.start, RoomOptions, session.output.audio, AudioOutput events and wait_for_playout used publicly; no private SDK imports, field edits or method replacements.",
+    "No playback_progressed events during the 2.2 second unresolved hold in all four runs; wait_for_playout remained pending until segment flush. These observations do not supply continuous consumption feedback for upstream pacing.",
+    "Smaller prebuffer in this diagnostic is an injected load condition, not a supported RoomIO queue-limit configuration or adopted optimization.",
+    "No accepted 300 ms P95 implementation. Do not add a second pacing clock, use destructive pause as lossless recovery, or patch SDK internals."
+  ],
+  "rtc_environment": {
+    "server": "installed livekit-server 1.11.0",
+    "isolated_loopback_ports": [
+      17880,
+      17881,
+      17882
+    ],
+    "server_started_for_test_only": true,
+    "owned_server_terminated_in_finally": true,
+    "existing_business_service_restarted": false,
+    "production_provider_calls": false
+  },
+  "original_reply_stages": {
+    "source": "/tmp/voice-priority-six-reply-stages.json",
+    "new_business_rtc_run": false,
+    "rows": [
+      {
+        "repeat": "repeat-00",
+        "turn": "a7ab91dd179d4fb8",
+        "room": "voice-bench-fd_default_correction_date_001-e6d82aae",
+        "stop_to_commit": 74.3,
+        "commit_to_rpc": 9.1,
+        "rpc_to_text": 1213.3,
+        "text_to_tts": 299.1,
+        "tts_to_pcm": 308.7,
+        "pcm_to_channel": 27.5
+      },
+      {
+        "repeat": "repeat-00",
+        "turn": "e7b5c42043634020",
+        "room": "voice-bench-fd_default_correction_cost_001-545faeea",
+        "stop_to_commit": 82.2,
+        "commit_to_rpc": 1.9,
+        "rpc_to_text": 1388.6,
+        "text_to_tts": 225.8,
+        "tts_to_pcm": 340.7,
+        "pcm_to_channel": 26.3
+      },
+      {
+        "repeat": "repeat-01",
+        "turn": "ddf66e0fdd744a7a",
+        "room": "voice-bench-fd_default_correction_date_001-46b601ac",
+        "stop_to_commit": 90.8,
+        "commit_to_rpc": 9.1,
+        "rpc_to_text": 1222.9,
+        "text_to_tts": 255.1,
+        "tts_to_pcm": 323.3,
+        "pcm_to_channel": 29.6
+      },
+      {
+        "repeat": "repeat-01",
+        "turn": "6b76ab56d07944ae",
+        "room": "voice-bench-fd_default_correction_cost_001-d56a6947",
+        "stop_to_commit": 99.4,
+        "commit_to_rpc": 3.0,
+        "rpc_to_text": 1229.7,
+        "text_to_tts": 317.3,
+        "tts_to_pcm": 389.7,
+        "pcm_to_channel": 28.9
+      },
+      {
+        "repeat": "repeat-02",
+        "turn": "fb9f43a4530143a0",
+        "room": "voice-bench-fd_default_correction_date_001-8e02b0fc",
+        "stop_to_commit": 136.1,
+        "commit_to_rpc": 11.3,
+        "rpc_to_text": 645.1,
+        "text_to_tts": 341.3,
+        "tts_to_pcm": 536.9,
+        "pcm_to_channel": 26.8
+      },
+      {
+        "repeat": "repeat-02",
+        "turn": "c462c9e1d8ea49fd",
+        "room": "voice-bench-fd_default_correction_cost_001-537bd3c9",
+        "stop_to_commit": 40.0,
+        "commit_to_rpc": 2.6,
+        "rpc_to_text": 998.2,
+        "text_to_tts": 189.3,
+        "tts_to_pcm": 516.2,
+        "pcm_to_channel": 11.8
+      }
+    ],
+    "interpretation": "Six original failed business RPC traces, one request per row. Stage timings omit client-to-VAD and downstream RTC onset; they are not whole-call latency or provider-only inference time. No evidence to rewrite commit coordination."
+  },
+  "business_environment": [
+    {
+      "service": "LiveKit",
+      "port": 7880,
+      "reachable": false,
+      "errno": 61,
+      "error": "[Errno 61] Connection refused"
+    },
+    {
+      "service": "Agent RPC",
+      "port": 45051,
+      "reachable": false,
+      "errno": 61,
+      "error": "[Errno 61] Connection refused"
+    },
+    {
+      "service": "Kernel",
+      "port": 8083,
+      "reachable": false,
+      "errno": 61,
+      "error": "[Errno 61] Connection refused"
+    },
+    {
+      "service": "Data",
+      "port": 8084,
+      "reachable": false,
+      "errno": 61,
+      "error": "[Errno 61] Connection refused"
+    }
+  ],
+  "next_dependencies": [
+    "Identify/start the existing business test environment before new real Agent RPC reply-latency acceptance; environment question sent to user.",
+    "For semantic waiting, a verified intent capability or a demonstrated lifecycle defect is required before runtime changes. Do not repeat rejected model variants or lower thresholds to force this example through.",
+    "Fast lossless duck remains an output capability gap in the tested public interface; no runtime workaround accepted."
+  ],
+  "sdk_integrity": {
+    "version": "1.7.1",
+    "python_files_checked": 207,
+    "mismatches": []
+  },
+  "diagnostic_sources": [
+    {
+      "path": "/tmp/voice_priority_public_output.py",
+      "sha256": "d6b2225227579c76efd361b1068f2520bcf7bd8fe2c575bd70b3377d9b779ea0"
+    },
+    {
+      "path": "/tmp/voice_priority_isolated_rtc.py",
+      "sha256": "7243c925b41258323a288570e7077cb8ac2ae2b26e35faf89d20a95c2711894c"
+    },
+    {
+      "path": "/tmp/voice_priority_hold_trace.py",
+      "sha256": "b8c0f901ed5e5559604c53209b59258149e1bd740db290f112aa8d3115875298"
+    },
+    {
+      "path": "/tmp/voice-priority-hold-policy.json",
+      "sha256": "296fcc3af12057b55d2b309c52e32c95aef497cd52d746cb1e96a0f26a435520"
+    },
+    {
+      "path": "/tmp/voice-priority-hold-trace.json",
+      "sha256": "81ff5e0ffab6c8d96a1f32fad99a64738b491af0dcda7ef77732452046a6f3ce"
+    },
+    {
+      "path": "/tmp/voice-priority-public-output.json",
+      "sha256": "1b65271cae153b1031d9018a66f0e0fb2b103e7f1225278b1125423ba126650d"
+    },
+    {
+      "path": "/tmp/voice-priority-six-reply-stages.json",
+      "sha256": "17fef28f84a0e5a37c4f99001796b2d7ec418d03a848b5f8b8c1eccb153486f0"
+    },
+    {
+      "path": "/tmp/voice-priority-service-availability.json",
+      "sha256": "fdea9cdd15e68798e77cee7bb82a0a302570a0e3f751dd5cd7b204a2ab55d9ae"
+    }
+  ]
+}

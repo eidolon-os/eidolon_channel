@@ -25,6 +25,7 @@ class DecisionEffectApplier:
         get_timeline: Callable[[], TurnTimeline | None],
         on_cancel: Callable[[], None],
         on_rollback: Callable[[str, bool], None],
+        on_resume: Callable[[str], None] | None = None,
         on_hold: Callable[[Decision, str, float | None, bool | None], None] | None = None,
         on_decision: Callable[..., object] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
@@ -33,6 +34,7 @@ class DecisionEffectApplier:
         self._get_timeline = get_timeline
         self._on_cancel = on_cancel
         self._on_rollback = on_rollback
+        self._on_resume = on_resume
         self._on_hold = on_hold
         self._on_decision = on_decision
         self._record_full_duplex_transition = record_full_duplex_transition
@@ -77,6 +79,10 @@ class DecisionEffectApplier:
                 resolved_reason or decision.reason,
                 decision.rollback_drop_buffered,
             )
+            return
+        if decision.action is Action.RESUME:
+            if self._on_resume is not None:
+                self._on_resume(decision.reason)
             return
         if decision.action is Action.HOLD and self._on_hold is not None:
             self._on_hold(decision, transcript, eot_score, vad_active)

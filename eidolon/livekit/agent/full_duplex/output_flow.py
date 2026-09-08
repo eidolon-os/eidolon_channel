@@ -62,7 +62,6 @@ class FullDuplexOutputFlow:
                 now - pipeline._ducking.last_unduck_time,
             )
             return False
-        pipeline._ducking.cancel_timeout()
         if not pipeline._ducking.duck(now=now):
             self.record_duck_event(
                 "duck_skipped",
@@ -114,10 +113,16 @@ class FullDuplexOutputFlow:
             cfg.duck_suspend_timeout_sec,
             cfg.duck_cooldown_sec,
         )
-        pipeline._ducking.timeout_task = asyncio.create_task(
-            pipeline._duck_deadline.run(cfg.duck_suspend_timeout_sec)
-        )
+        self.arm_evidence_timeout()
         return True
+
+    def arm_evidence_timeout(self) -> None:
+        """Bound candidate waiting even when output cooldown skips ducking."""
+        pipeline = self._pipeline
+        pipeline._ducking.cancel_timeout()
+        pipeline._ducking.timeout_task = asyncio.create_task(
+            pipeline._duck_deadline.run(pipeline._get_eot_model()._config.duck_suspend_timeout_sec)
+        )
 
     def record_duck_event(self, event: str, **fields: object) -> None:
         timeline = self._pipeline._timeline

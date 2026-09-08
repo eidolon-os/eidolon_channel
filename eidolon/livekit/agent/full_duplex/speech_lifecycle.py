@@ -31,10 +31,21 @@ class FullDuplexSpeechLifecycle:
         owner = self._owner
         turn_completion = owner._ensure_turn_completion()
         owner._ensure_user_turn_coordinator()
-        merge_continuation = owner._user_turns.can_merge_new_speech()
+        interruption_owner = owner._interruption_orchestrator
+        continue_pending = (
+            interruption_owner.awaiting_post_speech_evidence
+            and interruption_owner.should_hold_deadline()
+            and bool(interruption_owner.current_transcript)
+            and interruption_owner.active_key == (
+                getattr(owner._user_turns.active, "candidate_id", None),
+                owner._user_turns.current_generation_id,
+            )
+        )
+        merge_continuation = owner._user_turns.can_merge_new_speech(continue_pending=continue_pending)
         owner._set_interrupt_cancel_suppression(False, 0.0, reason="new_speech_started")
         owner._set_suppress_transcripts_until_next_speech(False, reason="new_speech_started")
         if not merge_continuation:
+            owner._turn_runtime.reset_interruption_evidence()
             turn_completion.cancel_completed_voiceprint_turn()
             turn_completion.reset_candidate_voiceprint_tasks()
         replaced_unmerged_timeline = owner._timeline if not merge_continuation else None
@@ -65,7 +76,7 @@ class FullDuplexSpeechLifecycle:
                 getattr(owner, "_runtime_participant_identity", "") or "",
             )
 
-        owner._user_turns.start_speech(timeline=owner._timeline)
+        owner._user_turns.start_speech(timeline=owner._timeline, continue_pending=continue_pending)
         owner._ensure_agent_output_coordinator().link_interruption_candidate(owner._timeline)
         if replaced_unmerged_timeline is not None:
             if superseding_pending_candidate:
@@ -120,11 +131,13 @@ class FullDuplexSpeechLifecycle:
             return
 
         interrupt_window_started = owner._attention_effects.handle_speaking_started()
-        if interrupt_window_started:
+        if interrupt_window_started and owner._ducking.installed and not owner._ducking.is_cancelled:
             owner._interruption_orchestrator.start_candidate(
                 timeline=owner._timeline,
                 generation_id=owner._user_turns.current_generation_id,
+                already_suspended=owner._ducking.is_suspended,
             )
+            owner._ensure_output_flow().arm_evidence_timeout()
 
     def handle_stopped(self) -> None:
         owner = self._owner
@@ -194,11 +207,13 @@ class FullDuplexSpeechLifecycle:
             )
             interruption_effects.cancel_soft_interrupt()
 
-        if owner._ducking.is_suspended and not owner._uses_livekit_native_adaptive_interruption():
+        if owner._interruption_orchestrator.active and not owner._uses_livekit_native_adaptive_interruption():
             should_defer = owner._interruption_orchestrator.defer_false_resume_after_speech_end(
                 transcript=owner._interruption_orchestrator.current_transcript or owner._latest_asr_text,
-                duck_suspended=True,
+                duck_suspended=owner._ducking.is_suspended,
             )
+            if should_defer and not owner._ducking.is_suspended:
+                owner._ensure_output_flow().arm_evidence_timeout()
             final_text = owner._interruption_orchestrator.current_final_transcript
             if final_text:
                 if owner._semantic_interrupts.uses_model_intent:

@@ -16,6 +16,7 @@ Tests verify:
 
 from __future__ import annotations
 
+import asyncio
 from typing import List
 
 import numpy as np
@@ -490,3 +491,58 @@ async def test_ramp_progresses_per_sample_not_per_frame() -> None:
     assert samples[-1] < 200
     # Mean should be ~5000 (linear ramp)
     assert 4000 < samples.mean() < 6000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('frame_ms', [20, 60, 200])
+async def test_fade_out_preserves_unheard_remainder_of_provider_frame(frame_ms):
+    """The fade boundary may fall inside an SDK/provider frame."""
+    inner = _FakeInnerOutput()
+    mixer = DuckingMixer(inner, fade_ms=30, fade_in_ms=1)
+    total_samples = SAMPLE_RATE * frame_ms // 1000
+    pcm = np.arange(1000, 1000 + total_samples, dtype=np.int16)
+    frame = rtc.AudioFrame(pcm.tobytes(), SAMPLE_RATE, 1, total_samples)
+    mixer.duck()
+    await mixer.capture_frame(frame)
+    fade_samples = min(total_samples, SAMPLE_RATE * 30 // 1000)
+    assert sum(f.samples_per_channel for f in inner.frames) == fade_samples
+    assert mixer.buffered_sec == pytest.approx((total_samples - fade_samples) / SAMPLE_RATE)
+    mixer.flush()
+    mixer.unduck()
+    async with asyncio.timeout(1):
+        while inner.flushed != 1:
+            await asyncio.sleep(0)
+    restored = np.concatenate([_samples_of(f) for f in inner.frames])
+    assert len(restored) == total_samples, 'no samples lost or duplicated across resume'
+    # Both ramps intentionally change amplitude; the unheard tail beyond the
+    # short resume ramp must retain its exact source samples and ordering.
+    tail_start = fade_samples + SAMPLE_RATE // 1000
+    assert np.array_equal(restored[tail_start:], pcm[tail_start:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('channels', [1, 2])
+async def test_fade_and_resume_are_independent_of_provider_frame_partition(channels):
+    async def render(frame_ms):
+        inner = _FakeInnerOutput()
+        mixer = DuckingMixer(inner, fade_ms=30, fade_in_ms=30)
+        pcm = np.full((SAMPLE_RATE // 5, channels), 10000, dtype=np.int16)
+        step = SAMPLE_RATE * frame_ms // 1000
+        mixer.duck()
+        for start in range(0, len(pcm), step):
+            block = pcm[start:start + step]
+            await mixer.capture_frame(rtc.AudioFrame(block.tobytes(), SAMPLE_RATE, channels, len(block)))
+        mixer.flush()
+        mixer.unduck()
+        async with asyncio.timeout(1):
+            while inner.flushed != 1:
+                await asyncio.sleep(0)
+        return np.concatenate([_samples_of(f) for f in inner.frames]).reshape(-1, channels)
+
+    small, large = await render(20), await render(200)
+    assert np.array_equal(small, large), 'provider chunk boundaries must not lose unheard samples'
+    assert len(large) == SAMPLE_RATE // 5
+    assert large[0, 0] > 9900
+    assert large[SAMPLE_RATE * 30 // 1000 - 1, 0] == 0
+    assert large[SAMPLE_RATE * 60 // 1000 - 1, 0] == 10000
+    assert np.all(large == large[:, :1]), 'all channels must share the same gain at the same time'

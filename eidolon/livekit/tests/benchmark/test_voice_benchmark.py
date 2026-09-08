@@ -652,7 +652,7 @@ def test_load_v1_interrupt_tiers_enforced_suite() -> None:
     )
     assert ambient.user_steps[0].client_playback_state == "agent_speaking"
     assert ambient.expectations.action == "any"
-    assert ambient.expectations.decision_action == "rollback"
+    assert ambient.expectations.decision_action == "hold"
     assert "cancel" in ambient.expectations.forbid_actions
 
 
@@ -676,8 +676,8 @@ def test_policy_runner_v1_interrupt_tiers_enforced_suite() -> None:
     tier4 = next(
         case for case in run.cases if case.case_id == "tier4_ambient_speech_enforced_observes_001"
     )
-    assert tier4.metrics["actual_action"] == "rollback"
-    assert tier4.metrics["actual_decision_action"] == "rollback"
+    assert tier4.metrics["actual_action"] == "hold"
+    assert tier4.metrics["actual_decision_action"] == "hold"
     assert tier4.decisions[0]["attention_admission"]["action"] == "duck_and_decide"
     assert tier4.decisions[0]["decision"] is None
 
@@ -851,7 +851,7 @@ def test_load_barge_in_ab_matrix_suite() -> None:
     backchannel = next(
         case for case in suite.cases if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
     )
-    assert backchannel.expectations.decision_action == "rollback"
+    assert backchannel.expectations.decision_action == "hold"
     false_start = next(
         case
         for case in suite.cases
@@ -890,7 +890,7 @@ def test_policy_runner_barge_in_ab_matrix_suite() -> None:
     backchannel = next(
         case for case in run.cases if case.case_id == "ab_backchannel_mm_does_not_cancel_001"
     )
-    assert backchannel.metrics["actual_decision_action"] == "rollback"
+    assert backchannel.metrics["actual_decision_action"] == "hold"
     normal_interrupt = next(
         case for case in run.cases if case.case_id == "ab_normal_interrupt_high_eot_cancels_001"
     )
@@ -1442,6 +1442,11 @@ async def test_room_reply_latency_excludes_feed_padding(monkeypatch, trailing_si
         state.mark("user_audio_done_at")
     metrics = state.metrics()
     assert metrics["user_audio_done_ms"] == boundary_ms
+    assert metrics["user_speech_started_ms"] == 20
+    assert [event for event in state.events if event['type'] == 'user_speech_started'] == [{
+        'type': 'user_speech_started', 'timestamp_ms': 20,
+        'reference': 'first_voiced_frame_published',
+    }]
     assert metrics["user_done_to_agent_audio_after_user_done_ms"] == 200
     assert metrics["input_feed_done_ms"] > boundary_ms + 200
     assert metrics["user_audio_done_reference"] == ("ptt_release" if ptt else "last_voiced_frame")
@@ -1918,6 +1923,46 @@ async def test_wait_for_initial_agent_quiet_allows_room_without_greeting() -> No
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_initial_agent_quiet_rejects_missing_expected_greeting() -> None:
+    from benchmark.livekit_room_runner import _RoomCaseState, _wait_for_agent_quiet
+
+    state = _RoomCaseState(started=time.monotonic(), events=[])
+    assert await _wait_for_agent_quiet(
+        state,
+        quiet_ms=10,
+        timeout_sec=0.08,
+        first_audio_wait_sec=0.01,
+        greeting_expected=True,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_room_suite_derives_greeting_expectation_from_runtime_policy(monkeypatch) -> None:
+    from benchmark import livekit_room_runner as runner
+    from eidolon.livekit.common.config import load_effective_config
+    from eidolon_sdk.biz.contracts import SESSION_INTENT_PROACTIVE, SESSION_INTENT_USER_INITIATED
+
+    cfg = load_effective_config()
+    cfg = replace(cfg, behavior=replace(cfg.behavior, welcome_message="欢迎"))
+    monkeypatch.setattr(runner, "load_effective_config", lambda: cfg)
+    observed = []
+
+    async def run_case(case, **kwargs):
+        observed.append(kwargs["options"].greeting_expected)
+        return CaseResult(case_id=case.case_id, suite=case.suite, runner="livekit_room", passed=True)
+
+    monkeypatch.setattr(runner, "_run_room_case_with_retries", run_case)
+    suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
+    suite = replace(suite, cases=suite.cases[:1])
+    for intent in (SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PROACTIVE):
+        await runner.run_livekit_room_suite(
+            [suite], root=Path.cwd(),
+            options=LiveKitRoomOptions(participant_metadata={"session_intent": intent}),
+        )
+    assert observed == [True, False]
 
 
 @pytest.mark.asyncio
@@ -4369,6 +4414,21 @@ def test_timeline_expectations_fail_split_turn_with_max_brain_requests(
     assert any("<=1 brain requests, got 2" in error for error in run.cases[0].errors)
 
 
+@pytest.mark.parametrize("second_send,passed", [(10.0, True), (11.0, False)])
+def test_timeline_request_count_deduplicates_snapshots_not_distinct_calls(tmp_path, second_send, passed):
+    suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
+    case_id = "pause_mid_utterance_single_turn_001"
+    run = _expectation_run(case_id, "turn_boundary")
+    first = json.loads(_committed_turn_record(case_id, turn_id="same-turn"))
+    second = json.loads(_committed_turn_record(case_id, turn_id="same-turn"))
+    second["timestamps"]["brain_request_sent_at"] = second_send
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
+    apply_timeline_expectations(run, [suite], timeline_path)
+    assert run.cases[0].passed is passed
+
+
+
 def test_timeline_expectations_require_min_brain_requests(tmp_path) -> None:
     suite = load_suite("benchmark/cases/conversation_turn_taking.yaml")
     run = _expectation_run("multi_turn_three_rounds_001", "conversation_flow")
@@ -4629,3 +4689,45 @@ def test_synthesize_composite_pcm_inserts_silence() -> None:
         assert pcm[len(speech) : len(speech) + len(expected_silence)] == expected_silence
 
     asyncio.run(scenario())
+
+
+def test_receiver_attenuation_measures_audio_instead_of_server_duck_mark():
+    from benchmark.barge_in_latency import receiver_attenuation_ms
+
+    # The server requests duck at 200 ms; queued old audio reaches the receiver
+    # through 600 ms. A short quiet dip at 300 ms must not hide the tail.
+    frames = [(at, 1000.0) for at in range(80, 620, 20)]
+    frames = [(at, 0.0 if at == 300 else rms) for at, rms in frames]
+    frames += [(at, 240.0) for at in range(620, 740, 20)]
+    assert receiver_attenuation_ms(frames, onset_ms=200) == 420
+    # A small decrease is not the required 12 dB attenuation.
+    assert receiver_attenuation_ms(
+        [(at, 300.0 if at >= 620 else rms) for at, rms in frames], onset_ms=200,
+    ) is None
+
+
+@pytest.mark.parametrize('frames', [
+    [(at, 0.0) for at in range(80, 500, 20)],  # already quiet
+    [(80, 1000.0)] + [(at, 0.0) for at in range(200, 500, 20)],  # stale baseline
+    [(at, 1000.0) for at in range(80, 200, 20)],  # no received tail
+    [(at, 1000.0) for at in range(80, 200, 20)] + [(200, 0.0), (400, 0.0)],
+    [(at, 1000.0) for at in range(80, 200, 20)] + [(at, 0.0) for at in range(200, 300, 20)],
+])
+def test_receiver_attenuation_requires_observed_sustained_reduction(frames):
+    from benchmark.barge_in_latency import receiver_attenuation_ms
+
+    assert receiver_attenuation_ms(frames, onset_ms=200) is None
+
+
+def test_room_metrics_keep_input_onset_and_audio_attenuation_separate_from_reply():
+    from benchmark.livekit_room_runner import _RoomCaseState
+
+    state = _RoomCaseState(started=0, events=[])
+    state.user_speech_started_ms = 200
+    state.agent_audio_levels = [(at, 1000.0) for at in range(80, 460, 20)]
+    state.agent_audio_levels += [(at, 0.0) for at in range(460, 580, 20)]
+    state.finish_user_input(1000, reference='last_voiced_frame')
+    state.agent_audio_frame_timestamps = [1100]
+    metrics = state.metrics()
+    assert metrics['user_start_to_rtc_attenuation_ms'] == 260
+    assert metrics['user_done_to_agent_audio_after_user_done_ms'] == 100

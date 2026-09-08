@@ -37,6 +37,7 @@ class AttentionEffectHandler:
         on_duck: Callable[[], bool | None],
         on_interrupt: Callable[[], None],
         get_eot_score: Callable[[], float] | None = None,
+        get_candidate_active: Callable[[], bool] = lambda: False,
     ) -> None:
         self._turn_policy = turn_policy
         self._turn_runtime = turn_runtime
@@ -47,6 +48,7 @@ class AttentionEffectHandler:
         self._get_timeline = get_timeline
         self._on_duck = on_duck
         self._on_interrupt = on_interrupt
+        self._get_candidate_active = get_candidate_active
 
     def handle_speaking_started(self) -> bool:
         decision, state = self._decide_with_state("", speech_started=True)
@@ -59,7 +61,8 @@ class AttentionEffectHandler:
             )
             return False
         if not self._turn_policy.attention.enforce:
-            return bool(self._on_duck())
+            self._on_duck()
+            return True
         if decision.action is AdmissionAction.HARD_INTERRUPT:
             timeline = self._get_timeline()
             if timeline is not None:
@@ -67,7 +70,8 @@ class AttentionEffectHandler:
             self._on_interrupt()
             return False
         if decision.action is AdmissionAction.DUCK_AND_DECIDE:
-            return bool(self._on_duck())
+            self._on_duck()
+            return True
         logger.info(
             "[AttentionEffectHandler] attention admission: %s reason=%s; no duck",
             decision.action.value,
@@ -95,7 +99,9 @@ class AttentionEffectHandler:
             if self._get_agent_speaking() and not self._get_duck_active():
                 self._on_duck()
             return True
-        if decision.action is AdmissionAction.OBSERVE and self._get_duck_active():
+        if decision.action is AdmissionAction.OBSERVE and (
+            self._get_duck_active() or self._get_candidate_active()
+        ):
             logger.info(
                 "[AttentionEffectHandler] attention admission: %s reason=%s; "
                 "duck active, route transcript as interruption evidence",

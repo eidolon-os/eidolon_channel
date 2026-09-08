@@ -1,0 +1,527 @@
+{
+  "date": "2026-09-08",
+  "status": "unconditional_final_rollback_rejected_pause_continuation_guard_added",
+  "overall_target_passed": false,
+  "new_runtime_changes": false,
+  "runtime_sources_unchanged_since_previous_regression": true,
+  "method": "Existing production Pipeline and real AgentSession. Scripted ASR/VAD/LLM/TTS; injected application EOT model scores 0.4 for uncertain sentence and 0.95 for continuation. No SDK modification.",
+  "profiles": {
+    "expressions": [
+      "delivery date change",
+      "participant count change",
+      "English destination change"
+    ],
+    "sentence_final_ms": [
+      700,
+      1150
+    ],
+    "first_vad_end_ms": 1050,
+    "continuation_vad_start_ms": 1450,
+    "continuation_final_ms": 1800,
+    "second_vad_end_ms": 2150,
+    "configured_merge_grace_ms": 800
+  },
+  "rejected_hypothesis": "For default intent_provider=none, replace ambiguous HOLD with rollback as soon as FINAL and inactive VAD are available.",
+  "rejection": "All six profiles resumed original output in the within-turn pause. Complete user text still committed exactly once; no observed transcript loss. Do not exaggerate the failure as lost words.",
+  "baseline_probe": {
+    "source": "/tmp/voice-mechanism-continuation-baseline.xml",
+    "tests": 6,
+    "failed": 0,
+    "errors": 0,
+    "cases": [
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u4ea4\\u4ed8\\u65f6\\u95f4\\u8fd9\\u4e00\\u9879\\u3002-\\u8bf7\\u6539\\u5230\\u4e0b\\u5468\\u4e09\\u3002-700]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u4ea4\\u4ed8\\u65f6\\u95f4\\u8fd9\\u4e00\\u9879\\u3002-\\u8bf7\\u6539\\u5230\\u4e0b\\u5468\\u4e09\\u3002-1150]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u5173\\u4e8e\\u53c2\\u52a0\\u7684\\u4eba\\u6570\\u3002-\\u6539\\u4e3a\\u4e03\\u4e2a\\u4eba\\u3002-700]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u5173\\u4e8e\\u53c2\\u52a0\\u7684\\u4eba\\u6570\\u3002-\\u6539\\u4e3a\\u4e03\\u4e2a\\u4eba\\u3002-1150]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[For the destination.-Please change it to Shanghai.-700]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[For the destination.-Please change it to Shanghai.-1150]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      }
+    ]
+  },
+  "rejected_probe": {
+    "source": "/tmp/voice-mechanism-early-rollback.xml",
+    "tests": 6,
+    "failed": 6,
+    "errors": 0,
+    "cases": [
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u4ea4\\u4ed8\\u65f6\\u95f4\\u8fd9\\u4e00\\u9879\\u3002-\\u8bf7\\u6539\\u5230\\u4e0b\\u5468\\u4e09\\u3002-700]",
+        "failed": true,
+        "error": false,
+        "properties": {
+          "pause_state": "NORMAL",
+          "completed_user_messages": "[\"交付时间这一项。请改到下周三。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u4ea4\\u4ed8\\u65f6\\u95f4\\u8fd9\\u4e00\\u9879\\u3002-\\u8bf7\\u6539\\u5230\\u4e0b\\u5468\\u4e09\\u3002-1150]",
+        "failed": true,
+        "error": false,
+        "properties": {
+          "pause_state": "NORMAL",
+          "completed_user_messages": "[\"交付时间这一项。请改到下周三。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u5173\\u4e8e\\u53c2\\u52a0\\u7684\\u4eba\\u6570\\u3002-\\u6539\\u4e3a\\u4e03\\u4e2a\\u4eba\\u3002-700]",
+        "failed": true,
+        "error": false,
+        "properties": {
+          "pause_state": "NORMAL",
+          "completed_user_messages": "[\"关于参加的人数。改为七个人。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u5173\\u4e8e\\u53c2\\u52a0\\u7684\\u4eba\\u6570\\u3002-\\u6539\\u4e3a\\u4e03\\u4e2a\\u4eba\\u3002-1150]",
+        "failed": true,
+        "error": false,
+        "properties": {
+          "pause_state": "NORMAL",
+          "completed_user_messages": "[\"关于参加的人数。改为七个人。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[For the destination.-Please change it to Shanghai.-700]",
+        "failed": true,
+        "error": false,
+        "properties": {
+          "pause_state": "NORMAL",
+          "completed_user_messages": "[\"For the destination. Please change it to Shanghai.\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[For the destination.-Please change it to Shanghai.-1150]",
+        "failed": true,
+        "error": false,
+        "properties": {
+          "pause_state": "NORMAL",
+          "completed_user_messages": "[\"For the destination. Please change it to Shanghai.\"]"
+        }
+      }
+    ]
+  },
+  "final_regression": {
+    "source": "/tmp/voice-mechanism-final.xml",
+    "tests": 59,
+    "failed": 0,
+    "errors": 0,
+    "cases": [
+      {
+        "name": "test_explicit_preempt_during_question_does_not_wait_for_old_model_request",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[normal_interrupt-0.05]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[normal_interrupt-0.7]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[normal_interrupt-1.2]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[backchannel-0.05]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[backchannel-0.7]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[backchannel-1.2]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[hard_stop-0.05]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[hard_stop-0.7]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_result_on_either_side_of_sdk_endpoint[hard_stop-1.2]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_default_intent_timeout_resumes_original_pcm",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u4ea4\\u4ed8\\u65f6\\u95f4\\u8fd9\\u4e00\\u9879\\u3002-\\u8bf7\\u6539\\u5230\\u4e0b\\u5468\\u4e09\\u3002-700]",
+        "failed": false,
+        "error": false,
+        "properties": {
+          "pause_state": "SUSPENDED",
+          "completed_user_messages": "[\"交付时间这一项。请改到下周三。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u4ea4\\u4ed8\\u65f6\\u95f4\\u8fd9\\u4e00\\u9879\\u3002-\\u8bf7\\u6539\\u5230\\u4e0b\\u5468\\u4e09\\u3002-1150]",
+        "failed": false,
+        "error": false,
+        "properties": {
+          "pause_state": "SUSPENDED",
+          "completed_user_messages": "[\"交付时间这一项。请改到下周三。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u5173\\u4e8e\\u53c2\\u52a0\\u7684\\u4eba\\u6570\\u3002-\\u6539\\u4e3a\\u4e03\\u4e2a\\u4eba\\u3002-700]",
+        "failed": false,
+        "error": false,
+        "properties": {
+          "pause_state": "SUSPENDED",
+          "completed_user_messages": "[\"关于参加的人数。改为七个人。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[\\u5173\\u4e8e\\u53c2\\u52a0\\u7684\\u4eba\\u6570\\u3002-\\u6539\\u4e3a\\u4e03\\u4e2a\\u4eba\\u3002-1150]",
+        "failed": false,
+        "error": false,
+        "properties": {
+          "pause_state": "SUSPENDED",
+          "completed_user_messages": "[\"关于参加的人数。改为七个人。\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[For the destination.-Please change it to Shanghai.-700]",
+        "failed": false,
+        "error": false,
+        "properties": {
+          "pause_state": "SUSPENDED",
+          "completed_user_messages": "[\"For the destination. Please change it to Shanghai.\"]"
+        }
+      },
+      {
+        "name": "test_ambiguous_sentence_final_preserves_pause_continuation[For the destination.-Please change it to Shanghai.-1150]",
+        "failed": false,
+        "error": false,
+        "properties": {
+          "pause_state": "SUSPENDED",
+          "completed_user_messages": "[\"For the destination. Please change it to Shanghai.\"]"
+        }
+      },
+      {
+        "name": "test_model_unavailable_resumes_original_speech_after_vad_end[timeout]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_model_unavailable_resumes_original_speech_after_vad_end[error]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_resume_does_not_leak_overlap_into_next_user_turn",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_overlap_delivery_waits_for_final_and_replies_once[fast]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_overlap_delivery_waits_for_final_and_replies_once[slow]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_overlap_delivery_waits_for_final_and_replies_once[repeated_interims]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_overlap_delivery_waits_for_final_and_replies_once[within_turn_pause]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_overlap_delivery_waits_for_final_and_replies_once[late_final]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_fragmented_final_intent_survives_deadline_and_vad_stop[normal_interrupt-950]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_fragmented_final_intent_survives_deadline_and_vad_stop[normal_interrupt-1400]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_fragmented_final_intent_survives_deadline_and_vad_stop[backchannel-950]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_fragmented_final_intent_survives_deadline_and_vad_stop[backchannel-1400]",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_final_evidence_is_invalidated_by_revision_resolution_or_new_generation",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_vad_end_without_transcript_waits_for_evidence_when_ducked",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_short_vad_blip_keeps_fast_false_resume_path",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_resolve_closes_evidence_window",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_new_acoustic_generation_supersedes_stale_active_candidate",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_turn_policy_hold_keeps_weak_transcript_in_evidence_window",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_provisional_short_latin_artifact_uses_bounded_evidence_window",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_turn_policy_rollback_allows_fast_false_resume_after_speech_end",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_single_char_backchannel_fast_resumes_on_speech_end",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_single_char_backchannel_cannot_end_candidate_while_speech_is_active",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_interruption_owner_events_record_elapsed_and_delta_ms",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_turn_policy_cancel_emits_confirm_cancel_decision",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_owner_routes_transcript_then_effect_records_policy_once",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_owner_blocks_framework_completed_turn_during_post_speech_wait",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_owner_only_commits_semantic_post_speech_cancel",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_semantic_cancel_collects_until_speech_end_before_commit",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_hard_stop_cancel_does_not_collect_user_turn",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_resolved_normal_interrupt_exposes_committable_verdict",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_resolved_backchannel_exposes_non_committable_verdict",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_verdict_is_not_visible_to_a_later_acoustic_generation",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_deadline_noops_when_duck_no_longer_suspended",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_hold_rearms_before_max_suspend_budget",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_owner_remaining_budget_rearms_independently_of_duck_start",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_owner_elapsed_budget_rolls_back_without_rearming",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_hold_rearms_with_policy_recheck_budget",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_hold_rolls_back_after_max_suspend_budget",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_vad_idle_can_hold_for_post_speech_evidence_window",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_active_speech_backchannel_deadline_cannot_terminally_rollback",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_no_transcript_false_interrupt_resumes_after_grace",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      },
+      {
+        "name": "test_no_transcript_false_interrupt_holds_within_grace",
+        "failed": false,
+        "error": false,
+        "properties": {}
+      }
+    ]
+  },
+  "source": {
+    "path": "/tmp/voice_mechanism_terminal_final_probe.py",
+    "sha256": "114a9360298ae822242669a2b591b7f65d7a955bb59a69e3ca2b1229adf6a9f4"
+  },
+  "limits": [
+    "Not real ASR accuracy, real-model quality, RTC or physical speaker evidence.",
+    "Rejecting immediate rollback does not validate the six-second budget.",
+    "No claim about population frequency of delayed recovery.",
+    "No new resolution of fast receiver duck, complete-request latency or the six original semantic failures."
+  ],
+  "priority": [
+    "actual receiver/speaker yield",
+    "complete-input reply latency",
+    "ambiguous feedback recovery"
+  ]
+}

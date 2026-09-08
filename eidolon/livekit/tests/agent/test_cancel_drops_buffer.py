@@ -1,28 +1,9 @@
-"""G17a (2026-05-18): regression — stale-buffer drain on timeout-unduck.
+"""Explicit content-discard control and ordinary resume behavior.
 
-Bug in production log (2026-05-17, round-4 long agent reply):
-  user spoke at T+27.42s; duck fired; 0.8s suspend-timeout elapsed; system
-  unducked because EOT had not yet emitted a confident cancel score; mixer
-  drained the buffered TTS frames (~2 seconds of agent's prior sentence)
-  AFTER unduck — but by then the user had been speaking the whole time,
-  so the drained audio physically overlapped with the user's microphone
-  input, producing the "agent talks over me" listening experience.
-
-Root cause: ``DuckingMixer.unduck()`` unconditionally drained the buffer
-on next ``capture_frame``. The timeout fallback in
-``DuckSuspendTimeoutHandler`` is by definition the
-"buffer is now stale" path (we've been suspended ≥0.8s, the user almost
-certainly hasn't stopped talking).
-
-Fix: ``unduck(drop_buffered=True)`` discards the buffer instead of draining
-it. Caller (the timeout fallback) opts in. The fast-path soft-unduck
-(``FullDuplexInterruptionEffects.rollback_if_suspended`` called after
-``user_state: speaking→listening``
-within ~300ms) keeps the default ``drop_buffered=False`` because the buffer
-is genuinely fresh there.
-
-This module tests the new option directly; integration tests for the
-timeout-fallback caller live in pipeline tests.
+The discard option was originally used on timeout to skip held TTS content.
+A timeout now preserves that unheard content; discarding it merely skipped
+part of the sentence while later audio still resumed. These tests retain
+coverage of the explicit output control, separate from timeout policy.
 """
 
 from __future__ import annotations
@@ -114,8 +95,7 @@ async def test_unduck_default_still_drains() -> None:
     """Backwards-compat: ``unduck()`` without args drains as before.
 
     The fast-path soft-unduck (user-silent transition within ~300ms)
-    relies on this default behaviour. Only the slow-path timeout opts
-    into drop_buffered=True.
+    and the timeout rollback both rely on this default behaviour.
     """
     inner = _FakeInnerOutput()
     mixer = DuckingMixer(inner, fade_ms=10, fade_in_ms=10)

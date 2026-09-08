@@ -1,0 +1,490 @@
+{
+  "date": "2026-09-08",
+  "status": "environment_restored_content_transport_validated_latency_still_failing",
+  "overall_target_passed": false,
+  "deployed_current_changes_to_business_worker": false,
+  "environment": {
+    "entrypoint": "/Users/manson/ai/eidolon/eidolon_ops/eidolon mac start",
+    "app_ready_before": "app_ready",
+    "app_ready_after": "app_ready"
+  },
+  "head": "f4597dced81d8f37b86f98ae1dfcd1a18d916af8",
+  "new_runtime_changes_this_run": [],
+  "benchmark_fix": {
+    "problem": "No greeting audio inside the existing six-second wait was mistaken for a no-greeting room. A delayed welcome then satisfied the later speaking precondition and yielded a false positive stop case.",
+    "fix": "Derive greeting expectation using the existing runtime session-intent and welcome resolvers. Missing expected greeting audio fails setup within the existing budget.",
+    "unchanged": [
+      "runtime orchestration",
+      "SDK",
+      "latency gates",
+      "wait budgets",
+      "existing retry policy"
+    ],
+    "regression": {
+      "tests": 172,
+      "failures": 0,
+      "errors": 0,
+      "evidence": {
+        "path": "/tmp/voice-restored-benchmark.xml",
+        "sha256": "4ae4d2d3fe188a3b4b285fc8a2ec12f9d1391917f04789f1dc68ecc6e1460f5b"
+      }
+    }
+  },
+  "real_rpc_runs": [
+    {
+      "run_id": "restored-current-full-duplex",
+      "cases": [
+        {
+          "case_id": "fd_gate_normal_turn_replies_001",
+          "raw_runner_passed": true,
+          "accepted_as_valid_pass": true,
+          "validity_note": null,
+          "errors": [],
+          "metrics": {
+            "real_call_verified": true,
+            "retry_attempts": null,
+            "functional_outcome_passed": true,
+            "user_done_to_agent_audio_after_user_done_ms": 3337,
+            "user_start_to_rtc_attenuation_ms": null,
+            "timeline_interrupt_speech_to_resolved_ms": null,
+            "timeline_speech_stop_to_commit_ms": 63.73775005340576,
+            "timeline_brain_request_to_first_delta_ms": 1904.7369582112879
+          },
+          "formal_rpc_request_count": 1,
+          "retry_events": []
+        },
+        {
+          "case_id": "fd_gate_hard_stop_cancels_001",
+          "raw_runner_passed": true,
+          "accepted_as_valid_pass": false,
+          "validity_note": "Rejected: late greeting was interrupted; no initial formal reply before stop.",
+          "errors": [],
+          "metrics": {
+            "real_call_verified": true,
+            "retry_attempts": null,
+            "functional_outcome_passed": true,
+            "user_done_to_agent_audio_after_user_done_ms": 4408,
+            "user_start_to_rtc_attenuation_ms": null,
+            "timeline_interrupt_speech_to_resolved_ms": 171.381332911551,
+            "timeline_speech_stop_to_commit_ms": 2501.2212090659887,
+            "timeline_brain_request_to_first_delta_ms": 436.71216699294746
+          },
+          "formal_rpc_request_count": 1,
+          "retry_events": []
+        },
+        {
+          "case_id": "fd_gate_backchannel_resumes_001",
+          "raw_runner_passed": false,
+          "accepted_as_valid_pass": false,
+          "validity_note": null,
+          "errors": [
+            "timed out waiting for agent participant before user audio",
+            "RuntimeError: timed out waiting for active agent audio before user step '好的'",
+            "timeline missing for case=fd_gate_backchannel_resumes_001",
+            "real-call: agent_audio_bytes=0 < 8000 (dead/mock agent?)",
+            "real-call: no worker timeline records (cannot prove real call)"
+          ],
+          "metrics": {
+            "real_call_verified": false,
+            "retry_attempts": 1,
+            "functional_outcome_passed": false,
+            "user_done_to_agent_audio_after_user_done_ms": null,
+            "user_start_to_rtc_attenuation_ms": null,
+            "timeline_interrupt_speech_to_resolved_ms": null,
+            "timeline_speech_stop_to_commit_ms": null,
+            "timeline_brain_request_to_first_delta_ms": null
+          },
+          "formal_rpc_request_count": 0,
+          "retry_events": [
+            {
+              "type": "case_retry",
+              "attempt": 1,
+              "reason": "agent_setup_transient",
+              "previous_room_name": "voice-bench-fd_gate_backchannel_resumes_001-4aee2f04",
+              "previous_errors": [
+                "RuntimeError: timed out waiting for the previous agent reply to complete before user step '帮我详细介绍一下这个方案'"
+              ]
+            }
+          ]
+        }
+      ],
+      "total_start_turn_calls": 2,
+      "speculative_start_turn_calls": 0,
+      "evidence": [
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-full-duplex/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+          "sha256": "43dd7c28def17bfc831ebec7331f99101d3a252be127eb1f2074870b82cc43ec"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-full-duplex/barge_in_e2e_ab/channel/livekit_room/turn_timeline.jsonl",
+          "sha256": "6114bc6ab1e4f8af6e9365b1ecc56d5c972b1a5de92e29330f6f28351dd04acf"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-full-duplex/barge_in_e2e_ab/channel/worker.stdout.log",
+          "sha256": "1b4873313772953051f92fcdbe8f1a27cee6d8652b8f81e545424c5c216646ba"
+        }
+      ]
+    },
+    {
+      "run_id": "restored-current-half-duplex",
+      "cases": [
+        {
+          "case_id": "streaming_three_short_rounds_commit_each_001",
+          "raw_runner_passed": true,
+          "accepted_as_valid_pass": true,
+          "validity_note": null,
+          "errors": [],
+          "metrics": {
+            "real_call_verified": true,
+            "retry_attempts": null,
+            "functional_outcome_passed": true,
+            "user_done_to_agent_audio_after_user_done_ms": 2402,
+            "user_start_to_rtc_attenuation_ms": null,
+            "timeline_interrupt_speech_to_resolved_ms": null,
+            "timeline_speech_stop_to_commit_ms": 6713.709125062451,
+            "timeline_brain_request_to_first_delta_ms": 4108.708624960855
+          },
+          "formal_rpc_request_count": 3,
+          "retry_events": []
+        }
+      ],
+      "total_start_turn_calls": 3,
+      "speculative_start_turn_calls": 0,
+      "evidence": [
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-half-duplex/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+          "sha256": "8fc125f1447a7bf018be5ff2e391600e18c344374a2f96679aebf0833bc2d9a7"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-half-duplex/barge_in_e2e_ab/channel/livekit_room/turn_timeline.jsonl",
+          "sha256": "4db01b897fa6775b4cddb83fcb2fc2efb511b6c365afcdd4fca0fd134d837b41"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-half-duplex/barge_in_e2e_ab/channel/worker.stdout.log",
+          "sha256": "4285ddf1948264fef4be483a8179816dd3dbed62f395621a23f41058558911b1"
+        }
+      ]
+    },
+    {
+      "run_id": "restored-current-ptt",
+      "cases": [
+        {
+          "case_id": "phase_a_ptt_normal_release_commits_001",
+          "raw_runner_passed": true,
+          "accepted_as_valid_pass": true,
+          "validity_note": null,
+          "errors": [],
+          "metrics": {
+            "real_call_verified": true,
+            "retry_attempts": null,
+            "functional_outcome_passed": true,
+            "user_done_to_agent_audio_after_user_done_ms": 2626,
+            "user_start_to_rtc_attenuation_ms": null,
+            "timeline_interrupt_speech_to_resolved_ms": null,
+            "timeline_speech_stop_to_commit_ms": 1248.7470000050962,
+            "timeline_brain_request_to_first_delta_ms": 624.6754159219563
+          },
+          "formal_rpc_request_count": 1,
+          "retry_events": []
+        }
+      ],
+      "total_start_turn_calls": 1,
+      "speculative_start_turn_calls": 0,
+      "evidence": [
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-ptt/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+          "sha256": "89df24417c3be9b0b3236e46e9b29241981effcdc561ffa749cc73f24c5809fe"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-ptt/barge_in_e2e_ab/channel/livekit_room/turn_timeline.jsonl",
+          "sha256": "dc9076cea9cd487442a2903486f452e8c9807801a76ae83d463c0ab419839959"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-ptt/barge_in_e2e_ab/channel/worker.stdout.log",
+          "sha256": "c0827b915372b84921218f2e8366855b8f7a00abb2549ef4a6987261b8038df4"
+        }
+      ]
+    },
+    {
+      "run_id": "restored-current-full-duplex-setup-fixed",
+      "cases": [
+        {
+          "case_id": "fd_gate_hard_stop_cancels_001",
+          "raw_runner_passed": true,
+          "accepted_as_valid_pass": true,
+          "validity_note": null,
+          "errors": [],
+          "metrics": {
+            "real_call_verified": true,
+            "retry_attempts": null,
+            "functional_outcome_passed": true,
+            "user_done_to_agent_audio_after_user_done_ms": 2166,
+            "user_start_to_rtc_attenuation_ms": 226,
+            "timeline_interrupt_speech_to_resolved_ms": 521.2939588818699,
+            "timeline_speech_stop_to_commit_ms": 98.83516700938344,
+            "timeline_brain_request_to_first_delta_ms": 611.0342920292169
+          },
+          "formal_rpc_request_count": 2,
+          "retry_events": []
+        },
+        {
+          "case_id": "fd_gate_backchannel_resumes_001",
+          "raw_runner_passed": false,
+          "accepted_as_valid_pass": false,
+          "validity_note": null,
+          "errors": [
+            "timeline speech-start-to-resume exceeded 900ms: [6650.3]"
+          ],
+          "metrics": {
+            "real_call_verified": true,
+            "retry_attempts": null,
+            "functional_outcome_passed": true,
+            "user_done_to_agent_audio_after_user_done_ms": 8,
+            "user_start_to_rtc_attenuation_ms": 1998,
+            "timeline_interrupt_speech_to_resolved_ms": 6650.335000129417,
+            "timeline_speech_stop_to_commit_ms": 962.2573750093579,
+            "timeline_brain_request_to_first_delta_ms": 1145.9802079480141
+          },
+          "formal_rpc_request_count": 1,
+          "retry_events": []
+        }
+      ],
+      "total_start_turn_calls": 3,
+      "speculative_start_turn_calls": 0,
+      "evidence": [
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-full-duplex-setup-fixed/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+          "sha256": "de46b965ec21423f9dd4cddffef281d7d5255c06d843a68985d2567ff517d24d"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-full-duplex-setup-fixed/barge_in_e2e_ab/channel/livekit_room/turn_timeline.jsonl",
+          "sha256": "115d4407e4f0ac1e76369c61caddcf13a8a6184bf27b9db21fae92f02b2be780"
+        },
+        {
+          "path": "/tmp/voice-stage-rpc/restored-current-full-duplex-setup-fixed/barge_in_e2e_ab/channel/worker.stdout.log",
+          "sha256": "14b080827bd84a933455f6257ef15ebba20abf121f029ee56cbf7e05488fba1a"
+        }
+      ]
+    }
+  ],
+  "rtc_content_sequence": {
+    "method": "20 ordered distinct 100 ms tone markers, sent in 200 ms frames through existing OutputController and public AgentSession output; real RTC receiver decodes 20 ms frames.",
+    "boundary": "Order and gross segment loss/repetition check, with 60-140 ms accepted duration per marker for fades/codec/frame boundaries. Not byte-exact PCM, speech intelligibility, physical speaker or P95 evidence.",
+    "source_audio_ms": 2000,
+    "results": [
+      {
+        "mode": "baseline",
+        "held_ms": 0.0,
+        "marker_order": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "marker_ms": [
+          120,
+          100,
+          120,
+          120,
+          100,
+          100,
+          100,
+          80,
+          100,
+          100,
+          80,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100
+        ],
+        "content_gate_passed": true,
+        "metrics": {
+          "total_ducks": 0,
+          "total_unducks": 0,
+          "total_cancels": 0,
+          "false_positive_rate": 0.0,
+          "avg_suspend_ms": 0.0,
+          "total_buffer_drains": 0,
+          "total_buffer_frames_drained": 0,
+          "total_buffer_frames_dropped": 0,
+          "total_buffer_frames_dropped_on_unduck": 0,
+          "total_buffer_frames_dropped_on_passthrough": 0,
+          "total_suspended_passthrough_frames": 0
+        }
+      },
+      {
+        "mode": "preserve",
+        "held_ms": 1569.9999999999998,
+        "marker_order": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "marker_ms": [
+          100,
+          120,
+          120,
+          120,
+          100,
+          100,
+          100,
+          100,
+          100,
+          80,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          120
+        ],
+        "content_gate_passed": true,
+        "metrics": {
+          "total_ducks": 1,
+          "total_unducks": 1,
+          "total_cancels": 0,
+          "false_positive_rate": 1.0,
+          "avg_suspend_ms": 702.2597079630941,
+          "total_buffer_drains": 1,
+          "total_buffer_frames_drained": 8,
+          "total_buffer_frames_dropped": 0,
+          "total_buffer_frames_dropped_on_unduck": 0,
+          "total_buffer_frames_dropped_on_passthrough": 0,
+          "total_suspended_passthrough_frames": 0
+        }
+      },
+      {
+        "mode": "discard_control",
+        "held_ms": 1569.9999999999998,
+        "marker_order": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "marker_ms": [
+          120,
+          120,
+          100,
+          120,
+          60,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "content_gate_passed": false,
+        "metrics": {
+          "total_ducks": 1,
+          "total_unducks": 1,
+          "total_cancels": 0,
+          "false_positive_rate": 1.0,
+          "avg_suspend_ms": 701.3441671151668,
+          "total_buffer_drains": 0,
+          "total_buffer_frames_drained": 0,
+          "total_buffer_frames_dropped": 0,
+          "total_buffer_frames_dropped_on_unduck": 8,
+          "total_buffer_frames_dropped_on_passthrough": 0,
+          "total_suspended_passthrough_frames": 0
+        }
+      }
+    ],
+    "evidence": [
+      {
+        "path": "/tmp/voice_rtc_content_sequence.py",
+        "sha256": "847dcadb5b45e801e1eb59faa3d1143b21468e459ef1ed3a1754de56f564ff93"
+      },
+      {
+        "path": "/tmp/voice-restored-rtc-content/results.json",
+        "sha256": "34cbeee643f46da0ed5ddfbcd06c1427a8848c08b799caa09c6d67712bd4ab64"
+      }
+    ]
+  },
+  "sdk_integrity": {
+    "version": "1.7.1",
+    "python_files_checked": 207,
+    "mismatches": []
+  },
+  "runtime_sources": [
+    {
+      "path": "/Users/manson/.codex/worktrees/d228/eidolon_channel/eidolon/livekit/agent/output/controller.py",
+      "sha256": "4038b7db200e7b355b724c14011dd6fe5b139db2c35a3c602387273c7fd89e06"
+    },
+    {
+      "path": "/Users/manson/.codex/worktrees/d228/eidolon_channel/eidolon/livekit/agent/session/duck_timeout.py",
+      "sha256": "62b3456d7345a7bbe5a482a0d2df8fdacb59aa58ded92468ea4b23c22500a545"
+    },
+    {
+      "path": "/Users/manson/.codex/worktrees/d228/eidolon_channel/eidolon/livekit/agent/turn_policy/decider.py",
+      "sha256": "e2c2515abacea754e624d06917a06934fd0725ae2f63d9a2d62f0aa62d6c966e"
+    }
+  ],
+  "diagnostics": [
+    {
+      "path": "/tmp/voice_restored_regression.py",
+      "sha256": "6300d92236b7dcf1a1a0baa27d60f0b9a17a3df1458866cd601682f5b0ca02de"
+    }
+  ],
+  "remaining_gaps": [
+    "Default backchannel resume still exceeds 900 ms: 6650.3 ms.",
+    "Natural TTS attenuation observations are not causal queue A/B or 300 ms P95 proof.",
+    "No new date/cost gate run; their earlier six 2500 ms failures remain.",
+    "Six existing semantic failures remain; no new classifier capability was introduced.",
+    "Physical mobile speaker validation remains deferred by user."
+  ]
+}

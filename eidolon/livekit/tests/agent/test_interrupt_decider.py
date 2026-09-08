@@ -238,6 +238,16 @@ def test_final_low_eot_score_does_not_override_active_vad() -> None:
     assert "semantic_score_wait" in decision.reason
 
 
+@pytest.mark.parametrize("score", [0.0, 0.003, 0.1, 0.424])
+def test_sentence_final_does_not_terminalize_incomplete_or_uncertain_input(score) -> None:
+    decision = InterruptDecider().on_stt_interim(
+        "关于交付时间", score=score, is_final=True, vad_active=False,
+    )
+    assert decision.action is Action.HOLD
+
+
+
+
 def test_first_signal_holds_single_char_backchannel() -> None:
     """Single-char backchannel fragments wait for more speech evidence."""
     d = InterruptDecider(min_interim_chars=2)
@@ -471,13 +481,12 @@ def test_deadline_vad_active_with_single_char_transcript_holds() -> None:
     assert "wait_for_more_transcript" in decision.reason
 
 
-def test_deadline_vad_idle_rollback_drop_buffered() -> None:
-    """VAD idle at deadline → rollback WITH drop_buffered=True (buffer
-    is stale after ≥500 ms suspend)."""
+def test_deadline_vad_idle_rollback_preserves_buffered_content() -> None:
+    """VAD idle without an interruption decision resumes the original reply."""
     d = InterruptDecider()
     decision = d.on_decision_deadline(vad_still_active=False)
     assert decision.action is Action.ROLLBACK
-    assert decision.rollback_drop_buffered is True
+    assert decision.rollback_drop_buffered is False
 
 
 # ---------------------------------------------------------------------------

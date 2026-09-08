@@ -1,0 +1,912 @@
+{
+  "date": "2026-09-08",
+  "host": {
+    "hostname": "orangepi5-max",
+    "rtc_address": "192.168.100.19:7880",
+    "source_revision": "not yet resolved"
+  },
+  "client": "original mobile pad, speaker, full duplex",
+  "user_feedback": [
+    {
+      "case": "park activities",
+      "result": "normal reply"
+    },
+    {
+      "case": "switch to indoor activities because rain",
+      "result": "normal interruption"
+    },
+    {
+      "case": "number of people, pause, change to two people",
+      "result": "failed to interrupt, prior reply continued"
+    }
+  ],
+  "raw_evidence": [
+    {
+      "path": "/tmp/opi5max-mobile-20260908-timeline.jsonl",
+      "sha256": "5a7c7d571a259c3db41fca8062d2e99c681eeb5c5325f16f8ff33ebd4e113653"
+    },
+    {
+      "path": "/tmp/opi5max-mobile-20260908-channel.log",
+      "sha256": "d7643f4e875b5b1d0e759910a83f89113e18568e738439556d9bea6d48a3ec94"
+    }
+  ],
+  "findings": [
+    "ASR captured both prefix and continuation.",
+    "Low EOT plus sentence FINAL and VAD idle resolved interruption as rejected_resume.",
+    "Continuation duck skipped inside existing 800 ms cooldown (explicit log).",
+    "Continuation semantic gate stopped at attention_blocked.",
+    "One later attempt merged both segments but remained uncommitted until session close."
+  ],
+  "limits": [
+    "User feedback is qualitative, no physical speaker timing or latency percentile.",
+    "First park attempt has llm_error; later successful attempt matches user report.",
+    "These are OPI5 Max deployed observations, not validation of current worktree.",
+    "Earlier scripted pause tests used EOT 0.4 and 0.95; they did not cover this observed low-EOT recovery path."
+  ],
+  "turns": [
+    {
+      "turn_id": "69671667b2704e62",
+      "text": "详细介绍一下周末去公园可以安排哪些活动。",
+      "state": "committed",
+      "reject_reason": "",
+      "timestamps": {
+        "speech_started_at": 8573.559427015,
+        "stt_first_audio_sent_at": 8573.599699164,
+        "stt_provider_first_partial_at": 8574.259034203,
+        "transcript_interim_first_at": 8574.260867301,
+        "speech_stopped_at": 8577.554972368,
+        "stt_provider_final_at": 8577.64433391,
+        "transcript_final_at": 8577.64732549,
+        "framework_completed_turn_at": 8577.761151376,
+        "turn_committed_at": 8577.761388206,
+        "brain_request_started_at": 8577.770466487,
+        "llm_started_at": 8577.785162768,
+        "llm_error_at": 1788876497.9179914,
+        "session_error_at": 8577.822427295
+      },
+      "eot_score": 0.0008901652205931075,
+      "state_transitions": [
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "new_speech_started",
+          "side_effect": "none",
+          "at": 8573.559341558,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8577.555447486,
+          "transcript_preview": "详细介绍一下周末去公园可以安排哪些活"
+        },
+        {
+          "phase": "user_turn_committed",
+          "event": "framework_completed_turn",
+          "reason": "framework_completed_turn",
+          "side_effect": "irreversible",
+          "at": 8577.761618619,
+          "transcript_preview": "详细介绍一下周末去公园可以安排哪些活动。"
+        }
+      ],
+      "interruption_verdict": null,
+      "semantic_interrupt_gate_last_event": {
+        "stage": "initial",
+        "action": "inactive",
+        "reason": "no_interrupt_window",
+        "transcript_preview": "详细介绍一下周末去公园可以安排哪些活动。",
+        "text_length": 20,
+        "is_final": true,
+        "speaker_id": null,
+        "allow_interruptions": true,
+        "native_adaptive_owner": false,
+        "agent_output_active": false,
+        "interrupt_window_active": false,
+        "decision_suppressed": false
+      }
+    },
+    {
+      "turn_id": "e3ce49529c9546ea",
+      "text": "详细介绍一下周末去公园可以安排哪些活动。",
+      "state": "committed",
+      "reject_reason": "",
+      "timestamps": {
+        "speech_started_at": 8652.807317973,
+        "stt_first_audio_sent_at": 8652.821973421,
+        "stt_provider_first_partial_at": 8652.976638738,
+        "transcript_interim_first_at": 8652.97818659,
+        "speech_stopped_at": 8656.849772835,
+        "stt_provider_final_at": 8656.947016259,
+        "transcript_final_at": 8656.949981006,
+        "framework_completed_turn_at": 8657.057656608,
+        "turn_committed_at": 8657.058188017,
+        "brain_request_started_at": 8657.07007559,
+        "llm_started_at": 8657.075274471,
+        "brain_request_sent_at": 8657.083846426,
+        "brain_state_thinking_at": 8657.127623773,
+        "brain_state_speaking_at": 8658.175586015,
+        "brain_first_model_activity_at": 8658.99750442,
+        "brain_first_delta_at": 8658.997852082,
+        "llm_first_delta_at": 8658.997852082,
+        "brain_first_answer_delta_at": 8658.99798683,
+        "tts_stream_started_at": 8659.000533625,
+        "tts_request_started_at": 8659.000804579,
+        "tts_connection_acquired_at": 8659.043739314,
+        "tts_first_text_sent_at": 8659.301652799,
+        "tts_provider_first_audio_at": 8659.59643736,
+        "tts_first_audio_at": 8659.600539591,
+        "brain_done_at": 8663.685879313
+      },
+      "eot_score": 0.0008901652205931075,
+      "state_transitions": [
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "new_speech_started",
+          "side_effect": "none",
+          "at": 8652.807198391,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8656.850402242,
+          "transcript_preview": "详细介绍一下周末去公园可以安排哪些活"
+        },
+        {
+          "phase": "user_turn_committed",
+          "event": "framework_completed_turn",
+          "reason": "framework_completed_turn",
+          "side_effect": "irreversible",
+          "at": 8657.058807216,
+          "transcript_preview": "详细介绍一下周末去公园可以安排哪些活动。"
+        }
+      ],
+      "interruption_verdict": null,
+      "semantic_interrupt_gate_last_event": {
+        "stage": "initial",
+        "action": "inactive",
+        "reason": "no_interrupt_window",
+        "transcript_preview": "详细介绍一下周末去公园可以安排哪些活动。",
+        "text_length": 20,
+        "is_final": true,
+        "speaker_id": null,
+        "allow_interruptions": true,
+        "native_adaptive_owner": false,
+        "agent_output_active": false,
+        "interrupt_window_active": false,
+        "decision_suppressed": false
+      }
+    },
+    {
+      "turn_id": "6ae324a3749044b6",
+      "text": "我想换成室内活动。因为可能下雨。",
+      "state": "committed",
+      "reject_reason": "",
+      "timestamps": {
+        "speech_started_at": 8666.047252961,
+        "interrupt_started_at": 8666.048304404,
+        "stt_first_audio_sent_at": 8666.120284038,
+        "transcript_interim_first_at": 8666.240953197,
+        "transcript_evidence_sufficient_first_at": 8666.53757173,
+        "transcript_actionable_first_at": 8666.537574647,
+        "playback_stop_sent_at": 8666.538029932,
+        "interrupt_resolved_at": 8666.540063401,
+        "interrupt_cancel_resolved_at": 8666.540063401,
+        "transcript_final_at": 8668.155692091,
+        "speech_stopped_at": 8669.334474215,
+        "framework_completed_turn_at": 8669.370843339,
+        "turn_committed_at": 8669.462718426,
+        "brain_request_started_at": 8669.492946017,
+        "brain_request_sent_at": 8669.495793516,
+        "llm_started_at": 8669.49677846,
+        "brain_state_thinking_at": 8669.512042607,
+        "brain_state_speaking_at": 8669.545668939,
+        "brain_first_model_activity_at": 8670.456956178,
+        "brain_first_delta_at": 8670.457195924,
+        "llm_first_delta_at": 8670.457195924,
+        "brain_first_answer_delta_at": 8670.457235007,
+        "tts_stream_started_at": 8670.458302491,
+        "tts_request_started_at": 8670.458392906,
+        "tts_connection_acquired_at": 8670.496618461,
+        "tts_first_text_sent_at": 8670.603659114,
+        "tts_provider_first_audio_at": 8670.973201393,
+        "tts_first_audio_at": 8670.997072496,
+        "brain_done_at": 8671.994707821,
+        "agent_audio_playback_done_at": 8730.202615401
+      },
+      "eot_score": 0.0004699737981290637,
+      "state_transitions": [
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "new_speech_started",
+          "side_effect": "none",
+          "at": 8666.047161963,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "provisional_duck",
+          "event": "duck_started",
+          "reason": "vad_started",
+          "side_effect": "reversible",
+          "at": 8666.048345528,
+          "transcript_preview": "",
+          "details": {
+            "timeout_sec": 0.45,
+            "cooldown_sec": 0.8
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "weak_signal_short_transcript len=1",
+          "side_effect": "none",
+          "at": 8666.242612755,
+          "transcript_preview": "对",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_more_transcript len=1",
+          "side_effect": "none",
+          "at": 8666.500969859,
+          "transcript_preview": "对",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "accepted_interruption",
+          "event": "turn_policy_cancel_accepted",
+          "reason": "eot_score_high score=0.84>=0.70 evidence=enough_cjk_interim",
+          "side_effect": "irreversible",
+          "at": 8666.537662729,
+          "transcript_preview": "我想换",
+          "details": {
+            "source": "turn_policy",
+            "action": "cancel",
+            "vad_active": true,
+            "eot_score": 0.840145378785988
+          }
+        },
+        {
+          "phase": "accepted_interruption",
+          "event": "playback_stop_committed",
+          "reason": "interrupt_cancel",
+          "side_effect": "irreversible",
+          "at": 8666.537946224,
+          "transcript_preview": "",
+          "details": {
+            "commit_post_speech_candidate": false,
+            "collect_confirmed_cancel_turn": true
+          }
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8669.335554823,
+          "transcript_preview": "我想换成室内活动。因为可能下"
+        },
+        {
+          "phase": "user_turn_committed",
+          "event": "framework_completed_turn",
+          "reason": "framework_completed_turn",
+          "side_effect": "irreversible",
+          "at": 8669.463182461,
+          "transcript_preview": "我想换成室内活动。因为可能下雨。"
+        }
+      ],
+      "interruption_verdict": {
+        "action": "confirmed_cancel",
+        "reason": "confirmed_cancel_speech_completed",
+        "candidate_id": "6ae324a3749044b6",
+        "generation_id": 2,
+        "continue_to_llm": true,
+        "turn_policy_action": "cancel",
+        "intent": "normal_interrupt",
+        "transcript_preview": "我想换成室内活动。因为可能下"
+      },
+      "semantic_interrupt_gate_last_event": {
+        "stage": "initial",
+        "action": "inactive",
+        "reason": "no_interrupt_window",
+        "transcript_preview": "我想换成室内活动因为可能下雨。",
+        "text_length": 15,
+        "is_final": true,
+        "speaker_id": null,
+        "allow_interruptions": true,
+        "native_adaptive_owner": false,
+        "agent_output_active": false,
+        "interrupt_window_active": false,
+        "decision_suppressed": false,
+        "event_transcript_preview": "因为可能下雨。"
+      }
+    },
+    {
+      "turn_id": "068f47173e3340ff",
+      "text": "人数方面，嗯。",
+      "state": "rejected",
+      "reject_reason": "superseded_by_new_speech",
+      "timestamps": {
+        "speech_started_at": 8681.144628324,
+        "interrupt_started_at": 8681.146048428,
+        "stt_first_audio_sent_at": 8681.218335766,
+        "transcript_interim_first_at": 8681.349179273,
+        "transcript_evidence_sufficient_first_at": 8682.349932469,
+        "speech_stopped_at": 8683.199209091,
+        "transcript_final_at": 8683.855065765,
+        "interrupt_resolved_at": 8683.882180736,
+        "interrupt_rollback_resolved_at": 8683.882180736
+      },
+      "eot_score": 0.0005172063938620713,
+      "state_transitions": [
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "new_speech_started",
+          "side_effect": "none",
+          "at": 8681.144523617,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "provisional_duck",
+          "event": "duck_started",
+          "reason": "vad_started",
+          "side_effect": "reversible",
+          "at": 8681.146158093,
+          "transcript_preview": "",
+          "details": {
+            "timeout_sec": 0.45,
+            "cooldown_sec": 0.8
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "weak_signal_short_transcript len=1",
+          "side_effect": "none",
+          "at": 8681.350914372,
+          "transcript_preview": "人",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_more_transcript len=1",
+          "side_effect": "none",
+          "at": 8681.601607174,
+          "transcript_preview": "人",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "transcript_evidence_hold:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8681.61256901,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "transcript_evidence_hold:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8681.932563111,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_better_transcript:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8682.053828136,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "semantic_score_wait score=0.00 evidence=enough_cjk_interim",
+          "side_effect": "none",
+          "at": 8682.350019092,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0034256613647271213
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_semantic_score:enough_cjk_interim score=0.00",
+          "side_effect": "none",
+          "at": 8682.504874574,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "semantic_score_wait score=0.00 evidence=enough_cjk_interim",
+          "side_effect": "none",
+          "at": 8682.673634181,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0034256613647271213
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_semantic_score:enough_cjk_interim score=0.00",
+          "side_effect": "none",
+          "at": 8682.956579002,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "semantic_score_wait score=0.00 evidence=enough_cjk_interim",
+          "side_effect": "none",
+          "at": 8683.187262311,
+          "transcript_preview": "人数方面，嗯",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0005172063938620713
+          }
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8683.199469545,
+          "transcript_preview": "人数方面，嗯"
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_final_commit",
+          "side_effect": "none",
+          "at": 8683.410254484,
+          "transcript_preview": "人数方面，嗯",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": false
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "semantic_score_wait score=0.00 evidence=enough_cjk_interim",
+          "side_effect": "none",
+          "at": 8683.502188488,
+          "transcript_preview": "人数方面，嗯",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": false,
+            "eot_score": 0.0005172063938620713
+          }
+        },
+        {
+          "phase": "rejected_interruption",
+          "event": "turn_policy_rollback",
+          "reason": "final_terminal_eot_low score=0.00<=0.20",
+          "side_effect": "reversible",
+          "at": 8683.881845324,
+          "transcript_preview": "人数方面，嗯。",
+          "details": {
+            "source": "turn_policy",
+            "action": "rollback",
+            "vad_active": false,
+            "eot_score": 0.0005172063938620713
+          }
+        },
+        {
+          "phase": "rejected_interruption",
+          "event": "duck_rollback_committed",
+          "reason": "final_terminal_eot_low score=0.00<=0.20",
+          "side_effect": "reversible",
+          "at": 8683.882146903,
+          "transcript_preview": "人数方面，嗯。",
+          "details": {
+            "drop_buffered": false
+          }
+        },
+        {
+          "phase": "user_turn_rejected",
+          "event": "user_turn_superseded_by_new_speech",
+          "reason": "superseded_by_new_speech",
+          "side_effect": "none",
+          "at": 8684.28534643,
+          "transcript_preview": ""
+        }
+      ],
+      "interruption_verdict": {
+        "action": "rejected_resume",
+        "reason": "final_terminal_eot_low score=0.00<=0.20",
+        "candidate_id": "068f47173e3340ff",
+        "generation_id": 3,
+        "continue_to_llm": false,
+        "turn_policy_action": "rollback",
+        "intent": "uncertain",
+        "transcript_preview": "人数方面，嗯。"
+      },
+      "semantic_interrupt_gate_last_event": {
+        "stage": "attention",
+        "action": "run",
+        "reason": "eligible",
+        "transcript_preview": "人数方面，嗯。",
+        "text_length": 7,
+        "is_final": true,
+        "speaker_id": null,
+        "allow_interruptions": true,
+        "native_adaptive_owner": false,
+        "agent_output_active": true,
+        "interrupt_window_active": true,
+        "decision_suppressed": false,
+        "attention_allowed": true
+      }
+    },
+    {
+      "turn_id": "9ddecd21314845dc",
+      "text": "改成两个人。",
+      "state": "rejected",
+      "reject_reason": "superseded_by_new_speech",
+      "timestamps": {
+        "speech_started_at": 8684.288670505,
+        "stt_first_audio_sent_at": 8684.321791678,
+        "transcript_interim_first_at": 8684.542860046,
+        "speech_stopped_at": 8685.832334435,
+        "transcript_final_at": 8685.886543668
+      },
+      "eot_score": 0.10097067467530552,
+      "state_transitions": [
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "new_speech_started",
+          "side_effect": "none",
+          "at": 8684.288633172,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8685.832825011,
+          "transcript_preview": "改成两个人"
+        },
+        {
+          "phase": "user_turn_rejected",
+          "event": "user_turn_superseded_by_new_speech",
+          "reason": "superseded_by_new_speech",
+          "side_effect": "none",
+          "at": 8698.444091211,
+          "transcript_preview": ""
+        }
+      ],
+      "interruption_verdict": null,
+      "semantic_interrupt_gate_last_event": {
+        "stage": "attention",
+        "action": "forward_and_stop",
+        "reason": "attention_blocked",
+        "transcript_preview": "改成两个人。",
+        "text_length": 6,
+        "is_final": true,
+        "speaker_id": null,
+        "allow_interruptions": true,
+        "native_adaptive_owner": false,
+        "agent_output_active": true,
+        "interrupt_window_active": false,
+        "decision_suppressed": false,
+        "attention_allowed": false
+      }
+    },
+    {
+      "turn_id": "9461d090e0234cc5",
+      "text": "人数方面。改成两个人。",
+      "state": "rejected",
+      "reject_reason": "session_closed",
+      "timestamps": {
+        "speech_started_at": 8698.446504425,
+        "interrupt_started_at": 8698.447029126,
+        "stt_first_audio_sent_at": 8698.518753264,
+        "transcript_interim_first_at": 8698.590236781,
+        "transcript_evidence_sufficient_first_at": 8699.760502948,
+        "speech_stopped_at": 8702.37272048,
+        "transcript_final_at": 8700.322196736,
+        "interrupt_resolved_at": 8700.352862987,
+        "interrupt_rollback_resolved_at": 8700.352862987,
+        "idle_timeout_triggered_at": 8762.445069496
+      },
+      "eot_score": 0.424238469957486,
+      "state_transitions": [
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "new_speech_started",
+          "side_effect": "none",
+          "at": 8698.446469134,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "provisional_duck",
+          "event": "duck_started",
+          "reason": "vad_started",
+          "side_effect": "reversible",
+          "at": 8698.447052459,
+          "transcript_preview": "",
+          "details": {
+            "timeout_sec": 0.45,
+            "cooldown_sec": 0.8
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "weak_signal_short_transcript len=1",
+          "side_effect": "none",
+          "at": 8698.5923245,
+          "transcript_preview": "对",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "transcript_evidence_hold:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8698.886147742,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_better_transcript:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8698.901459722,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "transcript_evidence_hold:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8699.208549807,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_better_transcript:insufficient_transcript_evidence cjk=2 latin=0",
+          "side_effect": "none",
+          "at": 8699.355153579,
+          "transcript_preview": "人数",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "semantic_score_wait score=0.00 evidence=enough_cjk_interim",
+          "side_effect": "none",
+          "at": 8699.760590739,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0034256613647271213
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_semantic_score:enough_cjk_interim score=0.00",
+          "side_effect": "none",
+          "at": 8699.806457846,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "semantic_score_wait score=0.00 evidence=enough_cjk_interim",
+          "side_effect": "none",
+          "at": 8700.083377507,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "turn_policy",
+            "action": "hold",
+            "vad_active": true,
+            "eot_score": 0.0034256613647271213
+          }
+        },
+        {
+          "phase": "evidence_arbitration",
+          "event": "turn_policy_hold",
+          "reason": "deadline_wait_for_semantic_score:enough_cjk_interim score=0.00",
+          "side_effect": "none",
+          "at": 8700.257930111,
+          "transcript_preview": "人数方面",
+          "details": {
+            "source": "timeout",
+            "action": "hold",
+            "vad_active": true
+          }
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8700.279877992,
+          "transcript_preview": "人数方面"
+        },
+        {
+          "phase": "rejected_interruption",
+          "event": "turn_policy_rollback",
+          "reason": "final_terminal_eot_low score=0.00<=0.20",
+          "side_effect": "reversible",
+          "at": 8700.352575116,
+          "transcript_preview": "人数方面。",
+          "details": {
+            "source": "turn_policy",
+            "action": "rollback",
+            "vad_active": false,
+            "eot_score": 0.0034256613647271213
+          }
+        },
+        {
+          "phase": "rejected_interruption",
+          "event": "duck_rollback_committed",
+          "reason": "final_terminal_eot_low score=0.00<=0.20",
+          "side_effect": "reversible",
+          "at": 8700.352833529,
+          "transcript_preview": "人数方面。",
+          "details": {
+            "drop_buffered": false
+          }
+        },
+        {
+          "phase": "user_speech_open",
+          "event": "speech_started",
+          "reason": "merge_continuation",
+          "side_effect": "none",
+          "at": 8700.800050732,
+          "transcript_preview": ""
+        },
+        {
+          "phase": "user_turn_pending",
+          "event": "speech_stopped_waiting_framework",
+          "reason": "automatic_turn_lifecycle",
+          "side_effect": "none",
+          "at": 8702.372967226,
+          "transcript_preview": "人数方面。改成两个人"
+        },
+        {
+          "phase": "user_turn_rejected",
+          "event": "session_closed_with_open_user_turn",
+          "reason": "session_closed",
+          "side_effect": "irreversible",
+          "at": 8765.798396596,
+          "transcript_preview": ""
+        }
+      ],
+      "interruption_verdict": {
+        "action": "rejected_resume",
+        "reason": "final_terminal_eot_low score=0.00<=0.20",
+        "candidate_id": "9461d090e0234cc5",
+        "generation_id": 5,
+        "continue_to_llm": false,
+        "turn_policy_action": "rollback",
+        "intent": "uncertain",
+        "transcript_preview": "人数方面。"
+      },
+      "semantic_interrupt_gate_last_event": {
+        "stage": "attention",
+        "action": "forward_and_stop",
+        "reason": "attention_blocked",
+        "transcript_preview": "人数方面改成两个人。",
+        "text_length": 10,
+        "is_final": true,
+        "speaker_id": null,
+        "allow_interruptions": true,
+        "native_adaptive_owner": false,
+        "agent_output_active": true,
+        "interrupt_window_active": false,
+        "decision_suppressed": false,
+        "event_transcript_preview": "改成两个人。",
+        "attention_allowed": false
+      }
+    }
+  ]
+}

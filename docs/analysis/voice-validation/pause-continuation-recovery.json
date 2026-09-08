@@ -1,0 +1,462 @@
+{
+  "date": "2026-09-08",
+  "scope": "Pause/continuation after provisional output resume in full duplex; not global voice optimization acceptance",
+  "baseline_commit": "f4597dc",
+  "uncommitted_runtime_sha256": {
+    "benchmark/barge_in_latency.py": "d77678f054c639ca0f4b55ee98225bc031232d14633afa4152b3f8822e21c620",
+    "benchmark/cases/full_duplex/barge_in_ab_matrix_enforced.yaml": "9910b6a93cd01949659b9761447d3e50e81d1546d5f301bfd3b7dda24ba4d7bb",
+    "benchmark/cases/full_duplex/v1_interrupt_tiers_enforced.yaml": "693b468c9e4a4f7ef1ac3ef93737931f8273d3a2bf3af4eb3c28e86be072d3d1",
+    "benchmark/livekit_room_runner.py": "cfbfccaa270e04c536c06abfa520ab96fe4010861d4e5475d9a42322562f1c03",
+    "benchmark/timeline_expectations.py": "d4b6ad08676840ab7d05373f37bb8da472d64c7857ddc17540fe5307d00db715",
+    "eidolon/livekit/agent/full_duplex/interruption_effects.py": "7b602ca548ad594ce9bcc69f712dcaa5ef3042d929180587cb3d6cdf4f10e2b3",
+    "eidolon/livekit/agent/full_duplex/output_flow.py": "8b65373a8dce82c80dfb1479c58998207724270d42a2256fcc40f0c7febd24b3",
+    "eidolon/livekit/agent/full_duplex/pipeline.py": "d2307d8dcee0d117b772c1eb70a7ca83dcb21b51c6497983f2fad5762e03cc67",
+    "eidolon/livekit/agent/full_duplex/speech_lifecycle.py": "13de94192380e45c0cadff2a6daae2e49285d414c4faf4ee00bd88b9e403b073",
+    "eidolon/livekit/agent/full_duplex/state_machine.py": "632b74dd8d2c366fbe71e49bd5f0dd237c80b1e2e0c3b733d1136b51d7c307a2",
+    "eidolon/livekit/agent/output/controller.py": "4038b7db200e7b355b724c14011dd6fe5b139db2c35a3c602387273c7fd89e06",
+    "eidolon/livekit/agent/session/attention_effects.py": "3f117581ffa56e49b77f52c3eea3d3622ea268555688f4eaa26b5f6a7c3aaa56",
+    "eidolon/livekit/agent/session/decision_effects.py": "c997bb56d1b109ca88a1019d9416dc4e91243b8bec77c024faafffee60562b92",
+    "eidolon/livekit/agent/session/duck_timeout.py": "35cbc618a66c786794b718ba0ecfc934913fcdaf0a1b32ae4d71865e9c22cf80",
+    "eidolon/livekit/agent/session/interruption_orchestrator.py": "5a7e23c509a9c540bc1eef491c81bed2a3a003680a80928e0bfdd96ce28c4498",
+    "eidolon/livekit/agent/session/semantic_interrupt.py": "b8ca3affc6f268f69986dff424646b4aa2d1b5ab3cc11a4cf7edb07707546aee",
+    "eidolon/livekit/agent/session/user_turn_coordinator.py": "273cc0f5af5960aaf89048d4a03f72ba70e2e6b4a411a762e981f861cb67b58d",
+    "eidolon/livekit/agent/turn_policy/decider.py": "9fb03aab78cd834d48f76934b7a9aedfb1720adaed52118e70f9077d1cddcaa9",
+    "eidolon/livekit/agent/turn_policy/runtime.py": "86551c57d241a7c574a63e36347451efff63a8bc64f00b09675ce929f15549c9",
+    "scripts/bench_barge_in_e2e_ab.py": "0ecd98fabd9abd47c28b058fc8a09b3d3a472f8f462e7668ecd1d9e9a10da50a",
+    "scripts/generate_voice_benchmark_audio.py": "4370f97f5ba2a61de575072a6703807b01f71d1e9c49d09e748e1b32a4e510c4"
+  },
+  "source_manifest_matches_final_tested_runtime": true,
+  "architecture": [
+    "Low EOT plus sentence FINAL is no longer a terminal false-interruption verdict.",
+    "RESUME releases playback provisionally while the same candidate remains open for evidence; terminal ROLLBACK and CANCEL retain their ownership roles.",
+    "Reuse existing speech merge grace for provisional playback hold, evidence deadline for bounded candidate continuation, candidate/generation identity, transcript assembler and timeout slot.",
+    "Output cooldown controls repeated output actions, not whether evidence is received for an admitted active candidate.",
+    "Pending semantic continuation can reuse the open candidate beyond the acoustic merge gap, within its existing evidence deadline; resolved/rejected candidates cannot reopen.",
+    "Stable evidence timers survive provisional resume; weak followup HOLD schedules reevaluation through the existing timer.",
+    "No phrase-specific rule, threshold reduction, new playback queue or SDK auto-interruption ownership change.",
+    "Existing model-intent requests retain their pending-result wait; no new classifier or enabling of optional LLM provider."
+  ],
+  "automated_coverage": [
+    "18 combinations: three Chinese/English topics, FINAL before/after VAD end, prefix/tail scores 0.003/0.424, 0.003/0.95 and 0.4/0.95.",
+    "Late FINAL after output resumes, resumed speech inside/outside cooldown, long active speech exceeding playback budget, expiry with no continuation.",
+    "Complete canonical text, exactly one continuation reply, no prefix-only commit, no premature resume during protected short pause, no stale candidate revival.",
+    "Existing explicit preempt, unavailable/delayed intent model, PCM recovery, human speaking profiles and PTT contracts."
+  ],
+  "tests": {
+    "unit_and_benchmark": {
+      "path": "/tmp/voice-continuation-unit-final.xml",
+      "sha256": "096ea31e98eea870fd6fb98479b50d6ac9dcc9cefcd90c88b41c537d0119df07",
+      "tests": 400,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 400,
+      "expected_failures": []
+    },
+    "framework_scenarios": {
+      "path": "/tmp/voice-continuation-complete-framework.xml",
+      "sha256": "d76d6ce8e147d795855bc871b3c451d34828e1fbc0a03f31353f665a72dedfaa",
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 46,
+      "expected_failures": []
+    },
+    "three_mode_human_profiles": {
+      "path": "/tmp/voice-continuation-complete-modes.xml",
+      "sha256": "bc512eb7913cc70b31aff9f89e8450f165010e68a354c323f28317aaf041965e",
+      "tests": 59,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "passed": 56,
+      "expected_failures": [
+        {
+          "test": "test_overlap_intent_contract[\\u597d\\u7684-False-]",
+          "reason": "EOT completeness is still used as interruption intent; see execution report FD-INTENT"
+        },
+        {
+          "test": "test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False-]",
+          "reason": "Negated commands need intent evidence independent of EOT; see FD-INTENT"
+        },
+        {
+          "test": "test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True-\\u76ee\\u524d\\u5148\\u6309\\u540e\\u5929\\u6765\\u5b89\\u6392\\uff0c\\u6211\\u63a5\\u4e0b\\u6765\\u4f1a\\u9010\\u9879\\u8bf4\\u660e\\u65f6\\u95f4\\u3001\\u5730\\u70b9\\u548c\\u9700\\u8981\\u51c6\\u5907\\u7684\\u6750\\u6599\\u3002]",
+          "reason": "Low EOT corrective interruption is not recognized; see FD-INTENT"
+        }
+      ]
+    }
+  },
+  "real_rtc": {
+    "runner": "existing managed bench_barge_in_e2e_ab, isolated Mac worker, real STT/EOT/Agent RPC/TTS/RTC receiver",
+    "profile": "full_duplex, default intent_provider=none, avatar/voiceprint disabled for test",
+    "inserted_silence_ms": [
+      500,
+      900
+    ],
+    "inserted_silence_is_not_measured_vad_gap": true,
+    "cases": [
+      {
+        "case_id": "fd_continuation_people_500",
+        "functional_passed": true,
+        "errors": [],
+        "distinct_rpc_count": 2,
+        "requests": [
+          {
+            "turn_id": "19e7fb7df4b34381",
+            "canonical_text": "帮我详细介绍一下这个方案。",
+            "state": "committed",
+            "timestamps": {
+              "speech_started_at": 1628449.078308708,
+              "stt_first_audio_sent_at": 1628449.123302333,
+              "stt_provider_first_partial_at": 1628449.381265291,
+              "transcript_interim_first_at": 1628449.38194375,
+              "speech_stopped_at": 1628451.326205,
+              "stt_provider_final_at": 1628451.376221791,
+              "transcript_final_at": 1628451.377273291,
+              "framework_completed_turn_at": 1628451.386969125,
+              "turn_committed_at": 1628451.387071083,
+              "brain_request_started_at": 1628451.389266416,
+              "llm_started_at": 1628451.39130525,
+              "brain_request_sent_at": 1628451.394760458,
+              "brain_state_thinking_at": 1628451.404741375,
+              "brain_state_speaking_at": 1628451.431091958,
+              "brain_first_model_activity_at": 1628452.258022166,
+              "brain_first_delta_at": 1628452.258202916,
+              "llm_first_delta_at": 1628452.258202916,
+              "brain_first_answer_delta_at": 1628452.258264916,
+              "tts_stream_started_at": 1628452.259058916,
+              "tts_request_started_at": 1628452.259102166,
+              "tts_connection_acquired_at": 1628452.300475916,
+              "tts_first_text_sent_at": 1628452.407993208,
+              "tts_provider_first_audio_at": 1628453.043051541,
+              "tts_first_audio_at": 1628453.049678666,
+              "brain_done_at": 1628453.287646208
+            },
+            "durations_ms": {
+              "speech_stop_to_commit_ms": 60.866,
+              "commit_to_rpc_sent_ms": 7.689,
+              "rpc_sent_to_answer_delta_ms": 863.504,
+              "answer_delta_to_tts_first_audio_ms": 791.414,
+              "commit_to_tts_first_audio_ms": 1662.608,
+              "speech_stop_to_tts_first_audio_ms": 1723.474
+            }
+          },
+          {
+            "turn_id": "f5077b7313d94976",
+            "canonical_text": "人数方面。改成两个人。",
+            "state": "committed",
+            "timestamps": {
+              "speech_started_at": 1628454.279260583,
+              "interrupt_started_at": 1628454.2793895,
+              "stt_first_audio_sent_at": 1628454.322953125,
+              "transcript_interim_first_at": 1628454.5095825,
+              "speech_stopped_at": 1628457.775613916,
+              "transcript_final_at": 1628455.454217791,
+              "transcript_evidence_sufficient_first_at": 1628455.460570166,
+              "transcript_actionable_first_at": 1628458.576924083,
+              "playback_stop_sent_at": 1628458.577173041,
+              "interrupt_resolved_at": 1628458.578236541,
+              "interrupt_cancel_resolved_at": 1628458.578236541,
+              "framework_completed_turn_at": 1628460.276372375,
+              "turn_committed_at": 1628460.276509166,
+              "brain_request_started_at": 1628460.278749083,
+              "brain_request_sent_at": 1628460.279163708,
+              "llm_started_at": 1628460.279671791,
+              "brain_state_thinking_at": 1628460.285388791,
+              "brain_state_speaking_at": 1628460.316349791,
+              "brain_first_model_activity_at": 1628460.970978875,
+              "brain_first_delta_at": 1628460.971056958,
+              "llm_first_delta_at": 1628460.971056958,
+              "brain_first_answer_delta_at": 1628460.971075166,
+              "tts_stream_started_at": 1628460.97154125,
+              "tts_request_started_at": 1628460.971569791,
+              "tts_connection_acquired_at": 1628461.0107325,
+              "tts_first_text_sent_at": 1628461.192543,
+              "tts_provider_first_audio_at": 1628461.495625,
+              "tts_first_audio_at": 1628461.521493916,
+              "brain_done_at": 1628462.122620541,
+              "agent_audio_playback_done_at": 1628468.770370333
+            },
+            "durations_ms": {
+              "speech_stop_to_cancel_ms": 802.623,
+              "speech_stop_to_commit_ms": 2500.895,
+              "commit_to_rpc_sent_ms": 2.655,
+              "rpc_sent_to_answer_delta_ms": 691.911,
+              "answer_delta_to_tts_first_audio_ms": 550.419,
+              "commit_to_tts_first_audio_ms": 1244.985,
+              "speech_stop_to_tts_first_audio_ms": 3745.88
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "fd_continuation_people_900",
+        "functional_passed": true,
+        "errors": [],
+        "distinct_rpc_count": 2,
+        "requests": [
+          {
+            "turn_id": "dfd50c6fdc434b70",
+            "canonical_text": "帮我详细介绍一下这个方案。",
+            "state": "committed",
+            "timestamps": {
+              "speech_started_at": 1628479.30063875,
+              "stt_first_audio_sent_at": 1628479.399175666,
+              "stt_provider_first_partial_at": 1628479.604395583,
+              "transcript_interim_first_at": 1628479.605175083,
+              "speech_stopped_at": 1628481.502771333,
+              "stt_provider_final_at": 1628481.536473583,
+              "transcript_final_at": 1628481.537159833,
+              "framework_completed_turn_at": 1628481.546175916,
+              "turn_committed_at": 1628481.546292208,
+              "brain_request_started_at": 1628481.548160291,
+              "llm_started_at": 1628481.551297583,
+              "brain_request_sent_at": 1628481.555608875,
+              "brain_state_thinking_at": 1628481.568167833,
+              "brain_state_speaking_at": 1628481.596607125,
+              "brain_first_model_activity_at": 1628482.406387041,
+              "brain_first_delta_at": 1628482.406449541,
+              "llm_first_delta_at": 1628482.406449541,
+              "brain_first_answer_delta_at": 1628482.406467,
+              "tts_stream_started_at": 1628482.407010041,
+              "tts_request_started_at": 1628482.407049666,
+              "tts_connection_acquired_at": 1628482.440657583,
+              "tts_first_text_sent_at": 1628482.556604541,
+              "tts_provider_first_audio_at": 1628483.02016975,
+              "tts_first_audio_at": 1628483.027122875,
+              "brain_done_at": 1628483.615652208
+            },
+            "durations_ms": {
+              "speech_stop_to_commit_ms": 43.521,
+              "commit_to_rpc_sent_ms": 9.317,
+              "rpc_sent_to_answer_delta_ms": 850.858,
+              "answer_delta_to_tts_first_audio_ms": 620.656,
+              "commit_to_tts_first_audio_ms": 1480.831,
+              "speech_stop_to_tts_first_audio_ms": 1524.352
+            }
+          },
+          {
+            "turn_id": "308911a23b4145c4",
+            "canonical_text": "人数方面。改成两个人。",
+            "state": "committed",
+            "timestamps": {
+              "speech_started_at": 1628484.254080291,
+              "interrupt_started_at": 1628484.254260125,
+              "stt_first_audio_sent_at": 1628484.298717291,
+              "transcript_interim_first_at": 1628484.559834083,
+              "speech_stopped_at": 1628488.149228916,
+              "transcript_final_at": 1628485.455454375,
+              "transcript_evidence_sufficient_first_at": 1628485.4605065,
+              "transcript_actionable_first_at": 1628488.95071575,
+              "playback_stop_sent_at": 1628488.950933625,
+              "interrupt_resolved_at": 1628488.952045125,
+              "interrupt_cancel_resolved_at": 1628488.952045125,
+              "framework_completed_turn_at": 1628490.650181458,
+              "turn_committed_at": 1628490.650342583,
+              "brain_request_started_at": 1628490.652783708,
+              "brain_request_sent_at": 1628490.653217333,
+              "llm_started_at": 1628490.653672916,
+              "brain_state_thinking_at": 1628490.659247541,
+              "brain_state_speaking_at": 1628490.690898458,
+              "brain_first_model_activity_at": 1628491.01953875,
+              "brain_first_delta_at": 1628491.019667833,
+              "llm_first_delta_at": 1628491.019667833,
+              "brain_first_answer_delta_at": 1628491.019682666,
+              "tts_stream_started_at": 1628491.020111375,
+              "tts_request_started_at": 1628491.020140333,
+              "tts_connection_acquired_at": 1628491.059158916,
+              "tts_first_text_sent_at": 1628491.2010945,
+              "brain_done_at": 1628491.977932083,
+              "tts_provider_first_audio_at": 1628491.99947775,
+              "tts_first_audio_at": 1628492.001314333,
+              "agent_audio_playback_done_at": 1628499.13945375
+            },
+            "durations_ms": {
+              "speech_stop_to_cancel_ms": 802.816,
+              "speech_stop_to_commit_ms": 2501.114,
+              "commit_to_rpc_sent_ms": 2.875,
+              "rpc_sent_to_answer_delta_ms": 366.465,
+              "answer_delta_to_tts_first_audio_ms": 981.632,
+              "commit_to_tts_first_audio_ms": 1350.972,
+              "speech_stop_to_tts_first_audio_ms": 3852.085
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "fd_continuation_cost_500",
+        "functional_passed": true,
+        "errors": [],
+        "distinct_rpc_count": 2,
+        "requests": [
+          {
+            "turn_id": "8b38f78645284e43",
+            "canonical_text": "帮我详细介绍一下这个方案。",
+            "state": "committed",
+            "timestamps": {
+              "speech_started_at": 1628574.622728416,
+              "stt_first_audio_sent_at": 1628574.720074666,
+              "stt_provider_first_partial_at": 1628574.927734,
+              "transcript_interim_first_at": 1628574.928521416,
+              "speech_stopped_at": 1628576.821870833,
+              "stt_provider_final_at": 1628576.846797208,
+              "transcript_final_at": 1628576.847229125,
+              "framework_completed_turn_at": 1628576.853052833,
+              "turn_committed_at": 1628576.853198875,
+              "brain_request_started_at": 1628576.85530075,
+              "llm_started_at": 1628576.85692225,
+              "brain_request_sent_at": 1628576.859008666,
+              "brain_state_thinking_at": 1628576.867915791,
+              "brain_state_speaking_at": 1628576.892120333,
+              "brain_first_model_activity_at": 1628577.334150333,
+              "brain_first_delta_at": 1628577.334220166,
+              "llm_first_delta_at": 1628577.334220166,
+              "brain_first_answer_delta_at": 1628577.334236083,
+              "tts_stream_started_at": 1628577.334622083,
+              "tts_request_started_at": 1628577.334650208,
+              "tts_connection_acquired_at": 1628577.373382625,
+              "tts_first_text_sent_at": 1628577.541551375,
+              "tts_provider_first_audio_at": 1628577.899057875,
+              "tts_first_audio_at": 1628577.927469666,
+              "brain_done_at": 1628578.723335625
+            },
+            "durations_ms": {
+              "speech_stop_to_commit_ms": 31.328,
+              "commit_to_rpc_sent_ms": 5.81,
+              "rpc_sent_to_answer_delta_ms": 475.227,
+              "answer_delta_to_tts_first_audio_ms": 593.234,
+              "commit_to_tts_first_audio_ms": 1074.271,
+              "speech_stop_to_tts_first_audio_ms": 1105.599
+            }
+          },
+          {
+            "turn_id": "6323b8396bd34bdd",
+            "canonical_text": "费用方面。控制在500元以内。",
+            "state": "committed",
+            "timestamps": {
+              "speech_started_at": 1628579.224209458,
+              "interrupt_started_at": 1628579.224330125,
+              "stt_first_audio_sent_at": 1628579.322041958,
+              "transcript_interim_first_at": 1628579.533293583,
+              "transcript_evidence_sufficient_first_at": 1628579.70409375,
+              "speech_stopped_at": 1628583.073498625,
+              "transcript_final_at": 1628580.337898291,
+              "transcript_actionable_first_at": 1628583.158038875,
+              "playback_stop_sent_at": 1628583.158143583,
+              "interrupt_resolved_at": 1628583.159035541,
+              "interrupt_cancel_resolved_at": 1628583.159035541,
+              "framework_completed_turn_at": 1628583.171548625,
+              "turn_committed_at": 1628583.17163175,
+              "brain_request_started_at": 1628583.172939541,
+              "brain_request_sent_at": 1628583.173629458,
+              "llm_started_at": 1628583.174064583,
+              "brain_state_thinking_at": 1628583.177196458,
+              "brain_state_speaking_at": 1628583.200112625,
+              "brain_first_model_activity_at": 1628583.632003458,
+              "brain_first_delta_at": 1628583.632058958,
+              "llm_first_delta_at": 1628583.632058958,
+              "brain_first_answer_delta_at": 1628583.632076916,
+              "tts_stream_started_at": 1628583.632440333,
+              "tts_request_started_at": 1628583.632469833,
+              "tts_connection_acquired_at": 1628583.672695333,
+              "tts_first_text_sent_at": 1628583.876118875,
+              "tts_provider_first_audio_at": 1628584.19155375,
+              "tts_first_audio_at": 1628584.199608166,
+              "brain_done_at": 1628584.770318166,
+              "agent_audio_playback_done_at": 1628593.988726625
+            },
+            "durations_ms": {
+              "speech_stop_to_cancel_ms": 85.537,
+              "speech_stop_to_commit_ms": 98.133,
+              "commit_to_rpc_sent_ms": 1.998,
+              "rpc_sent_to_answer_delta_ms": 458.447,
+              "answer_delta_to_tts_first_audio_ms": 567.531,
+              "commit_to_tts_first_audio_ms": 1027.976,
+              "speech_stop_to_tts_first_audio_ms": 1126.11
+            }
+          }
+        ]
+      }
+    ],
+    "pass_count": 3,
+    "case_count": 3,
+    "repeat_per_case_in_final_run": 1,
+    "latency_slo_asserted": false
+  },
+  "experiments": [
+    {
+      "evidence": "/tmp/voice-low-eot-before.xml",
+      "outcome": "Six low-prefix-EOT framework reproductions failed before repair."
+    },
+    {
+      "run": "continuation-current-20260908",
+      "outcome": "First true RTC run failed 0/3; exposed acoustic-gap-only merging and missing default semantic progress. Completed-turn callback fallback was removed, not retained."
+    },
+    {
+      "run": "continuation-v2-20260908",
+      "outcome": "Raw report 0/3 retained; complete interruption requests occurred, but assertion counted repeated timeline snapshots as duplicate RPCs and expected Chinese numerals instead of ASR digits. Corrected dedup with tests retaining distinct same-turn RPCs; numeral expectation adjusted."
+    },
+    {
+      "evidence": "/tmp/voice-continuation-framework-final.xml",
+      "outcome": "44 pass / 2 English failures exposed missing weak-followup timer. Final code fixed reevaluation, 6 targeted English tests and final 46-scenario run passed."
+    }
+  ],
+  "sdk_integrity": {
+    "package": "livekit-agents",
+    "version": "1.7.1",
+    "python_files_checked": 207,
+    "mismatches": []
+  },
+  "deployment": "Current worktree only. Not deployed to OPI5 Max or existing Mac business worker.",
+  "limits": [
+    "Three synthetic-audio RTC cases are functional evidence, not a broad field pass rate or P95.",
+    "Scenario tests inject model-boundary scores and use scripted ASR/VAD; actual RTC cases do not inject STT/EOT scores.",
+    "No physical microphone/speaker/AEC verification; device retest remains after deployment.",
+    "People cases still wait about 2501 ms from final server VAD stop to commit, about 3746/3852 ms to application TTS first audio. Cost case about 98 ms to commit, 1126 ms to TTS first audio. Low-latency goal is not complete.",
+    "Use per-request timestamps for stage sums. Benchmark maxima can select different requests and cannot be summed; audio immediately after user completion may still be old output.",
+    "No latency threshold is configured in these new functional cases; report experience_slo_passed=true does not certify the product latency objective.",
+    "Default intent semantic counterexamples remain; no claim of replacing semantic intent inference or resolving every ambiguous utterance."
+  ],
+  "raw_evidence": [
+    {
+      "path": "/tmp/voice-stage-rpc/continuation-complete-20260908/barge_in_e2e_ab/channel/worker-turn-timeline.jsonl",
+      "sha256": "1128b6daf5f11e497cb09f0c3491963aa41d723a18701c98ecabda17e29d978e"
+    },
+    {
+      "path": "/tmp/voice-stage-rpc/continuation-complete-20260908/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "sha256": "3ec5b125ec88d88c87d4998f69a548e527c18b7ced562fb41f048a8f9911804e"
+    },
+    {
+      "path": "/tmp/voice-stage-rpc/continuation-complete-20260908/barge_in_e2e_ab/channel/worker.stdout.log",
+      "sha256": "eacd73fee7345dfe89da64f344d065c687ca88fc5b49ad0bad0efc51f7a70566"
+    },
+    {
+      "path": "/tmp/voice-continuation-complete-source.json",
+      "sha256": "2f0c6dc387df4afa90d24547635613afbf46297e4f8263984f266332d54b587e"
+    },
+    {
+      "path": "/tmp/voice-continuation-english-final.xml",
+      "sha256": "9dd04877ffb32efedc4f0cd5714c143b914df09594c2106f3b77dbfab0e7fa61"
+    },
+    {
+      "path": "/tmp/voice-low-eot-before.xml",
+      "sha256": "5955435905320a55976159ecadee149b8dcca4afa87132954f0d7a6ec9e9fd73"
+    },
+    {
+      "path": "/tmp/voice-continuation-framework-final.xml",
+      "sha256": "0db2450b3b5052b6a488bad7176a358fcace38b9f7dddef3e72de1c198ab6e8f"
+    }
+  ],
+  "reproduction": {
+    "cases": "benchmark/cases/full_duplex/pause_continuation_enforced.yaml",
+    "scenario_file": "eidolon/livekit/tests/scenarios/test_interrupt_model_timing.py",
+    "rtc_launcher": "/tmp/voice_continuation_rtc.py (thin invocation of existing runner with current authenticated local environment)",
+    "audio_generator": "scripts/generate_voice_benchmark_audio.py existing COMPOSITE_CLIPS",
+    "audio_sha256": {
+      "continuation_people_500.wav": "a70d0cb41e73e2cb6b159e2e81b52b1f1d3d320883646849b1b6191620fc3960",
+      "continuation_cost_500.wav": "c53be8edd48fe3542668ba4db856eafe42f37e091c888ff99156406d0fa30d1b",
+      "continuation_people_900.wav": "6072502d7d5e13d89a8c8d596c87435d67098e379d558ff61e618a812bf48dda"
+    }
+  }
+}

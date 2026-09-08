@@ -68,6 +68,11 @@ class TurnPolicyRuntime:
     def decision_timeout_sec(self) -> float:
         return self.config.interrupt.decision_timeout_ms / 1000.0
 
+    def reset_interruption_evidence(self) -> None:
+        """A new product candidate cannot inherit the previous text's age."""
+        self._stable_signal = _StableSignalStabilizer(self.config)
+        self._stabilizer = _WeakSignalFollowupStabilizer(self.config)
+
     def decide_from_transcript(
         self,
         text: str,
@@ -193,9 +198,8 @@ class _StableSignalStabilizer:
         is_final: bool,
         now_ms: float,
     ) -> Decision:
-        if not vad_active:
-            self._clear()
-            return decision
+        # VAD-end does not invalidate transcript stability. The interruption
+        # owner protects the continuation grace before post-speech arbitration.
         if (
             self._config.interrupt.stabilize_normal_interrupts
             and self._is_normal_interrupt_wait(decision)
@@ -329,15 +333,18 @@ class _WeakSignalFollowupStabilizer:
             self._last_weak_signal_ms = now_ms
             return decision
         if self._should_hold_after_weak_signal(decision, now_ms):
+            assert self._last_weak_signal_ms is not None
+            age_ms = now_ms - self._last_weak_signal_ms
             return Decision(
                 action=Action.HOLD,
                 reason=(
                     "weak_signal_followup_hold "
-                    f"age_ms={now_ms - (self._last_weak_signal_ms or now_ms):.0f}"
+                    f"age_ms={age_ms:.0f}"
                 ),
                 intent=InterruptIntent.UNCERTAIN,
                 intent_source=decision.intent_source or "runtime",
                 intent_confidence=0.0,
+                hold_recheck_ms=max(0.0, self._config.interrupt.weak_signal_followup_hold_ms - age_ms),
             )
         if decision.action is Action.CANCEL:
             self._last_weak_signal_ms = None
@@ -352,7 +359,7 @@ class _WeakSignalFollowupStabilizer:
         window_ms = self._config.interrupt.weak_signal_followup_hold_ms
         if window_ms <= 0 or self._last_weak_signal_ms is None:
             return False
-        if now_ms - self._last_weak_signal_ms > window_ms:
+        if now_ms - self._last_weak_signal_ms >= window_ms:
             return False
         if (
             decision.intent_source == "eot"

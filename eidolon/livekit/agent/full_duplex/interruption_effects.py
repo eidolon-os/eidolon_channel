@@ -217,7 +217,11 @@ class FullDuplexInterruptionEffects:
         self._stable_signal_timer = None
 
     def _interrupt_evidence_active(self) -> bool:
-        return bool(self._ducking.is_suspended) or bool(self._playback_evidence_active())
+        return (
+            bool(self._ducking.is_suspended)
+            or bool(self._get_interruption_orchestrator().active)
+            or bool(self._playback_evidence_active())
+        )
 
     def cancel_and_interrupt(self, *, force: bool = False) -> None:
         """Confirm an interruption by dropping buffered output and cancelling TTS."""
@@ -347,6 +351,14 @@ class FullDuplexInterruptionEffects:
             allow_cancelled_output=True,
         )
 
+    def resume_pending_output(self, reason: str) -> None:
+        """Release the audio hold without issuing a terminal input verdict."""
+        if self._ducking.unduck_if_suspended(drop_buffered=False):
+            timeline = self._get_timeline()
+            if timeline is not None:
+                self._record_duck_event(timeline, "output_resumed_pending_evidence", reason=reason)
+            self._callbacks.on_duck_resolved("unduck")
+
     def rollback_if_suspended(
         self,
         reason: str = "user_silent",
@@ -358,6 +370,10 @@ class FullDuplexInterruptionEffects:
         if not self._ducking.installed:
             return
         if not self._ducking.is_suspended:
+            orchestrator = self._get_interruption_orchestrator()
+            if orchestrator.active:
+                self._ducking.cancel_timeout()
+                orchestrator.resolve(action="rollback", reason=reason)
             return
 
         orchestrator = self._get_interruption_orchestrator()

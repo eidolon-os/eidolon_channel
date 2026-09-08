@@ -94,11 +94,12 @@ async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay):
     policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm'))
     welcome = '这里正在播放原本的回答，后面还有几个细节需要继续说明。'
     text = '测试中由外部意图证据决定这轮交互'
+    tts = MockTTS(char_seconds=.1, chunk_delay_ms=40)
     async with production_session(
         welcome=welcome, llm=MockLLM.scripted([(text, '这是新的回复。')]),
         interrupt_classifier=classifier, turn_policy=policy,
         stt=MockSTT.scripted([ScriptedTranscript(text=text, trigger_after_ms=700)]),
-        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        tts=tts,
         vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1050, .1)]),
     ) as (pipeline, h):
         h.audio_in.feed_pcm(synth_voiced(1.1))
@@ -116,11 +117,201 @@ async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay):
             assert not speech.interrupted
             assert not any(s.cleared for s in h.audio_out.segments)
             assert not h.events.user_messages()
+            # Text/context equality cannot detect a frame tail replaced with
+            # silence. Check the PCM produced by the existing deterministic TTS.
+            import numpy as np
+            expected = np.frombuffer(b''.join(
+                synth_voiced(max(.05, min(60.0, len(t) * .1)),
+                    sample_rate=tts.sample_rate, amplitude=.3)
+                for t in tts.synth_texts
+            ), dtype=np.int16)
+            actual = np.frombuffer(h.audio_out.collected_pcm, dtype=np.int16)
+            # AudioEmitter may append a 10 ms silent final-segment marker.
+            # Permit only that trailing marker, never missing source samples.
+            assert len(actual) - len(expected) in (0, tts.sample_rate // 100)
+            assert not np.any(actual[len(expected):])
+            actual = actual[:len(expected)]
+            zeroed = np.count_nonzero((expected != 0) & (actual == 0))
+            assert zeroed < tts.sample_rate * .005, 'unheard PCM was silenced instead of resumed'
         else:
             await asyncio.sleep(2.5)
             assert speech.interrupted
             assert not h.events.user_messages()
         classifier.classify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_default_intent_timeout_resumes_original_pcm():
+    """A real low-completeness final exhausts the existing evidence budget."""
+    import numpy as np
+
+    welcome = '这里正在播放原本的回答，后面还有几个细节需要继续说明。'
+    tts = MockTTS(char_seconds=.1, chunk_delay_ms=40)
+    async with production_session(
+        welcome=welcome, llm=MockLLM.scripted([]), tts=tts,
+        stt=MockSTT.scripted([ScriptedTranscript(text='好。', trigger_after_ms=700)]),
+        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1050, .1)]),
+    ) as (pipeline, h):
+        h.audio_in.feed_pcm(synth_voiced(1.1))
+        await h.audio_out.wait_for_first_audio()
+        speech = h.session.current_speech
+        await h.events.wait_for_agent_messages(1, timeout=10)
+        assert not speech.interrupted
+        assert h.events.agent_messages() == [welcome]
+        assert not h.events.user_messages()
+        assert not any(s.cleared for s in h.audio_out.segments)
+        # Outside the fade envelopes, every source sample must survive.
+        expected = np.frombuffer(synth_voiced(len(welcome) * .1,
+            sample_rate=tts.sample_rate, amplitude=.3), dtype=np.int16)
+        actual = np.frombuffer(h.audio_out.collected_pcm, dtype=np.int16)
+        assert len(actual) - len(expected) in (0, tts.sample_rate // 100)
+        assert not np.any(actual[len(expected):])
+        zeroed = np.count_nonzero((expected != 0) & (actual[:len(expected)] == 0))
+        assert zeroed < tts.sample_rate * .005
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('final_ms', [700, 1150])
+@pytest.mark.parametrize('prefix_score,tail_score', [(.003, .424), (.003, .95), (.4, .95)], ids=['observed_eot', 'low_eot', 'uncertain_eot'])
+@pytest.mark.parametrize('prefix,tail', [
+    ('交付时间这一项。', '请改到下周三。'),
+    ('关于参加的人数。', '改为七个人。'),
+    ('For the destination.', 'Please change it to Shanghai.'),
+])
+async def test_ambiguous_sentence_final_preserves_pause_continuation(
+    prefix, tail, prefix_score, tail_score, final_ms, monkeypatch, record_property,
+):
+    """ASR finality cannot decide whether a paused speaker will continue.
+
+    Inject EOT evidence at the existing model boundary to isolate orchestration
+    from wording/model accuracy: uncertain prefix, decisive continuation.
+    """
+    reply = '已收到完整修改要求。'
+    llm = MockLLM.scripted([('', reply)])
+    async with production_session(
+        welcome='原来的说明还在进行，接下来还有一些内容需要继续向你介绍。',
+        llm=llm,
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix, trigger_after_ms=final_ms),
+            ScriptedTranscript(text=tail, trigger_after_ms=1800),
+        ]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1050, .1),
+            MockVADEvent('start', 1450), MockVADEvent('end', 2150, .1),
+        ]),
+    ) as (pipeline, h):
+        monkeypatch.setattr(pipeline._get_eot_model()._context_eot,
+            'semantic_completeness_score', lambda text: tail_score if tail in text else prefix_score)
+        h.audio_in.feed_pcm(synth_voiced(2.3))
+        await h.audio_out.wait_for_first_audio()
+        await h.events.wait_for(lambda e: e.type == 'user_input_transcribed'
+            and e.payload.transcript == prefix and e.payload.is_final, timeout=3)
+        # Both event orderings have reached VAD-stop + a sentence final here,
+        # before the next acoustic segment. Neither establishes a false trigger.
+        async with asyncio.timeout(3):
+            while h.session.user_state == 'speaking':
+                await asyncio.sleep(.01)
+        pause_state = pipeline._ducking.mixer.state
+        pause_users = h.events.user_messages()
+        pause_calls = llm.call_count
+        record_property('pause_state', pause_state)
+        await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+            and getattr(e.payload.item, 'text_content', '') == reply, timeout=6)
+        record_property('completed_user_messages', json.dumps(h.events.user_messages(), ensure_ascii=False))
+        assert pause_state == 'SUSPENDED'
+        assert not pause_users
+        assert pause_calls == 0
+        assert len(h.events.user_messages()) == 1
+        assert prefix.rstrip('。.') in h.events.user_messages()[0]
+        assert tail in h.events.user_messages()[0]
+        assert llm.call_count == 1
+
+
+async def _wait_until(predicate, timeout=3):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('continuation', ['late_final', 'new_speech_in_cooldown', 'new_speech_after_cooldown', 'long_active_speech'])
+async def test_resumed_output_keeps_receiving_interruption_evidence(continuation):
+    prefix = '关于配送时间'
+    tail = '请改到下周三。'
+    long_speech = continuation == 'long_active_speech'
+    is_new_speech = continuation not in {'late_final', 'long_active_speech'}
+    start_ms = 2100 if continuation == 'new_speech_in_cooldown' else 2900
+    final_ms = start_ms + 400 if is_new_speech else (7800 if long_speech else 2300)
+    end_ms = start_ms + 650 if is_new_speech else (7400 if long_speech else 1050)
+    events = [MockVADEvent('start', 350), MockVADEvent('end', 7400 if long_speech else 1050, .1)]
+    if is_new_speech:
+        events.extend([MockVADEvent('start', start_ms), MockVADEvent('end', end_ms, .1)])
+    llm = MockLLM.scripted([('', '已收到修改。')])
+    expected = tail if is_new_speech else prefix + tail
+    async with production_session(
+        welcome='原来的说明还有一些内容，我们可以慢慢介绍每个步骤和具体安排。' * 2,
+        llm=llm,
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix if is_new_speech else '', interims=[] if is_new_speech else [prefix], trigger_after_ms=700),
+            ScriptedTranscript(text=expected, trigger_after_ms=final_ms),
+        ]),
+        tts=MockTTS(char_seconds=.2, chunk_delay_ms=200), vad=MockVAD.scripted(events),
+    ) as (pipeline, h):
+        # A fresh mobile idle report must not veto a server-owned candidate.
+        packet = SimpleNamespace(topic=CLIENT_AUDIO_STATE_TOPIC,
+            participant=SimpleNamespace(identity='human-simulator'),
+            data=json.dumps({'schema_v': WIRE_SCHEMA_VERSION, 'type': 'client.audio_state',
+                'seq': 1, 'input_mode': 'auto', 'playback_state': 'idle',
+                'mic_muted': False, 'ptt': False, 'rms': 0.0, 'client_ts_ms': 0}).encode())
+        pipeline._room_data.handle_packet(packet)
+        model = pipeline._get_eot_model()._context_eot
+        original = model.semantic_completeness_score
+        model.semantic_completeness_score = lambda text: .95 if tail in text else .003
+        try:
+            h.audio_in.feed_pcm(synth_voiced(max(3.7, (final_ms + 400) / 1000)))
+            await h.audio_out.wait_for_first_audio()
+            speech = h.session.current_speech
+            await _wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
+            assert pipeline._ducking.mixer.state != 'SUSPENDED'
+            assert not speech.interrupted
+            assert not h.events.user_messages()
+            await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+                and getattr(e.payload.item, 'text_content', '') == '已收到修改。', timeout=7)
+            assert speech.interrupted
+            assert len(h.events.user_messages()) == 1
+            assert h.events.user_messages()[0].replace(' ', '') == prefix + tail
+            assert llm.call_count == 1
+        finally:
+            model.semantic_completeness_score = original
+
+
+@pytest.mark.asyncio
+async def test_incomplete_speech_resumes_output_then_expires_without_reply():
+    text = '关于配送时间'
+    llm = MockLLM.scripted([('', '不应调用')])
+    async with production_session(
+        welcome='原来的说明还有一些内容，我们可以慢慢介绍每个步骤和具体安排。' * 2,
+        llm=llm, stt=MockSTT.scripted([ScriptedTranscript(text=text, trigger_after_ms=700)]),
+        tts=MockTTS(char_seconds=.2, chunk_delay_ms=200),
+        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1050, .1)]),
+    ) as (pipeline, h):
+        model = pipeline._get_eot_model()._context_eot
+        original = model.semantic_completeness_score
+        model.semantic_completeness_score = lambda text: .003
+        try:
+            h.audio_in.feed_pcm(synth_voiced(1.2))
+            await h.audio_out.wait_for_first_audio()
+            speech = h.session.current_speech
+            await _wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
+            assert pipeline._ducking.mixer.state != 'SUSPENDED'
+            assert pipeline._interruption_orchestrator.active
+            await _wait_until(lambda: not pipeline._interruption_orchestrator.active, timeout=6)
+            assert not h.events.user_messages()
+            assert llm.call_count == 0
+            assert not speech.interrupted
+        finally:
+            model.semantic_completeness_score = original
 
 
 @pytest.mark.asyncio

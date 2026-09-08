@@ -74,7 +74,8 @@ cases:
         client_playback_state: agent_speaking
     expect:
       action: any
-      decision_action: rollback
+      # Low EOT / ASR final alone remains undecided; lifecycle tests own bounded playback resume.
+      decision_action: hold
       decision_intent: uncertain
       forbid_actions: ["cancel"]
 
@@ -99,7 +100,8 @@ cases:
         client_playback_state: agent_speaking
     expect:
       action: any
-      decision_action: rollback
+      # Low EOT / ASR final alone remains undecided; lifecycle tests own bounded playback resume.
+      decision_action: hold
       decision_intent: uncertain
       forbid_actions: ["cancel"]
 

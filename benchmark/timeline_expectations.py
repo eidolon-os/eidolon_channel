@@ -552,12 +552,16 @@ def _has_brain_request(records: list[dict[str, Any]]) -> bool:
 
 
 def _brain_request_count(records: list[dict[str, Any]]) -> int:
-    count = 0
+    requests: set[tuple[object, ...]] = set()
     for record in records:
         timestamps = _mapping(record.get("timestamps"))
-        if isinstance(timestamps.get("brain_request_sent_at"), (int, float)):
-            count += 1
-    return count
+        sent_at = timestamps.get("brain_request_sent_at")
+        if isinstance(sent_at, (int, float)):
+            # A timeline is snapshotted at several lifecycle boundaries. Count
+            # calls, not snapshots, while preserving distinct calls in one turn.
+            attrs = _mapping(record.get("attrs"))
+            requests.add((attrs.get("room_name"), record.get("turn_id"), sent_at))
+    return len(requests)
 
 
 def _rejected_turn_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

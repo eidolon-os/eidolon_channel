@@ -66,6 +66,7 @@ DEFAULT_SUITE_SET = "full_duplex_gate"
 DEFAULT_CASES = SUITE_SET_CASES[DEFAULT_SUITE_SET]
 ROOM_AGENT_AUDIO_RESPONSE_VALUES = {"none", "first", "after_user_done"}
 KEY_LATENCY_METRICS = (
+    "user_start_to_rtc_attenuation_ms",
     "timeline_interrupt_speech_to_started_ms",
     "timeline_interrupt_speech_to_first_transcript_ms",
     "timeline_stt_speech_to_actionable_transcript_ms",

@@ -247,7 +247,7 @@ class UserTurnCoordinator:
         finally:
             self._transcript_change_waiters.discard(future)
 
-    def can_merge_new_speech(self, *, now: float | None = None) -> bool:
+    def can_merge_new_speech(self, *, now: float | None = None, continue_pending: bool = False) -> bool:
         """Merge only an acoustically continuous fragment into the open turn."""
 
         candidate = self._active
@@ -256,7 +256,7 @@ class UserTurnCoordinator:
         segment = candidate.current_segment
         if segment is None:
             return False
-        if segment.ended_at is None:
+        if segment.ended_at is None or continue_pending:
             return True
         return (self._now(now) - segment.ended_at) <= self._speech_merge_grace_sec
 
@@ -265,9 +265,10 @@ class UserTurnCoordinator:
         *,
         timeline: TurnTimeline | None,
         now: float | None = None,
+        continue_pending: bool = False,
     ) -> UserTurnCandidate:
         current_time = self._now(now)
-        if self.can_merge_new_speech(now=current_time):
+        if self.can_merge_new_speech(now=current_time, continue_pending=continue_pending):
             candidate = self._require_active()
             current_segment = candidate.current_segment
             if current_segment is not None and current_segment.ended_at is None:

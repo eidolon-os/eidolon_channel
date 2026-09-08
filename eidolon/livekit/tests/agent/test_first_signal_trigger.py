@@ -251,19 +251,18 @@ async def test_timeout_hold_rolls_back_after_max_suspend_budget() -> None:
 
     await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=True)
+    pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=False)
     pipeline._ducking.mixer.cancel.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_timeout_with_vad_idle_unducks_drop_buffered() -> None:
-    """G18a + G17a: if VAD is no longer active at the deadline (user
-    really did go silent), unduck with drop_buffered=True."""
+async def test_timeout_with_vad_idle_unducks_preserving_content() -> None:
+    """No confirmed interruption: resume the unheard part of the reply."""
     pipeline = _make_pipeline(vad_user_state="listening")
 
     await _run_duck_deadline(pipeline, 0.01)
 
-    pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=True)
+    pipeline._ducking.mixer.unduck.assert_called_once_with(drop_buffered=False)
     pipeline._ducking.mixer.cancel.assert_not_called()
 
 

@@ -1,0 +1,193 @@
+{
+  "date": "2026-09-08",
+  "status": "application_content_preservation_validated_receiver_latency_target_not_met",
+  "target_passed": false,
+  "deployed": false,
+  "sdk_changes": false,
+  "boundary": "Channel runtime only; unchanged livekit-agents, mode ownership, EOT thresholds, cooldown and timeout budgets. Existing output state machine, buffer and writer are reused.",
+  "fixes": [
+    {
+      "problem": "A fade ending inside a provider frame replaced its entire unheard tail with zero PCM.",
+      "change": "Forward only the fade prefix; read current state/generation again to admit the untouched remainder through the existing buffer/backpressure path. Count forwarded prefix only; fade progression uses samples per channel.",
+      "before": {
+        "source": "/tmp/voice-app-fade-before.xml",
+        "tests": 3,
+        "passed": 1,
+        "failed": 2,
+        "skipped_or_xfailed": 0
+      },
+      "framework_before": {
+        "source": "/tmp/voice-app-frame-e2e-before.xml",
+        "tests": 3,
+        "passed": 0,
+        "failed": 3,
+        "skipped_or_xfailed": 0
+      },
+      "framework_before_method": "Only the prior application _handle_suspended method from f4597dc was restored inside the test process; no SDK or workspace runtime overwrite.",
+      "observed_loss": "60 ms and 200 ms frames failed the preservation test; the 200 ms case silenced about 170 ms after a 30 ms fade."
+    },
+    {
+      "problem": "Timeout rollback discarded unheard content despite continuing the same reply.",
+      "change": "Both bounded evidence expiry and VAD-idle/no-transcript deadline use normal preserve-buffer rollback. Cancellation and explicit discard APIs are unchanged.",
+      "before": {
+        "source": "/tmp/voice-app-default-timeout-before.xml",
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped_or_xfailed": 0
+      },
+      "framework_before_state": "Fade fix already applied; original timeout-drop decisions still active.",
+      "observed_loss": "Default EOT with final 好。 returned 24320 samples for 43200 source samples at 16 kHz before the timeout policy fix; source-count shortfall 1180 ms."
+    }
+  ],
+  "final_regression": [
+    {
+      "source": "/tmp/voice-app-output-policy-regression.xml",
+      "tests": 151,
+      "passed": 151,
+      "failed": 0,
+      "skipped_or_xfailed": 0
+    },
+    {
+      "source": "/tmp/voice-app-output-e2e-final.xml",
+      "tests": 23,
+      "passed": 23,
+      "failed": 0,
+      "skipped_or_xfailed": 0
+    },
+    {
+      "source": "/tmp/voice-app-three-mode-final.xml",
+      "tests": 85,
+      "passed": 79,
+      "failed": 0,
+      "skipped_or_xfailed": 6
+    }
+  ],
+  "framework_test_boundary": "Real AgentSession, Channel and local EOT. Scripted VAD/ASR/LLM/TTS; RecordingAudioOutput checks source PCM and does not simulate RTC queue or physical speaker. Final marker permits only an optional 10 ms trailing zero frame.",
+  "runtime_dialogue_runs": [
+    {
+      "source": "/tmp/voice-stage-rpc/app-output-admission-model-recheck/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "passed": false,
+      "errors": [
+        "timeline speech-start-to-resume exceeded 900ms: [6554.2]"
+      ],
+      "metrics": {
+        "real_call_verified": true,
+        "functional_outcome_passed": true,
+        "retry_attempts": null,
+        "user_start_to_rtc_attenuation_ms": 174,
+        "timeline_interrupt_speech_to_resolved_ms": 6554.186000023037
+      },
+      "retries": []
+    },
+    {
+      "source": "/tmp/voice-stage-rpc/app-output-preserve-final/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl",
+      "case_id": "fd_gate_backchannel_resumes_001",
+      "passed": false,
+      "errors": [
+        "timeline speech-start-to-resume exceeded 900ms: [6655.5]"
+      ],
+      "metrics": {
+        "real_call_verified": true,
+        "functional_outcome_passed": true,
+        "retry_attempts": 1,
+        "user_start_to_rtc_attenuation_ms": 1207,
+        "timeline_interrupt_speech_to_resolved_ms": 6655.476666986942
+      },
+      "retries": [
+        {
+          "type": "case_retry",
+          "attempt": 1,
+          "reason": "agent_setup_transient",
+          "previous_room_name": "voice-bench-fd_gate_backchannel_resumes_001-711d9f2f",
+          "previous_errors": [
+            "RuntimeError: timed out waiting for the previous agent reply to complete before user step '帮我详细介绍一下这个方案'"
+          ]
+        }
+      ]
+    }
+  ],
+  "application_admission": [
+    {
+      "source": "/tmp/voice-app-output-admission.jsonl",
+      "capture_frame_sizes_ms": {
+        "10.0": 2,
+        "40.0": 1,
+        "80.0": 1,
+        "160.0": 2,
+        "200.0": 100
+      },
+      "duck_to_resume_ms": 6553.596,
+      "held_ms_before_resume": 1970.0,
+      "nonempty_drains": 0,
+      "audio_submitted_first_120ms_after_resume": 13170.0
+    },
+    {
+      "source": "/tmp/voice-app-output-admission-final.jsonl",
+      "capture_frame_sizes_ms": {
+        "10.0": 2,
+        "40.0": 2,
+        "80.0": 1,
+        "160.0": 1,
+        "200.0": 171
+      },
+      "duck_to_resume_ms": 6655.084,
+      "held_ms_before_resume": 1970.0,
+      "nonempty_drains": 1,
+      "audio_submitted_first_120ms_after_resume": 17170.0,
+      "first_nonempty_drain_elapsed_ms": 14.918
+    }
+  ],
+  "rtc_content_evidence": {
+    "before_timeout_policy_fix": {
+      "buffered_frames_dropped_on_unduck": 10,
+      "dropped_audio_ms": 1970
+    },
+    "after_timeout_policy_fix": {
+      "buffer_frames_drained": 10,
+      "buffered_frames_dropped_on_unduck": 0,
+      "buffered_audio_ms": 1970
+    },
+    "boundary": "Application buffer counters, not proof that physical playback completed. Benchmark teardown interrupted remaining playout."
+  },
+  "sdk_integrity": {
+    "sdk_version": "1.7.1",
+    "record_checked_python_files": 207,
+    "mismatches": []
+  },
+  "limitations": [
+    "Natural TTS varies between calls. The 174 ms and 1207 ms attenuation observations are not a causal A/B latency comparison or P95.",
+    "RTC resume remained about 6.55/6.66 seconds, above original 900 ms gate; no timeout threshold was shortened.",
+    "1970 ms buffered audio admitted downstream in about 15 ms. Awaited sink capture is not playout acknowledgement; total downstream queue depth is not measured by this trace.",
+    "Preserving content avoids skipping words; it does not prevent an existing timeout decision from resuming while a user is still speaking.",
+    "Six known semantic acceptance cases remain expected failures; physical mobile validation deferred by user; no full 300 ms P95 acceptance."
+  ],
+  "setup_failures_excluded": [
+    "Worktree EOT/VAD files were Git LFS pointers; reruns used existing hydrated models via environment paths without downloading or modifying model/config files.",
+    "Initial diagnostic runpy entrypoint failed macOS process pickling; temporary wrapper changed to import the normal server main. Subsequent real RTC calls verified.",
+    "Initial PCM assertion incorrectly excluded AudioEmitter optional 10 ms silent final marker; only that trailing marker was allowed before reporting final content tests."
+  ],
+  "diagnostics": [
+    {
+      "source": "/tmp/voice_app_output_worker.py",
+      "sha256": "f25ee3f4aec5d0ab2b1f999eec278780664c9db5aa3089cb8f35b306c0d08ef2"
+    },
+    {
+      "source": "/tmp/voice_app_output_bench.py",
+      "sha256": "3926a17070d3b2929e4221beb5c0fbe627e0580d77da316619c2670537e9255a"
+    },
+    {
+      "source": "/tmp/voice_app_before_e2e.py",
+      "sha256": "4eb168d56c6c8e2b1c6b0734831eadb01b44f82864c544740f262342721543a7"
+    },
+    {
+      "source": "/tmp/voice-app-output-admission.jsonl",
+      "sha256": "7c8decb20bc777cd0b942512fb7104aad67c61bcda7093c92969d51673d9c199"
+    },
+    {
+      "source": "/tmp/voice-app-output-admission-final.jsonl",
+      "sha256": "6a331a9de0a131ab3463319429530efad1879ee31b15dfe99d6ed14b70ababd1"
+    }
+  ]
+}

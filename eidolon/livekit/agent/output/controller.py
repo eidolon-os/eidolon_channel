@@ -165,10 +165,8 @@ class OutputController(lk_io.AudioOutput):
             "total_buffer_drains": self._total_buffer_drains,
             "total_buffer_frames_drained": self._total_buffer_frames_drained,
             "total_buffer_frames_dropped": self._total_buffer_frames_dropped,
-            # G17a (2026-05-18): frames dropped because unduck(drop_buffered=True)
-            # decided the buffer was stale (timeout fallback). Should be small
-            # relative to total_buffer_frames_drained; high values indicate the
-            # decision window is too long.
+            # Explicit discard requests only; ordinary timeout rollback keeps
+            # unheard audio and must not increment this counter.
             "total_buffer_frames_dropped_on_unduck": (
                 self._total_buffer_frames_dropped_on_unduck
             ),
@@ -293,15 +291,9 @@ class OutputController(lk_io.AudioOutput):
         used by capture_frame, including when no further TTS frames arrive.
 
         Args:
-            drop_buffered: If True, discard the buffered frames instead of
-                draining them. G17a (2026-05-18) — used by the timeout
-                fallback in DuckSuspendTimeoutHandler:
-                by the time the 0.8s timeout fires, any buffered TTS frames
-                are stale (the user has been talking through the window),
-                and replaying them after fade-in causes "agent talks over
-                user" overlap. Fast-path soft-unduck (called on user-silent
-                transition <300ms) keeps the default drain-with-fade-in
-                because the buffer is genuinely fresh there.
+            drop_buffered: Explicitly discard held content instead of draining
+                it. Ordinary rollback, including evidence timeout, retains the
+                default: elapsed time does not make unheard content obsolete.
         """
         if self._state != "SUSPENDED":
             return
@@ -408,8 +400,13 @@ class OutputController(lk_io.AudioOutput):
                     await self._forward_with_gain(frame)
                     break
                 if self._can_accept_suspended(frame):
-                    await self._handle_suspended(frame)
-                    break
+                    remainder = await self._handle_suspended(frame)
+                    if remainder is None:
+                        break
+                    # A fade can end inside a provider frame. Read the current
+                    # state again before admitting its untouched remainder.
+                    frame = remainder
+                    continue
                 # No data is discarded at capacity. A mode transition wakes the
                 # producer; cancellation also invalidates this waiting frame.
                 self._state_changed.clear()
@@ -499,17 +496,34 @@ class OutputController(lk_io.AudioOutput):
     # Internals
     # ------------------------------------------------------------------
 
-    async def _handle_suspended(self, frame: rtc.AudioFrame) -> None:
+    async def _handle_suspended(self, frame: rtc.AudioFrame) -> rtc.AudioFrame | None:
         """SUSPENDED: fade-out phase forwards attenuated frames;
         after ramp completes, buffer frames silently unless explicit
         suspended passthrough is enabled."""
         if self._ramp_samples_remaining > 0:
+            remainder = None
+            if self._ramp_samples_remaining < frame.samples_per_channel:
+                ramp_samples = self._ramp_samples_remaining
+                split = ramp_samples * frame.num_channels
+                remainder = rtc.AudioFrame(
+                    data=frame.data[split:].tobytes(),
+                    sample_rate=frame.sample_rate,
+                    num_channels=frame.num_channels,
+                    samples_per_channel=frame.samples_per_channel - ramp_samples,
+                )
+                frame = rtc.AudioFrame(
+                    data=frame.data[:split].tobytes(),
+                    sample_rate=frame.sample_rate,
+                    num_channels=frame.num_channels,
+                    samples_per_channel=ramp_samples,
+                )
             scaled = self._scale_frame(frame)
             if not await self._write(scaled):
-                return
-            # G6 (2026-05-17): fade-out frames ARE played (just attenuated)
-            # — the user heard them. Count toward played_seconds.
+                return None
+            # Only the forwarded fade prefix contributes to this estimate;
+            # sink admission does not acknowledge physical playout.
             self._played_samples_this_turn += frame.samples_per_channel
+            return remainder
         elif self._suspended_passthrough_volume is not None:
             await self._forward_with_static_gain(
                 frame,
@@ -525,9 +539,14 @@ class OutputController(lk_io.AudioOutput):
             frame_sec = frame.samples_per_channel / sr
             self._buffer.append(frame)
             self._buffer_duration_sec += frame_sec
+        return None
 
     async def _drain_buffer(self) -> None:
-        """Drain with sink pacing; recheck admission after every awaited write."""
+        """Drain in order; recheck admission after every awaited write.
+
+        A sink may accept faster than playout; its capture acknowledgement is
+        not a playback acknowledgement.
+        """
         generation = self._generation
         if not self._buffer or self._state != "NORMAL":
             return
@@ -587,7 +606,7 @@ class OutputController(lk_io.AudioOutput):
     def _scale_frame(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         """Return a new AudioFrame with per-sample gain ramp applied."""
         samples = np.frombuffer(frame.data, dtype=np.int16)
-        n = samples.size
+        n = frame.samples_per_channel
 
         if self._ramp_samples_remaining == 0:
             scaled = self._apply_static_gain(samples, self._volume_current)
@@ -611,7 +630,8 @@ class OutputController(lk_io.AudioOutput):
                 self._ramp_samples_remaining -= ramp_in_frame
 
             scaled = np.clip(
-                samples.astype(np.float32) * gains, -32768, 32767
+                samples.astype(np.float32) * np.repeat(gains, frame.num_channels),
+                -32768, 32767,
             ).astype(np.int16)
 
         return rtc.AudioFrame(

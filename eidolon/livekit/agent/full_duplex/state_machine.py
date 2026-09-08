@@ -48,6 +48,8 @@ _EXPECTED_NEXT_PHASES: dict[FullDuplexPhase, frozenset[FullDuplexPhase]] = {
     FullDuplexPhase.USER_SPEECH_OPEN: frozenset(
         {
             FullDuplexPhase.PROVISIONAL_DUCK,
+            FullDuplexPhase.EVIDENCE_ARBITRATION,
+            FullDuplexPhase.ACCEPTED_INTERRUPTION,
             FullDuplexPhase.USER_TURN_PENDING,
             FullDuplexPhase.USER_TURN_COMMITTED,
         }

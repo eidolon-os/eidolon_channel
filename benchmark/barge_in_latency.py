@@ -4,9 +4,9 @@
 Measurement tool for the near-term slice (2026-07): the web dogfood showed a
 substantive Chinese barge-in ("那你现在能帮我做什么。") with
 ``speech-start-to-cancel`` ≈ 1984ms. Before choosing a fix we need to know what
-that ~2s actually *is* — in particular whether the agent is already ducked
-**silent** within tens of ms (so the ~2s is commit/answer latency, not audible
-overlap) or is genuinely talking over the user.
+that ~2s actually *is*. These server marks describe decisions and output
+admission, not when a receiver or physical speaker becomes quiet. Already
+queued audio can continue playing after ``interrupt_started_at``.
 
 Everything needed is already recorded per turn in the timeline snapshot written
 to ``observability.timeline_debug_path`` (default
@@ -22,12 +22,16 @@ Usage
     python -m benchmark.barge_in_latency PATH.jsonl
 
 The key rows:
-  speech_start -> duck_silence    agent goes silent (expect tens of ms)
+  speech_start -> duck_requested server starts ducking (not audible silence)
   speech_start -> cancel          the ~1984ms headline
   cancel       -> commit          gap from cancel to committing the user turn
   commit       -> first_delta     brain latency
   first_delta  -> first_audio     TTS latency
-  speech_start -> first_audio     full E2E: barge-in -> agent's new answer audible
+  speech_start -> first_audio     server first-audio mark (not client playout)
+
+``speech_started_at`` is the server speech callback, not microphone onset.
+Receiver attenuation and device playout need separate audio measurements;
+this report cannot establish an audible-overlap latency bound.
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ DEFAULT_PATH = "~/eidolon/logs/channel/turn-timeline.jsonl"
 
 # (label, from_mark, to_mark). First present brain-delta mark wins via _pick.
 _STEPS: tuple[tuple[str, str, str], ...] = (
-    ("speech_start -> duck_silence", "speech_started_at", "interrupt_started_at"),
+    ("speech_start -> duck_requested", "speech_started_at", "interrupt_started_at"),
     ("speech_start -> cancel", "speech_started_at", "interrupt_cancel_resolved_at"),
     ("speech_start -> speech_stop", "speech_started_at", "speech_stopped_at"),
     ("speech_stop  -> commit", "speech_stopped_at", "turn_committed_at"),
@@ -55,6 +59,40 @@ _STEPS: tuple[tuple[str, str, str], ...] = (
 
 # Rolled-back (false-interrupt) barge-ins resolve here instead of cancel.
 _ROLLBACK_MARK = "interrupt_rollback_resolved_at"
+
+
+def receiver_attenuation_ms(
+    frames: list[tuple[float, float]], *, onset_ms: float,
+) -> float | None:
+    """Observe a >=12 dB RMS drop lasting 100 ms in received 20 ms frames.
+
+    Reference the 120 ms preceding microphone publication onset. Missing,
+    quiet, or stale baseline audio and packet gaps are not evidence of ducking.
+    This is an acoustic observation, not causal proof: natural TTS pauses can
+    also qualify. Use continuous test audio to validate output-control latency;
+    never substitute this receiver metric for physical speaker measurements.
+    """
+    before = [(at, rms) for at, rms in frames if onset_ms - 120 <= at < onset_ms]
+    if len(before) < 4 or onset_ms - before[-1][0] > 40:
+        return None
+    baseline = statistics.median(rms for _, rms in before)
+    if baseline < 120:
+        return None
+    threshold = baseline * 10 ** (-12 / 20)
+    quiet_at = previous = None
+    for at, rms in frames:
+        if at < onset_ms:
+            continue
+        if previous is not None and at - previous > 60:
+            quiet_at = None
+        previous = at
+        if rms > threshold:
+            quiet_at = None
+        elif quiet_at is None:
+            quiet_at = at
+        elif at - quiet_at >= 100:
+            return quiet_at - onset_ms
+    return None
 
 
 def _pick(ts: dict[str, float], name: str) -> float | None:

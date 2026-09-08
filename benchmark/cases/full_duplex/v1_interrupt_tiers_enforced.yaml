@@ -185,6 +185,7 @@ cases:
     expect:
       action: any
       intent: uncertain
-      decision_action: rollback
+      # Low EOT / ASR final alone remains undecided; lifecycle tests own bounded playback resume.
+      decision_action: hold
       forbid_actions: ["cancel"]
       min_user_finals: 1

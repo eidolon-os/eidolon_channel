@@ -32,6 +32,11 @@ if TYPE_CHECKING:
 
     from eidolon.livekit.common.config import AgentConfig
 
+from eidolon.livekit.common.config.validators import (
+    LOCAL_ASR_PROVIDER,
+    STT_PROVIDERS,
+)
+
 from .providers.llm import LlmParams, LivekitLlmStage
 from .providers.stt import SttParams, SttStage
 from .providers.tts import TtsParams, TtsStage
@@ -527,9 +532,23 @@ class SharedStageFactory:
                 language=plugin_cfg.language,
                 sample_rate=plugin_cfg.sample_rate,
             )
+        elif provider == LOCAL_ASR_PROVIDER:
+            # Recognition on this Host's own models. No credential and no
+            # address: the endpoint is resolved from this Host's port registry,
+            # which Ops writes from the contract of the component that reserves
+            # the port.
+            from eidolon.livekit.plugins.stt.local_asr import LocalAsrSTT
+
+            plugin_cfg = cfg.local_asr_stt
+            stt = LocalAsrSTT(config=plugin_cfg)
+            params = SttParams(
+                language=plugin_cfg.language,
+                sample_rate=plugin_cfg.sample_rate,
+            )
         else:
             raise ValueError(
-                f"Unknown STT provider: {provider!r} (supported: 'bailian', 'sensetime')"
+                f"Unknown STT provider: {provider!r} "
+                f"(supported: {', '.join(sorted(STT_PROVIDERS))})"
             )
 
         return SttStage(stt, params=params)

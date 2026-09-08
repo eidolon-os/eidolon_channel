@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from eidolon.livekit.plugins.stt.bailian.config import BailianSTTConfig
+from eidolon.livekit.plugins.stt.local_asr.config import LocalAsrSTTConfig
 from eidolon.livekit.plugins.stt.sensetime.config import SenseTimeSTTConfig
 from eidolon.livekit.plugins.tts.bailian.config import BailianTTSConfig
 from eidolon.livekit.plugins.tts.sensetime.config import SenseTimeTTSConfig
@@ -389,6 +390,9 @@ class EffectiveAgentConfig:
 
     bailian_stt: BailianSTTConfig = field(default_factory=BailianSTTConfig)
     sensetime_stt: SenseTimeSTTConfig = field(default_factory=SenseTimeSTTConfig)
+    #: Recognition on this Host. Carries no endpoint and no credential — see
+    #: the plugin's own config for why each of those is absent.
+    local_asr_stt: LocalAsrSTTConfig = field(default_factory=LocalAsrSTTConfig)
     bailian_tts: BailianTTSConfig = field(default_factory=BailianTTSConfig)
     sensetime_tts: SenseTimeTTSConfig = field(default_factory=SenseTimeTTSConfig)
 

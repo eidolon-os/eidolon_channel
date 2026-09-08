@@ -19,6 +19,7 @@ from .schema import (
     CoreConfig,
     EffectiveAgentConfig,
     LLMConfig,
+    LocalAsrSTTConfig,
     ObservabilityConfig,
     ProvidersConfig,
     RemoteAgentRpcConfig,
@@ -226,6 +227,7 @@ def load_effective_config() -> EffectiveAgentConfig:
     bailian_stt_y = _section(y, "bailian_stt")
     bailian_tts_y = _section(y, "bailian_tts")
     sensetime_stt_y = _section(y, "sensetime_stt")
+    local_asr_stt_y = _section(y, "local_asr_stt")
     sensetime_tts_y = _section(y, "sensetime_tts")
 
     _reject_unknown_fields(
@@ -359,6 +361,7 @@ def load_effective_config() -> EffectiveAgentConfig:
         bailian_stt=_merge_dataclass(BailianSTTConfig(), bailian_stt_y),
         bailian_tts=_merge_dataclass(BailianTTSConfig(), bailian_tts_y),
         sensetime_stt=_merge_dataclass(SenseTimeSTTConfig(), sensetime_stt_y),
+        local_asr_stt=_merge_dataclass(LocalAsrSTTConfig(), local_asr_stt_y),
         sensetime_tts=_merge_dataclass(SenseTimeTTSConfig(), sensetime_tts_y),
     )
     validate_effective_config(cfg)

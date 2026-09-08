@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
+from eidolon_sdk.biz.contracts.local_asr import (
+    LOCAL_ASR_CAPABILITY as LOCAL_ASR_PROVIDER,
+)
+
 from .schema import EffectiveAgentConfig
+
+
+#: Every recognizer this build can be asked for.
+#:
+#: `local_asr` is spelled the same as the Host capability that has to be
+#: present for it, deliberately: Ops can then refuse "this Host is configured
+#: for local recognition and does not declare that it can do it" by comparing
+#: two identical strings, instead of consulting a table that could disagree
+#: with either side.
+STT_PROVIDERS = frozenset({"bailian", "sensetime", LOCAL_ASR_PROVIDER})
 
 
 def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     errors: list[str] = []
 
-    if cfg.providers.stt_provider not in ("bailian", "sensetime"):
-        errors.append("providers.stt_provider must be 'bailian' or 'sensetime'")
+    if cfg.providers.stt_provider not in STT_PROVIDERS:
+        errors.append(
+            "providers.stt_provider must be one of: " + ", ".join(sorted(STT_PROVIDERS))
+        )
     if cfg.providers.tts_provider not in ("bailian", "sensetime"):
         errors.append("providers.tts_provider must be 'bailian' or 'sensetime'")
     if cfg.providers.vad_provider not in (

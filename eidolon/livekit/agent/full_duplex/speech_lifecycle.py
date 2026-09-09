@@ -145,6 +145,12 @@ class FullDuplexSpeechLifecycle:
         owner._user_speaking_start_time = None
         if owner._timeline is not None:
             owner._timeline.mark_latest("speech_stopped_at")
+        # First, and before any of the turn bookkeeping: a recognizer that
+        # takes its sentence boundaries from us is waiting on this call to
+        # decode what was just said. Everything below decides what to do
+        # with a transcript; this is what causes there to be one.
+        if owner._close_stt_utterance() and owner._timeline is not None:
+            owner._timeline.mark_latest("stt_flush_sent_at")
         voiceprint_task = owner._voiceprint_turns.finish_turn()
         turn_completion.remember_completed_voiceprint_turn(
             voiceprint_task,

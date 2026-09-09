@@ -32,6 +32,10 @@ def _owner() -> SimpleNamespace:
     owner._completed_turn_voiceprint_result = object()
     owner._completed_turn_voiceprint_timeline = TurnTimeline("old-turn")
     owner._callbacks = MagicMock()
+    # The recognizer is told the speaker stopped before any turn bookkeeping
+    # runs. False by default: most plugins decide their own boundaries and
+    # this reports that it had nothing to close.
+    owner._close_stt_utterance = MagicMock(return_value=False)
     owner._user_speaking_start_time = None
     owner._timeline = None
     owner._timeline_debug_flushed = False
@@ -346,3 +350,47 @@ def test_speech_lifecycle_stop_leaves_attention_reject_to_completed_turn_gate() 
         "speech_stopped_waiting_framework"
     )
     assert owner._latest_asr_text == "stale"
+
+
+def test_speech_lifecycle_stop_closes_the_stt_utterance_first() -> None:
+    """The call that causes there to be a transcript at all.
+
+    A recognizer running on this Host has no endpoint detection of its own
+    and LiveKit never flushes a streaming STT, so this is the only thing in
+    the system that says "that was a sentence". Everything else in
+    ``handle_stopped`` decides what to do with a transcript; if this is not
+    called, there is none to decide about, and the turn ends on the
+    transcription-timeout fallback instead.
+    """
+
+    owner = _owner()
+    owner._timeline = TurnTimeline("turn-flush")
+    owner._close_stt_utterance = MagicMock(return_value=True)
+    owner._session = MagicMock()
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
+
+    FullDuplexSpeechLifecycle(owner).handle_stopped()
+
+    owner._close_stt_utterance.assert_called_once_with()
+    # Recorded so a turn timeline can show whether the boundary was sent,
+    # which is exactly what was unreadable while nothing sent one.
+    assert owner._timeline.timestamps["stt_flush_sent_at"] is not None
+
+
+def test_speech_lifecycle_stop_marks_no_flush_when_the_plugin_has_none() -> None:
+    """A cloud provider needs no telling, and must not be reported as told."""
+
+    owner = _owner()
+    owner._timeline = TurnTimeline("turn-cloud")
+    owner._close_stt_utterance = MagicMock(return_value=False)
+    owner._session = MagicMock()
+    effects = MagicMock()
+    effects.soft_interrupt_active.return_value = False
+    owner._ensure_interruption_effects = MagicMock(return_value=effects)
+
+    FullDuplexSpeechLifecycle(owner).handle_stopped()
+
+    owner._close_stt_utterance.assert_called_once_with()
+    assert "stt_flush_sent_at" not in owner._timeline.timestamps

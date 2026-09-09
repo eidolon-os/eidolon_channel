@@ -50,6 +50,7 @@ class LocalAsrSTT(lk_stt.STT):
         self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
         self._session = session
         self._owns_session = session is None
+        self._live_stream: LocalAsrSpeechStream | None = None
 
     @property
     def provider(self) -> str:
@@ -137,12 +138,48 @@ class LocalAsrSTT(lk_stt.STT):
             session = aiohttp.ClientSession()
             self._session = session
             self._owns_session = True
-        return LocalAsrSpeechStream(
+        # Remembered so `end_utterance` can close whatever the framework is
+        # currently reading from, including after `_stt_pump` rebuilds it.
+        # The last stream opened is the right one for the streaming pipeline,
+        # which is the only caller of `end_utterance`; the one-shot
+        # `SttStage.recognize_streaming` path lives in half-duplex and sends
+        # its own `end_input`.
+        self._live_stream = LocalAsrSpeechStream(
             stt=self,
             config=self._config,
             stream_url=self.stream_url(),
             session=session,
         )
+        return self._live_stream
+
+    def end_utterance(self) -> bool:
+        """Close the utterance now, because the speaker has stopped.
+
+        Somebody has to say where a sentence ends, and on this provider that
+        somebody is the Host's own VAD. A cloud recognizer decides it itself
+        (Bailian has `max_sentence_silence_ms`), and this service does not:
+        `/v1/info` calls the endpoint owner "upstream", and upstream is this
+        pipeline. Until this existed nobody claimed the job — LiveKit only
+        flushes a *non*-streaming STT, through `StreamAdapter`, and this one
+        declares `streaming`, so the stream stayed open from the first frame
+        of a session to its last. One utterance per session, silence
+        included, which is how a device that nobody was talking to still
+        tripped a limit written for a single long sentence.
+
+        Reported rather than assumed: a stream that has already ended its
+        input, or that failed, cannot take a flush, and this being called
+        between sessions is normal rather than an error.
+        """
+
+        stream = self._live_stream
+        if stream is None:
+            return False
+        try:
+            stream.flush()
+        except Exception as exc:  # noqa: BLE001 - a closed stream is not news
+            logger.debug("local_asr had no stream to close an utterance on: %s", exc)
+            return False
+        return True
 
     async def _recognize_impl(self, *args, **kwargs):
         """Not offered. This provider declares `streaming` and nothing else.
@@ -157,6 +194,7 @@ class LocalAsrSTT(lk_stt.STT):
         )
 
     async def aclose(self) -> None:
+        self._live_stream = None
         if self._session is not None and self._owns_session and not self._session.closed:
             await self._session.close()
         self._session = None

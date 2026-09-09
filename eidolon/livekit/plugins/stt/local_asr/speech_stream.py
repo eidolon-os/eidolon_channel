@@ -104,7 +104,13 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                 )
                 try:
                     await self._read_greeting(inbox)
-                    await self._stream(socket, inbox, buffer, flush_sentinel)
+                    await self._race(
+                        reader,
+                        asyncio.create_task(
+                            self._stream(socket, inbox, buffer, flush_sentinel),
+                            name="local_asr-send",
+                        ),
+                    )
                 finally:
                     reader.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -118,13 +124,41 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
             # recognizable. The framework rebuilds the stream on its own
             # 0.5 s backoff and the session's error tolerance is what gives
             # up, which is a decision that belongs there and not here.
-            self._emit_error(
+            self._fail(
                 RuntimeError(
                     f"this Host's speech recognition did not answer at "
                     f"{self._stream_url}: {exc}"
                 ),
                 recoverable=True,
             )
+
+    async def _race(self, reader: asyncio.Task, sender: asyncio.Task) -> None:
+        """Let whichever of the two ends first decide what happened.
+
+        Waiting only on the sender is what made a closed socket invisible
+        during silence: the send loop acts on what was read, so with no audio
+        arriving there was nothing to act, and the service's goodbye sat in
+        the inbox unread until somebody spoke again. The reader ending first
+        means the socket did — which is news, and news this stream is
+        supposed to end on.
+        """
+
+        try:
+            await asyncio.wait({reader, sender}, return_when=asyncio.FIRST_COMPLETED)
+            if sender.done():
+                sender.result()
+                return
+            reader.result()
+            self._fail(
+                RuntimeError(
+                    "this Host's recognition closed the stream before it was done"
+                ),
+                recoverable=True,
+            )
+        finally:
+            sender.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sender
 
     async def _receive_loop(
         self, socket: aiohttp.ClientWebSocketResponse, inbox: asyncio.Queue
@@ -250,7 +284,7 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                 # The service hung up mid-utterance. It says why first, and
                 # that message is handled above this line; reaching here
                 # without one means the socket went without a word.
-                self._emit_error(
+                self._fail(
                     RuntimeError(
                         "this Host's recognition closed the stream mid-utterance"
                     ),
@@ -263,7 +297,7 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                self._emit_error(
+                self._fail(
                     RuntimeError(
                         "this Host's recognition did not finish the utterance within "
                         f"{self._config.final_timeout_s}s"
@@ -314,7 +348,7 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
         kind = payload.get("type")
         if kind == contract.ERROR:
             code = str(payload.get("code", ""))
-            self._emit_error(
+            self._fail(
                 RuntimeError(f"this Host's recognition refused: {code}"),
                 # `RETRYABLE_ERROR_CODES` answers "may this utterance be sent
                 # again", which is not the question being asked here. The
@@ -359,8 +393,18 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
         except asyncio.QueueFull:
             logger.warning("local_asr event queue full, dropping event")
 
-    def _emit_error(self, error: Exception, *, recoverable: bool) -> None:
-        """Say it once, and say it in the type the framework reads.
+    def _fail(self, error: Exception, *, recoverable: bool) -> None:
+        """Stop this stream, and say why in the type the framework reads.
+
+        Deliberately not called `_emit_error`. That name belongs to
+        `RecognizeStream`, whose contract is to *emit* an error event and
+        return — and `_main_task` calls it on its own paths, including the
+        one just before a retry. Overriding it with something that raises
+        hijacked those calls: the retry never happened, and the framework's
+        `error` event was never emitted at all, so nothing watching the
+        session ever heard that recognition had failed. The doubled
+        "local_asr stream error" lines on the Host were this, seen from
+        outside.
 
         `recoverable` used to be a log field and nothing else: whatever it
         said, this raised the exception it was handed. Both layers above that
@@ -383,3 +427,6 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
         if recoverable:
             raise APIError(str(error), retryable=True) from error
         raise error
+
+    # `_emit_error` is inherited on purpose: the framework emits the STT
+    # error event, and this stream only decides when to stop.

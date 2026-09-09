@@ -199,20 +199,19 @@ async def _drain_events(pipeline: _STTPipeline, sink: list) -> None:
         sink.append(event)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the plugin opens an utterance on the first audio frame and closes it only on a _FlushSentinel, which the framework never sends to a streaming-capable STT",
-)
 @pytest.mark.asyncio
-async def test_an_idle_session_is_not_accumulated_into_one_utterance() -> None:
-    """Silence between sentences must not be billed to the sentence.
+async def test_the_framework_alone_never_closes_an_utterance() -> None:
+    """Why this provider needs `end_utterance` at all.
 
-    Two spoken stretches with a long quiet one between them is two
-    utterances, or at the very least two closed ones. What must not happen
-    is what happens today: the utterance opens on the first frame the room
-    ever delivers and stays open, so a session that is mostly silence
-    arrives at the service as a single unbroken utterance and trips a limit
-    that was written to catch a single long sentence.
+    Characterisation, not a wish: LiveKit flushes a *non*-streaming STT by
+    wrapping it in `StreamAdapter`, and this plugin declares `streaming`, so
+    the default node only ever calls `push_frame`. Ten seconds of room audio
+    spanning two spoken stretches and a silence therefore close nothing —
+    which is why the Host accumulated a whole session into one utterance and
+    why the boundary has to come from the pipeline's VAD instead.
+
+    If a future livekit-agents does start flushing streaming plugins, this
+    test fails, and that is the point of it.
     """
 
     service = _FakeHostAsr(max_utterance_seconds=600.0)
@@ -229,13 +228,14 @@ async def test_an_idle_session_is_not_accumulated_into_one_utterance() -> None:
             await asyncio.sleep(0)
         await asyncio.sleep(0.5)
 
-        assert service.utterances_started >= 1, "no utterance ever opened"
-        assert service.utterances_ended >= 1, (
-            "10 s of room audio spanning two spoken stretches and a 6 s silence "
-            f"closed {service.utterances_ended} utterances: the framework never "
-            "sends a _FlushSentinel to a streaming-capable STT, so this plugin's "
-            "only close path is unreachable and the whole session accumulates "
-            "into one utterance"
+        assert service.utterances_started == 1, (
+            "the utterance opens on the first frame the room delivers"
+        )
+        assert service.utterances_ended == 0, (
+            f"the framework closed {service.utterances_ended} utterance(s) on its "
+            "own; if livekit-agents now flushes streaming plugins, the pipeline's "
+            "own end_utterance call is no longer the only boundary and this "
+            "plugin's endpointing should be reconsidered"
         )
     finally:
         reader.cancel()
@@ -381,6 +381,136 @@ async def test_interims_reach_the_session_while_the_words_are_still_arriving() -
             f"the service sent {service.interims_sent} partial(s) and the "
             f"session received {len(interims)}: _drain's zero timeout cancels "
             "every receive before it can return one"
+        )
+    finally:
+        reader.cancel()
+        await pipeline.aclose()
+        await stt.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_the_pipeline_closing_an_utterance_yields_a_final_and_starts_the_next() -> None:
+    """The boundary the pipeline now sends, driven through the framework.
+
+    This calls exactly what `StreamingPipeline._close_stt_utterance` calls,
+    at the moment `handle_stopped` calls it — the plugin's own
+    `end_utterance()` — and nothing else. It never reaches into
+    `RecognizeStream` to fabricate a `_FlushSentinel`, because that is the
+    step that made the earlier "it works on the Host" claim untrue: a test
+    that supplies its own boundary is testing the half that was never
+    broken.
+
+    Two spoken stretches, told apart the way the Host tells them apart, are
+    two utterances with a final each.
+    """
+
+    service = _FakeHostAsr(max_utterance_seconds=600.0)
+    runner, port = await _serve(service)
+    stt = LocalAsrSTT(config=LocalAsrSTTConfig(port=port))
+    pipeline = _framework_pipeline(stt)
+    events: list = []
+    reader = asyncio.create_task(_drain_events(pipeline, events))
+    try:
+        for _ in range(2):
+            for _ in range(int(1.5 / 0.05)):
+                pipeline.audio_ch.send_nowait(_room_frame())
+                await asyncio.sleep(0)
+            # VAD says the speaker stopped; the pipeline passes that on.
+            assert stt.end_utterance() is True
+            await asyncio.sleep(0.4)
+
+        assert service.utterances_started == 2, (
+            f"{service.utterances_started} utterance(s) opened for two spoken "
+            "stretches"
+        )
+        assert service.utterances_ended == 2, (
+            f"{service.utterances_ended} utterance(s) closed for two spoken "
+            "stretches"
+        )
+        finals = [
+            event
+            for event in events
+            if event.type is lk_stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert len(finals) == 2, (
+            f"two closed utterances produced {len(finals)} final transcript(s)"
+        )
+    finally:
+        reader.cancel()
+        await pipeline.aclose()
+        await stt.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_end_utterance_is_asked_for_by_name_and_stays_quiet_otherwise() -> None:
+    """No stream yet, or a finished one, is normal rather than an error.
+
+    `_close_stt_utterance` calls this between sessions and on providers that
+    never made a stream, and a False is how it says "nothing to close" — the
+    same shape as `observe_next_audio_for_turn` next door.
+    """
+
+    stt = LocalAsrSTT(config=LocalAsrSTTConfig(port=1))
+    assert stt.end_utterance() is False
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_sentence_after_an_over_long_one_is_still_transcribed() -> None:
+    """The property the Host actually needs, stated end to end.
+
+    Someone talking past the limit costs that utterance — the service says
+    so and hangs up, and it is right to. What must survive is everything
+    after it. This is the shape of the real failure: three turns in a row
+    answered with a fallback line, and a service restart as the only way
+    back.
+    """
+
+    # A 1 s limit against a 0.2 s sentence stands in for the Host's 60 s
+    # against a normal one: the over-long utterance is the exception and what
+    # follows it is comfortably inside.
+    service = _FakeHostAsr(max_utterance_seconds=1.0)
+    runner, port = await _serve(service)
+    stt = LocalAsrSTT(config=LocalAsrSTTConfig(port=port))
+    pipeline = _framework_pipeline(stt)
+    events: list = []
+    reader = asyncio.create_task(_drain_events(pipeline, events))
+    try:
+        # Someone talks past what this Host will hold for one utterance.
+        for _ in range(int(1.2 / 0.05)):
+            pipeline.audio_ch.send_nowait(_room_frame())
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.5)
+        assert service.rejected
+
+        # The framework reconnects on its own backoff, without needing audio
+        # to do it. Wait for the stream rather than guessing at the schedule.
+        deadline = asyncio.get_running_loop().time() + 15.0
+        while (
+            service.connections < 2
+            and asyncio.get_running_loop().time() < deadline
+        ):
+            await asyncio.sleep(0.05)
+        assert service.connections >= 2, "recognition was never re-established"
+
+        # Now a short sentence, ended the way the pipeline ends one.
+        for _ in range(int(0.2 / 0.05)):
+            pipeline.audio_ch.send_nowait(_room_frame())
+            await asyncio.sleep(0)
+        assert stt.end_utterance() is True
+        await asyncio.sleep(1.0)
+
+        finals = [
+            event
+            for event in events
+            if event.type is lk_stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert finals, (
+            "nothing said after the over-long utterance was transcribed; "
+            f"the service saw {service.connections} connection(s) and "
+            f"{service.utterances_ended} closed utterance(s)"
         )
     finally:
         reader.cancel()

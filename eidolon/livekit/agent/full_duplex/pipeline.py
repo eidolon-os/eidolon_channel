@@ -1041,6 +1041,35 @@ class StreamingPipeline(BasePipeline):
 
         return self._ensure_transcript_evidence_buffer().observe_speech_event(event)
 
+    def _close_stt_utterance(self) -> bool:
+        """Tell the recognizer the speaker stopped, if it is one that needs telling.
+
+        LiveKit sends a `_FlushSentinel` to a *non*-streaming STT only, by
+        wrapping it in `StreamAdapter`; a plugin that declares `streaming`
+        never receives one for the life of a session. Providers that decide
+        their own sentence boundaries do not care — Bailian and SenseTime
+        both get finals from the cloud's endpoint detection. A recognizer
+        running on this Host has no such luxury: the only VAD in the system
+        is ours, so the only place that can say "that was a sentence" is
+        here.
+
+        Asked for by name rather than configured, the same way
+        `observe_next_audio_for_turn` is: a plugin that does not need this
+        does not implement it, and this returns False without comment.
+        """
+
+        factory = getattr(self, "_factory", None)
+        stage = getattr(factory, "stt", None)
+        plugin = getattr(stage, "stt", None)
+        close = getattr(plugin, "end_utterance", None)
+        if not callable(close):
+            return False
+        try:
+            return bool(close())
+        except Exception:
+            logger.exception("[StreamingPipeline] failed to close the STT utterance")
+            return False
+
     def _build_speech_lifecycle(self) -> FullDuplexSpeechLifecycle:
         return FullDuplexSpeechLifecycle(self)
 

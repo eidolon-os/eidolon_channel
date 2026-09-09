@@ -507,6 +507,12 @@ def aggregate(cases: list[CaseResult]) -> dict[str, Any]:
             cases,
             "experience_slo_passed",
         ),
+        "experience_slo_not_evaluated": sum(
+            case.metrics.get("experience_slo_passed") is None for case in cases
+        ),
+        "reply_receiver_not_measured": sum(
+            case.metrics.get("canonical_reply_receiver_status") == "not_measured" for case in cases
+        ),
         "metrics": _metric_distribution(cases),
     }
 
@@ -562,6 +568,12 @@ def aggregate_runs(runs: list[RunResult]) -> dict[str, Any]:
             all_cases,
             "experience_slo_passed",
         ),
+        "experience_slo_not_evaluated": sum(
+            case.metrics.get("experience_slo_passed") is None for case in all_cases
+        ),
+        "reply_receiver_not_measured": sum(
+            case.metrics.get("canonical_reply_receiver_status") == "not_measured" for case in all_cases
+        ),
         "metrics": _metric_distribution(all_cases),
         "per_case": per_case,
     }
@@ -613,6 +625,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
         )
     if summary.get("experience_slo_failed") is not None:
         lines.append(f"- 体验 SLO 失败样本：`{summary['experience_slo_failed']}`")
+    if summary.get("experience_slo_not_evaluated") is not None:
+        lines.append(f"- 体验 SLO 未验收样本：`{summary['experience_slo_not_evaluated']}`")
+    if summary.get("reply_receiver_not_measured"):
+        lines.append(f"- 接收端新回复出声未验收样本：`{summary['reply_receiver_not_measured']}`（应用 TTS 首音频不能替代接收端测量）")
     lines.extend(
         [
             "",

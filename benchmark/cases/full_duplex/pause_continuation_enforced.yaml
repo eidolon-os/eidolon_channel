@@ -45,6 +45,10 @@ cases:
     min_agent_messages: 1
     min_brain_requests: 2
     max_brain_requests: 2
+    canonical_response_required: true
+    # Necessary server-side check for the existing 2.5 s reply goal;
+    # receiver/speaker latency is still a separate unverified stage.
+    max_speech_stop_to_reply_audio_ms: 2500
     canonical_contains:
     - 人数方面
     - 改成两个人
@@ -92,6 +96,10 @@ cases:
     min_agent_messages: 1
     min_brain_requests: 2
     max_brain_requests: 2
+    canonical_response_required: true
+    # Necessary server-side check for the existing 2.5 s reply goal;
+    # receiver/speaker latency is still a separate unverified stage.
+    max_speech_stop_to_reply_audio_ms: 2500
     canonical_contains:
     - 人数方面
     - 改成两个人
@@ -139,6 +147,10 @@ cases:
     min_agent_messages: 1
     min_brain_requests: 2
     max_brain_requests: 2
+    canonical_response_required: true
+    # Necessary server-side check for the existing 2.5 s reply goal;
+    # receiver/speaker latency is still a separate unverified stage.
+    max_speech_stop_to_reply_audio_ms: 2500
     canonical_contains:
     - 费用方面
     - 500元

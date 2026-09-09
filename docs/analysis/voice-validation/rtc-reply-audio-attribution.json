@@ -1,0 +1,235 @@
+{
+  "date": "2026-09-09",
+  "git_head": "cd070fe99791d2f5c92759360b772adb0429b4e2",
+  "dirty_worktree": true,
+  "run_id": "reply-capture-20260909",
+  "kind": "actual RTC run plus offline waveform attribution; not physical mobile playout",
+  "method": {
+    "recording": "Opt-in existing room AudioStream, PCM16 mono 16kHz, decoded frames with monotonic arrival timestamps. Test-only tee at Channel agent tts_node; packets yielded unchanged. SDK not patched.",
+    "alignment": "scipy.signal.correlate with local mean and energy normalization. Two 400ms source windows separated by 500ms, beginning at first 20ms source block with RMS >= 120; require both peaks to preserve the source sample distance. Record raw coefficients rather than claim calibrated recognition accuracy.",
+    "negative_control": "Same reference windows searched in receiver audio before the source TTS first frame. Repeated common speech can match one window, so one arbitrary peak is insufficient.",
+    "clock": "Worker and receiver are on the same Mac monotonic clock. First matched voiced block arrival is frame-granular, with codec and consumer scheduling effects. Not physical speaker time; not an exact first phoneme boundary.",
+    "benchmark_input_boundary": "last_voiced_frame is the existing synthetic audio sender estimate. VAD stop adds about 600ms in these samples; neither boundary is physical microphone measurement.",
+    "automation_limit": "Default report still says receiver not_measured; offline attribution is an explicitly separate diagnostic, not a new automated acceptance gate."
+  },
+  "cases": [
+    {
+      "case_id": "fd_continuation_people_500",
+      "turn_id": "3664457966f640a4",
+      "room_name": "voice-bench-fd_continuation_people_500-5eee5d8c",
+      "functional_passed": true,
+      "configured_application_slo_passed": false,
+      "errors": [
+        "timeline speech-stop-to-reply-audio exceeded 2500ms: [4014.4]"
+      ],
+      "stages": {
+        "vad_stop_to_commit_ms": 2501.01,
+        "commit_to_rpc_sent_ms": 2.19,
+        "rpc_to_answer_ms": 962.45,
+        "answer_to_tts_ms": 548.7,
+        "tts_to_receiver_first_voiced_frame_ms": 260.58
+      },
+      "vad_stop_to_receiver_ms": 4274.93,
+      "benchmark_last_voiced_frame_to_receiver_ms": 4877.97,
+      "alignment": {
+        "turn_id": "3664457966f640a4",
+        "room_name": "voice-bench-fd_continuation_people_500-5eee5d8c",
+        "text": "好的，收到。关于「改成两个人」，我需要确认一下才能改得准确——你指的是哪份方案/计划里的人数？\n\n比如是：\n方案里的某个环节（如执行、参与、调研对象）从原本的多人改成两人？\n还是团队/编制人数改成两人",
+        "tts_path": "/tmp/voice-reply-audio-capture/tts/3664457966f640a4-b068f416eeaa43439c058e4cb19cae8b.json",
+        "receiver_path": "/tmp/voice-reply-audio-capture/receiver/receiver-b3df03b2ca6a4d2cb47b43e8f93dd9ae.json",
+        "source_first_frame_at": 1668388.446960458,
+        "source_onset_sample": 1600,
+        "windows": [
+          {
+            "offset": 302975,
+            "correlation": 0.9868632175099872,
+            "source_offset": 1600,
+            "receiver_frame_arrived_at": 1668388.708240083,
+            "old_audio_control": {
+              "offset": 10876,
+              "correlation": 0.20402203390694765
+            }
+          },
+          {
+            "offset": 310975,
+            "correlation": 0.9561595319088868,
+            "source_offset": 9600,
+            "receiver_frame_arrived_at": 1668389.207993583,
+            "old_audio_control": {
+              "offset": 44433,
+              "correlation": 0.7430446608291366
+            }
+          }
+        ]
+      },
+      "setup_retries": [
+        {
+          "type": "case_retry",
+          "attempt": 1,
+          "reason": "agent_setup_transient",
+          "previous_room_name": "voice-bench-fd_continuation_people_500-5f2e61d7",
+          "previous_errors": [
+            "RuntimeError: timed out waiting for the previous agent reply to complete before user step '帮我详细介绍一下这个方案'"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "fd_continuation_people_900",
+      "turn_id": "60d5f1bb744f4413",
+      "room_name": "voice-bench-fd_continuation_people_900-b0c44749",
+      "functional_passed": true,
+      "configured_application_slo_passed": false,
+      "errors": [
+        "timeline speech-stop-to-reply-audio exceeded 2500ms: [3518.6]"
+      ],
+      "stages": {
+        "vad_stop_to_commit_ms": 2500.94,
+        "commit_to_rpc_sent_ms": 2.27,
+        "rpc_to_answer_ms": 568.89,
+        "answer_to_tts_ms": 446.51,
+        "tts_to_receiver_first_voiced_frame_ms": 269.26
+      },
+      "vad_stop_to_receiver_ms": 3787.87,
+      "benchmark_last_voiced_frame_to_receiver_ms": 4397.55,
+      "alignment": {
+        "turn_id": "60d5f1bb744f4413",
+        "room_name": "voice-bench-fd_continuation_people_900-b0c44749",
+        "text": "好的，人数方面改成两个人。\n\n我确认一下：你是想让我把方案里的人数设定从之前的内容调整为两人，对吗？不过我这边目前还没有看到具体的方案内容，所以想跟你核对一下——你希望具体怎么改？\n\n你可以把方案发过",
+        "tts_path": "/tmp/voice-reply-audio-capture/tts/60d5f1bb744f4413-ba202a01e36f498ea8507bef130e40dc.json",
+        "receiver_path": "/tmp/voice-reply-audio-capture/receiver/receiver-9dc5845950494c8a86c0cd10fdb6541a.json",
+        "source_first_frame_at": 1668418.258117541,
+        "source_onset_sample": 1280,
+        "windows": [
+          {
+            "offset": 291935,
+            "correlation": 0.9801065457749154,
+            "source_offset": 1280,
+            "receiver_frame_arrived_at": 1668418.527926125,
+            "old_audio_control": {
+              "offset": 189528,
+              "correlation": 0.18403527441536233
+            }
+          },
+          {
+            "offset": 299935,
+            "correlation": 0.9263710041278421,
+            "source_offset": 9280,
+            "receiver_frame_arrived_at": 1668419.027055541,
+            "old_audio_control": {
+              "offset": 148167,
+              "correlation": 0.7674002785382764
+            }
+          }
+        ]
+      },
+      "setup_retries": []
+    },
+    {
+      "case_id": "fd_continuation_cost_500",
+      "turn_id": "f89536c5292c4876",
+      "room_name": "voice-bench-fd_continuation_cost_500-6c4f885f",
+      "functional_passed": true,
+      "configured_application_slo_passed": true,
+      "errors": [],
+      "stages": {
+        "vad_stop_to_commit_ms": 27.43,
+        "commit_to_rpc_sent_ms": 1.42,
+        "rpc_to_answer_ms": 609.27,
+        "answer_to_tts_ms": 675.05,
+        "tts_to_receiver_first_voiced_frame_ms": 283.76
+      },
+      "vad_stop_to_receiver_ms": 1596.92,
+      "benchmark_last_voiced_frame_to_receiver_ms": 2205.13,
+      "alignment": {
+        "turn_id": "f89536c5292c4876",
+        "room_name": "voice-bench-fd_continuation_cost_500-6c4f885f",
+        "text": "关于费用控制在500元以内，我需要先确认一下背景——因为目前对话里我还没看到你具体说的是哪个方案或活动。\n\n从现有信息看，我们之前聊到过\"某个方案\"，你想让我详细介绍，但那份方案内容我这边并没有收到具",
+        "tts_path": "/tmp/voice-reply-audio-capture/tts/f89536c5292c4876-64847f590c014165b1a15df6aaba38d0.json",
+        "receiver_path": "/tmp/voice-reply-audio-capture/receiver/receiver-7cad586985bb4ea9b4074c1d4ba17b37.json",
+        "source_first_frame_at": 1668446.442998041,
+        "source_onset_sample": 960,
+        "windows": [
+          {
+            "offset": 259903,
+            "correlation": 0.9631934714897608,
+            "source_offset": 960,
+            "receiver_frame_arrived_at": 1668446.727273166,
+            "old_audio_control": {
+              "offset": 158438,
+              "correlation": 0.20535734610166806
+            }
+          },
+          {
+            "offset": 267903,
+            "correlation": 0.9804415565851545,
+            "source_offset": 8960,
+            "receiver_frame_arrived_at": 1668447.227640291,
+            "old_audio_control": {
+              "offset": 215958,
+              "correlation": 0.37729108964442365
+            }
+          }
+        ]
+      },
+      "setup_retries": []
+    }
+  ],
+  "device": {
+    "host": "OPI5 Max",
+    "channel_release": "ee4f1da193683a60e92977fd80d135a73816db0b",
+    "release_id": "rk3588-20260908T161546",
+    "channel_service": "active at read-only check",
+    "deployed_this_turn": false,
+    "mobile_speaker_retested": false
+  },
+  "validation": {
+    "benchmark_unit": "163 passed",
+    "sdk": "livekit-agents 1.7.1: all 207 Python files match package RECORD",
+    "regression": "271 passed with existing local EOT/PVAD model paths; first attempt 268 passed and 3 model-loading failures",
+    "regression_xml": "/tmp/voice-reply-capture-regression-model.xml"
+  },
+  "sha256": {
+    "/tmp/voice-stage-rpc/reply-capture-20260909/barge_in_e2e_ab/channel/worker-turn-timeline.jsonl": "753f1ee3d11aacf3e7a2c3e49c7a4a791320f72892ac60fa9477094bbc194d3a",
+    "/tmp/voice-stage-rpc/reply-capture-20260909/barge_in_e2e_ab/channel/livekit_room/livekit_room_results.jsonl": "275a3972485f8a523d0f506131eb1fb0c2776f5d5646c5262e15d896210f65d4",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-9dc5845950494c8a86c0cd10fdb6541a.wav": "cd9e5a1e432559426e04c3884176616186edc57cf7191d75a2d50274676aa371",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-b3df03b2ca6a4d2cb47b43e8f93dd9ae.json": "a7c003851c75c48b0ddf0ac11435ce2588d40969452fdacfa5a311d21a5868c3",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-a67b84c4e84e4ce68291d53ce7ea4e46.wav": "6259fd575a3c98a55c7f4d79fc3693c9cae3047c5105ffaa0d292a5970ec1c93",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-9dc5845950494c8a86c0cd10fdb6541a.json": "81cff9598562953b9de3417024e17c76fbadc8ee534a5218eb63c6cec39b51ba",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-b3df03b2ca6a4d2cb47b43e8f93dd9ae.wav": "5598f4bf5ce930a06698f9182f0a9d54ce5cf2c3f3724f17522cc82794ed215d",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-7cad586985bb4ea9b4074c1d4ba17b37.json": "413af166b79c64710519ba057df4e0b4592708257e8bc2ad200ac042838834f2",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-7cad586985bb4ea9b4074c1d4ba17b37.wav": "787e55d44d8787d9c1843e8b9648c44b1ca845c6a5294f008d4af9f43284bc0a",
+    "/tmp/voice-reply-audio-capture/receiver/receiver-a67b84c4e84e4ce68291d53ce7ea4e46.json": "f9130617a66d850b9482d4230148c4fb4a9cda0551254f1673cce7efdd187dd8",
+    "/tmp/voice-reply-audio-capture/tts/7d917489fe4a4bd5-a38639cfe2504197b4a91417a3104f9e.json": "c227949b2c084cab5fd129154b143b1488d105419bf1426ad0d94070bc576dfe",
+    "/tmp/voice-reply-audio-capture/tts/greeting-70861629c5de4bfbb0d881e0b3bca4e1.wav": "338c6d744483f0f5cfcbc7a7f53cbf375ecd8e82485ee7e806ab40ad99af98eb",
+    "/tmp/voice-reply-audio-capture/tts/60d5f1bb744f4413-ba202a01e36f498ea8507bef130e40dc.json": "6552e80576a20e193d7c9161d3cb89c96478600d0dbc3ecdef9577daa97c7ac6",
+    "/tmp/voice-reply-audio-capture/tts/3664457966f640a4-b068f416eeaa43439c058e4cb19cae8b.json": "a5a0f71c9ca5756d77d78ef5fdf46a0b64648c19c0344c266d8df8b3675d40c8",
+    "/tmp/voice-reply-audio-capture/tts/3664457966f640a4-b068f416eeaa43439c058e4cb19cae8b.wav": "593dd375b120b08f2999cbcf8c607b62d2d842a1b1909c4fc8dd01605f413eb4",
+    "/tmp/voice-reply-audio-capture/tts/7a4bd1b3deac436f-d1cdc6b9bfd44b789f7b809647d5824e.json": "5ebe6aa07021fb7233751aecbea7da57ada5511136c182841570ea93b48635ed",
+    "/tmp/voice-reply-audio-capture/tts/greeting-81678d8a55a2473aaeabcddbb0b5eee0.wav": "338c6d744483f0f5cfcbc7a7f53cbf375ecd8e82485ee7e806ab40ad99af98eb",
+    "/tmp/voice-reply-audio-capture/tts/f89536c5292c4876-64847f590c014165b1a15df6aaba38d0.wav": "3123d9d99f30d68139be87cf1751730ef5a1ea54d10568fb2f1ef1290cf976d0",
+    "/tmp/voice-reply-audio-capture/tts/7d917489fe4a4bd5-a38639cfe2504197b4a91417a3104f9e.wav": "5a8eefa2eb57deea0d605b3f61a1dbbd97ca0ee161ff875ff1109e79dab465bf",
+    "/tmp/voice-reply-audio-capture/tts/greeting-81678d8a55a2473aaeabcddbb0b5eee0.json": "040f381b814ac4d09a8b412e53fb90a523938ce514955f636846bd83bb4d721e",
+    "/tmp/voice-reply-audio-capture/tts/7a4bd1b3deac436f-d1cdc6b9bfd44b789f7b809647d5824e.wav": "9f1ac496568f56f512defe1b962a48b0648ab62236b54be5894ba3c4fc3c2ebe",
+    "/tmp/voice-reply-audio-capture/tts/eb74117e6a30419a-8412ca5abfb44960b160ba4314e557a5.wav": "d9c2f8290e9bcc50327811af37f3b8f4ce6fbe36c4c95727dcb6f41b15244bda",
+    "/tmp/voice-reply-audio-capture/tts/greeting-dfb33c4191bc42a8af18e4ffe4d6ad60.json": "71afa42997d68dfaa52c7719f5e562fc10f95703ce940304ccc825caf5d3489b",
+    "/tmp/voice-reply-audio-capture/tts/greeting-70861629c5de4bfbb0d881e0b3bca4e1.json": "e74dfbb81cf45dec8596dc8ec7f0cbf8814000f5a413afc2f4291adde212df7f",
+    "/tmp/voice-reply-audio-capture/tts/greeting-1b25f6bcbbf849daa80099a975de7d36.json": "da99c74fb5b660ec8f25460bb20b60c9b75c47937b25d18ce4f173ef99320ddb",
+    "/tmp/voice-reply-audio-capture/tts/greeting-dfb33c4191bc42a8af18e4ffe4d6ad60.wav": "338c6d744483f0f5cfcbc7a7f53cbf375ecd8e82485ee7e806ab40ad99af98eb",
+    "/tmp/voice-reply-audio-capture/tts/f89536c5292c4876-64847f590c014165b1a15df6aaba38d0.json": "e9cb29840e534ad69ec24d959a29decf432618ac25f627cefa8db1d5aeac337a",
+    "/tmp/voice-reply-audio-capture/tts/eb74117e6a30419a-8412ca5abfb44960b160ba4314e557a5.json": "2fd804021ffd09345b8c276947eaf47f07812c76d7decba789814f6895043c09",
+    "/tmp/voice-reply-audio-capture/tts/greeting-1b25f6bcbbf849daa80099a975de7d36.wav": "338c6d744483f0f5cfcbc7a7f53cbf375ecd8e82485ee7e806ab40ad99af98eb",
+    "/tmp/voice-reply-audio-capture/tts/60d5f1bb744f4413-ba202a01e36f498ea8507bef130e40dc.wav": "4b4060fb17a7eeba64cdcad9630aea2908c48fb7b755d9395e48094003836a15",
+    "benchmark/livekit_room_runner.py": "b016206c12297b7ea367941151ac1b680b2622283dc3d6d292fbf3bb7abf9a7d",
+    "scripts/bench_barge_in_e2e_ab.py": "3c5c65aa74435254bfc3e45212069c40b16aba360ea68cc4b45665c825cd5dfe",
+    "eidolon/livekit/agent/full_duplex/interruption_effects.py": "59b0c8e2c990f263661e6630f46e106f39c24cf09da9af682cffc28c24ebffd0",
+    "/tmp/voice_match_reply_audio.py": "80487a4acae4c9989cce999cf004c882ce2146a2241e30d649fd303218976cfd",
+    "/tmp/voice-reply-capture-worker/sitecustomize.py": "4395f001f6bc9b3291ba71c0378d60f154e97efca97661dfbec09249743bb095",
+    "/tmp/voice_reply_capture_rtc.py": "47810cb039b4c465006072f5d2689194945942cae41af09ace8c79e80533de98"
+  },
+  "diagnostic_source": {
+    "/tmp/voice_match_reply_audio.py": "import json,wave,hashlib\nfrom pathlib import Path\nimport numpy as np\nfrom scipy.signal import correlate\nROOT=Path('/tmp/voice-reply-audio-capture')\ndef read(p):\n with wave.open(str(p),'rb') as f:\n  assert f.getframerate()==16000 and f.getnchannels()==1\n  return np.frombuffer(f.readframes(f.getnframes()),dtype='<i2').astype(float)\ndef match(x,y):\n if len(x)<len(y):return None\n y=y-y.mean(); n=len(y)\n dot=correlate(x,y,mode='valid',method='fft')\n s=np.concatenate(([0.],np.cumsum(x)));q=np.concatenate(([0.],np.cumsum(x*x)))\n den=np.sqrt(np.maximum(0,q[n:]-q[:-n]-(s[n:]-s[:-n])**2/n)*np.sum(y*y))\n scores=np.divide(dot,den,out=np.zeros_like(dot),where=den>1)\n i=int(np.argmax(scores));return {'offset':i,'correlation':float(scores[i])}\nrx=[]\nfor p in ROOT.joinpath('receiver').glob('*.json'):\n d=json.loads(p.read_text());rx.append((p,d,read(p.with_suffix('.wav'))))\nrows=[]\nfor p in ROOT.joinpath('tts').glob('*.json'):\n d=json.loads(p.read_text())\n if not d['turn_id']:continue\n y=read(p.with_suffix('.wav')); first=d['frames'][0]['produced_at']\n candidates=[r for r in rx if r[1]['frames'][0]['received_at']<=first<=r[1]['frames'][-1]['received_at']]\n if len(candidates)!=1:continue\n rp,rd,x=candidates[0]; fs=rd['frames']; onset=next((i for i in range(0,len(y)-320,320) if np.sqrt(np.mean(y[i:i+320]**2))>=120),None)\n if onset is None:continue\n windows=[]\n for delta in (0,8000):\n  a=onset+delta; b=a+6400\n  if b>len(y):continue\n  m=match(x,y[a:b]); pos=m['offset']; f=next(f for f in fs if f['sample_offset']<=pos<f['sample_offset']+f['samples'])\n  old_end=next((f['sample_offset'] for f in fs if f['received_at']>=first),len(x))\n  negative=match(x[:old_end],y[a:b])\n  windows.append({**m,'source_offset':a,'receiver_frame_arrived_at':f['received_at'],'old_audio_control':negative})\n rows.append({'turn_id':d['turn_id'],'room_name':d['room_name'],'text':d['text'][:100],'tts_path':str(p),'receiver_path':str(rp),'source_first_frame_at':first,'source_onset_sample':onset,'windows':windows})\nout=ROOT/'alignment.json';out.write_text(json.dumps(rows,ensure_ascii=False,indent=2)+'\\n')\nprint(out)\nfor row in rows: print(row['turn_id'],row['text'][:20],row['windows'])\n",
+    "/tmp/voice-reply-capture-worker/sitecustomize.py": "\"\"\"Test-worker-only tee of Channel's own public Agent construction hook.\"\"\"\nimport os\nif os.environ.get('VOICE_CAPTURE_TTS_DIR'):\n    import json,time,uuid\n    from pathlib import Path\n    from benchmark.audio_assets import write_wav\n    import eidolon.livekit.agent.full_duplex.pipeline as pipeline_module\n    original_build=pipeline_module.build_full_duplex_agent\n    def observed_build(pipeline):\n        agent=original_build(pipeline)\n        original_tts=agent.tts_node\n        async def observed_tts(text, model_settings):\n            timeline=pipeline._timeline\n            room=getattr(pipeline._room,'name','')\n            turn_id=getattr(timeline,'turn_id',None)\n            parts=[];frames=[];sample_rate=16000;channels=1;chunks=[]\n            async def observed_text():\n                async for chunk in text:\n                    chunks.append(chunk)\n                    yield chunk\n            try:\n                async for packet in original_tts(observed_text(),model_settings):\n                    frame=getattr(packet,'frame',packet)\n                    sample_rate=frame.sample_rate;channels=frame.num_channels\n                    frames.append({'produced_at':time.monotonic(),'bytes':len(frame.data)})\n                    parts.append(bytes(frame.data))\n                    yield packet\n            finally:\n                if parts:\n                    path=Path(os.environ['VOICE_CAPTURE_TTS_DIR']) / f'{turn_id or \"greeting\"}-{uuid.uuid4().hex}.wav'\n                    write_wav(path,b''.join(parts),sample_rate=sample_rate,channels=channels)\n                    path.with_suffix('.json').write_text(json.dumps({'room_name':room,'turn_id':turn_id,'text':''.join(chunks),'sample_rate':sample_rate,'channels':channels,'frames':frames},ensure_ascii=False,indent=2)+'\\n')\n        agent.tts_node=observed_tts\n        return agent\n    pipeline_module.build_full_duplex_agent=observed_build\n",
+    "/tmp/voice_reply_capture_rtc.py": "import asyncio,os\nfrom pathlib import Path\nimport voice_continuation_rtc as continuation\nrunner=continuation.existing.existing.runner\nroot=Path('/tmp/voice-reply-audio-capture')\nargs=continuation.args\nargs[args.index('--livekit-agent-name')+1]='eidolon-voice-reply-capture'\nargs[args.index('--worker-base-port')+1]='18791'\nargs += ['--livekit-audio-capture-dir', str(root/'receiver')]\noriginal_env=runner._worker_env\ndef capture_env(*args,**kwargs):\n    env=original_env(*args,**kwargs)\n    env['VOICE_CAPTURE_TTS_DIR']=str(root/'tts')\n    env['PYTHONPATH']=str(Path.cwd())+os.pathsep+'/tmp/voice-reply-capture-worker'+os.pathsep+env.get('PYTHONPATH','')\n    return env\nrunner._worker_env=capture_env\nif __name__=='__main__':\n    raise SystemExit(asyncio.run(runner._main()))\n"
+  }
+}

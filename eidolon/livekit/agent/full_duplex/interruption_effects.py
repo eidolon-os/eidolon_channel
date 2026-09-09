@@ -466,13 +466,19 @@ class FullDuplexInterruptionEffects:
         )
         self.interrupt_current_turn(force=True)
 
-    @staticmethod
     def _record_duck_event(
+        self,
         timeline: TurnTimeline,
         event: str,
         **fields: object,
     ) -> None:
-        payload = {"event": event, **fields}
+        payload = {"event": event, "at": time.monotonic(), **fields}
+        if event in {"duck_unducked", "output_resumed_pending_evidence"}:
+            # Capture the stop belonging to this recovery, before a later
+            # acoustic segment overwrites the timeline's last stop.
+            speaking = getattr(self._get_session(), "user_state", None) == "speaking"
+            payload["user_speaking"] = speaking
+            payload["speech_stopped_at"] = None if speaking else timeline.timestamps.get("speech_stopped_at")
         events = list(timeline.attrs.get("duck_events") or ())
         events.append(payload)
         timeline.set_attr("duck_events", events)

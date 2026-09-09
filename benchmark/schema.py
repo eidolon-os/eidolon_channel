@@ -130,6 +130,10 @@ class Expectations:
     rejected_turn_brain: str = "any"
     agent_audio_response: str = "auto"
     canonical_contains: tuple[str, ...] = ()
+    # Match one committed canonical turn and its RPC/answer/TTS timestamps.
+    # This proves application-side new reply audio, not RTC speaker playout.
+    canonical_response_required: bool = False
+    max_speech_stop_to_reply_audio_ms: float | None = None
     allow_attention_actions: tuple[str, ...] = ()
     forbid_actions: tuple[str, ...] = ()
     topic_switch_hint: bool = False
@@ -164,6 +168,8 @@ class Expectations:
     max_speech_start_to_suspend_ms: float | None = None
     max_speech_start_to_cancel_ms: float | None = None
     max_speech_start_to_resume_ms: float | None = None
+    # Excludes the user's own speech duration; never measures speaker playout.
+    max_speech_stop_to_resume_ms: float | None = None
     playback_stop_sent: bool | None = None
     ptt_terminal_action: str = ""
     ptt_terminal_reason: str = ""

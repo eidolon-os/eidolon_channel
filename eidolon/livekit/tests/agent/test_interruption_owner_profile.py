@@ -40,7 +40,8 @@ def _speech_start_pipeline(owner: str) -> StreamingPipeline:
     pipeline._provider_events = MagicMock()
     pipeline._user_turns = MagicMock()
     pipeline._user_turns.can_merge_new_speech.return_value = False
-    pipeline._ducking = SimpleNamespace(is_suspended=True)
+    pipeline._ducking = SimpleNamespace(is_suspended=True, installed=True, is_cancelled=False)
+    pipeline._ensure_output_flow = MagicMock()
     pipeline._attention_effects = MagicMock()
     pipeline._interruption_orchestrator = MagicMock()
     eot_model = MagicMock()
@@ -141,6 +142,7 @@ def test_livekit_native_profile_does_not_start_channel_duck_candidate() -> None:
 
     pipeline._attention_effects.handle_speaking_started.assert_not_called()
     pipeline._interruption_orchestrator.start_candidate.assert_not_called()
+    pipeline._ensure_output_flow.assert_not_called()
     assert pipeline._timeline is not None
     assert pipeline._timeline.attrs["interruption_owner"] == "livekit_native_adaptive"
 
@@ -152,6 +154,8 @@ def test_channel_owner_still_soft_ducks_and_starts_candidate() -> None:
 
     pipeline._attention_effects.handle_speaking_started.assert_called_once()
     pipeline._interruption_orchestrator.start_candidate.assert_called_once()
+    assert pipeline._interruption_orchestrator.start_candidate.call_args.kwargs["already_suspended"] is True
+    pipeline._ensure_output_flow.return_value.arm_evidence_timeout.assert_called_once_with()
 
 
 def test_livekit_native_profile_skips_channel_semantic_interrupt_side_effects() -> None:

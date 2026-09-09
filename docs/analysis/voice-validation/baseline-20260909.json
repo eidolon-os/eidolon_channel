@@ -1,0 +1,365 @@
+{
+  "baseline_id": "voice-baseline-20260909",
+  "date": "2026-09-09",
+  "parent_commit": "cd070fe99791d2f5c92759360b772adb0429b4e2",
+  "version_reference": "The Git commit containing this manifest. No release tag or deployment implied.",
+  "status": "frozen engineering baseline with explicit product acceptance gaps",
+  "scope": "Existing cascaded Channel-owned dialogue; no new model, policy branch, SDK patch, dependency change or deployment.",
+  "runtime_delta_from_parent": "Only output recovery observability in full_duplex/interruption_effects.py; policy/timers/models unchanged.",
+  "review_corrections": [
+    "Keep new room audio capture option after existing positional parameters.",
+    "Reject canonical reply evidence without room/turn identity.",
+    "Update stale lifecycle/owner test doubles for already-committed production contracts; preserve assertions and add timer ownership checks."
+  ],
+  "environment": {
+    "eidolon_sdk_source": {
+      "package_root": "/Users/manson/ai/eidolon/eidolon_sdk",
+      "revision": "f82a93bd4749854d227afbeb28e5ea8f6e46c0d0",
+      "dirty": false
+    },
+    "python": "3.13.13",
+    "machine": "arm64",
+    "role": "Mac test host, not target-device acceptance",
+    "versions": {
+      "livekit-agents": "1.7.1",
+      "livekit": "1.1.15",
+      "livekit-api": "1.2.1",
+      "onnxruntime": "1.26.0",
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "pytest": "9.0.3",
+      "eidolon-sdk": "0.1.0"
+    },
+    "lock_sha256": "9ad6ec70007a49849539b748a179435e9050192f21e03be8d5d46d083d60a4aa",
+    "sdk_record_check": {
+      "python_files": 207,
+      "mismatch": []
+    },
+    "eot_model_sha256": {
+      "chinese_best_model_q8.onnx": "e0738b2d2f8cf17ee75fc8ac8a36f2b0a9dcb29f288387df4ab7554f0c3f6317",
+      "tokenizer/tokenizer.json": "bf1b59b7b11c95f194f51708d918eea378e09d05f84c0e1656dc5180e8117088",
+      "tokenizer/config.json": "a8ecea4db687cce851674916271ce65d54982763afedbbef347b7a95913882db"
+    }
+  },
+  "tests": {
+    "initial_core": {
+      "path": "/tmp/voice-baseline-core-20260909.xml",
+      "sha256": "015576c936a928dc092016ded325de5f2fa037113b2e82882730a671caa3212b",
+      "tests": 1421,
+      "passed": 1397,
+      "failed": [
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_start_opens_clean_full_duplex_segment",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_turn_runtime'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_start_does_not_open_candidate_without_interrupt_window",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_turn_runtime'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_start_skips_barge_in_when_half_duplex",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_turn_runtime'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_stop_skips_interruption_resolve_when_half_duplex",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_turn_runtime'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_snapshots_replaced_unmerged_timeline",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_turn_runtime'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_keeps_merge_continuation_timeline",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute 'installed'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_stop_waits_for_framework_completed_turn",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_ensure_output_flow'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_stop_does_not_apply_terminal_reject_policy",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_ensure_output_flow'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_stop_leaves_non_semantic_reject_to_completed_turn_gate",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_ensure_output_flow'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_full_duplex_speech_lifecycle::test_speech_lifecycle_stop_leaves_attention_reject_to_completed_turn_gate",
+          "reason": "AttributeError: 'types.SimpleNamespace' object has no attribute '_ensure_output_flow'"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_interruption_owner_profile::test_channel_owner_still_soft_ducks_and_starts_candidate",
+          "reason": "AssertionError: Expected 'start_candidate' to have been called once. Called 0 times."
+        }
+      ],
+      "skipped_or_xfailed": [
+        {
+          "id": "eidolon.livekit.tests.agent.runtime.test_kernel_body_client::test_consumed_shape_matches_kernel_normative_body_endpoint_schema",
+          "type": "pytest.skip",
+          "reason": "sibling eidolon_kernel checkout is unavailable"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.runtime.test_kernel_body_client::test_the_derived_endpoint_id_this_consumer_composes_matches_the_producer",
+          "type": "pytest.skip",
+          "reason": "sibling eidolon_kernel checkout is unavailable"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u4e0d\\u8981\\u8bb2\\u4e86]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u6362\\u4e2a\\u8bdd\\u9898\\u5427]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u5c31\\u8fd9\\u6837\\u5427]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_livekit_session_commits_complete_turn_within_hard_slo",
+          "type": "pytest.xfail",
+          "reason": "learned EOT still delays a complete short turn beyond the product latency budget"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[hard_stop_short]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[hard_stop_phrase]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[topic_switch]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[correction]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[backchannel]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_final_transcript_hold_cannot_extend_duck_to_six_seconds",
+          "type": "pytest.xfail",
+          "reason": "a final transcript can currently retain the full six-second hold budget"
+        }
+      ]
+    },
+    "stale_fixture_correction": {
+      "path": "/tmp/voice-baseline-fixtures-20260909.xml",
+      "sha256": "74ba54b7665cf3fce6f5f8cf76ab4e37828bbc9340f77806c2dcdcac5ae1be70",
+      "tests": 19,
+      "passed": 19,
+      "failed": [],
+      "skipped_or_xfailed": []
+    },
+    "final_core": {
+      "path": "/tmp/voice-baseline-core-final-20260909.xml",
+      "sha256": "ef320b614f7e3801fed9c1d682c7c89136baeda4d4798dea4be21bec27118977",
+      "tests": 1421,
+      "passed": 1408,
+      "failed": [],
+      "skipped_or_xfailed": [
+        {
+          "id": "eidolon.livekit.tests.agent.runtime.test_kernel_body_client::test_consumed_shape_matches_kernel_normative_body_endpoint_schema",
+          "type": "pytest.skip",
+          "reason": "sibling eidolon_kernel checkout is unavailable"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.runtime.test_kernel_body_client::test_the_derived_endpoint_id_this_consumer_composes_matches_the_producer",
+          "type": "pytest.skip",
+          "reason": "sibling eidolon_kernel checkout is unavailable"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u4e0d\\u8981\\u8bb2\\u4e86]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u6362\\u4e2a\\u8bdd\\u9898\\u5427]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_complete_utterance_clears_framework_eot_threshold[\\u5c31\\u8fd9\\u6837\\u5427]",
+          "type": "pytest.xfail",
+          "reason": "learned EOT sends complete Chinese turns to LiveKit's long-delay band"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_livekit_session_commits_complete_turn_within_hard_slo",
+          "type": "pytest.xfail",
+          "reason": "learned EOT still delays a complete short turn beyond the product latency budget"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[hard_stop_short]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[hard_stop_phrase]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[topic_switch]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[correction]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_playback_interruption_semantics_do_not_depend_on_eot_completeness[backchannel]",
+          "type": "pytest.xfail",
+          "reason": "production has no non-lexical interruption intent implementation"
+        },
+        {
+          "id": "eidolon.livekit.tests.agent.test_eot_full_duplex_product_contract::test_final_transcript_hold_cannot_extend_duck_to_six_seconds",
+          "type": "pytest.xfail",
+          "reason": "a final transcript can currently retain the full six-second hold budget"
+        }
+      ],
+      "deselected_integration": 9
+    },
+    "scenarios_runxfail": {
+      "path": "/tmp/voice-baseline-scenarios-20260909.xml",
+      "sha256": "7161c769c7d4d7a64f63198bf3f83321d4855f7bcc3ef65d59c905926040f30d",
+      "tests": 131,
+      "passed": 125,
+      "failed": [
+        {
+          "id": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-none]",
+          "reason": "AssertionError: incomplete prefix was committed before continuation\nassert ['如果预算不够的话'] == []\n  \n  Left contains one more item: '如果预算不够的话'\n  Use -v to get more diff"
+        },
+        {
+          "id": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-full_duplex-llm]",
+          "reason": "AssertionError: incomplete prefix was committed before continuation\nassert ['如果预算不够的话'] == []\n  \n  Left contains one more item: '如果预算不够的话'\n  Use -v to get more diff"
+        },
+        {
+          "id": "eidolon.livekit.tests.scenarios.test_complete_turn_latency::test_incomplete_turn_survives_long_pause_then_replies_promptly[\\u5982\\u679c\\u9884\\u7b97\\u4e0d\\u591f\\u7684\\u8bdd-\\u5c31\\u9009\\u4fbf\\u5b9c\\u7684\\u3002-half_duplex-none]",
+          "reason": "AssertionError: incomplete prefix was committed before continuation\nassert ['如果预算不够的话'] == []\n  \n  Left contains one more item: '如果预算不够的话'\n  Use -v to get more diff"
+        },
+        {
+          "id": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u597d\\u7684-False-]",
+          "reason": "assert True is False\n +  where True = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x126d0ee40>.interrupted"
+        },
+        {
+          "id": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u4e0d\\u8981\\u505c\\u6b62\\uff0c\\u8bf7\\u7ee7\\u7eed\\u521a\\u624d\\u7684\\u89e3\\u91ca-False-]",
+          "reason": "assert True is False\n +  where True = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x126ad4c80>.interrupted"
+        },
+        {
+          "id": "eidolon.livekit.tests.scenarios.test_human_speaking::test_overlap_intent_contract[\\u4e0d\\u662f\\uff0c\\u6211\\u8bf4\\u7684\\u662f\\u660e\\u5929-True-\\u76ee\\u524d\\u5148\\u6309\\u540e\\u5929\\u6765\\u5b89\\u6392\\uff0c\\u6211\\u63a5\\u4e0b\\u6765\\u4f1a\\u9010\\u9879\\u8bf4\\u660e\\u65f6\\u95f4\\u3001\\u5730\\u70b9\\u548c\\u9700\\u8981\\u51c6\\u5907\\u7684\\u6750\\u6599\\u3002]",
+          "reason": "assert False is True\n +  where False = <livekit.agents.voice.speech_handle.SpeechHandle object at 0x126ad54f0>.interrupted"
+        }
+      ],
+      "skipped_or_xfailed": []
+    }
+  },
+  "rtc": {
+    "original_run": "reply-capture-20260909",
+    "rerun_this_baseline_turn": false,
+    "final_assertions_reanalysis": [
+      {
+        "case_id": "fd_continuation_people_500",
+        "passed": false,
+        "functional": true,
+        "slo": "failed",
+        "reply_audio_ms": 4014.3552080262452,
+        "receiver": "not_measured",
+        "errors": [
+          "timeline speech-stop-to-reply-audio exceeded 2500ms: [4014.4]"
+        ]
+      },
+      {
+        "case_id": "fd_continuation_people_900",
+        "passed": false,
+        "functional": true,
+        "slo": "failed",
+        "reply_audio_ms": 3518.6052080243826,
+        "receiver": "not_measured",
+        "errors": [
+          "timeline speech-stop-to-reply-audio exceeded 2500ms: [3518.6]"
+        ]
+      },
+      {
+        "case_id": "fd_continuation_cost_500",
+        "passed": true,
+        "functional": true,
+        "slo": "passed",
+        "reply_audio_ms": 1313.162042060867,
+        "receiver": "not_measured",
+        "errors": []
+      }
+    ],
+    "waveform_evidence": "rtc-reply-audio-attribution.json",
+    "functional_passed": 3,
+    "application_2500ms_passed": 1,
+    "offline_receiver_attribution_cases": 3,
+    "receiver_automatic_gate": "not_measured",
+    "benchmark_last_voiced_frame_to_receiver_ms": [
+      4878,
+      4398,
+      2205
+    ],
+    "setup_retry_count": 1,
+    "physical_mobile_playout_measured": false
+  },
+  "known_gaps": [
+    "Complete/incomplete EOT quality and six default semantic counterexamples.",
+    "Two continuation samples fail application reply latency; physical speaker latency unmeasured.",
+    "Old output can resume while a user continues speaking during evidence wait.",
+    "Welcome completion detection timed out on first room; root cause unconfirmed.",
+    "Target OPI5 Max/mobile version has not been deployed or tested with this baseline."
+  ],
+  "historical_evidence": {
+    "case-aware-acceptance.json": "222393b74315558acc7076759d529724f37e13e7b2f955da0c463479cf6404f7",
+    "endpoint-wait-causality.json": "7a97978e8e229ef84f873f04152ac4e7b4797d2e6dcefea5dd8eb8cbebf2f24e",
+    "rtc-reply-audio-attribution.json": "447c375505e302662a3c1be75c38021758586c9aabba534aca2e837e3d4b2c24"
+  },
+  "final_changed_code_sha256": {
+    "benchmark/cases/full_duplex/pause_continuation_enforced.yaml": "8b62b7fb2fb77aef4ded7d08c4e5469950e54e15efe363ff8154fd4a127e9a65",
+    "benchmark/livekit_room_runner.py": "d75278b3b7f39e1a8519056d27e32cf23f97429abfc335fcd8dc40653ec93db1",
+    "benchmark/report.py": "0cc12d8af8a53bac0a07ed94de0cc1a7ae194db522b771a12b4ed15e30f3221d",
+    "benchmark/schema.py": "3b8c3b17c1383fff0eaf1eba8c0aaf8f3108800f6ac5af97991c4d7d75c6c8bd",
+    "benchmark/timeline_expectations.py": "ef9bf6c2cd7be840eb134b66a4a46335c259636c19d6ea76169f3f0acaee42f7",
+    "eidolon/livekit/agent/full_duplex/interruption_effects.py": "59b0c8e2c990f263661e6630f46e106f39c24cf09da9af682cffc28c24ebffd0",
+    "eidolon/livekit/tests/agent/test_full_duplex_speech_lifecycle.py": "6145f9cedc94d3de0f4301c4114975f5b973c96f53015f9b2cdb84e26441bd37",
+    "eidolon/livekit/tests/agent/test_interruption_owner_profile.py": "e9ae6bdded17af6e94cd1df204d5258107794a3cfa0118e131c9d7f20ace7a96",
+    "eidolon/livekit/tests/benchmark/test_voice_benchmark.py": "d66024779ec8af5736037fcff992a037957c90bc822a044da4e359d8e8445cd0",
+    "eidolon/livekit/tests/scenarios/test_complete_turn_latency.py": "e26cab9c7cb91e43c019ee9a9bf340a1badb24d347622c1fb04b55d079bc9cd0",
+    "eidolon/livekit/tests/scenarios/test_interrupt_model_timing.py": "3a1631c35fe389d5fb878e53c79382ca2109bd28f4d801d823fe4c5d50e64b5d",
+    "scripts/bench_barge_in_e2e_ab.py": "3c5c65aa74435254bfc3e45212069c40b16aba360ea68cc4b45665c825cd5dfe"
+  },
+  "interpretation": "Unit/mock scenario results are not real-acoustic accuracy. xfail/skipped are not passing acceptance; --runxfail failures are retained. Previous RTC was actual transport with synthetic user audio and real providers. Code changes after that run affect assertions, recording option argument order and fixtures, not dialogue policy.",
+  "validation_checks": {
+    "ruff_serious_errors": "passed",
+    "git_diff_check": "passed",
+    "scenario_warnings": {
+      "count": 82,
+      "reason": "pytest record_property with default xunit2 schema; properties are present in XML"
+    }
+  }
+}

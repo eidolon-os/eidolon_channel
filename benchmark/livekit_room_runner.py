@@ -42,7 +42,7 @@ from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
-from .audio_assets import load_clip_pcm
+from .audio_assets import load_clip_pcm, write_wav
 from .barge_in_latency import receiver_attenuation_ms
 from .device_envelope import (
     audio_state_interval_sec,
@@ -91,6 +91,8 @@ class LiveKitRoomOptions:
     room_prefix: str = ROOM_NAME_PREFIX
     agent_missing_retry_count: int = 1
     case_hard_timeout_grace_sec: float = 8.0
+    # Explicit diagnostic recording; disabled for normal runs.
+    audio_capture_dir: Path | None = None
 
 
 _AGENT_MISSING_ERROR = "timed out waiting for agent participant before user audio"
@@ -333,7 +335,9 @@ async def _run_room_case(
     )
 
     room = rtc.Room()
-    state = _RoomCaseState(started=started, events=events)
+    state = _RoomCaseState(
+        started=started, events=events, audio_capture_dir=options.audio_capture_dir,
+    )
     audio_tasks: list[asyncio.Task] = []
 
     @room.on("data_received")
@@ -925,9 +929,18 @@ async def _capture_pcm(
 
 async def _consume_agent_audio(track: rtc.Track, state: "_RoomCaseState") -> None:
     stream = rtc.AudioStream(track, sample_rate=16_000, num_channels=1, frame_size_ms=20)
+    captured = bytearray() if state.audio_capture_dir is not None else None
+    frame_times: list[dict[str, int | float]] = []
     try:
         async for event in stream:
             payload = bytes(event.frame.data)
+            if captured is not None:
+                frame_times.append({
+                    "sample_offset": len(captured) // 2,
+                    "received_at": time.monotonic(),
+                    "samples": len(payload) // 2,
+                })
+                captured.extend(payload)
             state.agent_audio_frames += 1
             state.agent_audio_bytes += len(payload)
             rms = _pcm16_rms(payload)
@@ -939,6 +952,22 @@ async def _consume_agent_audio(track: rtc.Track, state: "_RoomCaseState") -> Non
                     state.first_agent_audio.set()
     finally:
         await stream.aclose()
+        if state.audio_capture_dir is not None and captured is not None and frame_times:
+            path = state.audio_capture_dir / f"receiver-{uuid.uuid4().hex}.wav"
+            write_wav(path, bytes(captured))
+            timing_path = path.with_suffix(".json")
+            timing_path.write_text(json.dumps({
+                "reference": "RTC decoded frame arrival, not physical speaker playout",
+                "started_monotonic": state.started,
+                "sample_rate": 16000,
+                "track_sid": getattr(track, "sid", ""),
+                "frames": frame_times,
+            }, indent=2) + "\n", encoding="utf-8")
+            state.events.append({
+                "type": "agent_audio_capture",
+                "path": str(path),
+                "timing_path": str(timing_path),
+            })
 
 
 async def _close_room(room: rtc.Room, audio_tasks: list[asyncio.Task]) -> None:
@@ -1138,6 +1167,7 @@ class _RoomCaseState:
     events: list[dict[str, Any]]
     agent_audio_frames: int = 0
     agent_audio_bytes: int = 0
+    audio_capture_dir: Path | None = None
 
     def __post_init__(self) -> None:
         self.timestamps: dict[str, int] = {}

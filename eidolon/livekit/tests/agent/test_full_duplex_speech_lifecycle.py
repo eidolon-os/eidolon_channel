@@ -7,6 +7,7 @@ from eidolon.livekit.agent.full_duplex.speech_lifecycle import (
     FullDuplexSpeechLifecycle,
 )
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 
 
 def _owner() -> SimpleNamespace:
@@ -23,6 +24,7 @@ def _owner() -> SimpleNamespace:
     owner._user_turns = MagicMock()
     owner._user_turns.can_merge_new_speech.return_value = False
     owner._user_turns.current_generation_id = 1
+    owner._turn_runtime = MagicMock(spec=TurnPolicyRuntime)
     owner._skip_commit_after_interrupt_cancel = True
     owner._suppress_commit_after_interrupt_until = 123.0
     owner._suppress_transcripts_until_next_speech = True
@@ -51,8 +53,11 @@ def _owner() -> SimpleNamespace:
     owner._attention_effects = MagicMock()
     owner._attention_effects.handle_speaking_started.return_value = True
     owner._attach_transcript_ingress_recent_events = MagicMock()
-    owner._ducking = SimpleNamespace(is_suspended=True)
+    owner._ducking = SimpleNamespace(is_suspended=True, installed=True, is_cancelled=False)
+    owner._output_flow = SimpleNamespace(arm_evidence_timeout=MagicMock())
+    owner._ensure_output_flow = MagicMock(return_value=owner._output_flow)
     owner._interruption_orchestrator = MagicMock()
+    owner._interruption_orchestrator.awaiting_post_speech_evidence = False
     owner._interruption_orchestrator.current_transcript = ""
     owner._interruption_orchestrator.current_final_transcript = ""
     owner._record_full_duplex_transition = MagicMock()
@@ -93,7 +98,10 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._timeline is not None
     assert owner._timeline.attrs["room_name"] == "room-a"
     assert owner._timeline.attrs["participant_identity"] == "device-a"
-    owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
+    owner._user_turns.start_speech.assert_called_once_with(
+        timeline=owner._timeline, continue_pending=False,
+    )
+    owner._turn_runtime.reset_interruption_evidence.assert_called_once_with()
     owner._agent_output.link_interruption_candidate.assert_called_once_with(owner._timeline)
     owner._append_turn_timeline_snapshot.assert_not_called()
     owner._attach_transcript_ingress_recent_events.assert_called_once_with("speech_started")
@@ -112,7 +120,9 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     owner._interruption_orchestrator.start_candidate.assert_called_once_with(
         timeline=owner._timeline,
         generation_id=1,
+        already_suspended=True,
     )
+    owner._output_flow.arm_evidence_timeout.assert_called_once_with()
     owner._record_full_duplex_transition.assert_called_once()
     assert owner._record_full_duplex_transition.call_args.args[0].value == ("user_speech_open")
     assert owner._record_full_duplex_transition.call_args.kwargs["event"] == ("speech_started")
@@ -126,6 +136,7 @@ def test_speech_lifecycle_start_does_not_open_candidate_without_interrupt_window
 
     owner._attention_effects.handle_speaking_started.assert_called_once_with()
     owner._interruption_orchestrator.start_candidate.assert_not_called()
+    owner._output_flow.arm_evidence_timeout.assert_not_called()
 
 
 def test_speech_lifecycle_start_skips_barge_in_when_half_duplex() -> None:
@@ -145,7 +156,10 @@ def test_speech_lifecycle_start_skips_barge_in_when_half_duplex() -> None:
     # Shared turn setup still runs — the user turn must proceed to the framework's
     # normal endpointing/commit path.
     owner._callbacks.on_user_started_speaking.assert_called_once_with()
-    owner._user_turns.start_speech.assert_called_once_with(timeline=owner._timeline)
+    owner._user_turns.start_speech.assert_called_once_with(
+        timeline=owner._timeline, continue_pending=False,
+    )
+    owner._output_flow.arm_evidence_timeout.assert_not_called()
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)
 
 

@@ -1,0 +1,143 @@
+{
+  "date": "2026-09-09",
+  "baseline_commit": "cd070fe",
+  "scope": "Correct acceptance assertions and recovery clocks; case-specific budgets without changing production policy.",
+  "threshold_policy": {
+    "legacy_900ms": "max_speech_start_to_resume_ms for brief-backchannel cases; includes the user speech duration. Original numeric thresholds retained.",
+    "new_optional_metric": "max_speech_stop_to_resume_ms, configured per case; excludes user speech duration. No new runtime timeout or user profiling.",
+    "slow_or_paused_speech": "Protect continuation and one complete commit. Longer continuation tolerance does not automatically justify longer reply latency after completion or slower initial attenuation.",
+    "reply_gate": "Existing 2500 ms reply objective added as a necessary server VAD-stop to same-request TTS-first-audio gate in the three continuation cases. Does not certify receiver or physical speaker latency."
+  },
+  "changes": [
+    "All canonical_contains fragments must appear in one text, not across turns or fields.",
+    "canonical_response_required binds complete canonical text to ordered same-turn commit, RPC, answer delta and TTS first audio.",
+    "No configured latency gate produces experience_slo_passed=null / not_evaluated, with report counts separate from failures.",
+    "Application output recovery events carry an operation timestamp, contemporaneous stop boundary and user_speaking flag. Later candidate resolution cannot substitute for provisional recovery.",
+    "Removed mandatory minimum waits from the prior diagnostic scenario; timing remains recorded and incomplete-turn guards remain."
+  ],
+  "tests": {
+    "benchmark_and_timeline_units": {
+      "path": "/tmp/voice-acceptance-contract-unit-complete.xml",
+      "sha256": "a85f2914fb4220b678536ef9950053f358709af491bac977ff7efc3562b47eb9",
+      "tests": 208,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "passed": 208
+    },
+    "recovery_framework": {
+      "path": "/tmp/voice-acceptance-recovery-verified.xml",
+      "sha256": "dd7655e610d1483978c6d36a6e21830741367170599515f86e50d6e8427c184a",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 7
+    },
+    "endpoint_guards": {
+      "path": "/tmp/voice-acceptance-endpoint-guards.xml",
+      "sha256": "fc12da036219beff39ff20c3a22a00b5d8321940667df33d6cece1c66e712779",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 6
+    }
+  },
+  "recovery_clock_observation": {
+    "output_recovery": {
+      "event": "output_resumed_pending_evidence",
+      "at": 1667191.933347708,
+      "reason": "continuation_grace_elapsed_pending_evidence",
+      "user_speaking": false,
+      "speech_stopped_at": 1667191.132121375
+    },
+    "stop_to_recovery_ms": 801.2263330165297,
+    "candidate_resolved_elapsed_ms": 6701.566458214074,
+    "output_resume_decision_elapsed_ms": 1500.809625023976
+  },
+  "archived_rtc_reanalysis": {
+    "new_rtc_run": false,
+    "source": "/tmp/voice-stage-rpc/continuation-complete-20260908/barge_in_e2e_ab/channel",
+    "cases": [
+      {
+        "case_id": "fd_continuation_people_500",
+        "passed_configured_gates": false,
+        "functional_passed": true,
+        "slo_status": "failed",
+        "same_request_vad_stop_to_tts_ms": 3745.8799998275936,
+        "receiver_status": "not_measured",
+        "errors": [
+          "timeline speech-stop-to-reply-audio exceeded 2500ms: [3745.9]"
+        ]
+      },
+      {
+        "case_id": "fd_continuation_people_900",
+        "passed_configured_gates": false,
+        "functional_passed": true,
+        "slo_status": "failed",
+        "same_request_vad_stop_to_tts_ms": 3852.0854169037193,
+        "receiver_status": "not_measured",
+        "errors": [
+          "timeline speech-stop-to-reply-audio exceeded 2500ms: [3852.1]"
+        ]
+      },
+      {
+        "case_id": "fd_continuation_cost_500",
+        "passed_configured_gates": true,
+        "functional_passed": true,
+        "slo_status": "passed",
+        "same_request_vad_stop_to_tts_ms": 1126.1095409281552,
+        "receiver_status": "not_measured",
+        "errors": []
+      }
+    ],
+    "reports": [
+      {
+        "path": "/tmp/voice-acceptance-reanalysis/metrics.json",
+        "sha256": "3ded258cc6db68612eb433401704608c2804bafdc15d661ef472671def5a2cb2"
+      },
+      {
+        "path": "/tmp/voice-acceptance-reanalysis/report.md",
+        "sha256": "4c3b81074f5269ec099a02f7aa5392623f68fb837322224bf6b19badd4d838b4"
+      }
+    ]
+  },
+  "negative_tests": [
+    "Split canonical across different turns or fields.",
+    "Missing commit, answer delta or reply audio.",
+    "Audio timestamp precedes request; only another request produces audio.",
+    "Configured reply deadline fails despite functional success; missing reply also fails.",
+    "Identical 200 ms recovery overhead after 300 ms versus 2 s speech: stop-relative budget passes both; legacy 900 ms onset-relative budget still fails the longer sample.",
+    "Missing timestamp on provisional recovery cannot be replaced by a later terminal verdict."
+  ],
+  "sdk_integrity": {
+    "package": "livekit-agents",
+    "version": "1.7.1",
+    "python_files_checked": 207,
+    "mismatches": []
+  },
+  "architecture": "Production change is recovery-event metadata only in FullDuplexInterruptionEffects; other runtime behavior files match prior validated hashes. No SDK, model, mode, timer or user-profile policy change.",
+  "limits": [
+    "Receiver frames are not yet attributed to the new reply; canonical_reply_receiver_status remains not_measured. after_user_done continues to mean only some audio arrived after input.",
+    "The full end-user delay starts earlier than server VAD stop and ends later than application TTS; the new 2500 ms gate is only a necessary stage check.",
+    "Long ongoing speech can still trigger existing provisional recovery after its budget; now observable, not declared a good experience.",
+    "No deployment or mobile/OPI5 Max speaker retest. Original two response-latency gaps remain.",
+    "One initial instrumentation assertion expected interrupt_resolved_at after candidate-only expiry; that mark does not exist there. The corrected test uses existing owner events. No runtime behavior was changed for this test error."
+  ],
+  "modified_source_sha256": {
+    "benchmark/cases/full_duplex/pause_continuation_enforced.yaml": "8b62b7fb2fb77aef4ded7d08c4e5469950e54e15efe363ff8154fd4a127e9a65",
+    "benchmark/report.py": "0cc12d8af8a53bac0a07ed94de0cc1a7ae194db522b771a12b4ed15e30f3221d",
+    "benchmark/schema.py": "3b8c3b17c1383fff0eaf1eba8c0aaf8f3108800f6ac5af97991c4d7d75c6c8bd",
+    "benchmark/timeline_expectations.py": "d7e2cb43f8b0d84687e442990a3a4fd2875fbb962174cf1cbfb6f28b82c23e2e",
+    "docs/analysis/voice-optimization-acceptance.md": "ffad80f4cec9ca71f3d839c359693646ee6c24ff00fa194c6360c05c3d0b337c",
+    "eidolon/livekit/agent/full_duplex/interruption_effects.py": "59b0c8e2c990f263661e6630f46e106f39c24cf09da9af682cffc28c24ebffd0",
+    "eidolon/livekit/tests/benchmark/test_voice_benchmark.py": "2c1eb2522939050fc65c233cd74138bc63548848da7024193c68ebbd143f4d06",
+    "eidolon/livekit/tests/scenarios/test_complete_turn_latency.py": "e26cab9c7cb91e43c019ee9a9bf340a1badb24d347622c1fb04b55d079bc9cd0",
+    "eidolon/livekit/tests/scenarios/test_interrupt_model_timing.py": "3a1631c35fe389d5fb878e53c79382ca2109bd28f4d801d823fe4c5d50e64b5d"
+  },
+  "raw_reanalysis_launcher": {
+    "path": "/tmp/voice_acceptance_replay.py",
+    "sha256": "a30e45b15306e66ec0a0d8a66122287ac1de4944bce370a5d308120447db939e"
+  }
+}

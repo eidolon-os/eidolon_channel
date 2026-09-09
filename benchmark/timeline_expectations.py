@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -65,12 +66,29 @@ def apply_timeline_expectations(
 
         prior_errors = list(result.errors)
         errors = _expectation_errors(result.case_id, expected, case_records)
-        functional_errors, experience_errors = _split_expectation_errors(errors)
-        all_functional_errors = [*prior_errors, *functional_errors]
-        result.metrics["functional_outcome_passed"] = not all_functional_errors
-        result.metrics["experience_slo_passed"] = not experience_errors
-        result.metrics["functional_outcome_errors"] = "\n".join(all_functional_errors)
+        functional_errors, experience_errors = _split_expectation_errors([*prior_errors, *errors])
+        slo_configured = any(
+            field.name.startswith("max_") and field.name.endswith("_ms")
+            and getattr(expected, field.name) is not None
+            for field in fields(expected)
+        )
+        result.metrics["functional_outcome_passed"] = not functional_errors
+        result.metrics["experience_slo_passed"] = (
+            False if experience_errors else True if slo_configured else None
+        )
+        result.metrics["experience_slo_status"] = (
+            "failed" if experience_errors else "passed" if slo_configured else "not_evaluated"
+        )
+        result.metrics["functional_outcome_errors"] = "\n".join(functional_errors)
         result.metrics["experience_slo_errors"] = "\n".join(experience_errors)
+        if expected.canonical_response_required:
+            matched = _canonical_reply_records(case_records, expected.canonical_contains)
+            result.metrics["canonical_reply_audio_source"] = "application_tts"
+            result.metrics["canonical_reply_receiver_status"] = "not_measured"
+            if matched:
+                result.metrics["canonical_reply_speech_stop_to_audio_ms"] = max(
+                    _reply_audio_duration_ms(record) for record in matched
+                )
         result.errors.extend(errors)
         result.passed = result.passed and not errors
 
@@ -96,6 +114,8 @@ def _is_experience_slo_error(error: str) -> bool:
         "timeline missing speech-start-to-suspend duration",
         "timeline missing speech-start-to-cancel duration",
         "timeline missing speech-start-to-resume duration",
+        "timeline missing speech-stop-to-resume duration",
+        "timeline missing speech-stop-to-reply-audio duration",
     }
 
 
@@ -232,9 +252,21 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
         elif rejected_turn_brain not in ("required", "forbidden"):
             errors.append(f"unknown rejected_turn_brain expectation={rejected_turn_brain!r}")
 
-    for needle in getattr(expected, "canonical_contains", ()) or ():
-        if not _canonical_contains(records, str(needle)):
-            errors.append(f"timeline canonical text missing {needle!r}")
+    needles = getattr(expected, "canonical_contains", ()) or ()
+    if needles and not _canonical_contains(records, needles):
+        errors.append(f"timeline canonical text missing complete expression {list(needles)!r}")
+    if expected.canonical_response_required or expected.max_speech_stop_to_reply_audio_ms is not None:
+        matched = _canonical_reply_records(records, needles)
+        if not matched:
+            errors.append("timeline missing new reply audio for one complete committed canonical turn")
+            if expected.max_speech_stop_to_reply_audio_ms is not None:
+                errors.append("timeline missing speech-stop-to-reply-audio duration")
+        elif expected.max_speech_stop_to_reply_audio_ms is not None:
+            slow = [round(_reply_audio_duration_ms(record), 1) for record in matched
+                    if _reply_audio_duration_ms(record) > expected.max_speech_stop_to_reply_audio_ms]
+            if slow:
+                errors.append("timeline speech-stop-to-reply-audio exceeded "
+                              f"{expected.max_speech_stop_to_reply_audio_ms}ms: {slow}")
 
     if expected.topic_switch_hint and not _any_decision_flag(records, "topic_switch_hint"):
         errors.append("timeline expected topic_switch_hint=True")
@@ -389,6 +421,15 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
             errors.append("timeline missing speech-start-to-resume duration")
 
     playback_stop_sent = getattr(expected, "playback_stop_sent", None)
+    if expected.max_speech_stop_to_resume_ms is not None:
+        durations = _speech_stop_to_resume_durations_ms(records)
+        if not durations and _has_interrupt_started(records):
+            errors.append("timeline missing speech-stop-to-resume duration")
+        slow = [round(value, 1) for value in durations
+                if value > expected.max_speech_stop_to_resume_ms]
+        if slow:
+            errors.append("timeline speech-stop-to-resume exceeded "
+                          f"{expected.max_speech_stop_to_resume_ms}ms: {slow}")
     if playback_stop_sent is not None:
         saw_stop = _client_control_sent(records, "playback.stop")
         if playback_stop_sent and not saw_stop:
@@ -580,8 +621,8 @@ def _rejected_turn_records(records: list[dict[str, Any]]) -> list[dict[str, Any]
     return rejected
 
 
-def _canonical_contains(records: list[dict[str, Any]], needle: str) -> bool:
-    if not needle:
+def _canonical_contains(records: list[dict[str, Any]], needles: tuple[str, ...]) -> bool:
+    if not needles:
         return True
     for record in records:
         attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
@@ -604,9 +645,40 @@ def _canonical_contains(records: list[dict[str, Any]], needle: str) -> bool:
                 text = value.get(text_key)
                 if isinstance(text, str) and text:
                     candidates.append(text)
-        if any(needle in text for text in candidates):
+        if any(all(needle in text for needle in needles) for text in candidates):
             return True
     return False
+
+
+def _canonical_reply_records(records: list[dict[str, Any]], needles: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Require one request's full canonical text and ordered reply evidence.
+
+    A prefix in one snapshot, a tail in another, or old response audio cannot
+    establish this contract. Receiver frames still need separate attribution.
+    """
+    matched = {}
+    for record in records:
+        attrs = _mapping(record.get("attrs"))
+        if not record.get("turn_id") or not attrs.get("room_name"):
+            continue
+        text = _mapping(attrs.get("canonical_user_text")).get("text_preview")
+        if not isinstance(text, str) or not text or not all(n in text for n in needles):
+            continue
+        stamps = _mapping(record.get("timestamps"))
+        chain = [_number(stamps.get(key)) for key in (
+            "speech_stopped_at", "turn_committed_at", "brain_request_sent_at",
+            "brain_first_answer_delta_at", "tts_first_audio_at",
+        )]
+        if any(value is None for value in chain) or chain != sorted(chain):
+            continue
+        key = (attrs.get("room_name"), record.get("turn_id"), stamps["brain_request_sent_at"])
+        matched[key] = record
+    return list(matched.values())
+
+
+def _reply_audio_duration_ms(record: dict[str, Any]) -> float:
+    stamps = record["timestamps"]
+    return (stamps["tts_first_audio_at"] - stamps["speech_stopped_at"]) * 1000.0
 
 
 def _is_resolved_interrupt(record: dict[str, Any]) -> bool:
@@ -948,12 +1020,36 @@ def _speech_start_to_cancel_durations_ms(records: list[dict[str, Any]]) -> list[
 def _speech_start_to_resume_durations_ms(records: list[dict[str, Any]]) -> list[float]:
     durations: list[float] = []
     for record in records:
+        recovery_events = _output_recovery_events(record)
+        if recovery_events:
+            start = _number(_mapping(record.get("timestamps")).get("speech_started_at"))
+            if start is not None:
+                measured = [(at - start) * 1000.0 for event in recovery_events
+                            if (at := _number(event.get("at"))) is not None and at >= start]
+                if measured:
+                    durations.extend(measured)
+                    continue
+            if any(event.get("event") == "output_resumed_pending_evidence" for event in recovery_events):
+                # Older traces record provisional recovery without a clock.
+                # Its later terminal verdict cannot stand in for playback.
+                continue
         if not _record_is_resume(record):
             continue
         duration = _speech_start_to_action_resolved_ms(record, "rollback")
         if duration is not None:
             durations.append(duration)
     return durations
+
+
+def _output_recovery_events(record: dict[str, Any]) -> list[dict[str, Any]]:
+    return [event for event in _duck_events(record)
+            if event.get("event") in {"duck_unducked", "output_resumed_pending_evidence"}]
+
+
+def _speech_stop_to_resume_durations_ms(records: list[dict[str, Any]]) -> list[float]:
+    return [(at - stop) * 1000.0 for record in records for event in _output_recovery_events(record)
+            if (at := _number(event.get("at"))) is not None
+            and (stop := _number(event.get("speech_stopped_at"))) is not None and at >= stop]
 
 
 def _speech_start_to_action_resolved_ms(

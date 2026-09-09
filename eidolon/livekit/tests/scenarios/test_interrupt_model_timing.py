@@ -276,6 +276,11 @@ async def test_resumed_output_keeps_receiving_interruption_evidence(continuation
             assert pipeline._ducking.mixer.state != 'SUSPENDED'
             assert not speech.interrupted
             assert not h.events.user_messages()
+            if continuation == 'long_active_speech':
+                recovery = next(event for event in pipeline._timeline.attrs['duck_events']
+                    if event['event'] == 'output_resumed_pending_evidence')
+                assert recovery['user_speaking'] is True
+                assert recovery['speech_stopped_at'] is None
             await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
                 and getattr(e.payload.item, 'text_content', '') == '已收到修改。', timeout=7)
             assert speech.interrupted
@@ -287,7 +292,7 @@ async def test_resumed_output_keeps_receiving_interruption_evidence(continuation
 
 
 @pytest.mark.asyncio
-async def test_incomplete_speech_resumes_output_then_expires_without_reply():
+async def test_incomplete_speech_resumes_output_then_expires_without_reply(record_property):
     text = '关于配送时间'
     llm = MockLLM.scripted([('', '不应调用')])
     async with production_session(
@@ -306,7 +311,19 @@ async def test_incomplete_speech_resumes_output_then_expires_without_reply():
             await _wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
             assert pipeline._ducking.mixer.state != 'SUSPENDED'
             assert pipeline._interruption_orchestrator.active
+            timeline = pipeline._timeline
+            recovery = next(event for event in timeline.attrs['duck_events']
+                if event['event'] == 'output_resumed_pending_evidence')
+            assert recovery['at'] >= recovery['speech_stopped_at']
+            record_property('output_recovery', json.dumps(recovery))
             await _wait_until(lambda: not pipeline._interruption_orchestrator.active, timeout=6)
+            events = timeline.attrs['interruption_orchestrator_events']
+            resolved = next(event for event in events if event['event'] == 'candidate_resolved')
+            resumed = next(event for event in events
+                if event['event'] == 'turn_policy_decision' and event['action'] == 'resume')
+            record_property('candidate_resolved_elapsed_ms', resolved['elapsed_ms'])
+            record_property('output_resume_decision_elapsed_ms', resumed['elapsed_ms'])
+            assert resolved['elapsed_ms'] > resumed['elapsed_ms']
             assert not h.events.user_messages()
             assert llm.call_count == 0
             assert not speech.interrupted

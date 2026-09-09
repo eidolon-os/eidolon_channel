@@ -20,6 +20,97 @@ from .._harness.production import production_session
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('score', [.424, .95], ids=['uncertain', 'complete'])
+@pytest.mark.parametrize('vad_silence', [.2, .5])
+async def test_endpointing_preserves_complete_text_after_interruption(
+    score, vad_silence, monkeypatch, record_property,
+):
+    """Protect complete text and the fast path; observe uncertain-turn timing.
+
+    Scores are injected at the Channel model boundary. A complete result must
+    take the fast path. Uncertain timing is recorded for diagnosis, not fixed
+    as a product requirement; paused-turn tests guard premature completion.
+    """
+    text, reply = '请调整一下参加活动的人数。', '已收到修改。'
+    async with production_session(
+        welcome='我先介绍原来的安排，后面还有几项细节需要继续说明。',
+        llm=MockLLM.scripted([('', reply)]),
+        stt=MockSTT.scripted([ScriptedTranscript(text=text, trigger_after_ms=700)]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350),
+            MockVADEvent('end', 1000, .1, silence_duration=vad_silence),
+        ]),
+    ) as (pipeline, h):
+        monkeypatch.setattr(pipeline._get_eot_model()._context_eot,
+            'semantic_completeness_score', lambda text: score)
+        h.audio_in.feed_pcm(synth_voiced(1.2))
+        await h.audio_out.wait_for_first_audio()
+        old_speech = h.session.current_speech
+        await h.events.wait_for(lambda e: e.type == 'user_input_transcribed'
+            and e.payload.transcript == text and e.payload.is_final, timeout=3)
+        timeline = pipeline._timeline
+        await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+            and getattr(e.payload.item, 'text_content', '') == reply, timeout=7)
+        marks = timeline.timestamps
+        stop_to_commit = (marks['turn_committed_at'] - marks['speech_stopped_at']) * 1000
+        cancel_to_commit = (marks['turn_committed_at'] - marks['interrupt_cancel_resolved_at']) * 1000
+        record_property('stop_to_commit_ms', stop_to_commit)
+        record_property('cancel_to_commit_ms', cancel_to_commit)
+        record_property('injected_eot_score', score)
+        record_property('vad_silence_sec', vad_silence)
+        assert old_speech.interrupted
+        assert h.events.user_messages() == [text]
+        if score >= .5:
+            assert 0 <= stop_to_commit <= 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prefix,tail', [
+    ('如果参加人数改成两个人', '费用需要重新计算。'),
+    ('如果把出发时间改到下午', '就不用安排午饭了。'),
+])
+async def test_confirmed_interrupt_does_not_finish_a_paused_user_turn(
+    prefix, tail, monkeypatch, record_property,
+):
+    """A user may still continue after the old reply has been interrupted."""
+    reply = '收到完整的修改要求。'
+    llm = MockLLM.scripted([('', reply)])
+    async with production_session(
+        welcome='我先介绍原来的安排，接下来还有几项具体内容需要说明。',
+        llm=llm,
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix, trigger_after_ms=700),
+            ScriptedTranscript(text=tail, trigger_after_ms=3150),
+        ]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1000, .1, silence_duration=.5),
+            MockVADEvent('start', 2600), MockVADEvent('end', 3500, .1, silence_duration=.5),
+        ]),
+    ) as (pipeline, h):
+        monkeypatch.setattr(pipeline._get_eot_model()._context_eot,
+            'semantic_completeness_score', lambda text: .95 if tail in text else .424)
+        h.audio_in.feed_pcm(synth_voiced(3.7))
+        await h.audio_out.wait_for_first_audio()
+        old_speech = h.session.current_speech
+        await h.events.wait_for(lambda e: e.type == 'user_state_changed'
+            and e.payload.new_state == 'speaking'
+            and sum(s.payload.new_state == 'speaking'
+                for s in h.events.of_type('user_state_changed')) == 2, timeout=5)
+        record_property('premature_messages', json.dumps(h.events.user_messages(), ensure_ascii=False))
+        record_property('old_speech_interrupted', old_speech.interrupted)
+        assert old_speech.interrupted, 'test must reach an accepted interruption before continuation'
+        assert not h.events.user_messages(), 'interruption acceptance must not commit the unfinished turn'
+        assert llm.call_count == 0
+        await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+            and getattr(e.payload.item, 'text_content', '') == reply, timeout=5)
+        assert len(h.events.user_messages()) == 1
+        assert prefix in h.events.user_messages()[0] and tail in h.events.user_messages()[0]
+        assert llm.call_count == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('provider,prefix,tail', [
     ('llm', '不是。', '我刚才说错了。'),
     ('none', '我想改一下。', '不是明天是后天。'),

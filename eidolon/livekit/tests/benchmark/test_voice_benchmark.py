@@ -1984,13 +1984,60 @@ async def test_consume_agent_audio_closes_stream_when_cancelled(
             closed.set()
 
     monkeypatch.setattr(runner.rtc, "AudioStream", lambda *_args, **_kwargs: FakeStream())
-    task = asyncio.create_task(runner._consume_agent_audio(object(), object()))
+    state = runner._RoomCaseState(started=time.monotonic(), events=[])
+    task = asyncio.create_task(runner._consume_agent_audio(object(), state))
     await asyncio.sleep(0)
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
 
     assert closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture", [False, True])
+async def test_receiver_audio_capture_preserves_pcm_and_frame_arrival(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capture: bool,
+) -> None:
+    import wave
+    from benchmark import livekit_room_runner as runner
+
+    payloads = [b"\x01\x02" * 320, b"\x03\x04" * 320]
+    closed = asyncio.Event()
+
+    class FakeStream:
+        def __aiter__(self):
+            return self.frames()
+
+        async def frames(self):
+            for payload in payloads:
+                yield SimpleNamespace(frame=SimpleNamespace(data=payload))
+
+        async def aclose(self):
+            closed.set()
+
+    monkeypatch.setattr(runner.rtc, "AudioStream", lambda *_a, **_kw: FakeStream())
+    state = runner._RoomCaseState(
+        started=time.monotonic(), events=[],
+        audio_capture_dir=tmp_path if capture else None,
+    )
+    await runner._consume_agent_audio(SimpleNamespace(sid="test-track"), state)
+    assert closed.is_set()
+    assert state.agent_audio_frames == 2
+    if not capture:
+        assert list(tmp_path.iterdir()) == []
+        assert state.events == []
+        return
+    event, = state.events
+    with wave.open(event["path"], "rb") as recording:
+        assert recording.getframerate() == 16000
+        assert recording.getnchannels() == 1
+        assert recording.readframes(recording.getnframes()) == b"".join(payloads)
+    timing = json.loads(Path(event["timing_path"]).read_text())
+    assert timing["track_sid"] == "test-track"
+    assert [frame["sample_offset"] for frame in timing["frames"]] == [0, 320]
+    assert [frame["samples"] for frame in timing["frames"]] == [320, 320]
+    assert all(frame["received_at"] >= state.started for frame in timing["frames"])
 
 
 @pytest.mark.asyncio
@@ -4731,3 +4778,148 @@ def test_room_metrics_keep_input_onset_and_audio_attenuation_separate_from_reply
     metrics = state.metrics()
     assert metrics['user_start_to_rtc_attenuation_ms'] == 260
     assert metrics['user_done_to_agent_audio_after_user_done_ms'] == 100
+
+
+def _canonical_response_case():
+    from benchmark.schema import Expectations
+    suite = load_suite('benchmark/cases/full_duplex/pause_continuation_enforced.yaml')
+    case = replace(suite.cases[0], expectations=Expectations(
+        action='any', canonical_contains=('前半句', '后半句'), canonical_response_required=True,
+    ))
+    record = {
+        'turn_id': 'complete-turn',
+        'attrs': {
+            'room_name': f'voice-bench-{case.case_id}-1234abcd',
+            'canonical_user_text': {'text_preview': '前半句。后半句。'},
+        },
+        'timestamps': {
+            'speech_stopped_at': 10.0, 'turn_committed_at': 10.2,
+            'brain_request_sent_at': 10.3, 'brain_first_answer_delta_at': 10.5,
+            'tts_first_audio_at': 11.0,
+        },
+    }
+    return replace(suite, cases=(case,)), record
+
+
+def _apply_record_expectations(tmp_path, suite, records):
+    case = suite.cases[0]
+    run = _expectation_run(case.case_id, case.suite)
+    # Old RTC frames alone must not prove that this request produced a reply.
+    run.cases[0].metrics['agent_audio_bytes'] = 10000
+    path = tmp_path / 'timeline.jsonl'
+    path.write_text(''.join(json.dumps(r) + '\n' for r in records))
+    apply_timeline_expectations(run, [suite], path)
+    return run
+
+
+@pytest.mark.parametrize('fault', [
+    'split_turns', 'split_fields', 'uncommitted', 'old_audio', 'missing_audio',
+    'missing_answer', 'other_reply_only', 'missing_turn_id',
+])
+def test_canonical_reply_rejects_unrelated_or_incomplete_evidence(tmp_path, fault):
+    suite, record = _canonical_response_case()
+    records = [record]
+    if fault in {'split_turns', 'other_reply_only'}:
+        other = json.loads(json.dumps(record))
+        other['turn_id'] = 'other-turn'
+        other['attrs']['canonical_user_text']['text_preview'] = '后半句' if fault == 'split_turns' else '旧问题'
+        records.append(other)
+        if fault == 'split_turns':
+            record['attrs']['canonical_user_text']['text_preview'] = '前半句'
+        else:
+            del record['timestamps']['tts_first_audio_at']
+    elif fault == 'split_fields':
+        record['attrs']['canonical_user_text']['text_preview'] = '前半句'
+        record['attrs']['framework_completed_turn'] = {'text_preview': '后半句'}
+    elif fault == 'uncommitted':
+        del record['timestamps']['turn_committed_at']
+    elif fault == 'old_audio':
+        record['timestamps']['tts_first_audio_at'] = 9.0
+    elif fault == 'missing_turn_id':
+        del record['turn_id']
+    else:
+        del record['timestamps']['tts_first_audio_at' if fault == 'missing_audio' else 'brain_first_answer_delta_at']
+    run = _apply_record_expectations(tmp_path, suite, records)
+    assert not run.cases[0].passed
+    assert any('new reply audio' in error for error in run.cases[0].errors)
+    if fault.startswith('split'):
+        assert any('complete expression' in error for error in run.cases[0].errors)
+
+
+def test_canonical_reply_reports_unmeasured_slo_and_receiver_separately(tmp_path):
+    suite, record = _canonical_response_case()
+    run = _apply_record_expectations(tmp_path, suite, [record, record])
+    result = run.cases[0]
+    assert result.passed
+    assert result.metrics['canonical_reply_speech_stop_to_audio_ms'] == 1000
+    assert result.metrics['canonical_reply_receiver_status'] == 'not_measured'
+    assert result.metrics['experience_slo_passed'] is None
+    assert result.metrics['experience_slo_status'] == 'not_evaluated'
+    assert aggregate(run.cases)['experience_slo_not_evaluated'] == 1
+    assert aggregate_runs([run])['experience_slo_not_evaluated'] == 1
+    assert aggregate(run.cases)['reply_receiver_not_measured'] == 1
+    from benchmark.report import render_markdown
+    rendered = render_markdown({'run': {'run_id': run.run_id, 'git_sha': run.git_sha,
+        'runner': run.runner, 'profile': run.profile}, 'summary': aggregate(run.cases), 'cases': []})
+    assert '接收端新回复出声未验收样本：`1`' in rendered
+
+
+@pytest.mark.parametrize('audio_at,expected_functional,expected_slo', [
+    (11.0, True, True), (13.0, True, False), (None, False, False),
+])
+def test_canonical_reply_latency_is_for_the_same_committed_request(
+    tmp_path, audio_at, expected_functional, expected_slo,
+):
+    suite, record = _canonical_response_case()
+    case = suite.cases[0]
+    suite = replace(suite, cases=(replace(case, expectations=replace(
+        case.expectations, max_speech_stop_to_reply_audio_ms=2500,
+    )),))
+    record['timestamps']['tts_first_audio_at'] = audio_at
+    run = _apply_record_expectations(tmp_path, suite, [record])
+    result = run.cases[0]
+    assert result.metrics['functional_outcome_passed'] is expected_functional
+    assert result.metrics['experience_slo_passed'] is expected_slo
+    assert result.passed is (expected_functional and expected_slo)
+
+
+@pytest.mark.parametrize('speech_duration', [.3, 2.0])
+def test_recovery_budget_can_exclude_user_speech_duration(tmp_path, speech_duration):
+    from benchmark.schema import Expectations
+    suite, record = _canonical_response_case()
+    case = suite.cases[0]
+    suite = replace(suite, cases=(replace(case, expectations=Expectations(
+        action='any', max_speech_stop_to_resume_ms=900,
+    )),))
+    stopped = 10.0 + speech_duration
+    record['timestamps'] = {
+        'speech_started_at': 10.0, 'interrupt_started_at': 10.01,
+        'speech_stopped_at': stopped, 'interrupt_resolved_at': 18.0,
+    }
+    record['attrs']['interrupt_action'] = 'rollback'
+    record['attrs']['duck_events'] = [{
+        'event': 'output_resumed_pending_evidence', 'at': stopped + .2,
+        'speech_stopped_at': stopped,
+    }]
+    run = _apply_record_expectations(tmp_path, suite, [record])
+    assert run.cases[0].passed, 'same recovery overhead must not penalize longer speech'
+    # Preserve the legacy onset budget's meaning; do not silently enlarge it.
+    suite = replace(suite, cases=(replace(suite.cases[0], expectations=replace(
+        suite.cases[0].expectations, max_speech_start_to_resume_ms=900,
+    )),))
+    run = _apply_record_expectations(tmp_path, suite, [record])
+    assert run.cases[0].passed is (speech_duration == .3)
+
+
+def test_provisional_recovery_without_timestamp_cannot_use_later_terminal_time(tmp_path):
+    from benchmark.schema import Expectations
+    suite, record = _canonical_response_case()
+    suite = replace(suite, cases=(replace(suite.cases[0], expectations=Expectations(
+        action='any', max_speech_start_to_resume_ms=900,
+    )),))
+    record['timestamps'] = {'speech_started_at': 10.0, 'interrupt_started_at': 10.0, 'interrupt_resolved_at': 10.8}
+    record['attrs']['interrupt_action'] = 'rollback'
+    record['attrs']['duck_events'] = [{'event': 'output_resumed_pending_evidence'}]
+    run = _apply_record_expectations(tmp_path, suite, [record])
+    assert not run.cases[0].passed
+    assert 'timeline missing speech-start-to-resume duration' in run.cases[0].errors

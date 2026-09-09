@@ -1,0 +1,295 @@
+{
+  "date": "2026-09-09",
+  "baseline_commit": "cd070fe",
+  "scope": "Explain confirmed interruption to committed user turn delay; reject unsafe endpoint shortcuts.",
+  "outcome": "No production timing change. Added six boundary regressions; the observed 1.7 s remainder belongs to existing semantic endpoint protection, not a second post-cancel timer.",
+  "runtime_matches_previous_tested_source": true,
+  "real_rtc_evidence_source": "pause-continuation-recovery.json; same final three RTC cases from 2026-09-08, not a new RTC run",
+  "real_rtc_people_observations": [
+    {
+      "case": "fd_continuation_people_500",
+      "model_score": 0.424238469957486,
+      "threshold": 0.5,
+      "vad_stop_to_cancel_ms": 802.623,
+      "vad_stop_to_commit_ms": 2500.895,
+      "vad_stop_to_tts_first_audio_ms": 3745.88
+    },
+    {
+      "case": "fd_continuation_people_900",
+      "model_score": 0.424238469957486,
+      "threshold": 0.5,
+      "vad_stop_to_cancel_ms": 802.816,
+      "vad_stop_to_commit_ms": 2501.114,
+      "vad_stop_to_tts_first_audio_ms": 3852.085
+    }
+  ],
+  "mechanism": [
+    "Channel completed-text EOT returns about 0.424, below 0.5. Normal interruption uses stable substantive evidence and cancels old output; it does not change that EOT result into turn-complete evidence.",
+    "Installed LiveKit Agents 1.7.1 chooses the existing maximum endpointing delay of 3 s for a below-threshold result.",
+    "SDK speech-end anchor subtracts VAD silence_duration and inference_duration from the stop-event time. Its endpoint task sleeps only the remaining delay from that anchor.",
+    "With roughly 500 ms VAD silence, the remaining wait measured from VAD stop is about 2500 ms. Cancel at about 803 ms leaves about 1698 ms to commit.",
+    "The scripted VAD .2/.5 s and EOT .424/.95 controls confirm the anchor and fast path through real AgentSession and Channel orchestration."
+  ],
+  "source_references": [
+    "eidolon/livekit/plugins/eot/models/base.py:EidolonEOTModel.predict_end_of_turn",
+    "eidolon/livekit/agent/full_duplex/agent_builder.py:turn_handling endpointing min_delay",
+    ".venv/lib/python3.13/site-packages/livekit/agents/voice/audio_recognition.py:END_OF_SPEECH anchor, _bounce_eou_task endpointing selection and extra_sleep",
+    ".venv/lib/python3.13/site-packages/livekit/agents/voice/turn.py:_ENDPOINTING_DEFAULTS"
+  ],
+  "tests": {
+    "boundary": {
+      "path": "/tmp/voice-endpoint-boundary-final.xml",
+      "sha256": "e2b67ff5bc1902dcfadcd5fa9617f58fea63f755e16dd05e83d02171733ca421",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 6,
+      "cases": [
+        {
+          "test": "test_endpoint_wait_is_anchored_to_speech_not_interrupt_cancel[0.2-uncertain]",
+          "properties": {
+            "stop_to_commit_ms": "2802.341250004247",
+            "cancel_to_commit_ms": "1999.2900828365237",
+            "injected_eot_score": "0.424",
+            "vad_silence_sec": "0.2"
+          },
+          "failure": null
+        },
+        {
+          "test": "test_endpoint_wait_is_anchored_to_speech_not_interrupt_cancel[0.2-complete]",
+          "properties": {
+            "stop_to_commit_ms": "50.94316694885492",
+            "cancel_to_commit_ms": "350.600834004581",
+            "injected_eot_score": "0.95",
+            "vad_silence_sec": "0.2"
+          },
+          "failure": null
+        },
+        {
+          "test": "test_endpoint_wait_is_anchored_to_speech_not_interrupt_cancel[0.5-uncertain]",
+          "properties": {
+            "stop_to_commit_ms": "2501.941000111401",
+            "cancel_to_commit_ms": "1700.7240829989314",
+            "injected_eot_score": "0.424",
+            "vad_silence_sec": "0.5"
+          },
+          "failure": null
+        },
+        {
+          "test": "test_endpoint_wait_is_anchored_to_speech_not_interrupt_cancel[0.5-complete]",
+          "properties": {
+            "stop_to_commit_ms": "1.274207839742303",
+            "cancel_to_commit_ms": "300.3667499870062",
+            "injected_eot_score": "0.95",
+            "vad_silence_sec": "0.5"
+          },
+          "failure": null
+        },
+        {
+          "test": "test_confirmed_interrupt_does_not_finish_a_paused_user_turn[\\u5982\\u679c\\u53c2\\u52a0\\u4eba\\u6570\\u6539\\u6210\\u4e24\\u4e2a\\u4eba-\\u8d39\\u7528\\u9700\\u8981\\u91cd\\u65b0\\u8ba1\\u7b97\\u3002]",
+          "properties": {
+            "premature_messages": "[]",
+            "old_speech_interrupted": "True"
+          },
+          "failure": null
+        },
+        {
+          "test": "test_confirmed_interrupt_does_not_finish_a_paused_user_turn[\\u5982\\u679c\\u628a\\u51fa\\u53d1\\u65f6\\u95f4\\u6539\\u5230\\u4e0b\\u5348-\\u5c31\\u4e0d\\u7528\\u5b89\\u6392\\u5348\\u996d\\u4e86\\u3002]",
+          "properties": {
+            "premature_messages": "[]",
+            "old_speech_interrupted": "True"
+          },
+          "failure": null
+        }
+      ]
+    },
+    "shorter_maximum_negative_control": {
+      "path": "/tmp/voice-endpoint-short-control.xml",
+      "sha256": "2091233427e69cf6a8559c206cf123d7269f7e9e3b7269cda2248046d6d11e60",
+      "tests": 2,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 0,
+      "cases": [
+        {
+          "test": "test_confirmed_interrupt_does_not_finish_a_paused_user_turn[\\u5982\\u679c\\u53c2\\u52a0\\u4eba\\u6570\\u6539\\u6210\\u4e24\\u4e2a\\u4eba-\\u8d39\\u7528\\u9700\\u8981\\u91cd\\u65b0\\u8ba1\\u7b97\\u3002]",
+          "properties": {
+            "premature_messages": "[\"如果参加人数改成两个人\"]",
+            "old_speech_interrupted": "True"
+          },
+          "failure": "AssertionError: interruption acceptance must not commit the unfinished turn"
+        },
+        {
+          "test": "test_confirmed_interrupt_does_not_finish_a_paused_user_turn[\\u5982\\u679c\\u628a\\u51fa\\u53d1\\u65f6\\u95f4\\u6539\\u5230\\u4e0b\\u5348-\\u5c31\\u4e0d\\u7528\\u5b89\\u6392\\u5348\\u996d\\u4e86\\u3002]",
+          "properties": {
+            "premature_messages": "[\"如果把出发时间改到下午\"]",
+            "old_speech_interrupted": "True"
+          },
+          "failure": "AssertionError: interruption acceptance must not commit the unfinished turn"
+        }
+      ]
+    },
+    "complete_turn_latency_regression": {
+      "path": "/tmp/voice-endpoint-latency-regression.xml",
+      "sha256": "193bbfec31b5358454b3dccfe91a38ed1b43df9dc3e4c62c93903352f60b1fba",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "passed": 23
+    }
+  },
+  "negative_control": {
+    "change": "Test-only public AgentSession.update_options(endpointing_opts={max_delay: 1.5}); no SDK monkeypatch or production configuration edit.",
+    "scenario": "Model-boundary score .424, old output cancelled, next speech starts 1.6 s after VAD stop; following clause raises score to .95.",
+    "result": "Both original-policy cases pass. Shorter-maximum control commits the unfinished prefix in both cases before continuation.",
+    "interpretation": "Counterexample to treating accepted interruption as completed turn or shortening a generic uncertain-turn timeout; does not prove the default 3 s is globally optimal."
+  },
+  "learned_model_diagnostic": {
+    "note": "Hand-selected diagnostic texts; labels are intended linguistic roles, not user-population accuracy or calibrated confidence. No thresholds or model changed.",
+    "pairs": [
+      {
+        "topic": "人数修改",
+        "intended_complete": {
+          "text": "人数方面。改成两个人。",
+          "score": 0.424238469957486,
+          "elapsed_ms": 6.226
+        },
+        "intended_incomplete": {
+          "text": "如果参加人数改成两个人",
+          "score": 0.2775021934779896,
+          "elapsed_ms": 6.275
+        }
+      },
+      {
+        "topic": "日期修改",
+        "intended_complete": {
+          "text": "日期方面。改成下周三。",
+          "score": 0.038311606755535625,
+          "elapsed_ms": 4.711
+        },
+        "intended_incomplete": {
+          "text": "如果日期改成下周三",
+          "score": 0.060841686285510135,
+          "elapsed_ms": 3.117
+        }
+      },
+      {
+        "topic": "费用限制",
+        "intended_complete": {
+          "text": "费用方面。控制在五百元以内。",
+          "score": 0.9337803625443577,
+          "elapsed_ms": 5.296
+        },
+        "intended_incomplete": {
+          "text": "如果费用控制在五百元以内",
+          "score": 0.8894794720794001,
+          "elapsed_ms": 7.053
+        }
+      },
+      {
+        "topic": "出发时间",
+        "intended_complete": {
+          "text": "出发时间改到下午。",
+          "score": 0.043568418102553144,
+          "elapsed_ms": 5.429
+        },
+        "intended_incomplete": {
+          "text": "如果把出发时间改到下午",
+          "score": 0.0006268650666717589,
+          "elapsed_ms": 5.81
+        }
+      },
+      {
+        "topic": "地点修改",
+        "intended_complete": {
+          "text": "地点方面。换成室内。",
+          "score": 0.00558669611655715,
+          "elapsed_ms": 4.14
+        },
+        "intended_incomplete": {
+          "text": "地点方面我想",
+          "score": 0.000680076667371613,
+          "elapsed_ms": 3.914
+        }
+      },
+      {
+        "topic": "目的地",
+        "intended_complete": {
+          "text": "Please change the destination to Shanghai.",
+          "score": 0.5491406305893896,
+          "elapsed_ms": 4.897
+        },
+        "intended_incomplete": {
+          "text": "For the destination I would like",
+          "score": 0.6221909345962365,
+          "elapsed_ms": 3.791
+        }
+      },
+      {
+        "topic": "人数英文",
+        "intended_complete": {
+          "text": "Please change the number of people to two.",
+          "score": 0.16443080968411747,
+          "elapsed_ms": 5.414
+        },
+        "intended_incomplete": {
+          "text": "If we change the number of people to two",
+          "score": 0.1388357503643998,
+          "elapsed_ms": 6.076
+        }
+      },
+      {
+        "topic": "条件前提",
+        "intended_complete": {
+          "text": "就选便宜的。",
+          "score": 0.0009576006732847048,
+          "elapsed_ms": 5.491
+        },
+        "intended_incomplete": {
+          "text": "如果预算不够的话",
+          "score": 0.6014498088087934,
+          "elapsed_ms": 5.387
+        }
+      }
+    ]
+  },
+  "sdk_integrity": {
+    "package": "livekit-agents",
+    "version": "1.7.1",
+    "python_files_checked": 207,
+    "mismatches": []
+  },
+  "limits": [
+    "New framework regressions inject EOT at the Channel model boundary; they isolate scheduling and are not end-to-end real recognizer or real-model accuracy tests.",
+    "Eight hand-selected text pairs are a diagnostic probe, not a representative evaluation set or calibrated error rate; score ranges overlap across intended complete/incomplete labels.",
+    "No claim that existing EOT inference milliseconds cover all EOT latency or that model-quality changes have been implemented.",
+    "The original physical-device and 3.75/3.85 s response-latency gaps remain. No deployment or new physical speaker measurement.",
+    "Initial boundary-test draft read pipeline._timeline after reply completion cleared it, producing four AttributeErrors. Test now retains the live timeline at FINAL; no production fix was made for that instrumentation error."
+  ],
+  "next_bounded_work": "Evaluate the existing end-of-turn model/input contract on paired completed and paused-continuation expressions, with held-out wording and whole-request timing. Any proposed quality change must pass both latency and premature-commit guards before replacing current policy.",
+  "artifacts": [
+    {
+      "path": "/tmp/voice-endpoint-score-probe.json",
+      "sha256": "206c4474093d02c6d974424ec7866dc55c290e65958c37e6ed5b9558746efabb"
+    },
+    {
+      "path": "/tmp/voice_endpoint_scores.py",
+      "sha256": "47fc0d3fb4cc519d1e32cb2d766dc550945df365c176af2c5b3838cb6ad67401"
+    },
+    {
+      "path": "/tmp/voice_short_endpoint_control.py",
+      "sha256": "6f7cf0a649dc7cbf3a56b47428020e3882eb41827386ca6d86bc3a4b43a11977"
+    },
+    {
+      "path": "/tmp/voice-endpoint-boundary-current.xml",
+      "sha256": "c28d3f5ca280c05beee93b9b669e3e9531ff49cb5d28949610f0f8b4b9ef408c"
+    },
+    {
+      "path": "/Users/manson/.codex/worktrees/d228/eidolon_channel/eidolon/livekit/tests/scenarios/test_complete_turn_latency.py",
+      "sha256": "2234469f096a4a184d8d8dcfc5fac465cabc37e965232e92832415aeb4583464"
+    }
+  ]
+}

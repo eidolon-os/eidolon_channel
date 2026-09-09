@@ -530,6 +530,7 @@ async def _run_profile(
                     root=root,
                     run_id=f"{args.run_id}-{profile}",
                     options=LiveKitRoomOptions(
+                        audio_capture_dir=args.livekit_audio_capture_dir,
                         timeout_sec=args.livekit_room_timeout_sec,
                         settle_after_first_audio_sec=args.livekit_room_settle_sec,
                         agent_ready_timeout_sec=args.livekit_agent_ready_timeout_sec,
@@ -894,6 +895,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--lenient-realcall", action="store_true")
     parser.add_argument("--livekit-room-timeout-sec", type=float, default=45.0)
     parser.add_argument("--livekit-room-settle-sec", type=float, default=2.0)
+    parser.add_argument(
+        "--livekit-audio-capture-dir", type=Path, default=None,
+        help="Record decoded RTC audio and frame arrival times for diagnostic analysis",
+    )
     parser.add_argument("--livekit-agent-ready-timeout-sec", type=float, default=12.0)
     parser.add_argument("--livekit-timeline-flush-grace-sec", type=float, default=5.0)
     parser.add_argument("--livekit-agent-name", default="eidolon")

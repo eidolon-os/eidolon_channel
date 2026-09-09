@@ -32,9 +32,15 @@ if TYPE_CHECKING:
 
     from eidolon.livekit.common.config import AgentConfig
 
+from eidolon_sdk.biz.contracts.local_tts import (
+    AUDIO_SAMPLE_RATE as LOCAL_TTS_SAMPLE_RATE,
+)
+
 from eidolon.livekit.common.config.validators import (
     LOCAL_ASR_PROVIDER,
+    LOCAL_TTS_PROVIDER,
     STT_PROVIDERS,
+    TTS_PROVIDERS,
 )
 
 from .providers.llm import LlmParams, LivekitLlmStage
@@ -577,9 +583,29 @@ class SharedStageFactory:
                 speed=plugin_cfg.speech_rate,
                 voice=plugin_cfg.voice,
             )
+        elif provider == LOCAL_TTS_PROVIDER:
+            # This Host's own voice. No credential and no address, for the same
+            # reason local recognition has neither: the endpoint is resolved
+            # from this Host's port registry, which Ops writes from the
+            # contract of the component that reserves the port.
+            #
+            # Speed and voice are not this side's to set: the voice is what the
+            # carried weights are, and the engine has no rate control. Named
+            # here rather than left blank so a reader is not left wondering
+            # whether they were forgotten.
+            from eidolon.livekit.plugins.tts.local_tts import LocalTTS
+
+            plugin_cfg = cfg.local_tts
+            tts = LocalTTS(config=plugin_cfg)
+            params = TtsParams(
+                sample_rate=LOCAL_TTS_SAMPLE_RATE,
+                speed=1.0,
+                voice=None,
+            )
         else:
             raise ValueError(
-                f"Unknown TTS provider: {provider!r} (supported: 'sensetime', 'bailian')"
+                f"Unknown TTS provider: {provider!r} "
+                f"(supported: {', '.join(sorted(TTS_PROVIDERS))})"
             )
         return TtsStage(tts, params=params)
 

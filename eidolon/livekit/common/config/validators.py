@@ -5,6 +5,9 @@ from __future__ import annotations
 from eidolon_sdk.biz.contracts.local_asr import (
     LOCAL_ASR_CAPABILITY as LOCAL_ASR_PROVIDER,
 )
+from eidolon_sdk.biz.contracts.local_tts import (
+    LOCAL_TTS_CAPABILITY as LOCAL_TTS_PROVIDER,
+)
 
 from .schema import EffectiveAgentConfig
 
@@ -18,6 +21,10 @@ from .schema import EffectiveAgentConfig
 #: with either side.
 STT_PROVIDERS = frozenset({"bailian", "sensetime", LOCAL_ASR_PROVIDER})
 
+#: Every voice this build can be asked for. `local_tts` is spelled the same as
+#: its Host capability for the same reason `local_asr` is.
+TTS_PROVIDERS = frozenset({"bailian", "sensetime", LOCAL_TTS_PROVIDER})
+
 
 def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     errors: list[str] = []
@@ -26,8 +33,10 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "providers.stt_provider must be one of: " + ", ".join(sorted(STT_PROVIDERS))
         )
-    if cfg.providers.tts_provider not in ("bailian", "sensetime"):
-        errors.append("providers.tts_provider must be 'bailian' or 'sensetime'")
+    if cfg.providers.tts_provider not in TTS_PROVIDERS:
+        errors.append(
+            "providers.tts_provider must be one of: " + ", ".join(sorted(TTS_PROVIDERS))
+        )
     if cfg.providers.vad_provider not in (
         "firered",
         "firered_pvad",

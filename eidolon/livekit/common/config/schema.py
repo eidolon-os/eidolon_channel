@@ -11,6 +11,7 @@ from eidolon.livekit.plugins.stt.bailian.config import BailianSTTConfig
 from eidolon.livekit.plugins.stt.local_asr.config import LocalAsrSTTConfig
 from eidolon.livekit.plugins.stt.sensetime.config import SenseTimeSTTConfig
 from eidolon.livekit.plugins.tts.bailian.config import BailianTTSConfig
+from eidolon.livekit.plugins.tts.local_tts.config import LocalTtsConfig
 from eidolon.livekit.plugins.tts.sensetime.config import SenseTimeTTSConfig
 
 
@@ -395,6 +396,9 @@ class EffectiveAgentConfig:
     local_asr_stt: LocalAsrSTTConfig = field(default_factory=LocalAsrSTTConfig)
     bailian_tts: BailianTTSConfig = field(default_factory=BailianTTSConfig)
     sensetime_tts: SenseTimeTTSConfig = field(default_factory=SenseTimeTTSConfig)
+    #: This Host's own voice. Carries no endpoint, no credential and no voice
+    #: name — see the plugin's own config for why each of those is absent.
+    local_tts: LocalTtsConfig = field(default_factory=LocalTtsConfig)
 
     @property
     def stt_provider(self) -> str:

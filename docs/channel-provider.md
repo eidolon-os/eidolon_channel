@@ -196,3 +196,16 @@ Channel Provider 完成不等于 ESP handoff 已经可用，至少存在两段�
 
 不得关闭证书校验、接受任意自签证书或把 mDNS TXT 当作信任根。在上述 Hub TLS gate 完成前，
 Provider 可以独立通过合同与 LiveKit 控制面测试，但不能据此报告 Box3 已完成真实 handoff。
+
+
+### Device Manifest 更新与现有 Channel
+
+同一 DeviceRef 的新 Manifest 通过 `channel.refresh-device` 更新既有 Channel，
+不重复 provision，也不改变 Claim。refresh 在凭据过期或 Authority 提交的
+manifest_revision 与当前 active 凭据不同的时候成立；未过期且声明相同的
+refresh 仍拒绝。刷新原子地 fence 旧 active/expired 操作，保留同一传输资源，
+重放旧操作不能复活旧凭据，撤销后的刷新仍拒绝。
+
+Hub 先读 current，再用当前 operation_id、到期时间及目标声明标识派生 refresh
+的幂等键。A→B→A 因而是两次沿当前 Channel 前进的刷新，不会重放首次 A 的操作。
+设备在模式变化后用新 binding 重新入房，让新的声明进入 participant metadata。

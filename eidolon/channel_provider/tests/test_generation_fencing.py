@@ -208,3 +208,32 @@ async def test_two_processes_racing_same_generation_commit_one_operation(tmp_pat
     # The losing grant is disposable; the converged resource is not. Closing
     # either handle would destroy the room retained by the winning operation.
     assert len(first_backend.closed) + len(second_backend.closed) == 0
+
+
+async def test_manifest_refresh_before_expiry_preserves_device_and_fences_prior_operations(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, store, backend = _service(tmp_path / "provider.sqlite3", clock)
+    initial = _request()
+    first = json.loads(await service.provision(initial))
+    previous = initial
+    for index, revision in enumerate(["sha256:manifest-2", "sha256:manifest-1"], start=1):
+        payload = provision_payload(manifest_revision=revision)
+        payload.update(operation="channel.refresh-device", operation_id=f"mode-change-{index}")
+        request = ProvisionRequest.parse(encoded(payload))
+        result = await service.provision(request)
+        opened = len(backend.opened)
+        assert await service.provision(request) == result
+        assert len(backend.opened) == opened
+        assert json.loads(result)["channels"][0]["channel_id"] == first["channels"][0]["channel_id"]
+        assert store.active_device(initial.device_ref).manifest_revision == revision
+        with pytest.raises(InvalidTransition):
+            await service.provision(previous)
+        previous = request
+    assert len(store.active_provisions()) == 1
+    assert backend.closed == []
+    assert backend.stopped == []
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload())))
+    payload = provision_payload(manifest_revision="sha256:manifest-3")
+    payload.update(operation="channel.refresh-device", operation_id="after-revoke")
+    with pytest.raises(InvalidTransition):
+        await service.provision(ProvisionRequest.parse(encoded(payload)))

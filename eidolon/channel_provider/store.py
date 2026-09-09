@@ -292,12 +292,16 @@ class ChannelProviderStore:
                         "the DeviceRef generation already has a provision lifecycle"
                     )
                 if value.operation_kind == REFRESH and not any(
-                    row["operation_kind"] in {PROVISION, REFRESH} and row["status"] == "expired"
+                    row["operation_kind"] in {PROVISION, REFRESH}
+                    and (row["status"] == "expired" or (
+                        row["status"] == "active"
+                        and row["manifest_revision"] != value.manifest_revision
+                    ))
                     for row in same_generation
                 ):
                     connection.rollback()
                     raise InvalidTransition(
-                        "credential refresh requires an expired current credential"
+                        "credential refresh requires expiry or a changed Manifest"
                     )
             elif value.operation_kind != PROVISION:
                 connection.rollback()
@@ -311,7 +315,7 @@ class ChannelProviderStore:
                     expires_at_ms=0, updated_at_ms=?
                     WHERE device_instance_id=? AND owner_domain_id=?
                     AND owner_domain_generation=? AND claim_generation=? AND trust_epoch=?
-                    AND status='expired'""",
+                    AND status IN ('active','expired')""",
                     (now_ms, *self._ref_values(value.device_ref)),
                 )
             self._insert_operation(connection, value)

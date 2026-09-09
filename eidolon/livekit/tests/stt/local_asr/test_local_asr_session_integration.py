@@ -237,10 +237,6 @@ async def test_an_idle_session_is_not_accumulated_into_one_utterance() -> None:
         await runner.cleanup()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="LocalAsrSpeechStream never passes sample_rate to RecognizeStream, so 24 kHz room audio reaches a service that reads it as 16 kHz",
-)
 @pytest.mark.asyncio
 async def test_room_audio_is_resampled_to_the_rate_the_service_reads() -> None:
     """The service reads 16 kHz. The room sends 24 kHz. Someone must convert.

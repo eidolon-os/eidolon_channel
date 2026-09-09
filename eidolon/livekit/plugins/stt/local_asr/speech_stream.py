@@ -51,7 +51,18 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
         stream_url: str,
         session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(stt=stt, conn_options=stt._conn_options)
+        # The rate is declared, not assumed. `RecognizeStream` is the only
+        # place in this path that resamples, and it resamples only when it has
+        # been told what the recognizer needs: LiveKit's room input delivers
+        # 24 kHz by default, and this service reads 16 kHz — both for its
+        # model and for the byte accounting behind `max_utterance_seconds`.
+        # Leaving this off let 24 kHz through unconverted, which made a 40 s
+        # utterance measure 60 s. The plugins beside this one pass it too.
+        super().__init__(
+            stt=stt,
+            conn_options=stt._conn_options,
+            sample_rate=config.sample_rate,
+        )
         self._config = config
         self._stream_url = stream_url
         self._session = session

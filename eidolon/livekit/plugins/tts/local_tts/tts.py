@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import uuid
+from typing import Any
 
 import aiohttp
 from eidolon_sdk.biz.contracts import local_tts as contract
@@ -170,6 +171,47 @@ class LocalSynthesizeStream(SynthesizeStream):
                 await aggregator.feed(token)
         await aggregator.flush()
 
+    def _report(self, event: dict[str, Any]) -> None:
+        """Say something only when the listener would have heard something.
+
+        Whether the Host kept ahead of playback is the one quality fact this
+        side cannot observe for itself, so it is worth a line in the log —
+        but only from the field that answers that question.
+
+        That field is `minimum_buffer_ms`: how much unplayed audio was left
+        at the worst moment, below zero meaning a gap was audible. It is
+        *not* `late_chunks`, which counts chunks that missed a deadline
+        measured from the first one being ready, i.e. as though playback
+        began with an empty buffer. For a producer near real time that is
+        almost every chunk by construction, so it tracks the length of the
+        audio and not the listener's experience — 17 seconds of untroubled
+        speech reports about 17 late chunks.
+
+        This read that field under its older name, `underruns`, and reported
+        "the Host underran N times" for utterances whose real gap count was
+        zero. The rename to `late_chunks` then left the branch permanently
+        dead, and nothing noticed because both ends spelled the name out
+        separately. Both halves of that are why the names now live in the
+        contract and are read from it here.
+
+        Absent is not zero: a Host that did not measure the floor, or an
+        older one that did not have it, omits the field, and its absence is
+        not a claim that nothing was heard.
+        """
+
+        floor = event.get(contract.MINIMUM_BUFFER_MS_FIELD)
+        if not isinstance(floor, (int, float)) or isinstance(floor, bool) or floor >= 0:
+            return
+        logger.warning(
+            "[%s] audio broke up: the Host's buffer went %.0f ms below empty on "
+            "%.2fs of audio (late_chunks=%s steady_rtf=%s)",
+            PROVIDER,
+            floor,
+            event.get(contract.AUDIO_SECONDS_FIELD, 0.0),
+            event.get(contract.LATE_CHUNKS_FIELD),
+            event.get(contract.STEADY_RTF_FIELD),
+        )
+
     async def _say_one(
         self,
         socket: aiohttp.ClientWebSocketResponse,
@@ -194,17 +236,7 @@ class LocalSynthesizeStream(SynthesizeStream):
             if kind == contract.SYNTHESIS_STARTED:
                 continue
             if kind == contract.SYNTHESIS_FINISHED:
-                # The Host's own quality numbers. Logged rather than acted on:
-                # underruns mean it could not keep ahead of playback, which is
-                # the one thing this side cannot observe and the operator's to
-                # decide about.
-                if event.get("underruns"):
-                    logger.warning(
-                        "[%s] the Host underran %s times on %.2fs of audio",
-                        PROVIDER,
-                        event.get("underruns"),
-                        event.get("audio_seconds", 0.0),
-                    )
+                self._report(event)
                 return
             if kind == contract.SYNTHESIS_CANCELLED:
                 return

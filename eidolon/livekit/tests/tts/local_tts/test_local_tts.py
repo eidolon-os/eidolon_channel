@@ -138,3 +138,84 @@ def test_an_unknown_provider_names_every_one_this_build_has() -> None:
     from eidolon.livekit.common.config.validators import TTS_PROVIDERS
 
     assert {"bailian", "sensetime", "local_tts"} <= TTS_PROVIDERS
+
+
+# -- the finish report, which nothing checked until it broke -----------------
+#
+# The service renamed `underruns` to `late_chunks`, the branch that read it
+# went permanently dead, and both ends kept passing their own tests, because
+# neither end's spelling of the word was checked against the other's. These
+# read the names out of the contract, so the next rename fails here instead of
+# in a log nobody is watching.
+
+
+def _finished(**fields):
+    from eidolon.livekit.plugins.tts.local_tts.tts import LocalSynthesizeStream
+
+    event = {"type": contract.SYNTHESIS_FINISHED, contract.REQUEST_ID_FIELD: "r1"}
+    event.update(fields)
+    return LocalSynthesizeStream._report, event
+
+
+def test_a_negative_buffer_floor_is_reported_because_it_was_audible(caplog) -> None:
+    """Below zero is the one number that means the listener heard a gap."""
+
+    report, event = _finished(
+        **{
+            contract.MINIMUM_BUFFER_MS_FIELD: -372.0,
+            contract.AUDIO_SECONDS_FIELD: 26.2,
+            contract.LATE_CHUNKS_FIELD: 26,
+        }
+    )
+    with caplog.at_level("WARNING"):
+        report(None, event)
+
+    assert "audio broke up" in caplog.text
+    assert "-372" in caplog.text
+
+
+def test_late_chunks_alone_are_not_reported_as_a_dropout(caplog) -> None:
+    """The misreading this replaced, pinned so it cannot come back.
+
+    16.88 s of audio with a healthy +209 ms floor reported 16 late chunks on
+    the board. Nothing was audible; nothing should be said.
+    """
+
+    report, event = _finished(
+        **{
+            contract.MINIMUM_BUFFER_MS_FIELD: 209.0,
+            contract.AUDIO_SECONDS_FIELD: 16.88,
+            contract.LATE_CHUNKS_FIELD: 16,
+        }
+    )
+    with caplog.at_level("WARNING"):
+        report(None, event)
+
+    assert caplog.text == ""
+
+
+def test_a_missing_floor_is_not_read_as_no_gap(caplog) -> None:
+    """Absent means the Host did not measure it, which is not a verdict.
+
+    An older Host, or one whose engine reported no floor, omits the field.
+    Warning on that would cry wolf; claiming silence proves quiet would be
+    the same mistake in the other direction, so this only declines to speak.
+    """
+
+    report, event = _finished(**{contract.AUDIO_SECONDS_FIELD: 4.08})
+    with caplog.at_level("WARNING"):
+        report(None, event)
+
+    assert caplog.text == ""
+
+
+def test_the_field_names_are_the_contracts_own() -> None:
+    """The point of the whole exercise: one spelling, in one place.
+
+    If these move, the service's mirror test and this one both fail, which is
+    what was missing when `underruns` became `late_chunks`.
+    """
+
+    assert contract.MINIMUM_BUFFER_MS_FIELD == "minimum_buffer_ms"
+    assert contract.LATE_CHUNKS_FIELD == "late_chunks"
+    assert not hasattr(contract, "UNDERRUNS_FIELD")

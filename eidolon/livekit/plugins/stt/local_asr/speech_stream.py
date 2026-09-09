@@ -26,6 +26,7 @@ INTERIM_TRANSCRIPT / FINAL_TRANSCRIPT contract LiveKit already has.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -40,6 +41,15 @@ if TYPE_CHECKING:
     from .config import LocalAsrSTTConfig
 
 logger = logging.getLogger("eidolon.livekit.plugins.stt.local_asr")
+
+
+class _Closed:
+    """The socket is done speaking. Placed in the inbox so a caller waiting
+    for an answer learns that none is coming, rather than waiting out its
+    timeout."""
+
+
+_CLOSED = _Closed()
 
 
 class LocalAsrSpeechStream(lk_stt.RecognizeStream):
@@ -83,8 +93,21 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                 timeout=aiohttp.ClientWSTimeout(ws_close=self._config.connect_timeout_s),
                 heartbeat=None,
             ) as socket:
-                await self._read_greeting(socket)
-                await self._stream(socket, buffer, flush_sentinel)
+                # One task reads this socket, for as long as it is open. The
+                # send loop and the two places that wait for a named answer
+                # all take from the inbox it fills, so a message is never
+                # waiting on whoever happens to be sending audio.
+                inbox: asyncio.Queue = asyncio.Queue()
+                reader = asyncio.create_task(
+                    self._receive_loop(socket, inbox), name="local_asr-receive"
+                )
+                try:
+                    await self._read_greeting(inbox)
+                    await self._stream(socket, inbox, buffer, flush_sentinel)
+                finally:
+                    reader.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await reader
         except aiohttp.ClientError as exc:
             # Said plainly rather than retried. This service is on this
             # machine: if it is not answering, it is not running, and the Host
@@ -97,7 +120,31 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                 recoverable=False,
             )
 
-    async def _read_greeting(self, socket: aiohttp.ClientWebSocketResponse) -> None:
+    async def _receive_loop(
+        self, socket: aiohttp.ClientWebSocketResponse, inbox: asyncio.Queue
+    ) -> None:
+        """Read the socket at the socket's pace, and decide nothing.
+
+        This exists because the reading used to be done by `_drain`, in the
+        send loop, with `asyncio.wait_for(socket.receive(), timeout=0)`. A
+        zero timeout is not "take what has already arrived": `wait_for`
+        schedules the receive, finds it not yet done, and cancels it — so
+        that branch never read a message, not even one already queued. The
+        plugin's two-pass shape promises interims "while the words are still
+        being spoken", and none of them were ever delivered; nor was the
+        service's own error message, which is why a refused utterance was
+        only noticed later, when a write into the closed socket failed.
+        """
+
+        try:
+            async for message in socket:
+                payload = self._decode(message)
+                if payload is not None:
+                    inbox.put_nowait(payload)
+        finally:
+            inbox.put_nowait(_CLOSED)
+
+    async def _read_greeting(self, inbox: asyncio.Queue) -> None:
         """Take the version the service states on the connection being used.
 
         The service sends this unprompted the moment a stream opens. Reading it
@@ -110,7 +157,7 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
         about a transcript is worse than being absent from one.
         """
 
-        greeting = await self._receive(socket, timeout=self._config.connect_timeout_s)
+        greeting = await self._next(inbox, timeout=self._config.connect_timeout_s)
         if greeting is None or greeting.get("type") != contract.CONNECTED:
             raise RuntimeError(
                 f"expected {contract.CONNECTED} from this Host's recognition, "
@@ -132,6 +179,7 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
     async def _stream(
         self,
         socket: aiohttp.ClientWebSocketResponse,
+        inbox: asyncio.Queue,
         buffer: AudioByteStream,
         flush_sentinel: type,
     ) -> None:
@@ -143,56 +191,68 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                 for frame in buffer.flush():
                     await socket.send_bytes(frame.data.tobytes())
                 await socket.send_str(json.dumps({"type": contract.END_UTTERANCE}))
-                await self._await_final(socket)
+                await self._await_final(inbox)
                 open_utterance = False
                 continue
             if not open_utterance:
-                await self._open_utterance(socket)
+                await self._open_utterance(socket, inbox)
                 open_utterance = True
             for frame in buffer.push(item.data.tobytes()):
                 await socket.send_bytes(frame.data.tobytes())
-                await self._drain(socket)
+                self._drain(inbox)
         if open_utterance:
             # The framework closed the input mid-utterance: ask for what the
             # service has rather than dropping a half-spoken sentence.
             for frame in buffer.flush():
                 await socket.send_bytes(frame.data.tobytes())
             await socket.send_str(json.dumps({"type": contract.END_UTTERANCE}))
-            await self._await_final(socket)
+            await self._await_final(inbox)
         await socket.send_str(json.dumps({"type": contract.CLOSE_STREAM}))
 
-    async def _open_utterance(self, socket: aiohttp.ClientWebSocketResponse) -> None:
+    async def _open_utterance(
+        self, socket: aiohttp.ClientWebSocketResponse, inbox: asyncio.Queue
+    ) -> None:
         self._utterance_index += 1
         message = contract.start_message(
             self._stream_id, f"{self._stream_id}-{self._utterance_index}"
         )
         await socket.send_str(json.dumps(message))
-        answer = await self._receive(socket, timeout=self._config.connect_timeout_s)
+        answer = await self._next(inbox, timeout=self._config.connect_timeout_s)
         if answer is None or answer.get("type") != contract.UTTERANCE_STARTED:
             raise RuntimeError(
                 f"expected {contract.UTTERANCE_STARTED} from this Host's recognition, "
                 f"got {answer!r}"
             )
 
-    async def _drain(self, socket: aiohttp.ClientWebSocketResponse) -> None:
-        """Take whatever interim answers have arrived, without waiting for one.
+    def _drain(self, inbox: asyncio.Queue) -> None:
+        """Take whatever answers have arrived, without waiting for one.
 
         Interims are a courtesy: they make words appear while they are still
-        being spoken. Blocking the send loop for one would trade the thing they
-        are for the thing they help.
+        being spoken, and blocking the send loop for one would trade the
+        thing they are for the thing they help. Reading the inbox rather
+        than the socket is what makes "without waiting" true — the reader
+        has already taken them off the wire, so this is a queue that either
+        has something in it or does not.
         """
 
         while True:
             try:
-                message = await asyncio.wait_for(socket.receive(), timeout=0)
-            except (TimeoutError, asyncio.TimeoutError):
+                payload = inbox.get_nowait()
+            except asyncio.QueueEmpty:
                 return
-            payload = self._decode(message)
-            if payload is None:
-                return
+            if payload is _CLOSED:
+                # The service hung up mid-utterance. It says why first, and
+                # that message is handled above this line; reaching here
+                # without one means the socket went without a word.
+                self._emit_error(
+                    RuntimeError(
+                        "this Host's recognition closed the stream mid-utterance"
+                    ),
+                    recoverable=False,
+                )
             self._handle(payload)
 
-    async def _await_final(self, socket: aiohttp.ClientWebSocketResponse) -> None:
+    async def _await_final(self, inbox: asyncio.Queue) -> None:
         deadline = asyncio.get_running_loop().time() + self._config.final_timeout_s
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -205,20 +265,32 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                     recoverable=True,
                 )
                 return
-            payload = await self._receive(socket, timeout=remaining)
+            payload = await self._next(inbox, timeout=remaining)
             if payload is None:
+                # Either the wait ran out or the socket closed without a
+                # final. Both leave this utterance unanswered, and neither is
+                # a reason to stop recognizing the next one.
                 return
             if self._handle(payload):
                 return
 
-    async def _receive(
-        self, socket: aiohttp.ClientWebSocketResponse, *, timeout: float
+    async def _next(
+        self, inbox: asyncio.Queue, *, timeout: float
     ) -> dict[str, Any] | None:
+        """Wait for one message, or for the wait to be over.
+
+        Cancelling a `Queue.get` leaves the queue alone, which is the
+        difference that matters: a timeout here costs the wait and not the
+        message.
+        """
+
         try:
-            message = await asyncio.wait_for(socket.receive(), timeout=timeout)
+            payload = await asyncio.wait_for(inbox.get(), timeout=timeout)
         except (TimeoutError, asyncio.TimeoutError):
             return None
-        return self._decode(message)
+        if payload is _CLOSED:
+            return None
+        return payload
 
     def _decode(self, message: aiohttp.WSMessage) -> dict[str, Any] | None:
         if message.type is not aiohttp.WSMsgType.TEXT:

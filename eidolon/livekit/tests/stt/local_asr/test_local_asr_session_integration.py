@@ -340,11 +340,6 @@ async def test_one_over_long_utterance_does_not_end_recognition_for_the_session(
         await runner.cleanup()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_drain uses asyncio.wait_for(..., timeout=0), which cancels the "
-    "receive before it can run and so never reads a queued message",
-)
 @pytest.mark.asyncio
 async def test_interims_reach_the_session_while_the_words_are_still_arriving() -> None:
     """The two-pass shape's first pass, which is the plugin's stated reason to exist.

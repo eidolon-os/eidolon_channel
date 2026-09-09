@@ -61,7 +61,8 @@ def test_the_first_delta_deadline_is_not_the_connection_timeout() -> None:
     source = inspect.getsource(grpc_llm)
 
     # The connection still uses conn_options; the first delta no longer does.
-    assert "first_delta_timeout = give_up_after_s(generation_allowance_s())" in source
+    assert grpc_llm.FIRST_DELTA_TIMEOUT_S == 30.0
+    assert "first_delta_timeout = FIRST_DELTA_TIMEOUT_S" in source
     assert "first_delta_deadline = (\n                asyncio.get_running_loop().time() + first_delta_timeout" in source
     # And the old shape is gone: the deadline must not be built from `timeout`.
     assert "first_delta_deadline = asyncio.get_running_loop().time() + timeout" not in source

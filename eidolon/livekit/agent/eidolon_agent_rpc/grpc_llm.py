@@ -25,10 +25,6 @@ if TYPE_CHECKING:
 
 from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
-from eidolon_sdk.biz.contracts.turn_latency import (
-    generation_allowance_s,
-    give_up_after_s,
-)
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice
@@ -56,6 +52,10 @@ from eidolon.livekit.agent.eidolon_agent_rpc.session import (
 )
 
 logger = logging.getLogger("eidolon_agent_rpc.grpc_llm")
+
+# Temporary diagnostic allowance requested for RK3588 cold-prompt testing.
+# Keep connection, ASR and TTS timeouts unchanged.
+FIRST_DELTA_TIMEOUT_S = 30.0
 
 
 # ``device_token`` must be a zero-arg sync/async callable that mints the
@@ -367,15 +367,10 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         # `conn_options.timeout` is a *connection* timeout, and below it is used
         # as one — opening the session and starting the turn. It used to answer
         # a second, unrelated question as well: how long to wait for the first
-        # text chunk. Against a hosted model those are nearly the same thing,
-        # so the framework's 10 s default was a harmless over-allowance;
-        # against a model on this Host's own little cores they are not, and a
-        # turn that needed 11 s to read its prompt was cancelled at 10 with no
-        # text to speak. Two questions, two numbers, and the second one is now
-        # derived from what a turn is allowed to cost rather than from a
-        # default nobody chose for it.
+        # text chunk. Allow 30 s for the requested cold-prompt experiment;
+        # connection setup still uses the transport's own timeout.
         timeout = max(float(getattr(self._conn_options, "timeout", 10.0) or 10.0), 0.1)
-        first_delta_timeout = give_up_after_s(generation_allowance_s())
+        first_delta_timeout = FIRST_DELTA_TIMEOUT_S
         try:
             session = await asyncio.wait_for(llm_v._get_session(), timeout=timeout)
         except asyncio.TimeoutError as exc:
@@ -445,8 +440,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 except asyncio.TimeoutError as exc:
                     message = (
                         "eidolon_agent first delta timed out after "
-                        f"{first_delta_timeout:.1f}s (the turn's generation "
-                        "allowance; a cold prompt prefix does not fit it)"
+                        f"{first_delta_timeout:.1f}s while waiting for model output"
                     )
                     llm_v.emit_provider_event(
                         "brain_error",

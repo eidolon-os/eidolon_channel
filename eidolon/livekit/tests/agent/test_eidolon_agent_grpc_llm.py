@@ -459,7 +459,10 @@ async def test_session_open_uses_connect_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_delta_timeout_cancels_without_replaying_logical_turn() -> None:
+async def test_first_delta_timeout_cancels_without_replaying_logical_turn(monkeypatch) -> None:
+    from eidolon.livekit.agent.eidolon_agent_rpc import grpc_llm
+
+    monkeypatch.setattr(grpc_llm, "FIRST_DELTA_TIMEOUT_S", 0.05)
     from livekit.agents._exceptions import APIConnectionError
     from livekit.agents.types import APIConnectOptions
 

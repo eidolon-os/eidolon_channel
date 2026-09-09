@@ -71,6 +71,30 @@ pytest -m integration
 
 可选：在 `eidolon/livekit/tests/.env` 放置与 `config/.env.example` 同结构的配置；否则测试使用 `eidolon/livekit/tests/fixtures/minimal_test.env` 占位值。
 
+## 运行环境自检
+
+两个进程（Provider 与 Agent worker）在启动时都会把已安装的直接依赖版本与 `uv.lock`
+对照：装成 `pyproject.toml` 声明范围之外的直接依赖会**拒绝启动**，落在范围内但不等于
+`uv.lock` pin 的只记 WARNING 后继续。分级理由、包集合的推导方式与已知边界见
+[`docs/locked-environment.md`](docs/locked-environment.md)。
+
+不启动服务也可以单独问同一个问题：
+
+```bash
+.venv/bin/python -m eidolon.locked_environment
+```
+
+环境漂移的修法是同步而不是改代码。注意 `dev` 在本仓库是 optional-dependency extra，
+裸 `uv sync` 会卸掉 pytest / ruff / mypy：
+
+```bash
+uv sync --frozen --extra dev
+```
+
+顺序是 **停服务 → sync → 重启**。运行中的解释器保留它已经 import 的东西，在 worker 活着的时候
+sync 既修不了它、也会留下「磁盘已新、进程内存还旧」的半换窗口——9-07 就是这么来的。启动校验
+按定义看不到启动之后才裂开的窗口，所以那行绿字只说明「本进程启动那一刻磁盘是对的」。
+
 ## gRPC 桩
 
 修改 `eidolon/proto/.../eidolon_agent_rpc/v1/grpc_gen/eidolon.proto` 后在仓库根执行：

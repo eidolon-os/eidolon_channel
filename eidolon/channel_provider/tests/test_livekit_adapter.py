@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -10,12 +11,16 @@ from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
+    SESSION_END_ERROR,
+    SESSION_END_TYPE,
     SESSION_OPEN_TYPE,
     WIRE_SCHEMA_VERSION,
 )
 from livekit.protocol.agent import JobStatus
+from livekit.protocol.models import ParticipantInfo
 
 from eidolon.channel_provider.adapters.livekit import LiveKitChannelAdapter
+from eidolon.channel_provider.adapters.livekit import adapter as adapter_mod
 from eidolon.channel_provider.contracts import ChannelNotServable, ProvisionRequest
 from eidolon.channel_provider.ports import ServingAction, ServingRequest
 from eidolon.channel_provider.spec import derive_spec
@@ -34,6 +39,8 @@ class FakeRoomService:
         self.created: list[object] = []
         self.deleted: list[str] = []
         self.health_names: list[list[str]] = []
+        self.participants: list[object] = []
+        self.participants_raise = False
 
     async def create_room(self, request):
         self.created.append(request)
@@ -45,10 +52,18 @@ class FakeRoomService:
         self.health_names.append(list(request.names))
         return object()
 
+    async def list_participants(self, request):
+        if self.participants_raise:
+            raise RuntimeError("livekit unreachable")
+        return SimpleNamespace(participants=list(self.participants))
+
 
 class FakeJob:
-    def __init__(self, status: int) -> None:
-        self.state = SimpleNamespace(status=status)
+    def __init__(self, status: int, *, job_id: str = "AJ_1", error: str = "") -> None:
+        self.id = job_id
+        # `error` is the job's own account of why it failed; LiveKit leaves it
+        # empty for every other status.
+        self.state = SimpleNamespace(status=status, error=error)
 
 
 class FakeDispatch:
@@ -570,3 +585,257 @@ async def test_close_tolerates_a_channel_that_was_never_opened(handle: dict) -> 
     await adapter.close(handle)
 
     assert client.room.deleted == []
+
+
+# -- a dispatch that never becomes a serving agent ---------------------------
+#
+# The port promises to "bring this channel's agent to it"; creating a dispatch
+# only places a standing order. On 2026-09-07 a job took that order, joined the
+# room, raised on startup and left 1.5s later, and no surface reported it: this
+# adapter had already logged `opened session`, the channel record went on
+# answering 200, and the phone went on showing 「正在聆听」 truthfully, because
+# its microphone genuinely was open. These hold the Provider to the difference.
+
+
+def _agent_participant() -> object:
+    return SimpleNamespace(identity="agent-AJ_x", kind=ParticipantInfo.Kind.AGENT)
+
+
+def _device_participant() -> object:
+    return SimpleNamespace(identity="device-instance-1", kind=ParticipantInfo.Kind.STANDARD)
+
+
+async def _settle(adapter: LiveKitChannelAdapter) -> None:
+    """Run the confirmation the dispatch scheduled, without waiting on its clock."""
+    await asyncio.gather(*list(adapter._requests))  # noqa: SLF001 - driving our own task
+
+
+async def test_a_dispatch_that_never_serves_is_reported(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.room.participants = [_device_participant()]
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(grant.handle, "conversation-1")
+        await _settle(adapter)
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors, "a dispatch that produced no agent must not pass silently"
+    assert "conversation-1" in errors[0].getMessage()
+
+
+async def test_a_dispatch_that_serves_says_nothing(monkeypatch, caplog) -> None:
+    """The device being alone is the fault; the agent being there is not news."""
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.room.participants = [_device_participant(), _agent_participant()]
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(grant.handle, "conversation-1")
+        await _settle(adapter)
+
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_a_dispatch_being_cleared_says_how_the_last_one_ended(caplog) -> None:
+    """Deleting the dispatch deletes the only account of a job that failed.
+
+    The confirmation window can miss one — this process restarted, or LiveKit
+    could not be read at the time — and then this is the last moment anything
+    holds the record at all. It costs nothing but a level: the dispatch is
+    already in hand, and `_is_spent` is about to throw the distinction away.
+    """
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.agent_dispatch.dispatches[grant.handle["room"]] = [
+        FakeDispatch(
+            "AD_old",
+            "eidolon",
+            jobs=[FakeJob(JobStatus.JS_FAILED, job_id="AJ_dead", error="transcription_timeout")],
+            metadata=_metadata("conversation-0"),
+        )
+    ]
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(grant.handle, "conversation-1")
+
+    warned = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warned, "a dispatch cleared after its job died must say so"
+    assert "AJ_dead" in warned[0].getMessage()
+
+
+async def test_a_conversation_already_ended_is_not_reported_as_unserved(
+    monkeypatch, caplog
+) -> None:
+    """A short exchange is the healthy case and must not read as a failure.
+
+    `close_session` withdraws the dispatch and LiveKit removes the agent
+    promptly, so any conversation shorter than the confirmation window leaves
+    the device alone in its room — which is exactly what a dispatch that never
+    served looks like. Without asking whether the conversation is still wanted
+    first, this report fires on ordinary traffic, and a report that fires on
+    healthy traffic is the same disease as the silence it was added to cure.
+    """
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.room.participants = [_device_participant()]
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.close_session(grant.handle, "conversation-1")
+        await _settle(adapter)
+
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_a_job_that_died_is_reported_with_its_own_error(monkeypatch, caplog) -> None:
+    """`JS_FAILED` is where "nobody came" has to become "it died, and here is why".
+
+    `_is_spent` folds failure into success because a finished job cannot serve a
+    new conversation either way. That is the dispatch's usefulness; this is a
+    device that was not served, and it is the one question the two statuses
+    answer differently — so the answer has to reach the log that reports it.
+    """
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.room.participants = [_device_participant()]
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(grant.handle, "conversation-1")
+        ours = [
+            d
+            for d in client.agent_dispatch.dispatches[grant.handle["room"]]
+            if d.agent_name == "eidolon"
+        ]
+        ours[0].state.jobs.append(
+            FakeJob(JobStatus.JS_FAILED, job_id="AJ_dead", error="transcription_timeout")
+        )
+        await _settle(adapter)
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors, "a job that died must not be reported as merely absent"
+    message = errors[0].getMessage()
+    assert "AJ_dead" in message
+    assert "transcription_timeout" in message
+
+
+# -- the failure the agent announces, heard by the component that dispatched --
+#
+# `session_end{error}` is published from the job's failure path while the room
+# is still live, and this adapter is sitting in that room. It arrives seconds
+# before any confirmation window closes, and was being dropped as "not a
+# request" — true, and the end of it.
+
+
+def _session_end(identity: str | None, reason: str) -> SimpleNamespace:
+    return _packet(
+        topic=SESSION_CONTROL_TOPIC,
+        identity=identity,
+        body={
+            "schema_v": WIRE_SCHEMA_VERSION,
+            "type": SESSION_END_TYPE,
+            SESSION_CONVERSATION_ID_FIELD: "conversation-1",
+            "reason": reason,
+        },
+    )
+
+
+async def test_the_agent_saying_it_could_not_serve_is_heard(caplog) -> None:
+    adapter, _ = _adapter()
+
+    with caplog.at_level(logging.INFO):
+        adapter._note_serving_failure(  # noqa: SLF001 - the packet path under test
+            _session_end("agent-7", SESSION_END_ERROR), device=_DEVICE_1, room="r"
+        )
+
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warned, "the Provider must not be the last component to know"
+    assert "conversation-1" in warned[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    "packet",
+    [
+        # An ordinary end is not news, and warning on it would teach the reader
+        # to skip the warning.
+        _session_end("agent-7", "user_left"),
+        _session_end("agent-7", "idle_normal_end"),
+        # The device does not speak this direction of the topic.
+        _session_end(_DEVICE_1, SESSION_END_ERROR),
+        # Right words, wrong topic.
+        _packet(topic="eidolon.audio_state", identity="agent-7", body={"type": "session_end"}),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity="agent-7", body=b"not json"),
+        _packet(topic=SESSION_CONTROL_TOPIC, identity="agent-7", body={"type": "session_end"}),
+    ],
+)
+async def test_only_a_failure_from_the_other_direction_is_news(packet, caplog) -> None:
+    adapter, _ = _adapter()
+
+    with caplog.at_level(logging.INFO):
+        adapter._note_serving_failure(packet, device=_DEVICE_1, room="r")  # noqa: SLF001
+
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_a_confirmation_that_could_not_look_does_not_accuse(monkeypatch, caplog) -> None:
+    """Nobody having looked is not the same as nothing being there.
+
+    The same distinction `device_is_on_channel` draws with `None`: LiveKit being
+    unreachable must not be reported as a conversation nobody is serving, or the
+    report stops meaning anything the first time the transport blinks.
+    """
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.room.participants_raise = True
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(grant.handle, "conversation-1")
+        await _settle(adapter)
+
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_a_configured_client_url_is_handed_over_unchanged() -> None:
+    """A LiveKit that is not on this Host has a real host, and it is kept."""
+
+    adapter, _client = _adapter()
+
+    assert adapter._client_url() == "wss://livekit.example.test"
+
+
+def test_a_host_deferred_client_url_is_answered_when_the_binding_is_minted(
+    monkeypatch,
+) -> None:
+    """The address is decided per binding, not frozen at deploy.
+
+    Ops observed one address at deploy and froze it into an environment
+    variable. A Host that then moved networks or renewed a lease went on
+    handing out the address it used to have — and a session binding names one
+    server, with no second candidate and no re-locating, so the device had one
+    URL and it was wrong.
+    """
+
+    adapter = LiveKitChannelAdapter(livekit_config(client_url="ws://:7880"))
+    monkeypatch.setattr(adapter_mod, "_routable_address", lambda: "192.168.1.33")
+
+    assert adapter._client_url() == "ws://192.168.1.33:7880"
+
+
+@pytest.mark.asyncio
+async def test_the_binding_carries_the_address_decided_at_mint_time(
+    monkeypatch,
+) -> None:
+    adapter, _client = _adapter()
+    monkeypatch.setattr(
+        adapter, "_config", livekit_config(client_url="ws://:7880"), raising=True
+    )
+    monkeypatch.setattr(adapter_mod, "_routable_address", lambda: "10.0.0.7")
+
+    grant = await adapter.open(_spec(), issued_at_ms=1_700_000_000_000)
+
+    assert json.loads(grant.payload)["session"]["server_url"] == "ws://10.0.0.7:7880"

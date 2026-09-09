@@ -107,3 +107,76 @@ def test_config_rejects_ambiguous_insecure_lan_switch(monkeypatch, tmp_path) -> 
 
     with pytest.raises(ValueError, match="must be 0 or 1"):
         load_provider_config()
+
+
+def test_config_accepts_a_client_url_whose_host_is_not_yet_knowable(
+    monkeypatch, tmp_path
+) -> None:
+    """`ws://:7880` says the host is decided when a binding is minted.
+
+    Written that way because it is the truth: nothing at configuration time
+    knows which of a Host's addresses a device will be able to reach, and an
+    address observed once at deploy was handed to every device until the next
+    deploy.
+    """
+
+    _environment(
+        monkeypatch,
+        tmp_path,
+        """
+        storage:
+          path: $STATE_ROOT_FOR_TEST/provider.sqlite3
+        livekit:
+          api_url: http://127.0.0.1:7880
+          client_url: ws://:7880
+        """,
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_ALLOW_INSECURE_LAN_CLIENT_URL", "1")
+
+    assert load_provider_config().livekit.client_url == "ws://:7880"
+
+
+def test_config_refuses_a_client_url_with_neither_host_nor_port(
+    monkeypatch, tmp_path
+) -> None:
+    """Deferring the host is not licence to omit the port too.
+
+    A port is knowable at configuration time — it is this Host's own LiveKit
+    listener — so leaving it out is a missing value, not a deferred one.
+    """
+
+    _environment(
+        monkeypatch,
+        tmp_path,
+        """
+        storage:
+          path: $STATE_ROOT_FOR_TEST/provider.sqlite3
+        livekit:
+          api_url: http://127.0.0.1:7880
+          client_url: ws://
+        """,
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_ALLOW_INSECURE_LAN_CLIENT_URL", "1")
+
+    with pytest.raises(ValueError, match="livekit.client_url"):
+        load_provider_config()
+
+
+def test_config_refuses_an_api_url_that_defers_its_host(monkeypatch, tmp_path) -> None:
+    """Only the client URL may defer. `api_url` is this process reaching
+    LiveKit over loopback, and loopback is known."""
+
+    _environment(
+        monkeypatch,
+        tmp_path,
+        """
+        storage:
+          path: $STATE_ROOT_FOR_TEST/provider.sqlite3
+        livekit:
+          api_url: http://:7880
+          client_url: wss://livekit.example.test
+        """,
+    )
+
+    with pytest.raises(ValueError, match="livekit.api_url"):
+        load_provider_config()

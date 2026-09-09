@@ -11,14 +11,18 @@ import asyncio
 import hashlib
 import json
 import logging
+import socket
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
+    SESSION_END_ERROR,
+    SESSION_END_TYPE,
     SESSION_OPEN_TYPE,
     WIRE_SCHEMA_VERSION,
     normalize_conversation_id,
@@ -26,6 +30,7 @@ from eidolon_sdk.biz.contracts import (
 from livekit import api, rtc
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 from livekit.protocol.agent import JobStatus
+from livekit.protocol.models import ParticipantInfo
 
 from ...contracts import BackendUnavailable, ChannelNotServable, canonical_json
 from ...ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
@@ -37,6 +42,25 @@ logger = logging.getLogger("eidolon.channel_provider.livekit")
 ADAPTER_NAME = "livekit"
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 
+def _routable_address() -> str:
+    """This machine's address on the interface it would leave by.
+
+    A UDP socket connected to a documentation address (RFC 5737 TEST-NET-1)
+    sends nothing and reaches nothing; it only makes the kernel choose a route,
+    and the local end of that choice is the address. Asked rather than
+    configured because a Host grows and loses addresses on its own — a
+    maintenance cable, a new access point — and no file written earlier knows
+    which one is current.
+    """
+
+    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        connection.connect(("192.0.2.1", 9))
+        return str(connection.getsockname()[0])
+    finally:
+        connection.close()
+
+
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
 _ENDED_JOB_STATUSES = frozenset({JobStatus.JS_SUCCESS, JobStatus.JS_FAILED})
 _SESSION_REQUESTS = {
@@ -45,6 +69,11 @@ _SESSION_REQUESTS = {
 }
 _REJOIN_BASE_DELAY = 1.0
 _REJOIN_MAX_DELAY = 30.0
+# How long a dispatch has to become a serving agent before we say it did
+# not. Generous on purpose: a cold worker measured 3.6s of prewarm and
+# then joined in under a second, so this is far outside the normal spread
+# and only fires when nothing arrived at all.
+_SERVING_CONFIRM_DELAY = 10.0
 
 
 @dataclass
@@ -72,6 +101,45 @@ def _is_spent(dispatch: Any) -> bool:
     """
     jobs = list(dispatch.state.jobs)
     return bool(jobs) and all(job.state.status in _ENDED_JOB_STATUSES for job in jobs)
+
+
+def _failure_of(dispatch: Any) -> str:
+    """What this dispatch's failed jobs say for themselves, or "" if none did.
+
+    The one place `JS_FAILED` must not be interchangeable with `JS_SUCCESS`.
+    `_is_spent` is right to fold them together — a finished job cannot serve a
+    new conversation whichever way it finished — but that answer is about the
+    dispatch's usefulness, and this one is about a device that was not served,
+    which is the only question the two statuses answer differently. `error` is
+    the job's own account of why, and on this side of the edge it is the only
+    description of the failure that exists.
+    """
+    return "; ".join(
+        f"job={getattr(job, 'id', '') or '?'} failed: "
+        f"{getattr(job.state, 'error', '') or 'no reason reported'}"
+        for job in dispatch.state.jobs
+        if job.state.status == JobStatus.JS_FAILED
+    )
+
+
+def _why_unserved(dispatch: Any) -> str:
+    """Say what the dispatch knows about a conversation nobody is serving.
+
+    Three answers worth telling apart, because each sends the reader somewhere
+    else: a job that died, and its own error; no job at all, meaning nothing
+    ever took the standing order — what an absent or misnamed worker looks like
+    from here; or a job LiveKit still holds as live, meaning the agent left the
+    room without its job being marked.
+    """
+    failure = _failure_of(dispatch)
+    if failure:
+        return failure
+    jobs = list(dispatch.state.jobs)
+    if not jobs:
+        return "no worker took the dispatch"
+    return "dispatch still holds " + ", ".join(
+        JobStatus.Name(job.state.status) for job in jobs
+    )
 
 
 class LiveKitChannelAdapter:
@@ -132,6 +200,36 @@ class LiveKitChannelAdapter:
     # Resource names are this adapter's business. Another adapter names topics
     # or endpoints instead, and nothing above this line has to care.
 
+    def _client_url(self) -> str:
+        """Where a device should reach this Host's LiveKit, decided now.
+
+        A configured ``ws://:7880`` — scheme and port, no host — says the host
+        is not knowable at configuration time, which is the truth: Ops observed
+        one address at deploy and froze it into an environment variable, and a
+        Host that then moved networks or renewed a lease went on handing out the
+        address it used to have. The Local API survives that by offering every
+        candidate and being re-located; a session binding names one server and
+        has neither.
+
+        So it is answered per binding, from the address the kernel says it would
+        use to leave this machine. That is the same question
+        ``eidolon-livekit-launch`` asks for ``rtc.node_ip``, asked the same way
+        and answered on the same interface, so the URL a device is handed and
+        the address LiveKit advertises itself at cannot drift apart.
+
+        Not the same as knowing where the *device* is — a Host with two networks
+        still has to pick one, and picking the routable one is a rule, not
+        knowledge. What this removes is staleness, not the assumption.
+        """
+
+        parsed = urlparse(self._config.client_url)
+        if parsed.hostname is not None:
+            return self._config.client_url
+        port = parsed.port
+        return urlunparse(
+            (parsed.scheme, f"{_routable_address()}:{port}", "", "", "", "")
+        )
+
     def _room_name(self, spec: ChannelSpec) -> str:
         digest = hashlib.sha256(
             f"{self._config.room_prefix}\0{spec.device_id}".encode()
@@ -148,7 +246,7 @@ class LiveKitChannelAdapter:
             {
                 "schema_version": 2,
                 "session": {
-                    "server_url": self._config.client_url,
+                    "server_url": self._client_url(),
                     "token": self._token(room, spec, ttl_seconds=ttl),
                     "identity": spec.device_id,
                     "room_name": room,
@@ -235,6 +333,7 @@ class LiveKitChannelAdapter:
 
         @connection.on("data_received")
         def _received(packet: Any) -> None:
+            self._note_serving_failure(packet, device=watch.device, room=room)
             request = self._requested(packet, device=watch.device, room=room)
             if request is not None:
                 self._dispatch_request(watch.sink, request, room=room)
@@ -285,6 +384,109 @@ class LiveKitChannelAdapter:
                 return
 
         watch.retry = asyncio.create_task(_rejoin())
+
+    async def _dispatch_for(
+        self, room: str, *, agent: str, conversation_id: str
+    ) -> Any | None:
+        """The dispatch standing for one conversation, or None if none is.
+
+        Matched the way `close_session` matches it — by agent name and the
+        conversation in its own metadata — rather than by an id we remembered:
+        LiveKit keeps dispatch records of its own in the same room, and a
+        session an earlier process opened must still be recognisable here.
+        """
+        for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
+            if (
+                dispatch.agent_name == agent
+                and self._dispatch_metadata(dispatch).get(SESSION_CONVERSATION_ID_FIELD)
+                == conversation_id
+            ):
+                return dispatch
+        return None
+
+    def _confirm_serving_later(
+        self, room: str, *, agent: str, conversation_id: str
+    ) -> None:
+        """Check that the dispatch we just placed actually became a serving agent.
+
+        This port promises to "bring this channel's agent to it" and what it
+        does is place a standing order. Those are not the same thing, and the
+        gap between them is invisible: a job that dies on startup leaves the
+        dispatch accepted, this log saying `opened session`, the channel record
+        answering 200, and the device holding an open microphone against a room
+        with nothing in it. Measured on 2026-09-07: the agent was a participant
+        for 1.5s and no surface anywhere reported that the conversation had no
+        one in it.
+
+        So we go and look, and the order of the three questions is the method.
+
+        Is this conversation still wanted? A dispatch that is no longer there
+        was withdrawn by `close_session`, and the agent leaves promptly after
+        that — so every exchange shorter than this window leaves the device
+        alone in its room, which is indistinguishable from a dispatch that
+        never served. Asking this first is the difference between a report and
+        an alarm that fires on healthy traffic, which is the same disease as
+        the silence it was added to cure.
+
+        Is anyone serving it? `Kind.AGENT` is the exact question — not a head
+        count, which includes the device and any infrastructure participant,
+        and not an identity guess, since LiveKit names the agent itself. It also
+        outranks the dispatch record, which publishes a job a beat late: an
+        agent demonstrably in the room is serving whatever the bookkeeping says.
+
+        And if nobody is — why, from the dispatch already in hand. See
+        `_why_unserved`: "nothing came" and "the job died with this error" are
+        different reports to be woken by.
+
+        This never fails a request. The device has already been answered by the
+        time this runs; what it changes is that the Provider stops being the
+        last component to know.
+        """
+
+        async def _confirm() -> None:
+            await asyncio.sleep(_SERVING_CONFIRM_DELAY)
+            try:
+                dispatch = await self._dispatch_for(
+                    room, agent=agent, conversation_id=conversation_id
+                )
+            except Exception:
+                logger.debug("could not read dispatch of room=%s", room, exc_info=True)
+                return
+            if dispatch is None:
+                # Withdrawn while we waited: this conversation ended, which is
+                # what a short exchange looks like from here.
+                return
+            try:
+                participants = await self._client().room.list_participants(
+                    api.ListParticipantsRequest(room=room)
+                )
+            except Exception:
+                # Nobody looked, which is not the same as nothing being there.
+                logger.debug(
+                    "could not confirm serving on room=%s", room, exc_info=True
+                )
+                return
+            listed = getattr(participants, "participants", []) or []
+            if any(
+                getattr(p, "kind", None) == ParticipantInfo.Kind.AGENT
+                for p in listed
+            ):
+                return
+            logger.error(
+                "dispatch=%s on room=%s agent=%s conversation_id=%s produced no serving "
+                "agent within %.0fs — the device asked for a conversation and nothing "
+                "is in the room to hold it (%s)",
+                dispatch.id,
+                room,
+                agent,
+                conversation_id,
+                _SERVING_CONFIRM_DELAY,
+                _why_unserved(dispatch),
+            )
+
+        task = asyncio.create_task(_confirm())
+        self._requests.add(task)
+        task.add_done_callback(self._requests.discard)
 
     async def device_is_on_channel(self, handle: dict[str, Any]) -> bool | None:
         """Is the device's own participant in its room?
@@ -372,6 +574,50 @@ class LiveKitChannelAdapter:
         if action is None or conversation_id is None:
             return None
         return ServingRequest(action=action, conversation_id=conversation_id)
+
+    def _note_serving_failure(self, packet: Any, *, device: str, room: str) -> None:
+        """Hear the agent say it could not serve, since we are already in the room.
+
+        The other half of the same edge. `session_end{error}` is published from
+        the job's failure path while the room is still live, so it arrives here,
+        on this connection, seconds before any confirmation window closes — and
+        until now `_requested` dropped it as "not a request", which was true and
+        was the end of it. The component that placed the dispatch was the last
+        one to learn it had died.
+
+        Read as news, never as an instruction. The device has already been told
+        by the agent itself, and ending the session on the strength of a packet
+        would take the channel away from the only party that can ask for another
+        conversation. So this says so, and does nothing.
+
+        Only `error`. `session_end` also carries the reasons an ordinary
+        conversation ends with, and warning on those would teach the reader to
+        skip the warning — which is how it would fail to be there for this.
+        """
+        if getattr(packet, "topic", None) != SESSION_CONTROL_TOPIC:
+            return
+        identity = getattr(getattr(packet, "participant", None), "identity", None)
+        if identity == device:
+            # The mirror of `_requested`'s gate: this is the direction the
+            # device does not speak, and an unresolved sender is still heard
+            # for the reason given there.
+            return
+        try:
+            body = json.loads(bytes(packet.data))
+        except (TypeError, ValueError, UnicodeDecodeError):
+            # `_requested` has already said so about this same packet.
+            return
+        if not isinstance(body, dict) or body.get("schema_v") != WIRE_SCHEMA_VERSION:
+            return
+        if body.get("type") != SESSION_END_TYPE or body.get("reason") != SESSION_END_ERROR:
+            return
+        logger.warning(
+            "room=%s agent reported session_end reason=%s conversation_id=%s — the "
+            "conversation this channel opened is not being served",
+            room,
+            SESSION_END_ERROR,
+            normalize_conversation_id(body.get(SESSION_CONVERSATION_ID_FIELD)) or "",
+        )
 
     def _dispatch_request(
         self, sink: ServingRequestSink, request: ServingRequest, *, room: str
@@ -472,11 +718,19 @@ class LiveKitChannelAdapter:
                     return
                 # A spent dispatch or one belonging to a superseded conversation
                 # cannot stand in for the conversation the device is asking for.
-                logger.info(
-                    "clearing dispatch=%s on room=%s previous_conversation=%s",
+                # How the previous one ended is said here because this is
+                # the last moment anything knows: deleting the dispatch deletes
+                # the only account of a job that failed, so if the confirmation
+                # window missed it — this process restarted, or LiveKit could
+                # not be read then — nothing ever says so.
+                failure = _failure_of(dispatch)
+                logger.log(
+                    logging.WARNING if failure else logging.INFO,
+                    "clearing dispatch=%s on room=%s previous_conversation=%s%s",
                     dispatch.id,
                     room,
                     metadata.get(SESSION_CONVERSATION_ID_FIELD, ""),
+                    f" — it had {failure}" if failure else "",
                 )
                 await self._client().agent_dispatch.delete_dispatch(
                     dispatch_id=dispatch.id, room_name=room
@@ -496,6 +750,7 @@ class LiveKitChannelAdapter:
         except Exception as exc:
             raise BackendUnavailable("LiveKit agent dispatch failed") from exc
         logger.info("opened session on room=%s agent=%s", room, agent)
+        self._confirm_serving_later(room, agent=agent, conversation_id=conversation_id)
 
     async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         """Withdraw the standing order, which is what ends the agent's job.

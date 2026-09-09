@@ -116,13 +116,25 @@ def test_a_one_shot_synthesize_is_refused_rather_than_faked() -> None:
         tts.synthesize("你好")
 
 
-def test_a_batch_larger_than_one_request_is_refused_at_construction() -> None:
-    """Rather than after the turn has started. The service will not say more
-    than the contract's limit in one go, and finding that out mid-reply means a
-    sentence is lost with the NPU already spent on it."""
+def test_a_batch_longer_than_stays_audible_is_refused_at_construction() -> None:
+    """At construction rather than by ear.
 
-    with pytest.raises(ValueError, match="exceeds what the service"):
-        LocalTtsConfig(hard_max_chars=contract.MAX_TEXT_CHARACTERS + 1)
+    The guard used to compare against `MAX_TEXT_CHARACTERS` (400), which is the
+    length the service *refuses*. But the length that stays *audible* is 60:
+    past it the Host's buffer runs dry mid-sentence and the listener hears a
+    gap — 126 characters measured 246-372 ms below empty on every turn. So
+    anything up to 400 passed a guard that was watching the wrong limit.
+    """
+
+    with pytest.raises(ValueError, match="without the audio breaking up"):
+        LocalTtsConfig(hard_max_chars=contract.SAFE_TEXT_CHARACTERS + 1)
+
+
+def test_the_default_batch_sits_exactly_on_the_audible_limit() -> None:
+    """60 is not a coincidence: it is the contract's safe bound, so the default
+    is the largest batch that was measured to stay whole."""
+
+    assert LocalTtsConfig().hard_max_chars == contract.SAFE_TEXT_CHARACTERS
 
 
 def test_the_first_sentence_may_be_shorter_than_the_rest() -> None:

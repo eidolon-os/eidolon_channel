@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from eidolon_sdk.biz.contracts import local_asr as contract
+from livekit.agents import APIError
 from livekit.agents import stt as lk_stt
 from livekit.agents.utils.audio import AudioByteStream
 
@@ -109,15 +110,20 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                     with contextlib.suppress(asyncio.CancelledError):
                         await reader
         except aiohttp.ClientError as exc:
-            # Said plainly rather than retried. This service is on this
-            # machine: if it is not answering, it is not running, and the Host
-            # is the thing to look at.
+            # Still said plainly — this service is on this machine, and no
+            # backoff will start a process that is not running. What changed
+            # is that saying so no longer ends recognition for the session: a
+            # socket closing under us is also how the service refuses a
+            # single utterance, and the sentence after it is perfectly
+            # recognizable. The framework rebuilds the stream on its own
+            # 0.5 s backoff and the session's error tolerance is what gives
+            # up, which is a decision that belongs there and not here.
             self._emit_error(
                 RuntimeError(
                     f"this Host's speech recognition did not answer at "
                     f"{self._stream_url}: {exc}"
                 ),
-                recoverable=False,
+                recoverable=True,
             )
 
     async def _receive_loop(
@@ -248,7 +254,7 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
                     RuntimeError(
                         "this Host's recognition closed the stream mid-utterance"
                     ),
-                    recoverable=False,
+                    recoverable=True,
                 )
             self._handle(payload)
 
@@ -310,7 +316,15 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
             code = str(payload.get("code", ""))
             self._emit_error(
                 RuntimeError(f"this Host's recognition refused: {code}"),
-                recoverable=code in contract.RETRYABLE_ERROR_CODES,
+                # `RETRYABLE_ERROR_CODES` answers "may this utterance be sent
+                # again", which is not the question being asked here. The
+                # contract says `utterance_too_long` is not retryable *as
+                # sent* — those words are gone, and resending them is
+                # pointless — and this stream read that as nothing further
+                # can ever be recognized. The one code that is genuinely
+                # fatal is the one saying this client and this service
+                # disagree about the protocol; the rest cost an utterance.
+                recoverable=code != contract.ERROR_BAD_REQUEST,
             )
             return True
         if kind != contract.TRANSCRIPT:
@@ -346,8 +360,26 @@ class LocalAsrSpeechStream(lk_stt.RecognizeStream):
             logger.warning("local_asr event queue full, dropping event")
 
     def _emit_error(self, error: Exception, *, recoverable: bool) -> None:
+        """Say it once, and say it in the type the framework reads.
+
+        `recoverable` used to be a log field and nothing else: whatever it
+        said, this raised the exception it was handed. Both layers above that
+        can bring recognition back look for an `APIError`, and only for one —
+        `RecognizeStream._main_task` to reconnect, and `_STTPipeline._stt_pump`
+        to rebuild the stream, whose own comment says any other error
+        "propagates and stops the pump". A bare exception reached neither, so
+        one refused utterance ended recognition for the rest of the session
+        and left the device answering everything it heard with its fallback
+        line, until someone restarted the service.
+
+        So the flag now chooses the type. What is fatal stays fatal: a
+        protocol this build cannot read is not going to become readable.
+        """
+
         logger.error("local_asr stream error (recoverable=%s): %s", recoverable, error)
         self._push_event(
             lk_stt.SpeechEvent(type=lk_stt.SpeechEventType.END_OF_SPEECH, alternatives=[])
         )
+        if recoverable:
+            raise APIError(str(error), retryable=True) from error
         raise error

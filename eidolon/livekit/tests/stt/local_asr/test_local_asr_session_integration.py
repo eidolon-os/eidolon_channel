@@ -66,6 +66,8 @@ class _FakeHostAsr:
         self.utterances_started = 0
         self.utterances_ended = 0
         self.audio_bytes = 0
+        #: Every byte this service was ever sent, across utterances.
+        self.total_audio_bytes = 0
         self.rejected = False
 
     async def handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -84,6 +86,7 @@ class _FakeHostAsr:
         async for message in socket:
             if message.type is web.WSMsgType.BINARY:
                 self.audio_bytes += len(message.data)
+                self.total_audio_bytes += len(message.data)
                 self.audio_frames += 1
                 if self.interim_every and self.audio_frames % self.interim_every == 0:
                     self.interims_sent += 1
@@ -115,6 +118,10 @@ class _FakeHostAsr:
             kind = payload.get("type")
             if kind in {contract.START_UTTERANCE, contract.START_UTTERANCE_LEGACY}:
                 self.utterances_started += 1
+                # Per utterance, as `service.py` counts it: `_audio_bytes`
+                # lives on the utterance object, so the limit does not carry
+                # across utterances or across streams.
+                self.audio_bytes = 0
                 await socket.send_json(
                     {
                         "type": contract.UTTERANCE_STARTED,
@@ -271,10 +278,10 @@ async def test_room_audio_is_resampled_to_the_rate_the_service_reads() -> None:
         expected_16k_bytes = round(seconds * 16_000 * 2)
         # A frame's worth of tolerance: the plugin's AudioByteStream holds a
         # partial frame back until something flushes it.
-        assert service.audio_bytes <= expected_16k_bytes + 3200, (
+        assert service.total_audio_bytes <= expected_16k_bytes + 3200, (
             f"{seconds:g} s of 24 kHz room audio reached the service as "
-            f"{service.audio_bytes} bytes, which it will read as "
-            f"{service.audio_bytes / SERVICE_BYTES_PER_SECOND:.1f} s of 16 kHz "
+            f"{service.total_audio_bytes} bytes, which it will read as "
+            f"{service.total_audio_bytes / SERVICE_BYTES_PER_SECOND:.1f} s of 16 kHz "
             f"audio; resampled it would be about {expected_16k_bytes} bytes "
             f"(raw, unresampled: {pushed_24k_bytes})"
         )
@@ -285,10 +292,6 @@ async def test_room_audio_is_resampled_to_the_rate_the_service_reads() -> None:
         await runner.cleanup()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the plugin raises a bare RuntimeError, which neither RecognizeStream._main_task nor _STTPipeline._stt_pump treats as recoverable, so the stream is never rebuilt",
-)
 @pytest.mark.asyncio
 async def test_one_over_long_utterance_does_not_end_recognition_for_the_session() -> None:
     """``utterance_too_long`` is "not retryable as sent", not "give up".

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from eidolon_sdk.biz.contracts import local_tts as contract
+from eidolon_sdk.biz.contracts.turn_latency import give_up_after_s, voice_allowance_s
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,8 @@ class LocalTtsConfig:
     #: How long to wait for the first audio frame of a sentence. The engine
     #: needs about 2.9 s on RK3588 — the voice-profile precompute plus its own
     #: time to first PCM — so this is that with room, not a tight deadline.
-    first_frame_timeout_s: float = 15.0
+    #: Derived from the turn budget. It was 15 s, longer than the whole turn.
+    first_frame_timeout_s: float = give_up_after_s(voice_allowance_s())
     #: How long a silence mid-sentence means the service has stopped. Audio
     #: arrives roughly every 200 ms while a sentence is being said.
     inter_frame_timeout_s: float = 20.0

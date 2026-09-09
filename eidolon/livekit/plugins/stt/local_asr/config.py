@@ -18,6 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from eidolon_sdk.biz.contracts import local_asr as contract
+from eidolon_sdk.biz.contracts.turn_latency import (
+    give_up_after_s,
+    recognition_allowance_s,
+)
 
 
 @dataclass
@@ -38,7 +42,11 @@ class LocalAsrSTTConfig:
     #: How long to wait for the final answer after the utterance is closed.
     #: The two-pass shape re-decodes with an offline model and punctuates, so
     #: this is longer than the interim cadence, and still local.
-    final_timeout_s: float = 15.0
+    #: Derived from the turn budget, not chosen here. 15 s used to sit in this
+    #: field, which is longer than a whole turn is allowed to take — so a
+    #: recognition that hung consumed the Agent's and the voice's share too,
+    #: and the turn failed with nobody at fault.
+    final_timeout_s: float = give_up_after_s(recognition_allowance_s())
 
     #: Milliseconds of audio per frame sent to the service. The service paces
     #: recognition on what it receives, so this is the interim cadence.

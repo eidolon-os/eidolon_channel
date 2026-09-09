@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
+from eidolon_sdk.biz.contracts.turn_latency import (
+    generation_allowance_s,
+    give_up_after_s,
+)
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice
@@ -360,7 +364,18 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
             attempt=attempt,
             text_chars=len(user_text),
         )
+        # `conn_options.timeout` is a *connection* timeout, and below it is used
+        # as one — opening the session and starting the turn. It used to answer
+        # a second, unrelated question as well: how long to wait for the first
+        # text chunk. Against a hosted model those are nearly the same thing,
+        # so the framework's 10 s default was a harmless over-allowance;
+        # against a model on this Host's own little cores they are not, and a
+        # turn that needed 11 s to read its prompt was cancelled at 10 with no
+        # text to speak. Two questions, two numbers, and the second one is now
+        # derived from what a turn is allowed to cost rather than from a
+        # default nobody chose for it.
         timeout = max(float(getattr(self._conn_options, "timeout", 10.0) or 10.0), 0.1)
+        first_delta_timeout = give_up_after_s(generation_allowance_s())
         try:
             session = await asyncio.wait_for(llm_v._get_session(), timeout=timeout)
         except asyncio.TimeoutError as exc:
@@ -410,7 +425,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         spoken_preamble_roles: set[str] = set()
         try:
             payload_iter = payloads.__aiter__()
-            first_delta_deadline = asyncio.get_running_loop().time() + timeout
+            first_delta_deadline = (
+                asyncio.get_running_loop().time() + first_delta_timeout
+            )
             while True:
                 try:
                     if first_model_activity_seen:
@@ -426,7 +443,11 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError as exc:
-                    message = f"eidolon_agent first delta timed out after {timeout:.1f}s"
+                    message = (
+                        "eidolon_agent first delta timed out after "
+                        f"{first_delta_timeout:.1f}s (the turn's generation "
+                        "allowance; a cold prompt prefix does not fit it)"
+                    )
                     llm_v.emit_provider_event(
                         "brain_error",
                         conversation_id=conversation_id,

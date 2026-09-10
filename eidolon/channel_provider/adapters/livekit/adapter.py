@@ -212,10 +212,10 @@ class LiveKitChannelAdapter:
         has neither.
 
         So it is answered per binding, from the address the kernel says it would
-        use to leave this machine. That is the same question
-        ``eidolon-livekit-launch`` asks for ``rtc.node_ip``, asked the same way
-        and answered on the same interface, so the URL a device is handed and
-        the address LiveKit advertises itself at cannot drift apart.
+        use to leave this machine. This is the signalling URL only: LiveKit
+        gathers its own ICE candidates, and eidolond refreshes that transport
+        when its captured network inputs change. Resolving this URL does not
+        by itself prove that the media transport is ready.
 
         Not the same as knowing where the *device* is — a Host with two networks
         still has to pick one, and picking the routable one is a rule, not

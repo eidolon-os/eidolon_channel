@@ -11,6 +11,7 @@ from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC, WIRE_SCHEMA_VERS
 from eidolon.livekit.agent.turn_policy import InterruptIntent, InterruptIntentResult
 from eidolon.livekit.common.config import TurnPolicyConfig
 from .._harness.audio import synth_voiced
+from .._harness.headless import wait_until
 from .._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedTranscript
 from .._harness.production import production_session
 
@@ -228,12 +229,6 @@ async def test_ambiguous_sentence_final_preserves_pause_continuation(
         assert llm.call_count == 1
 
 
-async def _wait_until(predicate, timeout=3):
-    async with asyncio.timeout(timeout):
-        while not predicate():
-            await asyncio.sleep(.01)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize('continuation', ['late_final', 'new_speech_in_cooldown', 'new_speech_after_cooldown', 'long_active_speech'])
 async def test_resumed_output_keeps_receiving_interruption_evidence(continuation):
@@ -272,7 +267,7 @@ async def test_resumed_output_keeps_receiving_interruption_evidence(continuation
             h.audio_in.feed_pcm(synth_voiced(max(3.7, (final_ms + 400) / 1000)))
             await h.audio_out.wait_for_first_audio()
             speech = h.session.current_speech
-            await _wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
+            await wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
             assert pipeline._ducking.mixer.state != 'SUSPENDED'
             assert not speech.interrupted
             assert not h.events.user_messages()
@@ -308,7 +303,7 @@ async def test_incomplete_speech_resumes_output_then_expires_without_reply(recor
             h.audio_in.feed_pcm(synth_voiced(1.2))
             await h.audio_out.wait_for_first_audio()
             speech = h.session.current_speech
-            await _wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
+            await wait_until(lambda: pipeline._interruption_orchestrator.state.value == 'resumed_waiting_evidence', timeout=8)
             assert pipeline._ducking.mixer.state != 'SUSPENDED'
             assert pipeline._interruption_orchestrator.active
             timeline = pipeline._timeline
@@ -316,7 +311,7 @@ async def test_incomplete_speech_resumes_output_then_expires_without_reply(recor
                 if event['event'] == 'output_resumed_pending_evidence')
             assert recovery['at'] >= recovery['speech_stopped_at']
             record_property('output_recovery', json.dumps(recovery))
-            await _wait_until(lambda: not pipeline._interruption_orchestrator.active, timeout=6)
+            await wait_until(lambda: not pipeline._interruption_orchestrator.active, timeout=6)
             events = timeline.attrs['interruption_orchestrator_events']
             resolved = next(event for event in events if event['event'] == 'candidate_resolved')
             resumed = next(event for event in events

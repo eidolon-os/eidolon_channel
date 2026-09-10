@@ -560,6 +560,24 @@ class EventRecorder:
         raise ValueError("must specify agent= or user=")
 
 
+async def wait_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 5.0,
+    poll_ms: int = 10,
+) -> None:
+    """Block until ``predicate`` holds, for state that emits no event.
+
+    ``EventRecorder.wait_for`` covers the session event log; pipeline-owned
+    state (duck mixer, interruption owner) is only observable by polling.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"predicate not satisfied within {timeout}s")
+        await asyncio.sleep(poll_ms / 1000.0)
+
+
 # ─────────────────────────────────────────────────────────────────
 #  HeadlessSession factory
 # ─────────────────────────────────────────────────────────────────

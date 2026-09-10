@@ -33,10 +33,6 @@ avatar:
 llm:
   base_url: https://api.deepseek.com
   model: deepseek-v4-flash
-  # Direct voice replies; Agent RPC manages its own model configuration.
-  extra_body:
-    thinking:
-      type: disabled
   api_key: OPENAI_LLM_API_KEY
   temperature: 0.7
   timeout: 120
@@ -111,10 +107,6 @@ turn_policy:
     transcript_revision_min_normalized_chars: 4
     speech_merge_grace_ms: 800
   interrupt:
-    # Opt in to llm in controlled tests; its latency/quality is not yet accepted
-    # for the production RPC/RTC chain. Half duplex and PTT do not use it.
-    intent_provider: none
-    intent_timeout_ms: 1500
     decision_timeout_ms: 450
     post_speech_evidence_timeout_ms: 6000
     post_speech_evidence_min_speech_ms: 250

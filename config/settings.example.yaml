@@ -184,6 +184,14 @@ observability:
   stt_pending_provider_event_window_ms: 2000
   stt_pending_provider_event_preroll_ms: 500
   stt_pending_provider_event_max_count: 32
+  # Per-session link trace (room join -> leave), one NDJSON file per session.
+  # Off by default: this is diagnosis, not a product feature. Set it to a
+  # directory under EIDOLON_STATE_ROOT — the Channel Provider's read surface
+  # serves these files, while EIDOLON_LOG_ROOT may be cleared by operations.
+  session_trace_path: ""
+  session_trace_max_queue: 4096
+  session_trace_max_file_bytes: 8000000
+  session_trace_retention_days: 7
 
 # Bailian STT/TTS provider config (non-secret). API keys stay in .env
 # (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).
@@ -210,7 +218,7 @@ bailian_stt:
   # debugging; set false in production. (Env EIDOLON_STT_DUMP_WAV /
   # EIDOLON_STT_DUMP_DIR still work as a fallback default.)
   dump_wav: true
-  dump_dir: "$EIDOLON_CACHE_ROOT/debug/channel"
+  dump_dir: "$EIDOLON_LOG_ROOT/debug/channel"
 
 bailian_tts:
   api_url: wss://dashscope.aliyuncs.com/api-ws/v1/inference

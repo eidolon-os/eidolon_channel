@@ -251,7 +251,17 @@ class SentenceAggregator:
         # SynthesizeStream's _task_failed_error, which raises APIError, which
         # at minimum gets logged at ERROR level and lets the framework cancel
         # the doomed audio segment cleanly.
-        await self._on_segment(text)
+        # A provider/SDK may deliver a whole reply in one chunk. The flush
+        # threshold alone does not bound that chunk; enforce the configured
+        # ceiling at the transport boundary too, preserving every character.
+        while len(text) > self._hard_max_chars:
+            prefix = text[:self._hard_max_chars]
+            boundary = max(prefix.rfind(char) for char in _HARD_PUNCT + _SOFT_PUNCT)
+            cut = boundary + 1 if boundary >= self._soft_min_chars - 1 else self._hard_max_chars
+            await self._on_segment(text[:cut])
+            text = text[cut:]
+        if text:
+            await self._on_segment(text)
 
     def _reset_idle_timer(self) -> None:
         """Restart the idle timer; schedules a flush if no new feed within ``idle_ms``."""

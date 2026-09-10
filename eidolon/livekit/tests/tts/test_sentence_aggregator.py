@@ -150,3 +150,26 @@ async def test_close_cancels_inflight_idle_send():
     finally:
         await asyncio.wait_for(aggregator.aclose(), timeout=1)
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('chunk_size', [1, 17, 1000])
+@pytest.mark.parametrize('text', [
+    '先说明背景，然后给出例子。最后总结这个方法。' * 20,
+    '这是一个没有标点的很长回复' * 25,
+])
+async def test_large_provider_chunks_respect_batch_ceiling_without_losing_tail(text, chunk_size):
+    sent = []
+
+    async def emit(part):
+        sent.append(part)
+
+    aggregator = SentenceAggregator(emit, hard_max_chars=60)
+    try:
+        for offset in range(0, len(text), chunk_size):
+            await aggregator.feed(text[offset:offset + chunk_size])
+        await aggregator.flush()
+        assert ''.join(sent) == text
+        assert all(0 < len(part) <= 60 for part in sent)
+    finally:
+        await aggregator.aclose()

@@ -36,7 +36,10 @@ def analyze_hil_barge_in(
     require_resume: bool = False,
     max_speech_start_to_suspend_ms: float = 120.0,
     max_speech_start_to_cancel_ms: float | None = 500.0,
-    max_speech_start_to_resume_ms: float | None = 900.0,
+    # Bounds the whole playback hole, which includes the user's own overlap.
+    max_speech_start_to_resume_ms: float | None = 1500.0,
+    # How fast playback returns once the user is done; excludes their speech.
+    max_speech_stop_to_resume_ms: float | None = 1000.0,
 ) -> HilBargeInReport:
     """Check real-device timeline records for channel-owned barge-in evidence.
 
@@ -101,6 +104,16 @@ def analyze_hil_barge_in(
                 findings.append(
                     "speech-start-to-resume exceeded "
                     f"{max_speech_start_to_resume_ms}ms: {round(resume_ms, 1)}"
+                )
+            stop_resume_ms = evidence.get("speech_stop_to_resume_ms")
+            if (
+                stop_resume_ms is not None
+                and max_speech_stop_to_resume_ms is not None
+                and stop_resume_ms > max_speech_stop_to_resume_ms
+            ):
+                findings.append(
+                    "speech-stop-to-resume exceeded "
+                    f"{max_speech_stop_to_resume_ms}ms: {round(stop_resume_ms, 1)}"
                 )
 
     if evidence["observe_without_duck"]:
@@ -179,6 +192,7 @@ def _collect_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
     suspend_samples: list[float] = []
     cancel_samples: list[float] = []
     resume_samples: list[float] = []
+    stop_resume_samples: list[float] = []
 
     for record in scoped_records:
         suspend_ms = _speech_start_to_suspend_ms(record)
@@ -189,9 +203,8 @@ def _collect_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
             if cancel_ms is not None:
                 cancel_samples.append(cancel_ms)
         if record in linked_resume_records:
-            resume_ms = _speech_start_to_resolved_ms(record, action="rollback")
-            if resume_ms is not None:
-                resume_samples.append(resume_ms)
+            resume_samples.extend(_speech_start_to_resume_samples_ms(record))
+            stop_resume_samples.extend(_speech_stop_to_resume_samples_ms(record))
 
     return {
         "soft_duck_admitted": soft_duck_admitted,
@@ -211,6 +224,7 @@ def _collect_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
         "speech_start_to_suspend_ms": max(suspend_samples) if suspend_samples else None,
         "speech_start_to_cancel_ms": max(cancel_samples) if cancel_samples else None,
         "speech_start_to_resume_ms": max(resume_samples) if resume_samples else None,
+        "speech_stop_to_resume_ms": max(stop_resume_samples) if stop_resume_samples else None,
     }
 
 
@@ -293,8 +307,55 @@ def _is_resume(record: dict[str, Any]) -> bool:
     return (
         attrs.get("interrupt_action") == "rollback"
         or bool(attrs.get("rollback_reason"))
-        or any(event.get("event") == "duck_unducked" for event in _duck_events(record))
+        or bool(_output_recovery_events(record))
     )
+
+
+def _speech_start_to_resume_samples_ms(record: dict[str, Any]) -> list[float]:
+    """Measure playback recovery, not the candidate's later terminal verdict.
+
+    Output resumes provisionally once the continuation grace elapses, while the
+    candidate keeps its own evidence deadline. The rollback that closes the
+    candidate lands seconds later and says nothing about when audio came back,
+    so it is only a fallback for traces that predate the recovery event.
+    """
+    recovery_events = _output_recovery_events(record)
+    if recovery_events:
+        start = _timestamp(record, "speech_started_at")
+        if start is not None:
+            samples = [
+                (at - start) * 1000.0
+                for event in recovery_events
+                if (at := _number(event.get("at"))) is not None and at >= start
+            ]
+            if samples:
+                return samples
+        if any(
+            event.get("event") == "output_resumed_pending_evidence"
+            for event in recovery_events
+        ):
+            return []
+    resolved_ms = _speech_start_to_resolved_ms(record, action="rollback")
+    return [resolved_ms] if resolved_ms is not None else []
+
+
+def _speech_stop_to_resume_samples_ms(record: dict[str, Any]) -> list[float]:
+    """Recovery overhead with the user's own speech duration removed."""
+    return [
+        (at - stop) * 1000.0
+        for event in _output_recovery_events(record)
+        if (at := _number(event.get("at"))) is not None
+        and (stop := _number(event.get("speech_stopped_at"))) is not None
+        and at >= stop
+    ]
+
+
+def _output_recovery_events(record: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in _duck_events(record)
+        if event.get("event") in {"duck_unducked", "output_resumed_pending_evidence"}
+    ]
 
 
 def _client_control_sent(attrs: dict[str, Any], op: str) -> bool:

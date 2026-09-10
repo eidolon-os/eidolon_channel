@@ -133,4 +133,12 @@ cases:
       min_user_finals: 2
       min_agent_messages: 1
       max_speech_start_to_suspend_ms: 120
-      max_speech_start_to_resume_ms: 900
+      # Two clocks, two guarantees. stop-to-resume is the experience budget:
+      # how fast playback returns once the user is done. It derives from
+      # turn_policy.eot.speech_merge_grace_ms (800 ms), so green only proves the
+      # continuation grace still bounds the hold, never that 800 ms is short
+      # enough. start-to-resume bounds the whole playback hole instead, which
+      # includes the user's own overlap: speech that keeps going is held until
+      # the owner evidence budget, so this is the only guard on hole length.
+      max_speech_stop_to_resume_ms: 1000
+      max_speech_start_to_resume_ms: 1500

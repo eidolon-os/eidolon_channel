@@ -4348,6 +4348,99 @@ def test_hil_barge_in_analyzer_passes_resume_chain(tmp_path) -> None:
     assert report.evidence["speech_start_to_resume_ms"] == pytest.approx(580.0)
 
 
+def test_hil_barge_in_measures_provisional_recovery_not_terminal_verdict(tmp_path) -> None:
+    """Playback returns on the continuation grace; the verdict lands seconds later."""
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room"}}\n'
+            '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
+            '"attention_admission":{"action":"duck_and_decide",'
+            '"reason":"playback_speech_start_soft_duck"},'
+            '"rollback_reason":"post_speech_evidence_timeout",'
+            '"duck_events":[{"event":"duck_started","vad_to_duck_ms":50},'
+            '{"event":"output_resumed_pending_evidence","at":11.3,"user_speaking":false,"speech_stopped_at":10.5}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.05,'
+            '"interrupt_resolved_at":16.5}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(
+        timeline_path,
+        room_contains="box3",
+        require_resume=True,
+    )
+
+    assert report.passed is True
+    # 1300 ms from speech start, not the 6500 ms terminal rollback.
+    assert report.evidence["speech_start_to_resume_ms"] == pytest.approx(1300.0)
+    assert report.evidence["speech_stop_to_resume_ms"] == pytest.approx(800.0)
+
+
+def test_hil_barge_in_flags_slow_recovery_against_both_clocks(tmp_path) -> None:
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room"}}\n'
+            '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
+            '"attention_admission":{"action":"duck_and_decide",'
+            '"reason":"playback_speech_start_soft_duck"},'
+            '"rollback_reason":"post_speech_evidence_timeout",'
+            '"duck_events":[{"event":"duck_started","vad_to_duck_ms":50},'
+            '{"event":"output_resumed_pending_evidence","at":12.4,"user_speaking":false,"speech_stopped_at":10.5}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.05,'
+            '"interrupt_resolved_at":16.5}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(
+        timeline_path,
+        room_contains="box3",
+        require_resume=True,
+    )
+
+    assert report.passed is False
+    assert any("speech-start-to-resume exceeded" in f for f in report.findings)
+    assert any("speech-stop-to-resume exceeded" in f for f in report.findings)
+
+
+def test_hil_barge_in_will_not_time_clockless_recovery_by_terminal_verdict(tmp_path) -> None:
+    """An old trace without a recovery clock reports nothing, never the verdict."""
+    timeline_path = tmp_path / "turn_timeline.jsonl"
+    timeline_path.write_text(
+        (
+            '{"turn_id":"r1","attrs":{"room_name":"real-box3-room"}}\n'
+            '{"turn_id":"t1","attrs":{"room_name":"real-box3-room",'
+            '"interruption_target":{"response_turn_id":"r1"},'
+            '"attention_admission":{"action":"duck_and_decide",'
+            '"reason":"playback_speech_start_soft_duck"},'
+            '"rollback_reason":"post_speech_evidence_timeout",'
+            '"duck_events":[{"event":"duck_started","vad_to_duck_ms":50},'
+            '{"event":"output_resumed_pending_evidence"}]},'
+            '"timestamps":{"speech_started_at":10.0,'
+            '"interrupt_started_at":10.05,'
+            '"interrupt_resolved_at":16.5}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = analyze_hil_barge_in(
+        timeline_path,
+        room_contains="box3",
+        require_resume=True,
+    )
+
+    assert report.evidence["speech_start_to_resume_ms"] is None
+    assert report.evidence["speech_stop_to_resume_ms"] is None
+    assert not any("exceeded" in f for f in report.findings)
+
+
 def test_hil_barge_in_ignores_unscoped_stop_after_response_completion(tmp_path) -> None:
     timeline_path = tmp_path / "turn_timeline.jsonl"
     timeline_path.write_text(

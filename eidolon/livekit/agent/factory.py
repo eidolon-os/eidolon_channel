@@ -178,6 +178,7 @@ class SharedStageFactory:
         runtime_services: "Any | None" = None,
         llm_params: LlmParams | None = None,
         interrupt_classifier: Any = None,
+        runtime_session_id: str = "",
     ) -> None:
         if llm is None:
             raise ValueError("llm must not be None")
@@ -195,6 +196,11 @@ class SharedStageFactory:
         self.vad: VadStage | None = VadStage(vad) if vad is not None else None
         self.runtime_context_resolver = runtime_context_resolver
         self.runtime_services = runtime_services
+        # The named dispatch's conversation_id, kept because it is this room
+        # entry's identity — the same value Hub gave the Provider, the Provider
+        # put in the dispatch, and the device hears back as session_started. A
+        # session-scoped observer keys its file by it; nothing else here does.
+        self.runtime_session_id = str(runtime_session_id or "").strip()
         self.voiceprint_provider = voiceprint_provider
         self.voiceprint_trust_paired_devices = voiceprint_trust_paired_devices
         self.voiceprint_service = None
@@ -424,6 +430,7 @@ class SharedStageFactory:
                 temperature=cfg.llm.temperature or 0.6,
             ),
             interrupt_classifier=cls.build_interrupt_classifier(cfg),
+            runtime_session_id=runtime_session_id,
         )
 
     @classmethod

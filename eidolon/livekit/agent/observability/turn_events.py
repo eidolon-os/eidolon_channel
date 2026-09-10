@@ -78,6 +78,17 @@ class ChannelTurnEventSink:
         return self._context is not None
 
     @property
+    def context(self) -> ChannelEventContext | None:
+        """The room identity resolved at :meth:`start`, once it is known.
+
+        Exposed because the session-scoped trace file is named for this Owner
+        and Companion, and this sink is what already resolved them — asking the
+        room a second time would be a second chance to disagree.
+        """
+
+        return self._context
+
+    @property
     def dropped_count(self) -> int:
         return self._dropped
 
@@ -91,7 +102,7 @@ class ChannelTurnEventSink:
         if self._context is not None:
             return
         try:
-            context = await _resolve_event_context(room)
+            context = await resolve_event_context(room)
         except Exception as exc:  # noqa: BLE001 - observability must not break voice
             logger.warning("Channel turn events disabled: %s", exc)
             return
@@ -270,7 +281,7 @@ class ChannelTurnEventSink:
             logger.exception("Channel telemetry observer failed type=%s", event.event_type)
 
 
-async def _resolve_event_context(room: Any) -> ChannelEventContext:
+async def resolve_event_context(room: Any) -> ChannelEventContext:
     participant = _participant_identity_and_metadata(room)
     if participant is None:
         raise RuntimeError("runtime participant missing")
@@ -343,4 +354,14 @@ def _terminal_classification(
     return "completed", "channel.turn.completed", None, None
 
 
-__all__ = ["ChannelEventContext", "ChannelTurnEventSink"]
+#: The private name predates the public one and is still what the focused
+#: tests reach for. Kept as an alias rather than renamed at the call sites: the
+#: mapping from participant kind to Owner/Companion has exactly one
+#: implementation, and both the turn sink and the PTT pipeline must use it.
+_resolve_event_context = resolve_event_context
+
+__all__ = [
+    "ChannelEventContext",
+    "ChannelTurnEventSink",
+    "resolve_event_context",
+]

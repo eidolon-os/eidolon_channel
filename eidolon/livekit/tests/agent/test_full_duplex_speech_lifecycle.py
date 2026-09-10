@@ -12,6 +12,9 @@ from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 
 def _owner() -> SimpleNamespace:
     owner = SimpleNamespace()
+    # BasePipeline surface the lifecycle reaches for. A double that omits it
+    # would only prove this test's stub is incomplete.
+    owner.session_mark = MagicMock()
     turn_completion = SimpleNamespace(
         cancel_completed_voiceprint_turn=MagicMock(),
         remember_completed_voiceprint_turn=MagicMock(),

@@ -46,7 +46,9 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
     if not hasattr(pipeline, "_observability"):
         pipeline._observability = ObservabilityConfig()
     if not hasattr(pipeline, "_turn_events"):
-        pipeline._turn_events = ChannelTurnEventSink()
+        pipeline._turn_events = ChannelTurnEventSink(
+            observer=pipeline._observe_channel_event
+        )
     if not hasattr(pipeline, "_voiceprint_config"):
         pipeline._voiceprint_config = VoiceprintConfig()
     if not hasattr(pipeline, "_timeline"):

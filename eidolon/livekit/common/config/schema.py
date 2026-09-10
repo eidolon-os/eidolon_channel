@@ -277,6 +277,23 @@ class ObservabilityConfig:
     stt_pending_provider_event_window_ms: int = 2_000
     stt_pending_provider_event_preroll_ms: int = 500
     stt_pending_provider_event_max_count: int = 32
+    # Per-session trace directory. Empty (the default) means no session trace is
+    # written at all — this is diagnosis, not a product feature, so it stays off
+    # until someone asks for it. When set, one NDJSON file per session lands at
+    # ``<path>/<date>/<owner>__<companion>__<session>.ndjson``.
+    #
+    # State, not logs: the Channel Provider's read surface serves these, while
+    # EIDOLON_LOG_ROOT is a directory operations may clear at will.
+    session_trace_path: str = ""
+    # Queue depth between the voice loop and the writer thread. A full queue
+    # drops the record and counts it rather than making the caller wait — a
+    # trace must never apply back-pressure to speech.
+    session_trace_max_queue: int = 4_096
+    # Ceiling per session file. Past it the file keeps its closing summary and
+    # nothing else, so one pathological session cannot fill the disk.
+    session_trace_max_file_bytes: int = 8_000_000
+    # Whole day-directories older than this are removed when a session opens.
+    session_trace_retention_days: int = 7
 
 
 @dataclass(frozen=True)

@@ -215,6 +215,14 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("observability.stt_pending_provider_event_preroll_ms must be in [0, 5000]")
     if not 1 <= obs.stt_pending_provider_event_max_count <= 512:
         errors.append("observability.stt_pending_provider_event_max_count must be in [1, 512]")
+    if not 16 <= obs.session_trace_max_queue <= 1_048_576:
+        errors.append("observability.session_trace_max_queue must be in [16, 1048576]")
+    if not 4_096 <= obs.session_trace_max_file_bytes <= 1_073_741_824:
+        errors.append(
+            "observability.session_trace_max_file_bytes must be in [4096, 1073741824]"
+        )
+    if not 0 <= obs.session_trace_retention_days <= 365:
+        errors.append("observability.session_trace_retention_days must be in [0, 365]")
 
     vp = cfg.voiceprint
     if vp.enabled:

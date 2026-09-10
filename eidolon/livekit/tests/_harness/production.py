@@ -17,6 +17,10 @@ async def production_session(*, llm, stt, tts, vad, mode='full_duplex', welcome=
         llm=SimpleNamespace(llm=llm), stt=SimpleNamespace(stt=stt),
         tts=SimpleNamespace(tts=tts), vad=SimpleNamespace(vad=vad),
         interrupt_classifier=interrupt_classifier,
+        # The real factory always carries the named dispatch's conversation_id.
+        # A session-scoped observer keys its file by it, so a double without one
+        # would silently observe nothing.
+        runtime_session_id='sess-harness',
     )
     pipeline = StreamingPipeline(
         factory, interaction_mode=mode, allow_interruptions=mode == 'full_duplex',

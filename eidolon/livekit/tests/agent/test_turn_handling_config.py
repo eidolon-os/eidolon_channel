@@ -99,7 +99,11 @@ async def test_session_uses_livekit_transcription_timeout_event(
         _room=None,
         _started=False,
         _runtime_participant_identity="",
-        _ensure_turn_event_sink=lambda: SimpleNamespace(start=AsyncMock()),
+        _ensure_turn_event_sink=lambda: SimpleNamespace(start=AsyncMock(), context=None),
+        # BasePipeline's session-trace surface: the lifecycle marks the session
+        # and opens the trace on the way to session.start().
+        session_mark=MagicMock(),
+        open_session_trace=MagicMock(),
         _build_agent=lambda: object(),
         _build_turn_handling=lambda: {"interruption": {"enabled": False}},
         _aec_warmup_duration=0.4,

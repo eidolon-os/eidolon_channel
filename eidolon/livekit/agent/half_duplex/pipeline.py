@@ -32,6 +32,7 @@ from eidolon_sdk.biz.contracts import (
 from eidolon_sdk.biz.dialogue_control import TurnCommitBoundary
 
 from eidolon.livekit.agent.observability import TurnTimeline
+from eidolon.livekit.agent.observability.turn_events import resolve_event_context
 from eidolon.livekit.agent.runtime.interaction_mode import (
     resolve_idle_policy,
     resolve_welcome_text,
@@ -184,6 +185,28 @@ class HalfDuplexPttPipeline(BasePipeline):
             tts=self._factory.tts.tts,
         )
 
+    async def _open_ptt_session_trace(self, room: Room) -> None:
+        """Open the session trace, naming it for this Owner and Companion.
+
+        PTT has no ``ChannelTurnEventSink`` to have resolved them already, so it
+        asks the one implementation that maps a participant kind to an
+        Owner/Companion pair. A room that cannot answer still gets a trace —
+        the session envelope is the point, and an unnamed file beats none.
+        """
+
+        owner_id = companion_id = ""
+        try:
+            context = await resolve_event_context(room)
+            owner_id, companion_id = context.owner_id, context.companion_id
+        except Exception as exc:  # noqa: BLE001 - observation must not break voice
+            logger.debug("[HalfDuplexPttPipeline] session trace identity unknown: %s", exc)
+        self.open_session_trace(
+            room,
+            owner_id=owner_id,
+            companion_id=companion_id,
+            interaction_mode=INTERACTION_MODE_PTT,
+        )
+
     async def run(self, room: Room) -> None:
         from livekit.agents.voice import AgentSession
         from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
@@ -191,8 +214,11 @@ class HalfDuplexPttPipeline(BasePipeline):
         logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
         self._room = room
         self._started = True
+        self.session_mark("room_joined")
+        await self._open_ptt_session_trace(room)
         self._install_room_observers(room)
         await self._warmup_stages()
+        self.session_mark("warmup_done")
         self._provider_events.install_all()
 
         session = AgentSession(turn_handling=self._build_turn_handling())
@@ -207,6 +233,7 @@ class HalfDuplexPttPipeline(BasePipeline):
                 text_output=True,
             ),
         )
+        self.session_mark("session_started")
         if self._on_session_started is not None:
             await self._on_session_started()
         self._publish_companion_ui_state("listening", "session_started")
@@ -257,6 +284,9 @@ class HalfDuplexPttPipeline(BasePipeline):
         close_factory = getattr(self._factory, "aclose", None)
         if callable(close_factory):
             await close_factory()
+        self._session_trace_close_reason = (
+            "session_error" if self._close_error else "session_ended"
+        )
         await super().shutdown()
 
     def _build_ptt_controller(self) -> HalfDuplexPttTurnController:
@@ -558,6 +588,7 @@ class HalfDuplexPttPipeline(BasePipeline):
     def _start_ptt_timeline(self, result: PttSegmentTurnResult) -> None:
         timeline = TurnTimeline(generate_turn_id())
         self._timeline = timeline
+        self.session_mark("first_turn")
         now = time.monotonic()
         room = getattr(self, "_room", None)
         timeline.set_attr("room_name", getattr(room, "name", "") if room else "")
@@ -655,6 +686,11 @@ class HalfDuplexPttPipeline(BasePipeline):
         timeline.set_attr("timeline_flush_reason", reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
         self._flushed_timeline_ids.add(timeline.turn_id)
+        # Already once-per-turn thanks to the guard above, so a PTT turn has no
+        # progress rows to distinguish: the row it writes is the settled one.
+        writer = getattr(self, "_session_trace", None)
+        if writer is not None:
+            writer.turn_record(timeline.snapshot(), final=True, reason=reason)
 
     def _flush_output_timeline(self, timeline: TurnTimeline, reason: str) -> None:
         if "tts_provider_first_audio_at" in timeline.timestamps:

@@ -204,7 +204,7 @@ class StreamingPipeline(BasePipeline):
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
-        self._turn_events = ChannelTurnEventSink()
+        self._turn_events = ChannelTurnEventSink(observer=self._observe_channel_event)
         self._voiceprint_config = voiceprint_config or VoiceprintConfig()
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
@@ -1129,6 +1129,10 @@ class StreamingPipeline(BasePipeline):
         timeline.set_attr("timeline_flush_reason", reason)
         self._ensure_turn_event_sink().terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        # The settled row. ``_flushed_timeline_ids`` makes this once-per-turn,
+        # which is what lets a reader take one sample per turn from the trace
+        # instead of counting a superseded turn's earlier snapshots again.
+        self._record_session_trace_turn(timeline, reason, final=True)
         self._ensure_agent_output_coordinator().release(timeline)
         if timeline is self._timeline:
             self._timeline_debug_flushed = True
@@ -1144,9 +1148,27 @@ class StreamingPipeline(BasePipeline):
         timeline.set_attr("timeline_snapshot_reason", reason)
         timeline.set_attr("timeline_flush_reason", reason)
         phase = str(((timeline.attrs.get("full_duplex_state") or {}).get("phase")) or "")
-        if phase == FullDuplexPhase.USER_TURN_REJECTED.value:
+        rejected = phase == FullDuplexPhase.USER_TURN_REJECTED.value
+        if rejected:
             self._ensure_turn_event_sink().terminal(timeline, reason)
         timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        # A rejected turn ends here — nothing will flush it — so this snapshot
+        # is its settled row. Every other snapshot is a turn still in progress
+        # that a later ``_flush_turn_timeline`` will settle, and marking it
+        # ``final`` would count the same turn twice.
+        self._record_session_trace_turn(timeline, reason, final=rejected)
+
+    def _record_session_trace_turn(
+        self,
+        timeline: TurnTimeline,
+        reason: str,
+        *,
+        final: bool,
+    ) -> None:
+        writer = getattr(self, "_session_trace", None)
+        if writer is None:
+            return
+        writer.turn_record(timeline.snapshot(), final=final, reason=reason)
 
     def _build_agent_state_effect_handler(self) -> AgentStateEffectHandler:
         interruption_effects = self._ensure_interruption_effects()
@@ -1311,8 +1333,38 @@ class StreamingPipeline(BasePipeline):
         """Return the observer, including for focused tests that skip __init__."""
 
         if not hasattr(self, "_turn_events"):
-            self._turn_events = ChannelTurnEventSink()
+            self._turn_events = ChannelTurnEventSink(observer=self._observe_channel_event)
         return self._turn_events
+
+    def _observe_channel_event(self, event: Any) -> None:
+        """Forward one semantic channel event to the session trace.
+
+        Until now this sink counted its events and dropped them: the observer
+        hook has been ``None`` at both construction sites since it was written.
+        Nothing new is measured here — phase transitions, milestones and
+        terminals were all already produced — they just now have somewhere to
+        land.
+
+        The sink calls this inside its own try/except and counts a raising
+        observer as a dropped event, so a trace problem cannot reach the turn.
+        """
+
+        writer = getattr(self, "_session_trace", None)
+        if writer is None:
+            return
+        writer.event(
+            event.event_type,
+            {
+                "subject_type": event.subject_type,
+                "subject_id": event.subject_id,
+                "trace_id": event.trace_id,
+                "severity": event.severity,
+                "outcome": event.outcome,
+                "reason": event.reason,
+                "event_id": event.event_id,
+                **(event.payload or {}),
+            },
+        )
 
     def _ensure_runtime_defaults(self) -> None:
         ensure_full_duplex_runtime_defaults(self)

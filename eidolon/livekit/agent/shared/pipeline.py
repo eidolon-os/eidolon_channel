@@ -29,10 +29,14 @@ collapsed to a single ``LifecycleStage`` helper.
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from eidolon.livekit.common.config import ObservabilityConfig
+
 from ..factory import SharedStageFactory
+from ..observability.session_trace import SessionTraceSettings, SessionTraceWriter
 from .types import PipelineCallbacks, PipelineState
 
 logger = logging.getLogger("agent")
@@ -64,10 +68,87 @@ class BasePipeline(ABC):
         self._state: PipelineState = PipelineState.IDLE
         self._room: "Room | None" = None
         self._started: bool = False
+        self._session_trace: SessionTraceWriter | None = None
+        self._pending_session_marks: list[tuple[str, float, dict[str, Any]]] = []
 
     @property
     def factory(self) -> SharedStageFactory:
         return self._factory
+
+    # -------------------------------------------------------------------------
+    # Session-scoped trace (room join -> leave)
+    #
+    # It lives here, not in the full-duplex pipeline, because a session is not a
+    # turn-taking concept: PTT enters and leaves a room the same way and has no
+    # ``ChannelTurnEventSink`` at all. Both duplex implementations inherit the
+    # open/close, so "how long did joining take" is answerable in either mode.
+    #
+    # Turn-scoped facts stay where they are. In particular the interruption
+    # clock is not this clock: after a barge-in, playback resumes one
+    # ``speech_merge_grace_ms`` after VAD stop while the candidate keeps its own
+    # evidence deadline for seconds longer. Session marks must not be read as
+    # either of those.
+    # -------------------------------------------------------------------------
+
+    def session_mark(self, name: str, **fields: Any) -> None:
+        """Record one session milestone, buffering it until the writer exists.
+
+        Callable from the first line of ``run()``: the marks that happen before
+        the Owner and Companion are known (and therefore before the file can be
+        named) are held with their own timestamps and replayed at open.
+        """
+
+        writer = getattr(self, "_session_trace", None)
+        if writer is not None:
+            writer.session_mark(name, **fields)
+            return
+        # ``getattr`` rather than the attribute: focused tests build a pipeline
+        # through ``object.__new__`` and never run this constructor, and a
+        # session mark must not be the thing that makes one of them fail.
+        pending = getattr(self, "_pending_session_marks", None)
+        if pending is None:
+            pending = self._pending_session_marks = []
+        if len(pending) < 32:
+            pending.append((name, time.monotonic(), dict(fields)))
+
+    def open_session_trace(
+        self,
+        room: "Room | None",
+        *,
+        observability: ObservabilityConfig | None = None,
+        owner_id: str = "",
+        companion_id: str = "",
+        interaction_mode: str = "",
+    ) -> None:
+        """Open this session's trace file. Safe to call once identity is known."""
+
+        if getattr(self, "_session_trace", None) is not None:
+            return
+        config = observability or getattr(self, "_observability", None) or ObservabilityConfig()
+        writer = SessionTraceWriter.open(
+            settings=SessionTraceSettings(
+                root=config.session_trace_path,
+                max_queue=config.session_trace_max_queue,
+                max_file_bytes=config.session_trace_max_file_bytes,
+                retention_days=config.session_trace_retention_days,
+            ),
+            session_id=getattr(self._factory, "runtime_session_id", "") or "",
+            owner_id=owner_id,
+            companion_id=companion_id,
+            room_name=str(getattr(room, "name", "") or ""),
+            interaction_mode=interaction_mode,
+        )
+        self._session_trace = writer
+        pending = getattr(self, "_pending_session_marks", None) or []
+        self._pending_session_marks = []
+        for name, at, fields in pending:
+            writer.session_mark(name, at=at, **fields)
+
+    def close_session_trace(self, reason: str) -> None:
+        writer = getattr(self, "_session_trace", None)
+        self._session_trace = None
+        if writer is not None:
+            writer.close(reason=reason)
 
     @property
     def state(self) -> PipelineState:
@@ -89,6 +170,7 @@ class BasePipeline(ABC):
     async def shutdown(self) -> None:
         """Shared graceful shutdown — resets state and marks pipeline as stopped."""
         logger.info("[BasePipeline] shutting down")
+        self.close_session_trace(getattr(self, "_session_trace_close_reason", "session_ended"))
         self._state = PipelineState.IDLE
         self._started = False
 

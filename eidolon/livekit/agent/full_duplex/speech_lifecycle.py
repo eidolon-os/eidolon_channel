@@ -60,6 +60,9 @@ class FullDuplexSpeechLifecycle:
         owner._user_speaking_start_time = time.monotonic()
         if not merge_continuation or owner._timeline is None:
             owner._timeline = TurnTimeline(generate_turn_id())
+            # First-occurrence-wins, so calling this per turn records only the
+            # first: "how long until this session was actually used".
+            owner.session_mark("first_turn")
             llm_plugin = getattr(
                 getattr(getattr(owner, "_factory", None), "llm", None),
                 "llm",

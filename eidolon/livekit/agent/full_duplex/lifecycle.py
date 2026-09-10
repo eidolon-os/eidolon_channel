@@ -51,10 +51,26 @@ class FullDuplexSessionLifecycle:
         logger.info("[StreamingPipeline] starting room=%s", room.name)
         pipeline._room = room
         pipeline._started = True
+        pipeline.session_mark("room_joined")
 
         participant_identity = await wait_for_runtime_participant_identity(room)
         pipeline._runtime_participant_identity = participant_identity
-        await pipeline._ensure_turn_event_sink().start(room)
+        sink = pipeline._ensure_turn_event_sink()
+        await sink.start(room)
+        # Only now is the Owner/Companion pair known, and the trace file is
+        # named for it — so this is the earliest point the file can exist. The
+        # marks above were buffered and are replayed here with their own times.
+        context = sink.context
+        pipeline.open_session_trace(
+            room,
+            owner_id=context.owner_id if context else "",
+            companion_id=context.companion_id if context else "",
+            interaction_mode="full_duplex",
+        )
+        pipeline.session_mark(
+            "runtime_participant_resolved",
+            participant_identity=participant_identity,
+        )
         logger.info(
             "[StreamingPipeline] binding RoomIO to runtime participant=%s",
             participant_identity,
@@ -83,6 +99,7 @@ class FullDuplexSessionLifecycle:
         await pipeline._warmup_stages()
         if pipeline._filler is not None:
             await pipeline._filler.warmup()
+        pipeline.session_mark("warmup_done")
 
         logger.info("[StreamingPipeline] calling session.start()...")
         pipeline._ensure_room_data_bridge().install(room)
@@ -100,6 +117,7 @@ class FullDuplexSessionLifecycle:
         if pipeline._avatar_enabled:
             if await self._start_avatar_worker(room, session):
                 room_audio_output = False
+                pipeline.session_mark("avatar_ready")
 
         await session.start(
             agent=agent,
@@ -109,6 +127,7 @@ class FullDuplexSessionLifecycle:
                 participant_identity=participant_identity,
             ),
         )
+        pipeline.session_mark("session_started")
         if pipeline._on_session_started is not None:
             await pipeline._on_session_started()
         pipeline._publish_companion_ui_state("listening", "session_started")
@@ -452,9 +471,15 @@ class FullDuplexSessionLifecycle:
             pipeline._session = None
         pipeline._finish_agent_output("session_shutdown_during_output")
         pipeline._append_timeline_debug("session_shutdown")
-        await pipeline._ensure_turn_event_sink().close(
-            reason="session_error" if getattr(pipeline, "_close_error", None) else "session_ended"
+        close_reason = (
+            "session_error" if getattr(pipeline, "_close_error", None) else "session_ended"
         )
+        await pipeline._ensure_turn_event_sink().close(reason=close_reason)
+        # Same reason on both, so the trace file's last line agrees with what
+        # the device was told. ``BasePipeline.shutdown`` closes it again as a
+        # backstop; the second call is a no-op.
+        pipeline._session_trace_close_reason = close_reason
+        pipeline.close_session_trace(close_reason)
         await pipeline._shutdown_stages()
         close_factory = getattr(pipeline._factory, "aclose", None)
         if callable(close_factory):

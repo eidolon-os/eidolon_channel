@@ -5,8 +5,45 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ClockAnchor:
+    """One monotonic reading and the wall clock at the same instant.
+
+    Every mark on a timeline is ``time.monotonic()`` — the only clock that can
+    measure a duration without a clock adjustment corrupting it. The cost is
+    that a monotonic value means nothing outside the process that read it, so
+    for years these snapshots could not be placed on the same axis as the
+    Agent's logs, the provider's, or the device's.
+
+    This pair is the conversion. Both halves are read back to back, once per
+    timeline, and every mark on it becomes absolute through
+    :meth:`to_unix_ns` — without converting each mark at write time, which
+    would bake this process's clock into every row instead of one.
+    """
+
+    monotonic: float
+    unix_ns: int
+
+    @classmethod
+    def now(cls) -> "ClockAnchor":
+        return cls(monotonic=time.monotonic(), unix_ns=time.time_ns())
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "monotonic": self.monotonic,
+            "unix_ns": self.unix_ns,
+            "iso": datetime.fromtimestamp(self.unix_ns / 1e9).astimezone().isoformat(),
+        }
+
+    def to_unix_ns(self, monotonic: float) -> int:
+        """Convert a monotonic reading from this process to absolute time."""
+
+        return self.unix_ns + int((monotonic - self.monotonic) * 1e9)
 
 
 TIMELINE_FIELDS = (
@@ -274,9 +311,21 @@ class TurnTimeline:
     turn_id: str
     timestamps: dict[str, float] = field(default_factory=dict)
     attrs: dict[str, Any] = field(default_factory=dict)
+    #: Read once, when the turn starts. Carried into :meth:`snapshot` so a row
+    #: is self-describing: a reader holding only the JSONL can still say what
+    #: absolute time each monotonic mark on it happened at.
+    clock_anchor: ClockAnchor = field(default_factory=ClockAnchor.now)
 
     def __post_init__(self) -> None:
         self.attrs.setdefault("stt_final_changed_after_preemptive", None)
+
+    def unix_ns(self, name: str) -> int | None:
+        """Absolute time of one mark, or None when the turn never reached it."""
+
+        at = self.timestamps.get(name)
+        if not isinstance(at, (int, float)):
+            return None
+        return self.clock_anchor.to_unix_ns(float(at))
 
     def mark(self, name: str) -> None:
         if name not in TIMELINE_FIELDS:
@@ -636,6 +685,7 @@ class TurnTimeline:
         attrs.setdefault("provider_segments", provider_segments)
         return {
             "turn_id": self.turn_id,
+            "clock_anchor": self.clock_anchor.as_dict(),
             "timestamps": dict(self.timestamps),
             "attrs": attrs,
             "durations_ms": {

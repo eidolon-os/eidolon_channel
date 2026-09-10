@@ -12,9 +12,12 @@ import hashlib
 import json
 import logging
 import socket
+import ipaddress
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+
+import psutil
 from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.contracts import (
@@ -42,23 +45,28 @@ logger = logging.getLogger("eidolon.channel_provider.livekit")
 ADAPTER_NAME = "livekit"
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 
-def _routable_address() -> str:
-    """This machine's address on the interface it would leave by.
-
-    A UDP socket connected to a documentation address (RFC 5737 TEST-NET-1)
-    sends nothing and reaches nothing; it only makes the kernel choose a route,
-    and the local end of that choice is the address. Asked rather than
-    configured because a Host grows and loses addresses on its own — a
-    maintenance cable, a new access point — and no file written earlier knows
-    which one is current.
-    """
-
-    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def _client_addresses() -> list[str]:
+    """Current LAN candidates; the default route is only an ordering hint."""
+    stats = psutil.net_if_stats()
+    addresses = set()
+    for name, entries in psutil.net_if_addrs().items():
+        if name not in stats or not stats[name].isup:
+            continue
+        for entry in entries:
+            if entry.family != socket.AF_INET:
+                continue
+            address = ipaddress.ip_address(entry.address)
+            if not (address.is_loopback or address.is_link_local or
+                    address.is_unspecified or address.is_multicast):
+                addresses.add(str(address))
+    preferred = None
     try:
-        connection.connect(("192.0.2.1", 9))
-        return str(connection.getsockname()[0])
-    finally:
-        connection.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+            connection.connect(("192.0.2.1", 9))
+            preferred = connection.getsockname()[0]
+    except OSError:
+        pass
+    return sorted(addresses, key=lambda address: (address != preferred, int(ipaddress.ip_address(address))))
 
 
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
@@ -200,35 +208,29 @@ class LiveKitChannelAdapter:
     # Resource names are this adapter's business. Another adapter names topics
     # or endpoints instead, and nothing above this line has to care.
 
-    def _client_url(self) -> str:
-        """Where a device should reach this Host's LiveKit, decided now.
+    def _client_urls(self) -> list[str]:
+        """Explicit remote policy stays explicit; local addresses are observed now.
 
-        A configured ``ws://:7880`` — scheme and port, no host — says the host
-        is not knowable at configuration time, which is the truth: Ops observed
-        one address at deploy and froze it into an environment variable, and a
-        Host that then moved networks or renewed a lease went on handing out the
-        address it used to have. The Local API survives that by offering every
-        candidate and being re-located; a session binding names one server and
-        has neither.
-
-        So it is answered per binding, from the address the kernel says it would
-        use to leave this machine. This is the signalling URL only: LiveKit
-        gathers its own ICE candidates, and eidolond refreshes that transport
-        when its captured network inputs change. Resolving this URL does not
-        by itself prove that the media transport is ready.
-
-        Not the same as knowing where the *device* is — a Host with two networks
-        still has to pick one, and picking the routable one is a rule, not
-        knowledge. What this removes is staleness, not the assumption.
+        A Host cannot know which interface a Body can reach. The binding carries
+        candidates for that Body to try, with one credential and one room.
         """
-
         parsed = urlparse(self._config.client_url)
         if parsed.hostname is not None:
-            return self._config.client_url
-        port = parsed.port
-        return urlunparse(
-            (parsed.scheme, f"{_routable_address()}:{port}", "", "", "", "")
-        )
+            return [self._config.client_url]
+        try:
+            addresses = _client_addresses()
+        except (OSError, psutil.Error, ValueError) as exc:
+            raise BackendUnavailable("LiveKit signalling interfaces cannot be observed") from exc
+        if not addresses:
+            raise BackendUnavailable("LiveKit has no usable local signalling address")
+        return [urlunparse((parsed.scheme, f"{address}:{parsed.port}", "", "", "", ""))
+                for address in addresses]
+
+    def binding_current(self, handle: dict[str, Any]) -> bool:
+        return handle.get("server_urls") == self._client_urls()
+
+    def _client_url(self) -> str:
+        return self._client_urls()[0]
 
     def _room_name(self, spec: ChannelSpec) -> str:
         digest = hashlib.sha256(
@@ -239,6 +241,7 @@ class LiveKitChannelAdapter:
     # -- lifecycle --------------------------------------------------------
 
     async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
+        urls = self._client_urls()
         room = self._room_name(spec)
         await self._declare_room(room)
         ttl = self._config.grant_ttl_seconds
@@ -246,7 +249,8 @@ class LiveKitChannelAdapter:
             {
                 "schema_version": 2,
                 "session": {
-                    "server_url": self._client_url(),
+                    "server_url": urls[0],
+                    **({"server_urls": urls} if len(urls) > 1 else {}),
                     "token": self._token(room, spec, ttl_seconds=ttl),
                     "identity": spec.device_id,
                     "room_name": room,
@@ -264,7 +268,7 @@ class LiveKitChannelAdapter:
         # arriving here can be checked against the only participant entitled to
         # make one — the room also holds the agent, which speaks on the same
         # topic in the other direction.
-        handle: dict[str, Any] = {"room": room, "device": spec.device_id}
+        handle: dict[str, Any] = {"room": room, "device": spec.device_id, "server_urls": urls}
         if spec.serving is not None:
             handle["agent"] = spec.serving.agent_name
         return ChannelGrant(

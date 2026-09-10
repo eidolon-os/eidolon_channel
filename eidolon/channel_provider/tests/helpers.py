@@ -178,6 +178,9 @@ class FakeAdapter:
             handle={"resource": f"{self._name}:{spec.device_id}"},
         )
 
+    def binding_current(self, handle: dict[str, Any]) -> bool:
+        return True
+
     def resource_identity(self, handle: dict[str, Any]) -> str:
         resource = str(handle.get("resource") or "")
         return f"{self._name}:{resource}" if resource else ""

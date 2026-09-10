@@ -821,7 +821,7 @@ def test_a_host_deferred_client_url_is_answered_when_the_binding_is_minted(
     """
 
     adapter = LiveKitChannelAdapter(livekit_config(client_url="ws://:7880"))
-    monkeypatch.setattr(adapter_mod, "_routable_address", lambda: "192.168.1.33")
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: ["192.168.1.33"])
 
     assert adapter._client_url() == "ws://192.168.1.33:7880"
 
@@ -834,8 +834,67 @@ async def test_the_binding_carries_the_address_decided_at_mint_time(
     monkeypatch.setattr(
         adapter, "_config", livekit_config(client_url="ws://:7880"), raising=True
     )
-    monkeypatch.setattr(adapter_mod, "_routable_address", lambda: "10.0.0.7")
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: ["10.0.0.7"])
 
     grant = await adapter.open(_spec(), issued_at_ms=1_700_000_000_000)
 
     assert json.loads(grant.payload)["session"]["server_url"] == "ws://10.0.0.7:7880"
+
+
+@pytest.mark.asyncio
+async def test_binding_offers_every_current_interface_not_only_default_route(monkeypatch):
+    adapter, _ = _adapter()
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
+    addresses = ["10.42.0.2", "192.168.1.37"]
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: addresses)
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    session = json.loads(grant.payload)["session"]
+    assert session["server_urls"] == ["ws://10.42.0.2:7880", "ws://192.168.1.37:7880"]
+    assert session["server_url"] == session["server_urls"][0]
+    addresses[:] = ["10.183.24.39"]
+    grant = await adapter.open(_spec(), issued_at_ms=2000)
+    assert json.loads(grant.payload)["session"]["server_url"] == "ws://10.183.24.39:7880"
+
+
+def test_lan_candidates_survive_without_default_route(monkeypatch):
+    import socket
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(adapter_mod.psutil, "net_if_stats", lambda: {
+        "wifi": SimpleNamespace(isup=True), "down": SimpleNamespace(isup=False),
+    })
+    monkeypatch.setattr(adapter_mod.psutil, "net_if_addrs", lambda: {
+        "wifi": [SimpleNamespace(family=socket.AF_INET, address=a) for a in
+                 ["192.168.1.37", "127.0.0.1", "169.254.1.1"]],
+        "down": [SimpleNamespace(family=socket.AF_INET, address="10.42.0.2")],
+    })
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.connect.side_effect = OSError("no default route")
+    monkeypatch.setattr(adapter_mod.socket, "socket", lambda *_a: connection)
+    assert adapter_mod._client_addresses() == ["192.168.1.37"]
+
+
+@pytest.mark.asyncio
+async def test_current_binding_tracks_network_separately_from_token_expiry(monkeypatch):
+    adapter, _ = _adapter()
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
+    addresses = ["192.168.1.37"]
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: addresses)
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    assert adapter.binding_current(grant.handle)
+    addresses[:] = ["10.183.24.39"]
+    assert not adapter.binding_current(grant.handle)
+    assert not adapter.binding_current({"room": "old-deployed-handle"})
+    fresh = await adapter.open(_spec(), issued_at_ms=2000)
+    assert adapter.binding_current(fresh.handle)
+    assert adapter.resource_identity(fresh.handle) == adapter.resource_identity(grant.handle)
+
+
+@pytest.mark.asyncio
+async def test_explicit_remote_policy_change_invalidates_saved_binding(monkeypatch):
+    adapter, _ = _adapter()
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="wss://rtc.example.test"))
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    assert adapter.binding_current(grant.handle)
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="wss://new.example.test"))
+    assert not adapter.binding_current(grant.handle)

@@ -462,3 +462,35 @@ async def test_presence_says_nothing_about_a_revoked_body(tmp_path) -> None:
     answer = json.loads(await service.presence())
 
     assert answer["bodies"] == []
+
+
+async def test_stale_routes_request_refresh_without_forging_expiry_or_provision(tmp_path, monkeypatch):
+    clock = [1_700_000_000_000]
+    service, store, backend = _service(tmp_path, clock)
+    original = json.loads(await service.provision(ProvisionRequest.parse(encoded(provision_payload()))))
+    monkeypatch.setattr(backend, "binding_current", lambda _handle: False)
+    answer = json.loads(await service.current(CurrentRequest.parse(encoded(current_payload()))))
+    assert answer["refresh_required"] is True
+    assert answer["binding"] == original
+    assert answer["binding"]["channels"][0]["expires_at_ms"] > clock[0]
+    assert len(backend.opened) == 1
+    assert backend.closed == []
+
+
+async def test_runtime_observation_cannot_refresh_a_replaced_active_row(tmp_path):
+    from dataclasses import replace
+    from eidolon.channel_provider.store import REFRESH
+
+    clock = [1_700_000_000_000]
+    service, store, _ = _service(tmp_path, clock)
+    request = ProvisionRequest.parse(encoded(provision_payload()))
+    await service.provision(request)
+    observed = store.current_channel(request.device_ref)
+    replacement = replace(observed, operation_id="runtime-refresh-1", operation_kind=REFRESH,
+                          request_fingerprint="runtime-refresh-1")
+    store.create_provision(replacement, now_ms=clock[0], runtime_refresh_of=observed)
+    stale_attempt = replace(replacement, operation_id="runtime-refresh-2",
+                            request_fingerprint="runtime-refresh-2")
+    with pytest.raises(InvalidTransition):
+        store.create_provision(stale_attempt, now_ms=clock[0], runtime_refresh_of=observed)
+    assert store.current_channel(request.device_ref).operation_id == "runtime-refresh-1"

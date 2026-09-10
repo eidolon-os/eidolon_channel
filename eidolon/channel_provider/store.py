@@ -261,7 +261,8 @@ class ChannelProviderStore:
         return [item for item in map(self._stored, rows) if item is not None]
 
     def create_provision(
-        self, value: StoredProvision, *, now_ms: int
+        self, value: StoredProvision, *, now_ms: int,
+        runtime_refresh_of: StoredProvision | None = None,
     ) -> tuple[StoredProvision, bool]:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -295,13 +296,18 @@ class ChannelProviderStore:
                     row["operation_kind"] in {PROVISION, REFRESH}
                     and (row["status"] == "expired" or (
                         row["status"] == "active"
-                        and row["manifest_revision"] != value.manifest_revision
+                        and (row["manifest_revision"] != value.manifest_revision or (
+                            runtime_refresh_of is not None
+                            and row["operation_id"] == runtime_refresh_of.operation_id
+                            and row["handle_json"] == runtime_refresh_of.handle_json
+                            and row["adapter_name"] == runtime_refresh_of.adapter_name
+                        ))
                     ))
                     for row in same_generation
                 ):
                     connection.rollback()
                     raise InvalidTransition(
-                        "credential refresh requires expiry or a changed Manifest"
+                        "credential refresh requires expiry, a changed Manifest, or observed stale runtime inputs"
                     )
             elif value.operation_kind != PROVISION:
                 connection.rollback()

@@ -19,6 +19,7 @@ dependencies = [
     "livekit-plugins-openai>=1.7.1,<1.8",
     "grpcio>=1.68",
     "aiohttp>=3.9",
+    "psutil>=6.0",
     "numpy>=1.26",
     "onnxruntime>=1.19",
     "transformers>=4.40",

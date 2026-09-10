@@ -115,6 +115,14 @@ class ChannelAdapter(Protocol):
         """
         ...
 
+    def binding_current(self, handle: dict[str, Any]) -> bool:
+        """Whether the binding still describes this adapter's runtime inputs.
+
+        Independent of credential expiry and resource/Owner identity. False
+        requests the existing idempotent refresh operation, never provision.
+        """
+        ...
+
     def resource_identity(self, handle: dict[str, Any]) -> str:
         """Return the stable transport-resource identity named by ``handle``.
 

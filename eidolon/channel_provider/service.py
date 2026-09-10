@@ -122,6 +122,13 @@ class ChannelProviderService:
                 if request.operation == "channel.refresh-device" and previous is not None
                 else self._registry.select(spec)
             )
+            # This is observed by the transport adapter, never asserted by a
+            # caller. The ledger checks the exact observed row still owns the
+            # active generation when committing the replacement.
+            runtime_refresh_of = None
+            if (request.operation == "channel.refresh-device" and previous is not None
+                    and not adapter.binding_current(json.loads(previous.handle_json))):
+                runtime_refresh_of = previous
             grant = await adapter.open(spec, issued_at_ms=now)
             channel_id = self._channel_id(request)
             response = self._response(
@@ -148,7 +155,9 @@ class ChannelProviderService:
                 updated_at_ms=now,
             )
             try:
-                committed, replayed = self._store.create_provision(value, now_ms=now)
+                committed, replayed = self._store.create_provision(
+                    value, now_ms=now, runtime_refresh_of=runtime_refresh_of
+                )
             except Exception:
                 if not self._same_transport_resource(
                     adapter,
@@ -223,8 +232,12 @@ class ChannelProviderService:
             self._store.expire_credentials(self._now_ms())
             stored = self._store.current_channel(request.device_ref)
         binding = json.loads(stored.response_json) if stored is not None else None
+        refresh_required = stored is not None and not self._registry.get(
+            stored.adapter_name
+        ).binding_current(json.loads(stored.handle_json))
         return json.dumps(
-            {"operation": "channel.current-device", "binding": binding},
+            {"operation": "channel.current-device", "binding": binding,
+             **({"refresh_required": True} if refresh_required else {})},
             separators=(",", ":"),
         )
 

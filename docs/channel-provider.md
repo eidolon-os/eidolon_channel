@@ -202,10 +202,29 @@ Provider 可以独立通过合同与 LiveKit 控制面测试，但不能据此�
 
 同一 DeviceRef 的新 Manifest 通过 `channel.refresh-device` 更新既有 Channel，
 不重复 provision，也不改变 Claim。refresh 在凭据过期或 Authority 提交的
-manifest_revision 与当前 active 凭据不同的时候成立；未过期且声明相同的
-refresh 仍拒绝。刷新原子地 fence 旧 active/expired 操作，保留同一传输资源，
+manifest_revision 与当前 active 凭据不同，或 adapter 观察到绑定依赖的运行环境已变化时成立。
+未过期、声明相同且运行环境仍匹配的 refresh 仍拒绝。刷新原子地 fence 旧 active/expired 操作，保留同一传输资源，
 重放旧操作不能复活旧凭据，撤销后的刷新仍拒绝。
 
 Hub 先读 current，再用当前 operation_id、到期时间及目标声明标识派生 refresh
 的幂等键。A→B→A 因而是两次沿当前 Channel 前进的刷新，不会重放首次 A 的操作。
 设备在模式变化后用新 binding 重新入房，让新的声明进入 participant metadata。
+
+
+### 运行环境变化与路由候选
+
+`channel.current-device` 的响应可携带 `refresh_required: true`。省略等价于 false。
+这是 adapter 对当前绑定运行时有效性的判断，不改写 binding 的凭据到期时间，
+也不在查询过程中创建资源。Hub 收到该标记后沿上述幂等 refresh 流程前进。
+Provider 的事务只接受仍与被观察记录的 operation_id、adapter 和 handle 相同的
+active 记录作为提前刷新的依据；外部请求不能自行声明运行环境失效。
+
+LiveKit 本地动态地址策略每次从活跃网卡获取候选，默认出口仅参与排序，没有默认
+路由仍可以提供局域网服务。显式远端 URL 保持配置策略；策略变更同样使旧绑定失效。
+私有 handle 保存签发时的候选用于比较，旧版未保存候选的 handle 会经过一次刷新。
+
+v2 session 保留 `server_url`。可选 `server_urls` 是同一房间和凭据的有序信令地址
+列表，非空、无重复，首项必须等于 `server_url`。省略时仅使用 `server_url`。
+该字段由 SDK `DF-LIVEKIT-SESSION-BINDING-001` 的 routing 正反例定义；Hub 不解析
+opaque payload。客户端在自身连接生命周期中尝试候选，信令地址不能替代 ICE 候选
+或作为 Host 身份证明。Hub 与 Provider 需一起更新，多候选能力需更新客户端。

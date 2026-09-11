@@ -7,6 +7,13 @@ http:
 storage:
   path: $EIDOLON_STATE_ROOT/channel/provider.sqlite3
 
+traces:
+  # Where the Agent worker writes its per-session link traces
+  # (channel settings.yaml: observability.session_trace_path). Read-only here:
+  # this process serves them, the worker decides whether to record any, and a
+  # root that does not exist simply lists nothing.
+  root: $EIDOLON_STATE_ROOT/channel/traces
+
 livekit:
   # Internal administrative origin used only by the Provider process.
   api_url: http://127.0.0.1:7880

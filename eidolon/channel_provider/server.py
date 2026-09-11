@@ -18,6 +18,7 @@ from .config import load_provider_config
 from .http import create_app
 from .selection import AdapterRegistry
 from .service import ChannelProviderService
+from .session_traces import SessionTraceReader
 from .store import ChannelProviderStore
 
 logger = logging.getLogger("eidolon.channel_provider.server")
@@ -43,7 +44,11 @@ def main() -> None:
         agent_name=config.livekit.agent_name,
     )
     service.initialize()
-    app = create_app(service=service, bearer_token=config.bearer_token)
+    app = create_app(
+        service=service,
+        bearer_token=config.bearer_token,
+        traces=SessionTraceReader(config.traces.root),
+    )
     web.run_app(
         app,
         host=config.http.host,

@@ -18,7 +18,8 @@
 - `LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`：只供 Provider 管理 room 和签发 JWT，绝不进入
   Hub handoff。
 - `EIDOLON_STATE_ROOT`：Provider 数据库默认位于
-  `$EIDOLON_STATE_ROOT/channel/provider.sqlite3`。
+  `$EIDOLON_STATE_ROOT/channel/provider.sqlite3`；`traces.root` 默认位于同级的
+  `$EIDOLON_STATE_ROOT/channel/traces`（Agent worker 写、Provider 只读）。
 - `EIDOLON_LIVEKIT_CLIENT_URL`：写入设备 binding 的可达 `wss://` origin。非 loopback 的
   `ws://` 会被配置校验拒绝。
 
@@ -43,8 +44,10 @@ onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用
 
 ## 认证与授权边界
 
-两个写接口都要求精确的 `Authorization: Bearer <token>` 和
-`Content-Type: application/json`。Provider 只信任通过 bearer 认证的 Hub：
+除 `GET /health` 外每个接口都要求精确的 `Authorization: Bearer <token>`；写接口
+（`provision`、`revoke`、`current`、`sessions/open`、`sessions/close`）还要求
+`Content-Type: application/json`。只读接口（`device-channels/presence`、
+`session-traces`）是 GET，不带请求体。Provider 只信任通过 bearer 认证的调用方：
 
 1. 设备 Enrollment 后进入 `pending-approval`，不携带 Owner 认领 secret，也不要求屏幕。
 2. 持有 `hub-admin` 权限的管理员在 Hub 管理面选择 `owner_id` 并人工批准；普通 Owner 或
@@ -56,6 +59,35 @@ onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用
 
 因此 bearer token 泄漏等价于伪造 Hub channel authority，必须按服务密钥存放和轮换；
 Provider 的 loopback 默认监听是第二层隔离。
+
+## 只读接口
+
+两个 GET，都不改任何状态，凭据与写接口同一个 bearer。
+
+```text
+GET /v1/device-channels/presence
+GET /v1/session-traces?owner_id=&companion_id=&since=&limit=
+GET /v1/session-traces/{session_id}?kinds=
+```
+
+`presence` 回答"哪些 Body 正在自己的 channel 上"——这是本 Host 唯一的 presence 权威。
+
+`session-traces` 提供 Agent worker 写下的**每会话链路追踪**（从进房到离开的时序、每跳
+耗时、轮次的 phase/milestone/终态与决策证据）。worker 与 Provider 是同一个 Channel
+authority，所以由 Provider 服务这些文件不跨越任何边界；worker 决定是否记录
+（channel `settings.yaml` 的 `observability.session_trace_path`，默认关），Provider
+只决定去哪里找（`traces.root`）。root 不存在时 `recording:false` + 空列表，不是错误。
+
+**这是唯一一份读实现。** Admin 用已有的 generic proxy
+`/api/services/channel-provider/v1/session-traces` 透传，无需改动；CLI
+（`scripts/report_session_trace.py`）走同一个 HTTP 契约；将来给 Mobile 看，由 Local API
+加一层薄投影，不重写解析。
+
+`limit` 上限 200、默认 50；`since` 取 ISO-8601；`kinds` 用逗号分隔
+（`session_open,session_mark,session_close,turn_progress,turn_final,event`）。
+非法的 `limit`/`since` 返回 422 而不是被忽略 —— 被丢掉的过滤条件会让调用方把未过滤的
+答案当成过滤后的答案。查询按记录内的 `session_id` 匹配，不按文件名：文件名经过脱敏，
+而 `conversation_id` 允许 `.` 与 `:`。
 
 ## Provision wire contract
 

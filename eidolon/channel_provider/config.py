@@ -31,11 +31,24 @@ class StorageConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TracesConfig:
+    """Where the Agent worker's per-session traces are, if it writes any.
+
+    Read-only from this process's side. The worker decides whether to record
+    (``observability.session_trace_path``); this only decides where to look, so
+    a root that does not exist is an empty answer rather than a broken config.
+    """
+
+    root: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderConfig:
     http: HttpConfig
     storage: StorageConfig
     livekit: LiveKitConfig
     bearer_token: str
+    traces: TracesConfig = TracesConfig()
     # Adapter names in the order this deployment prefers them. Selection walks
     # this list and takes the first one that can carry the device's spec.
     adapter_preference: tuple[str, ...] = ("livekit",)
@@ -152,12 +165,14 @@ def load_provider_config() -> ProviderConfig:
     _load_environment()
     source = yaml.safe_load(_settings_path().read_text(encoding="utf-8")) or {}
     root = _mapping(_expand(source), "root")
-    _exact(root, name="root", allowed={"http", "storage", "livekit", "adapters"})
+    _exact(root, name="root", allowed={"http", "storage", "livekit", "adapters", "traces"})
     adapters = _mapping(root.get("adapters"), "adapters")
     _exact(adapters, name="adapters", allowed={"preference"})
 
     http = _mapping(root.get("http"), "http")
     storage = _mapping(root.get("storage"), "storage")
+    traces = _mapping(root.get("traces"), "traces")
+    _exact(traces, name="traces", allowed={"root"})
     livekit = _mapping(root.get("livekit"), "livekit")
     _exact(http, name="http", allowed={"host", "port"})
     _exact(storage, name="storage", allowed={"path"})
@@ -187,6 +202,13 @@ def load_provider_config() -> ProviderConfig:
     if not state_path.is_absolute():
         state_path = (_REPO_ROOT / state_path).resolve()
 
+    raw_traces_root = traces.get("root")
+    traces_root: Path | None = None
+    if isinstance(raw_traces_root, str) and raw_traces_root.strip():
+        traces_root = Path(raw_traces_root).expanduser()
+        if not traces_root.is_absolute():
+            traces_root = (_REPO_ROOT / traces_root).resolve()
+
     ttl = int(livekit.get("grant_ttl_seconds", 1800))
     if not 300 <= ttl <= 86400:
         raise ValueError("livekit.grant_ttl_seconds must be in 300..86400")
@@ -212,6 +234,7 @@ def load_provider_config() -> ProviderConfig:
     return ProviderConfig(
         http=HttpConfig(host=host, port=port),
         storage=StorageConfig(path=state_path),
+        traces=TracesConfig(root=traces_root),
         livekit=LiveKitConfig(
             api_url=_url(livekit.get("api_url"), name="livekit.api_url", client=False),
             client_url=_url(

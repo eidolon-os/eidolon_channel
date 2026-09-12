@@ -9,6 +9,7 @@ import pytest_asyncio
 from eidolon.livekit.agent.factory import SharedStageFactory
 from eidolon.livekit.common.config import load_effective_config
 from .._harness.audio import synth_silence, synth_voiced
+from .._harness.headless import duck_settled, wait_until
 from .._harness.latency import ReplyLatencyProbe
 from .._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedTranscript
 from .._harness.production import production_session
@@ -61,9 +62,18 @@ async def test_real_model_overlap_effects(text, action, model_policy, record_pro
             await h.audio_out.wait_for_first_audio()
             speech = h.session.current_speech
             assert speech is not None
-            # Final arrives at 700 ms; the model has a separate 1500 ms budget.
-            # Include both instead of measuring its deadline from session start.
-            await asyncio.sleep(2.5)
+            # The final arrives at 700 ms and the model has its own
+            # intent_timeout_ms budget on top of it, so a fixed wait measured
+            # from here is both load-sensitive and, at the policy's own worst
+            # case, too short (700 + 1500 leaves 300 ms). Wait for the verdict,
+            # then for the duck effect it causes: the two facts every assertion
+            # below reads. The effect follows the verdict within a tick, but
+            # which terminal event it records depends on the verdict.
+            budget_sec = pipeline._turn_policy.interrupt.intent_timeout_ms / 1000
+            await wait_until(lambda: pipeline._semantic_interrupts._intent_result is not None,
+                             timeout=budget_sec + 3)
+            await wait_until(duck_settled(pipeline),
+                             timeout=pipeline._turn_policy.eot.speech_merge_grace_ms / 1000 + 3)
             record_property('expected_action', action)
             record_property('interrupted', speech.interrupted)
             record_property('output_state', pipeline._ducking.mixer.state)

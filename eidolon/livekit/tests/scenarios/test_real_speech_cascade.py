@@ -18,6 +18,7 @@ from eidolon.livekit.agent.factory import SharedStageFactory
 from eidolon.livekit.common.config import load_effective_config
 from .._harness.production import production_session, production_ptt_session
 from .._harness.audio import frames_from_pcm
+from .._harness.headless import duck_settled, wait_until
 from .._harness.latency import ReplyLatencyProbe
 from .test_human_ptt import button
 
@@ -130,8 +131,6 @@ async def test_real_audio_overlap_to_playback_effects(clip_name, action, record_
     benchmark/audio/generated/manifest.yaml. These are generic TTS fixtures,
     not recordings of real users. This does not test device AEC or RTC.
     """
-    import asyncio
-
     ffmpeg = shutil.which('ffmpeg')
     assert ffmpeg is not None
     clip = Path(__file__).resolve().parents[4] / f'benchmark/audio/generated/{clip_name}.wav'
@@ -171,16 +170,19 @@ async def test_real_audio_overlap_to_playback_effects(clip_name, action, record_
             probe = ReplyLatencyProbe(pipeline, h) if action == 'reply' else None
             h.audio_in.feed_pcm(pcm)
             h.audio_in.feed_silence(3)
-            async with asyncio.timeout(12):
-                while pipeline._semantic_interrupts._intent_result is None:
-                    await asyncio.sleep(.02)
+            await wait_until(lambda: pipeline._semantic_interrupts._intent_result is not None,
+                             timeout=12)
             evidence = pipeline._semantic_interrupts._intent_result
             record_property('clip', clip_name)
             record_property('intent', evidence.intent.value)
             record_property('source', evidence.source)
             record_property('stt_text', pipeline._semantic_interrupts._intent_key[1])
             assert evidence.source == 'llm'
-            await asyncio.sleep(1)
+            # Settle on the duck effect the verdict causes, not on a fixed
+            # second: with real audio the VAD stop that bounds a resume is
+            # data-dependent, so the budget left over is unknown.
+            await wait_until(duck_settled(pipeline),
+                             timeout=cfg.turn_policy.eot.speech_merge_grace_ms / 1000 + 3)
             assert speech.interrupted is (action != 'resume')
             if action == 'resume':
                 assert pipeline._ducking.mixer.state == 'NORMAL'

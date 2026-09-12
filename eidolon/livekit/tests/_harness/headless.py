@@ -578,6 +578,37 @@ async def wait_until(
         await asyncio.sleep(poll_ms / 1000.0)
 
 
+DUCK_TERMINAL_EVENTS = frozenset(
+    {"duck_cancelled", "duck_unducked", "output_resumed_pending_evidence"}
+)
+
+
+def duck_settled(pipeline: Any) -> Callable[[], bool]:
+    """Predicate for ``wait_until``: the duck reached a terminal event.
+
+    Which one depends on the verdict -- a cancel records ``duck_cancelled``, a
+    rejected candidate ``duck_unducked``, and an expired continuation grace
+    ``output_resumed_pending_evidence`` -- so tests that must settle before
+    reading the mixer wait for any of them rather than for one clock.
+
+    ``pipeline._timeline`` rotates as turns complete, so accumulate the
+    timelines seen while polling instead of capturing one up front.
+    """
+    seen: list[Any] = []
+
+    def _settled() -> bool:
+        current = getattr(pipeline, "_timeline", None)
+        if current is not None and all(current is not timeline for timeline in seen):
+            seen.append(current)
+        return any(
+            event["event"] in DUCK_TERMINAL_EVENTS
+            for timeline in seen
+            for event in (timeline.attrs.get("duck_events") or ())
+        )
+
+    return _settled
+
+
 # ─────────────────────────────────────────────────────────────────
 #  HeadlessSession factory
 # ─────────────────────────────────────────────────────────────────

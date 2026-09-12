@@ -261,10 +261,21 @@ class ChannelTurnEventSink:
         )
 
     def _base_payload(self) -> dict[str, Any]:
+        """Identity every event carries, so a row can be read on its own.
+
+        ``owner_id`` and ``companion_id`` are here because an event that cannot
+        say whose it is has to be joined back to the session's opening record
+        before it means anything — and a consumer reading a page of events does
+        not have that record. It is also what ``eidolon_admin``'s projection
+        reads for a turn, whose subject is the turn rather than the Companion.
+        """
+
         context = self._context
         if context is None:
             return {}
         return {
+            "owner_id": context.owner_id,
+            "companion_id": context.companion_id,
             "room_name": context.room_name,
             "device_id": context.device_id,
         }

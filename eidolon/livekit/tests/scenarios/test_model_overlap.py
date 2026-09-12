@@ -1,6 +1,7 @@
 """Actual model evidence -> production turn owner -> SDK audio/turn effects."""
 
 import asyncio
+import time
 from dataclasses import replace
 
 import pytest
@@ -76,14 +77,30 @@ async def test_real_model_overlap_effects(text, action, model_policy, record_pro
             # The final arrives at 700 ms and the model has its own
             # intent_timeout_ms budget on top of it, so a fixed wait measured
             # from here is both load-sensitive and, at the policy's own worst
-            # case, too short -- the 2.5 s sleep this replaced sat below
-            # 700 ms + that budget. Wait for the verdict,
-            # then for the duck effect it causes: the two facts every assertion
-            # below reads. The effect follows the verdict within a tick, but
-            # which terminal event it records depends on the verdict.
+            # case, too short -- the 2.5 s sleep this replaced sat below 700 ms
+            # plus that budget. Wait for the verdict, then for the duck effect
+            # it causes: the two facts every assertion below reads. The effect
+            # follows the verdict within a tick, but which terminal event it
+            # records depends on the verdict.
+            #
+            # Time the classification while waiting for it. Giving the budget
+            # room to cover this provider is what lets the case below judge its
+            # answers, but it also stops the run from failing when the provider
+            # is slow, so the latency has to be reported rather than inferred
+            # from a red case.
+            semantic = pipeline._semantic_interrupts
+            classification = {}
+
+            def verdict_arrived():
+                if 'started_at' not in classification and semantic._intent_task is not None:
+                    classification['started_at'] = time.monotonic()
+                return semantic._intent_result is not None
+
             budget_sec = pipeline._turn_policy.interrupt.intent_timeout_ms / 1000
-            await wait_until(lambda: pipeline._semantic_interrupts._intent_result is not None,
-                             timeout=budget_sec + 3)
+            await wait_until(verdict_arrived, timeout=budget_sec + 3)
+            record_property('intent_budget_ms', pipeline._turn_policy.interrupt.intent_timeout_ms)
+            record_property('intent_latency_ms', round(
+                (time.monotonic() - classification['started_at']) * 1000, 1))
             await wait_until(lambda: duck_settled(timeline),
                              timeout=pipeline._turn_policy.eot.speech_merge_grace_ms / 1000 + 3)
             record_property('expected_action', action)

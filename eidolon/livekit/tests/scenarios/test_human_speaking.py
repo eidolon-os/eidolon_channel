@@ -12,6 +12,7 @@ import pytest
 from eidolon.livekit.common.config import TurnPolicyConfig
 
 from .._harness.audio import synth_voiced
+from .._harness.headless import wait_until
 from .._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedTranscript
 from .._harness.production import production_session
 
@@ -115,10 +116,21 @@ async def test_overlap_intent_contract(text, should_interrupt, context, record_p
         await h.audio_out.wait_for_first_audio()
         speech = h.session.current_speech
         assert speech is not None
+        await wait_until(lambda: pipeline._timeline is not None, timeout=3)
+        timeline = pipeline._timeline
+        grace_ms = pipeline._turn_policy.eot.speech_merge_grace_ms
+
+        def resume_event():
+            return next((event for event in timeline.attrs.get('duck_events') or ()
+                         if event['event'] == 'output_resumed_pending_evidence'), None)
+
         # Accepted interruption must settle promptly. Non-interruptions must
         # resume the same response, not regenerate or silently lose its tail.
-        import asyncio
-        await asyncio.sleep(2)
+        # Both outcomes are recorded, so wait for whichever the owner reaches
+        # instead of a fixed 2 s budget: the rejected-candidate resume lands at
+        # VAD stop + speech_merge_grace_ms, ~185 ms before that budget expires.
+        await wait_until(lambda: speech.interrupted or resume_event() is not None,
+                         timeout=grace_ms / 1000 + 3)
         record_property('expected_interrupt', should_interrupt)
         record_property('observed_interrupt', speech.interrupted)
         record_property('output_state', pipeline._ducking.mixer.state)
@@ -126,3 +138,9 @@ async def test_overlap_intent_contract(text, should_interrupt, context, record_p
         if not should_interrupt:
             assert pipeline._ducking.mixer.state == 'NORMAL'
             assert h.events.user_messages() == []
+            # Playback recovery is bounded by the continuation grace, not by
+            # the candidate's much longer evidence budget behind it.
+            resume = resume_event()
+            stop_to_resume_ms = (resume['at'] - resume['speech_stopped_at']) * 1000.0
+            record_property('stop_to_resume_ms', stop_to_resume_ms)
+            assert 0 <= stop_to_resume_ms <= grace_ms + 200

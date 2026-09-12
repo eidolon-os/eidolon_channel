@@ -135,8 +135,12 @@ async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay):
             zeroed = np.count_nonzero((expected != 0) & (actual == 0))
             assert zeroed < tts.sample_rate * .005, 'unheard PCM was silenced instead of resumed'
         else:
-            await asyncio.sleep(2.5)
-            assert speech.interrupted
+            await wait_until(lambda: speech.interrupted, timeout=4)
+            # A hard stop cancels playback without opening a user turn. Settle
+            # from the cut rather than from session start: ``delay`` is
+            # parametrized, so a budget measured from the start leaves 1.7 s of
+            # margin at .05 and 0.6 s at 1.2.
+            await asyncio.sleep(1)
             assert not h.events.user_messages()
         classifier.classify.assert_awaited_once()
 
@@ -393,12 +397,38 @@ async def test_model_unavailable_resumes_original_speech_after_vad_end(failure):
         tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
         vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1050, .1)]),
     ) as (pipeline, h):
+        orchestrator = pipeline._interruption_orchestrator
         h.audio_in.feed_pcm(synth_voiced(1.1))
         await h.audio_out.wait_for_first_audio()
         speech = h.session.current_speech
-        await asyncio.sleep(1.5)
+        # Hold the reference: ``pipeline._timeline`` is cleared once the turn
+        # completes, and the user turn owns it from VAD start.
+        await wait_until(lambda: pipeline._timeline is not None, timeout=3)
+        timeline = pipeline._timeline
+
+        def resume_event():
+            return next((event for event in timeline.attrs.get('duck_events') or ()
+                         if event['event'] == 'duck_unducked'), None)
+
+        # The fallback resolves at VAD stop, ~470 ms before the fixed 1.5 s
+        # sample this used to take. Wait for the recorded resume instead: a
+        # sample on a clock of its own only records whether the production path
+        # kept pace with the test, which is what load changes.
+        await wait_until(lambda: resume_event() is not None and not orchestrator.active, timeout=5)
         assert pipeline._ducking.mixer.state == 'NORMAL'
         assert not speech.interrupted
+        # An unavailable provider is not evidence of a barge-in: the candidate
+        # is rejected without reaching the LLM, and playback recovers on speech
+        # end. The provider's own timeout has already elapsed by then, so the
+        # fallback adds no wait of its own -- it never spends the continuation
+        # grace, let alone the evidence budget behind it.
+        resume = resume_event()
+        assert resume['reason'] == 'final_intent_resume'
+        stop_to_resume_ms = (resume['at'] - resume['speech_stopped_at']) * 1000.0
+        assert 0 <= stop_to_resume_ms <= pipeline._turn_policy.interrupt.intent_timeout_ms
+        verdict = timeline.attrs['interruption_verdict']
+        assert verdict['action'] == 'rejected_resume'
+        assert verdict['continue_to_llm'] is False
         await h.events.wait_for_agent_messages(1, timeout=6)
         assert h.events.agent_messages() == [welcome]
         assert not h.events.user_messages()
@@ -507,9 +537,7 @@ async def test_fragmented_final_intent_survives_deadline_and_vad_stop(intent, va
         h.audio_in.feed_pcm(synth_voiced(1.5))
         await h.audio_out.wait_for_first_audio()
         speech = h.session.current_speech
-        async with asyncio.timeout(4):
-            while pipeline._semantic_interrupts._intent_result is None:
-                await asyncio.sleep(.02)
+        await wait_until(lambda: pipeline._semantic_interrupts._intent_result is not None, timeout=4)
         final_request = classifier.classify.call_args.args[0]
         assert prefix.rstrip('。') in final_request and tail in final_request
         if intent is InterruptIntent.NORMAL_INTERRUPT:

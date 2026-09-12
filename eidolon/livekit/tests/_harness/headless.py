@@ -583,30 +583,24 @@ DUCK_TERMINAL_EVENTS = frozenset(
 )
 
 
-def duck_settled(pipeline: Any) -> Callable[[], bool]:
-    """Predicate for ``wait_until``: the duck reached a terminal event.
+def duck_settled(timeline: Any) -> bool:
+    """True once the duck this turn opened reached a terminal event.
 
-    Which one depends on the verdict -- a cancel records ``duck_cancelled``, a
-    rejected candidate ``duck_unducked``, and an expired continuation grace
-    ``output_resumed_pending_evidence`` -- so tests that must settle before
-    reading the mixer wait for any of them rather than for one clock.
+    Which event that is depends on the verdict -- a cancel records
+    ``duck_cancelled``, a rejected candidate ``duck_unducked``, and an expired
+    continuation grace ``output_resumed_pending_evidence`` -- so tests that
+    must settle before reading the mixer wait for any of them rather than for
+    one clock.
 
-    ``pipeline._timeline`` rotates as turns complete, so accumulate the
-    timelines seen while polling instead of capturing one up front.
+    Takes the timeline rather than the pipeline on purpose: a confirmed cancel
+    clears ``pipeline._timeline`` in the same tick that records
+    ``duck_cancelled`` and keeps no reference to the turn that just ended, so
+    the caller has to capture one while the turn is still live.
     """
-    seen: list[Any] = []
-
-    def _settled() -> bool:
-        current = getattr(pipeline, "_timeline", None)
-        if current is not None and all(current is not timeline for timeline in seen):
-            seen.append(current)
-        return any(
-            event["event"] in DUCK_TERMINAL_EVENTS
-            for timeline in seen
-            for event in (timeline.attrs.get("duck_events") or ())
-        )
-
-    return _settled
+    return any(
+        event["event"] in DUCK_TERMINAL_EVENTS
+        for event in (timeline.attrs.get("duck_events") or ())
+    )
 
 
 # ─────────────────────────────────────────────────────────────────

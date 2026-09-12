@@ -170,6 +170,11 @@ async def test_real_audio_overlap_to_playback_effects(clip_name, action, record_
             probe = ReplyLatencyProbe(pipeline, h) if action == 'reply' else None
             h.audio_in.feed_pcm(pcm)
             h.audio_in.feed_silence(3)
+            # Capture the turn's timeline while it is live; a cancel clears the
+            # pipeline's reference in the same tick it records the duck event
+            # the settle below waits for.
+            await wait_until(lambda: pipeline._timeline is not None, timeout=12)
+            timeline = pipeline._timeline
             await wait_until(lambda: pipeline._semantic_interrupts._intent_result is not None,
                              timeout=12)
             evidence = pipeline._semantic_interrupts._intent_result
@@ -181,7 +186,7 @@ async def test_real_audio_overlap_to_playback_effects(clip_name, action, record_
             # Settle on the duck effect the verdict causes, not on a fixed
             # second: with real audio the VAD stop that bounds a resume is
             # data-dependent, so the budget left over is unknown.
-            await wait_until(duck_settled(pipeline),
+            await wait_until(lambda: duck_settled(timeline),
                              timeout=cfg.turn_policy.eot.speech_merge_grace_ms / 1000 + 3)
             assert speech.interrupted is (action != 'resume')
             if action == 'resume':

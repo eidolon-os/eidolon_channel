@@ -62,6 +62,11 @@ async def test_real_model_overlap_effects(text, action, model_policy, record_pro
             await h.audio_out.wait_for_first_audio()
             speech = h.session.current_speech
             assert speech is not None
+            # Capture the turn's timeline while it is live; the cancel below
+            # clears the pipeline's reference in the same tick it records the
+            # duck event this waits for.
+            await wait_until(lambda: pipeline._timeline is not None, timeout=5)
+            timeline = pipeline._timeline
             # The final arrives at 700 ms and the model has its own
             # intent_timeout_ms budget on top of it, so a fixed wait measured
             # from here is both load-sensitive and, at the policy's own worst
@@ -72,7 +77,7 @@ async def test_real_model_overlap_effects(text, action, model_policy, record_pro
             budget_sec = pipeline._turn_policy.interrupt.intent_timeout_ms / 1000
             await wait_until(lambda: pipeline._semantic_interrupts._intent_result is not None,
                              timeout=budget_sec + 3)
-            await wait_until(duck_settled(pipeline),
+            await wait_until(lambda: duck_settled(timeline),
                              timeout=pipeline._turn_policy.eot.speech_merge_grace_ms / 1000 + 3)
             record_property('expected_action', action)
             record_property('interrupted', speech.interrupted)

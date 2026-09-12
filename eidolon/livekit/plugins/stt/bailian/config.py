@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 
 def _resolve_api_key() -> str:
@@ -128,25 +127,6 @@ class BailianSTTConfig:
         )
     )
 
-    # Diagnostic audio dump (default OFF). When enabled, write the exact PCM the
-    # recognizer receives — post-network, post-resample; 16 kHz mono — to a WAV
-    # under ``dump_dir``, one file per stream run. Lets us listen to a device's
-    # uplink audio to tell clean speech from echo/noise. Configure via
-    # settings.yaml (``bailian_stt.dump_wav`` / ``dump_dir``); the env vars below
-    # remain as a fallback default so it can also be flipped without editing yaml.
-    dump_wav: bool = field(
-        default_factory=lambda: os.environ.get("EIDOLON_STT_DUMP_WAV", "").strip().lower()
-        in ("1", "true", "yes", "on")
-    )
-    dump_dir: str = field(
-        default_factory=lambda: os.environ.get(
-            "EIDOLON_STT_DUMP_DIR",
-            str(
-                Path(os.environ.get("EIDOLON_CACHE_ROOT", "~/eidolon/cache")).expanduser()
-                / "debug/channel"
-            ),
-        )
-    )
     # conn_options is intentionally omitted here — it is a LiveKit runtime
     # object that does not belong in a plain dataclass; the STT class
     # accepts it as a separate __init__ keyword argument.

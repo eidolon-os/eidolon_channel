@@ -18,8 +18,14 @@ from .._harness.production import production_session
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def model_policy():
     cfg = load_effective_config()
+    # 2500 rather than the shipped 1500: measured over 36 classifications of
+    # these very texts the provider runs 652/1023/1497/1599 ms for
+    # min/median/p90/max, so 1500 sits on its p90 and truncates roughly one
+    # call in six once the pipeline is also driving audio. The budget decides
+    # how long an answer may take, not what it says; the verdicts asserted
+    # below are unchanged.
     cfg = replace(cfg, turn_policy=replace(cfg.turn_policy, interrupt=replace(
-        cfg.turn_policy.interrupt, intent_provider='llm', intent_timeout_ms=1500,
+        cfg.turn_policy.interrupt, intent_provider='llm', intent_timeout_ms=2500,
     )))
     classifier = SharedStageFactory.build_interrupt_classifier(cfg)
     try:
@@ -70,7 +76,8 @@ async def test_real_model_overlap_effects(text, action, model_policy, record_pro
             # The final arrives at 700 ms and the model has its own
             # intent_timeout_ms budget on top of it, so a fixed wait measured
             # from here is both load-sensitive and, at the policy's own worst
-            # case, too short (700 + 1500 leaves 300 ms). Wait for the verdict,
+            # case, too short -- the 2.5 s sleep this replaced sat below
+            # 700 ms + that budget. Wait for the verdict,
             # then for the duck effect it causes: the two facts every assertion
             # below reads. The effect follows the verdict within a tick, but
             # which terminal event it records depends on the verdict.

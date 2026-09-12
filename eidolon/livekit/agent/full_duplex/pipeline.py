@@ -1128,7 +1128,7 @@ class StreamingPipeline(BasePipeline):
         flushed_ids.add(timeline.turn_id)
         timeline.set_attr("timeline_flush_reason", reason)
         self._ensure_turn_event_sink().terminal(timeline, reason)
-        timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        timeline.append_debug_jsonl(self._observability.timeline_debug_path, final=True)
         # The settled row. ``_flushed_timeline_ids`` makes this once-per-turn,
         # which is what lets a reader take one sample per turn from the trace
         # instead of counting a superseded turn's earlier snapshots again.
@@ -1151,7 +1151,7 @@ class StreamingPipeline(BasePipeline):
         rejected = phase == FullDuplexPhase.USER_TURN_REJECTED.value
         if rejected:
             self._ensure_turn_event_sink().terminal(timeline, reason)
-        timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        timeline.append_debug_jsonl(self._observability.timeline_debug_path, final=rejected)
         # A rejected turn ends here — nothing will flush it — so this snapshot
         # is its settled row. Every other snapshot is a turn still in progress
         # that a later ``_flush_turn_timeline`` will settle, and marking it

@@ -684,7 +684,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         if timeline.turn_id in self._flushed_timeline_ids:
             return
         timeline.set_attr("timeline_flush_reason", reason)
-        timeline.append_debug_jsonl(self._observability.timeline_debug_path)
+        timeline.append_debug_jsonl(self._observability.timeline_debug_path, final=True)
         self._flushed_timeline_ids.add(timeline.turn_id)
         # Already once-per-turn thanks to the guard above, so a PTT turn has no
         # progress rows to distinguish: the row it writes is the settled one.

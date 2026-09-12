@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("agent.observability.timeline")
 
 
 @dataclass(frozen=True)
@@ -786,13 +789,38 @@ class TurnTimeline:
             },
         }
 
-    def append_debug_jsonl(self, path: str) -> None:
+    def append_debug_jsonl(self, path: str, *, final: bool = True) -> None:
+        """Append this turn's snapshot, saying whether the turn has settled.
+
+        A turn reaches this file more than once: where a candidate is superseded
+        and again at its terminal flush. Without ``final`` a reader counts those
+        earlier, less complete rows as separate turns — measured at 28.6% of the
+        rows in a live log, and biased, because the turns that repeat are
+        disproportionately the abnormal ones (superseded, first-delta timeout).
+        It overstated `stt_speech_to_provider_partial_ms` p95 by 1.8s.
+
+        The flag is the same distinction the session trace draws with
+        ``turn_progress`` / ``turn_final``. One vocabulary, two files.
+        """
+
         if not path:
+            return
+        if "$" in path:
+            # ``os.path.expandvars`` leaves an undefined variable exactly as it
+            # found it, and ``mkdir(parents=True)`` below would then create a
+            # directory literally named ``$EIDOLON_LOG_ROOT``. This repository
+            # has already carried one such directory, from a different setting
+            # doing exactly this.
+            logger.warning(
+                "timeline debug path still contains an unexpanded variable (%s); "
+                "not writing",
+                path,
+            )
             return
         p = Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(self.snapshot(), ensure_ascii=False) + "\n")
+            f.write(json.dumps({**self.snapshot(), "final": final}, ensure_ascii=False) + "\n")
 
 
 def _duration_ms(start: float, end: float) -> float | None:

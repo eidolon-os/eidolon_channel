@@ -64,8 +64,62 @@ def load_timeline_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def settled_turn_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One record per turn: the settled one.
+
+    A turn reaches the JSONL more than once — once where a candidate was
+    superseded, again at its terminal flush — so counting every row counts the
+    abnormal turns twice or three times. Measured on a live log: 28.6% of rows
+    were earlier, less complete snapshots of a turn that also had a later one,
+    and because the turns that repeat are disproportionately the abnormal ones
+    (superseded, first-delta timeout) the bias runs into the tail. It overstated
+    ``stt_speech_to_provider_partial_ms`` p95 by 1.8s.
+
+    The writer now says which row settled the turn (``final``). Records written
+    before that carry no such key, and for them the most complete row — the one
+    with the most marks — is the best available answer; that is also what the
+    terminal flush produces, since marks only accumulate.
+
+    Order is preserved: a caller reading ``record_summaries`` alongside a run's
+    other output should see turns in the order they happened.
+    """
+
+    chosen: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for record in records:
+        turn_id = str(record.get("turn_id") or "")
+        if not turn_id:
+            # Nothing to deduplicate against; keep it under its own identity.
+            turn_id = f"_anonymous_{len(order)}"
+        if turn_id not in chosen:
+            chosen[turn_id] = record
+            order.append(turn_id)
+            continue
+        if _prefer(record, chosen[turn_id]):
+            chosen[turn_id] = record
+    return [chosen[turn_id] for turn_id in order]
+
+
+def _prefer(candidate: dict[str, Any], incumbent: dict[str, Any]) -> bool:
+    """Whether ``candidate`` describes the turn better than ``incumbent``."""
+
+    candidate_final = bool(candidate.get("final"))
+    incumbent_final = bool(incumbent.get("final"))
+    if candidate_final != incumbent_final:
+        return candidate_final
+    return len(_mapping(candidate.get("timestamps"))) > len(
+        _mapping(incumbent.get("timestamps"))
+    )
+
+
 def summarize_timeline_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize timeline records into dashboard-friendly metrics."""
+    """Summarize timeline records into dashboard-friendly metrics.
+
+    Deduplicated by turn first: percentiles over raw rows weight a turn by how
+    many times it was written, which is not a property of the conversation.
+    """
+
+    records = settled_turn_records(records)
 
     latency_samples: dict[str, list[float]] = {}
     segment_samples: dict[str, dict[str, Any]] = {}

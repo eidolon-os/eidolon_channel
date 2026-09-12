@@ -52,6 +52,7 @@ from eidolon.livekit.common.config import AttentionPolicyConfig, TurnPolicyConfi
 from benchmark.timeline import (
     TimelineCapture,
     load_timeline_records,
+    settled_turn_records,
     summarize_timeline_records,
 )
 from benchmark.timeline_expectations import apply_timeline_expectations
@@ -5016,3 +5017,99 @@ def test_provisional_recovery_without_timestamp_cannot_use_later_terminal_time(t
     run = _apply_record_expectations(tmp_path, suite, [record])
     assert not run.cases[0].passed
     assert 'timeline missing speech-start-to-resume duration' in run.cases[0].errors
+
+
+# --------------------------------------------------------------------------- #
+# Per-turn settlement: one row per turn, so a percentile weights conversations
+# rather than how many times a turn happened to be written.
+# --------------------------------------------------------------------------- #
+
+
+def _turn_row(turn_id: str, marks: int, *, final: bool | None = None) -> dict:
+    row: dict = {
+        "turn_id": turn_id,
+        "timestamps": {f"m{i}": float(i) for i in range(marks)},
+        "attrs": {},
+        "durations_ms": {},
+    }
+    if final is not None:
+        row["final"] = final
+    return row
+
+
+def test_the_settled_row_wins_over_the_progress_rows() -> None:
+    rows = [
+        _turn_row("t1", 15, final=False),
+        _turn_row("t1", 33, final=True),
+        _turn_row("t2", 20, final=True),
+    ]
+    kept = settled_turn_records(rows)
+
+    assert [r["turn_id"] for r in kept] == ["t1", "t2"]
+    assert len(kept[0]["timestamps"]) == 33
+
+
+def test_the_settled_row_wins_even_when_it_has_fewer_marks() -> None:
+    """``final`` is the writer's statement, not a guess from mark count.
+
+    A rejected turn settles early and can carry fewer marks than a progress row
+    written for a turn that kept going.
+    """
+
+    rows = [_turn_row("t1", 30, final=False), _turn_row("t1", 12, final=True)]
+    kept = settled_turn_records(rows)
+
+    assert len(kept) == 1
+    assert len(kept[0]["timestamps"]) == 12
+
+
+def test_rows_written_before_the_contract_fall_back_to_the_fullest() -> None:
+    """历史 JSONL has no ``final`` key at all; marks only accumulate, so the
+    fullest row is the one the terminal flush produced."""
+
+    rows = [_turn_row("t1", 15), _turn_row("t1", 33), _turn_row("t1", 25)]
+    kept = settled_turn_records(rows)
+
+    assert len(kept) == 1
+    assert len(kept[0]["timestamps"]) == 33
+
+
+def test_turns_keep_the_order_they_first_appeared() -> None:
+    rows = [
+        _turn_row("t1", 5, final=False),
+        _turn_row("t2", 5, final=True),
+        _turn_row("t1", 9, final=True),
+    ]
+    assert [r["turn_id"] for r in settled_turn_records(rows)] == ["t1", "t2"]
+
+
+def test_a_row_without_a_turn_id_is_kept_rather_than_merged() -> None:
+    """Two unidentifiable rows are not evidence that they are the same turn."""
+
+    rows = [{"timestamps": {"a": 1.0}}, {"timestamps": {"b": 2.0}}]
+    assert len(settled_turn_records(rows)) == 2
+
+
+def test_summaries_count_turns_not_writes() -> None:
+    rows = [
+        _turn_row("t1", 2, final=False),
+        _turn_row("t1", 4, final=True),
+        _turn_row("t2", 4, final=True),
+    ]
+    assert summarize_timeline_records(rows)["count"] == 2
+
+
+def test_duplicate_rows_do_not_inflate_a_latency_sample() -> None:
+    """The defect this fixes: an abnormal turn written three times contributed
+    three samples, and abnormal turns are the ones that repeat."""
+
+    def slow(turn_id: str, final: bool | None) -> dict:
+        row = _turn_row(turn_id, 0, final=final)
+        row["attrs"] = {"provider_latency_ms": {"stt_final_ms": 5000.0}}
+        return row
+
+    rows = [slow("t1", False), slow("t1", False), slow("t1", True), slow("t2", True)]
+    sample = summarize_timeline_records(rows)["latencies"]["stt_final_ms"]
+
+    # Two turns, not the four times they were written.
+    assert sample["count"] == 2

@@ -282,8 +282,16 @@ class ObservabilityConfig:
     # until someone asks for it. When set, one NDJSON file per session lands at
     # ``<path>/<date>/<owner>__<companion>__<session>.ndjson``.
     #
-    # State, not logs: the Channel Provider's read surface serves these, while
-    # EIDOLON_LOG_ROOT is a directory operations may clear at will.
+    # Logs, not state, and the systemd unit is what settles it. On a product
+    # Host ``eidolon-channel.service`` is ``ProtectSystem=strict`` and holds
+    # ``eidolon/channel`` under the logs, runtime and cache roots while its
+    # state root is ``eidolon/voiceprints``. A trace path under the state root
+    # is one this worker cannot create, and the writer degrades silently by
+    # design — so the Host would run untraced and read exactly like one with
+    # tracing switched off. Being clearable is not a loss either: this writer
+    # already rotates whole day-directories out after
+    # ``session_trace_retention_days``. It also puts the trace beside the turn
+    # timeline it complements, which has always been under the log root.
     session_trace_path: str = ""
     # Queue depth between the voice loop and the writer thread. A full queue
     # drops the record and counts it rather than making the caller wait — a

@@ -19,7 +19,10 @@
   Hub handoff。
 - `EIDOLON_STATE_ROOT`：Provider 数据库默认位于
   `$EIDOLON_STATE_ROOT/channel/provider.sqlite3`；`traces.root` 默认位于同级的
-  `$EIDOLON_STATE_ROOT/channel/traces`（Agent worker 写、Provider 只读）。
+  `$EIDOLON_LOG_ROOT/channel/traces`（Agent worker 写、Provider 只读）——落在 log root
+  而不是 state root，因为产品 Host 上 worker unit 是 `ProtectSystem=strict`，它在
+  logs/runtime/cache 三个角色下持有 `eidolon/channel`，而 state 是 `eidolon/voiceprints`；
+  `ProtectSystem` 只挡写不挡读，所以 Provider 读得到一个它自己创建不了的目录。
 - `EIDOLON_LIVEKIT_CLIENT_URL`：写入设备 binding 的可达 `wss://` origin。非 loopback 的
   `ws://` 会被配置校验拒绝。
 

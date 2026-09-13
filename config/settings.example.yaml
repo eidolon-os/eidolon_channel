@@ -185,9 +185,14 @@ observability:
   stt_pending_provider_event_preroll_ms: 500
   stt_pending_provider_event_max_count: 32
   # Per-session link trace (room join -> leave), one NDJSON file per session.
-  # Off by default: this is diagnosis, not a product feature. Set it to a
-  # directory under EIDOLON_STATE_ROOT — the Channel Provider's read surface
-  # serves these files, while EIDOLON_LOG_ROOT may be cleared by operations.
+  # Off by default: this is diagnosis, not a product feature.
+  #
+  # Under EIDOLON_LOG_ROOT, beside the turn timeline it complements. On a
+  # product Host the worker unit is ProtectSystem=strict and its writable
+  # roots are eidolon/channel under logs, runtime and cache — state is
+  # eidolon/voiceprints. A trace path under the state root cannot be created
+  # there, and this writer degrades silently by design, so the Host would run
+  # untraced and look no different from one with tracing off.
   session_trace_path: ""
   session_trace_max_queue: 4096
   session_trace_max_file_bytes: 8000000

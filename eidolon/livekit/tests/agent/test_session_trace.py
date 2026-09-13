@@ -193,11 +193,11 @@ def test_an_unexpanded_variable_disables_tracing_instead_of_making_a_directory()
     """
 
     writer = SessionTraceWriter.open(
-        settings=SessionTraceSettings(root="$EIDOLON_STATE_ROOT/channel/traces"),
+        settings=SessionTraceSettings(root="$EIDOLON_LOG_ROOT/channel/traces"),
         session_id="sess-1",
     )
     assert writer.enabled is False
-    assert not Path("$EIDOLON_STATE_ROOT").exists()
+    assert not Path("$EIDOLON_LOG_ROOT").exists()
     writer.session_mark("room_joined")
     writer.close()
 

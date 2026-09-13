@@ -12,7 +12,7 @@ traces:
   # (channel settings.yaml: observability.session_trace_path). Read-only here:
   # this process serves them, the worker decides whether to record any, and a
   # root that does not exist simply lists nothing.
-  root: $EIDOLON_STATE_ROOT/channel/traces
+  root: $EIDOLON_LOG_ROOT/channel/traces
 
 livekit:
   # Internal administrative origin used only by the Provider process.

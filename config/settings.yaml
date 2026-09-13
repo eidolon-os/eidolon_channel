@@ -195,7 +195,7 @@ observability:
   stt_pending_provider_event_max_count: 32
   # Per-session link trace (room join -> leave). Local dev has it on; the
   # default in settings.example.yaml stays empty.
-  session_trace_path: "$EIDOLON_STATE_ROOT/channel/traces"
+  session_trace_path: "$EIDOLON_LOG_ROOT/channel/traces"
   session_trace_max_queue: 4096
   session_trace_max_file_bytes: 8000000
   session_trace_retention_days: 7

@@ -37,6 +37,12 @@ class TracesConfig:
     Read-only from this process's side. The worker decides whether to record
     (``observability.session_trace_path``); this only decides where to look, so
     a root that does not exist is an empty answer rather than a broken config.
+
+    Under the log root because that is where the worker can write: its unit is
+    ``ProtectSystem=strict`` with ``eidolon/channel`` under logs and
+    ``eidolon/voiceprints`` under state. Reading is unaffected by that hardening
+    — ``ProtectSystem`` withholds writes, not reads — so this process can serve
+    a directory it could not itself create.
     """
 
     root: Path | None = None

@@ -134,23 +134,17 @@ class HandoffPayload:
 class _DonePayload:
     """Sentinel marking end-of-turn. Consumer returns when it sees this.
 
-    Carries the brain's structured termination semantics (proto DONE keys):
-    ``termination_cause`` distinguishes WHY the turn ended ("user_stop" means
-    the brain classified the utterance itself as a stop command and skipped
-    the LLM — upstream should circuit-break TTS/rendering); ``control_intent``
-    is the shared ``eidolon_sdk.biz.dialogue_control.InterruptIntent`` value
-    the brain assigned to the user utterance.
+    It used to carry the brain's structured termination semantics
+    (``status`` / ``termination_cause`` / ``control_intent``) for a turn-policy
+    reconciliation that was never wired: ``5d3ba74`` added the capture, and the
+    brain-side classifier it was meant to reconcile with was removed in
+    eidolon_agent ``000a011``. Nothing read the fields, so they are gone.
+    Reinstating them means deciding the reconcile rule first — one event must
+    still enter exactly one adjudication path.
     """
-
-    status: str = ""
-    termination_cause: str = ""
-    control_intent: str = ""
 
 
 _DONE = _DonePayload()
-
-# Cap for the recent-turn DONE-info map (see take_done_info).
-_DONE_INFO_MAX = 8
 
 
 # Union of everything the inbox queue can carry to a turn consumer.
@@ -248,9 +242,6 @@ class EidolonAgentSession:
         # cancelled turn_id -> future resolved with already_done when the
         # brain ACKs the CancelTurn frame.
         self._cancel_acks: dict[str, asyncio.Future] = {}
-        # turn_id -> structured DONE payload (termination_cause etc.), kept
-        # for a few recent turns so turn policy can reconcile after consume.
-        self._done_info: dict[str, _DonePayload] = {}
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -497,13 +488,7 @@ class EidolonAgentSession:
                 role = _s_field(data_fields, "role") or DeltaRole.ANSWER.value
                 q.put_nowait(DeltaPayload(text=text, role=role))
         elif kind == pb.TurnEvent.DONE:
-            done = _DonePayload(
-                status=_s_field(data_fields, "status"),
-                termination_cause=_s_field(data_fields, "termination_cause"),
-                control_intent=_s_field(data_fields, "control_intent"),
-            )
-            self._record_done_info(ev.turn_id, done)
-            q.put_nowait(done)
+            q.put_nowait(_DONE)
         elif kind == pb.TurnEvent.ERROR:
             code = (
                 data_fields["code"].string_value
@@ -603,15 +588,6 @@ class EidolonAgentSession:
         fut = self._cancel_acks.pop(cancelled_turn_id, None)
         if fut is not None and not fut.done():
             fut.set_result(already_done)
-
-    def _record_done_info(self, turn_id: str, done: "_DonePayload") -> None:
-        self._done_info[turn_id] = done
-        while len(self._done_info) > _DONE_INFO_MAX:
-            self._done_info.pop(next(iter(self._done_info)))
-
-    def take_done_info(self, turn_id: str) -> "_DonePayload | None":
-        """Return (and forget) the structured DONE payload for a turn."""
-        return self._done_info.pop(turn_id, None)
 
     def _broadcast_error(self, exc: BaseException) -> None:
         for q in self._inbox.values():

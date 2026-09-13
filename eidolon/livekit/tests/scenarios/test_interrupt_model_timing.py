@@ -236,7 +236,15 @@ async def test_ambiguous_sentence_final_preserves_pause_continuation(
         # pause is only 400 ms wide, and a poll that loops *while* speaking runs
         # straight through it whenever its first tick is late, then samples the
         # mixer after the continuation has already cancelled playback.
-        await wait_until(lambda: paused_hold() is not None, timeout=grace_ms / 1000 + 3)
+        try:
+            await wait_until(lambda: paused_hold() is not None, timeout=grace_ms / 1000 + 3)
+        except TimeoutError as exc:  # pragma: no cover - diagnosis for a rare reorder
+            raise AssertionError(
+                'the paused half never recorded a post-speech hold. '
+                f"orchestrator={[(e['event'], e.get('generation_id'), e.get('reason')) for e in timeline.attrs.get('interruption_orchestrator_events') or ()]} "
+                f"duck={[e['event'] for e in timeline.attrs.get('duck_events') or ()]} "
+                f"user_state={h.session.user_state}"
+            ) from exc
         pause_state = pipeline._ducking.mixer.state
         pause_users = h.events.user_messages()
         pause_calls = llm.call_count
@@ -250,7 +258,13 @@ async def test_ambiguous_sentence_final_preserves_pause_continuation(
         hold = paused_hold()
         record_property('post_speech_hold', json.dumps(hold, ensure_ascii=False))
         assert hold['state'] == 'suspended_post_speech_wait'
-        assert pause_state == 'SUSPENDED'
+        # The owner's own snapshot above and this sample read the same fact at
+        # different instants, so a disagreement is a timing report: say what the
+        # turn had recorded by then, or the next occurrence is unreadable.
+        assert pause_state == 'SUSPENDED', (
+            f"hold={hold} duck={[e['event'] for e in timeline.attrs['duck_events']]} "
+            f"orchestrator={pipeline._interruption_orchestrator.state.value}"
+        )
         assert not pause_users
         assert pause_calls == 0
 

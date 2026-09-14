@@ -176,7 +176,7 @@ async def test_default_intent_timeout_resumes_original_pcm():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('final_ms', [700, 1150])
+@pytest.mark.parametrize('final_ms', [800, 1150])
 @pytest.mark.parametrize('prefix_score,tail_score', [(.003, .424), (.003, .95), (.4, .95)], ids=['observed_eot', 'low_eot', 'uncertain_eot'])
 @pytest.mark.parametrize('prefix,tail', [
     ('交付时间这一项。', '请改到下周三。'),
@@ -191,14 +191,27 @@ async def test_ambiguous_sentence_final_preserves_pause_continuation(
     Inject EOT evidence at the existing model boundary to isolate orchestration
     from wording/model accuracy: uncertain prefix, decisive continuation.
 
-    The pause is 400 ms wide (VAD end 1050 -> VAD start 1450), well inside
-    turn_policy.eot.speech_merge_grace_ms: the continuation re-arms the same
-    suspension before the grace can resume playback, so the sentence final in
-    between neither commits a user turn nor reaches the LLM, and both halves
-    settle into one user message.
+    The scripted pause sits inside turn_policy.eot.speech_merge_grace_ms, so the
+    continuation re-arms the same suspension before the grace can resume
+    playback and both halves settle into one user message.
+
+    Every assertion reads the completed turn's record rather than sampling live
+    state, because the pause is narrow and a sample taken inside it races the
+    continuation.
+
+    ``final_ms`` keeps the final clear of the turn policy's stability window.
+    That rule promotes an uncertain signal to a normal interrupt once it has
+    been seen twice and has survived ``window_ms`` (350 ms, turn_policy/
+    runtime.py), and the two sightings here are the final itself and its
+    re-evaluation at VAD stop. A final 350 ms before the stop lands exactly on
+    that threshold, so the same audio either cancelled at the stop or held for
+    the continuation depending on sub-millisecond jitter -- both merge, but only
+    one records the hold this pins. 800 leaves 250 ms, measured deterministic
+    over 144 runs.
     """
     reply = '已收到完整修改要求。'
     llm = MockLLM.scripted([('', reply)])
+    speech_start_ms, speech_stop_ms, continuation_ms = 350, 1050, 1450
     async with production_session(
         welcome='原来的说明还在进行，接下来还有一些内容需要继续向你介绍。',
         llm=llm,
@@ -208,8 +221,8 @@ async def test_ambiguous_sentence_final_preserves_pause_continuation(
         ]),
         tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
         vad=MockVAD.scripted([
-            MockVADEvent('start', 350), MockVADEvent('end', 1050, .1),
-            MockVADEvent('start', 1450), MockVADEvent('end', 2150, .1),
+            MockVADEvent('start', speech_start_ms), MockVADEvent('end', speech_stop_ms, .1),
+            MockVADEvent('start', continuation_ms), MockVADEvent('end', 2150, .1),
         ]),
     ) as (pipeline, h):
         monkeypatch.setattr(pipeline._get_eot_model()._context_eot,
@@ -217,82 +230,76 @@ async def test_ambiguous_sentence_final_preserves_pause_continuation(
         h.audio_in.feed_pcm(synth_voiced(2.3))
         await h.audio_out.wait_for_first_audio()
         grace_ms = pipeline._turn_policy.eot.speech_merge_grace_ms
-        await h.events.wait_for(lambda e: e.type == 'user_input_transcribed'
-            and e.payload.transcript == prefix and e.payload.is_final, timeout=3)
-        # Hold the reference: ``pipeline._timeline`` is cleared once the turn
-        # completes, long before the assertions below run.
+        # Take the reference as the candidate opens it, at VAD start. The
+        # pipeline clears its own when the turn completes, and everything below
+        # reads the record afterwards -- capturing later would race a turn that
+        # ends early, which is a finding to assert, not a way to lose the
+        # evidence for it.
+        await wait_until(lambda: pipeline._timeline is not None, timeout=3)
         timeline = pipeline._timeline
-        assert timeline is not None
-
-        def paused_hold():
-            """The owner's own record of entering the post-speech hold."""
-            return next((event for event in
-                         timeline.attrs.get('interruption_orchestrator_events') or ()
-                         if event['event'] == 'post_speech_evidence_wait'), None)
-
-        # Both event orderings have reached VAD-stop + a sentence final here,
-        # before the next acoustic segment. Neither establishes a false trigger.
-        # Anchor on that recorded hold instead of polling ``user_state``: the
-        # pause is only 400 ms wide, and a poll that loops *while* speaking runs
-        # straight through it whenever its first tick is late, then samples the
-        # mixer after the continuation has already cancelled playback.
-        try:
-            await wait_until(lambda: paused_hold() is not None, timeout=grace_ms / 1000 + 3)
-        except TimeoutError as exc:  # pragma: no cover - diagnosis for a rare reorder
-            raise AssertionError(
-                'the paused half never recorded a post-speech hold. '
-                f"orchestrator={[(e['event'], e.get('generation_id'), e.get('reason')) for e in timeline.attrs.get('interruption_orchestrator_events') or ()]} "
-                f"duck={[e['event'] for e in timeline.attrs.get('duck_events') or ()]} "
-                f"user_state={h.session.user_state}"
-            ) from exc
-        pause_state = pipeline._ducking.mixer.state
-        pause_users = h.events.user_messages()
-        pause_calls = llm.call_count
-        record_property('pause_state', pause_state)
+        # Settle on the merged reply -- the one outcome this scenario always
+        # reaches -- then read what the turn recorded getting there.
         await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
             and getattr(e.payload.item, 'text_content', '') == reply, timeout=6)
-        record_property('completed_user_messages', json.dumps(h.events.user_messages(), ensure_ascii=False))
-        # Output was still suspended at the ambiguous final + VAD stop. This is
-        # the owner's snapshot of ``_ducking.is_suspended`` taken at that
-        # instant, so it cannot drift with load the way the sample below can.
-        hold = paused_hold()
-        record_property('post_speech_hold', json.dumps(hold, ensure_ascii=False))
-        assert hold['state'] == 'suspended_post_speech_wait'
-        # The owner's own snapshot above and this sample read the same fact at
-        # different instants, so a disagreement is a timing report: say what the
-        # turn had recorded by then, or the next occurrence is unreadable.
-        assert pause_state == 'SUSPENDED', (
-            f"hold={hold} duck={[e['event'] for e in timeline.attrs['duck_events']]} "
-            f"orchestrator={pipeline._interruption_orchestrator.state.value}"
-        )
-        assert not pause_users
-        assert pause_calls == 0
+        users = h.events.user_messages()
+        record_property('completed_user_messages', json.dumps(users, ensure_ascii=False))
+
+        # Both halves reached one user turn, so the ambiguous final never
+        # committed the prefix on its own.
+        assert len(users) == 1, users
+        assert prefix.rstrip('。.') in users[0]
+        assert tail in users[0]
+        # And one reply request carried both halves, so the pause never reached
+        # the model either. The prompt is what rules that out: a call count of
+        # one is also what a prefix-only call followed by no continuation looks
+        # like.
+        assert llm.call_count == 1
+        prompt = ' '.join(str(getattr(item, 'text_content', '') or '')
+                          for item in llm.prompts[0].items)
+        assert prefix.rstrip('。.') in prompt and tail in prompt
+
+        # The scripted pause has to fit inside the continuation grace, or the
+        # continuation would arrive after playback had already resumed and this
+        # would stop being a merge scenario at all.
+        assert continuation_ms - speech_stop_ms <= grace_ms
 
         events = timeline.attrs['interruption_orchestrator_events']
-        paused = [e for e in events if e['generation_id'] == hold['generation_id']]
+        record_property('orchestration', json.dumps(
+            [(e['event'], e.get('generation_id'), round(e.get('elapsed_ms', -1), 1), e.get('reason'))
+             for e in events], ensure_ascii=False))
+        duck = [event['event'] for event in timeline.attrs['duck_events']]
+        record_property('duck_events', json.dumps(duck))
+
+        def record():
+            """What the turn recorded, for the assertions that read its shape."""
+            return f"orchestration={events} duck={duck} users={users}"
+
+        paused_generation = next(event['generation_id'] for event in events
+                                 if event['event'] == 'candidate_started')
+        paused = [event for event in events if event['generation_id'] == paused_generation]
+        # Output was still suspended when the ambiguous final met VAD stop --
+        # the owner's own snapshot of ``_ducking.is_suspended`` at that instant.
+        hold = next((e for e in paused if e['event'] == 'post_speech_evidence_wait'), None)
+        assert hold is not None, record()
+        assert hold['state'] == 'suspended_post_speech_wait', record()
         # Nothing the paused half decided ended its turn.
-        assert {e['action'] for e in paused if e['event'] == 'turn_policy_decision'} == {'hold'}
+        assert {e['action'] for e in paused if e['event'] == 'turn_policy_decision'} == {'hold'}, record()
         # It yields to the continuation rather than resolving on its own, and it
-        # does so within the continuation grace -- the bound that keeps playback
-        # suspended instead of resuming on ``continuation_grace_elapsed``.
-        resolved = next(e for e in paused if e['event'] == 'candidate_resolved')
-        assert resolved['reason'] == 'superseded_by_new_acoustic_generation'
-        assert resolved['continue_to_llm'] is False
+        # does so within the grace -- the bound that keeps playback suspended
+        # instead of resuming on ``continuation_grace_elapsed``.
+        resolved = next((e for e in paused if e['event'] == 'candidate_resolved'), None)
+        assert resolved is not None, record()
+        assert resolved['reason'] == 'superseded_by_new_acoustic_generation', record()
+        assert resolved['continue_to_llm'] is False, record()
         stop_to_continuation_ms = resolved['elapsed_ms'] - hold['elapsed_ms']
         record_property('stop_to_continuation_ms', stop_to_continuation_ms)
-        assert 0 <= stop_to_continuation_ms <= grace_ms
+        assert 0 <= stop_to_continuation_ms <= grace_ms, record()
         # So the hold is continuous: the second duck re-arms the first one and
         # nothing releases playback in between.
-        duck = [event['event'] for event in timeline.attrs['duck_events']]
         starts = [i for i, event in enumerate(duck) if event == 'duck_started']
-        assert len(starts) == 2, duck
+        assert len(starts) == 2, record()
         assert not [event for event in duck[starts[0]:starts[1]] if event in
-                    {'duck_unducked', 'output_resumed_pending_evidence', 'duck_cancelled'}]
-
-        assert len(h.events.user_messages()) == 1
-        assert prefix.rstrip('。.') in h.events.user_messages()[0]
-        assert tail in h.events.user_messages()[0]
-        assert llm.call_count == 1
+                    {'duck_unducked', 'output_resumed_pending_evidence', 'duck_cancelled'}], record()
 
 
 @pytest.mark.asyncio

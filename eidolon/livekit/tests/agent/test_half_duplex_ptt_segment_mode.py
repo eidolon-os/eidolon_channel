@@ -262,8 +262,8 @@ def test_half_duplex_uses_shared_session_opening_policy() -> None:
         session_intent=SESSION_INTENT_PRESENCE,
     )
 
-    assert proactive._welcome_on_enter_text() is None
-    assert presence._welcome_on_enter_text() == "Welcome"
+    assert proactive._welcome_on_enter() is None
+    assert presence._welcome_on_enter() == "Welcome"
 
 
 @pytest.mark.asyncio

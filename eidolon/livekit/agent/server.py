@@ -177,6 +177,11 @@ def _prewarm(proc) -> None:
     """
     started = time.monotonic()
     try:
+        from eidolon.livekit.common.config import load_effective_config
+        from eidolon.livekit.common.welcome import prepare_welcome_audio
+
+        cfg = load_effective_config()
+        prepare_welcome_audio(cfg.behavior.welcome_message, sample_rate=cfg.behavior.audio_sample_rate)
         _load_prewarm_models(proc)
     finally:
         logger.info("[Agent] prewarm: finished in %.1fs", time.monotonic() - started)

@@ -39,6 +39,31 @@ pip install -e ".[dev]"
 初始化配置：`./deploy/dev/init.sh`（生成 `config/.env` 与 `config/settings.yaml`）。  
 全栈本地开发由 [eidolon_admin](https://github.com/eidolon/eidolon_admin) 的 `./deploy/dev/run_all.sh` 拉起 channel worker；env 旋钮见 [`config/.env.example`](config/.env.example)。
 
+## 进入语音会话的提示
+
+仍使用 `config/settings.yaml` 的 `behavior.welcome_message`，支持三种形式：
+
+```yaml
+behavior:
+  welcome_message:
+    audio: builtin:soft-ready  # 默认：440 ms 柔和上扬双音
+```
+
+- 欢迎语：`welcome_message: "你好，有什么可以帮你？"`，按原有逻辑调用 TTS。
+- 关闭：`welcome_message: ""`。
+- 自定义音效：`welcome_message: {audio: sounds/welcome.wav}`；相对路径以主
+  settings YAML 所在目录为基准（overlay 中的路径也遵循此规则），也可使用绝对路径。
+
+内置音效位于 `eidolon/livekit/common/assets/soft-ready.wav`，约 21 KB，随 Python
+包发布；不依赖工作目录、网络下载或外部对象存储。自定义资源建议放在部署配置目录的
+`sounds/` 下并随配置挂载。仅支持 8–48 kHz、单声道 PCM16 WAV，时长不超过 10 秒；
+缺失或格式不符会在加载配置时明确报错。替换资源后重启 worker 生效。
+
+音效在 worker 预热时加载并重采样，进程内缓存 PCM，各会话独立播放；未预热时在创建
+会话管线时加载。纯音效跳过 TTS，不生成转写、不进入对话上下文，继续使用现有播放与
+打断策略。主动播报会话和禁用语音输出的会话不播放欢迎内容；已有会话的 RTC 网络重连
+不会重新触发入场欢迎，新建会话会再次播放。
+
 ## Hub Channel Provider
 
 `eidolon-channel-provider` 是独立于 Agent worker 的正式控制面进程。它在默认

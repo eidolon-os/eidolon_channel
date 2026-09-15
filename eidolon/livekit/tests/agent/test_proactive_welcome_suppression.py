@@ -30,7 +30,7 @@ def _pipeline(*, intent: str, welcome: str) -> StreamingPipeline:
 
 def test_proactive_suppresses_welcome():
     p = _pipeline(intent=SESSION_INTENT_PROACTIVE, welcome="你好！我是你的 AI 助手")
-    assert p._welcome_on_enter_text() is None
+    assert p._welcome_on_enter() is None
 
 
 def test_user_initiated_keeps_welcome():
@@ -38,7 +38,7 @@ def test_user_initiated_keeps_welcome():
         intent=SESSION_INTENT_USER_INITIATED,
         welcome="你好！我是你的 AI 助手",
     )
-    assert p._welcome_on_enter_text() == "你好！我是你的 AI 助手"
+    assert p._welcome_on_enter() == "你好！我是你的 AI 助手"
 
 
 def test_presence_initiated_keeps_welcome():
@@ -46,9 +46,9 @@ def test_presence_initiated_keeps_welcome():
         intent=SESSION_INTENT_PRESENCE,
         welcome="你好！我是你的 AI 助手",
     )
-    assert p._welcome_on_enter_text() == "你好！我是你的 AI 助手"
+    assert p._welcome_on_enter() == "你好！我是你的 AI 助手"
 
 
 def test_user_initiated_empty_welcome_is_silent():
     p = _pipeline(intent=SESSION_INTENT_USER_INITIATED, welcome="")
-    assert p._welcome_on_enter_text() is None
+    assert p._welcome_on_enter() is None

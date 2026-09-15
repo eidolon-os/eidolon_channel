@@ -70,7 +70,8 @@ from eidolon.livekit.common.config import (
 )
 
 from .agent_builder import build_full_duplex_agent
-from ..runtime.interaction_mode import resolve_idle_policy, resolve_welcome_text
+from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio
+from ..runtime.interaction_mode import resolve_idle_policy, resolve_welcome
 from ..turn_policy import TurnPolicyRuntime
 from ..observability import ChannelTurnEventSink, TurnTimeline
 from ..factory import SharedStageFactory
@@ -157,7 +158,7 @@ class StreamingPipeline(BasePipeline):
         instructions: str = "",
         callbacks: PipelineCallbacks | None = None,
         allow_interruptions: bool = True,
-        welcome_message: str = "",
+        welcome_message: WelcomeMessage = "",
         false_interruption_timeout: float | None | object = _UNSET,
         audio_sample_rate: int = 16000,
         stt_commit_transcript_timeout: float | object = _UNSET,
@@ -267,6 +268,7 @@ class StreamingPipeline(BasePipeline):
         # only a system prompt context tends to echo back instruction
         # templates, which the user heard as garbled "welcome".
         self._welcome_message = welcome_message
+        self._welcome_pcm = prepare_welcome_audio(welcome_message, sample_rate=audio_sample_rate)
         interrupt_policy = self._turn_policy.interrupt
         # Round 8 R8.9: framework default 2.0s is too short for Chinese
         # STT, which often takes 3-5s to deliver a final transcript. Source of
@@ -1533,8 +1535,8 @@ class StreamingPipeline(BasePipeline):
         if speech is not None and speech.interrupted:
             await speech.wait_for_playout()
 
-    def _welcome_on_enter_text(self) -> str | None:
-        """Welcome line to speak on session start, or None to stay silent.
+    def _welcome_on_enter(self) -> WelcomeMessage | None:
+        """Welcome text/audio to play on session start, or None to stay silent.
 
         A proactive_initiated session was woken to deliver a report — that
         report IS the opening, so the canned welcome is suppressed. User and
@@ -1543,7 +1545,7 @@ class StreamingPipeline(BasePipeline):
         """
         if not self._factory.outputs.speech:
             return None
-        return resolve_welcome_text(
+        return resolve_welcome(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
         )

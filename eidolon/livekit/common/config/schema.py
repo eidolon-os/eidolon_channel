@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from eidolon.livekit.common.welcome import WelcomeAudio, WelcomeMessage
+
 from eidolon.livekit.plugins.stt.bailian.config import BailianSTTConfig
 from eidolon.livekit.plugins.stt.local_asr.config import LocalAsrSTTConfig
 from eidolon.livekit.plugins.stt.sensetime.config import SenseTimeSTTConfig
@@ -37,7 +39,7 @@ class CoreConfig:
 @dataclass(frozen=True)
 class AgentBehaviorConfig:
     instructions: str = "You are a helpful, friendly voice assistant. Keep responses concise."
-    welcome_message: str = "你好！我是你的 AI 助手，请问有什么可以帮你的？"
+    welcome_message: WelcomeMessage = field(default_factory=WelcomeAudio)
     audio_sample_rate: int = 16000
 
 

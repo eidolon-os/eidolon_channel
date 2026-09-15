@@ -51,6 +51,7 @@ import logging
 from typing import Any
 
 from eidolon.livekit.common.config.schema import IdlePolicyConfig, TurnPolicyConfig
+from eidolon.livekit.common.welcome import WelcomeMessage
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     INTERACTION_MODE_PTT,
@@ -237,9 +238,9 @@ class IdlePolicy:
     end_reason: str
 
 
-def resolve_welcome_text(
-    *, session_intent: str, welcome_message: str | None
-) -> str | None:
+def resolve_welcome(
+    *, session_intent: str, welcome_message: WelcomeMessage | None
+) -> WelcomeMessage | None:
     """Map session origin to its canned opening.
 
     Proactive report sessions already have opening content. Explicit user and

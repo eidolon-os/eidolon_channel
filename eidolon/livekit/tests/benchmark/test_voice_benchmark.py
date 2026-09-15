@@ -267,7 +267,16 @@ def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> 
     )
 
 
-def test_policy_runner_full_duplex_gate_uses_real_echo_admission() -> None:
+def test_policy_runner_full_duplex_gate_uses_real_echo_admission(monkeypatch) -> None:
+    from benchmark import policy_runner
+
+    # This case exercises spoken-welcome echo, independent of the deployment's
+    # default opening (which may now be a nonverbal sound or disabled).
+    cfg = policy_runner.load_effective_config()
+    cfg = replace(cfg, behavior=replace(
+        cfg.behavior, welcome_message="你好！我是你的 AI 助手，请问有什么可以帮你的？",
+    ))
+    monkeypatch.setattr(policy_runner, "load_effective_config", lambda: cfg)
     suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
     run = run_policy_suite(
         [suite],

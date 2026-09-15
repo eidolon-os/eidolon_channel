@@ -24,7 +24,12 @@ worker:
 
 behavior:
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.
-  welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
+  # Text => TTS; "" => silent; audio => cached local PCM16 mono WAV (max 10s).
+  # Custom WAV paths are relative to this settings file, or absolute.
+  # Example text: welcome_message: "你好，有什么可以帮你？"
+  # Example file: welcome_message: {audio: sounds/welcome.wav}
+  welcome_message:
+    audio: builtin:soft-ready
   audio_sample_rate: 16000
 
 llm:

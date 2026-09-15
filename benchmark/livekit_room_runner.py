@@ -25,7 +25,7 @@ from livekit import rtc
 
 from eidolon.livekit.agent.runtime.interaction_mode import (
     resolve_session_intent,
-    resolve_welcome_text,
+    resolve_welcome,
 )
 
 from eidolon_sdk.biz.contracts import (
@@ -40,6 +40,7 @@ from eidolon_sdk.biz.contracts import (
 from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION
 
 from eidolon.livekit.common.config import load_effective_config
+from eidolon.livekit.common.welcome import WelcomeAudio
 from eidolon.livekit.tests._harness.audio import frames_from_pcm, synth_silence
 
 from .audio_assets import load_clip_pcm, write_wav
@@ -72,6 +73,9 @@ class LiveKitRoomOptions:
     # Derived from the effective welcome policy by run_livekit_room_suite.
     # Missing expected greeting audio is setup failure, not proof of silence.
     greeting_expected: bool = False
+    # Sound-only greetings have no transcript. Require a completed speaking
+    # lifecycle plus receiver silence instead; text retains the final-text gate.
+    greeting_audio_only: bool = False
     # Deadline for a polite user turn waiting out the agent's previous answer.
     # Real-brain answers regularly exceed 8s; expiring early injects an
     # unintended interrupt, so this is deliberately generous.
@@ -126,12 +130,14 @@ async def run_livekit_room_suite(
 ) -> RunResult:
     cfg = load_effective_config()
     options = options or LiveKitRoomOptions()
+    welcome = resolve_welcome(
+        session_intent=resolve_session_intent(options.participant_metadata),
+        welcome_message=cfg.behavior.welcome_message,
+    )
     options = replace(
         options,
-        greeting_expected=resolve_welcome_text(
-            session_intent=resolve_session_intent(options.participant_metadata),
-            welcome_message=cfg.behavior.welcome_message,
-        ) is not None,
+        greeting_expected=welcome is not None,
+        greeting_audio_only=isinstance(welcome, WelcomeAudio),
     )
     results: list[CaseResult] = []
     for suite in suites:
@@ -346,6 +352,7 @@ async def _run_room_case(
 
     @room.on("participant_connected")
     def _on_participant_connected(participant_obj) -> None:
+        _record_agent_state(participant_obj.attributes, participant_obj, state)
         state.mark("participant_connected_at")
         events.append(
             {
@@ -354,6 +361,10 @@ async def _run_room_case(
                 "identity": getattr(participant_obj, "identity", ""),
             }
         )
+
+    @room.on("participant_attributes_changed")
+    def _on_participant_attributes_changed(changed_attributes, participant_obj) -> None:
+        _record_agent_state(changed_attributes, participant_obj, state)
 
     @room.on("track_subscribed")
     def _on_track_subscribed(track, publication, participant_obj) -> None:
@@ -401,6 +412,8 @@ async def _run_room_case(
     try:
         await asyncio.wait_for(room.connect(livekit_url, token), timeout=10.0)
         state.mark("room_connected_at")
+        for remote in room.remote_participants.values():
+            _record_agent_state(remote.attributes, remote, state)
 
         source = rtc.AudioSource(sample_rate=16_000, num_channels=1, queue_size_ms=1000)
         track = rtc.LocalAudioTrack.create_audio_track("voice-benchmark", source)
@@ -551,6 +564,7 @@ async def _feed_case_audio(
                 first_audio_wait_sec=options.agent_first_audio_wait_sec,
                 after_elapsed_ms=last_user_step_finished_ms,
                 greeting_expected=options.greeting_expected,
+                greeting_audio_only=options.greeting_audio_only,
             )
             if not quiet:
                 events.append(
@@ -834,6 +848,7 @@ async def _wait_for_agent_quiet(
     first_audio_wait_sec: float = 2.0,
     after_elapsed_ms: int | None = None,
     greeting_expected: bool = False,
+    greeting_audio_only: bool = False,
 ) -> bool:
     """Wait until the room has observed a quiet window in agent audio.
 
@@ -854,17 +869,20 @@ async def _wait_for_agent_quiet(
             )
         if greeting_expected and not state.first_agent_audio.is_set():
             return False
-        # The greeting is streamed in multiple TTS chunks. A quiet gap between
-        # chunks is not an idle agent, so once greeting audio has been observed,
-        # require its final synchronized transcript before applying the playout
-        # quiet window. Rooms with no greeting/audio still proceed normally.
+        # Quiet gaps are insufficient for completion. Text requires its final
+        # transcript; a sound requires the agent's speaking -> listening event.
+        # Both still require real received audio and the receiver quiet window.
         if state.first_agent_audio.is_set():
+            completions = (
+                state.agent_playout_finished_timestamps
+                if greeting_audio_only else state.agent_transcript_final_timestamps
+            )
             while (
                 time.monotonic() < deadline
-                and not state.agent_transcript_final_timestamps
+                and not completions
             ):
                 await asyncio.sleep(0.05)
-            if not state.agent_transcript_final_timestamps:
+            if not completions:
                 return False
     else:
         # A short quiet gap between streamed TTS chunks is not the end of a
@@ -1037,6 +1055,22 @@ def _user_done_audio_latency_errors(
     return []
 
 
+def _record_agent_state(attributes: dict[str, str], participant, state: _RoomCaseState) -> None:
+    if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+        return
+    value = attributes.get("lk.agent.state")
+    if value is None:
+        return
+    previous = state.agent_states.get(participant.identity)
+    state.agent_states[participant.identity] = value
+    if previous == "speaking" and value == "listening":
+        state.agent_playout_finished_timestamps.append(_elapsed_ms(state.started))
+    state.events.append({
+        "type": "agent_state", "timestamp_ms": _elapsed_ms(state.started),
+        "participant": participant.identity, "state": value,
+    })
+
+
 def _record_ptt_turn_status(packet: rtc.DataPacket, state: _RoomCaseState) -> None:
     """Observe the existing PTT wire contract without fabricating STT events."""
     participant = packet.participant
@@ -1175,6 +1209,8 @@ class _RoomCaseState:
         self.agent_audio_levels: list[tuple[float, float]] = []
         self.user_speech_started_ms: int | None = None
         self.agent_transcript_final_timestamps: list[int] = []
+        self.agent_states: dict[str, str] = {}
+        self.agent_playout_finished_timestamps: list[int] = []
         self.last_agent_audio_monotonic: float | None = None
         self.agent_connected = asyncio.Event()
         self.first_agent_audio = asyncio.Event()

@@ -10,6 +10,8 @@ from typing import Any, TypeVar
 
 import yaml
 
+from eidolon.livekit.common.welcome import parse_welcome_message
+
 from .profiles import profile_defaults
 from .schema import (
     AgentBehaviorConfig,
@@ -300,8 +302,10 @@ def load_effective_config() -> EffectiveAgentConfig:
         ),
         behavior=AgentBehaviorConfig(
             instructions=str(behavior_y.get("instructions") or AgentBehaviorConfig().instructions),
-            welcome_message=str(
-                behavior_y.get("welcome_message")
+            welcome_message=(
+                parse_welcome_message(
+                    behavior_y["welcome_message"], base_dir=_resolve_settings_yaml().parent,
+                )
                 if behavior_y.get("welcome_message") is not None
                 else AgentBehaviorConfig().welcome_message
             ),

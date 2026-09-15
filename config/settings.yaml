@@ -14,7 +14,8 @@ worker:
 
 behavior:
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.
-  welcome_message: 你好！我是你的 AI 助手，请问有什么可以帮你的？
+  welcome_message:
+    audio: builtin:soft-ready
   audio_sample_rate: 16000
 
 # Digital-human video avatar. Global availability/kill-switch; whether a given

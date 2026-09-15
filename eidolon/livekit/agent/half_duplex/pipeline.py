@@ -35,7 +35,7 @@ from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.observability.turn_events import resolve_event_context
 from eidolon.livekit.agent.runtime.interaction_mode import (
     resolve_idle_policy,
-    resolve_welcome_text,
+    resolve_welcome,
 )
 from eidolon.livekit.agent.shared.pipeline import BasePipeline
 from eidolon.livekit.agent.shared.types import (
@@ -54,6 +54,8 @@ from eidolon.livekit.agent.session.idle import IdleWatchdog
 from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
+from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio
+from eidolon.livekit.agent.session.welcome import play_welcome
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 
 from .control import (
@@ -83,7 +85,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         factory: Any,
         *,
         instructions: str = "",
-        welcome_message: str | None = None,
+        welcome_message: WelcomeMessage | None = None,
         audio_sample_rate: int = 16_000,
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
@@ -97,6 +99,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         super().__init__(factory=factory, callbacks=callbacks)
         self._instructions = instructions
         self._welcome_message = welcome_message
+        self._welcome_pcm = prepare_welcome_audio(welcome_message, sample_rate=audio_sample_rate)
         self._audio_sample_rate = audio_sample_rate
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
@@ -138,10 +141,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._idle_disconnect_started = False
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
-    def _welcome_on_enter_text(self) -> str | None:
+    def _welcome_on_enter(self) -> WelcomeMessage | None:
         if not self._factory.outputs.speech:
             return None
-        return resolve_welcome_text(
+        return resolve_welcome(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
         )
@@ -168,7 +171,7 @@ class HalfDuplexPttPipeline(BasePipeline):
 
         class PttAgent(PolicyBoundAgent):
             async def on_enter(self) -> None:
-                welcome = pipeline._welcome_on_enter_text()
+                welcome = pipeline._welcome_on_enter()
                 if welcome is None:
                     logger.info(
                         "[HalfDuplexPttPipeline] welcome suppressed intent=%s",
@@ -179,7 +182,11 @@ class HalfDuplexPttPipeline(BasePipeline):
                     "[HalfDuplexPttPipeline] welcome on_enter room=%s",
                     getattr(pipeline._room, "name", ""),
                 )
-                self.session.say(welcome)
+                play_welcome(
+                    self.session, welcome,
+                    pcm=pipeline._welcome_pcm,
+                    sample_rate=pipeline._audio_sample_rate,
+                )
 
         return PttAgent(
             outputs=self._factory.outputs,

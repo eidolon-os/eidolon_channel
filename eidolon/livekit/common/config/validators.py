@@ -10,6 +10,7 @@ from eidolon_sdk.biz.contracts.local_tts import (
 )
 
 from .schema import EffectiveAgentConfig
+from eidolon.livekit.common.welcome import validate_welcome_message
 
 
 #: Every recognizer this build can be asked for.
@@ -27,6 +28,7 @@ TTS_PROVIDERS = frozenset({"bailian", "sensetime", LOCAL_TTS_PROVIDER})
 
 
 def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
+    validate_welcome_message(cfg.behavior.welcome_message)
     errors: list[str] = []
 
     if cfg.providers.stt_provider not in STT_PROVIDERS:

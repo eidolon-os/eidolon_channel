@@ -1,4 +1,22 @@
 # Channel structured settings — secret placeholders = env var names (see settings.example.yaml)
+#
+# This file is not only Channel's own configuration. Ops renders *this* document
+# into every product Host's /etc/eidolon/channel.yaml, and under a reversible
+# cutover the staged file must load under two interpreters: the candidate
+# release's and the one already running. The loader rejects a field it does not
+# know, so naming a key here in the same release that adds it to the schema
+# makes the previously deployed release unable to read the file — which is the
+# rollback that `reversible` is the promise of. The deploy then fails at
+# host_application's cross-release validation and the only way through is
+# `--cutover-mode forward-only`, which gives that rollback up.
+#
+# So a new settings field lands in two releases: this release ships the schema
+# field and its default, and only the *next* one may name the key here. See
+# docs/cross-release-settings.md; scripts/check_settings_cross_release.py
+# rehearses the Host's check against any baseline revision.
+#
+# settings.example.yaml documents the whole schema and is never rendered, so it
+# is free of this rule — it is where a field is visible while it waits.
 
 core:
   livekit_url: ws://127.0.0.1:7880
@@ -35,9 +53,14 @@ llm:
   base_url: https://api.deepseek.com
   model: deepseek-v4-flash
   # Direct voice replies; Agent RPC manages its own model configuration.
-  extra_body:
-    thinking:
-      type: disabled
+  #
+  # `extra_body` waits for the next release (see the file header). A Host loses
+  # nothing meanwhile: brain_provider is eidolon_agent and
+  # interrupt.intent_provider is none, so no direct LLM adapter is built from
+  # this section at all. Local direct_llm work against DeepSeek does lose the
+  # disabled thinking on the brain until then — the interrupt classifier
+  # disables it for itself in AgentFactory.build_interrupt_classifier, the brain
+  # path reads extra_body as written.
   api_key: OPENAI_LLM_API_KEY
   temperature: 0.7
   timeout: 120
@@ -112,10 +135,12 @@ turn_policy:
     transcript_revision_min_normalized_chars: 4
     speech_merge_grace_ms: 800
   interrupt:
-    # Opt in to llm in controlled tests; its latency/quality is not yet accepted
-    # for the production RPC/RTC chain. Half duplex and PTT do not use it.
-    intent_provider: none
-    intent_timeout_ms: 1500
+    # `intent_provider` / `intent_timeout_ms` wait for the next release (see the
+    # file header). Both were written here at their schema defaults — none and
+    # 1500 — so naming them changed nothing and omitting them changes nothing.
+    # Opting in to llm in a controlled test is an overlay edit meanwhile; its
+    # latency/quality is not yet accepted for the production RPC/RTC chain, and
+    # half duplex and PTT do not use it at all.
     decision_timeout_ms: 450
     post_speech_evidence_timeout_ms: 6000
     post_speech_evidence_min_speech_ms: 250
@@ -194,12 +219,20 @@ observability:
   stt_pending_provider_event_window_ms: 2000
   stt_pending_provider_event_preroll_ms: 500
   stt_pending_provider_event_max_count: 32
-  # Per-session link trace (room join -> leave). Local dev has it on; the
-  # default in settings.example.yaml stays empty.
-  session_trace_path: "$EIDOLON_LOG_ROOT/channel/traces"
-  session_trace_max_queue: 4096
-  session_trace_max_file_bytes: 8000000
-  session_trace_retention_days: 7
+  # Per-session link trace (room join -> leave) waits for the next release (see
+  # the file header) — this is the release that adds the fields, so this is the
+  # release that may not name them. The four keys to restore, with the values
+  # they had, are:
+  #
+  #   session_trace_path: "$EIDOLON_LOG_ROOT/channel/traces"
+  #   session_trace_max_queue: 4096
+  #   session_trace_max_file_bytes: 8000000
+  #   session_trace_retention_days: 7
+  #
+  # Until then the schema default holds and no trace is written anywhere. That
+  # costs this release the diagnosis, not the feature: the writer, the Provider
+  # endpoint that serves the files and scripts/report_session_trace.py all ship
+  # here and turn on with one line in the release after.
 
 # Bailian STT/TTS provider config (non-secret). API keys stay in .env
 # (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).

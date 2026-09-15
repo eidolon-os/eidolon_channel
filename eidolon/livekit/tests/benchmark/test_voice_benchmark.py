@@ -271,16 +271,9 @@ def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> 
     )
 
 
-def test_policy_runner_full_duplex_gate_uses_real_echo_admission(monkeypatch) -> None:
-    from benchmark import policy_runner
-
-    # This case exercises spoken-welcome echo, independent of the deployment's
-    # default opening (which may now be a nonverbal sound or disabled).
-    cfg = policy_runner.load_effective_config()
-    cfg = replace(cfg, behavior=replace(
-        cfg.behavior, welcome_message="你好！我是你的 AI 助手，请问有什么可以帮你的？",
-    ))
-    monkeypatch.setattr(policy_runner, "load_effective_config", lambda: cfg)
+def test_policy_runner_full_duplex_gate_uses_real_echo_admission() -> None:
+    # The echo case carries its own agent speech, so it exercises spoken-welcome
+    # echo regardless of the deployment's opening (text, nonverbal, or disabled).
     suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
     run = run_policy_suite(
         [suite],
@@ -302,7 +295,7 @@ def test_policy_runner_full_duplex_gate_uses_real_echo_admission(monkeypatch) ->
     assert any(
         decision.get("transcript_admission", {}).get("reason") == "agent_echo"
         and decision.get("transcript_admission", {}).get("assistant_text_source")
-        == "benchmark_welcome"
+        == "benchmark_device_envelope"
         for decision in echo_result.decisions
     )
 

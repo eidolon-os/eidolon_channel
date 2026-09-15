@@ -265,6 +265,14 @@ cases:
     description: 全双工 open-mic：像欢迎语播放内容的低证据文本应作为 echo 丢弃，避免环境声或回声误杀。
     timeout_sec: 60
     tags: ["full_duplex", "gate", "echo_guard", "ambient_guard"]
+    # 这条 case 演的是“欢迎语正在播，其内容漏回 STT”。agent 在说什么属于 case
+    # 事实，必须由 case 自己钉住；早期它借用了部署 behavior.welcome_message，
+    # 一旦部署把开场白换成音频提示音，EchoGate 就失去比对文本而静默失效。
+    device_envelope:
+      enabled: true
+      agent:
+        speaking_text: 你好！我是你的 AI 助手，请问有什么可以帮你的？
+        tts_duration_ms: 5000
     audio_clips:
       - id: welcome_echo_words
         text: 我是你的 AI 助手

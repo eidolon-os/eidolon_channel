@@ -38,6 +38,13 @@ class ServingRequest:
     Statements of desired state, not events: the same one twice means the same
     thing once for one ``conversation_id``. The correlation key also fences a
     late close from a previous conversation.
+
+    Carries no ``session_intent`` on purpose, and must not grow one. A device
+    asking to be heard is the definition of a user-initiated session; the other
+    two intents describe a wake somebody else decided on, and a body that could
+    announce its own would be handing itself the Owner lease that
+    ``presence_initiated`` comes with. The absence of the field is the control:
+    there is nothing here for a compromised body to set.
     """
 
     action: ServingAction
@@ -142,13 +149,28 @@ class ChannelAdapter(Protocol):
         """
         ...
 
-    async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+    async def open_session(
+        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str
+    ) -> None:
         """Bring this channel's agent to it, so a conversation can happen.
 
         Converges rather than counts: asking twice leaves one session, because
         the caller is a device that may retry and must never end up served
         twice. Raises `ChannelNotServable` for a channel whose spec carried no
         `ServingSpec` — a device that cannot speak has no session to open.
+
+        `session_intent` is why this conversation is happening, and it is an
+        argument here rather than part of the channel's credential because the
+        two have different lifetimes: `open` mints a credential once and the
+        device sits on it for hours, while an intent is true of exactly one
+        conversation. Stamping it at credential time would mean rotating the
+        device's way in every time somebody wanted to wake it differently.
+
+        Two requirements on an adapter, both from the same place — the intent
+        decides what the session is allowed to do, so it is authorization, not
+        decoration. It must reach the agent on a bus the device cannot write,
+        and two open requests for one `conversation_id` that disagree about it
+        are not the same request, so convergence must not treat them as one.
         """
         ...
 

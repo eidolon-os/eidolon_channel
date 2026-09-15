@@ -190,7 +190,9 @@ class BasePipeline(ABC):
         are safely no-op'd via ``hasattr`` checks in ``_warmup_stages`` /
         ``_shutdown_stages``.
         """
-        stages: list[Any] = [self._factory.stt, self._factory.tts]
+        stages: list[Any] = [self._factory.stt]
+        if self._factory.tts is not None:
+            stages.append(self._factory.tts)
         # VAD is wrapped in VadStage (mirrors SttStage/TtsStage). Its
         # warmup/shutdown forward to the underlying VAD plugin only if the
         # plugin defines them; for plugins that preload at load() time

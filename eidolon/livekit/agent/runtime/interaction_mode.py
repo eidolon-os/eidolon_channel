@@ -51,6 +51,7 @@ import logging
 from typing import Any
 
 from eidolon.livekit.common.config.schema import IdlePolicyConfig, TurnPolicyConfig
+from eidolon.livekit.common.welcome import WelcomeMessage
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     INTERACTION_MODE_PTT,
@@ -66,14 +67,21 @@ from eidolon_sdk.biz.contracts import (
 
 logger = logging.getLogger("agent.interaction_mode")
 
-# Session intent (plan §3.2) — why this voice session exists. Rides the SAME
-# join-metadata bus as interaction_mode (resolved once, from the same
-# participant.metadata, passed as an explicit param), and is orthogonal to it:
+# Session intent (plan §3.2) — why this voice session exists:
 #   - user_initiated: explicit JOIN, canned welcome, normal idle window.
 #   - presence_initiated: verified owner-presence wake, canned welcome, and an
 #     externally governed renewable owner lease.
 #   - proactive_initiated: a report opens the session, so the canned welcome is
 #     suppressed and an unanswered report uses proactive_done teardown.
+#
+# It does NOT ride the join-metadata bus, and the difference is a trust
+# boundary rather than a routing detail. interaction_mode is a fact the joining
+# actor is entitled to state about its own hardware; the two non-default
+# intents are grants — an Owner lease, a changed teardown — that the actor
+# would be handing itself. So the intent travels on the agent dispatch the
+# Channel Provider creates (``server._resolve_session_intent``), while the
+# resolver below stays a pure parser so either bus can be handed to it: what
+# makes the value trustworthy is where the caller read it, not this function.
 # The INTENT_* / INTERACTION_MODE_* names + validity sets are sourced from
 # ``eidolon_sdk.biz.contracts`` (single source) and re-exported above.
 
@@ -110,12 +118,17 @@ def resolve_session_intent(
     *,
     default: str = SESSION_INTENT_USER_INITIATED,
 ) -> str:
-    """Parse ``session_intent`` out of a participant's metadata.
+    """Parse ``session_intent`` out of a metadata mapping.
 
-    Same source + parsing contract as ``resolve_interaction_mode`` (one
-    participant.metadata read resolves both). Anything missing, unparseable, or
-    holding an unknown value degrades to ``default`` (``user_initiated``) — the
-    safe assumption that a session is user-driven.
+    Same parsing contract as ``resolve_interaction_mode``, but deliberately not
+    the same source: production callers hand this the Provider's agent-dispatch
+    metadata, never a participant's. Anything missing, unparseable, or holding
+    an unknown value degrades to ``default`` (``user_initiated``) — the safe
+    assumption that a session is user-driven.
+
+    This function cannot tell the two buses apart, so it must never be read as
+    the authority for whether a value is allowed to be here; it is the parser,
+    and the caller is the authority. See ``server._resolve_session_intent``.
     """
     meta: dict[str, Any] | None = None
     if isinstance(raw_metadata, dict):
@@ -164,8 +177,8 @@ def resolve_device_id(
 
 # Participant-metadata key by which a display-capable client (web/app) declares
 # it wants the digital-human video avatar for this session. Same join-metadata
-# bus as interaction_mode/session_intent; read once, per participant. Absent /
-# false → audio-only (the safe default, so existing sessions are unaffected).
+# bus as interaction_mode; read once, per participant. Absent / false →
+# audio-only (the safe default, so existing sessions are unaffected).
 AVATAR_METADATA_KEY = "avatar"
 
 
@@ -237,9 +250,9 @@ class IdlePolicy:
     end_reason: str
 
 
-def resolve_welcome_text(
-    *, session_intent: str, welcome_message: str | None
-) -> str | None:
+def resolve_welcome(
+    *, session_intent: str, welcome_message: WelcomeMessage | None
+) -> WelcomeMessage | None:
     """Map session origin to its canned opening.
 
     Proactive report sessions already have opening content. Explicit user and

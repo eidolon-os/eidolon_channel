@@ -1,8 +1,11 @@
+
 """Reuse production Agent and callback wiring with scripted external providers.
 
 This exercises channel orchestration through real LiveKit AgentSession and real
 EOT inference. It does not measure ASR accuracy, RTC transport or device playback.
 """
+
+from eidolon_sdk.biz.presentation import OutputSelection
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -13,7 +16,7 @@ from .headless import headless_session
 
 @asynccontextmanager
 async def production_session(*, llm, stt, tts, vad, mode='full_duplex', welcome='', real_time_audio=False, interrupt_classifier=None, warmup=False, **kwargs):
-    factory = SimpleNamespace(
+    factory = SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True),
         llm=SimpleNamespace(llm=llm), stt=SimpleNamespace(stt=stt),
         tts=SimpleNamespace(tts=tts), vad=SimpleNamespace(vad=vad),
         interrupt_classifier=interrupt_classifier,
@@ -69,6 +72,7 @@ async def production_ptt_session(*, text, llm, tts, stt_stage=None, interrupt_cl
 
     stage = stt_stage if stt_stage is not None else ScriptedSegmentSTT(text)
     pipeline = HalfDuplexPttPipeline(SimpleNamespace(
+        outputs=OutputSelection(speech=True, dialogue_text=True),
         stt=stage, llm=SimpleNamespace(llm=llm), tts=SimpleNamespace(tts=tts), vad=None,
         interrupt_classifier=interrupt_classifier,
     ), instructions=instructions)

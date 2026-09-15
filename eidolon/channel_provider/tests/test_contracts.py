@@ -15,6 +15,11 @@ from eidolon.channel_provider.contracts import (
 
 from .helpers import encoded, provision_payload, revoke_payload, session_payload
 
+from eidolon_sdk.biz.contracts import (
+    SESSION_INTENT_PRESENCE,
+    SESSION_INTENT_USER_INITIATED,
+    VALID_SESSION_INTENTS,
+)
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 # Tests name the device they mean; the name becomes a real device
@@ -49,6 +54,25 @@ def test_session_request_matches_hub_v1_contract() -> None:
     assert request.operation == OPEN_SESSION
     assert request.owner_domain_id == "owner-domain-1"
     assert request.device_id == _DEVICE_1
+    # An open request that says nothing about why is a user-driven session —
+    # the same answer anyone without standing to say otherwise would get.
+    assert request.session_intent == SESSION_INTENT_USER_INITIATED
+
+
+@pytest.mark.parametrize("intent", sorted(VALID_SESSION_INTENTS))
+def test_an_open_request_may_name_any_valid_session_intent(intent: str) -> None:
+    """The authenticated road is how a privileged wake becomes expressible.
+
+    Before this the Provider had no field for it at all, so `presence_initiated`
+    and `proactive_initiated` were behaviour the agent implemented and nothing
+    could ask for.
+    """
+    request = SessionRequest.parse(
+        encoded(session_payload(operation=OPEN_SESSION, session_intent=intent)),
+        expected=OPEN_SESSION,
+    )
+
+    assert request.session_intent == intent
 
 
 @pytest.mark.parametrize(
@@ -59,6 +83,13 @@ def test_session_request_matches_hub_v1_contract() -> None:
         lambda value: value.update({"operation_id": "session-1"}),
         lambda value: value.update({"operation": CLOSE_SESSION}),
         lambda value: value.pop("device_ref"),
+        # Rejected rather than quietly demoted to user_initiated: an
+        # orchestrator that misspells a presence wake must be told, not handed
+        # an ordinary session while believing it holds an Owner lease.
+        lambda value: value.update({"session_intent": "presence-initiated"}),
+        lambda value: value.update({"session_intent": "PRESENCE_INITIATED"}),
+        lambda value: value.update({"session_intent": ""}),
+        lambda value: value.update({"session_intent": None}),
     ],
 )
 def test_session_rejects_contract_drift(mutation) -> None:
@@ -67,6 +98,16 @@ def test_session_rejects_contract_drift(mutation) -> None:
 
     with pytest.raises(ContractError):
         SessionRequest.parse(encoded(value), expected=OPEN_SESSION)
+
+
+def test_a_close_request_cannot_name_a_session_intent() -> None:
+    """Ending a conversation has no intent to state, so naming one is drift."""
+    value = session_payload(
+        operation=CLOSE_SESSION, session_intent=SESSION_INTENT_PRESENCE
+    )
+
+    with pytest.raises(ContractError, match="session_intent"):
+        SessionRequest.parse(encoded(value), expected=CLOSE_SESSION)
 
 
 @pytest.mark.parametrize(

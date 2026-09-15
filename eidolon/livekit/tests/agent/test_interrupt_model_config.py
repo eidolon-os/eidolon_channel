@@ -1,4 +1,7 @@
+
 """Intent configuration reuses the LLM factory and owns its client lifetime."""
+
+from eidolon_sdk.biz.presentation import OutputSelection
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -127,7 +130,7 @@ def test_complete_turn_fast_path_preserves_session_endpoint_maximum(wrapped):
     selected = InterruptAwareTurnDetector(detector, AsyncMock()) if wrapped else detector
     pipeline = SimpleNamespace(
         _instructions='test',
-        _factory=SimpleNamespace(stt=SimpleNamespace(stt=None), llm=SimpleNamespace(llm=None),
+        _factory=SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True), stt=SimpleNamespace(stt=None), llm=SimpleNamespace(llm=None),
             tts=SimpleNamespace(tts=None), vad=None),
         _turn_detection=lambda: selected,
     )
@@ -165,7 +168,7 @@ def test_intent_stage_and_endpoint_adapter_follow_policy_owner(
     from eidolon.livekit.agent.full_duplex.pipeline import StreamingPipeline
 
     classifier = object()
-    factory = SimpleNamespace(stt=SimpleNamespace(stt=None), tts=SimpleNamespace(tts=None),
+    factory = SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True), stt=SimpleNamespace(stt=None), tts=SimpleNamespace(tts=None),
         llm=SimpleNamespace(llm=None), vad=None, interrupt_classifier=classifier)
     policy = config(intent_provider=provider).turn_policy
     policy = replace(policy, interruption_owner=owner)

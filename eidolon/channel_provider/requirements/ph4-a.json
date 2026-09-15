@@ -41,6 +41,12 @@
       "normative_ref": "16.1 restart and concurrency recovery",
       "positive_test": "test_restart_preserves_generation_high_watermark",
       "negative_test": "test_two_processes_racing_same_generation_commit_one_operation"
+    },
+    {
+      "id": "CH-PH4A-008",
+      "normative_ref": "3.2 session intent is stated by the orchestrator, never by the body",
+      "positive_test": "test_an_orchestrated_wake_carries_its_intent_to_the_transport",
+      "negative_test": "test_a_device_asking_on_its_own_channel_cannot_wake_itself_privileged"
     }
   ]
 }

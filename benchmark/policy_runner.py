@@ -20,6 +20,7 @@ from eidolon.livekit.agent.turn_policy import (
     TurnPolicyRuntime,
 )
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
+from eidolon.livekit.common.welcome import WelcomeMessage
 
 from .device_envelope import device_envelope_metrics
 from .schema import BenchmarkCase, BenchmarkSuite, CaseResult, RunResult, UserStep
@@ -364,13 +365,13 @@ def run_policy_suite(
 def _assistant_speech_ledger(
     case: BenchmarkCase,
     *,
-    welcome_message: str,
+    welcome_message: WelcomeMessage,
 ) -> AssistantSpeechLedger:
     ledger = AssistantSpeechLedger()
     synthetic_text = case.device_envelope.agent.speaking_text.strip()
     if synthetic_text:
         ledger.record(synthetic_text, source="benchmark_device_envelope")
-    elif welcome_message.strip():
+    elif isinstance(welcome_message, str) and welcome_message.strip():
         ledger.record(welcome_message, source="benchmark_welcome")
     return ledger
 

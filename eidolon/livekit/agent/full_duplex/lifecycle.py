@@ -111,10 +111,11 @@ class FullDuplexSessionLifecycle:
         # (agent_session sets room audio_output=False when output.audio is set) and
         # the barge-in duck mixer wraps the DataStream sink unchanged. On failure we
         # fall back to audio-only so a flaky avatar service never drops the call.
-        room_audio_output: AudioOutputOptions | bool = AudioOutputOptions(
-            sample_rate=pipeline._audio_sample_rate,
+        room_audio_output: AudioOutputOptions | bool = (
+            AudioOutputOptions(sample_rate=pipeline._audio_sample_rate)
+            if pipeline._factory.outputs.speech else False
         )
-        if pipeline._avatar_enabled:
+        if pipeline._avatar_enabled and pipeline._factory.outputs.speech:
             if await self._start_avatar_worker(room, session):
                 room_audio_output = False
                 pipeline.session_mark("avatar_ready")
@@ -124,6 +125,7 @@ class FullDuplexSessionLifecycle:
             room=room,
             room_options=RoomOptions(
                 audio_output=room_audio_output,
+                text_output=pipeline._factory.outputs.dialogue_text,
                 participant_identity=participant_identity,
             ),
         )
@@ -429,6 +431,17 @@ class FullDuplexSessionLifecycle:
             len(text),
         )
         pipeline._mark_activity()
+        if not pipeline._factory.outputs.speech:
+            # A notification is a fact that a report arrived. It does not claim
+            # its contents were read or that the underlying task succeeded.
+            transport = getattr(pipeline._factory.llm.llm, "presentation_transport", None)
+            if transport is not None:
+                from uuid import uuid4
+                from eidolon_sdk.biz.presentation import ResponseIntent
+                turn = uuid4().hex
+                await transport.present(ResponseIntent(intent="notify", turn_id=turn,
+                    response_id=f"response:{turn}", session_id=transport.output.session_id))
+            return
         session.say(text)
 
     def _stop_proactive_consumer(self) -> None:

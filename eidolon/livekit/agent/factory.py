@@ -43,6 +43,8 @@ from eidolon.livekit.common.config.validators import (
     TTS_PROVIDERS,
 )
 
+from eidolon_sdk.biz.presentation import OutputSelection, SessionOutputPlan
+
 from .providers.llm import LlmParams, LivekitLlmStage
 from .providers.stt import SttParams, SttStage
 from .providers.tts import TtsParams, TtsStage
@@ -170,7 +172,7 @@ class SharedStageFactory:
         *,
         llm: "lk_llm.LLM",
         stt: SttStage,
-        tts: TtsStage,
+        tts: TtsStage | None,
         vad: "lk_vad.VAD | None" = None,
         voiceprint_provider: "Any | None" = None,
         voiceprint_trust_paired_devices: bool = True,
@@ -179,16 +181,22 @@ class SharedStageFactory:
         llm_params: LlmParams | None = None,
         interrupt_classifier: Any = None,
         runtime_session_id: str = "",
+        output_plan: SessionOutputPlan | None = None,
     ) -> None:
         if llm is None:
             raise ValueError("llm must not be None")
         if stt is None:
             raise ValueError("stt must not be None")
-        if tts is None:
-            raise ValueError("tts must not be None")
+        self.output_plan = output_plan
+        self.outputs = (output_plan.outputs if output_plan is not None
+                        else OutputSelection(speech=True, dialogue_text=True))
+        if output_plan is not None and output_plan.session_id != runtime_session_id:
+            raise ValueError("OUTPUT_PLAN_SESSION_MISMATCH")
+        if self.outputs.speech != (tts is not None):
+            raise ValueError("TTS_STAGE_MUST_MATCH_SELECTED_SPEECH")
 
         self.stt: SttStage = stt
-        self.tts: TtsStage = tts
+        self.tts: TtsStage | None = tts
         self.llm = LivekitLlmStage(llm=llm, params=llm_params or LlmParams())
         self.interrupt_classifier = interrupt_classifier
         # Wrap raw VAD in VadStage for symmetry with stt / tts. AgentSession
@@ -256,6 +264,7 @@ class SharedStageFactory:
         livekit_session_key: str = "",
         livekit_room: "Any | None" = None,
         runtime_session_id: str = "",
+        output_plan: SessionOutputPlan | None = None,
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -299,6 +308,8 @@ class SharedStageFactory:
                 config) — STT/TTS provider mismatches surface from
                 ``cfg._validate()`` at config-load time.
         """
+        if output_plan is not None and output_plan.outputs.expression and cfg.providers.brain_provider != "eidolon_agent":
+            raise ValueError("EXPRESSION_REQUIRES_EIDOLON_AGENT")
         runtime_services = None
         needs_runtime_context = (
             cfg.providers.brain_provider == "eidolon_agent"
@@ -392,6 +403,8 @@ class SharedStageFactory:
                 device_token=device_token_source,
                 conversation_id=conversation_id,
                 display_model=cfg.llm.model or "eidolon_agent",
+                output_plan=output_plan,
+                presentation_room=livekit_room,
                 tls=tls,
             )
             logger.info(
@@ -411,7 +424,7 @@ class SharedStageFactory:
                 )
 
         stt = cls._build_stt(cfg)
-        tts = cls._build_tts(cfg)
+        tts = cls._build_tts(cfg) if output_plan is None or output_plan.outputs.speech else None
         vad = prebuilt_vad if prebuilt_vad is not None else cls._build_vad(cfg)
 
         return cls(
@@ -431,6 +444,7 @@ class SharedStageFactory:
             ),
             interrupt_classifier=cls.build_interrupt_classifier(cfg),
             runtime_session_id=runtime_session_id,
+            output_plan=output_plan,
         )
 
     @classmethod

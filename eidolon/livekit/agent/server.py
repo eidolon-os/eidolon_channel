@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from livekit.agents import AgentServer
 
+from eidolon_sdk.biz.presentation import SessionOutputPlan
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
     SESSION_CONVERSATION_ID_FIELD,
@@ -176,6 +177,11 @@ def _prewarm(proc) -> None:
     """
     started = time.monotonic()
     try:
+        from eidolon.livekit.common.config import load_effective_config
+        from eidolon.livekit.common.welcome import prepare_welcome_audio
+
+        cfg = load_effective_config()
+        prepare_welcome_audio(cfg.behavior.welcome_message, sample_rate=cfg.behavior.audio_sample_rate)
         _load_prewarm_models(proc)
     finally:
         logger.info("[Agent] prewarm: finished in %.1fs", time.monotonic() - started)
@@ -237,16 +243,27 @@ def _load_prewarm_models(proc) -> None:
         logger.warning("[Agent] prewarm: voiceprint load failed: %s", e)
 
 
-async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
-    """Resolve ``(interaction_mode, session_intent, avatar_requested)`` from the participant.
+async def _resolve_session_metadata(ctx) -> tuple[str, bool]:
+    """Resolve ``(interaction_mode, avatar_requested)`` from the runtime actor.
 
-    Single resolution point for the session-metadata bus (plan §3.2): hub / web
-    client stamps these into the LiveKit token's ``participant_metadata``.
+    What this bus carries is what the joining actor is entitled to say about
+    itself: how its hardware takes turns (a device manifest fact the Channel
+    Provider stamps into the channel credential) and whether it wants a face
+    (a web client's own declaration). Neither can be overclaimed into a
+    privilege — a wrong turn-taking mode only makes the claimant's own session
+    worse, and the avatar is still gated by `cfg.avatar.enabled`, so asking is
+    an opt-in within what the deployment already allows. That is why the actor
+    gets to say them.
+
     Infrastructure participants such as the Hub control bridge may join first,
-    so select the explicitly typed runtime actor and read all values from that
+    so select the explicitly typed runtime actor and read every value from that
     ONE metadata snapshot before building the pipeline. Connection and actor
     resolution failures are fatal; optional metadata fields retain their safe
     defaults.
+
+    ``session_intent`` used to be read here and is not any more — see
+    ``_resolve_session_intent``. It is not a fact about the actor, it is a
+    statement about one conversation, and the actor is not who gets to make it.
     """
     # Remote participants are synchronized only after the job joins the room.
     await ctx.connect()
@@ -257,9 +274,43 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
         raise
     return (
         resolve_interaction_mode(metadata),
-        resolve_session_intent(metadata),
         resolve_avatar_requested(metadata),
     )
+
+
+def _resolve_session_intent(ctx) -> str:
+    """Read why this session exists from the Provider's job dispatch.
+
+    Same authority as ``_resolve_output_plan``, for the same reason: this is
+    not a description, it is what the session is permitted to do.
+    ``presence_initiated`` is answered with an externally governed renewable
+    Owner lease, and ``proactive_initiated`` changes both the opening and the
+    teardown of an unanswered session. A participant that could name its own
+    intent would be granting itself all of that, so the value is taken from the
+    one bus in the room that no participant can write: the agent dispatch, which
+    only the Channel Provider creates. The device's channel credential is minted
+    with ``can_update_own_metadata=False`` and carries no intent at all, so a
+    participant claiming one in its own metadata is ignored, not obeyed.
+
+    Missing or unrecognised degrades to ``user_initiated``. The Provider's
+    control contract rejects a typo outright, where an authenticated caller is
+    there to be told; by the time a dispatch reaches this process the only way
+    to say nothing is to be a Provider older than the field, and the safe
+    reading of silence is an ordinary user-driven session.
+    """
+    return resolve_session_intent(getattr(ctx.job, "metadata", None))
+
+
+def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
+    # Only the Provider's authenticated job dispatch supplies the policy.
+    # Participant metadata, speech and LLM output cannot grant output rights.
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    if "output_plan" not in metadata:
+        return None  # existing devices retain their established voice profile
+    plan = SessionOutputPlan.model_validate(metadata["output_plan"])
+    if plan.session_id != session_id:
+        raise ValueError("OUTPUT_PLAN_SESSION_MISMATCH")
+    return plan
 
 
 def _resolve_runtime_session_id(ctx) -> str:
@@ -282,7 +333,8 @@ def _resolve_runtime_session_id(ctx) -> str:
 
 
 def _session_lifecycle_payload(
-    message_type: str, runtime_session_id: str, *, reason: str | None = None
+    message_type: str, runtime_session_id: str, *, reason: str | None = None,
+    output_plan: SessionOutputPlan | None = None,
 ) -> bytes:
     payload = {
         "schema_v": WIRE_SCHEMA_VERSION,
@@ -291,6 +343,8 @@ def _session_lifecycle_payload(
     }
     if reason is not None:
         payload["reason"] = reason
+    if output_plan is not None:
+        payload["output_plan"] = output_plan.model_dump(mode="json")
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
@@ -312,6 +366,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
     runtime_session_id = _resolve_runtime_session_id(ctx)
+    output_plan = _resolve_output_plan(ctx, runtime_session_id)
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
@@ -331,7 +386,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         if local is None:
             raise RuntimeError("cannot confirm session start without a local participant")
         await local.publish_data(
-            _session_lifecycle_payload(SESSION_STARTED_TYPE, runtime_session_id),
+            _session_lifecycle_payload(SESSION_STARTED_TYPE, runtime_session_id, output_plan=output_plan),
             reliable=True,
             topic=SESSION_CONTROL_TOPIC,
         )
@@ -473,12 +528,15 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         except Exception:
             logger.exception("[Agent] failed to end serving room=%s (%s)", room.name, context)
 
-    # Resolve the session-metadata bus (interaction_mode + session_intent) from
-    # the device-declared token metadata in one read, then derive a per-session
-    # turn policy. The old process-wide "batch/streaming" pipeline mode was
+    # Two buses, because two different parties are entitled to speak on them.
+    # What the actor declares about itself (turn-taking, avatar) comes off its
+    # own token metadata; why this session exists comes off the Provider's
+    # dispatch, which the actor cannot write. Both are read before the pipeline
+    # is built. The old process-wide "batch/streaming" pipeline mode was
     # retired; the Channel worker now always chooses half/full duplex at the
     # session boundary.
-    interaction_mode, session_intent, avatar_requested = await _resolve_session_metadata(ctx)
+    session_intent = _resolve_session_intent(ctx)
+    interaction_mode, avatar_requested = await _resolve_session_metadata(ctx)
     session_turn_policy, allow_interruptions = apply_interaction_mode(
         turn_policy=cfg.turn_policy,
         allow_interruptions=True,
@@ -495,6 +553,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         livekit_session_key=session_key,
         livekit_room=room,
         runtime_session_id=runtime_session_id,
+        output_plan=output_plan,
     )
 
     # Video avatar is enabled for this session only if globally available AND the

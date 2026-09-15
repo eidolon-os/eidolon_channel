@@ -99,15 +99,14 @@ def test_summary_stat_reads_report_metric_distribution() -> None:
     assert _summary_stat(payload, "missing") is None
 
 
-def test_participant_metadata_defaults_to_full_duplex_user_initiated() -> None:
+def test_participant_metadata_carries_turn_taking_but_never_the_intent() -> None:
+    """Why a session exists is not a participant fact; it rides the dispatch."""
+
     class Args:
         livekit_interaction_mode = "full_duplex"
         livekit_session_intent = "user_initiated"
 
-    assert _participant_metadata(Args()) == {
-        "interaction_mode": "full_duplex",
-        "session_intent": "user_initiated",
-    }
+    assert _participant_metadata(Args()) == {"interaction_mode": "full_duplex"}
 
 
 def test_participant_metadata_allows_half_duplex_override() -> None:

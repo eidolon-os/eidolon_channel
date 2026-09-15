@@ -165,8 +165,13 @@ base64 解码后的 binding v2 是单一 session channel：
 ```
 
 默认 JWT TTL 为 1800 秒。token metadata 包含 `kind=device`、`device_id`、`owner_id`、
-`device_kind`、`interaction_mode`（适用时）和 `session_intent=user_initiated`。grant 只能加入固定
-room；publish source 按 Manifest 限定为 microphone/camera，禁止创建 room 或修改受信 metadata。
+`device_kind` 和 `interaction_mode`（适用时）—— 都是 channel 存续期内恒为真的事实。grant 只能
+加入固定 room；publish source 按 Manifest 限定为 microphone/camera，禁止创建 room 或修改受信
+metadata（`can_update_own_metadata=false`）。
+
+token 里**没有** `session_intent`：它描述的是某一次会话而不是这条 channel，且它决定该会话被
+允许做什么（见下节）。写进一条设备握在手里数小时的凭据，既与生命周期不符，也等于把授权交给
+被授权方。
 
 ## 幂等、重试与恢复
 
@@ -183,6 +188,45 @@ room；publish source 按 Manifest 限定为 microphone/camera，禁止创建 ro
 
 正式部署仍只有一个 Provider writer；SQLite `BEGIN IMMEDIATE`、五元 scope primary key 和 active
 partial unique index 还保证进程竞态/重启不会提交两个 active operation。
+
+## Session wire contract 与 session_intent 的授权边界
+
+一条 channel 上开始/结束一次会话有两条路，它们的**区别只在于谁有资格说出 `session_intent`**：
+
+```json
+POST /v1/device-channels/sessions/open
+{
+  "operation": "channel.open-session",
+  "device_ref": {"...": "<complete canonical DeviceRef>"},
+  "conversation_id": "<per-conversation id>",
+  "session_intent": "user_initiated | presence_initiated | proactive_initiated"
+}
+```
+
+`session_intent` 可选，缺省 `user_initiated`；`sessions/close` 不接受该字段（结束一次会话没有
+意图可言，带上就是 drift，返回 422）。非法取值一律 422 拒绝，**不做降级**：
+`normalize_session_intent` 是给不可信 wire value 用的失败安全语义，而这里调用方已通过 bearer
+认证，把拼错的 presence 唤醒静默变成普通会话，会让编排方以为自己拿到了并不存在的 Owner lease。
+成功响应回显 `session_intent`，调用方据此分辨"被授予"和"被降级"。
+
+另一条路是设备自己在 channel 上发 `session.open` 数据包。它**没有**这个字段，而且不会有：
+`ServingRequest` 只携带 `action` 与 `conversation_id`，Provider 在 sink 处直接写死
+`user_initiated`。设备请求被听见这件事本身就是 user-initiated 的定义；另外两种意图描述的是
+"别人替它决定的唤醒"，尤其 `presence_initiated` 会换来一个由外部治理的可续期 Owner lease ——
+能自报意图的 Body 就是在给自己提权。
+
+Provider 把意图写进 **LiveKit agent dispatch metadata**（与 `conversation_id`、`output_plan`
+同一条总线），Channel worker 从 `ctx.job.metadata` 读取。选这条总线的理由与
+`output_plan` 相同：它是房间里唯一"按会话生成、且参与者写不了"的通道。同一个
+`conversation_id` 用不同意图再次 open，会替换而不是复用既有 dispatch —— 否则 agent 会继续按上
+一次的规则运行。
+
+worker 侧对缺失/无法识别的意图降级为 `user_initiated`（与控制契约的严格拒绝相反）：能走到这里
+的"沉默"只可能来自早于该字段的 Provider，而沉默的安全读法是普通会话。
+
+`generate_token()`（HTTP API / web client 路径）不涉及意图，也不需要涉及：它签发的 token 通过
+room config 触发自动 dispatch，dispatch metadata 里没有意图，worker 于是落到
+`user_initiated`。这条路径 by construction 就是 user-only。
 
 ## Revoke wire contract
 

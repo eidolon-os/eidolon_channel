@@ -36,27 +36,33 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     INTERACTION_MODE_PTT,
     PLAYBACK_STATE_IDLE,
-    SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
 )
 
 
 def voice_token_metadata(
-    *, device_id: str, interaction_mode: str, session_intent: str
+    *, device_id: str, interaction_mode: str, session_intent: str | None = None
 ) -> dict:
-    """The ``participant_metadata`` hub stamps into the device VOICE token.
+    """The ``participant_metadata`` stamped into the device VOICE token.
 
-    Mirrors the dict built in ``eidolon_hub`` ``.../system/config.py`` (the
-    ``kind="device"`` token). Channel's ``resolve_interaction_mode`` /
-    ``resolve_session_intent`` read the session from exactly this shape — so this
-    helper is the canonical record of the cross-service metadata bus.
+    Mirrors the dict the Channel Provider mints in
+    ``channel_provider/adapters/livekit/adapter.py`` (the ``kind="device"``
+    token). Channel's ``resolve_interaction_mode`` reads the session from
+    exactly this shape, so this helper is the canonical record of that bus.
+
+    ``session_intent`` is NOT part of it: why a session exists is not a fact the
+    body may state about itself, and it travels on the Provider's agent dispatch
+    instead. The parameter exists only so a test can play a body that tries
+    anyway, and prove it is ignored.
     """
-    return {
+    metadata = {
         "kind": "device",
         "device_id": device_id,
         "interaction_mode": interaction_mode,
-        "session_intent": session_intent,
     }
+    if session_intent is not None:
+        metadata["session_intent"] = session_intent
+    return metadata
 
 
 class SimulatedDevice:
@@ -72,7 +78,9 @@ class SimulatedDevice:
         *,
         device_id: str = "device-sim",
         interaction_mode: str = INTERACTION_MODE_HALF_DUPLEX,
-        session_intent: str = SESSION_INTENT_USER_INITIATED,
+        # Only for playing a body that claims an intent it may not claim; a
+        # real one stamps none. See ``voice_token_metadata``.
+        session_intent: str | None = None,
     ) -> None:
         self.device_id = device_id
         self.interaction_mode = interaction_mode

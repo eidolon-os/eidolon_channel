@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .contracts import ProvisionDevice
+from .contracts import ProvisionDevice, ContractError
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
+from eidolon_sdk.biz.presentation.negotiation import manifest_outputs, select_outputs
 
 # Turn-taking is a device constraint, not a deployment preference: whether a
 # device may listen while it speaks depends on its echo cancellation, not on
@@ -70,6 +72,8 @@ class ChannelSpec:
     audio: MediaFlow
     video: MediaFlow
     serving: ServingSpec | None
+    output_policy: DeviceOutputPolicy | None = None
+    selected_outputs: OutputSelection | None = None
 
     @property
     def needs_media(self) -> bool:
@@ -134,6 +138,22 @@ def derive_spec(
     manifest = device.manifest
     audio = _media_flow(manifest, "audio")
     video = _media_flow(manifest, "video")
+    capabilities = manifest_outputs(manifest)
+    selected = None
+    if device.output_policy is not None:
+        try:
+            selected = select_outputs(capabilities=capabilities, policy=device.output_policy,
+                requested=device.output_policy.allowed,
+                ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True),
+                require_response=False)
+        except ValueError as exc:
+            raise ContractError(str(exc)) from exc
+        if not selected.speech:
+            audio = MediaFlow.PUBLISH if audio.publishes else MediaFlow.NONE
+    elif capabilities.expression:
+        # New Companion clients require an explicit Owner policy. Missing or
+        # corrupt policy must never silently restore legacy speech defaults.
+        raise ContractError("OUTPUT_POLICY_REQUIRED")
     serving = (
         ServingSpec(
             agent_name=agent_name,
@@ -149,4 +169,6 @@ def derive_spec(
         audio=audio,
         video=video,
         serving=serving,
+        output_policy=device.output_policy,
+        selected_outputs=selected,
     )

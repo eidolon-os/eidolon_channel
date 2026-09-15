@@ -108,7 +108,7 @@ def _install(monkeypatch, *, run_raises: BaseException | None) -> list:
     # The metadata bus needs a connected room and a real device; the failure
     # under test happens after it, so resolve it to a full-duplex session.
     async def _metadata(ctx):
-        return ("full_duplex", "user_initiated", False)
+        return ("full_duplex", False)
 
     monkeypatch.setattr(server, "_resolve_session_metadata", _metadata)
     return runs

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from eidolon_sdk.device_foundation.v1 import DeviceRef
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
 from .contracts import IdempotencyConflict, InvalidTransition, StaleGeneration
 
@@ -38,6 +39,10 @@ class StoredProvision:
     updated_at_ms: int = 0
 
     @property
+    def output_policy(self) -> DeviceOutputPolicy | None:
+        return _output_policy(self.response_json)
+
+    @property
     def owner_domain_id(self) -> str:
         return str(self.device_ref.owner_domain_id)
 
@@ -56,6 +61,16 @@ class StoredRevocation:
     @property
     def device_id(self) -> str:
         return self.device_ref.device_instance_id
+
+
+def _output_policy(response_json: str) -> DeviceOutputPolicy | None:
+    value = json.loads(response_json).get("output_policy")
+    return DeviceOutputPolicy.model_validate(value) if value is not None else None
+
+
+def _policy_advances(previous: str, incoming: str) -> bool:
+    old, new = _output_policy(previous), _output_policy(incoming)
+    return new is not None and new.revision > (old.revision if old else 0)
 
 
 class ChannelProviderStore:
@@ -287,6 +302,14 @@ class ChannelProviderStore:
                 return prior, True
             same_generation = self._generation_rows(connection, value.device_ref)
             if latest == incoming:
+                for row in same_generation:
+                    if row["operation_kind"] not in {PROVISION, REFRESH}:
+                        continue
+                    old, new = _output_policy(row["response_json"]), value.output_policy
+                    if old is not None and (new is None or new.revision < old.revision
+                            or (new.revision == old.revision and new != old)):
+                        connection.rollback()
+                        raise InvalidTransition("output policy cannot regress or reuse a revision")
                 if value.operation_kind == PROVISION and same_generation:
                     connection.rollback()
                     raise InvalidTransition(
@@ -296,7 +319,8 @@ class ChannelProviderStore:
                     row["operation_kind"] in {PROVISION, REFRESH}
                     and (row["status"] == "expired" or (
                         row["status"] == "active"
-                        and (row["manifest_revision"] != value.manifest_revision or (
+                        and (row["manifest_revision"] != value.manifest_revision
+                             or _policy_advances(row["response_json"], value.response_json) or (
                             runtime_refresh_of is not None
                             and row["operation_id"] == runtime_refresh_of.operation_id
                             and row["handle_json"] == runtime_refresh_of.handle_json

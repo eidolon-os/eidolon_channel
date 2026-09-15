@@ -12,6 +12,8 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
+from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+
 from benchmark.component_runner import (
     ComponentTimeouts,
     run_component_suite,
@@ -234,6 +236,10 @@ async def _run_livekit_room(args: argparse.Namespace, suites) -> Path:
                 participant_identity=args.livekit_participant_identity,
                 participant_kind=args.livekit_participant_kind,
                 participant_metadata=_participant_metadata(args, suites),
+                # Not participant metadata: Channel reads the intent off the
+                # agent dispatch, so a benchmark that put it on the participant
+                # would silently run every case as user_initiated.
+                session_intent=_session_intent(args),
             ),
         )
         if args.livekit_timeline_flush_grace_sec > 0:
@@ -275,13 +281,18 @@ def _participant_metadata(
         metadata["interaction_mode"] = requested_mode
     elif len(suite_modes) == 1:
         metadata["interaction_mode"] = next(iter(suite_modes))
-    session_intent = str(getattr(args, "livekit_session_intent", "") or "").strip()
-    if session_intent:
-        metadata["session_intent"] = session_intent
     owner_id = str(getattr(args, "livekit_owner_id", "") or "").strip()
     if owner_id:
         metadata["owner_id"] = owner_id
     return metadata
+
+
+def _session_intent(args) -> str:
+    """Why the benchmarked sessions exist, as the Provider would state it."""
+    return (
+        str(getattr(args, "livekit_session_intent", "") or "").strip()
+        or SESSION_INTENT_USER_INITIATED
+    )
 
 
 def _slo_enforcement_failures(output_dir: Path) -> list[dict]:
@@ -399,7 +410,7 @@ async def _main() -> int:
     parser.add_argument(
         "--livekit-session-intent",
         default=os.getenv("EIDOLON_BENCH_LIVEKIT_SESSION_INTENT", "user_initiated"),
-        help="Participant session_intent metadata for the benchmark room.",
+        help="Dispatch session_intent for the benchmark room.",
     )
     args = parser.parse_args()
     if args.repeat < 1:

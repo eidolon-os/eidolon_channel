@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 import yaml
 
+from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+
 from benchmark.livekit_room_runner import (
     LiveKitRoomOptions,
     run_livekit_room_suite,
@@ -392,8 +394,6 @@ def _participant_metadata(args: argparse.Namespace) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if args.livekit_interaction_mode:
         metadata["interaction_mode"] = args.livekit_interaction_mode
-    if args.livekit_session_intent:
-        metadata["session_intent"] = args.livekit_session_intent
     owner_id = str(getattr(args, "livekit_owner_id", "") or "").strip()
     if owner_id:
         metadata["owner_id"] = owner_id
@@ -538,6 +538,13 @@ async def _run_profile(
                         participant_identity=args.livekit_participant_identity,
                         participant_kind=args.livekit_participant_kind,
                         participant_metadata=_participant_metadata(args),
+                        # Not participant metadata: Channel reads the intent off
+                        # the agent dispatch, so a benchmark that put it on the
+                        # participant would run every case as user_initiated.
+                        session_intent=(
+                            str(args.livekit_session_intent or "").strip()
+                            or SESSION_INTENT_USER_INITIATED
+                        ),
                     ),
                 )
                 if args.livekit_timeline_flush_grace_sec > 0:
@@ -934,7 +941,7 @@ def _parse_args() -> argparse.Namespace:
             "EIDOLON_BENCH_LIVEKIT_SESSION_INTENT",
             "user_initiated",
         ),
-        help="Participant session_intent metadata for the benchmark room.",
+        help="Dispatch session_intent for the benchmark room.",
     )
     return parser.parse_args()
 

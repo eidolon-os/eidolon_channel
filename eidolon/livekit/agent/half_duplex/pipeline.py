@@ -35,7 +35,7 @@ from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.observability.turn_events import resolve_event_context
 from eidolon.livekit.agent.runtime.interaction_mode import (
     resolve_idle_policy,
-    resolve_welcome_text,
+    resolve_welcome,
 )
 from eidolon.livekit.agent.shared.pipeline import BasePipeline
 from eidolon.livekit.agent.shared.types import (
@@ -54,6 +54,8 @@ from eidolon.livekit.agent.session.idle import IdleWatchdog
 from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
+from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio
+from eidolon.livekit.agent.session.welcome import play_welcome
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 
 from .control import (
@@ -83,7 +85,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         factory: Any,
         *,
         instructions: str = "",
-        welcome_message: str | None = None,
+        welcome_message: WelcomeMessage | None = None,
         audio_sample_rate: int = 16_000,
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
@@ -97,6 +99,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         super().__init__(factory=factory, callbacks=callbacks)
         self._instructions = instructions
         self._welcome_message = welcome_message
+        self._welcome_pcm = prepare_welcome_audio(welcome_message, sample_rate=audio_sample_rate)
         self._audio_sample_rate = audio_sample_rate
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
@@ -138,8 +141,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._idle_disconnect_started = False
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
-    def _welcome_on_enter_text(self) -> str | None:
-        return resolve_welcome_text(
+    def _welcome_on_enter(self) -> WelcomeMessage | None:
+        if not self._factory.outputs.speech:
+            return None
+        return resolve_welcome(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
         )
@@ -160,13 +165,13 @@ class HalfDuplexPttPipeline(BasePipeline):
         session.on("close", self._on_session_close)
 
     def _build_agent(self):
-        from livekit.agents.voice import Agent
+        from ..session.policy_bound_agent import PolicyBoundAgent
 
         pipeline = self
 
-        class PttAgent(Agent):
+        class PttAgent(PolicyBoundAgent):
             async def on_enter(self) -> None:
-                welcome = pipeline._welcome_on_enter_text()
+                welcome = pipeline._welcome_on_enter()
                 if welcome is None:
                     logger.info(
                         "[HalfDuplexPttPipeline] welcome suppressed intent=%s",
@@ -177,12 +182,17 @@ class HalfDuplexPttPipeline(BasePipeline):
                     "[HalfDuplexPttPipeline] welcome on_enter room=%s",
                     getattr(pipeline._room, "name", ""),
                 )
-                self.session.say(welcome)
+                play_welcome(
+                    self.session, welcome,
+                    pcm=pipeline._welcome_pcm,
+                    sample_rate=pipeline._audio_sample_rate,
+                )
 
         return PttAgent(
+            outputs=self._factory.outputs,
             instructions=self._instructions,
             llm=self._factory.llm.llm,
-            tts=self._factory.tts.tts,
+            tts=self._factory.tts.tts if self._factory.tts is not None else None,
         )
 
     async def _open_ptt_session_trace(self, room: Room) -> None:
@@ -229,8 +239,9 @@ class HalfDuplexPttPipeline(BasePipeline):
             room=room,
             room_options=RoomOptions(
                 audio_input=False,
-                audio_output=AudioOutputOptions(sample_rate=self._audio_sample_rate),
-                text_output=True,
+                audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
+                              if self._factory.outputs.speech else False),
+                text_output=self._factory.outputs.dialogue_text,
             ),
         )
         self.session_mark("session_started")

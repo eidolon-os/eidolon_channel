@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from eidolon_sdk.biz.presentation import OutputSelection
+
 import asyncio
 import inspect
 import json
@@ -137,6 +139,7 @@ class _FakeSession:
 
 
 class _FakeFactory:
+    outputs = OutputSelection(speech=True, dialogue_text=True)
     def __init__(self, stt: _FakeSttStage) -> None:
         self.stt = stt
         self.turn_decisions: list[dict[str, object]] = []
@@ -259,8 +262,8 @@ def test_half_duplex_uses_shared_session_opening_policy() -> None:
         session_intent=SESSION_INTENT_PRESENCE,
     )
 
-    assert proactive._welcome_on_enter_text() is None
-    assert presence._welcome_on_enter_text() == "Welcome"
+    assert proactive._welcome_on_enter() is None
+    assert presence._welcome_on_enter() == "Welcome"
 
 
 @pytest.mark.asyncio

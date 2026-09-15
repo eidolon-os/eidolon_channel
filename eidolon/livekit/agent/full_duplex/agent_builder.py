@@ -6,8 +6,10 @@ import logging
 import inspect
 from typing import TYPE_CHECKING, Any
 
+from ..session.welcome import play_welcome
+
 if TYPE_CHECKING:
-    from livekit.agents.voice import Agent as lk_Agent
+    from ..session.policy_bound_agent import PolicyBoundAgent as lk_Agent
 
     from .pipeline import StreamingPipeline
 
@@ -18,9 +20,9 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
     """Build the LiveKit Agent used by the full-duplex pipeline."""
 
     from livekit.agents import StopResponse
-    from livekit.agents.voice import Agent
+    from ..session.policy_bound_agent import PolicyBoundAgent
 
-    class VoiceAgent(Agent):
+    class VoiceAgent(PolicyBoundAgent):
         async def stt_node(self, audio: Any, model_settings: Any):
             """Admit provider revisions and retain evidence before SDK consumption."""
 
@@ -61,7 +63,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             # 0 can measure the gap to a later idle teardown and confirm
             # whether "回 JOIN after welcome" is the idle watchdog firing.
             room_name = getattr(getattr(pipeline, "_room", None), "name", None)
-            welcome = pipeline._welcome_on_enter_text()
+            welcome = pipeline._welcome_on_enter()
             if welcome is None:
                 # Suppressed: proactive session (report is the opening, §4.3.1)
                 # or no configured welcome (wait for the user to speak first).
@@ -74,14 +76,14 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             logger.info(
                 "[lifecycle] welcome on_enter room=%s welcome=%r",
                 room_name,
-                welcome[:30],
+                welcome,
             )
-            pipeline._queue_fixed_assistant_speech(welcome, source="welcome")
-            # Round 8 R8.9: use ``session.say(welcome)`` instead of
-            # ``session.generate_reply()`` for the initial greeting.
-            # generate_reply with no user message hands an empty context to the
-            # LLM, which then frequently echoes the system prompt template back.
-            self.session.say(welcome)
+            play_welcome(
+                self.session, welcome,
+                pcm=pipeline._welcome_pcm,
+                sample_rate=pipeline._audio_sample_rate,
+                queue_text=pipeline._queue_fixed_assistant_speech,
+            )
 
         async def on_user_turn_completed(
             self,
@@ -115,10 +117,11 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             ),
         }
     return VoiceAgent(
+        outputs=pipeline._factory.outputs,
         instructions=pipeline._instructions,
         stt=pipeline._factory.stt.stt,
         llm=pipeline._factory.llm.llm,
-        tts=pipeline._factory.tts.tts,
+        tts=pipeline._factory.tts.tts if pipeline._factory.tts is not None else None,
         vad=pipeline._factory.vad.vad if pipeline._factory.vad else None,
         turn_handling=turn_handling,
     )

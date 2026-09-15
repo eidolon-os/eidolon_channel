@@ -56,7 +56,11 @@ from benchmark.timeline import (
     summarize_timeline_records,
 )
 from benchmark.timeline_expectations import apply_timeline_expectations
-from scripts.bench_voice import _default_cases, _participant_metadata as _bench_participant_metadata
+from scripts.bench_voice import (
+    _default_cases,
+    _participant_metadata as _bench_participant_metadata,
+    _session_intent as _bench_session_intent,
+)
 from scripts.bench_barge_in_ab import DEFAULT_CASES as DEFAULT_BARGE_IN_AB_CASES
 
 
@@ -267,7 +271,16 @@ def test_policy_runner_offline_policy_continuity_cases_continue_after_hold() -> 
     )
 
 
-def test_policy_runner_full_duplex_gate_uses_real_echo_admission() -> None:
+def test_policy_runner_full_duplex_gate_uses_real_echo_admission(monkeypatch) -> None:
+    from benchmark import policy_runner
+
+    # This case exercises spoken-welcome echo, independent of the deployment's
+    # default opening (which may now be a nonverbal sound or disabled).
+    cfg = policy_runner.load_effective_config()
+    cfg = replace(cfg, behavior=replace(
+        cfg.behavior, welcome_message="你好！我是你的 AI 助手，请问有什么可以帮你的？",
+    ))
+    monkeypatch.setattr(policy_runner, "load_effective_config", lambda: cfg)
     suite = load_suite("benchmark/cases/full_duplex/gate_enforced.yaml")
     run = run_policy_suite(
         [suite],
@@ -1961,7 +1974,7 @@ async def test_room_suite_derives_greeting_expectation_from_runtime_policy(monke
     for intent in (SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PROACTIVE):
         await runner.run_livekit_room_suite(
             [suite], root=Path.cwd(),
-            options=LiveKitRoomOptions(participant_metadata={"session_intent": intent}),
+            options=LiveKitRoomOptions(session_intent=intent),
         )
     assert observed == [True, False]
 
@@ -2137,8 +2150,12 @@ def test_livekit_dispatch_token_includes_participant_metadata() -> None:
 
     assert payload["sub"] == "manson"
     assert payload["roomConfig"]["agents"][0]["agentName"] == "eidolon"
+    # The dispatch stands in for the Channel Provider, so it carries the
+    # per-session facts the agent is allowed to trust — including why the
+    # session exists. The participant metadata carries none of them.
     assert json.loads(payload["roomConfig"]["agents"][0]["metadata"]) == {
-        "conversation_id": "bench:b629ec01f1ef5f85855baac825022053"
+        "conversation_id": "bench:b629ec01f1ef5f85855baac825022053",
+        "session_intent": "user_initiated",
     }
     assert json.loads(payload["metadata"]) == {
         "client": "bench",
@@ -2159,10 +2176,10 @@ def test_bench_voice_derives_full_duplex_participant_route_from_suite() -> None:
 
     metadata = _bench_participant_metadata(args, [suite])
 
-    assert metadata == {
-        "interaction_mode": "full_duplex",
-        "session_intent": "user_initiated",
-    }
+    # Turn-taking only. The intent is not a participant fact and travels on the
+    # dispatch; see `_bench_session_intent`.
+    assert metadata == {"interaction_mode": "full_duplex"}
+    assert _bench_session_intent(args) == "user_initiated"
 
 
 def test_bench_voice_explicit_route_overrides_suite_mode() -> None:
@@ -2179,6 +2196,7 @@ def test_bench_voice_explicit_route_overrides_suite_mode() -> None:
     metadata = _bench_participant_metadata(args, [suite])
 
     assert metadata["interaction_mode"] == "half_duplex"
+    assert "session_intent" not in metadata
 
 
 def test_timeline_records_are_summarized(tmp_path) -> None:

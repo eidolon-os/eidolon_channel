@@ -149,6 +149,24 @@ class HalfDuplexPttPipeline(BasePipeline):
             welcome_message=self._welcome_message,
         )
 
+    def _build_room_options(self) -> Any:
+        """Open only the tracks this session's output selection allows.
+
+        A silent session must not open an audio output track at all: suppressing
+        speech downstream would still publish an audible track the Companion is
+        not permitted to use.
+        """
+
+        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
+
+        # PTT feeds captured audio in explicitly; the room never opens an input.
+        return RoomOptions(
+            audio_input=False,
+            audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
+                          if self._factory.outputs.speech else False),
+            text_output=self._factory.outputs.dialogue_text,
+        )
+
     @staticmethod
     def _build_turn_handling() -> dict[str, Any]:
         # Button release is the only commit boundary; button press explicitly
@@ -224,7 +242,6 @@ class HalfDuplexPttPipeline(BasePipeline):
 
     async def run(self, room: Room) -> None:
         from livekit.agents.voice import AgentSession
-        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
 
         logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
         self._room = room
@@ -242,12 +259,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         await session.start(
             agent=self._build_agent(),
             room=room,
-            room_options=RoomOptions(
-                audio_input=False,
-                audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
-                              if self._factory.outputs.speech else False),
-                text_output=self._factory.outputs.dialogue_text,
-            ),
+            room_options=self._build_room_options(),
         )
         self.session_mark("session_started")
         if self._on_session_started is not None:

@@ -115,3 +115,32 @@ def test_dispatch_output_plan_cannot_be_bound_to_another_session():
     assert _resolve_output_plan(ctx, "session-1") == silent_plan()
     with pytest.raises(ValueError, match="OUTPUT_PLAN_SESSION_MISMATCH"):
         _resolve_output_plan(ctx, "session-2")
+
+
+def test_silent_session_opens_no_audio_output_track():
+    """The speech selection gates the track, not just what is written to it.
+
+    A silent Companion that still opened an audio output would publish a track
+    it is not permitted to speak on, so assert the room options themselves.
+    """
+
+    from eidolon.livekit.agent.half_duplex import HalfDuplexPttPipeline
+
+    pipeline = HalfDuplexPttPipeline.__new__(HalfDuplexPttPipeline)
+    pipeline._audio_sample_rate = 16000
+
+    pipeline._factory = SimpleNamespace(outputs=silent_plan().outputs)
+    silent = pipeline._build_room_options()
+    assert silent.audio_output is False
+    assert silent.text_output is False
+
+    pipeline._factory = SimpleNamespace(
+        outputs=OutputSelection(speech=True, dialogue_text=True)
+    )
+    speaking = pipeline._build_room_options()
+    assert speaking.audio_output is not False
+    assert speaking.audio_output.sample_rate == 16000
+    assert speaking.text_output is True
+
+    # PTT hands captured audio in itself; neither selection opens a room input.
+    assert silent.audio_input is False and speaking.audio_input is False

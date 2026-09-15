@@ -500,6 +500,7 @@ requires-dist = [
     { name = "livekit-api", specifier = ">=0.5" },
     { name = "livekit-api", marker = "extra == 'livekit'", specifier = ">=0.5" },
     { name = "nats-py", marker = "extra == 'audit'", specifier = ">=2.9" },
+    { name = "nats-py", marker = "extra == 'dev'", specifier = ">=2.9" },
     { name = "protobuf", specifier = ">=4.25" },
     { name = "protobuf", marker = "extra == 'grpc'", specifier = ">=4.25" },
     { name = "pydantic", specifier = ">=2.8" },

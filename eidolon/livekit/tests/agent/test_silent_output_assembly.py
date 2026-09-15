@@ -89,7 +89,7 @@ def test_silent_session_suppresses_fixed_welcome_for_every_turn_mode():
         pipeline._factory = SimpleNamespace(outputs=silent_plan().outputs)
         pipeline._session_intent = "user_initiated"
         pipeline._welcome_message = "Never synthesize me"
-        assert pipeline._welcome_on_enter_text() is None
+        assert pipeline._welcome_on_enter() is None
 
 
 @pytest.mark.asyncio

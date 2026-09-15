@@ -13,7 +13,12 @@ from eidolon_sdk.device_foundation.v1 import (
     DeviceCapabilityManifest,
     DeviceRef,
 )
-from eidolon_sdk.biz.contracts import normalize_conversation_id
+from eidolon_sdk.biz.contracts import (
+    SESSION_INTENT_FIELD,
+    SESSION_INTENT_USER_INITIATED,
+    VALID_SESSION_INTENTS,
+    normalize_conversation_id,
+)
 from pydantic import ValidationError
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
@@ -279,11 +284,30 @@ class SessionRequest:
     and the adapter converges onto it. Two "open" requests mean one session, and
     closing a channel nobody is serving is a success, so there is nothing a
     replay key would protect.
+
+    `session_intent` says why the session exists, and only an open request may
+    name one. It is a privilege statement rather than a description: a
+    `presence_initiated` session is answered with an externally governed
+    renewable Owner lease, and a `proactive_initiated` one suppresses the
+    welcome and tears down differently when nobody answers. So the only party
+    that may name one is a caller that got past this endpoint's bearer
+    credential — an orchestrator waking a body on the Owner's behalf. The
+    device's own way of asking arrives by a different road (`ServingRequest`,
+    read off its channel) that has no field for this at all, which is what
+    makes "the device cannot escalate itself" a property of the shape rather
+    than of a check someone has to remember. Absent means `user_initiated`.
+
+    An unknown value is rejected, not degraded. `normalize_session_intent`
+    exists for untrusted wire values that must fail safe; here the caller is
+    authenticated, and silently turning a misspelt presence wake into an
+    ordinary session would leave the orchestrator believing it got a lease
+    nobody granted.
     """
 
     operation: str
     device_ref: DeviceRef
     conversation_id: str
+    session_intent: str = SESSION_INTENT_USER_INITIATED
 
     @classmethod
     def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
@@ -292,6 +316,9 @@ class SessionRequest:
             value,
             name="session request",
             required={"operation", "device_ref", "conversation_id"},
+            # Closing a conversation has no intent to state, so naming one there
+            # is drift rather than a request, and is rejected as an unknown field.
+            optional={SESSION_INTENT_FIELD} if expected == OPEN_SESSION else None,
         )
         if root["operation"] != expected:
             raise ContractError(f"operation must be {expected}")
@@ -302,10 +329,14 @@ class SessionRequest:
         conversation_id = normalize_conversation_id(root["conversation_id"])
         if conversation_id is None:
             raise ContractError("conversation_id is invalid")
+        session_intent = root.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED)
+        if session_intent not in VALID_SESSION_INTENTS:
+            raise ContractError(f"{SESSION_INTENT_FIELD} is invalid")
         return cls(
             operation=expected,
             device_ref=device_ref,
             conversation_id=conversation_id,
+            session_intent=session_intent,
         )
 
     @property

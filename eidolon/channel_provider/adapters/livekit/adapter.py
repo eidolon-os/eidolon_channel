@@ -27,6 +27,8 @@ from eidolon_sdk.biz.contracts import (
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
+    SESSION_INTENT_FIELD,
+    SESSION_INTENT_USER_INITIATED,
     SESSION_OPEN_TYPE,
     WIRE_SCHEMA_VERSION,
     normalize_conversation_id,
@@ -731,7 +733,18 @@ class LiveKitChannelAdapter:
 
     # -- serving ----------------------------------------------------------
 
-    async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+    async def open_session(
+        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str
+    ) -> None:
+        """Place the standing order, and say on it why this session exists.
+
+        The intent rides the dispatch, not the device's token, because the
+        dispatch is the only thing here that is per-session AND unwritable by
+        the device: this adapter is what creates dispatches, while the token is
+        handed to the device once per provision and lives in its flash for
+        hours. It joins `conversation_id` and `output_plan`, which are on this
+        bus for the same reason — the agent must be able to trust them.
+        """
         room, agent = self._serving(handle)
         output_plan = (SessionOutputPlan(session_id=conversation_id, **handle["output_template"])
                        if "output_template" in handle else None)
@@ -743,6 +756,15 @@ class LiveKitChannelAdapter:
                 if (
                     not _is_spent(dispatch)
                     and metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
+                    # A standing dispatch that was placed for a different intent
+                    # is not this request already satisfied: the job it would run
+                    # is governed by different rules. Compared here so re-asking
+                    # for the same conversation with a new intent replaces it
+                    # rather than silently keeping the old one. Dispatches placed
+                    # before this field existed read as user_initiated, which is
+                    # what they were.
+                    and metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED)
+                    == session_intent
                     and metadata.get("output_plan") == (output_plan.model_dump(mode="json") if output_plan else None)
                 ):
                     return
@@ -773,6 +795,7 @@ class LiveKitChannelAdapter:
                         {
                             "schema_v": WIRE_SCHEMA_VERSION,
                             SESSION_CONVERSATION_ID_FIELD: conversation_id,
+                            SESSION_INTENT_FIELD: session_intent,
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
                         }
                     ),
@@ -780,7 +803,9 @@ class LiveKitChannelAdapter:
             )
         except Exception as exc:
             raise BackendUnavailable("LiveKit agent dispatch failed") from exc
-        logger.info("opened session on room=%s agent=%s", room, agent)
+        logger.info(
+            "opened session on room=%s agent=%s intent=%s", room, agent, session_intent
+        )
         self._confirm_serving_later(room, agent=agent, conversation_id=conversation_id)
 
     async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
@@ -841,6 +866,16 @@ class LiveKitChannelAdapter:
         The token says who the device is and what it may do. It carries no room
         configuration: server-side orchestration is declared where the room is
         declared, never routed through a credential handed to the device.
+
+        Everything in this metadata is true for as long as the channel is —
+        who the body is, whose it is, what it declared it can do about taking
+        turns. Deliberately absent is `session_intent`, which is true of one
+        conversation rather than of the channel, and which decides what that
+        conversation is allowed to do. It travels on the agent dispatch (see
+        `open_session`), where this adapter writes it per session and the
+        device cannot reach it. `can_update_own_metadata=False` below is the
+        other half of that: a body may not rewrite what it was issued, and the
+        one thing worth rewriting is the thing that is no longer here.
         """
         sources: list[str] = []
         if spec.audio.publishes:
@@ -852,7 +887,6 @@ class LiveKitChannelAdapter:
             "device_id": spec.device_id,
             "owner_id": spec.owner_id,
             "manifest_id": spec.manifest_id,
-            "session_intent": "user_initiated",
         }
         if spec.serving is not None:
             metadata["interaction_mode"] = spec.serving.interaction_mode

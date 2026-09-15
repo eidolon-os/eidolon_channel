@@ -56,7 +56,11 @@ from benchmark.timeline import (
     summarize_timeline_records,
 )
 from benchmark.timeline_expectations import apply_timeline_expectations
-from scripts.bench_voice import _default_cases, _participant_metadata as _bench_participant_metadata
+from scripts.bench_voice import (
+    _default_cases,
+    _participant_metadata as _bench_participant_metadata,
+    _session_intent as _bench_session_intent,
+)
 from scripts.bench_barge_in_ab import DEFAULT_CASES as DEFAULT_BARGE_IN_AB_CASES
 
 
@@ -1970,7 +1974,7 @@ async def test_room_suite_derives_greeting_expectation_from_runtime_policy(monke
     for intent in (SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PROACTIVE):
         await runner.run_livekit_room_suite(
             [suite], root=Path.cwd(),
-            options=LiveKitRoomOptions(participant_metadata={"session_intent": intent}),
+            options=LiveKitRoomOptions(session_intent=intent),
         )
     assert observed == [True, False]
 
@@ -2146,8 +2150,12 @@ def test_livekit_dispatch_token_includes_participant_metadata() -> None:
 
     assert payload["sub"] == "manson"
     assert payload["roomConfig"]["agents"][0]["agentName"] == "eidolon"
+    # The dispatch stands in for the Channel Provider, so it carries the
+    # per-session facts the agent is allowed to trust — including why the
+    # session exists. The participant metadata carries none of them.
     assert json.loads(payload["roomConfig"]["agents"][0]["metadata"]) == {
-        "conversation_id": "bench:b629ec01f1ef5f85855baac825022053"
+        "conversation_id": "bench:b629ec01f1ef5f85855baac825022053",
+        "session_intent": "user_initiated",
     }
     assert json.loads(payload["metadata"]) == {
         "client": "bench",
@@ -2168,10 +2176,10 @@ def test_bench_voice_derives_full_duplex_participant_route_from_suite() -> None:
 
     metadata = _bench_participant_metadata(args, [suite])
 
-    assert metadata == {
-        "interaction_mode": "full_duplex",
-        "session_intent": "user_initiated",
-    }
+    # Turn-taking only. The intent is not a participant fact and travels on the
+    # dispatch; see `_bench_session_intent`.
+    assert metadata == {"interaction_mode": "full_duplex"}
+    assert _bench_session_intent(args) == "user_initiated"
 
 
 def test_bench_voice_explicit_route_overrides_suite_mode() -> None:
@@ -2188,6 +2196,7 @@ def test_bench_voice_explicit_route_overrides_suite_mode() -> None:
     metadata = _bench_participant_metadata(args, [suite])
 
     assert metadata["interaction_mode"] == "half_duplex"
+    assert "session_intent" not in metadata
 
 
 def test_timeline_records_are_summarized(tmp_path) -> None:

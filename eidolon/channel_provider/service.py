@@ -16,6 +16,8 @@ import logging
 import time
 from collections.abc import Callable
 
+from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+
 from .contracts import (
     IdempotencyConflict,
     InvalidTransition,
@@ -333,7 +335,12 @@ class ChannelProviderService:
             return completed.response_json
 
     async def open_session(self, request: SessionRequest) -> str:
-        """Serve the device's channel, because the device asked to talk."""
+        """Serve the device's channel, because someone with standing asked.
+
+        The name is older than the two ways in. This is now the orchestrated
+        road — an authenticated caller waking a body on the Owner's behalf, and
+        the only one that may say the wake is anything other than user-driven.
+        """
         return await self._serve(request, serving=True)
 
     async def close_session(self, request: SessionRequest) -> str:
@@ -345,6 +352,7 @@ class ChannelProviderService:
             request.device_ref,
             serving=serving,
             conversation_id=request.conversation_id,
+            session_intent=request.session_intent,
         )
         return canonical_json(
             {
@@ -353,18 +361,24 @@ class ChannelProviderService:
                 "channel_id": channel.channel_id,
                 "conversation_id": request.conversation_id,
                 "serving": serving,
+                # Echoed so the caller can see which intent was actually
+                # honoured. An orchestrator that asked for a presence wake and
+                # got an ordinary session has to be able to tell.
+                **({"session_intent": request.session_intent} if serving else {}),
             }
         )
 
     async def _converge_serving(
-        self, device_ref, *, serving: bool, conversation_id: str
+        self, device_ref, *, serving: bool, conversation_id: str, session_intent: str
     ) -> StoredProvision:
         """Converge one device's channel onto served or unserved.
 
         The single place a conversation starts or stops, whether the device
         asked over its own channel or something else asked on its behalf. Both
-        arrive here saying only which device and which way, because that is all
-        either of them knows.
+        arrive here saying only which device, which way, and why — and the two
+        roads differ in exactly that last part, because only one of them has
+        the standing to name it. `session_intent` is read only when opening;
+        ending a conversation has no intent to state.
 
         Takes the same lock as provision and revocation so that reading the
         channel and acting on it cannot straddle a revocation — otherwise a
@@ -380,7 +394,9 @@ class ChannelProviderService:
             adapter = self._registry.get(active.adapter_name)
             handle = json.loads(active.handle_json)
             if serving:
-                await adapter.open_session(handle, conversation_id)
+                await adapter.open_session(
+                    handle, conversation_id, session_intent=session_intent
+                )
             else:
                 await adapter.close_session(handle, conversation_id)
             return active
@@ -399,6 +415,14 @@ class ChannelProviderService:
                 device_ref,
                 serving=request.action is ServingAction.START,
                 conversation_id=request.conversation_id,
+                # Stated here, not carried from the packet, and that is the
+                # whole authority rule in one line: a device asking over its
+                # own channel IS a user-initiated session. The privileged
+                # intents describe a wake somebody else decided on, so they can
+                # only come from the authenticated road above. This is written
+                # as a literal rather than defaulted so that a later reader
+                # sees a decision instead of an omission.
+                session_intent=SESSION_INTENT_USER_INITIATED,
             )
 
         return _requested

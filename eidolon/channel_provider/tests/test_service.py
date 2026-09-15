@@ -31,6 +31,10 @@ from .helpers import (
     session_payload,
 )
 
+from eidolon_sdk.biz.contracts import (
+    SESSION_INTENT_PRESENCE,
+    SESSION_INTENT_USER_INITIATED,
+)
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 # Tests name the device they mean; the name becomes a real device
@@ -223,7 +227,7 @@ async def test_a_session_runs_on_the_adapter_that_opened_the_channel(tmp_path) -
     )
 
     handle = {"resource": f"livekit:{_DEVICE_1}"}
-    assert backend.sessions_opened == [(handle, "conversation-1")]
+    assert backend.sessions_opened == [(handle, "conversation-1", "user_initiated")]
     assert backend.sessions_closed == [(handle, "conversation-1")]
     assert json.loads(opened) == {
         "operation": "channel.opened-session",
@@ -231,6 +235,7 @@ async def test_a_session_runs_on_the_adapter_that_opened_the_channel(tmp_path) -
         "channel_id": json.loads(opened)["channel_id"],
         "conversation_id": "conversation-1",
         "serving": True,
+        "session_intent": "user_initiated",
     }
     assert json.loads(closed)["serving"] is False
     # A conversation beginning or ending never disturbs the channel itself.
@@ -270,8 +275,62 @@ async def test_a_device_can_start_and_stop_its_own_conversation(tmp_path) -> Non
     await backend.device_asks(_DEVICE_1, ServingRequest(ServingAction.STOP, "conversation-1"))
 
     handle = {"resource": f"livekit:{_DEVICE_1}"}
-    assert backend.sessions_opened == [(handle, "conversation-1")]
+    assert backend.sessions_opened == [(handle, "conversation-1", "user_initiated")]
     assert backend.sessions_closed == [(handle, "conversation-1")]
+
+
+async def test_an_orchestrated_wake_carries_its_intent_to_the_transport(tmp_path) -> None:
+    """The authenticated road may say why, and the transport is told exactly that.
+
+    This is the whole point of the wiring: `presence_initiated` was a value the
+    agent knew how to act on and nothing in production could ever produce.
+    """
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    opened = await service.open_session(
+        SessionRequest.parse(
+            encoded(
+                session_payload(
+                    operation=OPEN_SESSION, session_intent=SESSION_INTENT_PRESENCE
+                )
+            ),
+            expected=OPEN_SESSION,
+        )
+    )
+
+    handle = {"resource": f"livekit:{_DEVICE_1}"}
+    assert backend.sessions_opened == [
+        (handle, "conversation-1", SESSION_INTENT_PRESENCE)
+    ]
+    # Echoed back, so an orchestrator can tell a granted lease from a demoted one.
+    assert json.loads(opened)["session_intent"] == SESSION_INTENT_PRESENCE
+
+
+async def test_a_device_asking_on_its_own_channel_cannot_wake_itself_privileged(
+    tmp_path,
+) -> None:
+    """The device's road reaches the transport as user_initiated, always.
+
+    The negative of the test above. A body asking to be heard is by definition
+    a user-driven session; the privileged intents describe a wake somebody else
+    decided on. `ServingRequest` has no field for one, so there is nothing to
+    smuggle — this pins that the service does not invent one either.
+    """
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    await backend.device_asks(
+        _DEVICE_1, ServingRequest(ServingAction.START, "conversation-9")
+    )
+
+    handle = {"resource": f"livekit:{_DEVICE_1}"}
+    assert backend.sessions_opened == [
+        (handle, "conversation-9", SESSION_INTENT_USER_INITIATED)
+    ]
+    assert not hasattr(ServingRequest(ServingAction.START, "c"), "session_intent")
 
 
 async def test_a_restart_resumes_listening_to_every_open_channel(tmp_path) -> None:
@@ -292,7 +351,9 @@ async def test_a_restart_resumes_listening_to_every_open_channel(tmp_path) -> No
     await fresh_backend.device_asks(
         _DEVICE_2, ServingRequest(ServingAction.START, "conversation-2")
     )
-    assert fresh_backend.sessions_opened == [({"resource": f"livekit:{_DEVICE_2}"}, "conversation-2")]
+    assert fresh_backend.sessions_opened == [
+        ({"resource": f"livekit:{_DEVICE_2}"}, "conversation-2", "user_initiated")
+    ]
 
 
 async def test_a_channel_that_cannot_be_watched_is_still_provisioned(tmp_path) -> None:

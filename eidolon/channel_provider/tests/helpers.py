@@ -135,7 +135,9 @@ class FakeAdapter:
         self._payload = payload
         self.opened: list[ChannelSpec] = []
         self.closed: list[dict[str, Any]] = []
-        self.sessions_opened: list[tuple[dict[str, Any], str]] = []
+        # (handle, conversation_id, session_intent) — the intent is recorded
+        # because which one reached the transport is the whole authority story.
+        self.sessions_opened: list[tuple[dict[str, Any], str, str]] = []
         self.sessions_closed: list[tuple[dict[str, Any], str]] = []
         # Channels currently listened to, keyed the way a real adapter would
         # have to key them, so re-stating one cannot leave two behind.
@@ -192,8 +194,10 @@ class FakeAdapter:
         self.presence_reads.append(handle)
         return self.on_channel
 
-    async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
-        self.sessions_opened.append((handle, conversation_id))
+    async def open_session(
+        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str
+    ) -> None:
+        self.sessions_opened.append((handle, conversation_id, session_intent))
 
     async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         self.sessions_closed.append((handle, conversation_id))

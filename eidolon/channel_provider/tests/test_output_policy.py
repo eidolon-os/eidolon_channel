@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 import pytest
+from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection, FACE_PROFILE
 from eidolon.channel_provider.contracts import (
     ProvisionRequest,
@@ -83,7 +84,9 @@ async def test_dispatch_binds_output_plan_and_changed_policy_withdraws_legacy_vo
     )
     await adapter._reconcile_output_dispatches(grant.handle)
     assert (room, "old-voice") in client.agent_dispatch.deleted
-    await adapter.open_session(grant.handle, "session-1")
+    await adapter.open_session(
+        grant.handle, "session-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
     metadata = json.loads(client.agent_dispatch.created[-1][2])
     assert metadata["output_plan"]["session_id"] == "session-1"
     assert metadata["output_plan"]["outputs"] == OutputSelection(expression=True).model_dump()
@@ -105,5 +108,7 @@ async def test_all_outputs_denied_still_replaces_policy_but_cannot_start_a_sessi
     )
     grant = await adapter.open(spec(req), issued_at_ms=1700000000000)
     with pytest.raises(ChannelNotServable, match="NO_RESPONSE_OUTPUT"):
-        await adapter.open_session(grant.handle, "session-1")
+        await adapter.open_session(
+            grant.handle, "session-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
     await adapter.shutdown()

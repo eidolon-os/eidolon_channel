@@ -13,6 +13,10 @@ from eidolon_sdk.biz.contracts import (
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
+    SESSION_INTENT_FIELD,
+    SESSION_INTENT_PRESENCE,
+    SESSION_INTENT_PROACTIVE,
+    SESSION_INTENT_USER_INITIATED,
     SESSION_OPEN_TYPE,
     WIRE_SCHEMA_VERSION,
 )
@@ -140,11 +144,15 @@ def _spec(**manifest_kwargs):
     )
 
 
-def _metadata(conversation_id: str = "conversation-1") -> str:
+def _metadata(
+    conversation_id: str = "conversation-1",
+    session_intent: str = SESSION_INTENT_USER_INITIATED,
+) -> str:
     return json.dumps(
         {
             "schema_v": WIRE_SCHEMA_VERSION,
             SESSION_CONVERSATION_ID_FIELD: conversation_id,
+            SESSION_INTENT_FIELD: session_intent,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -199,7 +207,9 @@ async def test_a_session_brings_the_agent_and_ending_it_keeps_the_channel() -> N
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     room = grant.handle["room"]
 
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
     assert client.agent_dispatch.created == [(room, "eidolon", _metadata())]
 
     await adapter.close_session(grant.handle, "conversation-1")
@@ -213,8 +223,12 @@ async def test_opening_a_session_twice_leaves_one_session() -> None:
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
 
-    await adapter.open_session(grant.handle, "conversation-1")
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
 
     assert len(client.agent_dispatch.created) == 1
 
@@ -224,8 +238,12 @@ async def test_a_late_close_cannot_end_a_newer_conversation() -> None:
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     room = grant.handle["room"]
 
-    await adapter.open_session(grant.handle, "conversation-1")
-    await adapter.open_session(grant.handle, "conversation-2")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
+    await adapter.open_session(
+        grant.handle, "conversation-2", session_intent=SESSION_INTENT_USER_INITIATED
+    )
 
     assert client.agent_dispatch.deleted == [(room, "AD_1")]
     assert client.agent_dispatch.created[-1] == (
@@ -256,7 +274,9 @@ async def test_livekits_own_dispatch_records_are_left_alone() -> None:
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     room = grant.handle["room"]
 
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
     await adapter.close_session(grant.handle, "conversation-1")
 
     assert [d.agent_name for d in client.agent_dispatch.dispatches[room]] == [""]
@@ -266,9 +286,13 @@ async def test_a_session_that_is_still_starting_is_not_restarted() -> None:
     """The job LiveKit has not published yet must not be mistaken for a dead one."""
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
 
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
 
     assert len(client.agent_dispatch.created) == 1
     assert client.agent_dispatch.deleted == []
@@ -291,7 +315,9 @@ async def test_a_live_session_is_left_alone(statuses) -> None:
         FakeDispatch("AD_live", "eidolon", [FakeJob(s) for s in statuses], _metadata())
     )
 
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
 
     assert client.agent_dispatch.created == []
 
@@ -313,7 +339,9 @@ async def test_a_spent_dispatch_cannot_block_the_device_forever(statuses) -> Non
         FakeDispatch("AD_spent", "eidolon", [FakeJob(s) for s in statuses])
     )
 
-    await adapter.open_session(grant.handle, "conversation-1")
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
 
     assert client.agent_dispatch.deleted == [(room, "AD_spent")]
     assert client.agent_dispatch.created == [(room, "eidolon", _metadata())]
@@ -539,7 +567,125 @@ async def test_a_channel_that_carries_no_conversation_cannot_hold_a_session() ->
     grant = await adapter.open(_spec(direction="", video="publish"), issued_at_ms=1_000)
 
     with pytest.raises(ChannelNotServable):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PRESENCE, SESSION_INTENT_PROACTIVE],
+)
+async def test_the_dispatch_carries_why_the_session_exists(intent: str) -> None:
+    """The intent reaches the agent on the bus only this adapter can write.
+
+    The agent already knew how to act on all three; this is the wire that lets
+    anything other than `user_initiated` ever arrive.
+    """
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+
+    await adapter.open_session(grant.handle, "conversation-1", session_intent=intent)
+
+    assert client.agent_dispatch.created == [
+        (room, "eidolon", _metadata("conversation-1", intent))
+    ]
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PRESENCE, SESSION_INTENT_PROACTIVE],
+)
+async def test_what_the_provider_writes_is_what_the_worker_reads(intent: str) -> None:
+    """Close the one joint the other tests only mirror.
+
+    Everything else on this bus is pinned twice — the adapter's bytes here, the
+    worker's parsing over in the agent tests — against a hand-written copy of
+    the other side's shape. Two copies of a shape agree right up until one of
+    them is edited. So this hands the bytes the adapter actually produced to
+    the function the worker actually calls, and the mirror stops mattering.
+
+    The import crosses from Provider to agent deliberately: these two ends are
+    the contract, and a test of a contract has to be able to see both.
+    """
+    from eidolon.livekit.agent.runtime import resolve_session_intent
+
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+
+    await adapter.open_session(grant.handle, "conversation-1", session_intent=intent)
+
+    _room, _agent, dispatch_metadata = client.agent_dispatch.created[-1]
+    assert resolve_session_intent(dispatch_metadata) == intent
+
+
+async def test_reopening_one_conversation_with_a_new_intent_replaces_the_dispatch() -> None:
+    """Convergence is per (conversation, intent), because the intent is authority.
+
+    Treating the second ask as "already served" would leave the agent running
+    under the rules of the first one — the bug where an escalation is silently
+    ignored, or a demotion silently isn't.
+    """
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_PRESENCE
+    )
+
+    assert client.agent_dispatch.deleted == [(room, "AD_1")]
+    assert client.agent_dispatch.created[-1] == (
+        room,
+        "eidolon",
+        _metadata("conversation-1", SESSION_INTENT_PRESENCE),
+    )
+
+
+async def test_the_device_credential_cannot_state_or_restate_an_intent() -> None:
+    """A body is issued identity, not authority over what a session may do.
+
+    Two halves of one rule: the credential names no intent, and the grant
+    forbids the holder rewriting what it was issued. Either alone would be a
+    way for a compromised body to hand itself the Owner lease that
+    `presence_initiated` comes with.
+    """
+    adapter, _ = _adapter()
+
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+
+    claims = _claims(json.loads(grant.payload)["session"]["token"])
+    assert SESSION_INTENT_FIELD not in json.loads(claims["metadata"])
+    assert claims["video"].get("canUpdateOwnMetadata") is not True
+
+
+async def test_a_device_packet_claiming_an_intent_is_read_without_it() -> None:
+    """Even a device that tries has nowhere to put it.
+
+    `ServingRequest` has no field for an intent, so a packet naming one parses
+    into exactly the request a packet without it would — and the service then
+    states `user_initiated` itself.
+    """
+    adapter, _ = _adapter()
+    packet = _packet(
+        topic=SESSION_CONTROL_TOPIC,
+        identity=_DEVICE_1,
+        body={
+            "schema_v": WIRE_SCHEMA_VERSION,
+            "type": SESSION_OPEN_TYPE,
+            SESSION_CONVERSATION_ID_FIELD: "conversation-1",
+            SESSION_INTENT_FIELD: SESSION_INTENT_PRESENCE,
+        },
+    )
+
+    assert adapter._requested(packet, device=_DEVICE_1, room="r") == ServingRequest(
+        action=ServingAction.START,
+        conversation_id="conversation-1",
+    )
 
 
 async def test_interaction_mode_comes_from_the_device_not_the_deployment() -> None:
@@ -617,7 +763,9 @@ async def test_a_dispatch_that_never_serves_is_reported(monkeypatch, caplog) -> 
     client.room.participants = [_device_participant()]
 
     with caplog.at_level(logging.INFO):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
         await _settle(adapter)
 
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
@@ -633,7 +781,9 @@ async def test_a_dispatch_that_serves_says_nothing(monkeypatch, caplog) -> None:
     client.room.participants = [_device_participant(), _agent_participant()]
 
     with caplog.at_level(logging.INFO):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
         await _settle(adapter)
 
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
@@ -659,7 +809,9 @@ async def test_a_dispatch_being_cleared_says_how_the_last_one_ended(caplog) -> N
     ]
 
     with caplog.at_level(logging.INFO):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
 
     warned = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warned, "a dispatch cleared after its job died must say so"
@@ -684,7 +836,9 @@ async def test_a_conversation_already_ended_is_not_reported_as_unserved(
     client.room.participants = [_device_participant()]
 
     with caplog.at_level(logging.INFO):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
         await adapter.close_session(grant.handle, "conversation-1")
         await _settle(adapter)
 
@@ -705,7 +859,9 @@ async def test_a_job_that_died_is_reported_with_its_own_error(monkeypatch, caplo
     client.room.participants = [_device_participant()]
 
     with caplog.at_level(logging.INFO):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
         ours = [
             d
             for d in client.agent_dispatch.dispatches[grant.handle["room"]]
@@ -794,7 +950,9 @@ async def test_a_confirmation_that_could_not_look_does_not_accuse(monkeypatch, c
     client.room.participants_raise = True
 
     with caplog.at_level(logging.INFO):
-        await adapter.open_session(grant.handle, "conversation-1")
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
         await _settle(adapter)
 
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

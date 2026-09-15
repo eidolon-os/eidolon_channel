@@ -90,8 +90,11 @@ async def test_room_suite_selects_welcome_completion_contract(
     monkeypatch.setattr(runner, "_run_room_case_with_retries", run_case)
     suite = SimpleNamespace(cases=[object()])
     for intent in ("user_initiated", "presence_initiated", "proactive_initiated"):
+        # The intent option, not participant metadata: Channel takes it off the
+        # Provider's dispatch, so a benchmark setting it the other way would
+        # run every case as user_initiated and never notice.
         await runner.run_livekit_room_suite([suite], root=tmp_path, options=runner.LiveKitRoomOptions(
-            participant_metadata={"session_intent": intent},
+            session_intent=intent,
         ))
     assert [(o.greeting_expected, o.greeting_audio_only) for o in observed] == [
         (expected, audio_only), (expected, audio_only), (False, False),

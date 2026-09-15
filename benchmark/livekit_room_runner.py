@@ -23,10 +23,7 @@ from typing import Any
 from eidolon_sdk.integrations.livekit import build_livekit_token
 from livekit import rtc
 
-from eidolon.livekit.agent.runtime.interaction_mode import (
-    resolve_session_intent,
-    resolve_welcome,
-)
+from eidolon.livekit.agent.runtime.interaction_mode import resolve_welcome
 
 from eidolon_sdk.biz.contracts import (
     CLIENT_AUDIO_STATE_TOPIC,
@@ -35,6 +32,8 @@ from eidolon_sdk.biz.contracts import (
     INPUT_MODE_AUTO,
     INPUT_MODE_PTT,
     SESSION_CONVERSATION_ID_FIELD,
+    SESSION_INTENT_FIELD,
+    SESSION_INTENT_USER_INITIATED,
     WIRE_SCHEMA_VERSION,
 )
 from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION
@@ -90,6 +89,12 @@ class LiveKitRoomOptions:
     participant_identity: str | None = None
     participant_kind: str = "user"
     participant_metadata: dict[str, Any] | None = None
+    # Why the benchmarked session exists. A separate option rather than a
+    # participant_metadata key because that is the production split: Channel
+    # takes the intent off the agent dispatch, which only the Provider writes,
+    # and ignores anything a participant claims about its own. A benchmark that
+    # set it the other way would be exercising a bus that no longer carries it.
+    session_intent: str = SESSION_INTENT_USER_INITIATED
     # timeline_expectations parses case ids back out of room names, so a custom
     # prefix would break that mapping; keep the shared constant.
     room_prefix: str = ROOM_NAME_PREFIX
@@ -131,7 +136,7 @@ async def run_livekit_room_suite(
     cfg = load_effective_config()
     options = options or LiveKitRoomOptions()
     welcome = resolve_welcome(
-        session_intent=resolve_session_intent(options.participant_metadata),
+        session_intent=options.session_intent,
         welcome_message=cfg.behavior.welcome_message,
     )
     options = replace(
@@ -338,6 +343,7 @@ async def _run_room_case(
         participant=participant,
         agent_name=options.agent_name,
         metadata=_participant_metadata(options),
+        session_intent=options.session_intent,
     )
 
     room = rtc.Room()
@@ -1015,6 +1021,7 @@ def _make_dispatch_token(
     participant: str,
     agent_name: str,
     metadata: dict[str, Any] | None = None,
+    session_intent: str = SESSION_INTENT_USER_INITIATED,
 ) -> str:
     return build_livekit_token(
         api_key=api_key,
@@ -1025,10 +1032,13 @@ def _make_dispatch_token(
         participant_metadata=metadata,
         dispatch_agent=True,
         agent_name=agent_name,
+        # The dispatch stands in for the Channel Provider: in production it is
+        # what carries the per-session facts the agent is allowed to trust.
         agent_metadata={
             SESSION_CONVERSATION_ID_FIELD: (
                 f"bench:{uuid.uuid5(uuid.NAMESPACE_URL, room_name).hex}"
-            )
+            ),
+            SESSION_INTENT_FIELD: session_intent,
         },
     )
 

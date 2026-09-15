@@ -28,6 +28,10 @@ from .helpers import (
     session_payload,
 )
 
+from eidolon_sdk.biz.contracts import (
+    SESSION_INTENT_PRESENCE,
+    SESSION_INTENT_USER_INITIATED,
+)
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 # Tests name the device they mean; the name becomes a real device
@@ -126,6 +130,41 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
         assert opened.status == 200
         assert json.loads(await opened.text())["operation"] == "channel.opened-session"
         assert len(adapter.sessions_opened) == 1
+        # Saying nothing is saying user_initiated; the privileged intents are
+        # reachable only by naming one, and only from behind this bearer.
+        assert adapter.sessions_opened[-1][2] == SESSION_INTENT_USER_INITIATED
+
+        woken = await client.post(
+            "/v1/device-channels/sessions/open",
+            json=session_payload(
+                operation=OPEN_SESSION, session_intent=SESSION_INTENT_PRESENCE
+            ),
+            headers=headers,
+        )
+        assert woken.status == 200
+        assert json.loads(await woken.text())["session_intent"] == SESSION_INTENT_PRESENCE
+        assert adapter.sessions_opened[-1][2] == SESSION_INTENT_PRESENCE
+
+        # The same wake without the credential reaches nothing, which is what
+        # makes "who may set the intent" an answerable question at all.
+        unauthorized_wake = await client.post(
+            "/v1/device-channels/sessions/open",
+            json=session_payload(
+                operation=OPEN_SESSION, session_intent=SESSION_INTENT_PRESENCE
+            ),
+        )
+        assert unauthorized_wake.status == 401
+        assert len(adapter.sessions_opened) == 2
+
+        misspelt_wake = await client.post(
+            "/v1/device-channels/sessions/open",
+            json=session_payload(
+                operation=OPEN_SESSION, session_intent="presence-initiated"
+            ),
+            headers=headers,
+        )
+        assert misspelt_wake.status == 422
+        assert len(adapter.sessions_opened) == 2
 
         # Each route accepts only its own operation, so a mis-posted request
         # cannot end a conversation the caller meant to start.

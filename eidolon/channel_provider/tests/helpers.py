@@ -134,6 +134,9 @@ class FakeAdapter:
         self._binding_format = binding_format
         self._payload = payload
         self.opened: list[ChannelSpec] = []
+        # Where the Authority said this Host was reached, per open, so a test
+        # can tell "nothing was observed" from "nothing was forwarded".
+        self.observed: list[str] = []
         self.closed: list[dict[str, Any]] = []
         # (handle, conversation_id, session_intent) — the intent is recorded
         # because which one reached the transport is the whole authority story.
@@ -167,8 +170,11 @@ class FakeAdapter:
     async def healthcheck(self) -> None:
         self.health_calls += 1
 
-    async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
+    async def open(
+        self, spec: ChannelSpec, *, issued_at_ms: int, observed_host_address: str = ""
+    ) -> ChannelGrant:
         self.opened.append(spec)
+        self.observed.append(observed_host_address)
         return ChannelGrant(
             binding_format=self._binding_format
             or f"application/vnd.eidolon.{self._name}-session+json;v=2",

@@ -112,13 +112,21 @@ class ChannelAdapter(Protocol):
         """Raise `BackendUnavailable` if this adapter cannot serve right now."""
         ...
 
-    async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
+    async def open(
+        self, spec: ChannelSpec, *, issued_at_ms: int, observed_host_address: str = ""
+    ) -> ChannelGrant:
         """Converge the channel resource and mint a fresh device grant.
 
         Called both for a first provision and for a refresh, so it must be
         idempotent for the same spec.  A returned handle names the standing
         transport resource; it does not represent ownership of the credential
         that was just minted.
+
+        `observed_host_address` is where the Authority saw this Host being
+        reached, empty whenever it had nothing to observe — which includes
+        every reconcile that no device request set going.  An adapter may use
+        it to order what it offers; nothing may depend on it being there, and
+        the grant must stay idempotent for the same spec without it.
         """
         ...
 

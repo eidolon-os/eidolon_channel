@@ -221,7 +221,7 @@ async def test_http_preserves_domain_error_codes_from_the_adapter(tmp_path) -> N
     async def response_for(error):
         adapter = FakeAdapter(name="livekit")
 
-        async def fail_open(_spec, *, issued_at_ms):
+        async def fail_open(_spec, *, issued_at_ms, observed_host_address=""):
             raise error
 
         adapter.open = fail_open

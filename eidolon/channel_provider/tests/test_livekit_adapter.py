@@ -1114,3 +1114,91 @@ async def test_explicit_remote_policy_change_invalidates_saved_binding(monkeypat
     assert adapter.binding_current(grant.handle)
     monkeypatch.setattr(adapter, "_config", livekit_config(client_url="wss://new.example.test"))
     assert not adapter.binding_current(grant.handle)
+
+
+@pytest.mark.asyncio
+async def test_the_binding_leads_with_the_address_the_device_reached_this_host_on(
+    monkeypatch,
+) -> None:
+    """Evidence outranks the ordering hint, because a wrong guess is expensive.
+
+    The list is tried in order and every candidate the device cannot reach
+    costs it a full LiveKit connect — seven internal retries at an eleven
+    second TLS timeout, about 77 seconds of a screen that only says it is
+    retrying. The default route decides the order otherwise, and on
+    2026-09-15 the default route was not where the device was.
+    """
+
+    adapter, _ = _adapter()
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
+    monkeypatch.setattr(
+        adapter_mod, "_client_addresses", lambda _networks: ["10.42.0.2", "192.168.100.19"]
+    )
+
+    grant = await adapter.open(
+        _spec(), issued_at_ms=1_000, observed_host_address="192.168.100.19"
+    )
+
+    session = json.loads(grant.payload)["session"]
+    assert session["server_url"] == "ws://192.168.100.19:7880"
+    # Led, not narrowed: the binding outlives the request that minted it, and a
+    # device that moves inside its lifetime still has the rest to fall back on.
+    assert session["server_urls"] == ["ws://192.168.100.19:7880", "ws://10.42.0.2:7880"]
+
+
+@pytest.mark.asyncio
+async def test_an_address_this_host_does_not_offer_orders_nothing(monkeypatch) -> None:
+    """Which links may be offered at all is not this observation's question.
+
+    That one is answered by what Ops declared about this machine, and an
+    observation must not reach around it. It is also what makes it safe to
+    forward an observation nobody vetted: a Host whose Authority was reached
+    over loopback — every Host with a TLS ingress in front of it — hands on
+    127.0.0.1, and 127.0.0.1 is not one of the candidates, so it changes
+    nothing rather than telling a device to dial itself.
+    """
+
+    adapter, _ = _adapter()
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
+    monkeypatch.setattr(
+        adapter_mod, "_client_addresses", lambda _networks: ["10.42.0.2", "192.168.100.19"]
+    )
+    offered = ["ws://10.42.0.2:7880", "ws://192.168.100.19:7880"]
+
+    for observation in ("", "127.0.0.1", "203.0.113.9", "not-an-address"):
+        grant = await adapter.open(
+            _spec(), issued_at_ms=1_000, observed_host_address=observation
+        )
+        assert json.loads(grant.payload)["session"]["server_urls"] == offered, observation
+
+
+@pytest.mark.asyncio
+async def test_a_binding_minted_from_an_observation_still_reads_current(
+    monkeypatch,
+) -> None:
+    """Otherwise every configuration pull would refresh the binding it read.
+
+    `binding_current` asks whether this Host's own addresses have moved since
+    the binding was minted. An observation is not the Host moving — it is one
+    device's account of how it arrived — so it stays out of what the handle
+    records. Record the offered order there instead and the next `current`
+    reports `refresh_required` against a Host that has not changed, forever.
+    """
+
+    adapter, _ = _adapter()
+    monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
+    addresses = ["10.42.0.2", "192.168.100.19"]
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda _networks: addresses)
+
+    grant = await adapter.open(
+        _spec(), issued_at_ms=1_000, observed_host_address="192.168.100.19"
+    )
+    assert adapter.binding_current(grant.handle)
+    # And a later reconcile with nothing to observe agrees with it, which is
+    # the case that actually recurs: the Authority answers `current` without a
+    # device request in flight.
+    assert adapter.binding_current(grant.handle)
+
+    # The control: a Host that really did move still invalidates the binding.
+    addresses[:] = ["10.183.24.39"]
+    assert not adapter.binding_current(grant.handle)

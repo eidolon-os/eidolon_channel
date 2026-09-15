@@ -136,7 +136,9 @@ class ChannelProviderService:
             if (request.operation == "channel.refresh-device" and previous is not None
                     and not adapter.binding_current(json.loads(previous.handle_json))):
                 runtime_refresh_of = previous
-            grant = await adapter.open(spec, issued_at_ms=now)
+            grant = await adapter.open(
+                spec, issued_at_ms=now, observed_host_address=request.observed_host_address
+            )
             channel_id = self._channel_id(request)
             response = self._response(
                 request=request,

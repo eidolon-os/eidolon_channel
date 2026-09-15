@@ -555,3 +555,40 @@ async def test_runtime_observation_cannot_refresh_a_replaced_active_row(tmp_path
     with pytest.raises(InvalidTransition):
         store.create_provision(stale_attempt, now_ms=clock[0], runtime_refresh_of=observed)
     assert store.current_channel(request.device_ref).operation_id == "runtime-refresh-1"
+
+
+async def test_the_observed_host_address_reaches_the_adapter_that_mints_the_binding(
+    tmp_path,
+) -> None:
+    """The only thing this service does with the observation is hand it down.
+
+    Where a device reached this Host is a fact about one connection, and the
+    service has no opinion about addresses at all — the adapter that names a
+    server URL is the only thing that can use it.
+    """
+
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    payload = provision_payload()
+    payload["observed_host_address"] = "192.168.100.19"
+
+    await service.provision(ProvisionRequest.parse(encoded(payload)))
+
+    assert backend.observed == ["192.168.100.19"]
+
+
+async def test_a_reconcile_with_nothing_to_observe_still_provisions(tmp_path) -> None:
+    """A management action reconciles with no device request in flight.
+
+    So does a device pull that reached this Host over loopback. Both have to
+    keep working, which is why the observation is optional rather than a field
+    the Authority is required to fill.
+    """
+
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+
+    response = await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    assert json.loads(response)["operation"] == "channel.provisioned-device"
+    assert backend.observed == [""]

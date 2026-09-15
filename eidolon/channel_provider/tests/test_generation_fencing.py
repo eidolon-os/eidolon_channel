@@ -189,12 +189,14 @@ async def test_two_processes_racing_same_generation_commit_one_operation(tmp_pat
     arrivals = [0]
 
     class RacingAdapter(FakeAdapter):
-        async def open(self, spec, *, issued_at_ms):
+        async def open(self, spec, *, issued_at_ms, observed_host_address=""):
             arrivals[0] += 1
             if arrivals[0] == 2:
                 both_opening.set()
             await both_opening.wait()
-            return await super().open(spec, issued_at_ms=issued_at_ms)
+            return await super().open(
+                spec, issued_at_ms=issued_at_ms, observed_host_address=observed_host_address
+            )
 
     first, store, first_backend = _service(path, clock, RacingAdapter(name="livekit"))
     second, _store2, second_backend = _service(path, clock, RacingAdapter(name="livekit"))

@@ -137,3 +137,57 @@ def test_contract_rejects_duplicate_json_keys() -> None:
 
     with pytest.raises(ContractError, match="duplicate JSON field"):
         ProvisionRequest.parse(raw.encode())
+
+
+def test_the_observed_host_address_is_optional_and_absent_means_nothing_was_seen() -> None:
+    """Most reconciles have no device request in flight to observe."""
+
+    request = ProvisionRequest.parse(encoded(provision_payload()))
+
+    assert request.observed_host_address == ""
+
+
+def test_the_observed_host_address_is_read_from_the_root_not_the_device() -> None:
+    payload = provision_payload()
+    payload["observed_host_address"] = "192.168.100.19"
+
+    assert ProvisionRequest.parse(encoded(payload)).observed_host_address == "192.168.100.19"
+
+
+def test_an_observed_host_address_that_is_not_an_address_is_refused() -> None:
+    payload = provision_payload()
+    payload["observed_host_address"] = "eidolon-hub-f89c0ecca5d0070a7989.local"
+
+    with pytest.raises(ContractError, match="observed_host_address"):
+        ProvisionRequest.parse(encoded(payload))
+
+
+def test_the_observed_host_address_stays_out_of_the_idempotency_fingerprint() -> None:
+    """A device that moved between two deliveries must not lose its channel.
+
+    The Authority derives one operation id from the DeviceRef and the Manifest
+    and re-sends it until it converges. Neither of those moves when a device
+    changes network, but the address it reaches this Host on does — so if the
+    observation counted as part of the ask, the second delivery of the *same*
+    pending operation would read as that id reused for a different payload,
+    and be refused IdempotencyConflict, which is terminal.
+    """
+
+    without = ProvisionRequest.parse(encoded(provision_payload()))
+    wifi = provision_payload()
+    wifi["observed_host_address"] = "192.168.100.19"
+    cable = provision_payload()
+    cable["observed_host_address"] = "10.42.0.2"
+
+    seen = {
+        without.fingerprint,
+        ProvisionRequest.parse(encoded(wifi)).fingerprint,
+        ProvisionRequest.parse(encoded(cable)).fingerprint,
+    }
+    assert len(seen) == 1
+
+    # The control: something that *is* part of the ask still moves it, so the
+    # assertion above is about this one field and not about a dead fingerprint.
+    moved = provision_payload()
+    moved["device"]["manifest_revision"] = "sha256:manifest-2"
+    assert ProvisionRequest.parse(encoded(moved)).fingerprint != without.fingerprint

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -151,6 +152,33 @@ def _text(value: Any, *, name: str, minimum: int = 1, maximum: int) -> str:
     return value
 
 
+#: Where the Hub says this Host was reached, when a device's own request is what
+#: set the exchange going. Root-level rather than inside ``device``: it is not
+#: something the device declared about itself, it is what the Authority saw of
+#: the connection carrying the ask.
+OBSERVED_HOST_ADDRESS = "observed_host_address"
+
+
+def _observed_host_address(value: Any) -> str:
+    """The Host address a device reached, as the Authority observed it.
+
+    Shape only. Whether the address is *usable* is not decided here and does
+    not need to be: the adapter orders its own candidates by it and never adds
+    to them, so an address this Host does not have simply orders nothing. That
+    is deliberate — refusing here would turn a bad observation into a terminal
+    contract error, and cost a correctly claimed device its channel over a
+    field that only ever expresses a preference.
+    """
+
+    # 45 is the longest an IP address gets in text: an IPv4-mapped IPv6.
+    text = _text(value, name=OBSERVED_HOST_ADDRESS, maximum=45)
+    try:
+        ipaddress.ip_address(text)
+    except ValueError as exc:
+        raise ContractError(f"{OBSERVED_HOST_ADDRESS} must be an IP address") from exc
+    return text
+
+
 def _manifest_problem(exc: ValidationError) -> str:
     """The first thing wrong with the document, as a place and a reason."""
 
@@ -202,6 +230,9 @@ class ProvisionRequest:
     device_ref: DeviceRef
     device: ProvisionDevice
     fingerprint: str
+    #: Empty whenever the Authority had nothing to observe — a reconcile with no
+    #: device request in flight, or one that reached it over loopback.
+    observed_host_address: str = ""
 
     @classmethod
     def parse(cls, raw: bytes) -> ProvisionRequest:
@@ -210,6 +241,7 @@ class ProvisionRequest:
             value,
             name="provision request",
             required={"operation", "operation_id", "device_ref", "device"},
+            optional={OBSERVED_HOST_ADDRESS},
         )
         if root["operation"] not in {"channel.provision-device", "channel.refresh-device"}:
             raise ContractError(
@@ -258,7 +290,23 @@ class ProvisionRequest:
             operation_id=_text(root["operation_id"], name="operation_id", maximum=128),
             device_ref=device_ref,
             device=device,
-            fingerprint=request_fingerprint(value),
+            # Deliberately outside the fingerprint. The fingerprint answers
+            # "was this operation id reused for a different ask", and where a
+            # device happened to reach this Host is not part of the ask: the
+            # Authority derives the operation id from the DeviceRef and the
+            # Manifest, neither of which moves when the device changes network.
+            # Fold the observation in and a device that moved between two
+            # deliveries of the same pending operation is answered
+            # IdempotencyConflict, which is terminal — it would lose its
+            # channel over an address that was only ever a preference.
+            fingerprint=request_fingerprint(
+                {key: item for key, item in value.items() if key != OBSERVED_HOST_ADDRESS}
+            ),
+            observed_host_address=(
+                _observed_host_address(root[OBSERVED_HOST_ADDRESS])
+                if OBSERVED_HOST_ADDRESS in root
+                else ""
+            ),
         )
 
     @property

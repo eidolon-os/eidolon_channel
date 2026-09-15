@@ -86,6 +86,43 @@ def _client_addresses(
     return sorted(addresses, key=lambda address: (address != preferred, int(ipaddress.ip_address(address))))
 
 
+def _observed_first(urls: list[str], observed: str) -> list[str]:
+    """The same candidates, led by the one this device is known to reach.
+
+    Ordering only, never widening. The candidates are what this Host offers at
+    all, and that question is answered elsewhere — by what Ops declared about
+    this machine's links. What an observation answers is the narrower one of
+    which of them to try first, and it answers it with evidence rather than a
+    guess: an address that carried the device's own request is, by
+    construction, an address that device can reach. So an observation naming
+    something absent from the list orders nothing and adds nothing, which is
+    also what makes it safe to pass one through unexamined — a Host answering
+    a request that arrived over loopback hands on `127.0.0.1`, and `127.0.0.1`
+    is not a candidate, so nothing happens.
+
+    Worth the trouble because the list is tried in order and a wrong guess is
+    not free: the firmware pays a full LiveKit connect for each candidate,
+    seven internal retries at an eleven second TLS timeout, about 77 seconds
+    behind a screen that only says it is retrying.
+    """
+
+    if not observed:
+        return urls
+    try:
+        wanted = ipaddress.ip_address(observed)
+    except ValueError:
+        return urls
+    for index, url in enumerate(urls):
+        host = urlparse(url).hostname
+        try:
+            reached = host is not None and ipaddress.ip_address(host) == wanted
+        except ValueError:
+            continue
+        if reached:
+            return [url, *urls[:index], *urls[index + 1:]]
+    return urls
+
+
 _HEALTHCHECK_ROOM = "__eidolon_channel_provider_healthcheck__"
 _ENDED_JOB_STATUSES = frozenset({JobStatus.JS_SUCCESS, JobStatus.JS_FAILED})
 _SESSION_REQUESTS = {
@@ -266,8 +303,11 @@ class LiveKitChannelAdapter:
 
     # -- lifecycle --------------------------------------------------------
 
-    async def open(self, spec: ChannelSpec, *, issued_at_ms: int) -> ChannelGrant:
+    async def open(
+        self, spec: ChannelSpec, *, issued_at_ms: int, observed_host_address: str = ""
+    ) -> ChannelGrant:
         urls = self._client_urls()
+        offered = _observed_first(urls, observed_host_address)
         room = self._room_name(spec)
         await self._declare_room(room)
         ttl = self._config.grant_ttl_seconds
@@ -275,8 +315,8 @@ class LiveKitChannelAdapter:
             {
                 "schema_version": 2,
                 "session": {
-                    "server_url": urls[0],
-                    **({"server_urls": urls} if len(urls) > 1 else {}),
+                    "server_url": offered[0],
+                    **({"server_urls": offered} if len(offered) > 1 else {}),
                     "token": self._token(room, spec, ttl_seconds=ttl),
                     "identity": spec.device_id,
                     "room_name": room,
@@ -294,6 +334,14 @@ class LiveKitChannelAdapter:
         # arriving here can be checked against the only participant entitled to
         # make one — the room also holds the agent, which speaks on the same
         # topic in the other direction.
+        # `server_urls` here is what this Host has, not the order this device
+        # was told to try. `binding_current` reads it to ask whether the Host's
+        # own addresses have moved since, and an observation is not the Host
+        # moving — it is one device's account of how it arrived. Record the
+        # ordering instead and every binding minted from an observation reads
+        # as stale to the next `current`, which answers `refresh_required` to
+        # an Authority that then refreshes it, on every configuration pull,
+        # forever.
         handle: dict[str, Any] = {"room": room, "device": spec.device_id, "server_urls": urls}
         if spec.output_policy is not None and spec.selected_outputs is not None:
             handle["output_template"] = {

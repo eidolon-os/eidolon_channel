@@ -101,8 +101,17 @@ async def test_room_suite_selects_welcome_completion_contract(
     ]
 
 
-def test_sound_is_not_used_as_spoken_echo_context():
+def test_no_welcome_is_used_as_spoken_echo_context():
     from benchmark.policy_runner import _assistant_speech_ledger
 
-    case = SimpleNamespace(device_envelope=SimpleNamespace(agent=SimpleNamespace(speaking_text="")))
-    assert _assistant_speech_ledger(case, welcome_message=WelcomeAudio()).latest is None
+    # The ledger reads the case and nothing else, so no deployment welcome --
+    # a sound least of all, but spoken text just as much -- can stand in as what
+    # the agent is saying. A case that is mid-utterance says so itself.
+    def case(speaking_text):
+        return SimpleNamespace(
+            device_envelope=SimpleNamespace(agent=SimpleNamespace(speaking_text=speaking_text)),
+        )
+
+    assert _assistant_speech_ledger(case("")).latest is None
+    recorded = _assistant_speech_ledger(case("我会先讲系统结构")).latest
+    assert (recorded.text, recorded.source) == ("我会先讲系统结构", "benchmark_device_envelope")

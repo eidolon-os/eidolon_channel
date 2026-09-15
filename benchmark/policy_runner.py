@@ -20,7 +20,6 @@ from eidolon.livekit.agent.turn_policy import (
     TurnPolicyRuntime,
 )
 from eidolon.livekit.common.config import TurnPolicyConfig, load_effective_config
-from eidolon.livekit.common.welcome import WelcomeMessage
 
 from .device_envelope import device_envelope_metrics
 from .schema import BenchmarkCase, BenchmarkSuite, CaseResult, RunResult, UserStep
@@ -54,10 +53,7 @@ def run_policy_suite(
             started = time.monotonic()
             errors: list[str] = []
             decisions: list[dict] = []
-            assistant_speech = _assistant_speech_ledger(
-                case,
-                welcome_message=cfg.behavior.welcome_message,
-            )
+            assistant_speech = _assistant_speech_ledger(case)
             echo_gate = TranscriptEchoGate(
                 get_agent_text=lambda: _latest_assistant_text(assistant_speech),
                 min_normalized_chars=policy.attention.echo_min_normalized_chars,
@@ -362,17 +358,15 @@ def run_policy_suite(
     )
 
 
-def _assistant_speech_ledger(
-    case: BenchmarkCase,
-    *,
-    welcome_message: WelcomeMessage,
-) -> AssistantSpeechLedger:
+def _assistant_speech_ledger(case: BenchmarkCase) -> AssistantSpeechLedger:
+    # Case-only, with no fallback to the deployment's behavior.welcome_message:
+    # this corpus backs a CI safety gate, and a verdict that flips when someone
+    # edits config/settings.yaml for unrelated reasons is not a gate. A case that
+    # needs the agent mid-utterance pins device_envelope.agent.speaking_text.
     ledger = AssistantSpeechLedger()
     synthetic_text = case.device_envelope.agent.speaking_text.strip()
     if synthetic_text:
         ledger.record(synthetic_text, source="benchmark_device_envelope")
-    elif isinstance(welcome_message, str) and welcome_message.strip():
-        ledger.record(welcome_message, source="benchmark_welcome")
     return ledger
 
 

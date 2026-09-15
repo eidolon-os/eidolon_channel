@@ -72,6 +72,7 @@ async def production_ptt_session(*, text, llm, tts, stt_stage=None, interrupt_cl
 
     stage = stt_stage if stt_stage is not None else ScriptedSegmentSTT(text)
     pipeline = HalfDuplexPttPipeline(SimpleNamespace(
+        outputs=OutputSelection(speech=True, dialogue_text=True),
         stt=stage, llm=SimpleNamespace(llm=llm), tts=SimpleNamespace(tts=tts), vad=None,
         interrupt_classifier=interrupt_classifier,
     ), instructions=instructions)

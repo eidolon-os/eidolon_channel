@@ -206,7 +206,12 @@ class HalfDuplexPttPipeline(BasePipeline):
 
         owner_id = companion_id = ""
         try:
-            context = await resolve_event_context(room)
+            context = await resolve_event_context(
+                room,
+                context_resolver=getattr(
+                    self._factory, "runtime_context_resolver", None
+                ),
+            )
             owner_id, companion_id = context.owner_id, context.companion_id
         except Exception as exc:  # noqa: BLE001 - observation must not break voice
             logger.debug("[HalfDuplexPttPipeline] session trace identity unknown: %s", exc)

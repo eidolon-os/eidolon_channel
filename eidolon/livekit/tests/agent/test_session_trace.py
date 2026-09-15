@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from eidolon.livekit.agent.observability import ChannelTurnEventSink
 
 from eidolon.livekit.agent.observability.session_trace import (
     RECORD_SESSION_CLOSE,
@@ -335,3 +340,86 @@ def test_close_twice_writes_one_closing_record(tmp_path: Path) -> None:
 
     rows = _rows(tmp_path)
     assert [r["record_kind"] for r in rows].count(RECORD_SESSION_CLOSE) == 1
+
+
+# --- the wiring: a device session must reach the writer already attributable ---
+#
+# `test_channel_turn_events.py` proves the resolution. These prove that each
+# pipeline actually hands the resolver over — which is the half that was
+# missing, and the half no amount of testing the resolver would have caught:
+# every device trace on disk was named `unknown-owner__unknown-companion`
+# while the resolver's own tests passed.
+
+
+def _mounted_factory(companion_id: str, session_id: str = "sess-wired"):
+    """A factory whose runtime resolver answers as a mounted body's does."""
+
+    async def resolve_room(room):  # noqa: ANN001 - mirrors ChannelRuntimeServices
+        return SimpleNamespace(
+            runtime=SimpleNamespace(
+                owner_id="owner-mounted",
+                companion_id=companion_id,
+                device_id="device-1",
+            ),
+            mount_revision=3,
+        )
+
+    return SimpleNamespace(
+        runtime_session_id=session_id, runtime_context_resolver=resolve_room
+    )
+
+
+def _device_room():
+    """A device token's real metadata shape: no `companion_id` in it."""
+
+    participant = SimpleNamespace(
+        identity="device-1",
+        metadata=json.dumps(
+            {"kind": "device", "device_id": "device-1", "owner_id": "owner-mounted"}
+        ),
+    )
+    return SimpleNamespace(
+        name="room-device", remote_participants={"device-1": participant}
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_duplex_names_a_device_trace_for_the_mounted_companion(
+    tmp_path: Path,
+) -> None:
+    from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
+
+    pipeline = _Pipeline(_observability(tmp_path))
+    pipeline._factory = _mounted_factory("companion-mounted")
+    sink = ChannelTurnEventSink(observer=lambda event: None)
+    pipeline._ensure_turn_event_sink = lambda: sink
+
+    lifecycle = FullDuplexSessionLifecycle.__new__(FullDuplexSessionLifecycle)
+    lifecycle._pipeline = pipeline
+
+    await lifecycle.begin_session_observation(_device_room())
+    pipeline.close_session_trace("session_ended")
+
+    name = sorted(tmp_path.rglob("*.ndjson"))[0].name
+    assert name.startswith("owner-mounted__companion-mounted__")
+    assert "unknown-owner" not in name
+
+
+@pytest.mark.asyncio
+async def test_ptt_names_a_device_trace_for_the_mounted_companion(
+    tmp_path: Path,
+) -> None:
+    from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
+
+    pipeline = _Pipeline(_observability(tmp_path))
+    pipeline._factory = _mounted_factory("companion-mounted")
+    pipeline._open_ptt_session_trace = (
+        HalfDuplexPttPipeline._open_ptt_session_trace.__get__(pipeline)
+    )
+
+    await pipeline._open_ptt_session_trace(_device_room())
+    pipeline.close_session_trace("session_ended")
+
+    name = sorted(tmp_path.rglob("*.ndjson"))[0].name
+    assert name.startswith("owner-mounted__companion-mounted__")
+    assert "unknown-owner" not in name

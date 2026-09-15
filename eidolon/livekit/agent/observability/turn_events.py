@@ -96,13 +96,15 @@ class ChannelTurnEventSink:
     def telemetry_observed_count(self) -> int:
         return self._telemetry_observed
 
-    async def start(self, room: Any) -> None:
+    async def start(self, room: Any, *, context_resolver: Any = None) -> None:
         """Capture the already-resolved room identity without storage I/O."""
 
         if self._context is not None:
             return
         try:
-            context = await resolve_event_context(room)
+            context = await resolve_event_context(
+                room, context_resolver=context_resolver
+            )
         except Exception as exc:  # noqa: BLE001 - observability must not break voice
             logger.warning("Channel turn events disabled: %s", exc)
             return
@@ -292,7 +294,45 @@ class ChannelTurnEventSink:
             logger.exception("Channel telemetry observer failed type=%s", event.event_type)
 
 
-async def resolve_event_context(room: Any) -> ChannelEventContext:
+async def _mounted_companion(context_resolver: Any, room: Any) -> str:
+    """Which Companion answers through this body, according to the Kernel mount.
+
+    The same question the device token's own resolver asks, asked the same way —
+    ``ChannelRuntimeServices.resolve_room`` memoises its answer, so this is the
+    identical context the credential was minted from rather than a second
+    lookup that could disagree with it.
+
+    A resolver that cannot answer yields "" rather than raising, so the caller
+    reports one clear refusal instead of two different ones depending on where
+    the failure happened.
+    """
+
+    try:
+        resolved = await context_resolver(room)
+    except Exception as exc:  # noqa: BLE001 - observation must not break voice
+        logger.debug("mounted Companion unresolved: %s", exc)
+        return ""
+    # Two shapes: a mounted body with a Companion answering carries the full
+    # runtime context; one with nobody answering carries only the connection.
+    runtime = getattr(resolved, "runtime", None)
+    if runtime is not None:
+        return str(getattr(runtime, "companion_id", "") or "").strip()
+    return str(getattr(resolved, "answering_companion_id", "") or "").strip()
+
+
+async def resolve_event_context(
+    room: Any, *, context_resolver: Any = None
+) -> ChannelEventContext:
+    """Who this session belongs to, for the events and the trace named after it.
+
+    ``context_resolver`` is the runtime's own room resolver. It is optional
+    because two callers reach here and only one of them holds a factory, but for
+    a **device** it is the difference between an attributable session and one
+    filed under ``unknown-owner__unknown-companion``: a device token carries no
+    ``companion_id`` by design, so without the resolver this refused every real
+    device session and the sink quietly disabled itself.
+    """
+
     participant = _participant_identity_and_metadata(room)
     if participant is None:
         raise RuntimeError("runtime participant missing")
@@ -303,9 +343,15 @@ async def resolve_event_context(room: Any) -> ChannelEventContext:
         device_id = str(metadata.get("device_id") or identity).strip()
         owner_id = str(metadata.get("owner_id") or "").strip()
         companion_id = str(metadata.get("companion_id") or "").strip()
+        if not companion_id and context_resolver is not None:
+            # Same precedence as the runtime resolver's own
+            # ``metadata.companion_id or connection.answering_companion_id``.
+            # Two readers of one fact must not disagree about which half wins.
+            companion_id = await _mounted_companion(context_resolver, room)
         if not device_id or not owner_id or not companion_id:
             raise RuntimeError(
-                "device event context requires the owner/companion selected at ingress"
+                "device event context requires an owner and a Companion mounted "
+                "to answer through this body"
             )
     elif kind == "companion":
         owner_id = str(metadata.get("owner_id") or "").strip()

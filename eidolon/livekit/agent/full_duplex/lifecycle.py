@@ -42,6 +42,38 @@ class FullDuplexSessionLifecycle:
         session.on("error", pipeline._on_session_error)
         session.on("close", self._on_session_close)
 
+    async def begin_session_observation(self, room: Room) -> None:
+        """Resolve who this session belongs to, then open the trace named for them.
+
+        Its own method so the wiring can be tested. Inline inside ``run`` it was
+        only reachable by standing up an entire AgentSession, which is why the
+        resolver never being passed here would have gone unnoticed: the unit
+        tests for the resolution itself would stay green while every real device
+        session still produced `unknown-owner__unknown-companion`.
+
+        The resolver matters because a device token carries no ``companion_id``
+        on purpose — which Companion answers is the Kernel mount's to say.
+        """
+
+        pipeline = self._pipeline
+        sink = pipeline._ensure_turn_event_sink()
+        await sink.start(
+            room,
+            context_resolver=getattr(
+                pipeline._factory, "runtime_context_resolver", None
+            ),
+        )
+        # Only now is the Owner/Companion pair known, and the trace file is
+        # named for it — so this is the earliest point the file can exist. The
+        # marks above were buffered and are replayed here with their own times.
+        context = sink.context
+        pipeline.open_session_trace(
+            room,
+            owner_id=context.owner_id if context else "",
+            companion_id=context.companion_id if context else "",
+            interaction_mode="full_duplex",
+        )
+
     async def run(self, room: Room) -> None:
         """Start the full-duplex pipeline and block until the session closes."""
         from livekit.agents.voice import AgentSession
@@ -55,18 +87,7 @@ class FullDuplexSessionLifecycle:
 
         participant_identity = await wait_for_runtime_participant_identity(room)
         pipeline._runtime_participant_identity = participant_identity
-        sink = pipeline._ensure_turn_event_sink()
-        await sink.start(room)
-        # Only now is the Owner/Companion pair known, and the trace file is
-        # named for it — so this is the earliest point the file can exist. The
-        # marks above were buffered and are replayed here with their own times.
-        context = sink.context
-        pipeline.open_session_trace(
-            room,
-            owner_id=context.owner_id if context else "",
-            companion_id=context.companion_id if context else "",
-            interaction_mode="full_duplex",
-        )
+        await self.begin_session_observation(room)
         pipeline.session_mark(
             "runtime_participant_resolved",
             participant_identity=participant_identity,

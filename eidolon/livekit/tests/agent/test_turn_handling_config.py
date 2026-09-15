@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from eidolon_sdk.biz.presentation import OutputSelection
+
 import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -47,7 +49,7 @@ def test_preemptive_passthrough() -> None:
 def test_livekit_17_agent_uses_structured_turn_handling_and_public_stt_node() -> None:
     pipeline = SimpleNamespace(
         _instructions="test",
-        _factory=SimpleNamespace(
+        _factory=SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True),
             stt=SimpleNamespace(stt=None),
             llm=SimpleNamespace(llm=None),
             tts=SimpleNamespace(tts=None),
@@ -96,6 +98,7 @@ async def test_session_uses_livekit_transcription_timeout_event(
     )
 
     pipeline = SimpleNamespace(
+        _factory=SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True)),
         _room=None,
         _started=False,
         _runtime_participant_identity="",
@@ -153,7 +156,7 @@ async def test_public_tts_node_taps_text_without_reimplementing_synthesis(
     monkeypatch.setattr(Agent, "tts_node", fake_default_tts_node)
     pipeline = SimpleNamespace(
         _instructions="test",
-        _factory=SimpleNamespace(
+        _factory=SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True),
             stt=SimpleNamespace(stt=None),
             llm=SimpleNamespace(llm=None),
             tts=SimpleNamespace(tts=None),

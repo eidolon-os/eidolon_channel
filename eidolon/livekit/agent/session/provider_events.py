@@ -178,7 +178,7 @@ class ProviderEventObserver:
                     mark = "brain_state_thinking_at"
                 elif state == "speaking":
                     mark = "brain_state_speaking_at"
-            if mark is None and event_name != "brain_state":
+            if mark is None and event_name != "brain_state" and not event_name.startswith("brain_presentation_"):
                 return
             if not self._should_record_brain_event(timeline, event_name, event):
                 logger.debug(
@@ -246,7 +246,7 @@ class ProviderEventObserver:
                 self._emit_milestone(timeline, event_name, event_name)
             if event_name == "brain_request_sent":
                 self._arm_first_delta_watchdog(timeline)
-            elif event_name in {"brain_done", "brain_cancelled", "brain_error"}:
+            elif event_name in {"brain_done", "brain_cancelled", "brain_error"} or event_name.startswith("brain_presentation_"):
                 self._cancel_first_delta_watchdog()
             self._flush_silent_output_if_terminal(timeline, output)
 

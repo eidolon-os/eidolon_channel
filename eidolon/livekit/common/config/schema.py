@@ -44,7 +44,7 @@ class AgentBehaviorConfig:
 @dataclass(frozen=True)
 class ProvidersConfig:
     stt_provider: str = "sensetime"
-    tts_provider: str = "sensetime"
+    tts_provider: str | None = "sensetime"
     vad_provider: str = "firered"
     brain_provider: BrainProvider = "direct_llm"
 

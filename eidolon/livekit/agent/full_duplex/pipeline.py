@@ -388,7 +388,7 @@ class StreamingPipeline(BasePipeline):
         # Filler word injection for latency masking.
         eot_cfg = self._get_eot_model()._config
         self._filler: FillerManager | None = None
-        if eot_cfg.filler_enabled:
+        if eot_cfg.filler_enabled and self._factory.tts is not None:
             self._filler = FillerManager(
                 self._factory.tts,
                 phrases=list(eot_cfg.filler_phrases),
@@ -1541,6 +1541,8 @@ class StreamingPipeline(BasePipeline):
         verified-presence sessions keep their welcome (None when unconfigured
         means wait for the user to speak first).
         """
+        if not self._factory.outputs.speech:
+            return None
         return resolve_welcome_text(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,

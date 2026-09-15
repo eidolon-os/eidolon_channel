@@ -22,6 +22,7 @@ from typing import AsyncIterator
 import grpc
 import grpc.aio
 from eidolon_sdk.biz.chat_stream import DeltaRole
+from eidolon_sdk.biz.presentation import PresentationReceipt, ResponseIntent
 from eidolon_sdk.core.grpc import (
     DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS,
     GrpcTlsConfig,
@@ -149,7 +150,8 @@ _DONE = _DonePayload()
 
 # Union of everything the inbox queue can carry to a turn consumer.
 TurnPayload = (
-    DeltaPayload
+    ResponseIntent
+    |     DeltaPayload
     | UsagePayload
     | StatePayload
     | ProgressPayload
@@ -247,6 +249,10 @@ class EidolonAgentSession:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def report_presentation(self, turn_id: str, receipt: PresentationReceipt) -> None:
+        await self._write(pb.ChatRequest(presentation_feedback=pb.PresentationFeedback(
+            turn_id=turn_id, receipt=pb.PresentationReceipt(**receipt.model_dump()))))
 
     async def start_turn(
         self,
@@ -523,6 +529,18 @@ class EidolonAgentSession:
                 total_tokens=_i("total_tokens"),
                 model=_s("model"),
             ))
+        elif kind == pb.TurnEvent.PRESENTATION:
+            value = ev.presentation
+            try:
+                intent = ResponseIntent(schema_version=value.schema_version,
+                    response_id=value.response_id, turn_id=value.turn_id, session_id=value.session_id,
+                    intent=value.intent, stance=value.stance, intensity=value.intensity, pace=value.pace,
+                    outcome_ref=value.outcome_ref if value.HasField("outcome_ref") else None)
+                if intent.turn_id != ev.turn_id:
+                    raise ValueError("PRESENTATION_TURN_MISMATCH")
+                q.put_nowait(intent)
+            except ValueError:
+                q.put_nowait(ValueError("INVALID_RESPONSE_INTENT"))
         elif kind == pb.TurnEvent.STATE:
             state = (
                 data_fields["state"].string_value

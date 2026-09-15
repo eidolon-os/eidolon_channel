@@ -20,6 +20,7 @@ from typing import Any
 import psutil
 from urllib.parse import urlparse, urlunparse
 
+from eidolon_sdk.biz.presentation import SessionOutputPlan, OutputSelection, FACE_PROFILE
 from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
@@ -269,6 +270,12 @@ class LiveKitChannelAdapter:
         # make one — the room also holds the agent, which speaks on the same
         # topic in the other direction.
         handle: dict[str, Any] = {"room": room, "device": spec.device_id, "server_urls": urls}
+        if spec.output_policy is not None and spec.selected_outputs is not None:
+            handle["output_template"] = {
+                "policy_revision": spec.output_policy.revision,
+                "outputs": spec.selected_outputs.model_dump(mode="json"),
+                "expression_profile": FACE_PROFILE if spec.selected_outputs.expression else None,
+            }
         if spec.serving is not None:
             handle["agent"] = spec.serving.agent_name
         return ChannelGrant(
@@ -314,6 +321,7 @@ class LiveKitChannelAdapter:
             # it, so no arrival could ever be attributed. Trying harder cannot
             # change that, and the caller needs to hear so.
             raise ChannelNotServable("channel handle cannot identify its device")
+        await self._reconcile_output_dispatches(handle)
         if room in self._listeners:
             return
         watch = _Listening(device=device, sink=sink)
@@ -331,6 +339,21 @@ class LiveKitChannelAdapter:
             self._rejoin_later(room, watch, exc)
             return
         logger.info("listening to room=%s for device=%s", room, device)
+
+    async def _reconcile_output_dispatches(self, handle: dict[str, Any]) -> None:
+        """A committed policy change rebuilds the session; old TTS cannot linger."""
+        template = handle.get("output_template")
+        agent = handle.get("agent")
+        if template is None or not agent:
+            return
+        room = str(handle["room"])
+        for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
+            if dispatch.agent_name != agent:
+                continue
+            plan = self._dispatch_metadata(dispatch).get("output_plan")
+            compatible = (isinstance(plan, dict) and all(plan.get(k) == v for k,v in template.items()))
+            if not compatible:
+                await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
 
     async def _join(self, room: str, watch: _Listening) -> None:
         connection = rtc.Room()
@@ -710,6 +733,8 @@ class LiveKitChannelAdapter:
 
     async def open_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         room, agent = self._serving(handle)
+        output_plan = (SessionOutputPlan(session_id=conversation_id, **handle["output_template"])
+                       if "output_template" in handle else None)
         try:
             for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
                 if dispatch.agent_name != agent:
@@ -718,6 +743,7 @@ class LiveKitChannelAdapter:
                 if (
                     not _is_spent(dispatch)
                     and metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
+                    and metadata.get("output_plan") == (output_plan.model_dump(mode="json") if output_plan else None)
                 ):
                     return
                 # A spent dispatch or one belonging to a superseded conversation
@@ -747,6 +773,7 @@ class LiveKitChannelAdapter:
                         {
                             "schema_v": WIRE_SCHEMA_VERSION,
                             SESSION_CONVERSATION_ID_FIELD: conversation_id,
+                            **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
                         }
                     ),
                 )
@@ -803,6 +830,9 @@ class LiveKitChannelAdapter:
             raise ChannelNotServable("channel handle names no room")
         if not agent:
             raise ChannelNotServable("this channel was not provisioned to be served")
+        template = handle.get("output_template")
+        if template is not None and not OutputSelection.model_validate(template["outputs"]).can_respond:
+            raise ChannelNotServable("NO_RESPONSE_OUTPUT")
         return room, agent
 
     def _token(self, room: str, spec: ChannelSpec, *, ttl_seconds: int) -> str:

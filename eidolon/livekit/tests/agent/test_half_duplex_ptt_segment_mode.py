@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from eidolon_sdk.biz.presentation import OutputSelection
+
 import asyncio
 import inspect
 import json
@@ -137,6 +139,7 @@ class _FakeSession:
 
 
 class _FakeFactory:
+    outputs = OutputSelection(speech=True, dialogue_text=True)
     def __init__(self, stt: _FakeSttStage) -> None:
         self.stt = stt
         self.turn_decisions: list[dict[str, object]] = []

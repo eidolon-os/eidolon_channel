@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from livekit.agents import AgentServer
 
+from eidolon_sdk.biz.presentation import SessionOutputPlan
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
     SESSION_CONVERSATION_ID_FIELD,
@@ -262,6 +263,18 @@ async def _resolve_session_metadata(ctx) -> tuple[str, str, bool]:
     )
 
 
+def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
+    # Only the Provider's authenticated job dispatch supplies the policy.
+    # Participant metadata, speech and LLM output cannot grant output rights.
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    if "output_plan" not in metadata:
+        return None  # existing devices retain their established voice profile
+    plan = SessionOutputPlan.model_validate(metadata["output_plan"])
+    if plan.session_id != session_id:
+        raise ValueError("OUTPUT_PLAN_SESSION_MISMATCH")
+    return plan
+
+
 def _resolve_runtime_session_id(ctx) -> str:
     """Read the per-entry interaction identity from named dispatch metadata.
 
@@ -282,7 +295,8 @@ def _resolve_runtime_session_id(ctx) -> str:
 
 
 def _session_lifecycle_payload(
-    message_type: str, runtime_session_id: str, *, reason: str | None = None
+    message_type: str, runtime_session_id: str, *, reason: str | None = None,
+    output_plan: SessionOutputPlan | None = None,
 ) -> bytes:
     payload = {
         "schema_v": WIRE_SCHEMA_VERSION,
@@ -291,6 +305,8 @@ def _session_lifecycle_payload(
     }
     if reason is not None:
         payload["reason"] = reason
+    if output_plan is not None:
+        payload["output_plan"] = output_plan.model_dump(mode="json")
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
@@ -312,6 +328,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
     runtime_session_id = _resolve_runtime_session_id(ctx)
+    output_plan = _resolve_output_plan(ctx, runtime_session_id)
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
@@ -331,7 +348,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         if local is None:
             raise RuntimeError("cannot confirm session start without a local participant")
         await local.publish_data(
-            _session_lifecycle_payload(SESSION_STARTED_TYPE, runtime_session_id),
+            _session_lifecycle_payload(SESSION_STARTED_TYPE, runtime_session_id, output_plan=output_plan),
             reliable=True,
             topic=SESSION_CONTROL_TOPIC,
         )
@@ -495,6 +512,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         livekit_session_key=session_key,
         livekit_room=room,
         runtime_session_id=runtime_session_id,
+        output_plan=output_plan,
     )
 
     # Video avatar is enabled for this session only if globally available AND the

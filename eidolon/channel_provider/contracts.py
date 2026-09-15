@@ -15,6 +15,7 @@ from eidolon_sdk.device_foundation.v1 import (
 )
 from eidolon_sdk.biz.contracts import normalize_conversation_id
 from pydantic import ValidationError
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
 MAX_REQUEST_BYTES = 256 * 1024
 
@@ -186,6 +187,7 @@ class ProvisionDevice:
     manifest_id: str
     manifest: dict[str, Any] = field(repr=False)
     manifest_revision: str = ""
+    output_policy: DeviceOutputPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,14 +220,18 @@ class ProvisionRequest:
                 "manifest",
                 "manifest_revision",
             },
+            optional={"output_policy"},
         )
         try:
             device_ref = DeviceRef.model_validate(root["device_ref"])
             owner_id = BusinessOwnerId.model_validate(device_value["owner_id"])
+            output_policy = (DeviceOutputPolicy.model_validate(device_value["output_policy"])
+                             if "output_policy" in device_value else None)
         except ValidationError as exc:
             raise ContractError("device_ref or business owner id is invalid") from exc
         device = ProvisionDevice(
             owner_id=owner_id,
+            output_policy=output_policy,
             display_name=_text(
                 device_value["display_name"],
                 name="device.display_name",

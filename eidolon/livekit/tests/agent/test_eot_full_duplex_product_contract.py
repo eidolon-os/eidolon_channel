@@ -12,6 +12,8 @@ hide the coupling this suite is intended to detect.
 
 from __future__ import annotations
 
+from eidolon_sdk.biz.presentation import OutputSelection
+
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -341,7 +343,7 @@ def test_agent_binds_complete_turn_minimum_without_shortening_incomplete_turns(
 
     pipeline = SimpleNamespace(
         _instructions="test",
-        _factory=SimpleNamespace(
+        _factory=SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True),
             stt=SimpleNamespace(stt=None),
             llm=SimpleNamespace(llm=None),
             tts=SimpleNamespace(tts=None),

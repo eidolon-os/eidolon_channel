@@ -104,8 +104,18 @@ class AgentOutputCoordinator:
                     "risk": "",
                 }
             )
+        elif name.startswith("brain_presentation_"):
+            state = name.removeprefix("brain_presentation_")
+            output.update(phase="presentation", presentation_state=state,
+                          response_id=event.get("response_id"), silent_failure=False)
+            if "receipt" in event:
+                output["presentation_receipt"] = event["receipt"]
+            if state in {"completed", "none", "cancelled", "rejected", "failed"}:
+                output["outcome"] = f"presentation_{state}"
         elif name == "brain_done":
-            if "brain_first_delta_at" not in timeline.timestamps:
+            if output.get("presentation_state") in {"completed", "none"}:
+                output["silent_failure"] = False
+            elif "brain_first_delta_at" not in timeline.timestamps:
                 if "brain_first_model_activity_at" in timeline.timestamps:
                     output.update(
                         {

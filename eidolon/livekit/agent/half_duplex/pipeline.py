@@ -139,6 +139,8 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
     def _welcome_on_enter_text(self) -> str | None:
+        if not self._factory.outputs.speech:
+            return None
         return resolve_welcome_text(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
@@ -160,11 +162,11 @@ class HalfDuplexPttPipeline(BasePipeline):
         session.on("close", self._on_session_close)
 
     def _build_agent(self):
-        from livekit.agents.voice import Agent
+        from ..session.policy_bound_agent import PolicyBoundAgent
 
         pipeline = self
 
-        class PttAgent(Agent):
+        class PttAgent(PolicyBoundAgent):
             async def on_enter(self) -> None:
                 welcome = pipeline._welcome_on_enter_text()
                 if welcome is None:
@@ -180,9 +182,10 @@ class HalfDuplexPttPipeline(BasePipeline):
                 self.session.say(welcome)
 
         return PttAgent(
+            outputs=self._factory.outputs,
             instructions=self._instructions,
             llm=self._factory.llm.llm,
-            tts=self._factory.tts.tts,
+            tts=self._factory.tts.tts if self._factory.tts is not None else None,
         )
 
     async def _open_ptt_session_trace(self, room: Room) -> None:
@@ -229,8 +232,9 @@ class HalfDuplexPttPipeline(BasePipeline):
             room=room,
             room_options=RoomOptions(
                 audio_input=False,
-                audio_output=AudioOutputOptions(sample_rate=self._audio_sample_rate),
-                text_output=True,
+                audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
+                              if self._factory.outputs.speech else False),
+                text_output=self._factory.outputs.dialogue_text,
             ),
         )
         self.session_mark("session_started")

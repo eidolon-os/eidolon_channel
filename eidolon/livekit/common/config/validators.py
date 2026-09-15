@@ -33,7 +33,7 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append(
             "providers.stt_provider must be one of: " + ", ".join(sorted(STT_PROVIDERS))
         )
-    if cfg.providers.tts_provider not in TTS_PROVIDERS:
+    if cfg.providers.tts_provider is not None and cfg.providers.tts_provider not in TTS_PROVIDERS:
         errors.append(
             "providers.tts_provider must be one of: " + ", ".join(sorted(TTS_PROVIDERS))
         )

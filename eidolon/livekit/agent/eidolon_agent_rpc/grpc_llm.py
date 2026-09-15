@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     )
 
 from eidolon_sdk.biz.chat_stream import DeltaRole
+from eidolon_sdk.biz.presentation import ResponseIntent, SessionOutputPlan
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
@@ -82,6 +83,7 @@ _ERROR_CODE_MAP: dict[str, tuple[int, bool]] = {
     "tenant_not_found": (404, False),
     "user_not_found": (404, False),
     "rate_limited": (429, True),
+    "invalid_presentation": (400, False),
 }
 
 
@@ -123,6 +125,8 @@ class EidolonAgentGrpcLlm(llm.LLM):
         device_token: DeviceTokenSource,
         conversation_id: str | Callable[[], str],
         display_model: str = "eidolon_agent",
+        output_plan: SessionOutputPlan | None = None,
+        presentation_room: Any = None,
         tls: TlsConfig | None = None,
     ) -> None:
         """Construct an EidolonAgent LLM adapter.
@@ -151,6 +155,13 @@ class EidolonAgentGrpcLlm(llm.LLM):
             raise TypeError("EidolonAgentGrpcLlm: device_token must be a callable resolver")
         self._device_token_source: DeviceTokenSource = device_token
         self._target = target.strip()
+        self.output_plan = output_plan
+        self.presentation_transport = None
+        if output_plan is not None and output_plan.outputs.expression:
+            from ..session.presentation import PresentationTransport
+            if presentation_room is None:
+                raise ValueError("PRESENTATION_ROOM_REQUIRED")
+            self.presentation_transport = PresentationTransport(presentation_room, output_plan, self.emit_provider_event)
         # Concrete token resolved lazily — see ``_resolve_device_token``.
         self._device_token: str | None = None
         self._conversation_id: str | Callable[[], str] = conversation_id
@@ -321,6 +332,8 @@ class EidolonAgentGrpcLlm(llm.LLM):
             await self._warmer.discard()
 
     async def aclose(self) -> None:
+        if self.presentation_transport is not None:
+            await self.presentation_transport.close()
         if self._warmer is not None:
             await self._warmer.discard()
             self._warmer = None
@@ -386,9 +399,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 session.start_turn(
                     text=user_text,
                     conversation_id=conversation_id,
-                    metadata={"turn_decision": self._turn_decision_metadata}
-                    if self._turn_decision_metadata
-                    else None,
+                    metadata=({**({"turn_decision": self._turn_decision_metadata} if self._turn_decision_metadata else {}),
+                        **({"presentation_profile": llm_v.output_plan.expression_profile}
+                           if llm_v.output_plan and llm_v.output_plan.outputs.expression else {})} or None),
                     trace_id=self._trace_id,
                 ),
                 timeout=timeout,
@@ -468,6 +481,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
                 if isinstance(payload, DeltaPayload):
+                    if llm_v.output_plan is not None and not (llm_v.output_plan.outputs.speech or llm_v.output_plan.outputs.dialogue_text):
+                        continue
                     # Non-answer status lines are status chrome by default: emit
                     # them as provider events for UI/observability, but keep them
                     # out of TTS. A slow-tool hint is the one non-answer role that
@@ -534,6 +549,15 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             ),
                         )
                     )
+                elif isinstance(payload, ResponseIntent):
+                    if payload.turn_id != turn_id or llm_v.presentation_transport is None:
+                        raise ValueError("UNEXPECTED_RESPONSE_INTENT")
+                    receipt = await llm_v.presentation_transport.present(payload)
+                    if receipt is not None:
+                        await session.report_presentation(turn_id, receipt)
+                        if receipt.status != "completed":
+                            raise APIConnectionError(f"presentation_{receipt.status}", retryable=False)
+                    first_answer_delta_seen = True
                 elif isinstance(payload, StatePayload):
                     llm_v.emit_provider_event(
                         "brain_state",

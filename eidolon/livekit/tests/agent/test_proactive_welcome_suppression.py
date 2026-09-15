@@ -8,6 +8,9 @@ presence sessions keep their welcome.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from eidolon_sdk.biz.presentation import OutputSelection
+
 from eidolon_sdk.biz.contracts import (
     SESSION_INTENT_PRESENCE,
     SESSION_INTENT_PROACTIVE,
@@ -19,6 +22,7 @@ from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
 def _pipeline(*, intent: str, welcome: str) -> StreamingPipeline:
     p = StreamingPipeline.__new__(StreamingPipeline)
+    p._factory = SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True))
     p._session_intent = intent
     p._welcome_message = welcome
     return p

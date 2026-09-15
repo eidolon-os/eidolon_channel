@@ -7,7 +7,7 @@ import inspect
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from livekit.agents.voice import Agent as lk_Agent
+    from ..session.policy_bound_agent import PolicyBoundAgent as lk_Agent
 
     from .pipeline import StreamingPipeline
 
@@ -18,9 +18,9 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
     """Build the LiveKit Agent used by the full-duplex pipeline."""
 
     from livekit.agents import StopResponse
-    from livekit.agents.voice import Agent
+    from ..session.policy_bound_agent import PolicyBoundAgent
 
-    class VoiceAgent(Agent):
+    class VoiceAgent(PolicyBoundAgent):
         async def stt_node(self, audio: Any, model_settings: Any):
             """Admit provider revisions and retain evidence before SDK consumption."""
 
@@ -115,10 +115,11 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             ),
         }
     return VoiceAgent(
+        outputs=pipeline._factory.outputs,
         instructions=pipeline._instructions,
         stt=pipeline._factory.stt.stt,
         llm=pipeline._factory.llm.llm,
-        tts=pipeline._factory.tts.tts,
+        tts=pipeline._factory.tts.tts if pipeline._factory.tts is not None else None,
         vad=pipeline._factory.vad.vad if pipeline._factory.vad else None,
         turn_handling=turn_handling,
     )

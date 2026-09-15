@@ -112,6 +112,11 @@ class ChannelProviderService:
                 return stored.response_json
 
             previous = self._store.current_channel(request.device_ref)
+            if previous is not None and previous.device_ref == request.device_ref:
+                old, new = previous.output_policy, request.device.output_policy
+                if old is not None and (new is None or new.revision < old.revision
+                        or (new.revision == old.revision and new != old)):
+                    raise InvalidTransition("output policy cannot regress or reuse a revision")
             spec = derive_spec(
                 request.device,
                 device_instance_id=request.device_ref.device_instance_id,
@@ -420,6 +425,8 @@ class ChannelProviderService:
                 "operation_id": request.operation_id,
                 "device_ref": request.device_ref.model_dump(mode="json"),
                 "manifest_revision": request.device.manifest_revision,
+                **({"output_policy": request.device.output_policy.model_dump(mode="json")}
+                   if request.device.output_policy is not None else {}),
                 "channels": [
                     {
                         "channel_id": channel_id,

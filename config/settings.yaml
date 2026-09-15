@@ -219,20 +219,15 @@ observability:
   stt_pending_provider_event_window_ms: 2000
   stt_pending_provider_event_preroll_ms: 500
   stt_pending_provider_event_max_count: 32
-  # Per-session link trace (room join -> leave) waits for the next release (see
-  # the file header) — this is the release that adds the fields, so this is the
-  # release that may not name them. The four keys to restore, with the values
-  # they had, are:
-  #
-  #   session_trace_path: "$EIDOLON_LOG_ROOT/channel/traces"
-  #   session_trace_max_queue: 4096
-  #   session_trace_max_file_bytes: 8000000
-  #   session_trace_retention_days: 7
-  #
-  # Until then the schema default holds and no trace is written anywhere. That
-  # costs this release the diagnosis, not the feature: the writer, the Provider
-  # endpoint that serves the files and scripts/report_session_trace.py all ship
-  # here and turn on with one line in the release after.
+  # Per-session link trace (room join -> leave). Held back one release by the
+  # rule in this file's header — the release that added these schema fields
+  # could not also name them, or a rollback would meet keys it cannot parse.
+  # That release is deployed, so naming them here is now the safe half of the
+  # two-release expansion rather than the unsafe one.
+  session_trace_path: "$EIDOLON_LOG_ROOT/channel/traces"
+  session_trace_max_queue: 4096
+  session_trace_max_file_bytes: 8000000
+  session_trace_retention_days: 7
 
 # Bailian STT/TTS provider config (non-secret). API keys stay in .env
 # (BAILIAN_STT_API_KEY / BAILIAN_TTS_API_KEY).

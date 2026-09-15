@@ -319,18 +319,36 @@ async def _mounted_companion(context_resolver: Any, room: Any) -> tuple[str, str
         resolved = await context_resolver(room)
     except Exception as exc:  # noqa: BLE001 - observation must not break voice
         return "", f"the runtime resolver refused: {exc!s}"
-    # Two shapes: a mounted body with a Companion answering carries the full
-    # runtime context; one with nobody answering carries only the connection.
+    # The resolved identity itself, first. ``_resolve_context`` unwraps the
+    # interaction wrapper before returning — its last line is
+    # ``return resolved.runtime`` — so what arrives here is normally a bare
+    # ResolvedRuntimeIdentity carrying ``companion_id`` directly.
+    #
+    # This is the shape the first version missed. It read only the wrapper and
+    # the bare connection, found neither on a pydantic identity that had the
+    # Companion in plain sight, fell through to the last branch, and reported a
+    # perfectly healthy Kernel mount as naming nobody. The lesson is narrow and
+    # worth keeping: the shapes a function returns internally are not the shape
+    # its caller hands on.
+    companion_id = str(getattr(resolved, "companion_id", "") or "").strip()
+    if companion_id:
+        return companion_id, ""
+    # The wrapper, for callers that do not unwrap.
     runtime = getattr(resolved, "runtime", None)
     if runtime is not None:
-        companion_id = str(getattr(runtime, "companion_id", "") or "").strip()
-        if companion_id:
-            return companion_id, ""
+        wrapped = str(getattr(runtime, "companion_id", "") or "").strip()
+        if wrapped:
+            return wrapped, ""
         return "", "the resolved runtime context names no Companion"
+    # A mounted body with nobody answering carries only the connection.
     answering = str(getattr(resolved, "answering_companion_id", "") or "").strip()
     if answering:
         return answering, ""
-    return "", "the Kernel mount has no Companion answering through this body"
+    return (
+        "",
+        "the resolver returned "
+        f"{type(resolved).__name__}, which names no Companion",
+    )
 
 
 async def resolve_event_context(

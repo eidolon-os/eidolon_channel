@@ -166,6 +166,47 @@ def _mount_resolver(companion_id: str | None):
     return resolve
 
 
+async def test_the_shape_the_runtime_resolver_actually_returns_is_read() -> None:
+    """Built from the real class, because a hand-made stand-in hid this bug.
+
+    ``ChannelRuntimeServices.resolve_room`` returns whatever ``_resolve_context``
+    returns, and that function's last line is ``return resolved.runtime`` — so a
+    device session arrives here as a bare ``ResolvedRuntimeIdentity`` with
+    ``companion_id`` on it directly, not as the wrapper and not as the
+    connection.
+
+    The first version of this code read only the other two shapes. Against a
+    SimpleNamespace wearing ``.runtime`` every test passed; against the real
+    pydantic identity it found nothing and blamed the Kernel mount, which was
+    fine. So this test uses the type the resolver really hands over — the one
+    fact the fakes could not tell us.
+    """
+
+    from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity
+
+    identity = ResolvedRuntimeIdentity(
+        owner_id="owner-1",
+        companion_id="companion-mounted",
+        device_id="device-1",
+        genome_id="g-1",
+        genome_hash="h-1",
+        memory_realm_id="realm-1",
+        interaction_mode="full_duplex",
+        realizer_version="1",
+        schema_version="1",
+    )
+
+    async def resolve(room):  # noqa: ANN001
+        return identity
+
+    context = await turn_events._resolve_event_context(
+        _device_room(), context_resolver=resolve
+    )
+
+    assert context.companion_id == "companion-mounted"
+    assert context.owner_id == "owner-1"
+
+
 async def test_device_context_takes_the_companion_from_the_kernel_mount() -> None:
     """A device session must be attributable without the token naming a Companion.
 
@@ -272,7 +313,9 @@ async def test_an_unmounted_body_and_a_broken_resolver_do_not_read_alike() -> No
     unmounted = await _grab(_mount_resolver(None))
     broken = await _grab(_resolver_explodes)
 
-    assert "no Companion answering" in unmounted, unmounted
+    # The unmounted answer names the shape it got, which is what tells the
+    # reader the resolver returned something rather than failing.
+    assert "names no Companion" in unmounted, unmounted
     assert "resolver refused" in broken, broken
     assert unmounted != broken
 

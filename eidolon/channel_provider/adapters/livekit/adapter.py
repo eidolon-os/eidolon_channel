@@ -13,6 +13,7 @@ import json
 import logging
 import socket
 import ipaddress
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -33,6 +34,7 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
     normalize_conversation_id,
 )
+from eidolon_sdk.system import on_product_link
 from livekit import api, rtc
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 from livekit.protocol.agent import JobStatus
@@ -48,8 +50,19 @@ logger = logging.getLogger("eidolon.channel_provider.livekit")
 ADAPTER_NAME = "livekit"
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 
-def _client_addresses() -> list[str]:
-    """Current LAN candidates; the default route is only an ordering hint."""
+def _client_addresses(
+    management_networks: Sequence[ipaddress.IPv4Network | ipaddress.IPv6Network] = (),
+) -> list[str]:
+    """Current LAN candidates; the default route is only an ordering hint.
+
+    Candidates, not answers — the firmware works down the list. That is why a
+    link the device cannot reach is not a harmless extra: the device pays a
+    full LiveKit connect attempt for it, seven internal retries at an eleven
+    second TLS timeout each, about 77 seconds of nothing behind a screen that
+    only says it is retrying. An operator's bench cable is exactly such a link
+    and looks like any other /24 from here, so Ops declares it and it is
+    dropped before it can cost a device a round of that.
+    """
     stats = psutil.net_if_stats()
     addresses = set()
     for name, entries in psutil.net_if_addrs().items():
@@ -61,7 +74,8 @@ def _client_addresses() -> list[str]:
             address = ipaddress.ip_address(entry.address)
             if not (address.is_loopback or address.is_link_local or
                     address.is_unspecified or address.is_multicast):
-                addresses.add(str(address))
+                if on_product_link(address, management_networks):
+                    addresses.add(str(address))
     preferred = None
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
@@ -156,8 +170,17 @@ def _why_unserved(dispatch: Any) -> str:
 class LiveKitChannelAdapter:
     """Opens one LiveKit room per device and mints that device's token."""
 
-    def __init__(self, config: LiveKitConfig) -> None:
+    def __init__(
+        self,
+        config: LiveKitConfig,
+        management_networks: Sequence[ipaddress.IPv4Network | ipaddress.IPv6Network] = (),
+    ) -> None:
         self._config = config
+        #: Which of this Host's links belong to the operator rather than to the
+        #: product. Taken at construction and not re-read: it is a declaration
+        #: Ops made about this machine, not an observation, and unlike the
+        #: addresses below it does not change while the process runs.
+        self._management_networks = tuple(management_networks)
         self._api: api.LiveKitAPI | None = None
         # One connection per channel we are listening to, keyed by room so that
         # re-stating a channel converges instead of stacking up connections.
@@ -221,7 +244,7 @@ class LiveKitChannelAdapter:
         if parsed.hostname is not None:
             return [self._config.client_url]
         try:
-            addresses = _client_addresses()
+            addresses = _client_addresses(self._management_networks)
         except (OSError, psutil.Error, ValueError) as exc:
             raise BackendUnavailable("LiveKit signalling interfaces cannot be observed") from exc
         if not addresses:

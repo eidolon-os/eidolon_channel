@@ -14,16 +14,41 @@ from eidolon.livekit.agent.full_duplex.pipeline import StreamingPipeline
 from .headless import headless_session
 
 
-@asynccontextmanager
-async def production_session(*, llm, stt, tts, vad, mode='full_duplex', welcome='', real_time_audio=False, interrupt_classifier=None, warmup=False, **kwargs):
-    factory = SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True),
-        llm=SimpleNamespace(llm=llm), stt=SimpleNamespace(stt=stt),
-        tts=SimpleNamespace(tts=tts), vad=SimpleNamespace(vad=vad),
+def stub_factory(*, llm, stt, tts, vad, interrupt_classifier=None, runtime_session_id='sess-harness'):
+    """Stand in for SharedStageFactory with the attributes a pipeline reads.
+
+    One builder for both duplex modes on purpose. Written as two doubles, they
+    drift: an attribute the pipelines start reading lands on the one whose
+    tests were in front of you, and every test on the other path dies on it.
+
+    ``outputs`` is derived rather than declared, because the real factory
+    derives it too. It rejects any plan whose ``speech`` disagrees with whether
+    it holds a TTS stage, falls back to speech plus dialogue text when the
+    dispatch carries no output plan, and refuses an expression plan unless the
+    brain is ``eidolon_agent`` — which a scripted LLM is not. So a double is
+    entitled to exactly one output shape per TTS it is handed.
+
+    ``stt`` and ``vad`` arrive already shaped. The real ``SttStage`` answers
+    both the segment API half duplex calls and the ``.stt`` full duplex hands
+    to AgentSession; each caller supplies the half its own pipeline reads.
+    """
+    return SimpleNamespace(
+        outputs=OutputSelection(speech=tts is not None, dialogue_text=True),
+        llm=SimpleNamespace(llm=llm), stt=stt,
+        tts=SimpleNamespace(tts=tts) if tts is not None else None, vad=vad,
         interrupt_classifier=interrupt_classifier,
         # The real factory always carries the named dispatch's conversation_id.
         # A session-scoped observer keys its file by it, so a double without one
         # would silently observe nothing.
-        runtime_session_id='sess-harness',
+        runtime_session_id=runtime_session_id,
+    )
+
+
+@asynccontextmanager
+async def production_session(*, llm, stt, tts, vad, mode='full_duplex', welcome='', real_time_audio=False, interrupt_classifier=None, warmup=False, **kwargs):
+    factory = stub_factory(
+        llm=llm, stt=SimpleNamespace(stt=stt), tts=tts, vad=SimpleNamespace(vad=vad),
+        interrupt_classifier=interrupt_classifier,
     )
     pipeline = StreamingPipeline(
         factory, interaction_mode=mode, allow_interruptions=mode == 'full_duplex',
@@ -71,9 +96,8 @@ async def production_ptt_session(*, text, llm, tts, stt_stage=None, interrupt_cl
     from .mocks import MockSTT, MockVAD
 
     stage = stt_stage if stt_stage is not None else ScriptedSegmentSTT(text)
-    pipeline = HalfDuplexPttPipeline(SimpleNamespace(
-        outputs=OutputSelection(speech=True, dialogue_text=True),
-        stt=stage, llm=SimpleNamespace(llm=llm), tts=SimpleNamespace(tts=tts), vad=None,
+    pipeline = HalfDuplexPttPipeline(stub_factory(
+        llm=llm, stt=stage, tts=tts, vad=None,
         interrupt_classifier=interrupt_classifier,
     ), instructions=instructions)
     try:

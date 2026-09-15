@@ -23,6 +23,8 @@ if TYPE_CHECKING:
         ProactiveSubscriber,
     )
 
+import grpc
+
 from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.biz.presentation import ResponseIntent, SessionOutputPlan
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
@@ -85,6 +87,42 @@ _ERROR_CODE_MAP: dict[str, tuple[int, bool]] = {
     "rate_limited": (429, True),
     "invalid_presentation": (400, False),
 }
+
+
+#: gRPC statuses the brain uses to say "this will not work", as opposed to
+#: "this did not work just now".
+#:
+#: The stream's catch-all used to declare every unexpected failure retryable.
+#: That is right for a dropped connection and wrong for a refusal: a persona
+#: genome the Agent cannot read is not going to become readable on attempt two,
+#: so the framework spent the retry budget on a hopeless call while the person
+#: waited in silence. Worse, ``recoverable`` travels to the turn record, and the
+#: silent-failure marking in ``record_llm_error`` only fires when it is false —
+#: so the one turn that produced nothing was also the one turn not labelled as
+#: having produced nothing.
+#:
+#: Only statuses whose meaning is "the request itself is not acceptable" belong
+#: here. Everything else — UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED,
+#: ABORTED, INTERNAL, UNKNOWN — keeps the retryable default, as does any
+#: non-gRPC exception, because those are the failures a second attempt can win.
+_PERMANENT_GRPC_CODES = frozenset(
+    {
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.INVALID_ARGUMENT,
+        grpc.StatusCode.NOT_FOUND,
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.UNIMPLEMENTED,
+    }
+)
+
+
+def _stream_failure_is_retryable(exc: BaseException) -> bool:
+    """Whether a second attempt at this turn could plausibly succeed."""
+
+    if not isinstance(exc, grpc.aio.AioRpcError):
+        return True
+    return exc.code() not in _PERMANENT_GRPC_CODES
 
 
 def _map_turn_error(exc: "TurnError") -> Exception:
@@ -715,5 +753,5 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         except Exception as exc:
             raise APIConnectionError(
                 f"eidolon_agent stream failed: {exc}",
-                retryable=True,
+                retryable=_stream_failure_is_retryable(exc),
             ) from exc

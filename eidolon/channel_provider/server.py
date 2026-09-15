@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from aiohttp import web
+from eidolon_sdk.system import declared_management_networks
 
 from eidolon.locked_environment import require_locked_environment
 
@@ -35,7 +36,12 @@ def main() -> None:
     require_locked_environment(logger=logger)
     config = load_provider_config()
     registry = AdapterRegistry(
-        [LiveKitChannelAdapter(config.livekit)],
+        # Which links this Host's devices can actually reach it on. Read here,
+        # at the one place that composes the process, rather than inside the
+        # adapter: it is a declaration Ops delivered in the sealed Host profile
+        # this unit already reads, and an adapter that reached for it would be
+        # answering from ambient state its caller cannot see.
+        [LiveKitChannelAdapter(config.livekit, declared_management_networks())],
         preference=config.adapter_preference,
     )
     service = ChannelProviderService(

@@ -821,7 +821,7 @@ def test_a_host_deferred_client_url_is_answered_when_the_binding_is_minted(
     """
 
     adapter = LiveKitChannelAdapter(livekit_config(client_url="ws://:7880"))
-    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: ["192.168.1.33"])
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda _networks: ["192.168.1.33"])
 
     assert adapter._client_url() == "ws://192.168.1.33:7880"
 
@@ -834,7 +834,7 @@ async def test_the_binding_carries_the_address_decided_at_mint_time(
     monkeypatch.setattr(
         adapter, "_config", livekit_config(client_url="ws://:7880"), raising=True
     )
-    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: ["10.0.0.7"])
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda _networks: ["10.0.0.7"])
 
     grant = await adapter.open(_spec(), issued_at_ms=1_700_000_000_000)
 
@@ -846,7 +846,7 @@ async def test_binding_offers_every_current_interface_not_only_default_route(mon
     adapter, _ = _adapter()
     monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
     addresses = ["10.42.0.2", "192.168.1.37"]
-    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: addresses)
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda _networks: addresses)
     grant = await adapter.open(_spec(), issued_at_ms=1000)
     session = json.loads(grant.payload)["session"]
     assert session["server_urls"] == ["ws://10.42.0.2:7880", "ws://192.168.1.37:7880"]
@@ -854,6 +854,64 @@ async def test_binding_offers_every_current_interface_not_only_default_route(mon
     addresses[:] = ["10.183.24.39"]
     grant = await adapter.open(_spec(), issued_at_ms=2000)
     assert json.loads(grant.payload)["session"]["server_url"] == "ws://10.183.24.39:7880"
+
+
+def _observe(monkeypatch, *, wifi: str, cable: str) -> None:
+    """One Host on two routable links, and no default route to order them by.
+
+    The route lookup is stubbed out rather than left to the machine running
+    this: it is only an ordering hint, and a workstation that happens to be on
+    one of these subnets would otherwise decide the order.
+    """
+
+    import socket
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(adapter_mod.psutil, "net_if_stats", lambda: {
+        "wifi": SimpleNamespace(isup=True), "usb-lan": SimpleNamespace(isup=True),
+    })
+    monkeypatch.setattr(adapter_mod.psutil, "net_if_addrs", lambda: {
+        "wifi": [SimpleNamespace(family=socket.AF_INET, address=wifi)],
+        "usb-lan": [SimpleNamespace(family=socket.AF_INET, address=cable)],
+    })
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.connect.side_effect = OSError("no default route")
+    monkeypatch.setattr(adapter_mod.socket, "socket", lambda *_a: connection)
+
+
+def test_the_operators_cable_is_not_a_candidate_a_device_is_asked_to_try(monkeypatch):
+    """A candidate the device cannot reach is not free, it is 77 seconds.
+
+    The firmware works down the list, and the LiveKit SDK spends seven internal
+    retries at an eleven second TLS timeout on each URL before moving on — a
+    full minute and a quarter behind a screen that says only "retrying". Both
+    addresses here are ordinary routable /24s, so nothing this process can see
+    tells them apart; Ops declares which one is its own cable.
+    """
+
+    import ipaddress
+
+    _observe(monkeypatch, wifi="192.168.100.19", cable="10.42.0.2")
+
+    assert adapter_mod._client_addresses() == ["10.42.0.2", "192.168.100.19"]
+    assert adapter_mod._client_addresses(
+        (ipaddress.ip_network("10.42.0.0/24"),)
+    ) == ["192.168.100.19"]
+
+
+def test_a_declared_cable_leaves_the_binding_before_it_is_minted(monkeypatch):
+    """The declaration is taken once, at composition, and used per binding."""
+
+    import ipaddress
+
+    adapter = LiveKitChannelAdapter(
+        livekit_config(client_url="ws://:7880"),
+        (ipaddress.ip_network("10.42.0.0/24"),),
+    )
+    _observe(monkeypatch, wifi="192.168.100.19", cable="10.42.0.2")
+
+    assert adapter._client_urls() == ["ws://192.168.100.19:7880"]
 
 
 def test_lan_candidates_survive_without_default_route(monkeypatch):
@@ -879,7 +937,7 @@ async def test_current_binding_tracks_network_separately_from_token_expiry(monke
     adapter, _ = _adapter()
     monkeypatch.setattr(adapter, "_config", livekit_config(client_url="ws://:7880"))
     addresses = ["192.168.1.37"]
-    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda: addresses)
+    monkeypatch.setattr(adapter_mod, "_client_addresses", lambda _networks: addresses)
     grant = await adapter.open(_spec(), issued_at_ms=1000)
     assert adapter.binding_current(grant.handle)
     addresses[:] = ["10.183.24.39"]

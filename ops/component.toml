@@ -59,7 +59,15 @@ source = "operator"
 owner = "root"
 group = "eidolon"
 mode = "0640"
-required_by = ["eidolon-channel", "eidolon-channel-provider"]
+# The worker only. `required_by` means "unit ids that will not start without
+# it", and the Provider starts without this file: its unit points
+# EIDOLON_CHANNEL_PROVIDER_SETTINGS_YAML at config/channel-provider.yaml under
+# /opt/eidolon/current, and nothing it imports reaches the worker's loader. The
+# two settings documents differ in more than their contents — this one is
+# rendered into /etc and so must be readable by the release being replaced as
+# well (docs/cross-release-settings.md), while the Provider's travels with the
+# release and flips atomically with the code that reads it.
+required_by = ["eidolon-channel"]
 
 [[state.authority]]
 path = "/var/lib/eidolon/channel/provider.sqlite3"

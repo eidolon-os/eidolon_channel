@@ -294,30 +294,43 @@ class ChannelTurnEventSink:
             logger.exception("Channel telemetry observer failed type=%s", event.event_type)
 
 
-async def _mounted_companion(context_resolver: Any, room: Any) -> str:
-    """Which Companion answers through this body, according to the Kernel mount.
+async def _mounted_companion(context_resolver: Any, room: Any) -> tuple[str, str]:
+    """Which Companion answers through this body, and — when none — why not.
 
     The same question the device token's own resolver asks, asked the same way —
     ``ChannelRuntimeServices.resolve_room`` memoises its answer, so this is the
     identical context the credential was minted from rather than a second
     lookup that could disagree with it.
 
-    A resolver that cannot answer yields "" rather than raising, so the caller
-    reports one clear refusal instead of two different ones depending on where
-    the failure happened.
+    Returns ``(companion_id, reason)``: exactly one of them is ever non-empty.
+
+    The reason exists because the first version of this threw it away. It logged
+    the resolver's exception at DEBUG and returned "", so on a real Host the
+    refusal that reached the log said only that a Companion was required — the
+    same sentence whether the mount named nobody, the Kernel was unreachable, or
+    the resolver rejected the pair it had just fetched. A device session failed
+    this way with the Kernel answering 200 OK one millisecond earlier, and the
+    cause was unrecoverable from the logs because this function had discarded
+    it. Observation must not break voice; that is not a reason to make the
+    breakage unreadable.
     """
 
     try:
         resolved = await context_resolver(room)
     except Exception as exc:  # noqa: BLE001 - observation must not break voice
-        logger.debug("mounted Companion unresolved: %s", exc)
-        return ""
+        return "", f"the runtime resolver refused: {exc!s}"
     # Two shapes: a mounted body with a Companion answering carries the full
     # runtime context; one with nobody answering carries only the connection.
     runtime = getattr(resolved, "runtime", None)
     if runtime is not None:
-        return str(getattr(runtime, "companion_id", "") or "").strip()
-    return str(getattr(resolved, "answering_companion_id", "") or "").strip()
+        companion_id = str(getattr(runtime, "companion_id", "") or "").strip()
+        if companion_id:
+            return companion_id, ""
+        return "", "the resolved runtime context names no Companion"
+    answering = str(getattr(resolved, "answering_companion_id", "") or "").strip()
+    if answering:
+        return answering, ""
+    return "", "the Kernel mount has no Companion answering through this body"
 
 
 async def resolve_event_context(
@@ -343,15 +356,32 @@ async def resolve_event_context(
         device_id = str(metadata.get("device_id") or identity).strip()
         owner_id = str(metadata.get("owner_id") or "").strip()
         companion_id = str(metadata.get("companion_id") or "").strip()
-        if not companion_id and context_resolver is not None:
-            # Same precedence as the runtime resolver's own
-            # ``metadata.companion_id or connection.answering_companion_id``.
-            # Two readers of one fact must not disagree about which half wins.
-            companion_id = await _mounted_companion(context_resolver, room)
+        detail = ""
+        if not companion_id:
+            if context_resolver is None:
+                detail = "no runtime resolver was handed to this observation"
+            else:
+                # Same precedence as the runtime resolver's own
+                # ``metadata.companion_id or connection.answering_companion_id``.
+                # Two readers of one fact must not disagree about which half wins.
+                companion_id, detail = await _mounted_companion(context_resolver, room)
         if not device_id or not owner_id or not companion_id:
+            missing = [
+                name
+                for name, value in (
+                    ("device_id", device_id),
+                    ("owner_id", owner_id),
+                    ("companion_id", companion_id),
+                )
+                if not value
+            ]
+            # Name the half that is missing and, for the Companion, how the
+            # attempt to find one ended. One sentence that identifies the fault
+            # beats one that only restates the requirement.
             raise RuntimeError(
-                "device event context requires an owner and a Companion mounted "
-                "to answer through this body"
+                "device event context incomplete: missing "
+                + ", ".join(missing)
+                + (f" ({detail})" if detail else "")
             )
     elif kind == "companion":
         owner_id = str(metadata.get("owner_id") or "").strip()

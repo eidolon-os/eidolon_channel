@@ -223,6 +223,71 @@ async def test_a_body_nobody_answers_through_still_refuses_to_guess() -> None:
         raise AssertionError("Channel must not invent a Companion for an unmounted body")
 
 
+async def test_a_refusal_says_which_half_is_missing_and_why() -> None:
+    """The message has to identify the fault, not restate the requirement.
+
+    This is the regression that cost a real diagnosis: the Kernel answered
+    200 OK, the Companion was fetched, and one millisecond later the session
+    was filed under `unknown-owner__unknown-companion` — with a log line that
+    said only that a Companion was required. Every distinct cause produced that
+    same sentence, so the logs could not tell them apart.
+    """
+
+    async def _resolver_explodes(room):  # noqa: ANN001
+        raise RuntimeError("Companion runtime does not match mounted Device owner/target")
+
+    try:
+        await turn_events._resolve_event_context(
+            _device_room(), context_resolver=_resolver_explodes
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "companion_id" in message, message
+        # the resolver's own words survive, which is the whole point
+        assert "does not match mounted Device" in message, message
+    else:
+        raise AssertionError("an exploding resolver must not read as a resolved one")
+
+
+async def test_an_unmounted_body_and_a_broken_resolver_do_not_read_alike() -> None:
+    """Two different faults, two different sentences.
+
+    A mount that names nobody is a fact about the domain; a resolver that threw
+    is a fact about this Host. Collapsing them is what made the failure look
+    exactly like tracing being switched off.
+    """
+
+    async def _resolver_explodes(room):  # noqa: ANN001
+        raise RuntimeError("Kernel Body GET failed")
+
+    async def _grab(resolver) -> str:
+        try:
+            await turn_events._resolve_event_context(
+                _device_room(), context_resolver=resolver
+            )
+        except RuntimeError as exc:
+            return str(exc)
+        raise AssertionError("expected a refusal")
+
+    unmounted = await _grab(_mount_resolver(None))
+    broken = await _grab(_resolver_explodes)
+
+    assert "no Companion answering" in unmounted, unmounted
+    assert "resolver refused" in broken, broken
+    assert unmounted != broken
+
+
+async def test_a_missing_resolver_says_so_rather_than_blaming_the_mount() -> None:
+    """Nobody handed one over — that is this process's fault, not the Kernel's."""
+
+    try:
+        await turn_events._resolve_event_context(_device_room())
+    except RuntimeError as exc:
+        assert "no runtime resolver" in str(exc), str(exc)
+    else:
+        raise AssertionError("expected a refusal")
+
+
 async def test_owner_event_context_requires_explicit_companion_selection() -> None:
     participant = SimpleNamespace(
         identity="owner-a",

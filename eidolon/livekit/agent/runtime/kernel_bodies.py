@@ -5,6 +5,13 @@ this Owner's and mounted, and which Companion answers through it. They used to
 be one fact on the mount, which is why re-claiming a device silently forgot its
 Eidolon; they are now a mount and an assignment, and the Body endpoint is where
 they meet.
+
+The document's shape is pinned by importing its definition, not by restating it.
+The field set and the name of the endpoint used to be written out here, because
+this package deliberately does not depend on the Kernel and the Kernel was where
+both lived. They live in the contract package this process already depended on
+now, so there is nothing left to mirror — and nothing left to check a mirror
+against by reading the producer's source, which is what this file's tests did.
 """
 
 from __future__ import annotations
@@ -13,36 +20,14 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from eidolon_sdk.device_foundation.v1 import DeviceRef
+from eidolon_sdk.device_foundation.v1 import (
+    DERIVED_ENDPOINT_ID,
+    BodyAssignment,
+    BodyEndpoint,
+)
 from pydantic import ValidationError
 
 from .resolver import DeviceConnectionContext, DeviceTokenResolverError
-
-#: The endpoint document this consumer reads, pinned exactly. A field arriving
-#: here that nobody admitted is the producer handing this process something no
-#: one decided it should see; a field missing is a producer that moved on.
-_FIELDS = {
-    "operation",
-    "body_endpoint_id",
-    "device_id",
-    "owner_id",
-    "endpoint_id",
-    "device_ref",
-    "mount_revision",
-    "roles",
-    "assignment_policy",
-    "risk_class",
-    "concurrency",
-    "source",
-    "present",
-    "assignment",
-}
-
-#: The one endpoint every mounted device has while no Manifest declares any.
-#: Mirrored rather than imported: this package deliberately does not depend on
-#: the Kernel, and the test beside it compares this consumer to the producer's
-#: own schema.
-_DERIVED_ENDPOINT_ID = "body"
 
 
 class KernelBodyError(DeviceTokenResolverError):
@@ -62,59 +47,58 @@ class KernelBodyContractError(KernelBodyError):
 
 
 def body_endpoint_id(device_id: str) -> str:
-    return f"{device_id}:{_DERIVED_ENDPOINT_ID}"
+    return f"{device_id}:{DERIVED_ENDPOINT_ID}"
 
 
-def _answering(assignment: Any) -> str | None:
+def _answering(assignment: BodyAssignment | None) -> str | None:
     """Who answers here, taking only what this consumer is entitled to act on.
 
-    ``effective_companion_id`` rather than the spec's ``companion_id``: the
-    status is the authority's own answer to "is this actually in force", and it
-    is null for a Body whose device is no longer mounted. Reading the spec
-    instead would start a session as an Eidolon on hardware that is not there.
+    ``effective_companion_id`` rather than the spec's ``companion_id`` — which
+    used to be a paragraph asking the next reader to take it on trust, and the
+    trust did not hold: this process once read the spec and started sessions as
+    an Eidolon on hardware that was not there. It is a type now. The status is
+    the authority's own answer to "is this in force", and it is null for a Body
+    whose device is no longer mounted; the assignment outlives the mount on
+    purpose, so the spec still names the Companion it will come back to.
     """
 
     if assignment is None:
         return None
-    if not isinstance(assignment, dict):
-        raise KernelBodyContractError("Kernel Body assignment is not an object")
-    status = assignment.get("status")
-    if not isinstance(status, dict):
-        raise KernelBodyContractError("Kernel Body assignment carries no status")
-    companion_id = status.get("effective_companion_id")
+    companion_id = assignment.status.effective_companion_id
     if companion_id is None:
         return None
-    if not isinstance(companion_id, str) or not companion_id.strip():
+    if not companion_id.strip():
+        # The contract makes this a non-empty string or null; blank-but-present
+        # is the one shape it cannot spell. Refused rather than treated as
+        # nobody, because a producer emitting it is broken in a way this
+        # process should not paper over by starting an anonymous session.
         raise KernelBodyContractError("Kernel Body assignment names no usable Companion")
     return companion_id
 
 
 def _connection(document: Any, *, owner_id: str, device_id: str) -> DeviceConnectionContext:
-    if not isinstance(document, dict) or set(document) != _FIELDS:
-        raise KernelBodyContractError("Kernel Body endpoint fields do not match V1")
     try:
-        device_ref = DeviceRef.model_validate(document["device_ref"])
+        endpoint = BodyEndpoint.model_validate(document)
     except ValidationError as exc:
-        raise KernelBodyContractError("Kernel Body DeviceRef is invalid") from exc
-    mount_revision = document["mount_revision"]
+        raise KernelBodyContractError("Kernel Body endpoint fields do not match V1") from exc
+    # What the shape cannot say: that this is the Body this caller asked about,
+    # and that it is answerable at all. ``present`` stays a hard refusal — a
+    # device that is no longer mounted is not a session, and the assignment it
+    # kept is there so it can come back, not so it can be used while it is gone.
     if (
-        document["operation"] != "kernel.body-endpoint"
-        or document["owner_id"] != owner_id
-        or document["device_id"] != device_id
-        or device_ref.device_instance_id != device_id
-        or document["body_endpoint_id"] != body_endpoint_id(device_id)
-        or document["present"] is not True
-        or not isinstance(mount_revision, int)
-        or isinstance(mount_revision, bool)
-        or mount_revision < 1
+        endpoint.owner_id != owner_id
+        or endpoint.device_id != device_id
+        or endpoint.device_ref.device_instance_id != device_id
+        or endpoint.body_endpoint_id != body_endpoint_id(device_id)
+        or endpoint.present is not True
     ):
         raise KernelBodyContractError("Kernel Body endpoint values do not match V1")
     return DeviceConnectionContext(
         owner_id=owner_id,
         device_id=device_id,
-        device_ref=device_ref,
-        mount_revision=mount_revision,
-        answering_companion_id=_answering(document["assignment"]),
+        device_ref=endpoint.device_ref,
+        mount_revision=endpoint.mount_revision,
+        answering_companion_id=_answering(endpoint.assignment),
     )
 
 

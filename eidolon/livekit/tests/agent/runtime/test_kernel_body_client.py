@@ -1,6 +1,3 @@
-import json
-from pathlib import Path
-
 import httpx
 import pytest
 
@@ -179,36 +176,58 @@ async def test_a_body_whose_device_is_not_mounted_is_not_a_session():
         await _resolve(handler)
 
 
-async def test_consumed_shape_matches_kernel_normative_body_endpoint_schema():
-    workspace = Path(__file__).resolve().parents[6]
-    schema_path = (
-        workspace
-        / "eidolon_kernel/eidolon_kernel/contracts/schemas/body-mesh/endpoint.schema.json"
-    )
-    if not schema_path.is_file():
-        pytest.skip("sibling eidolon_kernel checkout is unavailable")
+async def test_the_shape_this_consumer_pins_is_the_producers_own_definition():
+    """Imported, and no longer skippable.
 
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    This was two cross-repo tests. One compared the pinned field set to the
+    Kernel's JSON Schema — a schema that said ``status: {"type": "object"}``, so
+    it could not have caught a change to the one field read below. The other
+    substring-matched the Kernel's source for a constant. Both skipped when the
+    sibling checkout was absent, which is how a check disappears by passing.
 
-    assert set(schema["properties"]) == kernel_bodies._FIELDS
-    assert set(schema["required"]) == kernel_bodies._FIELDS
-    assert schema["additionalProperties"] is False
-    assert (
-        schema["properties"]["operation"]["const"] == "kernel.body-endpoint"
-    )
-
-
-async def test_the_derived_endpoint_id_this_consumer_composes_matches_the_producer():
-    """A mirrored constant, checked against the authority that defines it.
-
-    This package deliberately does not depend on the Kernel, so the one word it
-    has to know — which Body a device's single endpoint is called — is mirrored
-    and compared rather than imported.
+    There is nothing left to compare. The type this consumer validates with is
+    the type the producer builds its response from.
     """
 
-    workspace = Path(__file__).resolve().parents[6]
-    body = workspace / "eidolon_kernel/eidolon_kernel/domain/body.py"
-    if not body.is_file():
-        pytest.skip("sibling eidolon_kernel checkout is unavailable")
-    source = body.read_text(encoding="utf-8")
-    assert f'DERIVED_ENDPOINT_ID = "{kernel_bodies._DERIVED_ENDPOINT_ID}"' in source
+    from eidolon_sdk.device_foundation.v1 import DERIVED_ENDPOINT_ID, BodyEndpoint
+
+    assert kernel_bodies.BodyEndpoint is BodyEndpoint
+    assert body_endpoint_id(_DEVICE_1) == f"{_DEVICE_1}:{DERIVED_ENDPOINT_ID}"
+
+
+async def test_a_status_that_stopped_saying_who_answers_is_refused_not_read_as_nobody():
+    """The drift this consumer could not previously see.
+
+    Reading ``status`` out of an untyped dictionary, a producer that dropped
+    ``effective_companion_id`` was indistinguishable from a Body that answers as
+    nobody: ``.get()`` returns None for both. That is the failure mode the
+    original incident had — a read that failed and reported itself as an answer.
+    """
+
+    async def handler(_request):
+        broken = assignment()
+        broken["status"] = {"observed_generation": 1, "conditions": ["Realized"]}
+        return httpx.Response(200, json=document(assignment=broken))
+
+    with pytest.raises(KernelBodyContractError, match="fields"):
+        await _resolve(handler)
+
+
+async def test_a_condition_outside_the_authoritys_vocabulary_is_drift():
+    """``conditions`` is a closed vocabulary, and now it is enforced as one.
+
+    A word this consumer has never been told the meaning of must not arrive
+    looking like one it has.
+    """
+
+    async def handler(_request):
+        drifted = assignment()
+        drifted["status"] = {
+            "observed_generation": 1,
+            "effective_companion_id": "companion-1",
+            "conditions": ["InForce"],
+        }
+        return httpx.Response(200, json=document(assignment=drifted))
+
+    with pytest.raises(KernelBodyContractError, match="fields"):
+        await _resolve(handler)

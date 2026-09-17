@@ -15,7 +15,11 @@ from typing import Any
 
 from .contracts import ProvisionDevice, ContractError
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
-from eidolon_sdk.biz.presentation.negotiation import manifest_outputs, select_outputs
+from eidolon_sdk.biz.presentation.negotiation import (
+    manifest_outputs,
+    output_policy_required,
+    select_outputs,
+)
 
 # Turn-taking is a device constraint, not a deployment preference: whether a
 # device may listen while it speaks depends on its echo cancellation, not on
@@ -150,7 +154,7 @@ def derive_spec(
             raise ContractError(str(exc)) from exc
         if not selected.speech:
             audio = MediaFlow.PUBLISH if audio.publishes else MediaFlow.NONE
-    elif capabilities.expression:
+    elif output_policy_required(capabilities):
         # New Companion clients require an explicit Owner policy. Missing or
         # corrupt policy must never silently restore legacy speech defaults.
         raise ContractError("OUTPUT_POLICY_REQUIRED")

@@ -112,3 +112,29 @@ async def test_all_outputs_denied_still_replaces_policy_but_cannot_start_a_sessi
             grant.handle, "session-1", session_intent=SESSION_INTENT_USER_INITIATED
         )
     await adapter.shutdown()
+
+
+@pytest.mark.parametrize("expression", [False, True])
+def test_explicit_device_contract_cannot_use_legacy_voice(expression):
+    req = request()
+    manifest = dict(req.device.manifest)
+    manifest["properties"] = [
+        p for p in manifest["properties"] if expression or p["name"] != "expression.profile"
+    ]
+    manifest["properties"].append(
+        {
+            "name": "output.contract",
+            "writable": False,
+            "schema": {"type": "string", "const": "eidolon.outputs.v1"},
+        }
+    )
+    device = replace(req.device, manifest=manifest, output_policy=None)
+    with pytest.raises(ContractError, match="OUTPUT_POLICY_REQUIRED"):
+        spec(replace(req, device=device))
+    policy = DeviceOutputPolicy(revision=1, allowed=OutputSelection(dialogue_text=True))
+    selected = spec(replace(req, device=replace(device, output_policy=policy)))
+    assert selected.selected_outputs == OutputSelection(dialogue_text=True)
+    assert selected.audio == MediaFlow.PUBLISH
+    manifest["properties"][-1]["schema"]["const"] = "eidolon.outputs.v2"
+    with pytest.raises(ContractError, match="UNSUPPORTED_OUTPUT_CONTRACT"):
+        spec(replace(req, device=replace(device, output_policy=policy)))

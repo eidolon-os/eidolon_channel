@@ -16,6 +16,7 @@ from typing import Any
 from .contracts import ProvisionDevice, ContractError
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
 from eidolon_sdk.biz.presentation.negotiation import (
+    validate_output_contract,
     manifest_outputs,
     output_policy_required,
     select_outputs,
@@ -142,19 +143,26 @@ def derive_spec(
     manifest = device.manifest
     audio = _media_flow(manifest, "audio")
     video = _media_flow(manifest, "video")
+    try:
+        validate_output_contract(manifest)
+    except ValueError as exc:
+        raise ContractError(str(exc)) from exc
     capabilities = manifest_outputs(manifest)
     selected = None
     if device.output_policy is not None:
         try:
-            selected = select_outputs(capabilities=capabilities, policy=device.output_policy,
+            selected = select_outputs(
+                capabilities=capabilities,
+                policy=device.output_policy,
                 requested=device.output_policy.allowed,
                 ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True),
-                require_response=False)
+                require_response=False,
+            )
         except ValueError as exc:
             raise ContractError(str(exc)) from exc
         if not selected.speech:
             audio = MediaFlow.PUBLISH if audio.publishes else MediaFlow.NONE
-    elif output_policy_required(capabilities):
+    elif output_policy_required(capabilities, manifest=manifest):
         # New Companion clients require an explicit Owner policy. Missing or
         # corrupt policy must never silently restore legacy speech defaults.
         raise ContractError("OUTPUT_POLICY_REQUIRED")

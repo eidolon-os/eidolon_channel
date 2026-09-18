@@ -106,15 +106,22 @@ class AgentOutputCoordinator:
             )
         elif name.startswith("brain_presentation_"):
             state = name.removeprefix("brain_presentation_")
-            output.update(phase="presentation", presentation_state=state,
-                          response_id=event.get("response_id"), silent_failure=False)
+            output.update(presentation_state=state, response_id=event.get("response_id"))
+            outputs = dict(output.get("outputs") or {})
+            outputs["expression"] = {"state": state, "receipt": event.get("receipt")}
+            output["outputs"] = outputs
             if "receipt" in event:
                 output["presentation_receipt"] = event["receipt"]
-            if state in {"completed", "none", "cancelled", "rejected", "failed"}:
+            if not output.get("first_delta_seen") and state in {"completed", "none", "cancelled", "rejected", "failed"}:
                 output["outcome"] = f"presentation_{state}"
+                output["silent_failure"] = state in {"rejected", "failed"}
         elif name == "brain_done":
             if output.get("presentation_state") in {"completed", "none"}:
                 output["silent_failure"] = False
+            elif output.get("presentation_state") in {"rejected", "failed"} and not output.get("first_delta_seen"):
+                output["silent_failure"] = True
+            elif output.get("presentation_state") in {"sent", "accepted", "started"}:
+                output["outcome"] = "awaiting_output"
             elif "brain_first_delta_at" not in timeline.timestamps:
                 if "brain_first_model_activity_at" in timeline.timestamps:
                     output.update(
@@ -159,10 +166,19 @@ class AgentOutputCoordinator:
         name = str(event.get("event") or "")
         output = _agent_output(timeline)
         output["last_event"] = name
-        if name == "tts_first_text_sent":
+        outputs = dict(output.get("outputs") or {})
+        speech = dict(outputs.get("speech") or {})
+        if name == "tts_output_error":
+            speech.update(state="retrying" if event.get("recoverable") else "failed",
+                          error=event.get("error"))
+        elif name == "tts_first_text_sent":
+            speech["state"] = "synthesizing"
             output.update({"phase": "tts_text_sent"})
         elif name == "tts_provider_first_audio":
+            speech["state"] = "audio_ready"
             output.update({"phase": "tts_audio_ready"})
+        outputs["speech"] = speech
+        output["outputs"] = outputs
         timeline.set_attr("agent_output", output)
         return output
 

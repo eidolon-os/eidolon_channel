@@ -49,3 +49,29 @@ def test_idle_candidate_does_not_invent_interruption_target() -> None:
 
     assert coordinator.link_interruption_candidate(candidate) is None
     assert "interruption_target" not in candidate.attrs
+
+
+
+def test_expression_failure_does_not_replace_speech_progress():
+    coordinator = AgentOutputCoordinator()
+    timeline = TurnTimeline("mixed-output")
+    coordinator.record_brain_event(timeline, {"event": "brain_first_delta"})
+    coordinator.record_tts_event(timeline, {"event": "tts_provider_first_audio"})
+    result = coordinator.record_brain_event(timeline, {
+        "event": "brain_presentation_rejected", "response_id": "r",
+        "receipt": {"reason": "COMMAND_CLOCK_UNAVAILABLE"}})
+    assert result["phase"] == "tts_audio_ready"
+    assert not result.get("silent_failure")
+    assert result["outputs"]["speech"]["state"] == "audio_ready"
+    assert result["outputs"]["expression"]["state"] == "rejected"
+
+
+def test_speech_failure_does_not_replace_completed_expression():
+    coordinator = AgentOutputCoordinator()
+    timeline = TurnTimeline("mixed-output")
+    coordinator.record_brain_event(timeline, {"event": "brain_presentation_completed"})
+    result = coordinator.record_tts_event(timeline, {
+        "event": "tts_output_error", "recoverable": False, "error": "offline"})
+    assert result["outputs"]["expression"]["state"] == "completed"
+    assert result["outputs"]["speech"]["state"] == "failed"
+    assert not result["silent_failure"]

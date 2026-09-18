@@ -47,11 +47,13 @@ class FullDuplexInterruptionEffects:
         correction_topic_stability_window_ms: Callable[[], int],
         set_interrupt_cancel_suppression: Callable[[bool, float], None],
         soft_interrupt_timeout_sec: Callable[[], float],
+        cancel_response_outputs: Callable[[], None] | None = None,
         finish_agent_output: Callable[[str], None] | None = None,
         playback_evidence_active: Callable[[], bool] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
         claim_irreversible_side_effect: Callable[..., bool] | None = None,
     ) -> None:
+        self._cancel_response_outputs = cancel_response_outputs or (lambda: None)
         self._ducking = ducking
         self._callbacks = callbacks
         self._get_session = get_session
@@ -96,6 +98,7 @@ class FullDuplexInterruptionEffects:
             )
             return
 
+        self._cancel_response_outputs()
         session = self._get_session()
         if session is not None:
             # Channel-owned interruption disables LiveKit's automatic

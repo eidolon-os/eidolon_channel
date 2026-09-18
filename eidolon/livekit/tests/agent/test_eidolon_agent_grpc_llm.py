@@ -22,7 +22,6 @@ from eidolon_sdk.biz.dialogue_control import CommittedTurnDecision, TurnCommitBo
 
 from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import (
     EidolonAgentGrpcLlm,
-    _stream_failure_is_retryable,
 )
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
     eidolon_pb2 as pb,
@@ -1058,10 +1057,10 @@ _ERROR_CASES = [
     ("permission_denied", False, "status", 403, False),
     ("tenant_not_found", False, "status", 404, False),
     ("user_not_found", False, "status", 404, False),
-    ("rate_limited", False, "status", 429, True),
-    ("internal", False, "connection", None, True),  # fatal=False → retryable
+    ("rate_limited", False, "status", 429, False),
+    ("internal", False, "connection", None, False),  # accepted turn is never replayed
     ("internal", True, "connection", None, False),  # fatal=True  → not retryable
-    ("anything_unknown", False, "connection", None, True),
+    ("anything_unknown", False, "connection", None, False),
 ]
 
 
@@ -1202,33 +1201,3 @@ async def test_tool_status_roles_are_rendered_by_latency_policy() -> None:
             await adapter.aclose()
     finally:
         await server.stop(grace=0.5)
-
-
-def test_a_refusal_is_not_retried_but_a_dropped_connection_is() -> None:
-    """Retryability follows what the status means, not that it was unexpected.
-
-    The catch-all around the turn stream used to call every unexpected failure
-    retryable. A persona genome the Agent cannot read comes back as
-    FAILED_PRECONDITION and will come back that way on every attempt, so the
-    retry budget bought nothing while the person waited in silence -- and the
-    ``recoverable`` that travelled to the turn record suppressed the
-    silent-failure marking, leaving the one turn that produced nothing also the
-    one turn not labelled as such.
-    """
-
-    def _rpc_error(code: grpc.StatusCode) -> grpc.aio.AioRpcError:
-        return grpc.aio.AioRpcError(code, None, None, details="from the brain")
-
-    assert not _stream_failure_is_retryable(
-        _rpc_error(grpc.StatusCode.FAILED_PRECONDITION)
-    )
-    assert not _stream_failure_is_retryable(_rpc_error(grpc.StatusCode.UNAUTHENTICATED))
-    assert not _stream_failure_is_retryable(_rpc_error(grpc.StatusCode.NOT_FOUND))
-
-    assert _stream_failure_is_retryable(_rpc_error(grpc.StatusCode.UNAVAILABLE))
-    assert _stream_failure_is_retryable(_rpc_error(grpc.StatusCode.DEADLINE_EXCEEDED))
-    assert _stream_failure_is_retryable(_rpc_error(grpc.StatusCode.INTERNAL))
-
-    # Anything that is not a gRPC status keeps the retryable default: those are
-    # the failures a second attempt can still win.
-    assert _stream_failure_is_retryable(RuntimeError("stream ended"))

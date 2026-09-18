@@ -23,7 +23,6 @@ if TYPE_CHECKING:
         ProactiveSubscriber,
     )
 
-import grpc
 
 from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.biz.presentation import ResponseIntent, SessionOutputPlan
@@ -89,55 +88,19 @@ _ERROR_CODE_MAP: dict[str, tuple[int, bool]] = {
 }
 
 
-#: gRPC statuses the brain uses to say "this will not work", as opposed to
-#: "this did not work just now".
-#:
-#: The stream's catch-all used to declare every unexpected failure retryable.
-#: That is right for a dropped connection and wrong for a refusal: a persona
-#: genome the Agent cannot read is not going to become readable on attempt two,
-#: so the framework spent the retry budget on a hopeless call while the person
-#: waited in silence. Worse, ``recoverable`` travels to the turn record, and the
-#: silent-failure marking in ``record_llm_error`` only fires when it is false —
-#: so the one turn that produced nothing was also the one turn not labelled as
-#: having produced nothing.
-#:
-#: Only statuses whose meaning is "the request itself is not acceptable" belong
-#: here. Everything else — UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED,
-#: ABORTED, INTERNAL, UNKNOWN — keeps the retryable default, as does any
-#: non-gRPC exception, because those are the failures a second attempt can win.
-_PERMANENT_GRPC_CODES = frozenset(
-    {
-        grpc.StatusCode.FAILED_PRECONDITION,
-        grpc.StatusCode.INVALID_ARGUMENT,
-        grpc.StatusCode.NOT_FOUND,
-        grpc.StatusCode.PERMISSION_DENIED,
-        grpc.StatusCode.UNAUTHENTICATED,
-        grpc.StatusCode.UNIMPLEMENTED,
-    }
-)
-
-
-def _stream_failure_is_retryable(exc: BaseException) -> bool:
-    """Whether a second attempt at this turn could plausibly succeed."""
-
-    if not isinstance(exc, grpc.aio.AioRpcError):
-        return True
-    return exc.code() not in _PERMANENT_GRPC_CODES
-
-
 def _map_turn_error(exc: "TurnError") -> Exception:
     """Translate a brain ERROR event into a LiveKit framework-friendly exception."""
     mapped = _ERROR_CODE_MAP.get(exc.code)
     if mapped is not None:
-        status_code, retryable = mapped
+        status_code, _ = mapped
         return APIStatusError(
             f"eidolon_agent {exc.code}: {exc}",
             status_code=status_code,
-            retryable=retryable,
+            retryable=False,
         )
     return APIConnectionError(
         f"eidolon_agent error {exc.code}: {exc}",
-        retryable=not exc.fatal,
+        retryable=False,
     )
 
 
@@ -369,6 +332,10 @@ class EidolonAgentGrpcLlm(llm.LLM):
         if self._warmer is not None:
             await self._warmer.discard()
 
+    def cancel_response_outputs(self, turn_id: str | None = None) -> None:
+        if self.presentation_transport is not None:
+            self.presentation_transport.interrupt(turn_id)
+
     async def aclose(self) -> None:
         if self.presentation_transport is not None:
             await self.presentation_transport.close()
@@ -432,12 +399,15 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         conversation_id = self._conversation_id
         # The real turn supersedes any preemptive warm-up for this session.
         await llm_v.discard_warm()
+        llm_v.cancel_response_outputs()
         try:
             turn_id, payloads = await asyncio.wait_for(
                 session.start_turn(
                     text=user_text,
                     conversation_id=conversation_id,
                     metadata=({**({"turn_decision": self._turn_decision_metadata} if self._turn_decision_metadata else {}),
+                        **({"selected_outputs": llm_v.output_plan.outputs.model_dump()}
+                           if llm_v.output_plan else {}),
                         **({"presentation_profile": llm_v.output_plan.expression_profile}
                            if llm_v.output_plan and llm_v.output_plan.outputs.expression else {})} or None),
                     trace_id=self._trace_id,
@@ -466,6 +436,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         first_delta_seen = False
         first_answer_delta_seen = False
         tool_call_seen = False
+        presentation_seen = False
         # Roles of non-answer status deltas already spoken this turn, so a
         # preamble is rendered at most once even if the brain repeats it.
         spoken_preamble_roles: set[str] = set()
@@ -590,12 +561,11 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 elif isinstance(payload, ResponseIntent):
                     if payload.turn_id != turn_id or llm_v.presentation_transport is None:
                         raise ValueError("UNEXPECTED_RESPONSE_INTENT")
-                    receipt = await llm_v.presentation_transport.present(payload)
-                    if receipt is not None:
-                        await session.report_presentation(turn_id, receipt)
-                        if receipt.status != "completed":
-                            raise APIConnectionError(f"presentation_{receipt.status}", retryable=False)
-                    first_answer_delta_seen = True
+                    llm_v.presentation_transport.start(payload, session.report_presentation)
+                    # This is a selected nonverbal response, not an audible
+                    # delta. Output completion is tracked by its own receipts.
+                    first_model_activity_seen = True
+                    presentation_seen = True
                 elif isinstance(payload, StatePayload):
                     llm_v.emit_provider_event(
                         "brain_state",
@@ -697,7 +667,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     )
                 # else: unknown payload type — ignore (forward-compat with new
                 # session.py additions).
-            if not first_answer_delta_seen and not tool_call_seen:
+            if not first_answer_delta_seen and not tool_call_seen and not presentation_seen:
                 message = "eidolon_agent completed without answer or tool call"
                 llm_v.emit_provider_event(
                     "brain_error",
@@ -718,8 +688,10 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 attempt=attempt,
             )
         except APIConnectionError:
+            llm_v.cancel_response_outputs(turn_id)
             raise
         except asyncio.CancelledError:
+            llm_v.cancel_response_outputs(turn_id)
             # Barge-in, preemptive-generation discard, or job teardown: tell the
             # brain to stop generating without closing the underlying bidi
             # stream. Use session.spawn rather than raw asyncio.create_task —
@@ -749,9 +721,13 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 message=str(exc),
                 fatal=exc.fatal,
             )
+            llm_v.cancel_response_outputs(turn_id)
             raise _map_turn_error(exc) from exc
         except Exception as exc:
+            llm_v.cancel_response_outputs(turn_id)
             raise APIConnectionError(
                 f"eidolon_agent stream failed: {exc}",
-                retryable=_stream_failure_is_retryable(exc),
+                # StartTurn has already been accepted. A new attempt would
+                # replay a logical turn, including its tool side effects.
+                retryable=False,
             ) from exc

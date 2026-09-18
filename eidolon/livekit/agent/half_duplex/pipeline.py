@@ -745,6 +745,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         return self._state in {PipelineState.GENERATING, PipelineState.SPEAKING}
 
     def _preempt_agent_output_for_ptt(self) -> None:
+        getattr(self._factory.llm.llm, "cancel_response_outputs", lambda: None)()
         session = self._session
         if session is not None:
             try:

@@ -225,3 +225,190 @@ async def test_real_grpc_feedback_finishes_silent_turn_without_text(monkeypatch)
     finally:
         await adapter.aclose()
         await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        ("rejected", "COMMAND_CLOCK_UNAVAILABLE"),
+        ("expired", "COMMAND_EXPIRED"),
+        ("unsupported", "UNSUPPORTED_CAPABILITY"),
+    ],
+)
+async def test_device_refusal_is_a_typed_output_result(monkeypatch, status, code):
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    transport = PresentationTransport(room, output(), Mock())
+    task = asyncio.create_task(transport.present(intent()))
+    while not transport.pending:
+        await asyncio.sleep(0)
+    transport.receive(
+        SimpleNamespace(
+            topic=CONTROL_TOPIC,
+            participant=SimpleNamespace(identity="device"),
+            data=json.dumps(
+                {"op": "expression.play", "ref": "face:turn-1", "status": status, "code": code}
+            ).encode(),
+        )
+    )
+    receipt = await task
+    assert receipt.status == "rejected" and receipt.reason == code
+    assert not transport.pending
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_generation_finishes_before_expression_receipt_and_never_retries(monkeypatch):
+    from .test_eidolon_agent_grpc_llm import _serve, _ctx, pb, pbg
+    from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
+
+    class Servicer(pbg.EidolonAgentServicer):
+        starts = 0
+
+        async def Chat(self, requests, context):
+            async for frame in requests:
+                if frame.WhichOneof("payload") != "start":
+                    continue
+                self.starts += 1
+                assert (
+                    frame.start.metadata.fields["selected_outputs"]
+                    .struct_value.fields["speech"]
+                    .bool_value
+                )
+                tid = frame.start.turn_id
+                yield pb.TurnEvent(
+                    turn_id=tid,
+                    seq=1,
+                    kind=pb.TurnEvent.PRESENTATION,
+                    presentation=pb.ResponseIntent(
+                        schema_version=1,
+                        response_id=f"response:{tid}",
+                        turn_id=tid,
+                        session_id="session-1",
+                        intent="acknowledge",
+                        stance="neutral",
+                        intensity=0.3,
+                        pace="normal",
+                    ),
+                )
+                from .test_eidolon_agent_grpc_llm import _delta_role
+
+                yield _delta_role(tid, 2, "你好，这是语音回答。", "answer")
+                yield pb.TurnEvent(turn_id=tid, seq=3, kind=pb.TurnEvent.DONE)
+
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    servicer = Servicer()
+    server, target = await _serve(servicer)
+    adapter = EidolonAgentGrpcLlm(
+        target=target,
+        device_token=lambda: "test-token",
+        conversation_id="session-1",
+        output_plan=output().model_copy(
+            update={"outputs": OutputSelection(speech=True, expression=True)}
+        ),
+        presentation_room=room,
+    )
+    try:
+
+        async def consume():
+            return [c async for c in adapter.chat(chat_ctx=_ctx("你好"))]
+
+        chunks = await asyncio.wait_for(consume(), timeout=2)
+        assert "".join(c.delta.content or "" for c in chunks if c.delta) == "你好，这是语音回答。"
+        assert adapter.presentation_transport.pending  # no device ACK yet
+        pid = next(iter(adapter.presentation_transport.pending))
+        adapter.presentation_transport.receive(
+            SimpleNamespace(
+                topic=CONTROL_TOPIC,
+                participant=SimpleNamespace(identity="device"),
+                data=json.dumps(
+                    {
+                        "op": "expression.play",
+                        "ref": pid,
+                        "status": "rejected",
+                        "code": "COMMAND_CLOCK_UNAVAILABLE",
+                    }
+                ).encode(),
+            )
+        )
+        await asyncio.gather(*tuple(adapter.presentation_transport._tasks.values()))
+        assert servicer.starts == 1
+        assert not adapter.presentation_transport.pending
+    finally:
+        await adapter.aclose()
+        await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+async def test_delivery_survives_generation_but_is_owned_by_interrupt_and_close(monkeypatch):
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    transport = PresentationTransport(room, output(), Mock())
+    report = AsyncMock()
+    transport.start(intent(), report)
+    while not transport.pending:
+        await asyncio.sleep(0)
+    transport.interrupt("old-turn")
+    assert not next(iter(transport._tasks.values())).cancelling()
+    transport.interrupt("turn-1")
+    await transport.close()
+    assert not transport.pending and not transport._tasks
+    assert report.call_args.args[1].status == "cancelled"
+    ops = [json.loads(c.args[0])["op"] for c in room.local_participant.publish_data.call_args_list]
+    assert "expression.cancel" in ops
+
+
+@pytest.mark.asyncio
+async def test_missing_receipt_times_out_only_expression_and_cancels_device(monkeypatch):
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    transport = PresentationTransport(room, output(), Mock())
+    receipt = await asyncio.wait_for(
+        transport.present(intent().model_copy(update={"pace": "brisk"})), timeout=5
+    )
+    assert receipt.status == "failed" and receipt.reason == "PRESENTATION_TIMEOUT"
+    assert not transport.pending
+    assert (
+        json.loads(room.local_participant.publish_data.call_args.args[0])["op"]
+        == "expression.cancel"
+    )
+    # A late completion has no pending owner and cannot revive the old response.
+    transport.receive(
+        SimpleNamespace(
+            topic=CONTROL_TOPIC,
+            participant=SimpleNamespace(identity="device"),
+            data=json.dumps(
+                {
+                    "op": "expression.play",
+                    "ref": receipt.presentation_id,
+                    "result": receipt.model_copy(
+                        update={"status": "completed", "sequence": 9}
+                    ).model_dump(),
+                }
+            ).encode(),
+        )
+    )
+    assert not transport.pending
+    await transport.close()

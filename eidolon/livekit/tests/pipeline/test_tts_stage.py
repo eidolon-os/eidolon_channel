@@ -48,3 +48,36 @@ async def test_synthesize_closes_underlying_stream_when_consumer_stops() -> None
     await gen.aclose()
 
     assert fake.stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tts_failures_do_not_count_towards_closing_multimodal_session():
+    import time
+    from unittest.mock import Mock
+    from livekit.agents import tts
+    from livekit.agents.voice import AgentSession
+    from livekit.agents import APIConnectionError
+    from eidolon.livekit.agent.providers.tts import OutputScopedTTS
+    class Fake(tts.TTS):
+        def __init__(self):
+            super().__init__(capabilities=tts.TTSCapabilities(streaming=True),
+                             sample_rate=16000, num_channels=1)
+        def synthesize(self, text, **kwargs):
+            raise NotImplementedError
+        def stream(self, **kwargs):
+            return sentinel
+    sentinel = object()
+    inner = Fake()
+    scoped = OutputScopedTTS(inner)
+    session = AgentSession()
+    scoped.on("error", session._on_error)
+    observer = Mock()
+    scoped.on("output_error", observer)
+    for _ in range(5):
+        inner.emit("error", tts.TTSError(timestamp=time.time(), label="fake",
+            error=APIConnectionError("tts offline", retryable=False), recoverable=False))
+    assert observer.call_count == 5
+    assert session._tts_error_counts == 0 and session._closing_task is None
+    assert scoped.stream() is sentinel  # original synthesis implementation
+    assert scoped.capabilities is inner.capabilities
+    await scoped.aclose()

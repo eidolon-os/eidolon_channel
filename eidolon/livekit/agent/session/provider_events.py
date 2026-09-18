@@ -308,7 +308,25 @@ class ProviderEventObserver:
             if mark in {"tts_first_text_sent_at", "tts_provider_first_audio_at"}:
                 self._cancel_first_delta_watchdog()
 
+        def _on_output_error(event: Any) -> None:
+            logger.warning("speech output failed recoverable=%s: %s",
+                           getattr(event, "recoverable", False), getattr(event, "error", event))
+            timeline = self._get_output_timeline()
+            if timeline is None:
+                return
+            if not self._should_record_tts_event(timeline):
+                return
+            self.agent_output.record_tts_event(timeline, {
+                "event": "tts_output_error", "recoverable": getattr(event, "recoverable", False),
+                "error": str(getattr(event, "error", event))[:240],
+            })
+            timeline.mark("tts_error_at")
+            self._emit_milestone(timeline, "tts_error", "speech_output_failed")
+            if self._append_timeline_snapshot is not None:
+                self._append_timeline_snapshot(timeline, "speech_output_failed")
+
         tts_plugin.on("provider_event", _on_provider_event)
+        tts_plugin.on("output_error", _on_output_error)
         self.tts_provider_observer_installed = True
 
     def _emit_milestone(self, timeline: TurnTimeline, milestone: str, reason: str) -> None:

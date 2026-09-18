@@ -535,6 +535,9 @@ class StreamingPipeline(BasePipeline):
                 CONTROL_OP_PLAYBACK_STOP,
                 reason=reason,
             ),
+            cancel_response_outputs=lambda: getattr(
+                self._factory.llm.llm, "cancel_response_outputs", lambda: None
+            )(),
             finish_agent_output=self._finish_agent_output,
             snapshot_interrupted_context=lambda: self._ensure_context_ledger().snapshot(),
             cancel_residual_commit_suppress_sec=self._cancel_residual_commit_suppress_sec,

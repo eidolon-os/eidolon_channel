@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from eidolon_sdk.biz.presentation import OutputSelection
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,13 @@ class WelcomeAudio:
 
 
 WelcomeMessage = str | WelcomeAudio
+def welcome_allowed(welcome: WelcomeMessage | None, outputs: OutputSelection) -> bool:
+    """A cached sound is a cue; a synthesized greeting is speech."""
+    if isinstance(welcome, WelcomeAudio):
+        return outputs.audio_cue
+    return bool(welcome) and outputs.speech
+
+
 _BUILTIN_AUDIO = Path(__file__).resolve().parent / "assets" / "soft-ready.wav"
 
 

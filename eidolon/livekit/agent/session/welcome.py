@@ -5,7 +5,8 @@ from typing import Any
 
 from livekit import rtc
 
-from eidolon.livekit.common.welcome import WelcomeAudio, WelcomeMessage
+from eidolon.livekit.common.welcome import WelcomeAudio, WelcomeMessage, welcome_allowed
+from eidolon_sdk.biz.presentation import OutputSelection
 
 
 async def _audio_frames(pcm: bytes, sample_rate: int) -> AsyncIterator[rtc.AudioFrame]:
@@ -20,11 +21,14 @@ def play_welcome(
     session: Any,
     welcome: WelcomeMessage,
     *,
+    outputs: OutputSelection,
     pcm: bytes | None,
     sample_rate: int,
     queue_text: Callable[..., None] | None = None,
 ) -> Any:
     """Keep the session's interruption policy and speech completion events."""
+    if not welcome_allowed(welcome, outputs):
+        return None
     if isinstance(welcome, WelcomeAudio):
         if pcm is None:
             raise ValueError("welcome audio must be prepared before session entry")

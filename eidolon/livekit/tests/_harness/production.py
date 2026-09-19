@@ -14,26 +14,25 @@ from eidolon.livekit.agent.full_duplex.pipeline import StreamingPipeline
 from .headless import headless_session
 
 
-def stub_factory(*, llm, stt, tts, vad, interrupt_classifier=None, runtime_session_id='sess-harness'):
+def stub_factory(*, llm, stt, tts, vad, interrupt_classifier=None, runtime_session_id='sess-harness', outputs=None):
     """Stand in for SharedStageFactory with the attributes a pipeline reads.
 
     One builder for both duplex modes on purpose. Written as two doubles, they
     drift: an attribute the pipelines start reading lands on the one whose
     tests were in front of you, and every test on the other path dies on it.
 
-    ``outputs`` is derived rather than declared, because the real factory
-    derives it too. It rejects any plan whose ``speech`` disagrees with whether
-    it holds a TTS stage, falls back to speech plus dialogue text when the
-    dispatch carries no output plan, and refuses an expression plan unless the
-    brain is ``eidolon_agent`` — which a scripted LLM is not. So a double is
-    entitled to exactly one output shape per TTS it is handed.
+    An explicit output selection models a negotiated plan. Without one the
+    harness preserves legacy speech/text/cue behavior when TTS is installed.
+    Speech must still agree with whether a TTS stage is installed.
 
     ``stt`` and ``vad`` arrive already shaped. The real ``SttStage`` answers
     both the segment API half duplex calls and the ``.stt`` full duplex hands
     to AgentSession; each caller supplies the half its own pipeline reads.
     """
+    if outputs is not None and outputs.speech != (tts is not None):
+        raise ValueError("TTS_STAGE_MUST_MATCH_SELECTED_SPEECH")
     return SimpleNamespace(
-        outputs=OutputSelection(speech=tts is not None, dialogue_text=True),
+        outputs=outputs if outputs is not None else OutputSelection(speech=tts is not None, dialogue_text=True, audio_cue=tts is not None),
         llm=SimpleNamespace(llm=llm), stt=stt,
         tts=SimpleNamespace(tts=tts) if tts is not None else None, vad=vad,
         interrupt_classifier=interrupt_classifier,
@@ -45,10 +44,10 @@ def stub_factory(*, llm, stt, tts, vad, interrupt_classifier=None, runtime_sessi
 
 
 @asynccontextmanager
-async def production_session(*, llm, stt, tts, vad, mode='full_duplex', welcome='', real_time_audio=False, interrupt_classifier=None, warmup=False, **kwargs):
+async def production_session(*, llm, stt, tts, vad, mode='full_duplex', welcome='', real_time_audio=False, interrupt_classifier=None, warmup=False, outputs=None, **kwargs):
     factory = stub_factory(
         llm=llm, stt=SimpleNamespace(stt=stt), tts=tts, vad=SimpleNamespace(vad=vad),
-        interrupt_classifier=interrupt_classifier,
+        interrupt_classifier=interrupt_classifier, outputs=outputs,
     )
     pipeline = StreamingPipeline(
         factory, interaction_mode=mode, allow_interruptions=mode == 'full_duplex',

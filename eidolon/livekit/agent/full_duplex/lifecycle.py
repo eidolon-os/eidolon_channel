@@ -134,7 +134,7 @@ class FullDuplexSessionLifecycle:
         # fall back to audio-only so a flaky avatar service never drops the call.
         room_audio_output: AudioOutputOptions | bool = (
             AudioOutputOptions(sample_rate=pipeline._audio_sample_rate)
-            if pipeline._factory.outputs.speech else False
+            if (pipeline._factory.outputs.speech or pipeline._factory.outputs.audio_cue) else False
         )
         if pipeline._avatar_enabled and pipeline._factory.outputs.speech:
             if await self._start_avatar_worker(room, session):

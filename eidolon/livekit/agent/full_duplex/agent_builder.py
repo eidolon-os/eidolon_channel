@@ -81,6 +81,7 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
             play_welcome(
                 self.session, welcome,
                 pcm=pipeline._welcome_pcm,
+                outputs=pipeline._factory.outputs,
                 sample_rate=pipeline._audio_sample_rate,
                 queue_text=pipeline._queue_fixed_assistant_speech,
             )

@@ -70,7 +70,7 @@ from eidolon.livekit.common.config import (
 )
 
 from .agent_builder import build_full_duplex_agent
-from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio
+from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio, welcome_allowed
 from ..runtime.interaction_mode import resolve_idle_policy, resolve_welcome
 from ..turn_policy import TurnPolicyRuntime
 from ..observability import ChannelTurnEventSink, TurnTimeline
@@ -268,7 +268,10 @@ class StreamingPipeline(BasePipeline):
         # only a system prompt context tends to echo back instruction
         # templates, which the user heard as garbled "welcome".
         self._welcome_message = welcome_message
-        self._welcome_pcm = prepare_welcome_audio(welcome_message, sample_rate=audio_sample_rate)
+        self._welcome_pcm = prepare_welcome_audio(
+            welcome_message if welcome_allowed(welcome_message, factory.outputs) else None,
+            sample_rate=audio_sample_rate,
+        )
         interrupt_policy = self._turn_policy.interrupt
         # Round 8 R8.9: framework default 2.0s is too short for Chinese
         # STT, which often takes 3-5s to deliver a final transcript. Source of
@@ -1546,11 +1549,10 @@ class StreamingPipeline(BasePipeline):
         verified-presence sessions keep their welcome (None when unconfigured
         means wait for the user to speak first).
         """
-        if not self._factory.outputs.speech:
-            return None
         return resolve_welcome(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
+            outputs=self._factory.outputs,
         )
 
     def _current_assistant_speech_text(self) -> str:

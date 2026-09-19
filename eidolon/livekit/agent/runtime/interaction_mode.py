@@ -51,7 +51,8 @@ import logging
 from typing import Any
 
 from eidolon.livekit.common.config.schema import IdlePolicyConfig, TurnPolicyConfig
-from eidolon.livekit.common.welcome import WelcomeMessage
+from eidolon.livekit.common.welcome import WelcomeMessage, welcome_allowed
+from eidolon_sdk.biz.presentation import OutputSelection
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     INTERACTION_MODE_PTT,
@@ -251,16 +252,16 @@ class IdlePolicy:
 
 
 def resolve_welcome(
-    *, session_intent: str, welcome_message: WelcomeMessage | None
+    *, session_intent: str, welcome_message: WelcomeMessage | None, outputs: OutputSelection
 ) -> WelcomeMessage | None:
     """Map session origin to its canned opening.
 
     Proactive report sessions already have opening content. Explicit user and
     verified-presence sessions use the configured welcome.
     """
-    if session_intent == SESSION_INTENT_PROACTIVE:
+    if session_intent == SESSION_INTENT_PROACTIVE or not welcome_allowed(welcome_message, outputs):
         return None
-    return welcome_message or None
+    return welcome_message
 
 
 def resolve_idle_policy(

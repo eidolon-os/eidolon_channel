@@ -19,7 +19,8 @@ def silent_plan():
     )
 
 
-def test_production_factory_never_constructs_tts_for_silent_session(monkeypatch):
+@pytest.mark.parametrize("cue", [False, True])
+def test_production_factory_never_constructs_tts_for_silent_session(monkeypatch, cue):
     tts_builder = Mock(side_effect=AssertionError("TTS constructor reached"))
     monkeypatch.setattr(SharedStageFactory, "_build_llm", lambda _: object())
     monkeypatch.setattr(SharedStageFactory, "_build_stt", lambda _: object())
@@ -41,7 +42,8 @@ def test_production_factory_never_constructs_tts_for_silent_session(monkeypatch)
         "eidolon.livekit.agent.eidolon_agent_rpc.EidolonAgentGrpcLlm", lambda **_: object()
     )
     factory = SharedStageFactory.from_config(
-        cfg, runtime_session_id="session-1", output_plan=silent_plan()
+        cfg, runtime_session_id="session-1", output_plan=silent_plan().model_copy(
+            update={"outputs": OutputSelection(expression=True, audio_cue=cue)})
     )
     assert factory.tts is None
     assert factory.outputs.expression and not factory.outputs.speech

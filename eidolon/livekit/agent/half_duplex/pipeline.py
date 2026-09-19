@@ -54,7 +54,7 @@ from eidolon.livekit.agent.session.idle import IdleWatchdog
 from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
 from eidolon.livekit.common.config import ObservabilityConfig, TurnPolicyConfig
-from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio
+from eidolon.livekit.common.welcome import WelcomeMessage, prepare_welcome_audio, welcome_allowed
 from eidolon.livekit.agent.session.welcome import play_welcome
 from eidolon.livekit.agent.turn_policy import TurnPolicyRuntime
 
@@ -99,7 +99,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         super().__init__(factory=factory, callbacks=callbacks)
         self._instructions = instructions
         self._welcome_message = welcome_message
-        self._welcome_pcm = prepare_welcome_audio(welcome_message, sample_rate=audio_sample_rate)
+        self._welcome_pcm = prepare_welcome_audio(
+            welcome_message if welcome_allowed(welcome_message, factory.outputs) else None,
+            sample_rate=audio_sample_rate,
+        )
         self._audio_sample_rate = audio_sample_rate
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
@@ -142,11 +145,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
     def _welcome_on_enter(self) -> WelcomeMessage | None:
-        if not self._factory.outputs.speech:
-            return None
         return resolve_welcome(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
+            outputs=self._factory.outputs,
         )
 
     def _build_room_options(self) -> Any:
@@ -163,7 +165,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         return RoomOptions(
             audio_input=False,
             audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
-                          if self._factory.outputs.speech else False),
+                          if (self._factory.outputs.speech or self._factory.outputs.audio_cue) else False),
             text_output=self._factory.outputs.dialogue_text,
         )
 
@@ -203,6 +205,7 @@ class HalfDuplexPttPipeline(BasePipeline):
                 play_welcome(
                     self.session, welcome,
                     pcm=pipeline._welcome_pcm,
+                    outputs=pipeline._factory.outputs,
                     sample_rate=pipeline._audio_sample_rate,
                 )
 

@@ -654,9 +654,9 @@ async def headless_session(
     Pass ``extra_session_kwargs`` / ``extra_agent_kwargs`` to override
     or add more AgentSession / Agent constructor arguments.
     """
-    if llm is None or stt is None or tts is None or vad is None:
+    if llm is None or stt is None or vad is None:
         raise ValueError(
-            "headless_session requires all four mock plugins: llm, stt, tts, vad"
+            "headless_session requires llm, stt and vad; tts=None models no speech output"
         )
 
     audio_in = ScriptedAudioInput(sample_rate=sample_rate)

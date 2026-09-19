@@ -189,7 +189,7 @@ class SharedStageFactory:
             raise ValueError("stt must not be None")
         self.output_plan = output_plan
         self.outputs = (output_plan.outputs if output_plan is not None
-                        else OutputSelection(speech=True, dialogue_text=True))
+                        else OutputSelection(speech=True, dialogue_text=True, audio_cue=True))
         if output_plan is not None and output_plan.session_id != runtime_session_id:
             raise ValueError("OUTPUT_PLAN_SESSION_MISMATCH")
         if self.outputs.speech != (tts is not None):

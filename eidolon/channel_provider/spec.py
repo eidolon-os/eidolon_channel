@@ -155,12 +155,12 @@ def derive_spec(
                 capabilities=capabilities,
                 policy=device.output_policy,
                 requested=device.output_policy.allowed,
-                ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True),
+                ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True, audio_cue=True),
                 require_response=False,
             )
         except ValueError as exc:
             raise ContractError(str(exc)) from exc
-        if not selected.speech:
+        if not (selected.speech or selected.audio_cue):
             audio = MediaFlow.PUBLISH if audio.publishes else MediaFlow.NONE
     elif output_policy_required(capabilities, manifest=manifest):
         # New Companion clients require an explicit Owner policy. Missing or

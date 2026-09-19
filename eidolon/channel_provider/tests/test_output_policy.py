@@ -138,3 +138,22 @@ def test_explicit_device_contract_cannot_use_legacy_voice(expression):
     manifest["properties"][-1]["schema"]["const"] = "eidolon.outputs.v2"
     with pytest.raises(ContractError, match="UNSUPPORTED_OUTPUT_CONTRACT"):
         spec(replace(req, device=replace(device, output_policy=policy)))
+
+
+@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.parametrize("allowed", [False, True])
+@pytest.mark.parametrize("speech", [False, True])
+def test_cue_negotiation_requires_capability_and_permission(declared, allowed, speech):
+    req = request(speech=speech)
+    manifest = dict(req.device.manifest)
+    manifest["properties"] = [*manifest["properties"], {
+        "name": "output.audio_cue", "writable": False,
+        "schema": {"type": "boolean", "const": declared},
+    }]
+    policy = DeviceOutputPolicy(revision=2, allowed=OutputSelection(
+        speech=speech, expression=True, audio_cue=allowed))
+    selected = spec(replace(req, device=replace(req.device, manifest=manifest, output_policy=policy)))
+    assert selected.selected_outputs.audio_cue == (declared and allowed)
+    assert selected.selected_outputs.speech == speech
+    assert selected.audio == (MediaFlow.DUPLEX if speech or (declared and allowed) else MediaFlow.PUBLISH)
+    assert selected.serving.interaction_mode == "half_duplex"

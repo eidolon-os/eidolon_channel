@@ -412,3 +412,69 @@ async def test_missing_receipt_times_out_only_expression_and_cancels_device(monk
     )
     assert not transport.pending
     await transport.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["completed", "rejected", "failed", "cancelled"])
+async def test_motion_waits_for_target_device_and_terminal_execution(monkeypatch, terminal):
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock()))
+    selected = output().model_copy(update={"outputs": OutputSelection(expression=True, motion=True)})
+    emit = Mock()
+    transport = PresentationTransport(room, selected, emit)
+    task = asyncio.create_task(transport.present_motion(intent("celebrate")))
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if room.local_participant.publish_data.called:
+            break
+    envelope = json.loads(room.local_participant.publish_data.call_args.args[0])
+    assert envelope["op"] == "head.gesture"
+    assert envelope["payload"]["name"] == "wake_wobble"
+    assert envelope["payload"]["session_id"] == "session-1"
+    assert envelope["payload"]["policy_revision"] == 1
+    def reply(status, peer="device"):
+        transport.receive(SimpleNamespace(topic=CONTROL_TOPIC, participant=SimpleNamespace(identity=peer),
+            data=json.dumps({"op": "head.gesture", "ref": envelope["id"], "status": status}).encode()))
+    reply("completed", "stranger")
+    reply("accepted")
+    reply("started")
+    await asyncio.sleep(0)
+    assert not task.done()
+    reply(terminal)
+    await task
+    assert not transport.motion_pending
+    assert any(c.args[0] == f"brain_motion_{terminal}" for c in emit.call_args_list)
+    await transport.close()
+
+@pytest.mark.asyncio
+async def test_motion_cancellation_is_scoped_to_original_command(monkeypatch):
+    monkeypatch.setattr("eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+                        AsyncMock(return_value="device"))
+    room = SimpleNamespace(on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock()))
+    selected = output().model_copy(update={"outputs": OutputSelection(expression=True, motion=True)})
+    transport = PresentationTransport(room, selected, Mock())
+    task = asyncio.create_task(transport.present_motion(intent()))
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if room.local_participant.publish_data.called:
+            break
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    stop = json.loads(room.local_participant.publish_data.call_args.args[0])
+    assert stop["op"] == "safety.stop"
+    assert stop["payload"]["motion_id"] == "head:turn-1"
+    assert stop["payload"]["session_id"] == "session-1"
+    assert not transport.motion_pending
+    await transport.close()
+
+@pytest.mark.asyncio
+async def test_unselected_motion_never_publishes():
+    room = SimpleNamespace(on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock()))
+    transport = PresentationTransport(room, output(), Mock())
+    with pytest.raises(ValueError, match="MOTION_OUTSIDE_SELECTED_SESSION"):
+        await transport.present_motion(intent())
+    room.local_participant.publish_data.assert_not_called()
+    await transport.close()

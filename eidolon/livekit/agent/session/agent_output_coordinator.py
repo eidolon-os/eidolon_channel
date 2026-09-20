@@ -104,6 +104,12 @@ class AgentOutputCoordinator:
                     "risk": "",
                 }
             )
+        elif name.startswith("brain_motion_"):
+            outputs = dict(output.get("outputs") or {})
+            outputs["motion"] = {"state": name.removeprefix("brain_motion_"),
+                                 "reason": event.get("reason", ""),
+                                 "gesture": event.get("gesture", "")}
+            output["outputs"] = outputs
         elif name.startswith("brain_presentation_"):
             state = name.removeprefix("brain_presentation_")
             output.update(presentation_state=state, response_id=event.get("response_id"))

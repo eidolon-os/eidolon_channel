@@ -65,6 +65,7 @@ class PresentationTransport:
     def __init__(self, room: Any, output: SessionOutputPlan, emit: Callable[..., None]):
         self.room, self.output, self.emit = room, output, emit
         self.pending: dict[str, tuple[ExpressionPlan, asyncio.Future, int]] = {}
+        self.motion_pending: dict[str, asyncio.Future] = {}
         self.peer = ""
         self._tasks: dict[str, asyncio.Task] = {}
         self._closed = False
@@ -88,7 +89,16 @@ class PresentationTransport:
             try:
                 if previous:
                     await asyncio.gather(*previous, return_exceptions=True)
-                receipt = await self.present(intent)
+                # Independent lanes share one response owner and cancellation.
+                # A failed head never suppresses an otherwise usable face.
+                if self.output.outputs.motion and intent.intent != "none":
+                    face, _ = await asyncio.gather(
+                        self.present(intent), self.present_motion(intent), return_exceptions=True)
+                    if isinstance(face, BaseException):
+                        raise face
+                    receipt = face
+                else:
+                    receipt = await self.present(intent)
             except asyncio.CancelledError:
                 receipt = self._receipt(intent, "cancelled", "RESPONSE_CANCELLED")
                 self._emit_receipt(intent, receipt)
@@ -187,6 +197,53 @@ class PresentationTransport:
         finally:
             self.pending.pop(plan.presentation_id, None)
 
+    async def present_motion(self, intent: ResponseIntent) -> None:
+        if intent.session_id != self.output.session_id or not self.output.outputs.motion:
+            raise ValueError("MOTION_OUTSIDE_SELECTED_SESSION")
+        # Hardware gesture vocabulary already exposed by the head.gesture action.
+        # No arbitrary servo coordinates or per-frame commands from the model.
+        gestures = {"acknowledge": "perk_up", "confirm": "nod", "consider": "glance",
+                    "clarify": "glance", "comfort": "droop", "celebrate": "wake_wobble",
+                    "decline": "shake", "notify": "perk_up"}
+        name = gestures.get(intent.intent)
+        if name is None:
+            return
+        command_id = f"head:{intent.turn_id}"
+        future = asyncio.get_running_loop().create_future()
+        self.motion_pending[command_id] = future
+        payload = {"name": name, "times": 1, "hold_ms": 350, "return_ms": 350,
+                   "session_id": self.output.session_id,
+                   "policy_revision": self.output.policy_revision}
+        envelope = build_session_client_control_envelope(
+            op="head.gesture", reason="response", turn_id=intent.turn_id, payload=payload)
+        envelope.update(id=command_id, capability_version=1)
+        async def stop() -> None:
+            cancel = build_session_client_control_envelope(op="safety.stop", reason="response_cancelled",
+                payload={"motion_id": command_id, "session_id": self.output.session_id,
+                         "policy_revision": self.output.policy_revision})
+            cancel["capability_version"] = 1
+            await asyncio.wait_for(self.room.local_participant.publish_data(
+                json.dumps(cancel).encode(), topic=CONTROL_TOPIC, reliable=True,
+                destination_identities=[self.peer]), timeout=1)
+        try:
+            self.peer = await asyncio.wait_for(wait_for_runtime_participant_identity(self.room), timeout=2.5)
+            await asyncio.wait_for(self.room.local_participant.publish_data(
+                json.dumps(envelope).encode(), topic=CONTROL_TOPIC, reliable=True,
+                destination_identities=[self.peer]), timeout=1)
+            self.emit("brain_motion_sent", turn_id=intent.turn_id, gesture=name)
+            await asyncio.wait_for(future, timeout=6)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                await stop()
+            self.emit("brain_motion_cancelled", turn_id=intent.turn_id, reason="RESPONSE_CANCELLED")
+            raise
+        except Exception:
+            with suppress(Exception):
+                await stop()
+            self.emit("brain_motion_failed", turn_id=intent.turn_id, reason="MOTION_TRANSPORT_FAILED")
+        finally:
+            self.motion_pending.pop(command_id, None)
+
     async def cancel(self, plan: ExpressionPlan) -> None:
         payload = CancelExpression(
             session_id=self.output.session_id,
@@ -217,6 +274,15 @@ class PresentationTransport:
             if len(packet.data) > 4096:
                 return
             envelope = json.loads(packet.data)
+            motion = self.motion_pending.get(envelope.get("ref"))
+            if motion is not None and envelope.get("op") == "head.gesture":
+                status = envelope.get("status")
+                if not motion.done() and status in {"accepted", "started", "completed", "cancelled", "rejected", "failed", "expired", "unsupported"}:
+                    self.emit(f"brain_motion_{status}", turn_id=envelope["ref"].removeprefix("head:"),
+                              reason=str(envelope.get("code") or "")[:96])
+                    if status not in {"accepted", "started"}:
+                        motion.set_result(status)
+                return
             entry = self.pending.get(envelope.get("ref"))
             if entry is None or envelope.get("op") != EXPRESSION_PLAY_OP:
                 return

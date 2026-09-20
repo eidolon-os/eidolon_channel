@@ -155,7 +155,8 @@ def derive_spec(
                 capabilities=capabilities,
                 policy=device.output_policy,
                 requested=device.output_policy.allowed,
-                ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True, audio_cue=True),
+                ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True, audio_cue=True,
+                                        motion=capabilities.expression and device.output_policy.allowed.expression),
                 require_response=False,
             )
         except ValueError as exc:

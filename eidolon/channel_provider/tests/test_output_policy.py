@@ -157,3 +157,19 @@ def test_cue_negotiation_requires_capability_and_permission(declared, allowed, s
     assert selected.selected_outputs.speech == speech
     assert selected.audio == (MediaFlow.DUPLEX if speech or (declared and allowed) else MediaFlow.PUBLISH)
     assert selected.serving.interaction_mode == "half_duplex"
+
+
+@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.parametrize("allowed", [False, True])
+def test_motion_requires_declared_capability_and_owner_permission(declared, allowed):
+    req = request(speech=False)
+    manifest = dict(req.device.manifest)
+    manifest["properties"] = [*manifest["properties"], {
+        "name": "output.motion", "writable": False,
+        "schema": {"type": "boolean", "const": declared},
+    }]
+    policy = DeviceOutputPolicy(revision=2, allowed=OutputSelection(expression=True, motion=allowed))
+    selected = spec(replace(req, device=replace(req.device, manifest=manifest, output_policy=policy)))
+    assert selected.selected_outputs.motion == (declared and allowed)
+    assert not selected.selected_outputs.speech
+    assert selected.serving.interaction_mode == "half_duplex"

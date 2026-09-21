@@ -83,6 +83,10 @@ class AbruptCloseServer:
 class RecoverOnSecondConnectionServer(AbruptCloseServer):
     """Crash one recognition task, then complete the retried task normally."""
 
+    def __init__(self, *, task_failed: bool = False) -> None:
+        super().__init__()
+        self.task_failed = task_failed
+
     async def _handler(self, ws: ServerConnection) -> None:
         self.handler_invocations += 1
         attempt = self.handler_invocations
@@ -104,6 +108,20 @@ class RecoverOnSecondConnectionServer(AbruptCloseServer):
             )
             if attempt == 1:
                 await asyncio.wait_for(ws.recv(), timeout=1.0)
+                if self.task_failed:
+                    await ws.send(json.dumps({
+                        "header": {
+                            "event": "task-failed",
+                            "task_id": task_id,
+                            "error_code": "CLIENT_ERROR",
+                            "error_message": "request timeout after 23 seconds.",
+                        },
+                        "payload": {},
+                    }))
+                    # A failed task need not close its WebSocket. Recovery
+                    # must not wait for another audio frame or socket close.
+                    await ws.wait_closed()
+                    return
                 await ws.close(code=1011, reason="Injected first-attempt crash")
                 return
 
@@ -214,10 +232,11 @@ async def test_run_raises_api_error_on_abrupt_close(abrupt_server) -> None:
 
 
 @pytest.mark.asyncio
-async def test_framework_retry_recovers_after_provider_disconnect() -> None:
+@pytest.mark.parametrize("task_failed", [False, True])
+async def test_framework_retry_recovers_after_provider_disconnect(task_failed) -> None:
     """The adapter must reconnect and resume emitting public SpeechEvents."""
 
-    server = RecoverOnSecondConnectionServer()
+    server = RecoverOnSecondConnectionServer(task_failed=task_failed)
     await server.start()
     try:
         stt = BailianFunASRSTT(

@@ -734,8 +734,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             f"(code={failed.error_code})",
             recoverable=True,
         )
-        self._finished = True
-        self._emit_error(err, recoverable=True)
+        # Only TASK_FINISHED is a successful terminal state. Let the receive
+        # loop propagate failure through the framework's bounded retry path;
+        # emitting an error event alone leaves recognition permanently closed.
+        self._cancel_preflight()
+        raise err
 
     # ------------------------------------------------------------------
     # Helpers

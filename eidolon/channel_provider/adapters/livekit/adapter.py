@@ -409,12 +409,12 @@ class LiveKitChannelAdapter:
             # it, so no arrival could ever be attributed. Trying harder cannot
             # change that, and the caller needs to hear so.
             raise ChannelNotServable("channel handle cannot identify its device")
-        await self._reconcile_input_permissions(handle)
-        await self._reconcile_output_dispatches(handle)
         if room in self._listeners:
             watch = self._listeners[room]
             if handle.get("input_revision", 0) >= watch.input_handle.get("input_revision", 0):
                 watch.input_handle = handle
+            await self._reconcile_input_permissions(watch.input_handle)
+            await self._reconcile_output_dispatches(watch.input_handle)
             return
         watch = _Listening(device=device, sink=sink)
         watch.input_handle = handle
@@ -483,6 +483,9 @@ class LiveKitChannelAdapter:
                 await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
 
     async def _join(self, room: str, watch: _Listening) -> None:
+        # Policy reconciliation belongs to the existing listener retry lifecycle.
+        # LiveKit's control API may still be starting when this process starts.
+        await self._reconcile_input_permissions(watch.input_handle)
         connection = rtc.Room()
 
         @connection.on("participant_connected")
@@ -521,6 +524,7 @@ class LiveKitChannelAdapter:
         # Close the gap between applying a policy and joining its event stream.
         try:
             await self._reconcile_input_permissions(watch.input_handle)
+            await self._reconcile_output_dispatches(watch.input_handle)
         except Exception:
             await connection.disconnect()
             raise

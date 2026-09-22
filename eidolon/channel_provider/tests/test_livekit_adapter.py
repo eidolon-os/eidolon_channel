@@ -1202,3 +1202,30 @@ async def test_a_binding_minted_from_an_observation_still_reads_current(
     # The control: a Host that really did move still invalidates the binding.
     addresses[:] = ["10.183.24.39"]
     assert not adapter.binding_current(grant.handle)
+
+@pytest.mark.parametrize('stage', ['_reconcile_input_permissions', '_reconcile_output_dispatches'])
+async def test_listener_retries_policy_reconciliation_during_transport_startup(monkeypatch, stage):
+    monkeypatch.setattr('eidolon.channel_provider.adapters.livekit.adapter._REJOIN_BASE_DELAY', 0.0)
+    adapter, _ = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    FakeRoom.instances.clear()
+    monkeypatch.setattr('eidolon.channel_provider.adapters.livekit.adapter.rtc.Room', FakeRoom)
+    failures = 2
+    async def recovering(handle):
+        nonlocal failures
+        if failures:
+            failures -= 1
+            raise ConnectionError('LiveKit control API is still starting')
+    monkeypatch.setattr(adapter, stage, recovering)
+    try:
+        await adapter.accept_requests(grant.handle, sink=_unused_sink)
+        assert grant.handle['room'] in adapter._listeners
+        for _ in range(20):
+            await asyncio.sleep(.01)
+            if adapter._listeners[grant.handle['room']].connection is not None:
+                break
+        assert failures == 0
+        assert adapter._listeners[grant.handle['room']].connection.connected
+        assert all(not room.connected for room in FakeRoom.instances[:-1])
+    finally:
+        await adapter.stop_accepting(grant.handle)

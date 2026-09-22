@@ -91,7 +91,9 @@ class PresentationTransport:
                     await asyncio.gather(*previous, return_exceptions=True)
                 # Independent lanes share one response owner and cancellation.
                 # A failed head never suppresses an otherwise usable face.
-                if self.output.outputs.motion and intent.intent != "none":
+                if self.output.outputs.motion and not self.output.outputs.expression:
+                    receipt = await self.present_motion(intent)
+                elif self.output.outputs.motion and intent.intent != "none":
                     face, _ = await asyncio.gather(
                         self.present(intent), self.present_motion(intent), return_exceptions=True)
                     if isinstance(face, BaseException):
@@ -125,10 +127,10 @@ class PresentationTransport:
                 if not task.done() and not task.cancelling():
                     task.cancel()
 
-    @staticmethod
-    def _receipt(intent: ResponseIntent, status: str, reason: str) -> PresentationReceipt:
+    def _receipt(self, intent: ResponseIntent, status: str, reason: str) -> PresentationReceipt:
+        lane = "face" if self.output.outputs.expression else "head"
         return PresentationReceipt(
-            presentation_id=f"face:{intent.turn_id}",
+            presentation_id=f"{lane}:{intent.turn_id}",
             response_id=intent.response_id,
             status=status,
             sequence=1,
@@ -197,7 +199,7 @@ class PresentationTransport:
         finally:
             self.pending.pop(plan.presentation_id, None)
 
-    async def present_motion(self, intent: ResponseIntent) -> None:
+    async def present_motion(self, intent: ResponseIntent) -> PresentationReceipt | None:
         if intent.session_id != self.output.session_id or not self.output.outputs.motion:
             raise ValueError("MOTION_OUTSIDE_SELECTED_SESSION")
         # Hardware gesture vocabulary already exposed by the head.gesture action.
@@ -207,6 +209,8 @@ class PresentationTransport:
                     "decline": "shake", "notify": "perk_up"}
         name = gestures.get(intent.intent)
         if name is None:
+            if not self.output.outputs.expression:
+                self.emit("brain_presentation_none", turn_id=intent.turn_id, response_id=intent.response_id)
             return
         command_id = f"head:{intent.turn_id}"
         future = asyncio.get_running_loop().create_future()
@@ -231,7 +235,11 @@ class PresentationTransport:
                 json.dumps(envelope).encode(), topic=CONTROL_TOPIC, reliable=True,
                 destination_identities=[self.peer]), timeout=1)
             self.emit("brain_motion_sent", turn_id=intent.turn_id, gesture=name)
-            await asyncio.wait_for(future, timeout=6)
+            status = await asyncio.wait_for(future, timeout=6)
+            receipt = self._receipt(intent, status if status in {"completed", "cancelled"} else "failed", "")
+            if not self.output.outputs.expression:
+                self._emit_receipt(intent, receipt)
+            return receipt
         except asyncio.CancelledError:
             with suppress(Exception):
                 await stop()
@@ -241,6 +249,10 @@ class PresentationTransport:
             with suppress(Exception):
                 await stop()
             self.emit("brain_motion_failed", turn_id=intent.turn_id, reason="MOTION_TRANSPORT_FAILED")
+            receipt = self._receipt(intent, "failed", "MOTION_TRANSPORT_FAILED")
+            if not self.output.outputs.expression:
+                self._emit_receipt(intent, receipt)
+            return receipt
         finally:
             self.motion_pending.pop(command_id, None)
 

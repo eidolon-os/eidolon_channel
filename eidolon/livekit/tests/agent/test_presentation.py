@@ -478,3 +478,28 @@ async def test_unselected_motion_never_publishes():
         await transport.present_motion(intent())
     room.local_participant.publish_data.assert_not_called()
     await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_motion_only_delivers_and_reports_without_a_face(monkeypatch):
+    monkeypatch.setattr('eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity',
+        AsyncMock(return_value='device'))
+    room = SimpleNamespace(on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock()))
+    plan = SessionOutputPlan(session_id='session-1', policy_revision=1, outputs=OutputSelection(motion=True))
+    transport = PresentationTransport(room, plan, Mock())
+    report = AsyncMock()
+    transport.start(intent(), report)
+    for _ in range(20):
+        if room.local_participant.publish_data.called:
+            break
+        await asyncio.sleep(0)
+    message = json.loads(room.local_participant.publish_data.call_args.args[0])
+    assert message['op'] == 'head.gesture'
+    transport.receive(SimpleNamespace(topic=CONTROL_TOPIC, participant=SimpleNamespace(identity='device'),
+        data=json.dumps({'op': 'head.gesture', 'ref': message['id'], 'status': 'completed'}).encode()))
+    await asyncio.gather(*tuple(transport._tasks.values()))
+    report.assert_awaited_once()
+    receipt = report.call_args.args[1]
+    assert receipt.status == 'completed' and receipt.presentation_id == 'head:turn-1'
+    assert [json.loads(call.args[0])['op'] for call in room.local_participant.publish_data.call_args_list] == ['head.gesture']
+    await transport.close()

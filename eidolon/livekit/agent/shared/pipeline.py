@@ -190,7 +190,7 @@ class BasePipeline(ABC):
         are safely no-op'd via ``hasattr`` checks in ``_warmup_stages`` /
         ``_shutdown_stages``.
         """
-        stages: list[Any] = [self._factory.stt]
+        stages: list[Any] = [self._factory.stt] if self._factory.stt is not None else []
         if self._factory.tts is not None:
             stages.append(self._factory.tts)
         # VAD is wrapped in VadStage (mirrors SttStage/TtsStage). Its

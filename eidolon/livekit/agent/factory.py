@@ -171,7 +171,7 @@ class SharedStageFactory:
         self,
         *,
         llm: "lk_llm.LLM",
-        stt: SttStage,
+        stt: SttStage | None,
         tts: TtsStage | None,
         vad: "lk_vad.VAD | None" = None,
         voiceprint_provider: "Any | None" = None,
@@ -185,9 +185,12 @@ class SharedStageFactory:
     ) -> None:
         if llm is None:
             raise ValueError("llm must not be None")
-        if stt is None:
-            raise ValueError("stt must not be None")
+
         self.output_plan = output_plan
+        from eidolon_sdk.biz.presentation import InputSelection
+        self.inputs = output_plan.inputs if output_plan is not None else InputSelection(microphone=True)
+        if self.inputs.microphone != (stt is not None):
+            raise ValueError("STT_STAGE_MUST_MATCH_SELECTED_MICROPHONE")
         self.outputs = (output_plan.outputs if output_plan is not None
                         else OutputSelection(speech=True, dialogue_text=True, audio_cue=True))
         if output_plan is not None and output_plan.session_id != runtime_session_id:
@@ -195,7 +198,7 @@ class SharedStageFactory:
         if self.outputs.speech != (tts is not None):
             raise ValueError("TTS_STAGE_MUST_MATCH_SELECTED_SPEECH")
 
-        self.stt: SttStage = stt
+        self.stt: SttStage | None = stt
         self.tts: TtsStage | None = tts
         self.llm = LivekitLlmStage(llm=llm, params=llm_params or LlmParams())
         self.interrupt_classifier = interrupt_classifier
@@ -308,7 +311,7 @@ class SharedStageFactory:
                 config) — STT/TTS provider mismatches surface from
                 ``cfg._validate()`` at config-load time.
         """
-        if output_plan is not None and output_plan.outputs.expression and cfg.providers.brain_provider != "eidolon_agent":
+        if output_plan is not None and (output_plan.outputs.expression or output_plan.outputs.motion or not output_plan.outputs.can_respond) and cfg.providers.brain_provider != "eidolon_agent":
             raise ValueError("EXPRESSION_REQUIRES_EIDOLON_AGENT")
         runtime_services = None
         needs_runtime_context = (
@@ -423,16 +426,17 @@ class SharedStageFactory:
                     "and ensure 'livekit-plugins-openai' is installed."
                 )
 
-        stt = cls._build_stt(cfg)
+        microphone = output_plan is None or output_plan.inputs.microphone
+        stt = cls._build_stt(cfg) if microphone else None
         tts = cls._build_tts(cfg) if output_plan is None or output_plan.outputs.speech else None
-        vad = prebuilt_vad if prebuilt_vad is not None else cls._build_vad(cfg)
+        vad = (prebuilt_vad if prebuilt_vad is not None else cls._build_vad(cfg)) if microphone else None
 
         return cls(
             llm=llm,
             stt=stt,
             tts=tts,
             vad=vad,
-            voiceprint_provider=prebuilt_voiceprint_provider,
+            voiceprint_provider=prebuilt_voiceprint_provider if microphone else None,
             voiceprint_trust_paired_devices=cfg.voiceprint.trust_paired_devices,
             runtime_context_resolver=(
                 runtime_services.resolve_room if runtime_services is not None else None
@@ -442,7 +446,7 @@ class SharedStageFactory:
                 model=cfg.llm.model,
                 temperature=cfg.llm.temperature or 0.6,
             ),
-            interrupt_classifier=cls.build_interrupt_classifier(cfg),
+            interrupt_classifier=cls.build_interrupt_classifier(cfg) if microphone else None,
             runtime_session_id=runtime_session_id,
             output_plan=output_plan,
         )

@@ -14,7 +14,7 @@ import logging
 import socket
 import ipaddress
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -151,6 +151,7 @@ class _Listening:
     connection: Any = None
     retry: asyncio.Task[None] | None = None
     attempt: int = 0
+    input_handle: dict[str, Any] = field(default_factory=dict)
 
 
 def _is_spent(dispatch: Any) -> bool:
@@ -223,6 +224,9 @@ class LiveKitChannelAdapter:
         # re-stating a channel converges instead of stacking up connections.
         self._listeners: dict[str, _Listening] = {}
         self._requests: set[asyncio.Task[None]] = set()
+        self._input_locks: dict[str, asyncio.Lock] = {}
+        self._input_revisions: dict[str, int] = {}
+        self._input_applied: dict[str, int] = {}
 
     @property
     def name(self) -> str:
@@ -290,7 +294,9 @@ class LiveKitChannelAdapter:
                 for address in addresses]
 
     def binding_current(self, handle: dict[str, Any]) -> bool:
-        return handle.get("server_urls") == self._client_urls()
+        return (handle.get("server_urls") == self._client_urls()
+                and ("input_revision" not in handle or
+                     self._input_applied.get(str(handle.get("room"))) == handle["input_revision"]))
 
     def _client_url(self) -> str:
         return self._client_urls()[0]
@@ -346,8 +352,16 @@ class LiveKitChannelAdapter:
         if spec.output_policy is not None and spec.selected_outputs is not None:
             handle["output_template"] = {
                 "policy_revision": spec.output_policy.revision,
+                "inputs": {"microphone": spec.audio.publishes},
                 "outputs": spec.selected_outputs.model_dump(mode="json"),
                 "expression_profile": FACE_PROFILE if spec.selected_outputs.expression else None,
+            }
+        if spec.output_policy is not None and spec.output_policy.inputs is not None:
+            handle["input_revision"] = spec.output_policy.revision
+            handle["input_permissions"] = {
+                "microphone": spec.audio.publishes,
+                "camera": spec.video.publishes,
+                "subscribe": spec.audio.subscribes or spec.video.subscribes,
             }
         if spec.serving is not None:
             handle["agent"] = spec.serving.agent_name
@@ -365,11 +379,12 @@ class LiveKitChannelAdapter:
         try:
             await self._client().room.delete_room(api.DeleteRoomRequest(room=room))
         except TwirpError as exc:
-            if exc.code == TwirpErrorCode.NOT_FOUND:
-                return
-            raise BackendUnavailable("LiveKit room revocation failed") from exc
+            if exc.code != TwirpErrorCode.NOT_FOUND:
+                raise BackendUnavailable("LiveKit room revocation failed") from exc
         except Exception as exc:
             raise BackendUnavailable("LiveKit room revocation failed") from exc
+        self._input_revisions.pop(room, None)
+        self._input_applied.pop(room, None)
 
     # -- hearing the device -----------------------------------------------
 
@@ -394,10 +409,15 @@ class LiveKitChannelAdapter:
             # it, so no arrival could ever be attributed. Trying harder cannot
             # change that, and the caller needs to hear so.
             raise ChannelNotServable("channel handle cannot identify its device")
+        await self._reconcile_input_permissions(handle)
         await self._reconcile_output_dispatches(handle)
         if room in self._listeners:
+            watch = self._listeners[room]
+            if handle.get("input_revision", 0) >= watch.input_handle.get("input_revision", 0):
+                watch.input_handle = handle
             return
         watch = _Listening(device=device, sink=sink)
+        watch.input_handle = handle
         self._listeners[room] = watch
         try:
             await self._join(room, watch)
@@ -412,6 +432,40 @@ class LiveKitChannelAdapter:
             self._rejoin_later(room, watch, exc)
             return
         logger.info("listening to room=%s for device=%s", room, device)
+
+    async def _reconcile_input_permissions(self, handle: dict[str, Any]) -> None:
+        """Apply committed permissions to connected participants as well as new tokens."""
+        permissions = handle.get("input_permissions")
+        if permissions is None:
+            return
+        room = str(handle["room"])
+        revision = int(handle["input_revision"])
+        async with self._input_locks.setdefault(room, asyncio.Lock()):
+            if revision < self._input_revisions.get(room, 0):
+                return
+            self._input_revisions[room] = revision
+            self._input_applied.pop(room, None)
+            await self._apply_input_permissions(handle, permissions)
+            self._input_applied[room] = revision
+
+    async def _apply_input_permissions(self, handle: dict[str, Any], permissions: dict[str, bool]) -> None:
+        sources = []
+        if permissions["microphone"]:
+            sources.append(api.TrackSource.MICROPHONE)
+        if permissions["camera"]:
+            sources.append(api.TrackSource.CAMERA)
+        try:
+            await self._client().room.update_participant(api.UpdateParticipantRequest(
+                room=handle["room"], identity=handle["device"],
+                permission=api.ParticipantPermission(
+                    can_publish=bool(sources), can_publish_sources=sources,
+                    can_subscribe=permissions["subscribe"], can_publish_data=True,
+                    can_update_metadata=False,
+                ),
+            ))
+        except TwirpError as exc:
+            if exc.code != TwirpErrorCode.NOT_FOUND:
+                raise BackendUnavailable("LiveKit input permission update failed") from exc
 
     async def _reconcile_output_dispatches(self, handle: dict[str, Any]) -> None:
         """A committed policy change rebuilds the session; old TTS cannot linger."""
@@ -430,6 +484,18 @@ class LiveKitChannelAdapter:
 
     async def _join(self, room: str, watch: _Listening) -> None:
         connection = rtc.Room()
+
+        @connection.on("participant_connected")
+        def _participant_connected(participant: Any) -> None:
+            if participant.identity == watch.device:
+                async def reconcile() -> None:
+                    try:
+                        await self._reconcile_input_permissions(watch.input_handle)
+                    except Exception:
+                        logger.exception("input permissions pending for room=%s", room)
+                task = asyncio.create_task(reconcile())
+                self._requests.add(task)
+                task.add_done_callback(self._requests.discard)
 
         @connection.on("data_received")
         def _received(packet: Any) -> None:
@@ -452,6 +518,12 @@ class LiveKitChannelAdapter:
             await connection.connect(self._rtc_url(), self._listener_token(room))
         except Exception as exc:
             raise BackendUnavailable("LiveKit channel could not be listened to") from exc
+        # Close the gap between applying a policy and joining its event stream.
+        try:
+            await self._reconcile_input_permissions(watch.input_handle)
+        except Exception:
+            await connection.disconnect()
+            raise
         watch.connection = connection
         watch.attempt = 0
 
@@ -926,9 +998,6 @@ class LiveKitChannelAdapter:
             raise ChannelNotServable("channel handle names no room")
         if not agent:
             raise ChannelNotServable("this channel was not provisioned to be served")
-        template = handle.get("output_template")
-        if template is not None and not OutputSelection.model_validate(template["outputs"]).can_respond:
-            raise ChannelNotServable("NO_RESPONSE_OUTPUT")
         return room, agent
 
     def _token(self, room: str, spec: ChannelSpec, *, ttl_seconds: int) -> str:

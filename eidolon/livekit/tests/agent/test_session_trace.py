@@ -413,6 +413,7 @@ async def test_ptt_names_a_device_trace_for_the_mounted_companion(
 
     pipeline = _Pipeline(_observability(tmp_path))
     pipeline._factory = _mounted_factory("companion-mounted")
+    pipeline._interaction_mode = "ptt"
     pipeline._open_ptt_session_trace = (
         HalfDuplexPttPipeline._open_ptt_session_trace.__get__(pipeline)
     )

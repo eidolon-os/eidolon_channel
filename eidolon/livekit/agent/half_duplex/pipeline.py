@@ -78,7 +78,7 @@ logger = logging.getLogger("agent.half_duplex")
 
 
 class HalfDuplexPttPipeline(BasePipeline):
-    """Room-level half-duplex PTT pipeline using complete audio segments."""
+    """Manually driven sessions: PTT audio segments or text without microphone input."""
 
     def __init__(
         self,
@@ -91,6 +91,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         observability: ObservabilityConfig | None = None,
         callbacks: PipelineCallbacks | None = None,
         session_intent: str = SESSION_INTENT_USER_INITIATED,
+        interaction_mode: str = INTERACTION_MODE_PTT,
         on_session_started: Callable[[], Awaitable[None]] | None = None,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_idle_disconnect: Callable[[], Any] | None = None,
@@ -107,6 +108,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._turn_policy = turn_policy or TurnPolicyConfig()
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._session_intent = session_intent
+        self._interaction_mode = interaction_mode
         self._observability = observability or ObservabilityConfig()
         self._on_session_started = on_session_started
         self._on_session_end = on_session_end
@@ -133,7 +135,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._track_tasks: set[asyncio.Task[Any]] = set()
         self._observed_audio_track_ids: set[int] = set()
         self._turn_tasks: set[asyncio.Task[Any]] = set()
-        self._ptt_controller = self._build_ptt_controller()
+        self._ptt_controller = self._build_ptt_controller() if factory.stt is not None else None
         idle_policy = resolve_idle_policy(
             session_intent=session_intent,
             idle_config=self._turn_policy.idle,
@@ -240,7 +242,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             room,
             owner_id=owner_id,
             companion_id=companion_id,
-            interaction_mode=INTERACTION_MODE_PTT,
+            interaction_mode=self._interaction_mode,
         )
 
     async def run(self, room: Room) -> None:
@@ -419,6 +421,8 @@ class HalfDuplexPttPipeline(BasePipeline):
                     self._maybe_start_audio_stream(track, participant)
 
     def _maybe_start_audio_stream(self, track: Any, participant: Any) -> None:
+        if self._ptt_controller is None:
+            return
         try:
             from livekit import rtc
 
@@ -476,6 +480,8 @@ class HalfDuplexPttPipeline(BasePipeline):
                     logger.debug("[HalfDuplexPttPipeline] audio stream close failed", exc_info=True)
 
     def _on_room_packet(self, packet: Any) -> None:
+        if self._ptt_controller is None:
+            return
         participant = getattr(packet, "participant", None)
         state = self._room_data.latest_client_audio_state(
             participant_identity=getattr(participant, "identity", None)

@@ -327,3 +327,34 @@ async def test_failed_actor_resolution_does_not_allocate_provider_clients(monkey
     with pytest.raises(DeviceTokenResolverError, match='runtime actor unavailable'):
         await server.run_agent(ctx, EffectiveAgentConfig())
     build.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['full_duplex', 'half_duplex', 'ptt'])
+async def test_microphone_disabled_dispatch_uses_existing_manual_session_without_audio_models(monkeypatch, mode):
+    from unittest.mock import AsyncMock, MagicMock
+    from eidolon_sdk.biz.presentation import SessionOutputPlan, InputSelection, OutputSelection
+    from eidolon.livekit.agent import full_duplex
+    from eidolon.livekit.agent.half_duplex import pipeline as manual
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
+    plan = SessionOutputPlan(session_id='conversation-1', policy_revision=2,
+        inputs=InputSelection(microphone=False), outputs=OutputSelection(speech=True))
+    captured = {}
+    def factory(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+    monkeypatch.setattr(SharedStageFactory, 'from_config', factory)
+    manual_pipeline = MagicMock(return_value=SimpleNamespace(run=AsyncMock()))
+    monkeypatch.setattr(manual, 'HalfDuplexPttPipeline', manual_pipeline)
+    streaming = MagicMock(side_effect=AssertionError('Audio/EOT pipeline must not be constructed'))
+    monkeypatch.setattr(full_duplex, 'StreamingPipeline', streaming)
+    monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(return_value=(mode, False)))
+    ctx = _FakeContext({}, dispatch_metadata=json.dumps({'conversation_id': 'conversation-1', 'output_plan': plan.model_dump(mode='json')}))
+    ctx.room.name = 'no-microphone'
+    ctx.proc = SimpleNamespace(userdata={})
+    ctx.add_shutdown_callback = MagicMock()
+    await server.run_agent(ctx, EffectiveAgentConfig())
+    assert captured['output_plan'] == plan
+    manual_pipeline.assert_called_once()
+    assert manual_pipeline.call_args.kwargs['interaction_mode'] == mode

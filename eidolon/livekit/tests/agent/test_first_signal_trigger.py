@@ -40,6 +40,7 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
     from eidolon.livekit.plugins.eot.config import EidolonEOTConfig
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._factory = MagicMock()
 
     # Configuration carrier; G18a reads these.
     cfg = EidolonEOTConfig()

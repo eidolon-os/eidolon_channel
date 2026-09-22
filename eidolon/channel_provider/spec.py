@@ -59,8 +59,9 @@ _DIRECTION_TO_FLOW = {
 class ServingSpec:
     """The conversational agent this channel must be served by, if any.
 
-    A device that cannot publish audio has nothing for a voice agent to listen
-    to, so it gets no serving spec and no agent is ever dispatched for it.
+    Serving belongs to the device session, independently of audio publication.
+    A session with its microphone disabled can still accept text and emit its
+    selected outputs.
     """
 
     agent_name: str
@@ -79,10 +80,11 @@ class ChannelSpec:
     serving: ServingSpec | None
     output_policy: DeviceOutputPolicy | None = None
     selected_outputs: OutputSelection | None = None
+    media_declared: bool = False
 
     @property
     def needs_media(self) -> bool:
-        return self.audio is not MediaFlow.NONE or self.video is not MediaFlow.NONE
+        return self.media_declared or self.audio is not MediaFlow.NONE or self.video is not MediaFlow.NONE
 
 
 def _media_flow(manifest: dict[str, Any], kind: str) -> MediaFlow:
@@ -156,7 +158,7 @@ def derive_spec(
                 policy=device.output_policy,
                 requested=device.output_policy.allowed,
                 ceiling=OutputSelection(speech=True, dialogue_text=True, expression=True, audio_cue=True,
-                                        motion=capabilities.expression and device.output_policy.allowed.expression),
+                                        motion=True),
                 require_response=False,
             )
         except ValueError as exc:
@@ -167,12 +169,15 @@ def derive_spec(
         # New Companion clients require an explicit Owner policy. Missing or
         # corrupt policy must never silently restore legacy speech defaults.
         raise ContractError("OUTPUT_POLICY_REQUIRED")
+    if device.output_policy is not None and device.output_policy.inputs is not None:
+        if not device.output_policy.inputs.microphone:
+            audio = MediaFlow.SUBSCRIBE if audio.subscribes else MediaFlow.NONE
     serving = (
         ServingSpec(
             agent_name=agent_name,
             interaction_mode=_declared_interaction_mode(manifest),
         )
-        if audio.publishes
+        if _media_flow(manifest, "audio") is not MediaFlow.NONE or selected is not None
         else None
     )
     return ChannelSpec(
@@ -184,4 +189,5 @@ def derive_spec(
         serving=serving,
         output_policy=device.output_policy,
         selected_outputs=selected,
+        media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE or _media_flow(manifest, "video") is not MediaFlow.NONE,
     )

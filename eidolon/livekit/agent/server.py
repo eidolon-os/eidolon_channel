@@ -569,9 +569,12 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         avatar_requested,
         avatar_enabled,
     )
-    if _use_ptt_pipeline(interaction_mode):
+    # The existing manually driven pipeline also serves typed/output-only
+    # sessions. No audio turn detector is needed when microphone input is off.
+    if _use_ptt_pipeline(interaction_mode) or (output_plan is not None and not output_plan.inputs.microphone):
         pipeline = HalfDuplexPttPipeline(
             factory,
+            interaction_mode=interaction_mode,
             instructions=cfg.behavior.instructions,
             welcome_message=cfg.behavior.welcome_message,
             audio_sample_rate=cfg.behavior.audio_sample_rate,
@@ -790,7 +793,7 @@ def _build_server(cfg: AgentConfig) -> "AgentServer":
 
     server.rtc_session(
         agent_name=cfg.worker.agent_name,
-        type=WorkerType.PUBLISHER,
+        type=WorkerType.ROOM,
     )(_on_session)
 
     return server

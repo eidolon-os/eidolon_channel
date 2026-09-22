@@ -158,7 +158,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._target = target.strip()
         self.output_plan = output_plan
         self.presentation_transport = None
-        if output_plan is not None and output_plan.outputs.expression:
+        if output_plan is not None and (output_plan.outputs.expression or output_plan.outputs.motion):
             from ..session.presentation import PresentationTransport
             if presentation_room is None:
                 raise ValueError("PRESENTATION_ROOM_REQUIRED")
@@ -559,9 +559,14 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                         )
                     )
                 elif isinstance(payload, ResponseIntent):
-                    if payload.turn_id != turn_id or llm_v.presentation_transport is None:
+                    if payload.turn_id != turn_id:
                         raise ValueError("UNEXPECTED_RESPONSE_INTENT")
-                    llm_v.presentation_transport.start(payload, session.report_presentation)
+                    if llm_v.presentation_transport is not None:
+                        llm_v.presentation_transport.start(payload, session.report_presentation)
+                    elif payload.intent != "none":
+                        raise ValueError("UNEXPECTED_RESPONSE_INTENT")
+                    else:
+                        llm_v.emit_provider_event("brain_presentation_none", turn_id=turn_id)
                     # This is a selected nonverbal response, not an audible
                     # delta. Output completion is tracked by its own receipts.
                     first_model_activity_seen = True

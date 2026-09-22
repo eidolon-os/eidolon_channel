@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from eidolon_sdk.biz.presentation import OutputSelection
 
 
 def test_streaming_pipeline_initializes_ducking_before_effect_handlers() -> None:
@@ -10,6 +11,7 @@ def test_streaming_pipeline_initializes_ducking_before_effect_handlers() -> None
     from eidolon.livekit.agent.output import OutputDuckingController
 
     factory = SimpleNamespace(
+        outputs=OutputSelection(speech=True, dialogue_text=True),
         stt=SimpleNamespace(stt=SimpleNamespace()),
         tts=SimpleNamespace(tts=SimpleNamespace()),
         llm=SimpleNamespace(llm=SimpleNamespace()),

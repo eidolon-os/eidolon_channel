@@ -146,3 +146,89 @@ def test_silent_session_opens_no_audio_output_track():
 
     # PTT hands captured audio in itself; neither selection opens a room input.
     assert silent.audio_input is False and speaking.audio_input is False
+
+
+@pytest.mark.parametrize('mask', range(64))
+def test_every_input_output_combination_builds_only_selected_model_stages(monkeypatch, mask):
+    from eidolon_sdk.biz.presentation import InputSelection, FACE_PROFILE
+    outputs = OutputSelection(**{name: bool(mask & (1 << index))
+        for index, name in enumerate(OutputSelection.model_fields)})
+    microphone = bool(mask & 32)
+    plan = SessionOutputPlan(session_id='matrix', policy_revision=1, outputs=outputs,
+        inputs=InputSelection(microphone=microphone),
+        expression_profile=FACE_PROFILE if outputs.expression else None)
+    stt, tts, vad, interrupt = [Mock(return_value=object()) for _ in range(4)]
+    monkeypatch.setattr(SharedStageFactory, '_build_stt', stt)
+    monkeypatch.setattr(SharedStageFactory, '_build_tts', tts)
+    monkeypatch.setattr(SharedStageFactory, '_build_vad', vad)
+    monkeypatch.setattr(SharedStageFactory, 'build_interrupt_classifier', interrupt)
+    monkeypatch.setattr('eidolon.livekit.agent.factory._build_runtime_services',
+        lambda _: SimpleNamespace(resolve_room=AsyncMock()))
+    monkeypatch.setattr('eidolon.livekit.agent.factory._build_device_token_source', lambda **_: lambda: 'test')
+    monkeypatch.setattr('eidolon.livekit.agent.eidolon_agent_rpc.EidolonAgentGrpcLlm', lambda **_: object())
+    cfg = replace(EffectiveAgentConfig(), providers=ProvidersConfig(brain_provider='eidolon_agent'))
+    factory = SharedStageFactory.from_config(cfg, runtime_session_id='matrix', output_plan=plan)
+    assert stt.call_count == int(microphone)
+    assert vad.call_count == int(microphone)
+    assert interrupt.call_count == int(microphone)
+    assert tts.call_count == int(outputs.speech)
+    assert (factory.stt is not None) == microphone
+    assert (factory.tts is not None) == outputs.speech
+    assert factory.outputs == outputs
+
+
+def test_input_disabled_manual_pipeline_keeps_text_and_speech_without_ptt_capture():
+    from eidolon_sdk.biz.presentation import InputSelection
+    from eidolon.livekit.agent.half_duplex import HalfDuplexPttPipeline
+    plan = SessionOutputPlan(session_id='text', policy_revision=1,
+        inputs=InputSelection(microphone=False), outputs=OutputSelection(speech=True, dialogue_text=True))
+    factory = SharedStageFactory(llm=object(), stt=None, tts=object(),
+        output_plan=plan, runtime_session_id='text')
+    pipeline = HalfDuplexPttPipeline(factory)
+    assert pipeline._ptt_controller is None
+    assert pipeline._lifecycle_stages() == [factory.tts]
+    pipeline._maybe_start_audio_stream(object(), object())
+    assert not pipeline._track_tasks
+    options = pipeline._build_room_options()
+    assert options.audio_input is False
+    assert options.audio_output is not False
+    assert options.text_output is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('display', [False, True])
+@pytest.mark.parametrize('speech', [False, True])
+async def test_text_turn_completes_with_independent_text_and_speech_in_real_agent_session(display, speech):
+    import asyncio
+    from livekit.agents.voice import AgentSession
+    from livekit.agents.voice.io import TextOutput
+    from eidolon.livekit.agent.session.policy_bound_agent import PolicyBoundAgent
+    from .._harness.mocks.mock_llm import MockLLM
+    from .._harness.mocks.mock_tts import MockTTS
+    from .._harness.headless import RecordingAudioOutput
+
+    class CaptureText(TextOutput):
+        def __init__(self):
+            super().__init__(label='test', next_in_chain=None)
+            self.parts = []
+        async def capture_text(self, text):
+            self.parts.append(text)
+        def flush(self):
+            pass
+
+    sink = CaptureText()
+    session = AgentSession(turn_handling={'turn_detection': 'manual', 'interruption': {'enabled': False}})
+    session.output.transcription = sink
+    audio = RecordingAudioOutput()
+    if speech:
+        session.output.audio = audio
+    agent = PolicyBoundAgent(instructions='', llm=MockLLM.echo(),
+        outputs=OutputSelection(dialogue_text=display, speech=speech), stt=None, tts=MockTTS() if speech else None)
+    try:
+        await session.start(agent)
+        handle = session.generate_reply(user_input='你好')
+        await asyncio.wait_for(handle.wait_for_playout(), timeout=3)
+        assert (''.join(sink.parts) == '你好') if display else not sink.parts, sink.parts
+        assert bool(audio.collected_pcm) == speech
+    finally:
+        await session.aclose()

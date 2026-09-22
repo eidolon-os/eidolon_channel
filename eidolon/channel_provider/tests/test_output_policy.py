@@ -97,7 +97,7 @@ async def test_dispatch_binds_output_plan_and_changed_policy_withdraws_legacy_vo
     await adapter.shutdown()
 
 
-async def test_all_outputs_denied_still_replaces_policy_but_cannot_start_a_session():
+async def test_all_outputs_denied_preserves_the_session_with_a_silent_plan():
     adapter, client = _adapter()
     req = request()
     req = replace(
@@ -107,10 +107,10 @@ async def test_all_outputs_denied_still_replaces_policy_but_cannot_start_a_sessi
         ),
     )
     grant = await adapter.open(spec(req), issued_at_ms=1700000000000)
-    with pytest.raises(ChannelNotServable, match="NO_RESPONSE_OUTPUT"):
-        await adapter.open_session(
-            grant.handle, "session-1", session_intent=SESSION_INTENT_USER_INITIATED
-        )
+    await adapter.open_session(
+        grant.handle, "session-1", session_intent=SESSION_INTENT_USER_INITIATED)
+    plan = json.loads(client.agent_dispatch.created[-1][2])["output_plan"]
+    assert not any(plan["outputs"].values())
     await adapter.shutdown()
 
 
@@ -173,3 +173,87 @@ def test_motion_requires_declared_capability_and_owner_permission(declared, allo
     assert selected.selected_outputs.motion == (declared and allowed)
     assert not selected.selected_outputs.speech
     assert selected.serving.interaction_mode == "half_duplex"
+
+
+@pytest.mark.parametrize('speech', [False, True])
+def test_microphone_permission_is_independent_of_outputs(speech):
+    from eidolon_sdk.biz.presentation import InputSelection
+    req = request(speech=speech)
+    policy = req.device.output_policy.model_copy(update={'inputs': InputSelection(microphone=False)})
+    selected = spec(replace(req, device=replace(req.device, output_policy=policy)))
+    assert selected.audio == (MediaFlow.SUBSCRIBE if speech else MediaFlow.NONE)
+    assert selected.serving is not None
+    assert selected.selected_outputs.speech == speech
+    assert selected.needs_media  # retain the transport even with all media denied
+
+
+async def test_denied_microphone_revokes_connected_grant_and_existing_dispatch():
+    import jwt
+    from eidolon_sdk.biz.presentation import InputSelection
+    adapter, client = _adapter()
+    req = request(speech=True)
+    policy = req.device.output_policy.model_copy(update={'inputs': InputSelection(microphone=False)})
+    grant = await adapter.open(spec(replace(req, device=replace(req.device, output_policy=policy))), issued_at_ms=1700000000000)
+    token = json.loads(grant.payload)['session']['token']
+    claims = jwt.decode(token, options={'verify_signature': False})
+    assert claims['video']['canPublish'] is False
+    assert claims['video']['canSubscribe'] is True
+    room = grant.handle['room']
+    client.agent_dispatch._room(room).append(FakeDispatch('old-voice', 'eidolon'))
+    updates = []
+    async def update_participant(command):
+        updates.append(command)
+    client.room.update_participant = update_participant
+    await adapter._reconcile_input_permissions(grant.handle)
+    assert len(updates) == 1
+    assert updates[0].identity == req.device_ref.device_instance_id
+    assert updates[0].permission.can_publish is False
+    assert updates[0].permission.can_subscribe is True
+    await adapter._reconcile_output_dispatches(grant.handle)
+    assert (room, 'old-voice') in client.agent_dispatch.deleted
+    await adapter.open_session(grant.handle, 'session-1', session_intent=SESSION_INTENT_USER_INITIATED)
+    metadata = json.loads(client.agent_dispatch.created[-1][2])
+    assert metadata['output_plan']['inputs']['microphone'] is False
+    assert metadata['output_plan']['outputs']['speech'] is True
+    await adapter.shutdown()
+
+
+async def test_microphone_only_policy_change_refreshes_and_fences_old_decision(tmp_path):
+    from eidolon_sdk.biz.presentation import InputSelection
+    service, store, backend = _service(tmp_path, [1700000000000])
+    old = request(speech=True)
+    await service.provision(old)
+    policy = old.device.output_policy.model_copy(update={'revision': 2, 'inputs': InputSelection(microphone=False)})
+    changed = replace(old, operation='channel.refresh-device', operation_id='mic-off',
+                      device=replace(old.device, output_policy=policy))
+    result = json.loads(await service.provision(changed))
+    assert result['output_policy']['inputs'] == {'microphone': False}
+    with pytest.raises(InvalidTransition, match='output policy'):
+        await service.provision(replace(old, operation='channel.refresh-device', operation_id='mic-stale'))
+
+
+async def test_failed_input_revocation_stays_pending_and_stale_callbacks_cannot_reopen():
+    from eidolon_sdk.biz.presentation import InputSelection
+    adapter, client = _adapter()
+    req = request(speech=True)
+    def with_mic(revision, allowed):
+        policy = req.device.output_policy.model_copy(update={'revision': revision, 'inputs': InputSelection(microphone=allowed)})
+        return spec(replace(req, device=replace(req.device, output_policy=policy)))
+    allowed = await adapter.open(with_mic(1, True), issued_at_ms=1700000000000)
+    denied = await adapter.open(with_mic(2, False), issued_at_ms=1700000000000)
+    updates = []
+    async def unavailable(command):
+        raise RuntimeError('offline')
+    client.room.update_participant = unavailable
+    with pytest.raises(RuntimeError):
+        await adapter._reconcile_input_permissions(denied.handle)
+    assert not adapter.binding_current(denied.handle)
+    async def apply(command):
+        updates.append(command)
+    client.room.update_participant = apply
+    await adapter._reconcile_input_permissions(allowed.handle)
+    assert not updates
+    await adapter._reconcile_input_permissions(denied.handle)
+    assert adapter.binding_current(denied.handle)
+    assert len(updates) == 1 and updates[0].permission.can_publish is False
+    await adapter.shutdown()

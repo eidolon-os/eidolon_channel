@@ -232,3 +232,37 @@ async def test_text_turn_completes_with_independent_text_and_speech_in_real_agen
         assert bool(audio.collected_pcm) == speech
     finally:
         await session.aclose()
+
+@pytest.mark.asyncio
+async def test_explicit_text_interrupts_noninterruptible_welcome_in_real_session():
+    import asyncio
+    from livekit import rtc
+    from livekit.agents.voice import AgentSession
+    from livekit.agents.voice.room_io import TextInputEvent
+    from eidolon.livekit.agent.session.policy_bound_agent import PolicyBoundAgent
+    from eidolon.livekit.agent.session.text_input import accept_text_input
+    from .._harness.mocks.mock_llm import MockLLM
+    from .._harness.headless import RecordingAudioOutput
+
+    welcome_started = asyncio.Event()
+    async def welcome_audio():
+        yield rtc.AudioFrame.create(16000, 1, 320)
+        welcome_started.set()
+        await asyncio.Event().wait()
+
+    session = AgentSession(turn_handling={'turn_detection': 'manual', 'interruption': {'enabled': False}})
+    session.output.audio = RecordingAudioOutput()
+    agent = PolicyBoundAgent(instructions='', llm=MockLLM.echo(),
+        outputs=OutputSelection(dialogue_text=True), stt=None, tts=None)
+    try:
+        await session.start(agent)
+        welcome = session.say('', audio=welcome_audio(), allow_interruptions=False)
+        await asyncio.wait_for(welcome_started.wait(), 3)
+        assert session.current_speech is welcome
+        await asyncio.wait_for(accept_text_input(session, TextInputEvent(text='独立文字回复正常')), 3)
+        await asyncio.sleep(.1)
+        assert welcome.interrupted
+        messages = [item for item in session.history.items if item.type == 'message']
+        assert any(item.role == 'user' and item.text_content == '独立文字回复正常' for item in messages)
+    finally:
+        await session.aclose()

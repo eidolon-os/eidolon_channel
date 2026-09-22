@@ -77,7 +77,8 @@ class FullDuplexSessionLifecycle:
     async def run(self, room: Room) -> None:
         """Start the full-duplex pipeline and block until the session closes."""
         from livekit.agents.voice import AgentSession
-        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
+        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions, TextInputOptions
+        from eidolon.livekit.agent.session.text_input import accept_text_input
 
         pipeline = self._pipeline
         logger.info("[StreamingPipeline] starting room=%s", room.name)
@@ -146,6 +147,7 @@ class FullDuplexSessionLifecycle:
             room=room,
             room_options=RoomOptions(
                 audio_output=room_audio_output,
+                text_input=TextInputOptions(text_input_cb=accept_text_input),
                 text_output=pipeline._factory.outputs.dialogue_text,
                 participant_identity=participant_identity,
             ),

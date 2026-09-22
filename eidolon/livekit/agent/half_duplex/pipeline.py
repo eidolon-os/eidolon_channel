@@ -161,11 +161,13 @@ class HalfDuplexPttPipeline(BasePipeline):
         not permitted to use.
         """
 
-        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions
+        from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions, TextInputOptions
+        from eidolon.livekit.agent.session.text_input import accept_text_input
 
         # PTT feeds captured audio in explicitly; the room never opens an input.
         return RoomOptions(
             audio_input=False,
+            text_input=TextInputOptions(text_input_cb=accept_text_input),
             audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
                           if (self._factory.outputs.speech or self._factory.outputs.audio_cue) else False),
             text_output=self._factory.outputs.dialogue_text,

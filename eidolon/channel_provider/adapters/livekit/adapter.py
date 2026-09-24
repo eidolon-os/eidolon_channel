@@ -900,37 +900,34 @@ class LiveKitChannelAdapter:
         output_plan = (SessionOutputPlan(session_id=conversation_id, **handle["output_template"])
                        if "output_template" in handle else None)
         try:
-            for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
-                if dispatch.agent_name != agent:
-                    continue
+            dispatches = [
+                dispatch for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room)
+                if dispatch.agent_name == agent
+            ]
+            already_serving = False
+            # Inspect the entire snapshot before any mutation, including when
+            # a matching retry appears before a conflicting live dispatch.
+            for dispatch in dispatches:
                 metadata = self._dispatch_metadata(dispatch)
-                if (
-                    metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
-                    and metadata.get("target_companion_id") != target_companion_id
-                ):
+                same_conversation = metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
+                if same_conversation and metadata.get("target_companion_id") != target_companion_id:
                     raise InvalidTransition("changing a Companion target requires a new conversation_id")
+                if _is_spent(dispatch):
+                    continue
+                if not same_conversation:
+                    raise InvalidTransition("device is serving another conversation; close it explicitly first")
                 if (
-                    not _is_spent(dispatch)
-                    and metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
-                    # A standing dispatch that was placed for a different intent
-                    # is not this request already satisfied: the job it would run
-                    # is governed by different rules. Compared here so re-asking
-                    # for the same conversation with a new intent replaces it
-                    # rather than silently keeping the old one. Dispatches placed
-                    # before this field existed read as user_initiated, which is
-                    # what they were.
-                    and metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED)
-                    == session_intent
-                    and metadata.get("output_plan") == (output_plan.model_dump(mode="json") if output_plan else None)
+                    metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED) != session_intent
+                    or metadata.get("output_plan") != (output_plan.model_dump(mode="json") if output_plan else None)
                 ):
-                    return
-                # A spent dispatch or one belonging to a superseded conversation
-                # cannot stand in for the conversation the device is asking for.
-                # How the previous one ended is said here because this is
-                # the last moment anything knows: deleting the dispatch deletes
-                # the only account of a job that failed, so if the confirmation
-                # window missed it — this process restarted, or LiveKit could
-                # not be read then — nothing ever says so.
+                    raise InvalidTransition("an active conversation cannot change intent or output plan")
+                already_serving = True
+            if already_serving:
+                return
+            # Only terminal jobs may be recovered without an explicit close.
+            # Preserve failure evidence in logs before deleting their records.
+            for dispatch in dispatches:
+                metadata = self._dispatch_metadata(dispatch)
                 failure = _failure_of(dispatch)
                 logger.log(
                     logging.WARNING if failure else logging.INFO,

@@ -218,8 +218,7 @@ POST /v1/device-channels/sessions/open
 Provider 把意图写进 **LiveKit agent dispatch metadata**（与 `conversation_id`、`output_plan`
 同一条总线），Channel worker 从 `ctx.job.metadata` 读取。选这条总线的理由与
 `output_plan` 相同：它是房间里唯一"按会话生成、且参与者写不了"的通道。同一个
-`conversation_id` 用不同意图再次 open，会替换而不是复用既有 dispatch —— 否则 agent 会继续按上
-一次的规则运行。
+`conversation_id` 在活跃期间用不同意图或输出计划再次 open，返回 `409 INVALID_TRANSITION`，既不替换，也不悄悄沿用原规则。
 
 worker 侧对缺失/无法识别的意图降级为 `user_initiated`（与控制契约的严格拒绝相反）：能走到这里
 的"沉默"只可能来自早于该字段的 Provider，而沉默的安全读法是普通会话。
@@ -315,3 +314,12 @@ v2 session 保留 `server_url`。可选 `server_urls` 是同一房间和凭据�
 该字段由 SDK `DF-LIVEKIT-SESSION-BINDING-001` 的 routing 正反例定义；Hub 不解析
 opaque payload。客户端在自身连接生命周期中尝试候选，信令地址不能替代 ICE 候选
 或作为 Host 身份证明。Hub 与 Provider 需一起更新，多候选能力需更新客户端。
+
+
+### 会话占用与显式退出
+
+同一设备、同一 serving agent 已有未结束的另一段会话时，`sessions/open` 返回 `409 INVALID_TRANSITION`，不删除或替换已有 dispatch。空 jobs、pending、running 均视为未结束；不能把尚未调度的任务当作闲置。相同会话且目标、意图、输出计划一致的请求继续幂等复用。目标变更仍须新 conversation ID。
+
+Provider 先检查完整 dispatch 列表，确认没有冲突后才清理结束任务；不会先删除一部分再返回冲突。所有 jobs 已 success/failed 的残留 dispatch 仍可恢复。切换会话需要先显式 close 原 conversation ID，再以新 ID open；旧会话的迟到 close 不匹配新会话。权限撤销和设备配置权威触发的资源回收仍沿用原机制，不受普通 open 的占用检查替代。
+
+并发请求由已有 Provider service 锁串行化；这一保证限于同一个服务进程，不声称具备多副本分布式互斥或共享房间预留事务。普通设备 RTC 请求仍只发送开始/停止，拒绝目前沿现有日志/客户端超时路径处理；可操作的 busy 回执及 UI 恢复尚需后续协议接入。因此本批不直接部署改变设备交互行为。

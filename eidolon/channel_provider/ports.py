@@ -180,6 +180,11 @@ class ChannelAdapter(Protocol):
         Owner authority by the worker. A different target for an existing
         conversation ID must be rejected, not silently rebound.
 
+        An unfinished conversation on this serving channel is occupied. A
+        different conversation must be refused without withdrawing it; the
+        caller must explicitly close the old conversation before switching.
+        Active intent/output-plan changes are conflicts, not implicit restarts.
+
         Two requirements on an adapter, both from the same place — the intent
         decides what the session is allowed to do, so it is authorization, not
         decoration. It must reach the agent on a bus the device cannot write,

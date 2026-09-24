@@ -241,6 +241,7 @@ async def test_a_late_close_cannot_end_a_newer_conversation() -> None:
     await adapter.open_session(
         grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
     )
+    await adapter.close_session(grant.handle, "conversation-1")
     await adapter.open_session(
         grant.handle, "conversation-2", session_intent=SESSION_INTENT_USER_INITIATED
     )
@@ -620,30 +621,19 @@ async def test_what_the_provider_writes_is_what_the_worker_reads(intent: str) ->
     assert resolve_session_intent(dispatch_metadata) == intent
 
 
-async def test_reopening_one_conversation_with_a_new_intent_replaces_the_dispatch() -> None:
-    """Convergence is per (conversation, intent), because the intent is authority.
-
-    Treating the second ask as "already served" would leave the agent running
-    under the rules of the first one — the bug where an escalation is silently
-    ignored, or a demotion silently isn't.
-    """
+async def test_reopening_one_conversation_cannot_mutate_its_intent() -> None:
+    from eidolon.channel_provider.contracts import InvalidTransition
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
-    room = grant.handle["room"]
-
     await adapter.open_session(
         grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
     )
-    await adapter.open_session(
-        grant.handle, "conversation-1", session_intent=SESSION_INTENT_PRESENCE
-    )
-
-    assert client.agent_dispatch.deleted == [(room, "AD_1")]
-    assert client.agent_dispatch.created[-1] == (
-        room,
-        "eidolon",
-        _metadata("conversation-1", SESSION_INTENT_PRESENCE),
-    )
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_PRESENCE
+        )
+    assert client.agent_dispatch.deleted == []
+    assert len(client.agent_dispatch.created) == 1
 
 
 async def test_the_device_credential_cannot_state_or_restate_an_intent() -> None:
@@ -1294,3 +1284,96 @@ async def test_dispatch_target_reaches_narrow_agent_token_only_after_authority_c
     mounts.resolve.assert_awaited_once_with(owner_id='owner-1', device_id=_DEVICE_1)
     runtime.resolve_companion.assert_awaited_once_with('visitor', device_id=_DEVICE_1)
     assert mounts.resolve.return_value.answering_companion_id == 'resident'
+
+@pytest.mark.parametrize('statuses', [[], [JobStatus.JS_PENDING], [JobStatus.JS_RUNNING]])
+async def test_new_conversation_cannot_interrupt_occupied_device(statuses):
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    room = grant.handle['room']
+    client.agent_dispatch._room(room).append(
+        FakeDispatch('occupied', 'eidolon', [FakeJob(s) for s in statuses], _metadata('existing')))
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(grant.handle, 'incoming', session_intent=SESSION_INTENT_USER_INITIATED)
+    assert client.agent_dispatch.deleted == []
+    assert client.agent_dispatch.created == []
+
+
+async def test_conflict_is_checked_before_cleaning_spent_dispatches():
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    room = grant.handle['room']
+    client.agent_dispatch._room(room).extend([
+        FakeDispatch('spent', 'eidolon', [FakeJob(JobStatus.JS_SUCCESS)], _metadata('old')),
+        FakeDispatch('occupied', 'eidolon', [], _metadata('existing')),
+    ])
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(grant.handle, 'incoming', session_intent=SESSION_INTENT_USER_INITIATED)
+    assert client.agent_dispatch.deleted == []
+    assert client.agent_dispatch.created == []
+
+@pytest.mark.parametrize('reverse', [False, True])
+async def test_matching_retry_does_not_hide_another_live_conversation(reverse):
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    room = grant.handle['room']
+    records = [FakeDispatch('matching', 'eidolon', [], _metadata('incoming')),
+               FakeDispatch('conflicting', 'eidolon', [], _metadata('other'))]
+    client.agent_dispatch._room(room).extend(records[::-1] if reverse else records)
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(grant.handle, 'incoming', session_intent=SESSION_INTENT_USER_INITIATED)
+    assert client.agent_dispatch.deleted == []
+    assert client.agent_dispatch.created == []
+
+
+async def test_concurrent_provider_requests_preserve_one_session_and_explicit_close_allows_next(tmp_path, monkeypatch):
+    from eidolon.channel_provider.contracts import InvalidTransition, OPEN_SESSION, CLOSE_SESSION, SessionRequest
+    from .test_service import _service
+    from .helpers import session_payload
+    adapter, client = _adapter()
+
+    async def no_rtc_listener(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(adapter, 'accept_requests', no_rtc_listener)
+    service, _, _ = _service(tmp_path, [1_700_000_000_000], backend=adapter)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    def request(conversation, operation=OPEN_SESSION):
+        payload = session_payload(operation=operation)
+        payload['conversation_id'] = conversation
+        return SessionRequest.parse(encoded(payload), expected=operation)
+
+    results = await asyncio.gather(
+        service.open_session(request('first')),
+        service.open_session(request('second')),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(result, InvalidTransition) for result in results) == 1
+    assert len(client.agent_dispatch.created) == 1
+    assert client.agent_dispatch.deleted == []
+    winner = 'first' if isinstance(results[0], str) else 'second'
+    await service.close_session(request(winner, CLOSE_SESSION))
+    await service.open_session(request('next'))
+    assert len(client.agent_dispatch.created) == 2
+    # A delayed close belonging to the old conversation cannot end the new one.
+    await service.close_session(request(winner, CLOSE_SESSION))
+    assert len(client.agent_dispatch.deleted) == 1
+    await adapter.shutdown()
+
+
+async def test_occupancy_is_local_to_the_device_room():
+    from dataclasses import replace
+    adapter, client = _adapter()
+    first = await adapter.open(_spec(), issued_at_ms=1000)
+    second = await adapter.open(
+        replace(_spec(), device_id=named_device_instance_id('other-device')), issued_at_ms=1000)
+    await adapter.open_session(first.handle, 'first', session_intent=SESSION_INTENT_USER_INITIATED)
+    await adapter.open_session(second.handle, 'second', session_intent=SESSION_INTENT_USER_INITIATED)
+    assert first.handle['room'] != second.handle['room']
+    assert len(client.agent_dispatch.created) == 2
+    await adapter.close_session(first.handle, 'first')
+    assert all(room != second.handle['room'] for room, _ in client.agent_dispatch.deleted)
+    await adapter.shutdown()

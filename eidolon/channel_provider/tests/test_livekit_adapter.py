@@ -1377,3 +1377,55 @@ async def test_occupancy_is_local_to_the_device_room():
     await adapter.close_session(first.handle, 'first')
     assert all(room != second.handle['room'] for room, _ in client.agent_dispatch.deleted)
     await adapter.shutdown()
+
+
+async def test_start_conflict_sends_targeted_rejection_without_closing_any_session():
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    sent = []
+    async def publish(data, **kwargs):
+        sent.append((json.loads(data), kwargs))
+    async def reject(request):
+        raise InvalidTransition('occupied')
+    watch = adapter_mod._Listening(device=_DEVICE_1, sink=reject,
+        connection=SimpleNamespace(local_participant=SimpleNamespace(publish_data=publish)))
+    adapter._listeners['room'] = watch
+    adapter._dispatch_request(reject, ServingRequest(action=ServingAction.START, conversation_id='incoming'), room='room')
+    await asyncio.gather(*adapter._requests)
+    assert sent == [({'schema_v': 1, 'type': 'session_rejected', 'conversation_id': 'incoming', 'reason': 'conflict'},
+                    {'reliable': True, 'topic': SESSION_CONTROL_TOPIC, 'destination_identities': [_DEVICE_1]})]
+    assert client.agent_dispatch.deleted == []
+    adapter._listeners.clear()
+
+
+@pytest.mark.parametrize("case", ["stop", "replaced", "delivery_failure"])
+async def test_rejection_does_not_leak_to_a_new_listener_or_fail_dispatch(case):
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, _ = _adapter()
+    sent = []
+    async def publish(data, **kwargs):
+        sent.append(data)
+        raise RuntimeError("disconnected")
+    async def reject(request):
+        if case == "replaced":
+            adapter._listeners["room"] = adapter_mod._Listening(device="new", sink=reject)
+        raise InvalidTransition("occupied")
+    adapter._listeners["room"] = adapter_mod._Listening(device=_DEVICE_1, sink=reject,
+        connection=SimpleNamespace(local_participant=SimpleNamespace(publish_data=publish)))
+    action = ServingAction.STOP if case == "stop" else ServingAction.START
+    adapter._dispatch_request(reject, ServingRequest(action=action, conversation_id="incoming"), room="room")
+    await asyncio.gather(*adapter._requests)
+    assert len(sent) == (1 if case == "delivery_failure" else 0)
+    adapter._listeners.clear()
+
+
+def test_listener_is_identifiable_data_only_infrastructure():
+    adapter, _ = _adapter()
+    claims = _claims(adapter._listener_token("test-room"))
+    assert claims["sub"] == "channel-provider-test-room"
+    grants = claims["video"]
+    assert grants["canPublishData"] is True
+    assert grants["canPublish"] is False
+    assert grants["canSubscribe"] is False
+    assert grants["hidden"] is False
+    assert not grants.get("agent", False)

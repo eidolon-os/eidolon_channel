@@ -31,6 +31,8 @@ from eidolon_sdk.biz.contracts import (
     SESSION_INTENT_FIELD,
     SESSION_INTENT_USER_INITIATED,
     SESSION_OPEN_TYPE,
+    SESSION_REJECTED_TYPE,
+    SESSION_REJECTION_CONFLICT,
     WIRE_SCHEMA_VERSION,
     normalize_conversation_id,
 )
@@ -398,9 +400,9 @@ class LiveKitChannelAdapter:
         one place it can ask for a conversation without being issued a second
         identity anywhere else.
 
-        Joins hidden: this participant is infrastructure. The agent selects the
-        runtime actor from who is visibly in the room, and a listener that
-        showed up there would be something for it to reason about.
+        Joins as visible, non-publishing infrastructure so device SDKs can
+        authenticate rejection receipts by participant identity. Runtime actor
+        selection excludes infrastructure; this participant is never an Agent.
         """
         room = str(handle.get("room") or "")
         device = str(handle.get("device") or "")
@@ -804,11 +806,30 @@ class LiveKitChannelAdapter:
         collected mid-flight would drop a conversation the device asked for.
         """
 
+        watch = self._listeners.get(room)
+
         async def _carry() -> None:
             try:
                 await sink(request)
+            except InvalidTransition:
+                logger.info("room=%s rejected %s due to session conflict", room, request.action.value)
+                if (request.action is ServingAction.START and watch is not None
+                        and self._listeners.get(room) is watch and watch.connection is not None):
+                    try:
+                        await watch.connection.local_participant.publish_data(
+                            canonical_json({
+                                "schema_v": WIRE_SCHEMA_VERSION,
+                                "type": SESSION_REJECTED_TYPE,
+                                SESSION_CONVERSATION_ID_FIELD: request.conversation_id,
+                                "reason": SESSION_REJECTION_CONFLICT,
+                            }),
+                            reliable=True, topic=SESSION_CONTROL_TOPIC,
+                            destination_identities=[watch.device],
+                        )
+                    except Exception:
+                        logger.exception("room=%s could not deliver session rejection", room)
             except Exception:
-                logger.exception("room=%s could not act on %s", room, request.value)
+                logger.exception("room=%s could not act on %s", room, request.action.value)
 
         task = asyncio.create_task(_carry())
         self._requests.add(task)
@@ -837,8 +858,8 @@ class LiveKitChannelAdapter:
                     room=room,
                     can_publish=False,
                     can_subscribe=False,
-                    can_publish_data=False,
-                    hidden=True,
+                    can_publish_data=True,
+                    hidden=False,
                 )
             )
             .to_jwt()

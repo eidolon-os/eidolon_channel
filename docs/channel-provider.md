@@ -323,3 +323,20 @@ opaque payload。客户端在自身连接生命周期中尝试候选，信令地
 Provider 先检查完整 dispatch 列表，确认没有冲突后才清理结束任务；不会先删除一部分再返回冲突。所有 jobs 已 success/failed 的残留 dispatch 仍可恢复。切换会话需要先显式 close 原 conversation ID，再以新 ID open；旧会话的迟到 close 不匹配新会话。权限撤销和设备配置权威触发的资源回收仍沿用原机制，不受普通 open 的占用检查替代。
 
 并发请求由已有 Provider service 锁串行化；这一保证限于同一个服务进程，不声称具备多副本分布式互斥或共享房间预留事务。普通设备 RTC 请求仍只发送开始/停止，拒绝目前沿现有日志/客户端超时路径处理；可操作的 busy 回执及 UI 恢复尚需后续协议接入。因此本批不直接部署改变设备交互行为。
+
+### 拒绝尚未开始的会话
+
+当经过身份核验的 `session_open` 因会话冲突被拒绝，Provider 在同一
+`eidolon.session_control` topic 可靠发送定向回执：
+
+```json
+{"schema_v":1,"type":"session_rejected","conversation_id":"incoming-id","reason":"conflict"}
+```
+
+只投递给该 Channel 的设备；不删除 dispatch，不代替用户关闭旧会话。停止请求被拒绝、
+监听器已被撤换时不发送此回执。投递失败会记录日志，客户端原有确认超时仍然兜底。
+
+Provider 使用 `channel-provider-{room}` 的服务端签发身份作为可见的数据参与者；
+不能发布或订阅媒体，也不是 Agent。客户端必须核验传输层发送者、schema、请求 ID、
+原因和仍在等待确认的状态。Provider 回执不能确认开始或结束已接受的会话。
+参与者身份解析与回答者检测必须排除该基础设施参与者，不能使用房间人数或首位参与者。

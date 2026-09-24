@@ -351,11 +351,12 @@ class SharedStageFactory:
                     try:
                         from eidolon.livekit.agent.runtime import resolve_device_id
 
-                        participants = list(getattr(room_ref, "remote_participants", {}).values())
+                        from eidolon.livekit.agent.runtime.resolver import _participant_identity_and_metadata
+
+                        participant = _participant_identity_and_metadata(room_ref)
                         room_name = getattr(room_ref, "name", None) or room_name_static
-                        if participants:
-                            p = participants[0]
-                            ident = getattr(p, "identity", "") or "anon"
+                        if participant:
+                            ident, metadata = participant
                             # A room name is transport identity, regardless of
                             # whether a deployment reuses it or rotates it.
                             # Keying brain history on the room would either split
@@ -371,7 +372,7 @@ class SharedStageFactory:
                             # device's history across two keys. Web/other
                             # participants carry no device_id and keep the
                             # room-scoped id.
-                            is_device = resolve_device_id(getattr(p, "metadata", None)) is not None
+                            is_device = resolve_device_id(metadata) is not None
                             if is_device:
                                 return f"{prefix}:{ident}"
                             return f"{prefix}:{ident}:{room_name}"

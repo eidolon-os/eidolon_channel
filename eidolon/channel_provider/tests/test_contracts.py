@@ -191,3 +191,20 @@ def test_the_observed_host_address_stays_out_of_the_idempotency_fingerprint() ->
     moved = provision_payload()
     moved["device"]["manifest_revision"] = "sha256:manifest-2"
     assert ProvisionRequest.parse(encoded(moved)).fingerprint != without.fingerprint
+
+
+def test_open_session_accepts_temporary_target_but_close_does_not():
+    value = session_payload(operation=OPEN_SESSION)
+    value['target_companion_id'] = 'companion-visitor'
+    assert SessionRequest.parse(encoded(value), expected=OPEN_SESSION).target_companion_id == 'companion-visitor'
+    value['operation'] = CLOSE_SESSION
+    with pytest.raises(ContractError):
+        SessionRequest.parse(encoded(value), expected=CLOSE_SESSION)
+
+
+@pytest.mark.parametrize('target', ['', ' ', ' visitor ', None, 7, [], 'x' * 513])
+def test_open_session_rejects_invalid_temporary_target(target):
+    value = session_payload(operation=OPEN_SESSION)
+    value['target_companion_id'] = target
+    with pytest.raises(ContractError):
+        SessionRequest.parse(encoded(value), expected=OPEN_SESSION)

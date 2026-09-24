@@ -1,9 +1,10 @@
 """Voice agent server — LiveKit agent worker.
 
 This server runs as a LiveKit agent worker, connecting to LiveKit rooms as an
-agent participant. When a user joins a room, this worker dispatches a job and
-selects the mode-specific pipeline from the session metadata stamped into the
-LiveKit participant token.
+agent participant. The Channel Provider explicitly dispatches a job when a
+session is requested; joining a standing room alone does not start processing.
+The worker combines trusted dispatch settings with participant interaction mode
+to assemble the session pipeline.
 
 Recommended local startup: ``eidolon_admin`` supervisord / ``./deploy/dev/run_all.sh``
 (loads ``config/.env`` via ``with-env.sh``).
@@ -301,6 +302,16 @@ def _resolve_session_intent(ctx) -> str:
     return resolve_session_intent(getattr(ctx.job, "metadata", None))
 
 
+def _resolve_session_target(ctx) -> str | None:
+    """Only the Provider dispatch may choose this device session's temporary target."""
+    from eidolon.interaction_context import validate_companion_target
+
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    if "target_companion_id" not in metadata:
+        return None
+    return validate_companion_target(metadata["target_companion_id"])
+
+
 def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
     # Only the Provider's authenticated job dispatch supplies the policy.
     # Participant metadata, speech and LLM output cannot grant output rights.
@@ -367,6 +378,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     room = ctx.room
     runtime_session_id = _resolve_runtime_session_id(ctx)
     output_plan = _resolve_output_plan(ctx, runtime_session_id)
+    target_companion_id = _resolve_session_target(ctx)
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
@@ -554,6 +566,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         livekit_room=room,
         runtime_session_id=runtime_session_id,
         output_plan=output_plan,
+        target_companion_id=target_companion_id,
     )
 
     # Video avatar is enabled for this session only if globally available AND the

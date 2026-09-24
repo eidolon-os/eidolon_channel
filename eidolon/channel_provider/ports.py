@@ -158,7 +158,8 @@ class ChannelAdapter(Protocol):
         ...
 
     async def open_session(
-        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str
+        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
+        target_companion_id: str | None = None,
     ) -> None:
         """Bring this channel's agent to it, so a conversation can happen.
 
@@ -173,6 +174,11 @@ class ChannelAdapter(Protocol):
         device sits on it for hours, while an intent is true of exactly one
         conversation. Stamping it at credential time would mean rotating the
         device's way in every time somebody wanted to wake it differently.
+
+        `target_companion_id` is an optional temporary target from the trusted
+        orchestrator. It travels on dispatch metadata and is checked against
+        Owner authority by the worker. A different target for an existing
+        conversation ID must be rejected, not silently rebound.
 
         Two requirements on an adapter, both from the same place — the intent
         decides what the session is allowed to do, so it is authorization, not

@@ -33,7 +33,7 @@ def test_production_factory_never_constructs_tts_for_silent_session(monkeypatch,
     )
     monkeypatch.setattr(
         "eidolon.livekit.agent.factory._build_runtime_services",
-        lambda _: SimpleNamespace(resolve_room=AsyncMock()),
+        lambda _, **kwargs: SimpleNamespace(resolve_room=AsyncMock()),
     )
     monkeypatch.setattr(
         "eidolon.livekit.agent.factory._build_device_token_source", lambda **_: lambda: "test"
@@ -163,7 +163,7 @@ def test_every_input_output_combination_builds_only_selected_model_stages(monkey
     monkeypatch.setattr(SharedStageFactory, '_build_vad', vad)
     monkeypatch.setattr(SharedStageFactory, 'build_interrupt_classifier', interrupt)
     monkeypatch.setattr('eidolon.livekit.agent.factory._build_runtime_services',
-        lambda _: SimpleNamespace(resolve_room=AsyncMock()))
+        lambda _, **kwargs: SimpleNamespace(resolve_room=AsyncMock()))
     monkeypatch.setattr('eidolon.livekit.agent.factory._build_device_token_source', lambda **_: lambda: 'test')
     monkeypatch.setattr('eidolon.livekit.agent.eidolon_agent_rpc.EidolonAgentGrpcLlm', lambda **_: object())
     cfg = replace(EffectiveAgentConfig(), providers=ProvidersConfig(brain_provider='eidolon_agent'))
@@ -266,3 +266,20 @@ async def test_explicit_text_interrupts_noninterruptible_welcome_in_real_session
         assert any(item.role == 'user' and item.text_content == '独立文字回复正常' for item in messages)
     finally:
         await session.aclose()
+
+
+def test_temporary_target_cannot_be_silently_ignored_by_direct_llm():
+    cfg = replace(EffectiveAgentConfig(), providers=ProvidersConfig(brain_provider='openai'))
+    with pytest.raises(ValueError, match='SESSION_TARGET_REQUIRES_EIDOLON_AGENT'):
+        SharedStageFactory.from_config(cfg, target_companion_id='visitor')
+
+
+def test_runtime_factory_binds_temporary_target(monkeypatch):
+    from eidolon.livekit.agent import factory as factory_module
+
+    runtime = SimpleNamespace(resolve_companion=AsyncMock())
+    monkeypatch.setattr(factory_module, '_build_runtime_resolve_client', lambda _: runtime)
+    services = factory_module._build_runtime_services(
+        SimpleNamespace(kernel_api_url='http://kernel.test'), target_companion_id='visitor')
+    assert services.target_companion_id == 'visitor'
+    assert services.runtime is runtime

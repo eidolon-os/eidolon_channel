@@ -355,6 +355,7 @@ class ChannelProviderService:
             serving=serving,
             conversation_id=request.conversation_id,
             session_intent=request.session_intent,
+            target_companion_id=request.target_companion_id,
         )
         return canonical_json(
             {
@@ -367,11 +368,14 @@ class ChannelProviderService:
                 # honoured. An orchestrator that asked for a presence wake and
                 # got an ordinary session has to be able to tell.
                 **({"session_intent": request.session_intent} if serving else {}),
+                **({"target_companion_id": request.target_companion_id}
+                   if serving and request.target_companion_id is not None else {}),
             }
         )
 
     async def _converge_serving(
-        self, device_ref, *, serving: bool, conversation_id: str, session_intent: str
+        self, device_ref, *, serving: bool, conversation_id: str, session_intent: str,
+        target_companion_id: str | None = None,
     ) -> StoredProvision:
         """Converge one device's channel onto served or unserved.
 
@@ -397,7 +401,8 @@ class ChannelProviderService:
             handle = json.loads(active.handle_json)
             if serving:
                 await adapter.open_session(
-                    handle, conversation_id, session_intent=session_intent
+                    handle, conversation_id, session_intent=session_intent,
+                    target_companion_id=target_companion_id,
                 )
             else:
                 await adapter.close_session(handle, conversation_id)

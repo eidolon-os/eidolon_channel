@@ -345,6 +345,11 @@ class SessionRequest:
     makes "the device cannot escalate itself" a property of the shape rather
     than of a check someone has to remember. Absent means `user_initiated`.
 
+    `target_companion_id` optionally selects a temporary same-Owner Companion.
+    It is carried only on the authenticated open request and dispatch, never
+    the device's standing credential. The worker checks the runtime authority
+    before signing its narrow token. A target change requires a new session ID.
+
     An unknown value is rejected, not degraded. `normalize_session_intent`
     exists for untrusted wire values that must fail safe; here the caller is
     authenticated, and silently turning a misspelt presence wake into an
@@ -356,6 +361,7 @@ class SessionRequest:
     device_ref: DeviceRef
     conversation_id: str
     session_intent: str = SESSION_INTENT_USER_INITIATED
+    target_companion_id: str | None = None
 
     @classmethod
     def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
@@ -366,7 +372,7 @@ class SessionRequest:
             required={"operation", "device_ref", "conversation_id"},
             # Closing a conversation has no intent to state, so naming one there
             # is drift rather than a request, and is rejected as an unknown field.
-            optional={SESSION_INTENT_FIELD} if expected == OPEN_SESSION else None,
+            optional={SESSION_INTENT_FIELD, "target_companion_id"} if expected == OPEN_SESSION else None,
         )
         if root["operation"] != expected:
             raise ContractError(f"operation must be {expected}")
@@ -380,11 +386,20 @@ class SessionRequest:
         session_intent = root.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED)
         if session_intent not in VALID_SESSION_INTENTS:
             raise ContractError(f"{SESSION_INTENT_FIELD} is invalid")
+        from eidolon.interaction_context import InteractionContextError, validate_companion_target
+
+        target = None
+        if "target_companion_id" in root:
+            try:
+                target = validate_companion_target(root["target_companion_id"])
+            except InteractionContextError as exc:
+                raise ContractError(str(exc)) from exc
         return cls(
             operation=expected,
             device_ref=device_ref,
             conversation_id=conversation_id,
             session_intent=session_intent,
+            target_companion_id=target,
         )
 
     @property

@@ -23,7 +23,8 @@ class ChannelRuntimeServices:
     cannot leak across rooms.
     """
 
-    def __init__(self, *, runtime: Any, mounts: Any) -> None:
+    def __init__(self, *, runtime: Any, mounts: Any, target_companion_id: str | None = None) -> None:
+        self.target_companion_id = target_companion_id
         self.runtime = runtime
         self.mounts = mounts
         self._context: ResolvedRuntimeIdentity | None = None
@@ -45,6 +46,7 @@ class ChannelRuntimeServices:
                 mounts=self.mounts,
                 identity=identity,
                 metadata=metadata,
+                target_companion_id=self.target_companion_id,
             )
             return self._context
 

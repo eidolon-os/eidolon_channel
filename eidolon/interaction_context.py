@@ -19,6 +19,13 @@ class InteractionContextError(Exception):
     """The authorities could not establish a matching source and target."""
 
 
+def validate_companion_target(value: object) -> str:
+    """Validate a present session target; absence is handled by the caller."""
+    if not isinstance(value, str) or not value.strip() or value != value.strip() or len(value) > 512:
+        raise InteractionContextError("target_companion_id must be a nonblank canonical ID (max 512)")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class InteractionSource:
     """Identity supplied by trusted ingress, independent of the requested target."""
@@ -82,12 +89,8 @@ async def resolve_interaction_context(
     A caller must bind the result to a single session before signing its narrow
     Agent token; changing targets requires a new session.
     """
-    if companion_id is not None and (
-        not isinstance(companion_id, str)
-        or not companion_id.strip()
-        or companion_id != companion_id.strip()
-    ):
-        raise InteractionContextError("explicit companion_id must be a nonblank canonical ID")
+    if companion_id is not None:
+        validate_companion_target(companion_id)
     connection = None
     if source.device_id is not None:
         if mounts is None:

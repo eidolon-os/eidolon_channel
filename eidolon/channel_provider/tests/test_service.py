@@ -592,3 +592,15 @@ async def test_a_reconcile_with_nothing_to_observe_still_provisions(tmp_path) ->
 
     assert json.loads(response)["operation"] == "channel.provisioned-device"
     assert backend.observed == [""]
+
+
+async def test_service_forwards_session_target_without_changing_channel(tmp_path):
+    service, _, backend = _service(tmp_path, [1_700_000_000_000])
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    payload = session_payload(operation=OPEN_SESSION)
+    payload['target_companion_id'] = 'visitor'
+    result = json.loads(await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION)))
+    assert result['target_companion_id'] == 'visitor'
+    assert backend.last_target_companion_id == 'visitor'
+    assert len(backend.opened) == 1
+    assert backend.closed == []

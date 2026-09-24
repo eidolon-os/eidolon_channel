@@ -201,9 +201,11 @@ class FakeAdapter:
         return self.on_channel
 
     async def open_session(
-        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str
+        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
+        target_companion_id: str | None = None,
     ) -> None:
         self.sessions_opened.append((handle, conversation_id, session_intent))
+        self.last_target_companion_id = target_companion_id
 
     async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         self.sessions_closed.append((handle, conversation_id))

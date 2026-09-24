@@ -191,7 +191,7 @@ partial unique index 还保证进程竞态/重启不会提交两个 active opera
 
 ## Session wire contract 与 session_intent 的授权边界
 
-一条 channel 上开始/结束一次会话有两条路，它们的**区别只在于谁有资格说出 `session_intent`**：
+一条 channel 上开始/结束一次会话有两条路，它们区别在于调用方是否有资格指定会话意图和临时目标：
 
 ```json
 POST /v1/device-channels/sessions/open
@@ -227,6 +227,14 @@ worker 侧对缺失/无法识别的意图降级为 `user_initiated`（与控制�
 `generate_token()`（HTTP API / web client 路径）不涉及意图，也不需要涉及：它签发的 token 通过
 room config 触发自动 dispatch，dispatch metadata 里没有意图，worker 于是落到
 `user_initiated`。这条路径 by construction 就是 user-only。
+
+### 临时 Companion 目标
+
+上述 authenticated `sessions/open` 还可携带 `"target_companion_id": "<companion-id>"`；缺省保持原有挂载解析。字段出现时必须是非空、无首尾空白且不超过 512 字符的字符串；null/空串不代表缺省。close 不接受此字段。
+
+目标只写入本次 dispatch，成功响应按请求回显，不写设备 token、channel handle 或 Kernel 挂载。响应表示 Provider 已安排会话，不表示目标已经通过运行时授权或已完成回复；worker 从可信 dispatch 读取目标，先校验 Kernel 来源和 Data 同 Owner 角色，再签发单 Companion Agent token。直接 LLM 后端不支持该字段，拒绝而非忽略。普通设备 ServingRequest 不增加选人权限；Mobile 仍须经过已有可信控制入口，不能直接持有 Provider bearer。
+
+相同会话 ID 和目标的请求收敛到同一 dispatch；已有 dispatch 的同一会话 ID 改目标（包括改回缺省）返回 409 INVALID_TRANSITION，不删除现有 dispatch。切换角色必须用新的会话 ID；新会话省略目标恢复挂载解析，关闭会话不删除 room。这里复用 LiveKit dispatch 状态，不提供已删除会话 ID 的永久去重账本；调用方不得重用已结束的会话 ID。
 
 ## Revoke wire contract
 

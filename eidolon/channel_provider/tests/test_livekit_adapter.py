@@ -1229,3 +1229,68 @@ async def test_listener_retries_policy_reconciliation_during_transport_startup(m
         assert all(not room.connected for room in FakeRoom.instances[:-1])
     finally:
         await adapter.stop_accepting(grant.handle)
+
+
+async def test_temporary_target_is_dispatch_scoped_and_cannot_change_in_same_session():
+    from eidolon.channel_provider.contracts import InvalidTransition
+
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    for _ in range(2):
+        await adapter.open_session(grant.handle, 'temporary',
+            session_intent=SESSION_INTENT_USER_INITIATED, target_companion_id='visitor')
+    assert len(client.agent_dispatch.created) == 1
+    metadata = json.loads(client.agent_dispatch.created[0][2])
+    assert metadata['target_companion_id'] == 'visitor'
+    assert 'target_companion_id' not in grant.handle
+    for other in ('different', None):
+        with pytest.raises(InvalidTransition):
+            await adapter.open_session(grant.handle, 'temporary',
+                session_intent=SESSION_INTENT_USER_INITIATED, target_companion_id=other)
+    assert client.agent_dispatch.deleted == []
+    await adapter.close_session(grant.handle, 'temporary')
+    await adapter.open_session(grant.handle, 'next', session_intent=SESSION_INTENT_USER_INITIATED)
+    assert 'target_companion_id' not in json.loads(client.agent_dispatch.created[-1][2])
+
+
+@pytest.mark.parametrize('owner', ['owner-1', 'other-owner'])
+async def test_dispatch_target_reaches_narrow_agent_token_only_after_authority_checks(owner):
+    from unittest.mock import AsyncMock
+    from eidolon_sdk.biz.runtime import RuntimeTokenVerifier
+    from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity
+    from eidolon_sdk.device_foundation.v1 import DeviceRef
+    from eidolon.interaction_context import DeviceConnectionContext, InteractionContextError
+    from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
+    from eidolon.livekit.agent.runtime.resolver import make_device_token_resolver
+    from eidolon.livekit.agent.server import _resolve_session_target
+
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    await adapter.open_session(grant.handle, 'temporary',
+        session_intent=SESSION_INTENT_USER_INITIATED, target_companion_id='visitor')
+    target = _resolve_session_target(SimpleNamespace(job=SimpleNamespace(
+        metadata=client.agent_dispatch.created[-1][2])))
+    mounts, runtime = AsyncMock(), AsyncMock()
+    mounts.resolve.return_value = DeviceConnectionContext(
+        owner_id='owner-1', device_id=_DEVICE_1,
+        device_ref=DeviceRef.model_validate(provision_payload()['device_ref']),
+        mount_revision=7, answering_companion_id='resident')
+    runtime.resolve_companion.return_value = ResolvedRuntimeIdentity(
+        owner_id=owner, companion_id='visitor', device_id=_DEVICE_1,
+        memory_realm_id='realm', genome_id='genome', genome_hash='hash',
+        schema_version='eidolon.persona_genome', realizer_version='eidolon.persona_realizer')
+    services = ChannelRuntimeServices(runtime=runtime, mounts=mounts, target_companion_id=target)
+    room = SimpleNamespace(remote_participants={'source': SimpleNamespace(
+        identity=_DEVICE_1, metadata=json.dumps({'kind': 'device', 'owner_id': 'owner-1'}))})
+    secret = 'session-target-tests-long-enough-secret'
+    resolve = make_device_token_resolver(room=room, runtime=runtime, mounts=mounts,
+        context_resolver=services.resolve_room, session_id='temporary', jwt_secret=secret)
+    if owner != 'owner-1':
+        with pytest.raises(InteractionContextError, match='mismatch'):
+            await resolve()
+    else:
+        scope = await RuntimeTokenVerifier(secret=secret).verify(await resolve())
+        assert (scope.companion_id, scope.device_id, scope.session_id) == ('visitor', _DEVICE_1, 'temporary')
+    mounts.resolve.assert_awaited_once_with(owner_id='owner-1', device_id=_DEVICE_1)
+    runtime.resolve_companion.assert_awaited_once_with('visitor', device_id=_DEVICE_1)
+    assert mounts.resolve.return_value.answering_companion_id == 'resident'

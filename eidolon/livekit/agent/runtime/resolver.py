@@ -154,6 +154,7 @@ async def _resolve_context(
     mounts: Any | None,
     identity: str,
     metadata: dict[str, Any],
+    target_companion_id: str | None = None,
 ) -> ResolvedContext:
     """Resolve a participant to its complete Companion runtime context."""
     resolved = await resolve_channel_context(
@@ -161,6 +162,7 @@ async def _resolve_context(
         mounts=mounts,
         identity=identity,
         metadata=metadata,
+        target_companion_id=target_companion_id,
     )
     if isinstance(resolved, DeviceConnectionContext):
         raise DeviceTokenResolverError(f"device {resolved.device_id!r} has no companion target")
@@ -173,6 +175,7 @@ async def resolve_channel_context(
     mounts: Any | None,
     identity: str,
     metadata: dict[str, Any],
+    target_companion_id: str | None = None,
 ) -> DeviceConnectionContext | CompanionInteractionContext:
     """Translate trusted LiveKit admission metadata into the shared use case.
 
@@ -207,6 +210,10 @@ async def resolve_channel_context(
             f"participant.metadata.kind must be device/companion/owner/user for "
             f"identity={identity!r}; got {kind!r}."
         )
+    if target_companion_id is not None:
+        if kind != "device":
+            raise DeviceTokenResolverError("Provider session targets require a device entrance")
+        target = target_companion_id
     return await resolve_interaction_context(
         source=InteractionSource(owner_id=owner_id, device_id=device_id),
         companion_id=target,

@@ -350,11 +350,27 @@ async def test_microphone_disabled_dispatch_uses_existing_manual_session_without
     streaming = MagicMock(side_effect=AssertionError('Audio/EOT pipeline must not be constructed'))
     monkeypatch.setattr(full_duplex, 'StreamingPipeline', streaming)
     monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(return_value=(mode, False)))
-    ctx = _FakeContext({}, dispatch_metadata=json.dumps({'conversation_id': 'conversation-1', 'output_plan': plan.model_dump(mode='json')}))
+    ctx = _FakeContext({}, dispatch_metadata=json.dumps({'conversation_id': 'conversation-1', 'output_plan': plan.model_dump(mode='json'), 'target_companion_id': 'visitor'}))
     ctx.room.name = 'no-microphone'
     ctx.proc = SimpleNamespace(userdata={})
     ctx.add_shutdown_callback = MagicMock()
     await server.run_agent(ctx, EffectiveAgentConfig())
     assert captured['output_plan'] == plan
+    assert captured['target_companion_id'] == 'visitor'
     manual_pipeline.assert_called_once()
     assert manual_pipeline.call_args.kwargs['interaction_mode'] == mode
+
+
+def test_session_target_comes_only_from_dispatch():
+    ctx = _FakeContext({'target_companion_id': 'untrusted'})
+    assert server._resolve_session_target(ctx) is None
+    ctx.job.metadata = json.dumps({'conversation_id': 'conversation-1', 'target_companion_id': 'visitor'})
+    assert server._resolve_session_target(ctx) == 'visitor'
+
+
+@pytest.mark.parametrize('target', [None, '', ' ', 9, []])
+def test_invalid_dispatch_target_fails_closed(target):
+    ctx = _FakeContext({}, dispatch_metadata=json.dumps({'target_companion_id': target}))
+    from eidolon.interaction_context import InteractionContextError
+    with pytest.raises(InteractionContextError, match='target_companion_id'):
+        server._resolve_session_target(ctx)

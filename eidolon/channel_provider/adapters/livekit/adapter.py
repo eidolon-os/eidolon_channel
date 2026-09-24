@@ -21,7 +21,7 @@ from typing import Any
 import psutil
 from urllib.parse import urlparse, urlunparse
 
-from eidolon_sdk.biz.presentation import SessionOutputPlan, OutputSelection, FACE_PROFILE
+from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
 from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
@@ -40,7 +40,7 @@ from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 from livekit.protocol.agent import JobStatus
 from livekit.protocol.models import ParticipantInfo
 
-from ...contracts import BackendUnavailable, ChannelNotServable, canonical_json
+from ...contracts import BackendUnavailable, ChannelNotServable, InvalidTransition, canonical_json
 from ...ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from ...spec import ChannelSpec
 from .config import LiveKitConfig
@@ -881,7 +881,8 @@ class LiveKitChannelAdapter:
     # -- serving ----------------------------------------------------------
 
     async def open_session(
-        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str
+        self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
+        target_companion_id: str | None = None,
     ) -> None:
         """Place the standing order, and say on it why this session exists.
 
@@ -892,6 +893,9 @@ class LiveKitChannelAdapter:
         hours. It joins `conversation_id` and `output_plan`, which are on this
         bus for the same reason — the agent must be able to trust them.
         """
+        if target_companion_id is not None:
+            from eidolon.interaction_context import validate_companion_target
+            validate_companion_target(target_companion_id)
         room, agent = self._serving(handle)
         output_plan = (SessionOutputPlan(session_id=conversation_id, **handle["output_template"])
                        if "output_template" in handle else None)
@@ -900,6 +904,11 @@ class LiveKitChannelAdapter:
                 if dispatch.agent_name != agent:
                     continue
                 metadata = self._dispatch_metadata(dispatch)
+                if (
+                    metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
+                    and metadata.get("target_companion_id") != target_companion_id
+                ):
+                    raise InvalidTransition("changing a Companion target requires a new conversation_id")
                 if (
                     not _is_spent(dispatch)
                     and metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
@@ -943,11 +952,15 @@ class LiveKitChannelAdapter:
                             "schema_v": WIRE_SCHEMA_VERSION,
                             SESSION_CONVERSATION_ID_FIELD: conversation_id,
                             SESSION_INTENT_FIELD: session_intent,
+                            **({"target_companion_id": target_companion_id}
+                               if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
                         }
                     ),
                 )
             )
+        except InvalidTransition:
+            raise
         except Exception as exc:
             raise BackendUnavailable("LiveKit agent dispatch failed") from exc
         logger.info(

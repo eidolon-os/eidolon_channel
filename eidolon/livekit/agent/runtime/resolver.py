@@ -21,13 +21,19 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any
 
-from eidolon_sdk.device_foundation.v1 import DeviceRef
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity as ResolvedContext
 from eidolon_sdk.biz.runtime import sign_runtime_token
 from eidolon_sdk.biz.system_data import SystemDataError
+
+from eidolon.interaction_context import (
+    CompanionInteractionContext,
+    DeviceConnectionContext,
+    InteractionContextError,
+    InteractionSource,
+    resolve_interaction_context,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -36,35 +42,12 @@ RuntimeTokenResolver = DeviceTokenResolver
 RUNTIME_PARTICIPANT_KINDS = frozenset({"device", "companion", "owner", "user"})
 
 
-class DeviceTokenResolverError(Exception):
-    """The authoritative session context could not produce an Agent token."""
+# Compatibility exports: the application use case owns these types and errors.
+DeviceTokenResolverError = InteractionContextError
 
 
 class RoomNotConnectedError(DeviceTokenResolverError):
     """Runtime participant resolution requires an active room connection."""
-
-
-@dataclass(frozen=True, slots=True)
-class DeviceConnectionContext:
-    """Owner-scoped mounted Device; a Companion answering through it is optional.
-
-    This context is sufficient for a Channel Provider data connection, but not
-    for constructing an Agent/audio runtime token.
-    """
-
-    owner_id: str
-    device_id: str
-    device_ref: DeviceRef
-    mount_revision: int
-    answering_companion_id: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CompanionInteractionContext:
-    """Complete Companion runtime selected before entering the audio pipeline."""
-
-    runtime: ResolvedContext
-    mount_revision: int | None = None
 
 
 def _participant_identity_and_metadata(
@@ -191,73 +174,44 @@ async def resolve_channel_context(
     identity: str,
     metadata: dict[str, Any],
 ) -> DeviceConnectionContext | CompanionInteractionContext:
-    """Resolve ingress before choosing a Channel processing path.
+    """Translate trusted LiveKit admission metadata into the shared use case.
 
-    A Device nobody answers through remains a valid Device connection. A
-    complete Companion runtime is requested only when the Kernel Body assignment
-    or an explicit same-Owner target names one. Physical Device ingress always
-    requires Kernel.
+    Metadata is issued by the admission service and must not be client-editable.
+    This adapter does not turn arbitrary request metadata into authorization.
     """
     kind = str(metadata.get("kind") or "").strip().lower()
+    target = str(metadata.get("companion_id") or "").strip() or None
+    device_id = None
     if kind == "device":
         device_id = str(metadata.get("device_id") or identity).strip()
-        if not device_id:
-            raise DeviceTokenResolverError("device participant missing device_id")
-        if mounts is None:
-            raise DeviceTokenResolverError(
-                "device participant requires the Kernel Device Mount resolver"
-            )
-
         owner_id = str(metadata.get("owner_id") or "").strip()
         if not owner_id:
             raise DeviceTokenResolverError(
                 "device participant missing trusted owner_id for Kernel scope"
             )
-        connection = await mounts.resolve(owner_id=owner_id, device_id=device_id)
-        if connection.owner_id != owner_id or connection.device_id != device_id:
-            raise DeviceTokenResolverError("Kernel Device Mount owner/device mismatch")
-
-        companion_id = str(
-            metadata.get("companion_id") or connection.answering_companion_id or ""
-        ).strip()
-        if not companion_id:
-            return connection
-        context = await runtime.resolve_companion(companion_id, device_id=device_id)
-        if (
-            context.owner_id != owner_id
-            or context.companion_id != companion_id
-            or context.device_id != device_id
-        ):
-            raise DeviceTokenResolverError(
-                "Companion runtime does not match mounted Device owner/target"
-            )
-        return CompanionInteractionContext(context, connection.mount_revision)
-    if kind == "companion":
-        companion_id = str(metadata.get("companion_id") or identity).strip()
+    elif kind == "companion":
+        target = target or identity.strip()
         owner_id = str(metadata.get("owner_id") or "").strip()
-        if not companion_id or not owner_id:
+        if not target or not owner_id:
             raise DeviceTokenResolverError(
                 "companion participant missing companion_id or trusted owner_id"
             )
-        context = await runtime.resolve_companion(companion_id, device_id=None)
-        if context.owner_id != owner_id or context.companion_id != companion_id:
-            raise DeviceTokenResolverError("Companion runtime owner/identity mismatch")
-        if context.device_id is not None:
-            raise DeviceTokenResolverError("virtual Companion runtime unexpectedly has device")
-        return CompanionInteractionContext(context)
-    if kind == "owner":
-        owner_id = str(metadata.get("owner_id") or identity).strip()
-        if not owner_id:
-            raise DeviceTokenResolverError("owner participant missing owner_id")
-        return CompanionInteractionContext(await runtime.resolve_owner(owner_id))
-    if kind == "user":
-        owner_id = str(metadata.get("owner_id") or metadata.get("user_id") or identity).strip()
-        if not owner_id:
-            raise DeviceTokenResolverError("user participant missing owner_id/user_id")
-        return CompanionInteractionContext(await runtime.resolve_owner(owner_id))
-    raise DeviceTokenResolverError(
-        f"participant.metadata.kind must be device/companion/owner/user for "
-        f"identity={identity!r}; got {kind!r}."
+    elif kind in {"owner", "user"}:
+        owner_id = str(
+            metadata.get("owner_id")
+            or (metadata.get("user_id") if kind == "user" else None)
+            or identity
+        ).strip()
+    else:
+        raise DeviceTokenResolverError(
+            f"participant.metadata.kind must be device/companion/owner/user for "
+            f"identity={identity!r}; got {kind!r}."
+        )
+    return await resolve_interaction_context(
+        source=InteractionSource(owner_id=owner_id, device_id=device_id),
+        companion_id=target,
+        runtime=runtime,
+        mounts=mounts,
     )
 
 

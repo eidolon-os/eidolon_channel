@@ -27,10 +27,10 @@ from eidolon_sdk.device_foundation.v1 import (
 )
 from pydantic import ValidationError
 
-from .resolver import DeviceConnectionContext, DeviceTokenResolverError
+from eidolon.interaction_context import DeviceConnectionContext, InteractionContextError
 
 
-class KernelBodyError(DeviceTokenResolverError):
+class KernelBodyError(InteractionContextError):
     """Base error for Kernel Body Mesh lookup."""
 
 
@@ -146,9 +146,7 @@ class KernelBodyHttpClient:
         except httpx.HTTPError as exc:
             raise KernelBodyUnavailable(f"Kernel Body GET failed: {exc}") from exc
         if response.status_code == 404:
-            raise KernelBodyNotFound(
-                f"device {device_id!r} is not mounted for owner {owner_id!r}"
-            )
+            raise KernelBodyNotFound(f"device {device_id!r} is not mounted for owner {owner_id!r}")
         if response.status_code != 200:
             raise KernelBodyUnavailable(f"Kernel Body GET returned HTTP {response.status_code}")
         try:
@@ -159,4 +157,3 @@ class KernelBodyHttpClient:
 
     async def close(self) -> None:
         """Injected HTTP clients remain owned by the composition caller."""
-

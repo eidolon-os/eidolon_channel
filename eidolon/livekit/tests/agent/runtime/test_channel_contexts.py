@@ -251,3 +251,94 @@ async def test_an_unassigned_device_is_not_given_the_owners_default():
     assert isinstance(context, DeviceConnectionContext)
     runtime.resolve_owner.assert_not_called()
     runtime.resolve_companion.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["owner", "user"])
+async def test_virtual_ingress_explicit_target_uses_shared_resolution(kind):
+    runtime = AsyncMock()
+    runtime.resolve_companion.return_value = runtime_context(companion_id="visitor")
+    context = await resolve_channel_context(
+        runtime=runtime,
+        mounts=None,
+        identity="owner-1",
+        metadata={"kind": kind, "owner_id": "owner-1", "companion_id": "visitor"},
+    )
+    assert context.runtime.companion_id == "visitor"
+    assert context.runtime.device_id is None
+    runtime.resolve_owner.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["owner", "user"])
+async def test_virtual_default_authority_mismatch_is_rejected_before_signing(kind):
+    runtime = AsyncMock()
+    runtime.resolve_owner.return_value = runtime_context().model_copy(
+        update={"owner_id": "other-owner"}
+    )
+    resolve = make_device_token_resolver(
+        room=room(f'{{"kind":"{kind}","owner_id":"owner-1"}}'),
+        runtime=runtime,
+        session_id="session-1",
+        jwt_secret="secret-with-enough-entropy",
+    )
+    with pytest.raises(DeviceTokenResolverError, match="mismatch"):
+        await resolve()
+
+
+async def test_temporary_target_is_session_scoped_and_next_session_returns_to_assignment():
+    import json
+
+    from eidolon_sdk.biz.runtime import RuntimeTokenVerifier
+    from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
+
+    mounts = AsyncMock()
+    mounts.resolve.return_value = DeviceConnectionContext(
+        owner_id="owner-1",
+        device_id=_DEVICE_1,
+        device_ref=device_ref(),
+        mount_revision=7,
+        answering_companion_id="resident",
+    )
+    runtime = AsyncMock()
+    runtime.resolve_companion.side_effect = lambda target, *, device_id: runtime_context(
+        device_id=device_id, companion_id=target
+    )
+    metadata = {"kind": "device", "owner_id": "owner-1", "companion_id": "visitor"}
+    active_room = room(json.dumps(metadata))
+    services = ChannelRuntimeServices(runtime=runtime, mounts=mounts)
+    secret = "secret-with-enough-entropy-for-tests"
+    resolve = make_device_token_resolver(
+        room=active_room,
+        runtime=runtime,
+        mounts=mounts,
+        context_resolver=services.resolve_room,
+        session_id="temporary-session",
+        jwt_secret=secret,
+    )
+    token = await resolve()
+    scope = await RuntimeTokenVerifier(secret=secret).verify(token)
+    assert (scope.companion_id, scope.device_id, scope.session_id) == (
+        "visitor",
+        _DEVICE_1,
+        "temporary-session",
+    )
+    # Even an upstream metadata change must not change an active session's role.
+    metadata.pop("companion_id")
+    active_room.remote_participants[_DEVICE_1].metadata = json.dumps(metadata)
+    assert await resolve() == token
+    assert (await services.resolve_room(active_room)).companion_id == "visitor"
+    runtime.resolve_companion.assert_awaited_once_with("visitor", device_id=_DEVICE_1)
+
+    next_services = ChannelRuntimeServices(runtime=runtime, mounts=mounts)
+    next_resolve = make_device_token_resolver(
+        room=active_room,
+        runtime=runtime,
+        mounts=mounts,
+        context_resolver=next_services.resolve_room,
+        session_id="next-session",
+        jwt_secret=secret,
+    )
+    next_scope = await RuntimeTokenVerifier(secret=secret).verify(await next_resolve())
+    assert next_scope.companion_id == "resident"
+    assert next_scope.session_id == "next-session"
+    assert mounts.resolve.return_value.answering_companion_id == "resident"
+    assert [call[0] for call in mounts.mock_calls] == ["resolve", "resolve"]

@@ -17,8 +17,13 @@ import time
 from collections.abc import Callable
 
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+from eidolon_sdk.biz.control.shared_session import (
+    SharedChannelSnapshot,
+    SharedSessionSelection,
+)
 
 from .contracts import (
+    Forbidden,
     IdempotencyConflict,
     InvalidTransition,
     ProvisionRequest,
@@ -249,6 +254,39 @@ class ChannelProviderService:
              **({"refresh_required": True} if refresh_required else {})},
             separators=(",", ":"),
         )
+
+    async def inspect_shared_selection(
+        self,
+        request: SharedSessionSelection,
+        *,
+        authenticated_owner_id: str,
+    ) -> tuple[SharedChannelSnapshot, ...]:
+        """Observe selected lifecycle records without granting room admission.
+
+        The caller supplies the authenticated business Owner separately from
+        the selection. Invitation must revalidate authority, binding, capability
+        and presence; these credential-free observations reserve no resources.
+        """
+        if not authenticated_owner_id:
+            raise Forbidden("authenticated Owner is required")
+        async with self._lock:
+            now = self._now_ms()
+            snapshots = []
+            for ref in request.devices:
+                stored = self._store.active_device(ref)
+                if stored is None or stored.expires_at_ms <= now:
+                    raise UnknownChannel("selected device has no current channel")
+                if stored.owner_id != authenticated_owner_id:
+                    raise Forbidden("selected device belongs to another Owner")
+                snapshots.append(
+                    SharedChannelSnapshot(
+                        device_ref=stored.device_ref,
+                        channel_id=stored.channel_id,
+                        manifest_revision=stored.manifest_revision,
+                        expires_at_ms=stored.expires_at_ms,
+                    )
+                )
+            return tuple(snapshots)
 
     async def presence(self) -> str:
         """Which of this Host's bodies are on their channel right now.

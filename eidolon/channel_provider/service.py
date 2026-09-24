@@ -39,6 +39,7 @@ from .spec import ChannelSpec, MediaFlow, derive_spec
 from .store import ChannelProviderStore, StoredProvision
 
 logger = logging.getLogger("eidolon.channel_provider.service")
+PRESENCE_READ_TIMEOUT_SECONDS = 3.0
 
 
 class ChannelProviderService:
@@ -269,24 +270,57 @@ class ChannelProviderService:
         """
         if not authenticated_owner_id:
             raise Forbidden("authenticated Owner is required")
-        async with self._lock:
+
+        def current_records() -> tuple[StoredProvision, ...]:
             now = self._now_ms()
-            snapshots = []
+            records = []
             for ref in request.devices:
                 stored = self._store.active_device(ref)
                 if stored is None or stored.expires_at_ms <= now:
                     raise UnknownChannel("selected device has no current channel")
                 if stored.owner_id != authenticated_owner_id:
                     raise Forbidden("selected device belongs to another Owner")
-                snapshots.append(
-                    SharedChannelSnapshot(
-                        device_ref=stored.device_ref,
-                        channel_id=stored.channel_id,
-                        manifest_revision=stored.manifest_revision,
-                        expires_at_ms=stored.expires_at_ms,
-                    )
+                records.append(stored)
+            return tuple(records)
+
+        async with self._lock:
+            records = current_records()
+
+        async def observe(stored: StoredProvision) -> tuple[bool | None, int]:
+            present = await self._read_channel_presence(stored)
+            return present, self._now_ms()
+
+        # The bounded selection probes concurrently, outside the lifecycle lock.
+        observations = await asyncio.gather(*(observe(record) for record in records))
+        async with self._lock:
+            if current_records() != records:
+                raise InvalidTransition("selected channels changed during inspection; retry")
+            return tuple(
+                SharedChannelSnapshot(
+                    device_ref=stored.device_ref,
+                    channel_id=stored.channel_id,
+                    manifest_revision=stored.manifest_revision,
+                    expires_at_ms=stored.expires_at_ms,
+                    on_channel=present,
+                    observed_at_ms=observed_at,
                 )
-            return tuple(snapshots)
+                for stored, (present, observed_at) in zip(records, observations, strict=True)
+            )
+
+    async def _read_channel_presence(self, stored: StoredProvision) -> bool | None:
+        adapter = self._registry.get(stored.adapter_name)
+        reader = getattr(adapter, "device_is_on_channel", None)
+        if reader is None:
+            return None
+        try:
+            async with asyncio.timeout(PRESENCE_READ_TIMEOUT_SECONDS):
+                present = await reader(json.loads(stored.handle_json))
+            return present if type(present) is bool else None
+        except Exception:
+            # Do not log the opaque handle or adapter exception: either may
+            # contain credentials. Cancellation still propagates to the caller.
+            logger.warning("presence unavailable for channel=%s", stored.channel_id)
+            return None
 
     async def presence(self) -> str:
         """Which of this Host's bodies are on their channel right now.
@@ -314,9 +348,7 @@ class ChannelProviderService:
             active = self._store.active_provisions()
         bodies = []
         for stored in active:
-            adapter = self._registry.get(stored.adapter_name)
-            reader = getattr(adapter, "device_is_on_channel", None)
-            on_channel = await reader(json.loads(stored.handle_json)) if reader else None
+            on_channel = await self._read_channel_presence(stored)
             bodies.append(
                 {
                     # The device's stable instance id, which is what a body is

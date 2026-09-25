@@ -306,3 +306,39 @@ async def test_revocation_does_not_hold_lifecycle_lock_while_caller_unwinds(tmp_
         await task
     assert released.is_set()
     assert adapter.closed[0]["resource"] == "temporary"
+
+
+@pytest.mark.parametrize("mutation", ["none", "operation", "manifest", "duplicate", "bad_ref"])
+async def test_current_specifications_use_provider_ledger_and_reject_tampering(tmp_path, mutation):
+    service, _, adapter, _, selected, requests = await setup(tmp_path)
+    specifications = []
+    for request in requests:
+        raw = provision_payload(device_id=request.device_id)
+        specifications.append(
+            {"device_ref": request.device_ref.model_dump(mode="json"), "device": raw["device"]}
+        )
+    if mutation == "operation":
+        specifications[0]["operation_id"] = "forged"
+    elif mutation == "manifest":
+        specifications[0]["device"]["display_name"] = "forged"
+    elif mutation == "duplicate":
+        specifications[1] = specifications[0]
+    elif mutation == "bad_ref":
+        specifications[0]["device_ref"]["device_instance_id"] = []
+    if mutation == "none":
+        async with service.shared_transport_from_specifications(
+            selected,
+            tuple(specifications),
+            authenticated_owner_id="owner_1",
+        ) as ready:
+            assert ready["state"] == "transport_ready"
+        assert len(adapter.closed) == 1
+    else:
+        with pytest.raises((InvalidTransition, IdempotencyConflict)):
+            async with service.shared_transport_from_specifications(
+                selected,
+                tuple(specifications),
+                authenticated_owner_id="owner_1",
+            ):
+                pytest.fail("tampered specification admitted")
+        assert not adapter.shared_created

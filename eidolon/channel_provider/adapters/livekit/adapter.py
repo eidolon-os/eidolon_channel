@@ -14,9 +14,10 @@ import logging
 import socket
 import ipaddress
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 import psutil
 from urllib.parse import urlparse, urlunparse
@@ -44,7 +45,7 @@ from livekit.protocol.models import ParticipantInfo
 
 from ...contracts import BackendUnavailable, ChannelNotServable, InvalidTransition, canonical_json
 from ...ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
-from ...spec import ChannelSpec
+from ...spec import ChannelSpec, MediaFlow
 from .config import LiveKitConfig
 
 logger = logging.getLogger("eidolon.channel_provider.livekit")
@@ -315,9 +316,19 @@ class LiveKitChannelAdapter:
         self, spec: ChannelSpec, *, issued_at_ms: int, observed_host_address: str = ""
     ) -> ChannelGrant:
         urls = self._client_urls()
-        offered = _observed_first(urls, observed_host_address)
         room = self._room_name(spec)
         await self._declare_room(room)
+        return self._grant(
+            spec, room=room, urls=urls, issued_at_ms=issued_at_ms,
+            observed_host_address=observed_host_address,
+        )
+
+    def _grant(
+        self, spec: ChannelSpec, *, room: str, urls: list[str], issued_at_ms: int,
+        observed_host_address: str = "",
+    ) -> ChannelGrant:
+        """Encode both standing and temporary bindings through the same codec."""
+        offered = _observed_first(urls, observed_host_address)
         ttl = self._config.grant_ttl_seconds
         payload = canonical_json(
             {
@@ -373,6 +384,52 @@ class LiveKitChannelAdapter:
             expires_at_ms=issued_at_ms + ttl * 1000,
             handle=handle,
         )
+
+    async def open_shared(
+        self, specs: Sequence[ChannelSpec], *, input_device_id: str, issued_at_ms: int,
+    ) -> dict[str, ChannelGrant]:
+        """Create one temporary transport for a pre-authorized participant set.
+
+        This is not a public admission API. The caller verifies current device
+        identities and Owner authority, owns the returned room lifetime, and
+        closes it on invitation failure, timeout or conversation completion.
+        Each invocation is a new attempt; retries reuse the returned grants.
+        No standing provision is changed and no serving agent is dispatched.
+        """
+        specs = tuple(specs)
+        devices = {spec.device_id for spec in specs}
+        owners = {spec.owner_id for spec in specs}
+        if (not 2 <= len(specs) <= 16 or len(devices) != len(specs)
+                or input_device_id not in devices or not all(devices)
+                or len(owners) != 1 or not all(owners)):
+            raise ValueError("shared transport requires distinct devices of one Owner and an input")
+        room = f"{self._config.room_prefix}-shared-{uuid4().hex}"
+        urls = self._client_urls()
+        grants: dict[str, ChannelGrant] = {}
+        for spec in specs:
+            # Selection may narrow permissions, never widen the manifest/policy.
+            audio = spec.audio
+            if spec.device_id != input_device_id:
+                audio = MediaFlow.SUBSCRIBE if audio.subscribes else MediaFlow.NONE
+            narrowed = replace(spec, audio=audio, video=MediaFlow.NONE)
+            grant = self._grant(narrowed, room=room, urls=urls, issued_at_ms=issued_at_ms)
+            # A shared room cannot enter the original per-device dispatch or
+            # live input-policy update path. Team orchestration owns those steps.
+            for key in ("agent", "input_revision", "input_permissions"):
+                grant.handle.pop(key, None)
+            grants[spec.device_id] = grant
+        # Sign everything before creating a resource; a signing failure leaves
+        # no partial room. If creation has an uncertain outcome, try to reclaim
+        # this unique attempt without touching any standing device channel.
+        try:
+            await self._declare_room(room)
+        except BaseException:
+            try:
+                await self.close({"room": room})
+            except Exception:
+                logger.warning("Failed to reclaim temporary shared room %s", room)
+            raise
+        return grants
 
     async def close(self, handle: dict[str, Any]) -> None:
         room = handle.get("room")

@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 from types import SimpleNamespace
+from dataclasses import replace
 
 import pytest
 from eidolon_sdk.biz.contracts import (
@@ -1429,3 +1430,130 @@ def test_listener_is_identifiable_data_only_infrastructure():
     assert grants["canSubscribe"] is False
     assert grants["hidden"] is False
     assert not grants.get("agent", False)
+
+
+async def test_shared_grants_use_one_isolated_room_and_existing_binding() -> None:
+    adapter, client = _adapter()
+    first = _spec()
+    second = replace(first, device_id=named_device_instance_id("device-2"))
+    original = await adapter.open(first, issued_at_ms=1000)
+    grants = await adapter.open_shared(
+        (first, second), input_device_id=first.device_id, issued_at_ms=2000
+    )
+    assert set(grants) == {first.device_id, second.device_id}
+    rooms = {grant.handle["room"] for grant in grants.values()}
+    assert len(rooms) == 1
+    assert original.handle["room"] not in rooms
+    assert client.agent_dispatch.created == []
+    for device_id, grant in grants.items():
+        assert grant.binding_format == original.binding_format
+        binding = json.loads(grant.payload)
+        claims = _claims(binding["session"]["token"])
+        assert claims["sub"] == device_id
+        assert claims["video"]["room"] == grant.handle["room"]
+        assert claims["video"]["canPublish"] == (device_id == first.device_id)
+        assert claims["video"]["canSubscribe"] is True
+        assert claims["video"]["canUpdateOwnMetadata"] is False
+        assert "agent" not in grant.handle
+    await adapter.close(grants[first.device_id].handle)
+    assert client.room.deleted == list(rooms)
+    assert original.handle["room"] not in client.room.deleted
+
+
+async def test_shared_attempts_cannot_reuse_old_credentials_or_invitations() -> None:
+    adapter, _ = _adapter()
+    first = _spec()
+    specs = (first, replace(first, device_id=named_device_instance_id("device-2")))
+    a = await adapter.open_shared(specs, input_device_id=first.device_id, issued_at_ms=1)
+    b = await adapter.open_shared(specs, input_device_id=first.device_id, issued_at_ms=2)
+    assert a[first.device_id].handle["room"] != b[first.device_id].handle["room"]
+
+
+@pytest.mark.parametrize("invalid", ["one", "duplicate", "other_owner", "missing_input"])
+async def test_shared_invalid_selection_has_no_transport_side_effects(invalid) -> None:
+    adapter, client = _adapter()
+    first = _spec()
+    second = replace(first, device_id=named_device_instance_id("device-2"))
+    specs = (first, second)
+    input_id = first.device_id
+    if invalid == "one":
+        specs = (first,)
+    elif invalid == "duplicate":
+        specs = (first, first)
+    elif invalid == "other_owner":
+        specs = (first, replace(second, owner_id="other"))
+    else:
+        input_id = "absent"
+    with pytest.raises(ValueError):
+        await adapter.open_shared(specs, input_device_id=input_id, issued_at_ms=1)
+    assert client.room.created == []
+
+
+async def test_shared_does_not_enable_disallowed_input_or_camera() -> None:
+    adapter, _ = _adapter()
+    from eidolon.channel_provider.spec import MediaFlow
+    first = replace(_spec(), audio=MediaFlow.SUBSCRIBE, video=MediaFlow.PUBLISH)
+    second = replace(_spec(), device_id=named_device_instance_id("device-2"))
+    grants = await adapter.open_shared(
+        (first, second), input_device_id=first.device_id, issued_at_ms=1
+    )
+    for grant in grants.values():
+        claims = _claims(json.loads(grant.payload)["session"]["token"])
+        assert claims["video"]["canPublish"] is False
+    # Temporary narrowing must never mutate the original device specification.
+    assert second.audio.publishes is True
+    assert first.video is MediaFlow.PUBLISH
+
+
+async def test_shared_token_failure_does_not_leave_a_room(monkeypatch) -> None:
+    adapter, client = _adapter()
+    first = _spec()
+    second = replace(first, device_id=named_device_instance_id("device-2"))
+    token = adapter._token
+    def failing_token(room, spec, *, ttl_seconds):
+        if spec.device_id == second.device_id:
+            raise RuntimeError("signing unavailable")
+        return token(room, spec, ttl_seconds=ttl_seconds)
+    monkeypatch.setattr(adapter, "_token", failing_token)
+    with pytest.raises(RuntimeError, match="signing unavailable"):
+        await adapter.open_shared(
+            (first, second), input_device_id=first.device_id, issued_at_ms=1
+        )
+    assert client.room.created == []
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_shared_uncertain_creation_reclaims_only_its_attempt(monkeypatch, cancelled) -> None:
+    adapter, client = _adapter()
+    first = _spec()
+    original = await adapter.open(first, issued_at_ms=1)
+    second = replace(first, device_id=named_device_instance_id("device-2"))
+    async def uncertain_create(request):
+        client.room.created.append(request)
+        if cancelled:
+            raise asyncio.CancelledError()
+        raise RuntimeError("response lost after create")
+    monkeypatch.setattr(client.room, "create_room", uncertain_create)
+    from eidolon.channel_provider.contracts import BackendUnavailable
+    with pytest.raises(asyncio.CancelledError if cancelled else BackendUnavailable):
+        await adapter.open_shared(
+            (first, second), input_device_id=first.device_id, issued_at_ms=2
+        )
+    assert client.room.deleted == [client.room.created[-1].name]
+    assert original.handle["room"] not in client.room.deleted
+    assert client.agent_dispatch.created == []
+
+
+async def test_shared_cannot_accidentally_dispatch_single_device_agent() -> None:
+    adapter, client = _adapter()
+    first = _spec()
+    second = replace(first, device_id=named_device_instance_id("device-2"))
+    grants = await adapter.open_shared(
+        (first, second), input_device_id=first.device_id, issued_at_ms=1
+    )
+    with pytest.raises(ChannelNotServable):
+        await adapter.open_session(
+            grants[first.device_id].handle, "shared-conversation",
+            session_intent=SESSION_INTENT_USER_INITIATED,
+        )
+    assert client.agent_dispatch.created == []

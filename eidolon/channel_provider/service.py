@@ -516,9 +516,20 @@ class ChannelProviderService:
         scope.cleanup = cleanup
         try:
             async with asyncio.timeout(25):
-                present = await asyncio.gather(*(self._read_channel_presence(r) for r in records))
-                if not all(value is True for value in present):
-                    raise InvalidTransition("every selected device must be reachable before invitation")
+                # Deleting the previous temporary room starts device recovery;
+                # it does not mean the standing control channel is already back.
+                # Observe readiness within the same bounded admission operation.
+                recovery_deadline = self._now_ms() + 20000
+                while True:
+                    present = await asyncio.gather(*(self._read_channel_presence(r) for r in records))
+                    async with self._lock:
+                        if current_records() != records:
+                            raise InvalidTransition("selected channels changed during control recovery")
+                    if all(value is True for value in present):
+                        break
+                    if self._now_ms() >= recovery_deadline:
+                        raise InvalidTransition("selected devices did not become reachable before invitation")
+                    await asyncio.sleep(0.1)
                 async with self._lock:
                     if current_records() != records:
                         raise InvalidTransition("selected channels changed before shared creation")

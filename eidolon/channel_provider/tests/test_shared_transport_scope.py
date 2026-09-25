@@ -19,8 +19,11 @@ from .test_service import _service
 
 @pytest.mark.parametrize("presence", [False, None])
 async def test_unreachable_member_refuses_before_creating_room(tmp_path, presence):
-    service, _, adapter, _, selected, requests = await setup(tmp_path)
-    adapter.on_channel = presence
+    service, _, adapter, clock, selected, requests = await setup(tmp_path)
+    async def unavailable(handle):
+        clock[0] += 21000
+        return presence
+    adapter.device_is_on_channel = unavailable
     with pytest.raises(InvalidTransition, match="reachable"):
         async with service.shared_transport(selected, requests, authenticated_owner_id="owner_1"):
             pytest.fail("must not invite unreachable members")
@@ -342,3 +345,31 @@ async def test_current_specifications_use_provider_ledger_and_reject_tampering(t
             ):
                 pytest.fail("tampered specification admitted")
         assert not adapter.shared_created
+
+
+async def test_recovering_control_room_is_observed_before_new_invitation(tmp_path):
+    service, _, adapter, _, selection, requests = await setup(tmp_path)
+    restored = asyncio.Event()
+    observed = asyncio.Event()
+    async def presence(handle):
+        if handle.get("resource") == "temporary":
+            return True
+        observed.set()
+        return restored.is_set()
+    adapter.device_is_on_channel = presence
+    async def visit():
+        async with service.shared_transport(selection, requests, authenticated_owner_id="owner_1"):
+            return True
+    task = asyncio.create_task(visit())
+    await observed.wait()
+    await asyncio.sleep(0)
+    try:
+        assert not task.done()
+        assert not adapter.shared_created and not adapter.invites
+        restored.set()
+        assert await asyncio.wait_for(task, 1)
+        assert len(adapter.shared_created) == 1 and len(adapter.invites) == 2
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

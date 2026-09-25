@@ -470,6 +470,7 @@ class LiveKitChannelAdapter:
                 )
                 return await future
         except TimeoutError as exc:
+            logger.warning("shared invitation receipt timed out room=%s device=%s", room, device)
             raise BackendUnavailable("invitation receipt timed out") from exc
         except asyncio.CancelledError:
             raise
@@ -501,7 +502,9 @@ class LiveKitChannelAdapter:
             return
         future = self._invitation_receipts.get((room, body["ref"]))
         if future is not None and not future.done():
-            future.set_result(command_status_from_ack(body["status"]))
+            status = command_status_from_ack(body["status"])
+            logger.info("shared invitation receipt room=%s device=%s status=%s", room, device, status)
+            future.set_result(status)
 
     def _fail_invitation_delivery(self, room: str) -> None:
         for (pending_room, _), future in self._invitation_receipts.items():

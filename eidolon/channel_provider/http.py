@@ -217,8 +217,14 @@ def create_app(
         except (ValidationError, ContractError):
             return _contract_problem("invalid shared session command", status=422)
         except DomainError as exc:
+            # Domain messages are authored by this service, never request bodies
+            # or transport credentials. Keep the exact refusal at its boundary.
+            logger.warning("shared action=%s code=%s detail=%s",
+                           request.match_info["action"], exc.code, str(exc))
             return _problem(exc)
         except TimeoutError:
+            logger.warning("shared action=%s admission deadline elapsed",
+                           request.match_info["action"])
             return _problem_body(code="PROVIDER_UNAVAILABLE", category="unavailable", retryable=True,
                                  status=503, detail="shared admission deadline elapsed")
 

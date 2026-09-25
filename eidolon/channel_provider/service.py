@@ -306,6 +306,41 @@ class ChannelProviderService:
             await scope.cleanup()
 
     @asynccontextmanager
+    async def shared_transport_from_specifications(
+        self, selection: SharedSessionSelection, specifications: tuple[dict, ...],
+        *, authenticated_owner_id: str,
+    ):
+        # Operation identity belongs to this ledger, never to a business caller.
+        # The existing scope revalidates these records and specification hashes
+        # under its lock before allocating any transport resources.
+        by_ref = {ref.device_instance_id: ref for ref in selection.devices}
+        requests = []
+        async with self._lock:
+            for specification in specifications:
+                if not isinstance(specification, dict) or set(specification) != {"device_ref", "device"}:
+                    raise InvalidTransition("invalid specification fields")
+                ref_value = specification["device_ref"]
+                if not isinstance(ref_value, dict) or not isinstance(ref_value.get("device_instance_id"), str):
+                    raise InvalidTransition("invalid specification DeviceRef")
+                ref = by_ref.get(ref_value.get("device_instance_id"))
+                if ref is None or ref.model_dump(mode="json") != ref_value:
+                    raise InvalidTransition("specification is outside selected lifecycle")
+                stored = self._store.active_device(ref)
+                if stored is None:
+                    raise UnknownChannel("selected device has no current channel")
+                if stored.owner_id != authenticated_owner_id:
+                    raise Forbidden("selected device belongs to another Owner")
+                requests.append(ProvisionRequest.parse(json.dumps({
+                    "operation": stored.operation_kind,
+                    "operation_id": stored.operation_id,
+                    **specification,
+                }).encode()))
+        async with self.shared_transport(
+            selection, tuple(requests), authenticated_owner_id=authenticated_owner_id,
+        ) as ready:
+            yield ready
+
+    @asynccontextmanager
     async def shared_transport(
         self, selection: SharedSessionSelection, provisions: tuple[ProvisionRequest, ...],
         *, authenticated_owner_id: str,

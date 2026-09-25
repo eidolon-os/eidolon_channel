@@ -21,11 +21,11 @@ async def client_scope(tmp_path):
         raw = provision_payload(device_id=request.device_id)
         raw["operation_id"] = request.operation_id
         raw["device_ref"] = request.device_ref.model_dump(mode="json")
-        payloads.append(raw)
+        payloads.append({k: raw[k] for k in ("device_ref", "device")})
     body = {
         "owner_id": "owner_1",
         "selection": selection.model_dump(mode="json"),
-        "provisions": payloads,
+        "specifications": payloads,
     }
     async with TestClient(TestServer(create_app(service=service, bearer_token=TOKEN))) as client:
         yield client, service, adapter, body
@@ -116,3 +116,21 @@ async def test_failed_cleanup_does_not_report_closed(tmp_path):
             assert (await ws.receive_json(timeout=1))["code"] == "PROVIDER_UNAVAILABLE"
             assert service._shared_scopes
         adapter.close = original
+
+
+@pytest.mark.parametrize("mutation", ["operation", "manifest", "duplicate", "bad_ref"])
+async def test_specification_cannot_override_ledger_or_selected_device(tmp_path, mutation):
+    async with client_scope(tmp_path) as (client, _, adapter, body):
+        specs = body["specifications"]
+        if mutation == "operation":
+            specs[0]["operation_id"] = "forged"
+        elif mutation == "manifest":
+            specs[0]["device"]["display_name"] = "changed-without-current-provision"
+        elif mutation == "duplicate":
+            specs[1] = specs[0]
+        else:
+            specs[0]["device_ref"]["device_instance_id"] = []
+        async with await connect(client) as ws:
+            await ws.send_json(body)
+            assert (await ws.receive_json(timeout=1))["state"] == "error"
+        assert not adapter.shared_created

@@ -14,19 +14,27 @@ from aiohttp import WSMsgType, web
 from pydantic import ValidationError
 from eidolon_sdk.biz.control.shared_session import SharedSessionSelection
 
-from .contracts import ContractError, DomainError, ProvisionRequest
+from .contracts import ContractError, DomainError
 
 
 def parse_start(value):
-    if not isinstance(value, dict) or set(value) != {"selection", "owner_id", "provisions"}:
+    if not isinstance(value, dict) or set(value) != {"selection", "owner_id", "specifications"}:
         raise ValueError("invalid start fields")
     if not isinstance(value["owner_id"], str) or not value["owner_id"].strip():
         raise ValueError("Owner required")
-    if not isinstance(value["provisions"], list) or not 2 <= len(value["provisions"]) <= 16:
-        raise ValueError("complete provision set required")
+    specifications = value["specifications"]
+    if not isinstance(specifications, list) or not 2 <= len(specifications) <= 16:
+        raise ValueError("complete specification set required")
+    for spec in specifications:
+        if (
+            not isinstance(spec, dict)
+            or set(spec) != {"device_ref", "device"}
+            or not isinstance(spec["device_ref"], dict)
+            or not isinstance(spec["device"], dict)
+        ):
+            raise ValueError("invalid specification fields")
     selection = SharedSessionSelection.model_validate(value["selection"])
-    provisions = tuple(ProvisionRequest.parse(json.dumps(p).encode()) for p in value["provisions"])
-    return selection, provisions, value["owner_id"]
+    return selection, tuple(specifications), value["owner_id"]
 
 
 async def shared_transport_socket(request, service):
@@ -42,7 +50,7 @@ async def shared_transport_socket(request, service):
         selection, provisions, owner = parse_start(json.loads(first.data))
 
         async def visit():
-            async with service.shared_transport(
+            async with service.shared_transport_from_specifications(
                 selection,
                 provisions,
                 authenticated_owner_id=owner,

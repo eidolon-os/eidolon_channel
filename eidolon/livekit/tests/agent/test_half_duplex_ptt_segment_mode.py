@@ -967,3 +967,26 @@ async def test_pipeline_ptt_press_during_output_interrupts_and_stops_playback() 
     local = pipeline._room.local_participant
     ops = [payload.get("op") for _, payload in local.published]
     assert "playback.stop" in ops
+
+
+async def test_ptt_room_io_links_device_even_when_provider_arrives_first():
+    from livekit import rtc
+    from livekit.agents.voice.room_io.room_io import RoomIO
+    from eidolon.livekit.agent.runtime.resolver import wait_for_runtime_participant_identity
+
+    provider = SimpleNamespace(identity="channel-provider-ptt", metadata="",
+        permissions=SimpleNamespace(can_publish=False), attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD)
+    device = SimpleNamespace(identity="device-ptt", metadata='{"kind":"device"}',
+        permissions=SimpleNamespace(can_publish=True), attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD)
+    room = SimpleNamespace(isconnected=lambda: True, remote_participants={"provider": provider, "device": device},
+        local_participant=SimpleNamespace(identity="agent"))
+    linked = []
+    pipeline = _segment_pipeline(_FakeSttStage())
+    identity = await wait_for_runtime_participant_identity(room)
+    io = RoomIO(SimpleNamespace(_on_room_io_participant_linked=linked.append), room,
+                options=pipeline._build_room_options(identity))
+    io._on_participant_connected(provider)
+    io._on_participant_connected(device)
+    assert linked == [device]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import rfc8785
@@ -285,7 +285,7 @@ class ProvisionRequest:
                 maximum=96,
             ),
         )
-        return cls(
+        request = cls(
             operation=root["operation"],
             operation_id=_text(root["operation_id"], name="operation_id", maximum=128),
             device_ref=device_ref,
@@ -299,15 +299,35 @@ class ProvisionRequest:
             # deliveries of the same pending operation is answered
             # IdempotencyConflict, which is terminal — it would lose its
             # channel over an address that was only ever a preference.
-            fingerprint=request_fingerprint(
-                {key: item for key, item in value.items() if key != OBSERVED_HOST_ADDRESS}
-            ),
+            fingerprint="",
             observed_host_address=(
                 _observed_host_address(root[OBSERVED_HOST_ADDRESS])
                 if OBSERVED_HOST_ADDRESS in root
                 else ""
             ),
         )
+
+        return replace(request, fingerprint=request.content_fingerprint())
+
+    def content_fingerprint(self) -> str:
+        """Canonical provision content, also used when revalidating a spec.
+
+        Re-read mutable nested data instead of trusting a copied fingerprint.
+        Network observations remain outside the persisted operation identity.
+        """
+        device = self.device
+        return request_fingerprint({
+            "operation": self.operation,
+            "operation_id": self.operation_id,
+            "device_ref": self.device_ref.model_dump(mode="json"),
+            "device": {
+                "owner_id": str(device.owner_id), "display_name": device.display_name,
+                "device_kind": device.manifest_id, "manifest": device.manifest,
+                "manifest_revision": device.manifest_revision,
+                **({"output_policy": device.output_policy.model_dump(mode="json", exclude_unset=True)}
+                   if device.output_policy is not None else {}),
+            },
+        })
 
     @property
     def owner_domain_id(self) -> str:

@@ -153,7 +153,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             outputs=self._factory.outputs,
         )
 
-    def _build_room_options(self) -> Any:
+    def _build_room_options(self, participant_identity: str | None = None) -> Any:
         """Open only the tracks this session's output selection allows.
 
         A silent session must not open an audio output track at all: suppressing
@@ -167,6 +167,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         # PTT feeds captured audio in explicitly; the room never opens an input.
         return RoomOptions(
             audio_input=False,
+            participant_identity=participant_identity,
             text_input=TextInputOptions(text_input_cb=accept_text_input),
             audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
                           if (self._factory.outputs.speech or self._factory.outputs.audio_cue) else False),
@@ -249,11 +250,13 @@ class HalfDuplexPttPipeline(BasePipeline):
 
     async def run(self, room: Room) -> None:
         from livekit.agents.voice import AgentSession
+        from ..runtime.resolver import wait_for_runtime_participant_identity
 
         logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
         self._room = room
         self._started = True
         self.session_mark("room_joined")
+        participant_identity = await wait_for_runtime_participant_identity(room)
         await self._open_ptt_session_trace(room)
         self._install_room_observers(room)
         await self._warmup_stages()
@@ -266,7 +269,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         await session.start(
             agent=self._build_agent(),
             room=room,
-            room_options=self._build_room_options(),
+            room_options=self._build_room_options(participant_identity),
         )
         self.session_mark("session_started")
         if self._on_session_started is not None:

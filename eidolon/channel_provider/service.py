@@ -22,7 +22,6 @@ from uuid import uuid4
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
-    SharedChannelSnapshot,
     SharedSessionSelection,
 )
 
@@ -459,19 +458,7 @@ class ChannelProviderService:
                 if stored.owner_id != authenticated_owner_id:
                     raise Forbidden("selected device belongs to another Owner")
                 request = by_id[ref.device_instance_id]
-                device = request.device
-                # Recompute from the actual specification, not the caller's
-                # fingerprint attribute. Nested manifests are mutable Python data.
-                wire = {
-                    "operation": request.operation, "operation_id": request.operation_id,
-                    "device_ref": request.device_ref.model_dump(mode="json"),
-                    "device": {"owner_id": str(device.owner_id), "display_name": device.display_name,
-                               "device_kind": device.manifest_id, "manifest": device.manifest,
-                               "manifest_revision": device.manifest_revision,
-                               **({"output_policy": device.output_policy.model_dump(mode="json", exclude_unset=True)}
-                                  if device.output_policy is not None else {})},
-                }
-                if request_fingerprint(wire) != stored.request_fingerprint:
+                if request.content_fingerprint() != stored.request_fingerprint:
                     raise IdempotencyConflict("specification differs from the current provision")
                 self._require_same_provision(stored, request)
                 if request.operation_id != stored.operation_id:
@@ -587,57 +574,6 @@ class ChannelProviderService:
                        "device_ids": list(device_ids)}
         finally:
             await cleanup()
-
-    async def inspect_shared_selection(
-        self,
-        request: SharedSessionSelection,
-        *,
-        authenticated_owner_id: str,
-    ) -> tuple[SharedChannelSnapshot, ...]:
-        """Observe selected lifecycle records without granting room admission.
-
-        The caller supplies the authenticated business Owner separately from
-        the selection. Invitation must revalidate authority, binding, capability
-        and presence; these credential-free observations reserve no resources.
-        """
-        if not authenticated_owner_id:
-            raise Forbidden("authenticated Owner is required")
-
-        def current_records() -> tuple[StoredProvision, ...]:
-            now = self._now_ms()
-            records = []
-            for ref in request.devices:
-                stored = self._store.active_device(ref)
-                if stored is None or stored.expires_at_ms <= now:
-                    raise UnknownChannel("selected device has no current channel")
-                if stored.owner_id != authenticated_owner_id:
-                    raise Forbidden("selected device belongs to another Owner")
-                records.append(stored)
-            return tuple(records)
-
-        async with self._lock:
-            records = current_records()
-
-        async def observe(stored: StoredProvision) -> tuple[bool | None, int]:
-            present = await self._read_channel_presence(stored)
-            return present, self._now_ms()
-
-        # The bounded selection probes concurrently, outside the lifecycle lock.
-        observations = await asyncio.gather(*(observe(record) for record in records))
-        async with self._lock:
-            if current_records() != records:
-                raise InvalidTransition("selected channels changed during inspection; retry")
-            return tuple(
-                SharedChannelSnapshot(
-                    device_ref=stored.device_ref,
-                    channel_id=stored.channel_id,
-                    manifest_revision=stored.manifest_revision,
-                    expires_at_ms=stored.expires_at_ms,
-                    on_channel=present,
-                    observed_at_ms=observed_at,
-                )
-                for stored, (present, observed_at) in zip(records, observations, strict=True)
-            )
 
     async def _read_channel_presence(self, stored: StoredProvision) -> bool | None:
         adapter = self._registry.get(stored.adapter_name)

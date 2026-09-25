@@ -1393,7 +1393,10 @@ async def test_start_conflict_sends_targeted_rejection_without_closing_any_sessi
     adapter._listeners['room'] = watch
     adapter._dispatch_request(reject, ServingRequest(action=ServingAction.START, conversation_id='incoming'), room='room')
     await asyncio.gather(*adapter._requests)
-    assert sent == [({'schema_v': 1, 'type': 'session_rejected', 'conversation_id': 'incoming', 'reason': 'conflict'},
+    from pathlib import Path
+    vector = json.loads((Path(__file__).resolve().parents[4] / "eidolon_sdk/contracts/control/v1/golden/session-rejected.json").read_text())
+    expected = {**vector["payload"], "conversation_id": "incoming"}
+    assert sent == [(expected,
                     {'reliable': True, 'topic': SESSION_CONTROL_TOPIC, 'destination_identities': [_DEVICE_1]})]
     assert client.agent_dispatch.deleted == []
     adapter._listeners.clear()

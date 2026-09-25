@@ -29,6 +29,7 @@ from eidolon_sdk.biz.control.shared_session import SharedSessionInvitation
 from eidolon_sdk.biz.control.protocol import command_status_from_ack
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
 from eidolon_sdk.biz.contracts import (
+    CHANNEL_PROVIDER_IDENTITY_PREFIX,
     CONTROL_TOPIC,
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
@@ -1003,7 +1004,7 @@ class LiveKitChannelAdapter:
     def _listener_token(self, room: str) -> str:
         return (
             api.AccessToken(self._config.api_key, self._config.api_secret)
-            .with_identity(f"channel-provider-{room}")
+            .with_identity(f"{CHANNEL_PROVIDER_IDENTITY_PREFIX}{room}")
             .with_grants(
                 api.VideoGrants(
                     room_join=True,

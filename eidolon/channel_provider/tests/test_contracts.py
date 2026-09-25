@@ -208,3 +208,15 @@ def test_open_session_rejects_invalid_temporary_target(target):
     value['target_companion_id'] = target
     with pytest.raises(ContractError):
         SessionRequest.parse(encoded(value), expected=OPEN_SESSION)
+
+
+@pytest.mark.parametrize("policy", [None, {"revision": 1, "allowed": {"speech": True}}])
+def test_provision_revalidation_preserves_persisted_fingerprint(policy):
+    from eidolon.channel_provider.contracts import request_fingerprint
+    payload = provision_payload()
+    if policy is not None:
+        payload["device"]["output_policy"] = policy
+    request = ProvisionRequest.parse(encoded(payload))
+    assert request.content_fingerprint() == request.fingerprint == request_fingerprint(payload)
+    request.device.manifest["title"] = "changed after validation"
+    assert request.content_fingerprint() != request.fingerprint

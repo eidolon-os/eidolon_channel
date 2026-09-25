@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
@@ -642,3 +643,24 @@ async def test_service_forwards_session_target_without_changing_channel(tmp_path
     assert backend.last_target_companion_id == 'visitor'
     assert len(backend.opened) == 1
     assert backend.closed == []
+
+
+@pytest.mark.parametrize("failure", ["error", "timeout", "invalid"])
+async def test_presence_keeps_unobservable_devices_unknown(tmp_path, monkeypatch, failure):
+    # This is the production presence read; the removed shared preview must not
+    # be the only place testing the common probe's failure semantics.
+    service, _, adapter = _service(tmp_path, [1700000000000])
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    monkeypatch.setattr("eidolon.channel_provider.service.PRESENCE_READ_TIMEOUT_SECONDS", 0.01)
+
+    async def read(handle):
+        if failure == "error":
+            raise OSError("unreachable")
+        if failure == "timeout":
+            await asyncio.Event().wait()
+        return "true"
+
+    adapter.device_is_on_channel = read
+    rows = json.loads(await service.presence())["bodies"]
+    assert len(rows) == 1 and rows[0]["on_channel"] is None
+    assert adapter.sessions_opened == []

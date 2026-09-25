@@ -23,6 +23,7 @@ from .contracts import (
 )
 from .service import ChannelProviderService
 from .session_traces import SessionTraceReader, TraceQuery
+from .shared_transport_http import shared_transport_socket
 
 logger = logging.getLogger("eidolon.channel_provider.http")
 
@@ -192,6 +193,12 @@ def create_app(
 
     app.router.add_post("/v1/device-channels/sessions/open", open_session)
     app.router.add_post("/v1/device-channels/sessions/close", close_session)
+    async def shared_transport(request: web.Request) -> web.StreamResponse:
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        return await shared_transport_socket(request, service)
+
+    app.router.add_get("/v1/shared-transports", shared_transport)
     app.on_cleanup.append(close)
     return app
 

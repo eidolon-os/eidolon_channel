@@ -345,10 +345,13 @@ class ChannelProviderService:
 
         async with self._lock:
             self._store.expire_credentials(self._now_ms())
-            active = self._store.active_provisions()
+            active = self._store.observable_provisions()
         bodies = []
         for stored in active:
             on_channel = await self._read_channel_presence(stored)
+            async with self._lock:
+                if self._store.current_channel(stored.device_ref) != stored:
+                    continue  # A retired handle cannot speak for a new lifecycle.
             bodies.append(
                 {
                     # The device's stable instance id, which is what a body is

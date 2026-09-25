@@ -525,6 +525,44 @@ async def test_presence_says_nothing_about_a_revoked_body(tmp_path) -> None:
     assert answer["bodies"] == []
 
 
+async def test_presence_still_observes_a_channel_after_credential_expiry(tmp_path):
+    clock = [1_000]
+    service, store, backend = _service(tmp_path, clock)
+    backend.on_channel = True
+    request = ProvisionRequest.parse(encoded(provision_payload(device_id=_DEVICE_1)))
+    await service.provision(request)
+    clock[0] += 1_800_001
+    answer = json.loads(await service.presence())
+    assert answer["bodies"][0]["on_channel"] is True
+    assert store.active_device(request.device_ref) is None
+    assert backend.sessions_opened == []
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload(device_id=_DEVICE_1))))
+    assert json.loads(await service.presence())["bodies"] == []
+
+
+@pytest.mark.parametrize("change", ["revoke", "refresh"])
+async def test_presence_discards_a_retired_handle_during_observation(tmp_path, change):
+    clock = [1_000]
+    service, _, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload(device_id=_DEVICE_1))))
+
+    async def observe(handle):
+        if change == "revoke":
+            await service.revoke(RevokeRequest.parse(encoded(revoke_payload(device_id=_DEVICE_1))))
+        else:
+            payload = provision_payload(device_id=_DEVICE_1, manifest_revision="sha256:manifest-2")
+            payload.update(operation="channel.refresh-device", operation_id="refresh-observed")
+            await service.provision(ProvisionRequest.parse(encoded(payload)))
+        return True
+
+    backend.device_is_on_channel = observe
+    assert json.loads(await service.presence())["bodies"] == []
+    backend.device_is_on_channel = FakeAdapter.device_is_on_channel.__get__(backend)
+    backend.on_channel = True
+    rows = json.loads(await service.presence())["bodies"]
+    assert len(rows) == (1 if change == "refresh" else 0)
+
+
 async def test_stale_routes_request_refresh_without_forging_expiry_or_provision(tmp_path, monkeypatch):
     clock = [1_700_000_000_000]
     service, store, backend = _service(tmp_path, clock)

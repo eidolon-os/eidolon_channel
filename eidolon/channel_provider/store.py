@@ -275,6 +275,18 @@ class ChannelProviderStore:
             ).fetchall()
         return [item for item in map(self._stored, rows) if item is not None]
 
+    def observable_provisions(self) -> list[StoredProvision]:
+        """Current channels, including expired grants; never execution authority.
+
+        Expiry ends permission to use a grant, not evidence of a connection.
+        Refresh and revocation fence these rows and remove their handles.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM provider_operations WHERE status IN ('active','expired')"
+            ).fetchall()
+        return [item for item in map(self._stored, rows) if item is not None]
+
     def create_provision(
         self, value: StoredProvision, *, now_ms: int,
         runtime_refresh_of: StoredProvision | None = None,

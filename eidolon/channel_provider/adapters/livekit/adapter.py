@@ -14,6 +14,8 @@ import logging
 import socket
 import time
 import ipaddress
+from ...shared_invitation import SHARED_VISIT_MAX_SECONDS
+
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -330,11 +332,13 @@ class LiveKitChannelAdapter:
 
     def _grant(
         self, spec: ChannelSpec, *, room: str, urls: list[str], issued_at_ms: int,
-        observed_host_address: str = "",
+        observed_host_address: str = "", ttl_limit_seconds: int | None = None,
     ) -> ChannelGrant:
         """Encode both standing and temporary bindings through the same codec."""
         offered = _observed_first(urls, observed_host_address)
         ttl = self._config.grant_ttl_seconds
+        if ttl_limit_seconds is not None:
+            ttl = min(ttl, ttl_limit_seconds)
         payload = canonical_json(
             {
                 "schema_version": 2,
@@ -417,7 +421,8 @@ class LiveKitChannelAdapter:
             if spec.device_id != input_device_id:
                 audio = MediaFlow.SUBSCRIBE if audio.subscribes else MediaFlow.NONE
             narrowed = replace(spec, audio=audio, video=MediaFlow.NONE)
-            grant = self._grant(narrowed, room=room, urls=urls, issued_at_ms=issued_at_ms)
+            grant = self._grant(narrowed, room=room, urls=urls, issued_at_ms=issued_at_ms,
+                                ttl_limit_seconds=SHARED_VISIT_MAX_SECONDS)
             # A shared room cannot enter the original per-device dispatch or
             # live input-policy update path. Team orchestration owns those steps.
             for key in ("agent", "input_revision", "input_permissions"):

@@ -13,6 +13,9 @@ from eidolon_sdk.device_foundation.v1 import DeviceRef
 from .ports import ChannelGrant
 
 
+SHARED_VISIT_MAX_SECONDS = 120
+
+
 def invitation_command(
     grant: ChannelGrant, *, device_ref: DeviceRef, session_id: str,
     command_id: str, channel_id: str, kinds: tuple[str, ...],

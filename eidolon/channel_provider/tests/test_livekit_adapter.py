@@ -1557,3 +1557,18 @@ async def test_shared_cannot_accidentally_dispatch_single_device_agent() -> None
             session_intent=SESSION_INTENT_USER_INITIATED,
         )
     assert client.agent_dispatch.created == []
+
+
+async def test_shared_binding_and_token_expire_with_server_visit_bound() -> None:
+    from eidolon.channel_provider.shared_invitation import SHARED_VISIT_MAX_SECONDS
+    adapter, _ = _adapter()
+    first = _spec()
+    second = replace(first, device_id=named_device_instance_id("device-2"))
+    issued = 1000
+    grants = await adapter.open_shared((first, second), input_device_id=first.device_id,
+                                      issued_at_ms=issued)
+    for grant in grants.values():
+        assert grant.expires_at_ms - issued <= SHARED_VISIT_MAX_SECONDS * 1000
+        token = json.loads(grant.payload)["session"]["token"]
+        claims = _claims(token)
+        assert claims["exp"] - claims["nbf"] <= SHARED_VISIT_MAX_SECONDS

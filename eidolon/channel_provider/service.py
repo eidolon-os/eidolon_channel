@@ -40,7 +40,7 @@ from .contracts import (
     request_fingerprint,
 )
 from .shared_admission import SharedAdmission
-from .shared_invitation import invitation_command
+from .shared_invitation import invitation_command, SHARED_VISIT_MAX_SECONDS
 from .ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
 from .spec import ChannelSpec, MediaFlow, derive_spec
@@ -570,7 +570,7 @@ class ChannelProviderService:
                     await asyncio.sleep(0.1)
             # Bound the scope even if a consumer forgets to finish a visit. The
             # device enforces its own credential lease if this process crashes.
-            remaining = min(120, (min(g.expires_at_ms for g in grants.values()) - self._now_ms()) / 1000)
+            remaining = min(SHARED_VISIT_MAX_SECONDS, (min(g.expires_at_ms for g in grants.values()) - self._now_ms()) / 1000)
             async with asyncio.timeout(max(0, remaining)):
                 yield {"session_id": selection.session_id, "state": "transport_ready",
                        "device_ids": list(device_ids)}

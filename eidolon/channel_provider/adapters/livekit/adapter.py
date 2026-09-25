@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import socket
+import time
 import ipaddress
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -22,8 +23,11 @@ from uuid import uuid4
 import psutil
 from urllib.parse import urlparse, urlunparse
 
+from eidolon_sdk.biz.control.shared_session import SharedSessionInvitation
+from eidolon_sdk.biz.control.protocol import command_status_from_ack
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
 from eidolon_sdk.biz.contracts import (
+    CONTROL_TOPIC,
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
@@ -230,6 +234,7 @@ class LiveKitChannelAdapter:
         self._input_locks: dict[str, asyncio.Lock] = {}
         self._input_revisions: dict[str, int] = {}
         self._input_applied: dict[str, int] = {}
+        self._invitation_receipts: dict[tuple[str, str], asyncio.Future[str]] = {}
 
     @property
     def name(self) -> str:
@@ -431,6 +436,78 @@ class LiveKitChannelAdapter:
             raise
         return grants
 
+    async def deliver_shared_invitation(
+        self, handle: dict[str, Any], invitation: SharedSessionInvitation, *, command_id: str,
+    ) -> str:
+        """Send on the device's standing channel and await its first receipt.
+
+        The caller has already checked Owner/DeviceRef authority. This is a
+        bounded transport exchange, not a durable queue or an admission grant.
+        In particular, accepted does not mean the device joined the new room.
+        """
+        room = str(handle.get("room") or "")
+        device = invitation.device_ref.device_instance_id
+        watch = self._listeners.get(room)
+        if handle.get("device") != device:
+            raise InvalidTransition("invitation target does not match channel")
+        if watch is None or watch.device != device or watch.connection is None:
+            raise BackendUnavailable("device control channel is not connected")
+        now_ms = int(time.time() * 1000)
+        remaining = (invitation.deadline_ms - now_ms) / 1000
+        if remaining <= 0 or invitation.channel.issued_at_ms > now_ms:
+            raise InvalidTransition("invitation is outside its delivery window")
+        command = invitation.command(command_id=command_id)
+        key = (room, command_id)
+        if any(pending_room == room for pending_room, _ in self._invitation_receipts):
+            raise InvalidTransition("device already has an invitation delivery in flight")
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._invitation_receipts[key] = future
+        try:
+            async with asyncio.timeout(min(remaining, 30.0)):
+                await watch.connection.local_participant.publish_data(
+                    canonical_json(command).encode(), reliable=True, topic=CONTROL_TOPIC,
+                    destination_identities=[device],
+                )
+                return await future
+        except TimeoutError as exc:
+            raise BackendUnavailable("invitation receipt timed out") from exc
+        except asyncio.CancelledError:
+            raise
+        except BackendUnavailable:
+            raise
+        except Exception as exc:
+            raise BackendUnavailable("invitation delivery failed") from exc
+        finally:
+            self._invitation_receipts.pop(key, None)
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()  # Retrieve a disconnect failure even if publish failed first.
+
+    def _invitation_receipt(self, packet: Any, *, room: str, device: str) -> None:
+        if (getattr(packet, "topic", None) != CONTROL_TOPIC
+                or getattr(getattr(packet, "participant", None), "identity", None) != device):
+            return
+        try:
+            body = json.loads(bytes(packet.data))
+        except (TypeError, ValueError, UnicodeDecodeError):
+            return
+        if (not isinstance(body, dict) or type(body.get("v")) is not int or body["v"] != 1
+                or body.get("kind") not in ("ack", "result")
+                or body.get("op") != "shared-session.invite"
+                or body.get("device_id") != device
+                or not isinstance(body.get("ref"), str)
+                or not isinstance(body.get("status"), str)):
+            return
+        future = self._invitation_receipts.get((room, body["ref"]))
+        if future is not None and not future.done():
+            future.set_result(command_status_from_ack(body["status"]))
+
+    def _fail_invitation_delivery(self, room: str) -> None:
+        for (pending_room, _), future in self._invitation_receipts.items():
+            if pending_room == room and not future.done():
+                future.set_exception(BackendUnavailable("invitation control channel disconnected"))
+
     async def close(self, handle: dict[str, Any]) -> None:
         room = handle.get("room")
         if not room:
@@ -561,6 +638,8 @@ class LiveKitChannelAdapter:
 
         @connection.on("data_received")
         def _received(packet: Any) -> None:
+            if self._listeners.get(room) is watch and watch.connection is connection:
+                self._invitation_receipt(packet, room=room, device=watch.device)
             self._note_serving_failure(packet, device=watch.device, room=room)
             request = self._requested(packet, device=watch.device, room=room)
             if request is not None:
@@ -573,7 +652,8 @@ class LiveKitChannelAdapter:
             # listening. Measured against a real server — a listener dropped from
             # its room does not come back on its own — so getting back in is this
             # adapter's job for as long as it has said it is carrying the channel.
-            if self._listeners.get(room) is watch:
+            if self._listeners.get(room) is watch and watch.connection is connection:
+                self._fail_invitation_delivery(room)
                 self._rejoin_later(room, watch, reason)
 
         try:
@@ -759,7 +839,9 @@ class LiveKitChannelAdapter:
     async def stop_accepting(self, handle: dict[str, Any]) -> None:
         # Dropped from the registry first: the disconnect below fires the same
         # event a failure does, and this is what tells them apart.
-        watch = self._listeners.pop(str(handle.get("room") or ""), None)
+        room = str(handle.get("room") or "")
+        self._fail_invitation_delivery(room)
+        watch = self._listeners.pop(room, None)
         if watch is None:
             return
         if watch.retry is not None:

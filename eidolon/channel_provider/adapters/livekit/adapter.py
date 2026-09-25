@@ -841,6 +841,7 @@ class LiveKitChannelAdapter:
             return None
         return any(
             getattr(participant, "identity", "") == device
+            and getattr(participant, "state", None) == api.ParticipantInfo.ACTIVE
             for participant in getattr(participants, "participants", []) or []
         )
 

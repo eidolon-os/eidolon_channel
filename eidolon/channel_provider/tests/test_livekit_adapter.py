@@ -1572,3 +1572,12 @@ async def test_shared_binding_and_token_expire_with_server_visit_bound() -> None
         token = json.loads(grant.payload)["session"]["token"]
         claims = _claims(token)
         assert claims["exp"] - claims["nbf"] <= SHARED_VISIT_MAX_SECONDS
+
+
+@pytest.mark.parametrize("state, ready", [(0, False), (1, False), (2, True), (3, False)])
+async def test_channel_presence_requires_active_transport_not_just_identity(state, ready):
+    adapter, client = _adapter()
+    first = _spec()
+    grant = await adapter.open(first, issued_at_ms=1000)
+    client.room.participants = [SimpleNamespace(identity=first.device_id, state=state)]
+    assert await adapter.device_is_on_channel(grant.handle) is ready

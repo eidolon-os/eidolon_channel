@@ -374,3 +374,70 @@ def test_invalid_dispatch_target_fails_closed(target):
     from eidolon.interaction_context import InteractionContextError
     with pytest.raises(InteractionContextError, match='target_companion_id'):
         server._resolve_session_target(ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ptt", "full_duplex"])
+async def test_directed_worker_keeps_input_identity_and_starts_output_before_source(monkeypatch, mode):
+    from unittest.mock import AsyncMock, MagicMock
+    from eidolon_sdk.biz.presentation import SessionOutputPlan, InputSelection, OutputSelection
+    from eidolon.livekit.agent import full_duplex
+    from eidolon.livekit.agent.half_duplex import pipeline as manual
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
+
+    source_plan = SessionOutputPlan(session_id="source-session", policy_revision=1,
+        outputs=OutputSelection(), inputs=InputSelection(microphone=True))
+    target_plan = SessionOutputPlan(session_id="target-session", policy_revision=7,
+        outputs=OutputSelection(speech=True), inputs=InputSelection(microphone=False))
+    endpoint = PresentationEndpoint(room="target-room", participant_identity="device-b", plan=target_plan)
+    ctx = _FakeContext({}, dispatch_metadata=json.dumps({"conversation_id": "source-session",
+        "output_plan": source_plan.model_dump(mode="json"), "target_companion_id": "selected-companion",
+        "presentation_endpoint": endpoint.model_dump(mode="json")}))
+    ctx.room.name = "source-room"
+    ctx.job.id = "job-1"
+    ctx.proc = SimpleNamespace(userdata={})
+    ctx.add_shutdown_callback = MagicMock()
+    controls = []
+
+    async def source_publish(data, **kwargs):
+        controls.append(("source", json.loads(data)))
+
+    async def target_publish(data, **kwargs):
+        assert kwargs["destination_identities"] == ["device-b"]
+        controls.append(("target", json.loads(data)))
+
+    ctx.room.local_participant = SimpleNamespace(publish_data=AsyncMock(side_effect=source_publish))
+    target_room = SimpleNamespace(local_participant=SimpleNamespace(
+        publish_data=AsyncMock(side_effect=target_publish)), disconnect=AsyncMock())
+    monkeypatch.setattr(PresentationEndpoint, "connect", AsyncMock(return_value=target_room))
+    runtime_services = SimpleNamespace(resolve_room=AsyncMock())
+    build = MagicMock(return_value=SimpleNamespace(runtime_services=runtime_services))
+    monkeypatch.setattr(SharedStageFactory, "from_config", build)
+    monkeypatch.setattr(server, "_resolve_session_metadata", AsyncMock(return_value=(mode, False)))
+
+    def pipeline(factory, **kwargs):
+        assert kwargs["welcome_message"] is None
+        async def run(room, *, output_room, output_participant_identity):
+            assert room is ctx.room
+            assert output_room is target_room
+            assert output_participant_identity == "device-b"
+            await kwargs["on_session_started"]()
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setattr(manual, "HalfDuplexPttPipeline", pipeline)
+    monkeypatch.setattr(full_duplex, "StreamingPipeline", pipeline)
+    await server.run_agent(ctx, EffectiveAgentConfig())
+    assert build.call_args.kwargs["livekit_room"] is ctx.room
+    assert build.call_args.kwargs["target_companion_id"] == "selected-companion"
+    stages = build.call_args.kwargs["output_plan"]
+    assert stages.inputs == source_plan.inputs
+    assert stages.outputs == target_plan.outputs
+    assert stages.session_id == "source-session"
+    assert [(who, body["type"]) for who, body in controls] == [
+        ("target", "session_started"), ("source", "session_started"), ("target", "session_end")]
+    assert controls[0][1]["output_plan"] == target_plan.model_dump(mode="json")
+    assert controls[1][1]["output_plan"] == source_plan.model_dump(mode="json")
+    target_room.disconnect.assert_awaited_once()
+    runtime_services.resolve_room.assert_awaited_once_with(ctx.room)

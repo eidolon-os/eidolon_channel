@@ -49,6 +49,7 @@ class ServingRequest:
 
     action: ServingAction
     conversation_id: str
+    control_request_id: str | None = None
 
 
 # Called by an adapter when the device on a channel asks. Awaited, so an adapter

@@ -37,7 +37,7 @@ def invitation(device, *, now=None):
     )
 
 
-def receipt(connection, device, *, ref="invite-1", status="accepted", sender=None):
+def receipt(connection, device, *, ref="invite-1", status="accepted", sender=None, op="shared-session.invite"):
     connection.handlers["data_received"](
         SimpleNamespace(
             topic=CONTROL_TOPIC,
@@ -48,7 +48,7 @@ def receipt(connection, device, *, ref="invite-1", status="accepted", sender=Non
                     kind="ack",
                     ref=ref,
                     device_id=device,
-                    op="shared-session.invite",
+                    op=op,
                     status=status,
                 )
             ).encode(),
@@ -120,7 +120,7 @@ async def test_disconnection_fails_pending_delivery_and_releases_slot(monkeypatc
     conn.drop()
     with pytest.raises(BackendUnavailable):
         await task
-    assert not adapter._invitation_receipts
+    assert not adapter._control_receipts
     await adapter.shutdown()
 
 
@@ -146,7 +146,7 @@ async def test_cancellation_releases_slot_and_late_ack_cannot_complete_new_comma
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first
-    assert not adapter._invitation_receipts
+    assert not adapter._control_receipts
     published.clear()
     second = asyncio.create_task(
         adapter.deliver_shared_invitation(grant.handle, value, command_id="invite-2")
@@ -171,7 +171,7 @@ async def test_receipt_timeout_covers_publish_and_cleans_up(monkeypatch):
     conn.local_participant.publish_data = hanging_publish
     with pytest.raises(BackendUnavailable, match="timed out"):
         await adapter.deliver_shared_invitation(grant.handle, value, command_id="invite-1")
-    assert not adapter._invitation_receipts
+    assert not adapter._control_receipts
     await adapter.shutdown()
 
 
@@ -186,7 +186,7 @@ async def test_stop_listening_terminates_receipt_wait(monkeypatch):
     await adapter.stop_accepting(grant.handle)
     with pytest.raises(BackendUnavailable):
         await task
-    assert not adapter._invitation_receipts
+    assert not adapter._control_receipts
     await adapter.shutdown()
 
 
@@ -222,4 +222,22 @@ async def test_malformed_or_unresolved_sender_is_not_an_ack(monkeypatch):
     assert not task.done()
     receipt(conn, device)
     assert await task == "accepted"
+    await adapter.shutdown()
+
+
+async def test_room_join_waits_for_completion_and_ignores_other_operation(monkeypatch):
+    from eidolon_sdk.biz.control.protocol import build_command_envelope
+    adapter, grant, connection, sent, published = await setup(monkeypatch)
+    device = grant.handle["device"]
+    command = build_command_envelope(command_id="join", device_id=device,
+        payload={}, op="room.join")
+    task = asyncio.create_task(adapter.deliver_control(grant.handle, command, wait_for_terminal=True))
+    await asyncio.wait_for(published.wait(), 1)
+    receipt(connection, device, ref="join", op="room.join", status="accepted")
+    receipt(connection, device, ref="join", op="shared-session.invite", status="completed")
+    await asyncio.sleep(0)
+    assert not task.done()
+    receipt(connection, device, ref="join", op="room.join", status="completed")
+    assert await task == "succeeded"
+    assert not adapter._control_receipts
     await adapter.shutdown()

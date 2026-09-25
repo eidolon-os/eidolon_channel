@@ -28,7 +28,7 @@ async def test_unreachable_member_refuses_before_creating_room(tmp_path, presenc
         async with service.shared_transport(selected, requests, authenticated_owner_id="owner_1"):
             pytest.fail("must not invite unreachable members")
     assert not adapter.shared_created
-    assert not service._shared_scopes
+    assert not service._transport_scopes
 
 
 async def test_provision_replay_preserves_shared_scope_but_refresh_retires_it(tmp_path):
@@ -55,7 +55,7 @@ async def test_provision_replay_preserves_shared_scope_but_refresh_retires_it(tm
     with pytest.raises(asyncio.CancelledError):
         await task
     assert adapter.closed[0]["resource"] == "temporary"
-    assert not service._shared_scopes
+    assert not service._transport_scopes
 
 
 async def setup(tmp_path):
@@ -113,7 +113,7 @@ async def test_scope_joins_all_members_then_closes_only_temporary_transport(tmp_
     assert len(adapter.closed) == 1
     assert adapter.closed[0]["resource"] == "temporary"
     assert tuple(store.active_provisions()) == before
-    assert not service._shared_scopes
+    assert not service._transport_scopes
 
 
 @pytest.mark.parametrize("case", ["owner", "fingerprint", "missing"])
@@ -139,7 +139,7 @@ async def test_refused_invitation_closes_room_and_releases_members(tmp_path):
         async with service.shared_transport(selected, requests, authenticated_owner_id="owner_1"):
             pytest.fail("must not admit")
     assert len(adapter.closed) == 1
-    assert not service._shared_scopes
+    assert not service._transport_scopes
 
 
 async def test_cancellation_in_scope_closes_room(tmp_path):
@@ -157,7 +157,7 @@ async def test_cancellation_in_scope_closes_room(tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert len(adapter.closed) == 1
-    assert not service._shared_scopes
+    assert not service._transport_scopes
 
 
 async def test_revocation_cancels_scope_before_retiring_original_channel(tmp_path):
@@ -241,10 +241,10 @@ async def test_close_failure_keeps_reservation_until_retry_succeeds(tmp_path):
 
     with pytest.raises(BackendUnavailable):
         await asyncio.create_task(run())
-    assert service._shared_scopes
+    assert service._transport_scopes
     adapter.close = original_close
-    await service._retire_shared_scope(requests[0].device_id)
-    assert not service._shared_scopes
+    await service._retire_transport_scope(requests[0].device_id)
+    assert not service._transport_scopes
     assert len(adapter.closed) == 1
 
 
@@ -277,7 +277,7 @@ async def test_failed_send_cancels_other_send_before_room_cleanup(tmp_path):
         async with service.shared_transport(selected, requests, authenticated_owner_id="owner_1"):
             pytest.fail("must not admit")
     assert len(adapter.closed) == 1
-    assert not service._shared_scopes
+    assert not service._transport_scopes
 
 
 async def test_revocation_does_not_hold_lifecycle_lock_while_caller_unwinds(tmp_path):

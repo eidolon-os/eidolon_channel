@@ -324,6 +324,19 @@ def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
     return plan
 
 
+def _resolve_presentation_endpoint(ctx):
+    from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    raw = metadata.get("presentation_endpoint")
+    if raw is None:
+        return None
+    endpoint = PresentationEndpoint.model_validate(raw)
+    if endpoint.room == ctx.room.name:
+        raise ValueError("REMOTE_PRESENTATION_REQUIRES_DISTINCT_ROOM")
+    return endpoint
+
+
 def _resolve_runtime_session_id(ctx) -> str:
     """Read the per-entry interaction identity from named dispatch metadata.
 
@@ -379,6 +392,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     runtime_session_id = _resolve_runtime_session_id(ctx)
     output_plan = _resolve_output_plan(ctx, runtime_session_id)
     target_companion_id = _resolve_session_target(ctx)
+    presentation_endpoint = _resolve_presentation_endpoint(ctx)
+    presentation_room = None
+    if presentation_endpoint is not None:
+        if output_plan is None or output_plan.outputs.can_respond or output_plan.outputs.audio_cue:
+            raise ValueError("DIRECTED_SOURCE_MUST_BE_INPUT_ONLY")
+        if not target_companion_id:
+            raise ValueError("DIRECTED_COMPANION_REQUIRED")
 
     from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
@@ -397,6 +417,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         local = getattr(room, "local_participant", None)
         if local is None:
             raise RuntimeError("cannot confirm session start without a local participant")
+        if presentation_endpoint is not None:
+            await presentation_room.local_participant.publish_data(
+                _session_lifecycle_payload(SESSION_STARTED_TYPE,
+                    presentation_endpoint.plan.session_id, output_plan=presentation_endpoint.plan),
+                reliable=True, topic=SESSION_CONTROL_TOPIC,
+                destination_identities=[presentation_endpoint.participant_identity],
+            )
         await local.publish_data(
             _session_lifecycle_payload(SESSION_STARTED_TYPE, runtime_session_id, output_plan=output_plan),
             reliable=True,
@@ -558,6 +585,13 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     # Non-barge-in sessions must not allocate a channel intent model.
     # Preserve the room reference for the existing lazy brain identity resolver.
     session_key = room.name or ""
+    stage_output_plan = output_plan
+    if presentation_endpoint is not None:
+        stage_output_plan = SessionOutputPlan(
+            session_id=runtime_session_id,
+            policy_revision=presentation_endpoint.plan.policy_revision,
+            inputs=output_plan.inputs, outputs=presentation_endpoint.plan.outputs,
+        )
     factory = SharedStageFactory.from_config(
         replace(cfg, turn_policy=session_turn_policy),
         prebuilt_vad=prebuilt_vad,
@@ -565,7 +599,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         livekit_session_key=session_key,
         livekit_room=room,
         runtime_session_id=runtime_session_id,
-        output_plan=output_plan,
+        output_plan=stage_output_plan,
         target_companion_id=target_companion_id,
     )
 
@@ -589,7 +623,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             factory,
             interaction_mode=interaction_mode,
             instructions=cfg.behavior.instructions,
-            welcome_message=cfg.behavior.welcome_message,
+            welcome_message=(None if presentation_endpoint is not None else cfg.behavior.welcome_message),
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             turn_policy=session_turn_policy,
             observability=cfg.observability,
@@ -604,7 +638,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             factory,
             instructions=cfg.behavior.instructions,
             allow_interruptions=allow_interruptions,
-            welcome_message=cfg.behavior.welcome_message,
+            welcome_message=(None if presentation_endpoint is not None else cfg.behavior.welcome_message),
             audio_sample_rate=cfg.behavior.audio_sample_rate,
             false_interruption_timeout=(
                 session_turn_policy.interrupt.framework_false_interruption_timeout_ms / 1000.0
@@ -660,7 +694,17 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
 
     ctx.add_shutdown_callback(_end_serving_cb)
     try:
-        await pipeline.run(room)
+        if presentation_endpoint is None:
+            await pipeline.run(room)
+        else:
+            if factory.runtime_services is None:
+                raise RuntimeError("directed conversation requires authoritative runtime identity")
+            await factory.runtime_services.resolve_room(room)
+            presentation_room = await presentation_endpoint.connect(
+                core=cfg.core, worker_identity=f"presentation-{ctx.job.id}",
+            )
+            await pipeline.run(room, output_room=presentation_room,
+                output_participant_identity=presentation_endpoint.participant_identity)
     except Exception:
         # A job that dies before it has a running session still owes the device
         # an answer, and _end_serving_cb cannot give one: the framework
@@ -673,6 +717,20 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         # idempotent, so the shutdown callback stays a no-op backstop.
         await _publish_session_end(SESSION_END_ERROR)
         raise
+    finally:
+        if presentation_room is not None:
+            try:
+                await presentation_room.local_participant.publish_data(
+                    _session_lifecycle_payload(SESSION_END_TYPE,
+                        presentation_endpoint.plan.session_id,
+                        reason=str(session_end_state.get("reason") or SESSION_END_USER_LEFT)),
+                    reliable=True, topic=SESSION_CONTROL_TOPIC,
+                    destination_identities=[presentation_endpoint.participant_identity],
+                )
+            except Exception:
+                logger.exception("could not send presentation session end room=%s", presentation_endpoint.room)
+            finally:
+                await presentation_room.disconnect()
 
 
 def _use_ptt_pipeline(interaction_mode: str) -> bool:

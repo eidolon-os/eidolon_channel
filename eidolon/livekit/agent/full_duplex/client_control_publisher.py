@@ -137,6 +137,12 @@ class FullDuplexClientControlPublisher:
 
         pipeline = self._pipeline
         room = getattr(pipeline, "_room", None)
+        destinations = {}
+        if op == "playback.stop":
+            presentation = getattr(pipeline, "_presentation_room", None)
+            if presentation is not None:
+                room = presentation
+                destinations = {"destination_identities": [pipeline._presentation_peer]}
         local = getattr(room, "local_participant", None) if room else None
         if local is None:
             logger.warning(
@@ -185,6 +191,7 @@ class FullDuplexClientControlPublisher:
                 json.dumps(envelope, separators=(",", ":")).encode("utf-8"),
                 reliable=True,
                 topic=CONTROL_TOPIC,
+                **destinations,
             )
 
         task = loop.create_task(_send())

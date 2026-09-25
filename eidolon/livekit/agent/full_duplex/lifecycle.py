@@ -74,7 +74,7 @@ class FullDuplexSessionLifecycle:
             interaction_mode="full_duplex",
         )
 
-    async def run(self, room: Room) -> None:
+    async def run(self, room: Room, *, output_room=None, output_participant_identity=None) -> None:
         """Start the full-duplex pipeline and block until the session closes."""
         from livekit.agents.voice import AgentSession
         from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions, TextInputOptions
@@ -83,6 +83,8 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         logger.info("[StreamingPipeline] starting room=%s", room.name)
         pipeline._room = room
+        pipeline._presentation_room = output_room
+        pipeline._presentation_peer = output_participant_identity
         pipeline._started = True
         pipeline.session_mark("room_joined")
 
@@ -137,15 +139,18 @@ class FullDuplexSessionLifecycle:
             AudioOutputOptions(sample_rate=pipeline._audio_sample_rate)
             if (pipeline._factory.outputs.speech or pipeline._factory.outputs.audio_cue) else False
         )
+        if output_room is not None and output_room is not room and pipeline._avatar_enabled:
+            raise ValueError("REMOTE_OUTPUT_AVATAR_NOT_SUPPORTED")
         if pipeline._avatar_enabled and pipeline._factory.outputs.speech:
             if await self._start_avatar_worker(room, session):
                 room_audio_output = False
                 pipeline.session_mark("avatar_ready")
 
-        await session.start(
-            agent=agent,
-            room=room,
-            room_options=RoomOptions(
+        from ..session.room_io import start_room_session
+        pipeline._presentation_io = await start_room_session(
+            session=session, agent=agent, input_room=room,
+            output_room=output_room, output_participant_identity=output_participant_identity,
+            options=RoomOptions(
                 audio_output=room_audio_output,
                 text_input=TextInputOptions(text_input_cb=accept_text_input),
                 text_output=pipeline._factory.outputs.dialogue_text,
@@ -505,6 +510,10 @@ class FullDuplexSessionLifecycle:
             except Exception:
                 logger.exception("[StreamingPipeline] error shutting down session")
             pipeline._session = None
+        presentation_io = getattr(pipeline, "_presentation_io", None)
+        if presentation_io is not None:
+            await presentation_io.aclose()
+            pipeline._presentation_io = None
         pipeline._finish_agent_output("session_shutdown_during_output")
         pipeline._append_timeline_debug("session_shutdown")
         close_reason = (

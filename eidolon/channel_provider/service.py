@@ -49,14 +49,15 @@ logger = logging.getLogger("eidolon.channel_provider.service")
 PRESENCE_READ_TIMEOUT_SECONDS = 3.0
 
 
-class _SharedTransitionRequired(InvalidTransition):
+class _TransportTransitionRequired(InvalidTransition):
     """Release the lifecycle lock before cancelling a shared caller scope."""
 
 
 @dataclass
-class _SharedScope:
+class _TransportScope:
     task: asyncio.Task
     cleanup: Callable[[], Awaitable[None]] | None = None
+    request: Callable[[str, ServingRequest], None] | None = None
 
 
 @dataclass
@@ -81,7 +82,8 @@ class ChannelProviderService:
         self._agent_name = agent_name
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
         self._lock = asyncio.Lock()
-        self._shared_scopes: dict[str, _SharedScope] = {}
+        self._transport_scopes: dict[str, _TransportScope] = {}
+        self._device_conversations: dict = {}
         self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
 
     def initialize(self) -> None:
@@ -113,8 +115,8 @@ class ChannelProviderService:
     async def shutdown(self) -> None:
         for owner, session_id in tuple(self._shared_visits):
             await self.close_shared_session(session_id, authenticated_owner_id=owner)
-        for device_id in tuple(self._shared_scopes):
-            await self._retire_shared_scope(device_id)
+        for device_id in tuple(self._transport_scopes):
+            await self._retire_transport_scope(device_id)
         await self._registry.shutdown()
 
     async def provision(self, request: ProvisionRequest) -> str:
@@ -139,8 +141,8 @@ class ChannelProviderService:
     async def _provision(self, request: ProvisionRequest) -> str:
         try:
             return await self._provision_once(request)
-        except _SharedTransitionRequired:
-            await self._retire_shared_scope(request.device_id)
+        except _TransportTransitionRequired:
+            await self._retire_transport_scope(request.device_id)
             return await self._provision_once(request)
 
     async def _provision_once(self, request: ProvisionRequest) -> str:
@@ -180,8 +182,8 @@ class ChannelProviderService:
             if (request.operation == "channel.refresh-device" and previous is not None
                     and not adapter.binding_current(json.loads(previous.handle_json))):
                 runtime_refresh_of = previous
-            if request.device_id in self._shared_scopes:
-                raise _SharedTransitionRequired("selected device configuration is changing")
+            if request.device_id in self._transport_scopes:
+                raise _TransportTransitionRequired("selected device configuration is changing")
             grant = await adapter.open(
                 spec, issued_at_ms=now, observed_host_address=request.observed_host_address
             )
@@ -296,8 +298,8 @@ class ChannelProviderService:
             separators=(",", ":"),
         )
 
-    async def _retire_shared_scope(self, device_id: str) -> None:
-        scope = self._shared_scopes.get(device_id)
+    async def _retire_transport_scope(self, device_id: str) -> None:
+        scope = self._transport_scopes.get(device_id)
         if scope is None:
             return
         task = scope.task
@@ -312,8 +314,72 @@ class ChannelProviderService:
                 pass
         # A failed close retains the reservation so revocation/refresh cannot
         # silently leave an authorized temporary room behind. Retry the close.
-        if self._shared_scopes.get(device_id) is scope and scope.cleanup is not None:
+        if self._transport_scopes.get(device_id) is scope and scope.cleanup is not None:
             await scope.cleanup()
+
+    async def open_device_conversation(self, selection, *, authenticated_owner_id: str) -> dict:
+        from .device_conversation import DeviceConversation
+        if not authenticated_owner_id:
+            raise Forbidden("authenticated Owner is required")
+        key = (authenticated_owner_id, selection.session_id)
+        async with self._lock:
+            previous = self._device_conversations.get(key)
+            if previous is not None:
+                if previous.selection != selection:
+                    raise IdempotencyConflict("conversation selection cannot change")
+                return previous.snapshot()
+            records = []
+            for ref in selection.devices:
+                record = self._store.active_device(ref)
+                if record is None or record.expires_at_ms <= self._now_ms():
+                    raise UnknownChannel("selected device has no current channel")
+                if record.owner_id != authenticated_owner_id:
+                    raise Forbidden("selected device belongs to another Owner")
+                if record.device_id in self._transport_scopes:
+                    raise InvalidTransition("selected device already belongs to a transport")
+                records.append(record)
+            if records[0].adapter_name != records[1].adapter_name:
+                raise InvalidTransition("selected endpoints require the same transport")
+            adapter = self._registry.get(records[0].adapter_name)
+            if not callable(getattr(adapter, "open_directed_session", None)):
+                raise InvalidTransition("transport does not support directed sessions")
+            visit = DeviceConversation(selection, authenticated_owner_id, adapter,
+                tuple(json.loads(record.handle_json) for record in records))
+            scope = _TransportScope(asyncio.current_task(), request=visit.request)
+            device_ids = tuple(record.device_id for record in records)
+
+            async def cleanup():
+                await visit.cleanup()
+                for device_id in device_ids:
+                    if self._transport_scopes.get(device_id) is scope:
+                        self._transport_scopes.pop(device_id)
+
+            async def run():
+                try:
+                    await visit.run()
+                finally:
+                    await cleanup()
+
+            scope.cleanup = cleanup
+            for device_id in device_ids:
+                self._transport_scopes[device_id] = scope
+            self._device_conversations[key] = visit
+            visit.task = scope.task = asyncio.create_task(run())
+            visit.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+            return visit.snapshot()
+
+    async def device_conversation(self, session_id: str, *, authenticated_owner_id: str,
+                                  close: bool = False) -> dict:
+        visit = self._device_conversations.get((authenticated_owner_id, session_id))
+        if visit is None:
+            raise UnknownChannel("device conversation is not known on this Provider")
+        if close:
+            for ref in visit.selection.devices:
+                scope = self._transport_scopes.get(ref.device_instance_id)
+                if scope is not None and scope.task is visit.task:
+                    await self._retire_transport_scope(ref.device_instance_id)
+            visit.state = "closed"
+        return visit.snapshot()
 
     async def open_shared_session(
         self, selection: SharedSessionSelection, specifications: tuple[dict, ...],
@@ -360,8 +426,8 @@ class ChannelProviderService:
                     finally:
                         # Failed room deletion retains the existing reservation;
                         # an explicit close retries it through the same cleanup.
-                        if not any(self._shared_scopes.get(d) is not None
-                                   and self._shared_scopes[d].task is asyncio.current_task()
+                        if not any(self._transport_scopes.get(d) is not None
+                                   and self._transport_scopes[d].task is asyncio.current_task()
                                    for d in visit.devices):
                             if self._shared_visits.get(key) is visit:
                                 self._shared_visits.pop(key)
@@ -388,9 +454,9 @@ class ChannelProviderService:
             if not visit.ready.done():
                 visit.ready.set_exception(InvalidTransition("shared start was cancelled"))
             for device in visit.devices:
-                scope = self._shared_scopes.get(device)
+                scope = self._transport_scopes.get(device)
                 if scope is not None and scope.task is visit.task:
-                    await self._retire_shared_scope(device)
+                    await self._retire_transport_scope(device)
             if self._shared_visits.get(key) is visit:
                 self._shared_visits.pop(key)
         return {"session_id": session_id, "state": "closed"}
@@ -468,7 +534,7 @@ class ChannelProviderService:
 
         async with self._lock:
             records = current_records()
-            if any(device_id in self._shared_scopes for device_id in device_ids):
+            if any(device_id in self._transport_scopes for device_id in device_ids):
                 raise InvalidTransition("a selected device already belongs to a shared transport")
             adapters = {record.adapter_name for record in records}
             if len(adapters) != 1:
@@ -480,9 +546,9 @@ class ChannelProviderService:
             specs = tuple(derive_spec(by_id[device_id].device,
                           device_instance_id=device_id, agent_name=self._agent_name)
                           for device_id in device_ids)
-            scope = _SharedScope(asyncio.current_task())
+            scope = _TransportScope(asyncio.current_task())
             for device_id in device_ids:
-                self._shared_scopes[device_id] = scope
+                self._transport_scopes[device_id] = scope
 
         grants = {}
         close_lock = asyncio.Lock()
@@ -497,8 +563,8 @@ class ChannelProviderService:
                     await adapter.close(next(iter(grants.values())).handle)
                 closed = True
                 for device_id in device_ids:
-                    if self._shared_scopes.get(device_id) is scope:
-                        self._shared_scopes.pop(device_id)
+                    if self._transport_scopes.get(device_id) is scope:
+                        self._transport_scopes.pop(device_id)
 
         scope.cleanup = cleanup
         try:
@@ -640,8 +706,8 @@ class ChannelProviderService:
     async def revoke(self, request: RevokeRequest) -> str:
         try:
             return await self._revoke_once(request)
-        except _SharedTransitionRequired:
-            await self._retire_shared_scope(request.device_id)
+        except _TransportTransitionRequired:
+            await self._retire_transport_scope(request.device_id)
             return await self._revoke_once(request)
 
     async def _revoke_once(self, request: RevokeRequest) -> str:
@@ -660,8 +726,8 @@ class ChannelProviderService:
                     )
                 return prior.response_json
 
-            if request.device_id in self._shared_scopes:
-                raise _SharedTransitionRequired("selected device is being revoked")
+            if request.device_id in self._transport_scopes:
+                raise _TransportTransitionRequired("selected device is being revoked")
             active = self._store.active_device(request.device_ref)
             if active is not None:
                 adapter = self._registry.get(active.adapter_name)
@@ -747,7 +813,7 @@ class ChannelProviderService:
             active = self._store.active_device(device_ref)
             if active is None:
                 raise UnknownChannel("device has no active channel")
-            if serving and active.device_id in self._shared_scopes:
+            if serving and active.device_id in self._transport_scopes:
                 raise InvalidTransition("device is reserved by a shared transport")
             adapter = self._registry.get(active.adapter_name)
             handle = json.loads(active.handle_json)
@@ -770,6 +836,16 @@ class ChannelProviderService:
         """
 
         async def _requested(request: ServingRequest) -> None:
+            async with self._lock:
+                scope = self._transport_scopes.get(device_ref.device_instance_id)
+                if scope is not None and scope.request is not None:
+                    active = self._store.active_device(device_ref)
+                    if active is None:
+                        raise UnknownChannel("device has no active channel")
+                    scope.request(device_ref.device_instance_id, request)
+                    return
+            if request.control_request_id is not None:
+                raise InvalidTransition("control preparation is no longer active")
             await self._converge_serving(
                 device_ref,
                 serving=request.action is ServingAction.START,

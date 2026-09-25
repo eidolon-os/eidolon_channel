@@ -1433,9 +1433,11 @@ class StreamingPipeline(BasePipeline):
             allow_interruptions=bool(getattr(self, "_allow_interruptions", False)),
         )
 
-    async def run(self, room: Room) -> None:
+    async def run(self, room: Room, *, output_room=None, output_participant_identity=None) -> None:
         """Start the full-duplex pipeline. Blocks until AgentSession closes."""
-        await self._ensure_lifecycle().run(room)
+        await self._ensure_lifecycle().run(
+            room, output_room=output_room, output_participant_identity=output_participant_identity
+        )
 
     async def shutdown(self) -> None:
         """Gracefully shut down the full-duplex pipeline."""

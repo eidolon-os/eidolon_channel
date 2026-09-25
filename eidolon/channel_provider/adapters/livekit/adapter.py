@@ -33,6 +33,7 @@ from eidolon_sdk.biz.contracts import (
     CONTROL_TOPIC,
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
+    SESSION_CONTROL_REQUEST_ID_FIELD,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
@@ -215,6 +216,13 @@ def _why_unserved(dispatch: Any) -> str:
     )
 
 
+@dataclass
+class _ControlReceipt:
+    op: str
+    future: asyncio.Future[str]
+    terminal: bool = False
+
+
 class LiveKitChannelAdapter:
     """Opens one LiveKit room per device and mints that device's token."""
 
@@ -237,7 +245,8 @@ class LiveKitChannelAdapter:
         self._input_locks: dict[str, asyncio.Lock] = {}
         self._input_revisions: dict[str, int] = {}
         self._input_applied: dict[str, int] = {}
-        self._invitation_receipts: dict[tuple[str, str], asyncio.Future[str]] = {}
+        self._session_end_observers: dict[str, tuple[str, Any]] = {}
+        self._control_receipts: dict[tuple[str, str], _ControlReceipt] = {}
 
     @property
     def name(self) -> str:
@@ -451,47 +460,66 @@ class LiveKitChannelAdapter:
         bounded transport exchange, not a durable queue or an admission grant.
         In particular, accepted does not mean the device joined the new room.
         """
+        now_ms = int(time.time() * 1000)
+        if invitation.deadline_ms <= now_ms or invitation.channel.issued_at_ms > now_ms:
+            raise InvalidTransition("invitation is outside its delivery window")
+        return await self.deliver_control(
+            handle, invitation.command(command_id=command_id), wait_for_terminal=False,
+        )
+
+    async def deliver_control(
+        self, handle: dict[str, Any], command: dict, *, wait_for_terminal: bool,
+    ) -> str:
+        """Use the standing listener for one bounded, correlated control exchange.
+
+        Preparation needs the completed room.join receipt; a shared invitation
+        needs its first receipt followed by independent admission observation.
+        Neither operation receives a second control connection or retry queue.
+        """
         room = str(handle.get("room") or "")
-        device = invitation.device_ref.device_instance_id
+        device = str(handle.get("device") or "")
+        if command.get("dst") != {"type": "device", "id": device}:
+            raise InvalidTransition("command target does not match channel")
+        command_id, op = command.get("id"), command.get("op")
+        if not isinstance(command_id, str) or not command_id or not isinstance(op, str) or not op:
+            raise InvalidTransition("command identity is required")
+        issued, ttl = command.get("ts"), command.get("ttl_ms")
+        now_ms = int(time.time() * 1000)
+        if (type(issued) is not int or type(ttl) is not int or ttl <= 0
+                or issued > now_ms or issued + ttl <= now_ms):
+            raise InvalidTransition("command is outside its delivery window")
         watch = self._listeners.get(room)
-        if handle.get("device") != device:
-            raise InvalidTransition("invitation target does not match channel")
         if watch is None or watch.device != device or watch.connection is None:
             raise BackendUnavailable("device control channel is not connected")
-        now_ms = int(time.time() * 1000)
-        remaining = (invitation.deadline_ms - now_ms) / 1000
-        if remaining <= 0 or invitation.channel.issued_at_ms > now_ms:
-            raise InvalidTransition("invitation is outside its delivery window")
-        command = invitation.command(command_id=command_id)
         key = (room, command_id)
-        if any(pending_room == room for pending_room, _ in self._invitation_receipts):
-            raise InvalidTransition("device already has an invitation delivery in flight")
+        if any(pending_room == room for pending_room, _ in self._control_receipts):
+            raise InvalidTransition("device already has a control delivery in flight")
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-        self._invitation_receipts[key] = future
+        self._control_receipts[key] = _ControlReceipt(op, future, wait_for_terminal)
         try:
-            async with asyncio.timeout(min(remaining, 30.0)):
+            async with asyncio.timeout(min((issued + ttl - now_ms) / 1000, 30.0)):
                 await watch.connection.local_participant.publish_data(
                     canonical_json(command).encode(), reliable=True, topic=CONTROL_TOPIC,
                     destination_identities=[device],
                 )
                 return await future
         except TimeoutError as exc:
-            logger.warning("shared invitation receipt timed out room=%s device=%s", room, device)
-            raise BackendUnavailable("invitation receipt timed out") from exc
+            logger.warning("control receipt timed out room=%s device=%s op=%s", room, device, op)
+            raise BackendUnavailable("control receipt timed out") from exc
         except asyncio.CancelledError:
             raise
         except BackendUnavailable:
             raise
         except Exception as exc:
-            raise BackendUnavailable("invitation delivery failed") from exc
+            raise BackendUnavailable("control delivery failed") from exc
         finally:
-            self._invitation_receipts.pop(key, None)
+            self._control_receipts.pop(key, None)
             if not future.done():
                 future.cancel()
             elif not future.cancelled():
-                future.exception()  # Retrieve a disconnect failure even if publish failed first.
+                future.exception()
 
-    def _invitation_receipt(self, packet: Any, *, room: str, device: str) -> None:
+    def _control_receipt(self, packet: Any, *, room: str, device: str) -> None:
         if (getattr(packet, "topic", None) != CONTROL_TOPIC
                 or getattr(getattr(packet, "participant", None), "identity", None) != device):
             return
@@ -501,25 +529,27 @@ class LiveKitChannelAdapter:
             return
         if (not isinstance(body, dict) or type(body.get("v")) is not int or body["v"] != 1
                 or body.get("kind") not in ("ack", "result")
-                or body.get("op") != "shared-session.invite"
                 or body.get("device_id") != device
                 or not isinstance(body.get("ref"), str)
                 or not isinstance(body.get("status"), str)):
             return
-        future = self._invitation_receipts.get((room, body["ref"]))
-        if future is not None and not future.done():
-            status = command_status_from_ack(body["status"])
-            code = body.get("code")
-            if not isinstance(code, str) or len(code) > 64 or not code.replace("_", "").isalnum():
-                code = "UNSPECIFIED"
-            logger.info("shared invitation receipt room=%s device=%s status=%s code=%s",
-                        room, device, status, code)
-            future.set_result(status)
+        pending = self._control_receipts.get((room, body["ref"]))
+        if pending is None or pending.future.done() or body.get("op") != pending.op:
+            return
+        status = command_status_from_ack(body["status"])
+        if pending.terminal and status in {"accepted", "running"}:
+            return
+        code = body.get("code")
+        if not isinstance(code, str) or len(code) > 64 or not code.replace("_", "").isalnum():
+            code = "UNSPECIFIED"
+        logger.info("control receipt room=%s device=%s op=%s status=%s code=%s",
+                    room, device, pending.op, status, code)
+        pending.future.set_result(status)
 
-    def _fail_invitation_delivery(self, room: str) -> None:
-        for (pending_room, _), future in self._invitation_receipts.items():
-            if pending_room == room and not future.done():
-                future.set_exception(BackendUnavailable("invitation control channel disconnected"))
+    def _fail_control_delivery(self, room: str) -> None:
+        for (pending_room, _), pending in self._control_receipts.items():
+            if pending_room == room and not pending.future.done():
+                pending.future.set_exception(BackendUnavailable("control channel disconnected"))
 
     async def close(self, handle: dict[str, Any]) -> None:
         room = handle.get("room")
@@ -626,7 +656,13 @@ class LiveKitChannelAdapter:
         for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
             if dispatch.agent_name != agent:
                 continue
-            plan = self._dispatch_metadata(dispatch).get("output_plan")
+            metadata = self._dispatch_metadata(dispatch)
+            # A new listener has no in-memory reservation for this pair. Never
+            # resurrect a directed worker from an old Provider process.
+            if metadata.get("presentation_endpoint") is not None:
+                await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
+                continue
+            plan = metadata.get("output_plan")
             compatible = (isinstance(plan, dict) and all(plan.get(k) == v for k,v in template.items()))
             if not compatible:
                 await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
@@ -652,11 +688,23 @@ class LiveKitChannelAdapter:
         @connection.on("data_received")
         def _received(packet: Any) -> None:
             if self._listeners.get(room) is watch and watch.connection is connection:
-                self._invitation_receipt(packet, room=room, device=watch.device)
+                self._control_receipt(packet, room=room, device=watch.device)
             self._note_serving_failure(packet, device=watch.device, room=room)
+            self._observe_session_end(packet, room=room)
             request = self._requested(packet, device=watch.device, room=room)
             if request is not None:
                 self._dispatch_request(watch.sink, request, room=room)
+
+        @connection.on("participant_disconnected")
+        def _participant_disconnected(participant: Any) -> None:
+            if self._listeners.get(room) is not watch or watch.connection is not connection:
+                return
+            observer = self._session_end_observers.get(room)
+            if observer is not None and (
+                participant.identity == watch.device
+                or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+            ):
+                observer[1]()
 
         @connection.on("disconnected")
         def _dropped(reason: Any = None) -> None:
@@ -666,7 +714,10 @@ class LiveKitChannelAdapter:
             # its room does not come back on its own — so getting back in is this
             # adapter's job for as long as it has said it is carrying the channel.
             if self._listeners.get(room) is watch and watch.connection is connection:
-                self._fail_invitation_delivery(room)
+                self._fail_control_delivery(room)
+                observer = self._session_end_observers.get(room)
+                if observer is not None:
+                    observer[1]()
                 self._rejoin_later(room, watch, reason)
 
         try:
@@ -854,7 +905,7 @@ class LiveKitChannelAdapter:
         # Dropped from the registry first: the disconnect below fires the same
         # event a failure does, and this is what tells them apart.
         room = str(handle.get("room") or "")
-        self._fail_invitation_delivery(room)
+        self._fail_control_delivery(room)
         watch = self._listeners.pop(room, None)
         if watch is None:
             return
@@ -904,7 +955,14 @@ class LiveKitChannelAdapter:
         conversation_id = normalize_conversation_id(body.get(SESSION_CONVERSATION_ID_FIELD))
         if action is None or conversation_id is None:
             return None
-        return ServingRequest(action=action, conversation_id=conversation_id)
+        control_request_id = body.get(SESSION_CONTROL_REQUEST_ID_FIELD)
+        if control_request_id is not None and (
+            not isinstance(control_request_id, str) or not control_request_id.strip()
+            or len(control_request_id) > 128
+        ):
+            return None
+        return ServingRequest(action=action, conversation_id=conversation_id,
+                              control_request_id=control_request_id)
 
     def _note_serving_failure(self, packet: Any, *, device: str, room: str) -> None:
         """Hear the agent say it could not serve, since we are already in the room.
@@ -1056,7 +1114,7 @@ class LiveKitChannelAdapter:
 
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
-        target_companion_id: str | None = None,
+        target_companion_id: str | None = None, presentation_endpoint: dict | None = None,
     ) -> None:
         """Place the standing order, and say on it why this session exists.
 
@@ -1071,9 +1129,16 @@ class LiveKitChannelAdapter:
             from eidolon.interaction_context import validate_companion_target
             validate_companion_target(target_companion_id)
         room, agent = self._serving(handle)
+        if presentation_endpoint is not None:
+            from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+            endpoint = PresentationEndpoint.model_validate(presentation_endpoint)
+            if endpoint.room == room:
+                raise InvalidTransition("presentation endpoint must keep a distinct device room")
+            presentation_endpoint = endpoint.model_dump(mode="json")
         output_plan = (SessionOutputPlan(session_id=conversation_id, **handle["output_template"])
                        if "output_template" in handle else None)
         try:
+            await self._require_no_remote_presentation(room)
             dispatches = [
                 dispatch for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room)
                 if dispatch.agent_name == agent
@@ -1093,6 +1158,7 @@ class LiveKitChannelAdapter:
                 if (
                     metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED) != session_intent
                     or metadata.get("output_plan") != (output_plan.model_dump(mode="json") if output_plan else None)
+                    or metadata.get("presentation_endpoint") != presentation_endpoint
                 ):
                     raise InvalidTransition("an active conversation cannot change intent or output plan")
                 already_serving = True
@@ -1126,6 +1192,7 @@ class LiveKitChannelAdapter:
                             **({"target_companion_id": target_companion_id}
                                if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
+                            **({"presentation_endpoint": presentation_endpoint} if presentation_endpoint else {}),
                         }
                     ),
                 )
@@ -1138,6 +1205,101 @@ class LiveKitChannelAdapter:
             "opened session on room=%s agent=%s intent=%s", room, agent, session_intent
         )
         self._confirm_serving_later(room, agent=agent, conversation_id=conversation_id)
+
+    def observe_session_end(self, handle: dict, session_id: str, callback):
+        room = str(handle["room"])
+        observer = (session_id, callback)
+        if room in self._session_end_observers:
+            raise InvalidTransition("session end already observed")
+        self._session_end_observers[room] = observer
+        def remove():
+            if self._session_end_observers.get(room) is observer:
+                self._session_end_observers.pop(room)
+        return remove
+
+    def _observe_session_end(self, packet, *, room: str) -> None:
+        observer = self._session_end_observers.get(room)
+        if observer is None or getattr(packet, "topic", None) != SESSION_CONTROL_TOPIC:
+            return
+        participant = getattr(packet, "participant", None)
+        if getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            return
+        try:
+            body = json.loads(bytes(packet.data))
+        except (ValueError, TypeError, UnicodeDecodeError):
+            return
+        if (isinstance(body, dict) and type(body.get("schema_v")) is int
+                and body["schema_v"] == WIRE_SCHEMA_VERSION
+                and body.get("type") == SESSION_END_TYPE
+                and body.get(SESSION_CONVERSATION_ID_FIELD) == observer[0]):
+            observer[1]()
+
+    async def require_idle(self, handle: dict) -> None:
+        room, agent = self._serving(handle)
+        await self._require_no_remote_presentation(room)
+        if await self.device_is_on_channel(handle) is not True:
+            raise BackendUnavailable("selected device is not present on its channel")
+        for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
+            if dispatch.agent_name == agent and not _is_spent(dispatch):
+                raise InvalidTransition("end the existing conversation before preparing another")
+
+    async def _require_no_remote_presentation(self, room: str) -> None:
+        watch = self._listeners.get(room)
+        connection = watch.connection if watch is not None else None
+        participants = getattr(connection, "remote_participants", {})
+        for participant in participants.values():
+            if (getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+                    and str(getattr(participant, "identity", "")).startswith("presentation-")):
+                raise InvalidTransition("previous presentation is still closing")
+
+    async def end_prepared_session(self, handle: dict, session_id: str) -> None:
+        watch = self._listeners.get(str(handle.get("room") or ""))
+        if watch is not None and watch.connection is not None:
+            await watch.connection.local_participant.publish_data(canonical_json({
+                "schema_v": WIRE_SCHEMA_VERSION, "type": SESSION_END_TYPE,
+                SESSION_CONVERSATION_ID_FIELD: session_id, "reason": "user_left",
+            }).encode(), reliable=True, topic=SESSION_CONTROL_TOPIC,
+                destination_identities=[handle["device"]])
+        await self.close_session(handle, session_id)
+
+    async def open_directed_session(
+        self, source: dict, target: dict, *, source_session_id: str,
+        target_session_id: str, target_companion_id: str,
+    ) -> None:
+        """Dispatch one inference worker, presenting in the other standing room.
+
+        Handles are from the Provider ledger after Owner/DeviceRef validation.
+        This adapter only narrows each endpoint's physical input/output rights.
+        """
+        from eidolon_sdk.biz.presentation import InputSelection, OutputSelection
+        from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+
+        source_template = source.get("output_template")
+        target_template = target.get("output_template")
+        if source_template is None or target_template is None:
+            raise InvalidTransition("directed sessions require explicit endpoint policies")
+        source_plan = SessionOutputPlan(session_id=source_session_id, **source_template)
+        target_plan = SessionOutputPlan(session_id=target_session_id, **target_template)
+        if not source_plan.inputs.microphone or not target_plan.outputs.speech:
+            raise InvalidTransition("selected endpoints do not allow microphone input and speech output")
+        target_plan = target_plan.model_copy(update={
+            "inputs": InputSelection(microphone=False),
+            "outputs": OutputSelection(speech=True, dialogue_text=target_plan.outputs.dialogue_text),
+            "expression_profile": None,
+        })
+        endpoint = PresentationEndpoint(room=str(target["room"]),
+            participant_identity=str(target["device"]), plan=target_plan)
+        source_handle = dict(source)
+        source_handle["output_template"] = {
+            "policy_revision": source_plan.policy_revision,
+            "inputs": source_plan.inputs.model_dump(mode="json"),
+            "outputs": OutputSelection().model_dump(mode="json"),
+            "expression_profile": None,
+        }
+        await self.open_session(source_handle, source_session_id,
+            session_intent=SESSION_INTENT_USER_INITIATED,
+            target_companion_id=target_companion_id,
+            presentation_endpoint=endpoint.model_dump(mode="json"))
 
     async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
         """Withdraw the standing order, which is what ends the agent's job.

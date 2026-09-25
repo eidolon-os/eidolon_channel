@@ -248,12 +248,14 @@ class HalfDuplexPttPipeline(BasePipeline):
             interaction_mode=self._interaction_mode,
         )
 
-    async def run(self, room: Room) -> None:
+    async def run(self, room: Room, *, output_room=None, output_participant_identity=None) -> None:
         from livekit.agents.voice import AgentSession
         from ..runtime.resolver import wait_for_runtime_participant_identity
 
         logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
         self._room = room
+        self._presentation_room = output_room
+        self._presentation_peer = output_participant_identity
         self._started = True
         self.session_mark("room_joined")
         participant_identity = await wait_for_runtime_participant_identity(room)
@@ -266,10 +268,11 @@ class HalfDuplexPttPipeline(BasePipeline):
         session = AgentSession(turn_handling=self._build_turn_handling())
         self._bind_session(session)
 
-        await session.start(
-            agent=self._build_agent(),
-            room=room,
-            room_options=self._build_room_options(participant_identity),
+        from ..session.room_io import start_room_session
+        self._presentation_io = await start_room_session(
+            session=session, agent=self._build_agent(), input_room=room,
+            options=self._build_room_options(participant_identity),
+            output_room=output_room, output_participant_identity=output_participant_identity,
         )
         self.session_mark("session_started")
         if self._on_session_started is not None:
@@ -318,6 +321,10 @@ class HalfDuplexPttPipeline(BasePipeline):
             close = getattr(session, "aclose", None)
             if callable(close):
                 await close()
+        presentation_io = getattr(self, "_presentation_io", None)
+        if presentation_io is not None:
+            await presentation_io.aclose()
+            self._presentation_io = None
         await self._shutdown_stages()
         close_factory = getattr(self._factory, "aclose", None)
         if callable(close_factory):
@@ -886,6 +893,12 @@ class HalfDuplexPttPipeline(BasePipeline):
 
     def _publish_data(self, topic: str, payload: dict[str, object]) -> bool:
         room = getattr(self, "_room", None)
+        destinations = {}
+        if topic == CONTROL_TOPIC and payload.get("op") == CONTROL_OP_PLAYBACK_STOP:
+            presentation = getattr(self, "_presentation_room", None)
+            if presentation is not None:
+                room = presentation
+                destinations = {"destination_identities": [self._presentation_peer]}
         local = getattr(room, "local_participant", None) if room else None
         if local is None:
             if topic == CONTROL_TOPIC:
@@ -917,6 +930,7 @@ class HalfDuplexPttPipeline(BasePipeline):
                 json.dumps(payload, separators=(",", ":")).encode("utf-8"),
                 reliable=True,
                 topic=topic,
+                **destinations,
             )
 
         task = loop.create_task(_send())

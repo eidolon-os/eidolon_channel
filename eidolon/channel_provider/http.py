@@ -195,6 +195,39 @@ def create_app(
     app.router.add_post("/v1/device-channels/sessions/open", open_session)
     app.router.add_post("/v1/device-channels/sessions/close", close_session)
 
+    async def device_conversation(request: web.Request) -> web.Response:
+        from pydantic import BaseModel, ConfigDict, Field
+        from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
+
+        class OpenRequest(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            owner_id: str = Field(min_length=1, max_length=255)
+            selection: DeviceConversationSelection
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            if request.match_info["action"] == "open":
+                payload = OpenRequest.model_validate_json(await request.read())
+                result = await service.open_device_conversation(payload.selection,
+                    authenticated_owner_id=payload.owner_id)
+            else:
+                payload = CloseSharedSession.model_validate_json(await request.read())
+                result = await service.device_conversation(payload.session_id,
+                    authenticated_owner_id=payload.owner_id,
+                    close=request.match_info["action"] == "close")
+            return _json_body(result)
+        except ValidationError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
+
+    app.router.add_post("/v1/device-conversations/{action:open|status|close}",
+                        device_conversation)
+
+
     async def shared_session(request: web.Request) -> web.Response:
         if not _authorized(request, bearer_token):
             return _problem(Unauthenticated("bearer credential was not accepted"))

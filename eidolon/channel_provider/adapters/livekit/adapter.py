@@ -508,7 +508,11 @@ class LiveKitChannelAdapter:
         future = self._invitation_receipts.get((room, body["ref"]))
         if future is not None and not future.done():
             status = command_status_from_ack(body["status"])
-            logger.info("shared invitation receipt room=%s device=%s status=%s", room, device, status)
+            code = body.get("code")
+            if not isinstance(code, str) or len(code) > 64 or not code.replace("_", "").isalnum():
+                code = "UNSPECIFIED"
+            logger.info("shared invitation receipt room=%s device=%s status=%s code=%s",
+                        room, device, status, code)
             future.set_result(status)
 
     def _fail_invitation_delivery(self, room: str) -> None:

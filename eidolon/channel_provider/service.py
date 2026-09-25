@@ -60,6 +60,14 @@ class _SharedScope:
     cleanup: Callable[[], Awaitable[None]] | None = None
 
 
+@dataclass
+class _SharedVisit:
+    fingerprint: str
+    ready: asyncio.Future
+    devices: tuple[str, ...]
+    task: asyncio.Task | None = None
+
+
 class ChannelProviderService:
     def __init__(
         self,
@@ -75,6 +83,7 @@ class ChannelProviderService:
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
         self._lock = asyncio.Lock()
         self._shared_scopes: dict[str, _SharedScope] = {}
+        self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
 
     def initialize(self) -> None:
         self._store.initialize()
@@ -103,6 +112,8 @@ class ChannelProviderService:
         await self._registry.healthcheck()
 
     async def shutdown(self) -> None:
+        for owner, session_id in tuple(self._shared_visits):
+            await self.close_shared_session(session_id, authenticated_owner_id=owner)
         for device_id in tuple(self._shared_scopes):
             await self._retire_shared_scope(device_id)
         await self._registry.shutdown()
@@ -304,6 +315,86 @@ class ChannelProviderService:
         # silently leave an authorized temporary room behind. Retry the close.
         if self._shared_scopes.get(device_id) is scope and scope.cleanup is not None:
             await scope.cleanup()
+
+    async def open_shared_session(
+        self, selection: SharedSessionSelection, specifications: tuple[dict, ...],
+        *, authenticated_owner_id: str,
+    ) -> dict:
+        """Converge a bounded shared transport to open, independent of HTTP lifetime."""
+        if not authenticated_owner_id:
+            raise Forbidden("authenticated Owner is required")
+        # Snapshot mutable input before handing it to a service-owned task.
+        specifications = tuple(json.loads(json.dumps(specifications)))
+        fingerprint = request_fingerprint({
+            "selection": selection.model_dump(mode="json"), "specifications": specifications,
+        })
+        key = (authenticated_owner_id, selection.session_id)
+        async with self._lock:
+            visit = self._shared_visits.get(key)
+            if visit is not None:
+                if visit.fingerprint != fingerprint:
+                    raise IdempotencyConflict("shared session already has another selection")
+                if visit.task.done() or visit.task.cancelling():
+                    raise InvalidTransition("shared transport cleanup must complete before reopening")
+            else:
+                visit = _SharedVisit(fingerprint, asyncio.get_running_loop().create_future(),
+                                    tuple(ref.device_instance_id for ref in selection.devices))
+                # Retrieve failures even if the HTTP caller has disconnected.
+                visit.ready.add_done_callback(lambda f: None if f.cancelled() else f.exception())
+                self._shared_visits[key] = visit
+
+                async def run():
+                    try:
+                        async with self.shared_transport_from_specifications(
+                            selection, specifications, authenticated_owner_id=authenticated_owner_id,
+                        ) as ready:
+                            visit.ready.set_result(ready)
+                            await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        if not visit.ready.done():
+                            visit.ready.set_exception(InvalidTransition("shared start was cancelled"))
+                        raise
+                    except Exception as exc:
+                        if not visit.ready.done():
+                            visit.ready.set_exception(exc)
+                        raise
+                    finally:
+                        # Failed room deletion retains the existing reservation;
+                        # an explicit close retries it through the same cleanup.
+                        if not any(self._shared_scopes.get(d) is not None
+                                   and self._shared_scopes[d].task is asyncio.current_task()
+                                   for d in visit.devices):
+                            if self._shared_visits.get(key) is visit:
+                                self._shared_visits.pop(key)
+
+                visit.task = asyncio.create_task(run())
+                visit.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+        return dict(await asyncio.shield(visit.ready))
+
+    async def close_shared_session(self, session_id: str, *, authenticated_owner_id: str) -> dict:
+        if not authenticated_owner_id:
+            raise Forbidden("authenticated Owner is required")
+        key = (authenticated_owner_id, session_id)
+        async with self._lock:
+            visit = self._shared_visits.get(key)
+        if visit is not None:
+            if not visit.task.done():
+                if not visit.task.cancelling():
+                    visit.task.cancel()
+                try:
+                    await asyncio.shield(visit.task)
+                except asyncio.CancelledError:
+                    if asyncio.current_task().cancelling():
+                        raise
+            if not visit.ready.done():
+                visit.ready.set_exception(InvalidTransition("shared start was cancelled"))
+            for device in visit.devices:
+                scope = self._shared_scopes.get(device)
+                if scope is not None and scope.task is visit.task:
+                    await self._retire_shared_scope(device)
+            if self._shared_visits.get(key) is visit:
+                self._shared_visits.pop(key)
+        return {"session_id": session_id, "state": "closed"}
 
     @asynccontextmanager
     async def shared_transport_from_specifications(

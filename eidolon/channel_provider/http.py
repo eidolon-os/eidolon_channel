@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from aiohttp import web
+from pydantic import ValidationError
 
 from .contracts import (
     CLOSE_SESSION,
@@ -23,6 +24,7 @@ from .contracts import (
 )
 from .service import ChannelProviderService
 from .session_traces import SessionTraceReader, TraceQuery
+from .shared_session_contract import OpenSharedSession, CloseSharedSession
 
 logger = logging.getLogger("eidolon.channel_provider.http")
 
@@ -192,6 +194,35 @@ def create_app(
 
     app.router.add_post("/v1/device-channels/sessions/open", open_session)
     app.router.add_post("/v1/device-channels/sessions/close", close_session)
+
+    async def shared_session(request: web.Request) -> web.Response:
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            if request.match_info["action"] == "open":
+                command = OpenSharedSession.model_validate_json(await request.read())
+                result = await service.open_shared_session(
+                    command.selection,
+                    tuple(s.model_dump(mode="json") for s in command.specifications),
+                    authenticated_owner_id=command.owner_id,
+                )
+            else:
+                command = CloseSharedSession.model_validate_json(await request.read())
+                result = await service.close_shared_session(
+                    command.session_id, authenticated_owner_id=command.owner_id,
+                )
+            return _json(result)
+        except (ValidationError, ContractError):
+            return _contract_problem("invalid shared session command", status=422)
+        except DomainError as exc:
+            return _problem(exc)
+        except TimeoutError:
+            return _problem_body(code="PROVIDER_UNAVAILABLE", category="unavailable", retryable=True,
+                                 status=503, detail="shared admission deadline elapsed")
+
+    app.router.add_post("/v1/shared-sessions/{action:open|close}", shared_session)
     app.on_cleanup.append(close)
     return app
 

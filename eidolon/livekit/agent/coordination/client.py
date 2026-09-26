@@ -10,6 +10,7 @@ retain the Provider's reservations. No automatic reconnect can replay a scene.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
@@ -200,12 +201,18 @@ class RoleGroupClient:
         except asyncio.CancelledError:
             raise
         except Exception:
+            logging.getLogger(__name__).exception(
+                "team presentation failed turn=%s device=%s", playback.start.turn_id,
+                playback.start.device_id)
             played = False
         if self._playback is not playback:
             return
         # The physical adapter cannot complete before the producer closed the text.
         completed = played is True and playback.ended and playback.text.empty()
         self._playback = None
+        logging.getLogger(__name__).info(
+            "team playout turn=%s device=%s completed=%s text_ended=%s",
+            playback.start.turn_id, playback.start.device_id, completed, playback.ended)
         self._send(
             Receipt(
                 type="receipt",
@@ -260,6 +267,8 @@ class RoleGroupClient:
         if frame.epoch != self._epoch or not self._released:
             raise ValueError("reply outside committed capture epoch")
         if isinstance(frame, ReplyStart):
+            logging.getLogger(__name__).info("team reply start turn=%s companion=%s device=%s",
+                frame.turn_id, frame.companion_id, frame.device_id)
             if self._playback is not None:
                 raise ValueError("overlapping role-group replies")
             if frame.turn_id in self._seen_turns or len(self._seen_turns) >= 8192:
@@ -280,6 +289,8 @@ class RoleGroupClient:
         ):
             raise ValueError("reply stream correlation mismatch")
         if isinstance(frame, ReplyEnd):
+            logging.getLogger(__name__).info("team text ended turn=%s device=%s",
+                frame.turn_id, frame.device_id)
             playback.ended = True
             playback.text.put_nowait(None)
         elif isinstance(frame, ReplyDelta):

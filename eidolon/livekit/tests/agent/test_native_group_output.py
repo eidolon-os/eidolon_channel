@@ -117,3 +117,21 @@ async def test_native_completion_sequences_without_claiming_device_ack():
         assert sink.collected_pcm
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('dialogue_text', [False, True])
+async def test_policy_bound_native_completion(dialogue_text):
+    from eidolon_sdk.biz.presentation import OutputSelection
+    from eidolon.livekit.agent.session.policy_bound_agent import PolicyBoundAgent
+    session = AgentSession(turn_handling={
+        'turn_detection': 'manual', 'interruption': {'enabled': False}})
+    session.output.audio = RecordingAudioOutput()
+    await session.start(PolicyBoundAgent(instructions='',
+        outputs=OutputSelection(speech=True, dialogue_text=dialogue_text),
+        tts=MockTTS(), llm=None, stt=None))
+    presenter = NativeSpeechPresenter({('a', 'device'): SpeechEndpoint(session)})
+    try:
+        assert await asyncio.wait_for(presenter(request(), words(), lambda: None), 3)
+    finally:
+        await session.aclose()

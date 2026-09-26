@@ -88,6 +88,7 @@ def test_silent_session_suppresses_fixed_welcome_for_every_turn_mode():
 
     for kind in (StreamingPipeline, HalfDuplexPttPipeline):
         pipeline = kind.__new__(kind)
+        pipeline._destination = None
         pipeline._factory = SimpleNamespace(outputs=silent_plan().outputs)
         pipeline._session_intent = "user_initiated"
         pipeline._welcome_message = "Never synthesize me"
@@ -129,6 +130,7 @@ def test_silent_session_opens_no_audio_output_track():
     from eidolon.livekit.agent.half_duplex import HalfDuplexPttPipeline
 
     pipeline = HalfDuplexPttPipeline.__new__(HalfDuplexPttPipeline)
+    pipeline._destination = None
     pipeline._audio_sample_rate = 16000
 
     pipeline._factory = SimpleNamespace(outputs=silent_plan().outputs)

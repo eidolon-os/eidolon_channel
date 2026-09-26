@@ -10,6 +10,8 @@ from typing import Any
 
 from livekit.agents.voice.room_io import RoomIO, RoomOptions
 
+from .presentation_input_gate import PresentationInputGate
+
 
 async def start_room_session(
     *, session: Any, agent: Any, input_room: Any, options: RoomOptions,
@@ -42,6 +44,7 @@ async def start_room_session(
         audio_output=options.audio_output, text_output=options.text_output,
         close_on_disconnect=True,
     ))
+    input_gate = PresentationInputGate(session)
     try:
         await output_io.start()
         async with asyncio.timeout(10.0):
@@ -50,6 +53,7 @@ async def start_room_session(
             options, audio_output=False, text_output=False,
         ))
     except BaseException:
+        input_gate.close()
         await output_io.aclose()
         raise
     return output_io

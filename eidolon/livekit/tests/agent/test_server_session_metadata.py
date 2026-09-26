@@ -419,6 +419,9 @@ async def test_directed_worker_keeps_input_identity_and_starts_output_before_sou
 
     def pipeline(factory, **kwargs):
         assert kwargs["welcome_message"] is None
+        assert kwargs["interaction_mode"] == ("ptt" if mode == "ptt" else "half_duplex")
+        if mode != "ptt":
+            assert kwargs["allow_interruptions"] is False
         async def run(room, *, output_room, output_participant_identity):
             assert room is ctx.room
             assert output_room is target_room

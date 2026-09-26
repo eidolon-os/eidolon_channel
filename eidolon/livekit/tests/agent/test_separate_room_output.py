@@ -1,6 +1,6 @@
 """The selected speaker is the sole output sink of one existing voice session."""
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from livekit.agents.voice.room_io import RoomOptions
@@ -15,7 +15,8 @@ def room(name):
 @pytest.fixture
 def setup(monkeypatch):
     source, target = room("input"), room("speaker")
-    session = SimpleNamespace(output=SimpleNamespace(audio=None, transcription=None), start=AsyncMock())
+    session = SimpleNamespace(output=SimpleNamespace(audio=None, transcription=None), start=AsyncMock(),
+                              on=Mock(), off=Mock())
     outputs = []
 
     class Output:

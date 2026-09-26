@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 from eidolon_sdk.biz.presentation import SessionOutputPlan
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
+    INTERACTION_MODE_HALF_DUPLEX,
     SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
@@ -576,6 +577,10 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     # session boundary.
     session_intent = _resolve_session_intent(ctx)
     interaction_mode, avatar_requested = await _resolve_session_metadata(ctx)
+    # A remote speaker cannot supply the input board with its local AEC reference.
+    # Preserve explicit PTT; directed open-mic sessions are half-duplex.
+    if presentation_endpoint is not None and interaction_mode != INTERACTION_MODE_PTT:
+        interaction_mode = INTERACTION_MODE_HALF_DUPLEX
     session_turn_policy, allow_interruptions = apply_interaction_mode(
         turn_policy=cfg.turn_policy,
         allow_interruptions=True,

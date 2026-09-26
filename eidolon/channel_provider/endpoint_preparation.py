@@ -27,6 +27,7 @@ class EndpointPreparation:
     prepared: asyncio.Event = field(default_factory=asyncio.Event)
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     remove_observers: list = field(default_factory=list)
+    _cleanup_failed: bool = field(default=False, init=False)
 
     def __post_init__(self):
         self._device_ids = {handle["device"] for handle in self.handles}
@@ -116,17 +117,26 @@ class EndpointPreparation:
     async def cleanup(self) -> None:
         # Keep failure visible; cleanup failure must retain the reservation so
         # a later close/revoke can retry rather than authorizing overlapping IO.
+        handles = tuple(handle for handle in self.handles
+                        if handle["device"] in self.sessions or handle["device"] in self.command_ids)
         results = await asyncio.gather(*(
             self.adapter.end_prepared_session(handle, self.sessions.get(handle["device"]),
                 control_request_id=self.command_ids.get(handle["device"]))
-            for handle in self.handles
-            if handle["device"] in self.sessions or handle["device"] in self.command_ids
+            for handle in handles
         ), return_exceptions=True)
-        failures = [result for result in results if isinstance(result, BaseException)]
+        failures = [(handle["device"], result) for handle, result in zip(handles, results)
+                    if isinstance(result, BaseException)]
         if failures:
-            raise BaseExceptionGroup("endpoint cleanup failed", failures)
+            self._cleanup_failed = True
+            self.state = "failed"
+            self.error = "endpoint cleanup unconfirmed: " + ", ".join(device for device, _ in failures)
+            logging.getLogger(__name__).warning("%s; causes=%r", self.error, failures)
+            raise BackendUnavailable(self.error) from BaseExceptionGroup(
+                "endpoint cleanup failed", [error for _, error in failures])
         for remove in self.remove_observers:
             remove()
         self.remove_observers.clear()
-        if self.state != "failed":
+        if self.state != "failed" or self._cleanup_failed:
             self.state = "closed"
+            self.error = ""
+        self._cleanup_failed = False

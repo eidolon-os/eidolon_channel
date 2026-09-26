@@ -1,3 +1,5 @@
+import pytest
+
 from eidolon_sdk.biz.control.coordination_stream import OpenScene
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from eidolon.channel_provider.contracts import ProvisionRequest
@@ -12,7 +14,8 @@ class TeamAdapter(Adapter):
         self.launched.set()
 
 
-async def test_three_device_team_http_start_status_close_and_shared_occupancy(tmp_path):
+@pytest.mark.parametrize("close_failure", [False, True])
+async def test_three_device_team_http_start_status_close_and_shared_occupancy(tmp_path, close_failure):
     from aiohttp.test_utils import TestClient, TestServer
     from eidolon.channel_provider.http import create_app
     backend = TeamAdapter()
@@ -42,10 +45,23 @@ async def test_three_device_team_http_start_status_close_and_shared_occupancy(tm
         query = dict(owner_id='owner_1', session_id='team')
         response = await client.post('/v1/role-groups/status', json=query, headers=headers)
         assert (await response.json())['state'] == 'ready'
+        if close_failure:
+            backend.end_prepared_session.side_effect = [RuntimeError('input ACK timeout'), None, None]
+            response = await client.post('/v1/role-groups/close', json=query, headers=headers)
+            assert response.status == 503, await response.text()
+            assert len(service._transport_scopes) == 3
+            response = await client.post('/v1/role-groups/status', json=query, headers=headers)
+            status = await response.json()
+            assert status['state'] == 'failed'
+            assert refs[0].device_instance_id in status['error']
+            backend.end_prepared_session.side_effect = None
         response = await client.post('/v1/role-groups/close', json=query, headers=headers)
-        assert (await response.json())['state'] == 'closed'
+        assert response.status == 200, await response.text()
+        status = await response.json()
+        assert status['state'] == 'closed'
+        assert status['error'] == ''
         assert not service._transport_scopes
-        assert backend.end_prepared_session.await_count == 3
+        assert backend.end_prepared_session.await_count == (6 if close_failure else 3)
 
 
 async def test_real_adapter_creates_single_explicit_team_dispatch():

@@ -2,7 +2,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
-from eidolon.channel_provider.contracts import InvalidTransition
+from eidolon.channel_provider.contracts import BackendUnavailable, InvalidTransition
 from eidolon.channel_provider.endpoint_preparation import EndpointPreparation
 from eidolon.channel_provider.ports import ServingAction, ServingRequest
 
@@ -75,7 +75,7 @@ async def test_cleanup_attempts_every_endpoint_and_retains_failure_for_retry():
     visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), AsyncMock())
     visit.sessions = {'a': 'native-a', 'b': 'native-b'}
     adapter.end_prepared_session.side_effect = [RuntimeError('offline'), None]
-    with pytest.raises(ExceptionGroup):
+    with pytest.raises(BackendUnavailable, match="cleanup unconfirmed"):
         await visit.cleanup()
     assert adapter.end_prepared_session.await_count == 2
     assert visit.state != 'closed'

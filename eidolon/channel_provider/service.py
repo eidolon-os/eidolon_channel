@@ -399,6 +399,7 @@ class ChannelProviderService:
                 if scope is not None and scope.task is visit.task:
                     await self._retire_transport_scope(ref.device_instance_id)
             visit.state = "closed"
+            visit.error = ""
         return visit.snapshot()
 
     async def open_shared_session(

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
-from eidolon.channel_provider.contracts import ProvisionRequest, Forbidden, InvalidTransition
+from eidolon.channel_provider.contracts import BackendUnavailable, ProvisionRequest, Forbidden, InvalidTransition
 from eidolon.channel_provider.ports import ServingAction, ServingRequest
 from .helpers import FakeAdapter, provision_payload, encoded
 from .test_service import _service
@@ -175,13 +175,17 @@ async def test_partial_cleanup_failure_keeps_all_reservations_until_retry(tmp_pa
     await wait_for(lambda: visit.state == 'ready')
     backend.end_prepared_session.side_effect = [RuntimeError('endpoint unavailable'), None]
     backend.observers[selection.input_device.device_instance_id]()
-    with pytest.raises(ExceptionGroup):
+    with pytest.raises(BackendUnavailable, match="cleanup unconfirmed"):
         await visit.task
     assert backend.end_prepared_session.await_count == 2
     assert len(service._transport_scopes) == 2
+    status = await service.device_conversation(selection.session_id, authenticated_owner_id="owner_1")
+    assert status["state"] == "failed"
+    assert "cleanup unconfirmed" in status["error"]
     backend.end_prepared_session.side_effect = None
     result = await service.device_conversation(selection.session_id,
         authenticated_owner_id='owner_1', close=True)
     assert result['state'] == 'closed'
+    assert result['error'] == ''
     assert not service._transport_scopes
     await service.shutdown()

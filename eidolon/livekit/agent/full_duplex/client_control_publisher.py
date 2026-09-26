@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from eidolon_sdk.biz.contracts import (
     COMPANION_UI_STATE_TOPIC,
     CONTROL_TOPIC,
-    WIRE_SCHEMA_VERSION,
 )
 
 from ..observability import TurnTimeline
@@ -19,6 +18,7 @@ from ..session.client_control import (
     append_client_control_event,
     build_client_control_event,
     build_session_client_control_envelope,
+    build_companion_ui_state_payload,
 )
 
 if TYPE_CHECKING:
@@ -89,13 +89,7 @@ class FullDuplexClientControlPublisher:
         except RuntimeError:
             return
 
-        payload = {
-            "schema_v": WIRE_SCHEMA_VERSION,
-            "type": COMPANION_UI_STATE_TOPIC,
-            "state": state,
-            "reason": reason,
-            "ts_ms": int(time.time() * 1000),
-        }
+        payload = build_companion_ui_state_payload(state, reason)
 
         async def _send() -> None:
             await local.publish_data(

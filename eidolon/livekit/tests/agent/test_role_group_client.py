@@ -75,6 +75,26 @@ async def settle(client):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def test_round_ui_completion_is_revoked_by_new_ptt_before_delivery():
+    delivered = []
+    async def state(frame):
+        delivered.append(frame.epoch)
+    client = prepared(on_state=state)
+    capture(client)
+    client.accept(frame('state', state='idle', members={}, epoch=1))
+    client.press('next')
+    await settle(client)
+    assert not delivered
+    client.release('next')
+    client.accept(frame('capturing', capture_id='next', epoch=2))
+    client.accept(frame('state', state='idle', members={}, epoch=1))
+    await settle(client)
+    assert not delivered
+    client.accept(frame('state', state='idle', members={}, epoch=2))
+    await settle(client)
+    assert delivered == [2]
+
+
 async def test_local_press_stops_all_members_before_agent_ack_and_drops_late_output():
     client = prepared()
     stopped = []

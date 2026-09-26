@@ -27,7 +27,6 @@ from eidolon_sdk.biz.contracts import (
     SESSION_END_ERROR,
     SESSION_END_USER_LEFT,
     SESSION_INTENT_USER_INITIATED,
-    WIRE_SCHEMA_VERSION,
 )
 from eidolon_sdk.biz.dialogue_control import TurnCommitBoundary
 
@@ -47,6 +46,7 @@ from eidolon.livekit.agent.session.client_control import (
     append_client_control_event,
     build_client_control_event,
     build_session_client_control_envelope,
+    build_companion_ui_state_payload,
 )
 from eidolon.livekit.agent.session.committed_turn import publish_committed_turn_decision
 from eidolon.livekit.agent.session.agent_output_coordinator import AgentOutputCoordinator
@@ -940,13 +940,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         )
 
     def _publish_companion_ui_state(self, state: str, reason: str) -> None:
-        payload = {
-            "schema_v": WIRE_SCHEMA_VERSION,
-            "type": COMPANION_UI_STATE_TOPIC,
-            "state": state,
-            "reason": reason,
-            "ts_ms": int(time.time() * 1000),
-        }
+        payload = build_companion_ui_state_payload(state, reason)
         self._publish_data(COMPANION_UI_STATE_TOPIC, payload)
 
     def _publish_client_control(

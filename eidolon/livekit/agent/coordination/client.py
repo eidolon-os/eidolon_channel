@@ -52,11 +52,13 @@ class RoleGroupClient:
         present: Callable[[ReplyStart, AsyncIterator[str], Callable[[], None]], Awaitable[bool]],
         stop: Callable[[str], Awaitable[bool]],
         stop_timeout: float = 2.0,
+        on_state: Callable[[SceneState], Awaitable[None]] | None = None,
     ):
         self.opened = opened
         self.present = present
         self.stop = stop
         self.stop_timeout = stop_timeout
+        self.on_state = on_state
         self.members = {
             m.output_device.device_instance_id: m.companion_id for m in opened.selection.members
         }
@@ -239,6 +241,8 @@ class RoleGroupClient:
                 raise ValueError("unknown scene state member")
             if self._epoch is not None and frame.epoch >= self._epoch:
                 self.state = frame
+                if self.on_state is not None:
+                    self._spawn(self._notify_state(frame))
             return
         if frame.device_id not in self.members:
             raise ValueError("output is not a scene member")
@@ -280,6 +284,11 @@ class RoleGroupClient:
             playback.text.put_nowait(None)
         elif isinstance(frame, ReplyDelta):
             playback.text.put_nowait(frame.text)
+
+    async def _notify_state(self, frame: SceneState):
+        # A queued completion must not clear a newer PTT capture's UI.
+        if self.state is frame and self.on_state is not None:
+            await self.on_state(frame)
 
     async def run(self, http: aiohttp.ClientSession, *, base_url: str, token: str):
         """Use the Host's configured service credential; never a Mobile token."""

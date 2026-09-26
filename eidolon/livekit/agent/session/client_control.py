@@ -11,11 +11,17 @@ from __future__ import annotations
 from typing import Any
 
 from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION, unix_ms
+from eidolon_sdk.biz.contracts import COMPANION_UI_STATE_TOPIC, WIRE_SCHEMA_VERSION
 
 CHANNEL_CONTROL_SOURCE_ID = "eidolon_channel"
 CHANNEL_CONTROL_SOURCE_TYPE = "channel"
 SESSION_LOCAL_CONTROL_TTL_MS = 5_000
 CLIENT_CONTROL_EVENT_LIMIT = 12
+
+
+def build_companion_ui_state_payload(state: str, reason: str) -> dict[str, Any]:
+    return {"schema_v": WIRE_SCHEMA_VERSION, "type": COMPANION_UI_STATE_TOPIC,
+            "state": state, "reason": reason, "ts_ms": unix_ms()}
 
 def build_client_control_event(
     *,

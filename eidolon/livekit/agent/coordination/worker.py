@@ -5,16 +5,20 @@ configured stages. This module neither reserves devices nor builds transports.
 Only the explicit ip_role_group selection can instantiate this composition.
 """
 import asyncio
+import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
 from livekit.agents.voice import AgentSession
 from livekit.agents.voice.room_io import RoomOptions
 from eidolon_sdk.biz.control.coordination_stream import OpenScene, ReplyStart
+from eidolon_sdk.biz.contracts import COMPANION_UI_STATE_TOPIC
 from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
 from eidolon.livekit.common.config.schema import ObservabilityConfig, TurnPolicyConfig
 from ..half_duplex.pipeline import HalfDuplexPttPipeline
 from ..session.policy_bound_agent import PolicyBoundAgent
+from ..session.client_control import build_companion_ui_state_payload
 from .client import RoleGroupClient
 from .native_output import NativeSpeechPresenter, SpeechEndpoint
 
@@ -75,6 +79,24 @@ class TeamWorker:
         tasks = []
         pipeline = None
         ended = asyncio.Event()
+        source = self.opened.selection.input_device.device_instance_id
+        by_device = {o.endpoint.participant_identity: o for o in self.outputs}
+
+        async def ui(room, device, state):
+            try:
+                async with asyncio.timeout(1):
+                    await room.local_participant.publish_data(json.dumps(
+                        build_companion_ui_state_payload(state, 'agent_state:' + state)).encode(),
+                        topic=COMPANION_UI_STATE_TOPIC, reliable=True,
+                        destination_identities=[device])
+            except Exception:
+                logging.getLogger(__name__).warning('team UI delivery failed device=%s', device)
+
+        async def round_state(frame):
+            # Only a terminal round update is emitted by the coordinator.
+            # Generation/stream completion alone never returns PTT to idle.
+            await ui(self.input_room, source, 'listening')
+
         try:
             endpoints = {}
             async with asyncio.timeout(10):
@@ -92,8 +114,26 @@ class TeamWorker:
                             close_on_disconnect=True))
                     endpoints[(output.companion_id, output.endpoint.participant_identity)] = (
                         SpeechEndpoint(session, output.confirm_playback))
+            presenter = NativeSpeechPresenter(endpoints)
+
+            async def present(start, text, speaking):
+                output = by_device[start.device_id]
+                state_updates = []
+                await asyncio.gather(ui(output.room, start.device_id, 'thinking'),
+                                     ui(self.input_room, source, 'thinking'))
+                def on_speaking():
+                    speaking()
+                    state_updates.append(asyncio.gather(
+                        ui(output.room, start.device_id, 'speaking'),
+                        ui(self.input_room, source, 'speaking')))
+                try:
+                    return await presenter(start, text, on_speaking)
+                finally:
+                    await asyncio.gather(*state_updates, return_exceptions=True)
+                    await ui(output.room, start.device_id, 'listening')
+
             self.client = RoleGroupClient(self.opened,
-                present=NativeSpeechPresenter(endpoints), stop=self.stop)
+                present=present, stop=self.stop, on_state=round_state)
             transport = asyncio.create_task(self.client.run(
                 http, base_url=agent_url, token=service_token))
             tasks.append(transport)

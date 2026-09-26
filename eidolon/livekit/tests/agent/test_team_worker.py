@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,6 +16,7 @@ def arguments():
     opened = opening()
     def room(identity):
         return SimpleNamespace(name=identity, isconnected=lambda: True,
+            local_participant=SimpleNamespace(publish_data=AsyncMock()),
             remote_participants={identity: SimpleNamespace(identity=identity)})
     outputs = tuple(worker.TeamOutput(member.companion_id, PresentationEndpoint(
         room=member.output_device.device_instance_id,
@@ -101,7 +103,7 @@ async def test_team_composes_one_input_and_exact_native_outputs(runtime):
             assert opts.audio_output is True
             assert call.kwargs['room'] is output.room
         kwargs['on_ready'].assert_awaited_once()
-        assert isinstance(clients[0].kwargs['present'], worker.NativeSpeechPresenter)
+        assert callable(clients[0].kwargs['present'])
         finish.set()
         await task
         assert team.cleanup_ok
@@ -134,3 +136,29 @@ def test_missing_member_or_speaking_input_rejected_before_any_start():
     kwargs['input_factory'].outputs = OutputSelection(speech=True)
     with pytest.raises(ValueError, match='must not respond'):
         worker.TeamWorker(opened, **kwargs)
+
+
+async def test_team_maps_real_playback_and_round_completion_to_device_ui(runtime, monkeypatch):
+    sessions, pipelines, clients, launched, finish = runtime
+    async def speech(start, text, speaking):
+        speaking()
+        return True
+    monkeypatch.setattr(worker, 'NativeSpeechPresenter', lambda endpoints: speech)
+    opened, kwargs = arguments()
+    team = worker.TeamWorker(opened, **kwargs)
+    task = asyncio.create_task(team.run(None, agent_url='http://agent', service_token='test'))
+    try:
+        await asyncio.wait_for(launched.wait(), 2)
+        device = kwargs['outputs'][0].endpoint.participant_identity
+        assert await clients[0].kwargs['present'](SimpleNamespace(device_id=device), None, lambda: None)
+        def states(room):
+            return [json.loads(c.args[0])['state']
+                    for c in room.local_participant.publish_data.await_args_list]
+        assert states(kwargs['input_room']) == ['thinking', 'speaking']
+        assert states(kwargs['outputs'][0].room) == ['thinking', 'speaking', 'listening']
+        assert states(kwargs['outputs'][1].room) == []
+        await clients[0].kwargs['on_state'](SimpleNamespace(state='idle'))
+        assert states(kwargs['input_room'])[-1] == 'listening'
+    finally:
+        finish.set()
+        await task

@@ -1,10 +1,12 @@
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from eidolon_sdk.biz.presentation import InputSelection, OutputSelection, SessionOutputPlan
 from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+from eidolon.livekit.common.config.schema import ObservabilityConfig, TurnPolicyConfig
 from eidolon.livekit.agent.coordination import worker
 from .test_role_group_client import opening
 
@@ -74,12 +76,22 @@ def runtime(monkeypatch):
 async def test_team_composes_one_input_and_exact_native_outputs(runtime):
     sessions, pipelines, clients, launched, finish = runtime
     opened, kwargs = arguments()
-    team = worker.TeamWorker(opened, **kwargs)
+    original = TurnPolicyConfig()
+    policy = replace(original, ptt=replace(original.ptt, segment_min_audio_ms=120))
+    observations = ObservabilityConfig()
+    team = worker.TeamWorker(opened, **kwargs, turn_policy=policy,
+        observability=observations, audio_sample_rate=24_000)
     task = asyncio.create_task(team.run(None, agent_url='http://agent', service_token='test'))
     try:
         await asyncio.wait_for(launched.wait(), 2)
         assert len(sessions) == 2 and len(pipelines) == 1
         assert pipelines[0].factory is kwargs['input_factory']
+        input_options = pipelines[0].kwargs
+        assert input_options['turn_policy'].idle.disconnect_after_idle_ms == 0
+        assert policy.idle.disconnect_after_idle_ms == 60_000
+        assert input_options['turn_policy'].ptt.segment_min_audio_ms == 120
+        assert input_options['observability'] is observations
+        assert input_options['audio_sample_rate'] == 24_000
         for session, output in zip(sessions, kwargs['outputs']):
             call = session.start.await_args
             assert call.args[0]['llm'] is None and call.args[0]['stt'] is None

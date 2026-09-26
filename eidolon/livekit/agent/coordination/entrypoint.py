@@ -61,7 +61,9 @@ async def run_team_dispatch(ctx, cfg, raw):
                 reliable=True, topic=SESSION_CONTROL_TOPIC, destination_identities=[source])
 
         worker = TeamWorker(team.opened, input_room=ctx.room, input_factory=source_factory,
-            outputs=tuple(outputs), stop=stop, on_ready=lambda: lifecycle(SESSION_STARTED_TYPE))
+            outputs=tuple(outputs), stop=stop, on_ready=lambda: lifecycle(SESSION_STARTED_TYPE),
+            turn_policy=cfg.turn_policy, observability=cfg.observability,
+            audio_sample_rate=cfg.behavior.audio_sample_rate)
         async with aiohttp.ClientSession() as http:
             try:
                 await worker.run(http, agent_url=url, service_token=token)

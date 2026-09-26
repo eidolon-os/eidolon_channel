@@ -6,12 +6,13 @@ Only the explicit ip_role_group selection can instantiate this composition.
 """
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from livekit.agents.voice import AgentSession
 from livekit.agents.voice.room_io import RoomOptions
 from eidolon_sdk.biz.control.coordination_stream import OpenScene, ReplyStart
 from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+from eidolon.livekit.common.config.schema import ObservabilityConfig, TurnPolicyConfig
 from ..half_duplex.pipeline import HalfDuplexPttPipeline
 from ..session.policy_bound_agent import PolicyBoundAgent
 from .client import RoleGroupClient
@@ -30,7 +31,10 @@ class TeamOutput:
 class TeamWorker:
     def __init__(self, opened: OpenScene, *, input_room, input_factory,
                  outputs: tuple[TeamOutput, ...], stop: Callable[[str], Awaitable[bool]],
-                 on_ready: Callable[[], Awaitable[None]]):
+                 on_ready: Callable[[], Awaitable[None]],
+                 turn_policy: TurnPolicyConfig | None = None,
+                 observability: ObservabilityConfig | None = None,
+                 audio_sample_rate: int = 16_000):
         expected = {(m.companion_id, m.output_device.device_instance_id)
                     for m in opened.selection.members}
         actual = {(o.companion_id, o.endpoint.participant_identity) for o in outputs}
@@ -53,6 +57,12 @@ class TeamWorker:
         self.opened = opened
         self.input_room, self.input_factory = input_room, input_factory
         self.outputs, self.stop, self.on_ready = outputs, stop, on_ready
+        policy = turn_policy or TurnPolicyConfig()
+        # The scene owns lifetime, including the bounded coordination stream.
+        # A silent input must not end a team while a different endpoint speaks.
+        # Copy the policy so ordinary PTT sessions retain their idle behavior.
+        self.input_policy = replace(policy, idle=replace(policy.idle, disconnect_after_idle_ms=0))
+        self.observability, self.audio_sample_rate = observability, audio_sample_rate
         self.client = None
         self._started = False
         self.cleanup_ok = False
@@ -98,7 +108,9 @@ class TeamWorker:
                 if lost_output in done:
                     raise ConnectionError('team output ended during preparation')
             pipeline = HalfDuplexPttPipeline(self.input_factory, destination=self.client,
-                welcome_message=None, on_session_started=self.on_ready)
+                welcome_message=None, on_session_started=self.on_ready,
+                turn_policy=self.input_policy, observability=self.observability,
+                audio_sample_rate=self.audio_sample_rate)
             recording = asyncio.create_task(pipeline.run(self.input_room))
             tasks.append(recording)
             done, _ = await asyncio.wait((recording, transport, lost_output),

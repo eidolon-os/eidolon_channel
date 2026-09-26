@@ -2,7 +2,8 @@
 
 Room admission, output policy and the session's TTS/RoomIO belong to composition.
 There is no media transport here. SDK playout and remote playback confirmation
-remain distinct; only the latter may release the next coordinated reply.
+remain distinct. By default sequence on native playout, without claiming a
+remote hardware drain; an installation may supply an additional confirmation.
 """
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -14,9 +15,9 @@ from eidolon_sdk.biz.control.coordination_stream import ReplyStart
 @dataclass(frozen=True)
 class SpeechEndpoint:
     session: AgentSession
-    # Installed by the existing device-control integration, never a timer or a
-    # default True. It must correlate the turn and stop on disconnect/cancel.
-    confirm_playback: Callable[[ReplyStart], Awaitable[bool]]
+    # Optional additional device evidence. When absent the result means only
+    # native SpeechHandle playout, explicitly labeled on the scene receipt.
+    confirm_playback: Callable[[ReplyStart], Awaitable[bool]] | None = None
 
 
 class NativeSpeechPresenter:
@@ -63,7 +64,8 @@ class NativeSpeechPresenter:
             await handle.wait_for_playout()
             if failed or handle.interrupted or not consumed or not nonempty:
                 return False
-            completed = await endpoint.confirm_playback(start) is True
+            completed = (await endpoint.confirm_playback(start) is True
+                         if endpoint.confirm_playback is not None else True)
             return completed and not failed and not handle.interrupted
         finally:
             session.off("error", on_error)

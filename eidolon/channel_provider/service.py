@@ -84,6 +84,7 @@ class ChannelProviderService:
         self._lock = asyncio.Lock()
         self._transport_scopes: dict[str, _TransportScope] = {}
         self._device_conversations: dict = {}
+        self._team_conversations: dict = {}
         self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
 
     def initialize(self) -> None:
@@ -319,13 +320,32 @@ class ChannelProviderService:
 
     async def open_device_conversation(self, selection, *, authenticated_owner_id: str) -> dict:
         from .device_conversation import DeviceConversation
+        return await self._open_prepared_scene(selection, authenticated_owner_id,
+            self._device_conversations, "open_directed_session",
+            lambda adapter, handles: DeviceConversation(selection, authenticated_owner_id,
+                                                         adapter, handles))
+
+    async def open_team_conversation(self, opened, *, authenticated_owner_id: str):
+        from .team_conversation import TeamConversation
+        if opened.owner_id != authenticated_owner_id:
+            raise Forbidden("team Owner mismatch")
+        previous = self._team_conversations.get((authenticated_owner_id, opened.selection.session_id))
+        if previous is not None and previous.opened != opened:
+            raise IdempotencyConflict("team decision configuration cannot change")
+        return await self._open_prepared_scene(opened.selection, authenticated_owner_id,
+            self._team_conversations, "open_team_session",
+            lambda adapter, handles: TeamConversation(opened, adapter, handles), identity=opened)
+
+    async def _open_prepared_scene(self, selection, authenticated_owner_id, catalog,
+                                   capability, create, identity=None):
         if not authenticated_owner_id:
             raise Forbidden("authenticated Owner is required")
         key = (authenticated_owner_id, selection.session_id)
         async with self._lock:
-            previous = self._device_conversations.get(key)
+            previous = catalog.get(key)
             if previous is not None:
-                if previous.selection != selection:
+                if (previous.selection != selection
+                        or (identity is not None and previous.opened != identity)):
                     raise IdempotencyConflict("conversation selection cannot change")
                 return previous.snapshot()
             records = []
@@ -338,13 +358,12 @@ class ChannelProviderService:
                 if record.device_id in self._transport_scopes:
                     raise InvalidTransition("selected device already belongs to a transport")
                 records.append(record)
-            if records[0].adapter_name != records[1].adapter_name:
+            if len({record.adapter_name for record in records}) != 1:
                 raise InvalidTransition("selected endpoints require the same transport")
             adapter = self._registry.get(records[0].adapter_name)
-            if not callable(getattr(adapter, "open_directed_session", None)):
+            if not callable(getattr(adapter, capability, None)):
                 raise InvalidTransition("transport does not support directed sessions")
-            visit = DeviceConversation(selection, authenticated_owner_id, adapter,
-                tuple(json.loads(record.handle_json) for record in records))
+            visit = create(adapter, tuple(json.loads(record.handle_json) for record in records))
             scope = _TransportScope(asyncio.current_task(), request=visit.request)
             device_ids = tuple(record.device_id for record in records)
 
@@ -363,14 +382,15 @@ class ChannelProviderService:
             scope.cleanup = cleanup
             for device_id in device_ids:
                 self._transport_scopes[device_id] = scope
-            self._device_conversations[key] = visit
+            catalog[key] = visit
             visit.task = scope.task = asyncio.create_task(run())
             visit.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
             return visit.snapshot()
 
     async def device_conversation(self, session_id: str, *, authenticated_owner_id: str,
-                                  close: bool = False) -> dict:
-        visit = self._device_conversations.get((authenticated_owner_id, session_id))
+                                  close: bool = False, team: bool = False) -> dict:
+        catalog = self._team_conversations if team else self._device_conversations
+        visit = catalog.get((authenticated_owner_id, session_id))
         if visit is None:
             raise UnknownChannel("device conversation is not known on this Provider")
         if close:

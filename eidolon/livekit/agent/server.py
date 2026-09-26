@@ -387,6 +387,19 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         cfg.providers.vad_provider,
     )
 
+    metadata = json.loads(ctx.job.metadata or '{}')
+    if 'team_dispatch' in metadata:
+        from eidolon.livekit.common.team_dispatch import TeamDispatch
+        from eidolon.livekit.agent.coordination.entrypoint import run_team_dispatch
+        team = TeamDispatch.model_validate(metadata['team_dispatch'])
+        if (team.input_plan.session_id != _resolve_runtime_session_id(ctx)
+                or team.input_plan != _resolve_output_plan(ctx, team.input_plan.session_id)
+                or metadata.get('presentation_endpoint') is not None
+                or metadata.get('target_companion_id') is not None):
+            raise ValueError('TEAM_DISPATCH_SCOPE_MISMATCH')
+        await run_team_dispatch(ctx, cfg, metadata['team_dispatch'])
+        return
+
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
     prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room

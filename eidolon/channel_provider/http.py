@@ -228,6 +228,30 @@ def create_app(
                         device_conversation)
 
 
+    async def team_conversation(request):
+        from eidolon_sdk.biz.control.coordination_stream import OpenScene
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            if request.match_info['action'] == 'open':
+                opened = OpenScene.model_validate_json(await request.read())
+                result = await service.open_team_conversation(opened,
+                    authenticated_owner_id=opened.owner_id)
+            else:
+                payload = CloseSharedSession.model_validate_json(await request.read())
+                result = await service.device_conversation(payload.session_id,
+                    authenticated_owner_id=payload.owner_id, team=True,
+                    close=request.match_info['action'] == 'close')
+            return _json_body(result)
+        except ValidationError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
+
+    app.router.add_post('/v1/role-groups/{action:open|status|close}', team_conversation)
+
     async def shared_session(request: web.Request) -> web.Response:
         if not _authorized(request, bearer_token):
             return _problem(Unauthenticated("bearer credential was not accepted"))

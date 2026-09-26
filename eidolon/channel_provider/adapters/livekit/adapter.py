@@ -658,7 +658,7 @@ class LiveKitChannelAdapter:
             metadata = self._dispatch_metadata(dispatch)
             # A new listener has no in-memory reservation for this pair. Never
             # resurrect a directed worker from an old Provider process.
-            if metadata.get("presentation_endpoint") is not None:
+            if metadata.get("presentation_endpoint") is not None or metadata.get("team_dispatch") is not None:
                 await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
                 continue
             plan = metadata.get("output_plan")
@@ -1114,6 +1114,7 @@ class LiveKitChannelAdapter:
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, presentation_endpoint: dict | None = None,
+        team_dispatch: dict | None = None,
     ) -> None:
         """Place the standing order, and say on it why this session exists.
 
@@ -1127,6 +1128,14 @@ class LiveKitChannelAdapter:
         if target_companion_id is not None:
             from eidolon.interaction_context import validate_companion_target
             validate_companion_target(target_companion_id)
+        if team_dispatch is not None:
+            from eidolon.livekit.common.team_dispatch import TeamDispatch
+            team = TeamDispatch.model_validate(team_dispatch)
+            if (presentation_endpoint is not None or target_companion_id is not None
+                    or team.input_plan.session_id != conversation_id
+                    or team.opened.selection.input_device.device_instance_id != handle['device']):
+                raise InvalidTransition("inconsistent team dispatch")
+            team_dispatch = team.model_dump(mode='json')
         room, agent = self._serving(handle)
         if presentation_endpoint is not None:
             from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
@@ -1158,6 +1167,7 @@ class LiveKitChannelAdapter:
                     metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED) != session_intent
                     or metadata.get("output_plan") != (output_plan.model_dump(mode="json") if output_plan else None)
                     or metadata.get("presentation_endpoint") != presentation_endpoint
+                    or metadata.get("team_dispatch") != team_dispatch
                 ):
                     raise InvalidTransition("an active conversation cannot change intent or output plan")
                 already_serving = True
@@ -1192,6 +1202,7 @@ class LiveKitChannelAdapter:
                                if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
                             **({"presentation_endpoint": presentation_endpoint} if presentation_endpoint else {}),
+                            **({"team_dispatch": team_dispatch} if team_dispatch else {}),
                         }
                     ),
                 )
@@ -1260,6 +1271,28 @@ class LiveKitChannelAdapter:
             }).encode(), reliable=True, topic=SESSION_CONTROL_TOPIC,
                 destination_identities=[handle["device"]])
         await self.close_session(handle, session_id)
+
+    async def open_team_session(self, opened, handles, sessions):
+        from eidolon_sdk.biz.presentation import InputSelection, OutputSelection
+        from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
+        from eidolon.livekit.common.team_dispatch import TeamDispatch
+        source, *targets = handles
+        plans = [SessionOutputPlan(session_id=sessions[h['device']], **h['output_template'])
+                 for h in handles]
+        if not plans[0].inputs.microphone or any(not p.outputs.speech for p in plans[1:]):
+            raise InvalidTransition("team endpoint capabilities do not match scene")
+        source_plan = plans[0].model_copy(update={'outputs': OutputSelection(),
+                                                'expression_profile': None})
+        endpoints = tuple(PresentationEndpoint(room=h['room'], participant_identity=h['device'],
+            plan=p.model_copy(update={'inputs': InputSelection(microphone=False),
+                'outputs': OutputSelection(speech=True, dialogue_text=p.outputs.dialogue_text),
+                'expression_profile': None})) for h, p in zip(targets, plans[1:]))
+        team = TeamDispatch(opened=opened, input_plan=source_plan, endpoints=endpoints)
+        handle = dict(source)
+        handle['output_template'] = source_plan.model_dump(mode='json', exclude={'session_id'})
+        await self.open_session(handle, source_plan.session_id,
+            session_intent=SESSION_INTENT_USER_INITIATED,
+            team_dispatch=team.model_dump(mode='json'))
 
     async def open_directed_session(
         self, source: dict, target: dict, *, source_session_id: str,

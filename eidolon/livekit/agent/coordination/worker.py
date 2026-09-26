@@ -24,7 +24,7 @@ class TeamOutput:
     endpoint: PresentationEndpoint
     room: object
     tts: object  # Existing configured LiveKit TTS plugin, not a new provider.
-    confirm_playback: Callable[[ReplyStart], Awaitable[bool]]
+    confirm_playback: Callable[[ReplyStart], Awaitable[bool]] | None = None
 
 
 class TeamWorker:

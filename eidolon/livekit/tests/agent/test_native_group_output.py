@@ -103,3 +103,17 @@ async def test_empty_or_failed_text_never_confirms_playback(broken):
         confirm.assert_not_called()
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_native_completion_sequences_without_claiming_device_ack():
+    session = AgentSession()
+    sink = RecordingAudioOutput()
+    session.output.audio = sink
+    await session.start(Agent(instructions='', tts=MockTTS(), llm=None, stt=None))
+    presenter = NativeSpeechPresenter({('a', 'device'): SpeechEndpoint(session)})
+    try:
+        assert await asyncio.wait_for(presenter(request(), words(), lambda: None), 5)
+        assert sink.collected_pcm
+    finally:
+        await session.aclose()

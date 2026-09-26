@@ -1,8 +1,8 @@
 """One scene's authenticated Agent stream and revocable media delivery.
 
 The Provider owns admission and device reservations. ``present`` must use the
-existing TTS/output path and return True only on a correlated physical playback
-receipt. Generation/synthesis/host playout completion is insufficient. ``stop``
+existing TTS/output path and return True only after native playout or an
+additional device confirmation. Reply receipts explicitly report native playout. ``stop``
 returns True only after the device confirms playback.stop. Failed cleanup must
 retain the Provider's reservations. No automatic reconnect can replay a scene.
 """
@@ -210,6 +210,7 @@ class RoleGroupClient:
                 request_id=playback.start.request_id,
                 device_id=playback.start.device_id,
                 result="completed" if completed else "failed",
+                completion_basis="native_playout",
             )
         )
         if not completed:

@@ -62,7 +62,7 @@ class TeamWorker:
         self.input_room, self.input_factory = input_room, input_factory
         self.outputs, self.stop, self.on_ready = outputs, stop, on_ready
         policy = turn_policy or TurnPolicyConfig()
-        # The scene owns lifetime, including the bounded coordination stream.
+        # The scene owns lifetime, until explicit close or an endpoint/transport failure.
         # A silent input must not end a team while a different endpoint speaks.
         # Copy the policy so ordinary PTT sessions retain their idle behavior.
         self.input_policy = replace(policy, idle=replace(policy.idle, disconnect_after_idle_ms=0))

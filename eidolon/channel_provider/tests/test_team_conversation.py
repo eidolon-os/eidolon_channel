@@ -46,3 +46,32 @@ async def test_three_device_team_http_start_status_close_and_shared_occupancy(tm
         assert (await response.json())['state'] == 'closed'
         assert not service._transport_scopes
         assert backend.end_prepared_session.await_count == 3
+
+
+async def test_real_adapter_creates_single_explicit_team_dispatch():
+    from .test_livekit_adapter import _adapter
+    from eidolon_sdk.biz.presentation import InputSelection, OutputSelection, SessionOutputPlan
+    from eidolon.livekit.common.team_dispatch import TeamDispatch
+    adapter, client = _adapter()
+    refs = [ProvisionRequest.parse(encoded(provision_payload(
+        device_id=named_device_instance_id(name)))).device_ref for name in ('input', 'a', 'b')]
+    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', mock_order=['b', 'a'],
+        selection=dict(scenario='ip_role_group', session_id='demo', input_device=refs[0], members=[
+            dict(companion_id=key, output_device=ref) for key, ref in zip(('a','b'), refs[1:])])) )
+    handles = tuple(dict(device=ref.device_instance_id, room='room-' + str(i), agent='eidolon',
+        output_template=SessionOutputPlan(session_id='unused', policy_revision=1,
+            inputs=InputSelection(microphone=True), outputs=OutputSelection(speech=True))
+                .model_dump(mode='json', exclude={'session_id'})) for i, ref in enumerate(refs))
+    sessions = {h['device']: 'native-' + str(i) for i, h in enumerate(handles)}
+    await adapter.open_team_session(opened, handles, sessions)
+    assert len(client.agent_dispatch.created) == 1
+    import json
+    metadata = json.loads(client.agent_dispatch.created[0][2])
+    team = TeamDispatch.model_validate(metadata['team_dispatch'])
+    assert not team.input_plan.outputs.can_respond
+    assert all(not e.plan.inputs.microphone for e in team.endpoints)
+    assert team.opened.mock_order == ('b', 'a')
+    assert 'presentation_endpoint' not in metadata and 'target_companion_id' not in metadata
+    await adapter.open_team_session(opened, handles, sessions)
+    assert len(client.agent_dispatch.created) == 1  # Idempotent dispatch.
+    await adapter.shutdown()

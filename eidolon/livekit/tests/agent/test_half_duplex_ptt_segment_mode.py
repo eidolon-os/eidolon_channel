@@ -1054,3 +1054,75 @@ def test_capture_is_open_before_output_preemption_callback() -> None:
     controller._preempt_agent_output = lambda: observed.append(controller.state)
     controller.press()
     assert observed == ["recording"]
+
+
+class _GroupInput:
+    def __init__(self):
+        self.events = []
+        self.closed = asyncio.Event()
+
+    def press(self, capture):
+        self.events.append(("press", capture))
+
+    def release(self, capture):
+        self.events.append(("release", capture))
+
+    def transcript(self, capture, text, commitment=None):
+        self.events.append(("transcript", capture, text, commitment))
+
+
+def _group_pipeline(stt):
+    factory = _FakeFactory(stt)
+    factory.outputs = OutputSelection(speech=False, dialogue_text=False, audio_cue=False)
+    group = _GroupInput()
+    pipeline = HalfDuplexPttPipeline(factory, turn_policy=_segment_policy(), role_group=group)
+    pipeline._room = SimpleNamespace(name="group-input", local_participant=_FakeLocalParticipant())
+    pipeline._session = _FakeSession()
+    return pipeline, group
+
+
+async def test_role_group_ptt_routes_committed_asr_without_solo_generation():
+    pipeline, group = _group_pipeline(_FakeSttStage(streaming_text="大家轮流回答"))
+    for held in (True, False):
+        packet = _packet(ptt=held)
+        pipeline._room_data.handle_packet(packet)
+        pipeline._on_room_packet(packet)
+        if held:
+            pipeline._ptt_controller.push_frame(_Frame(_pcm(120, sample=1200)))
+    assert [event[0] for event in group.events] == ["press", "release"]
+    assert pipeline._ptt_controller.state == "transcribing"
+    await asyncio.gather(*pipeline._turn_tasks)
+    assert group.events[2][0:3] == ("transcript", "ptt-1", "大家轮流回答")
+    assert group.events[2][3]["evidence"]["boundary"] == "ptt_segment_commit"
+    assert pipeline._session.generate_reply_calls == []
+    assert pipeline._factory.turn_decisions == []
+    assert pipeline._build_room_options().text_input is False
+    assert pipeline._ptt_controller._tap_to_stop_max_audio_sec == 0
+
+
+async def test_role_group_empty_capture_releases_agent_asr_wait():
+    pipeline, group = _group_pipeline(_FakeSttStage())
+    for held in (True, False):
+        packet = _packet(ptt=held)
+        pipeline._room_data.handle_packet(packet)
+        pipeline._on_room_packet(packet)
+    await asyncio.gather(*pipeline._turn_tasks)
+    assert group.events[-1] == ("transcript", "ptt-1", "", None)
+    assert pipeline._session.generate_reply_calls == []
+
+
+def test_role_group_refuses_audible_input_pipeline():
+    with pytest.raises(ValueError, match="must not publish audio"):
+        HalfDuplexPttPipeline(_FakeFactory(_FakeSttStage()), role_group=_GroupInput())
+
+
+async def test_abort_closes_ptt_and_invalidates_pending_asr():
+    controller = _controller(_FakeSttStage(streaming_text="old"))
+    controller.press()
+    generation = controller.generation
+    controller.push_frame(_Frame(_pcm(120)))
+    controller.abort()
+    assert controller.generation > generation
+    assert controller.state == "idle"
+    assert not controller.push_frame(_Frame(_pcm(120)))
+    assert (await controller.release()).action == "reject"

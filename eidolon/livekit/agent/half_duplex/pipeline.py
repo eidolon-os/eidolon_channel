@@ -71,6 +71,7 @@ from .ptt_transcriber import PttSegmentTranscriber, PttSegmentTranscriberConfig
 from .ptt_turn_controller import HalfDuplexPttTurnController, PttSegmentTurnResult
 
 if TYPE_CHECKING:
+    from eidolon.livekit.agent.coordination.client import RoleGroupClient
     from livekit.agents.voice import AgentSession
     from livekit.rtc import Room
 
@@ -92,12 +93,19 @@ class HalfDuplexPttPipeline(BasePipeline):
         callbacks: PipelineCallbacks | None = None,
         session_intent: str = SESSION_INTENT_USER_INITIATED,
         interaction_mode: str = INTERACTION_MODE_PTT,
+        role_group: RoleGroupClient | None = None,
         on_session_started: Callable[[], Awaitable[None]] | None = None,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_idle_disconnect: Callable[[], Any] | None = None,
         on_session_closed: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
+        self._role_group = role_group
+        if role_group is not None:
+            if interaction_mode != INTERACTION_MODE_PTT:
+                raise ValueError("role-group input requires explicit PTT mode")
+            if factory.outputs.speech or factory.outputs.audio_cue:
+                raise ValueError("role-group input pipeline must not publish audio")
         self._instructions = instructions
         self._welcome_message = welcome_message
         self._welcome_pcm = prepare_welcome_audio(
@@ -147,6 +155,8 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._idle_watchdog_controller = self._build_idle_watchdog()
 
     def _welcome_on_enter(self) -> WelcomeMessage | None:
+        if self._role_group is not None:
+            return None
         return resolve_welcome(
             session_intent=self._session_intent,
             welcome_message=self._welcome_message,
@@ -168,7 +178,8 @@ class HalfDuplexPttPipeline(BasePipeline):
         return RoomOptions(
             audio_input=False,
             participant_identity=participant_identity,
-            text_input=TextInputOptions(text_input_cb=accept_text_input),
+            text_input=(False if self._role_group is not None
+                        else TextInputOptions(text_input_cb=accept_text_input)),
             audio_output=(AudioOutputOptions(sample_rate=self._audio_sample_rate)
                           if (self._factory.outputs.speech or self._factory.outputs.audio_cue) else False),
             text_output=self._factory.outputs.dialogue_text,
@@ -217,7 +228,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         return PttAgent(
             outputs=self._factory.outputs,
             instructions=self._instructions,
-            llm=self._factory.llm.llm,
+            llm=(None if self._role_group is not None else self._factory.llm.llm),
             tts=self._factory.tts.tts if self._factory.tts is not None else None,
         )
 
@@ -253,6 +264,11 @@ class HalfDuplexPttPipeline(BasePipeline):
         from ..runtime.resolver import wait_for_runtime_participant_identity
 
         logger.info("[HalfDuplexPttPipeline] starting room=%s", room.name)
+        if self._role_group is not None:
+            async with asyncio.timeout(10):
+                await self._role_group.ready.wait()
+            if self._role_group.closed.is_set():
+                raise ConnectionError("role-group closed before input setup")
         self._room = room
         self._presentation_room = output_room
         self._presentation_peer = output_participant_identity
@@ -283,9 +299,14 @@ class HalfDuplexPttPipeline(BasePipeline):
 
         session_wait = asyncio.create_task(self._session_closed_event.wait())
         room_wait = asyncio.create_task(self._room_disconnected_event.wait())
+        waits = {session_wait, room_wait}
+        group_wait = None
+        if self._role_group is not None:
+            group_wait = asyncio.create_task(self._role_group.closed.wait())
+            waits.add(group_wait)
         try:
             done, pending = await asyncio.wait(
-                {session_wait, room_wait},
+                waits,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
@@ -294,7 +315,9 @@ class HalfDuplexPttPipeline(BasePipeline):
                 await asyncio.gather(*pending, return_exceptions=True)
             for task in done:
                 task.result()
-            if session_wait in done and not self._idle_disconnect_started:
+            if group_wait in done and not self._role_group.cleanup_ok:
+                self._close_error = "role_group_cleanup_failed"
+            if (session_wait in done or group_wait in done) and not self._idle_disconnect_started:
                 await self._end_serving_on_close()
         finally:
             await self.shutdown()
@@ -302,6 +325,13 @@ class HalfDuplexPttPipeline(BasePipeline):
     async def shutdown(self) -> None:
         logger.info("[HalfDuplexPttPipeline] shutting down")
         self._stop_idle_watchdog()
+        if self._ptt_controller is not None:
+            self._ptt_controller.abort()
+        if self._role_group is not None and not self._role_group.closed.is_set():
+            try:
+                self._role_group.close()
+            except ConnectionError:
+                pass  # Provider owns transport cleanup and reservation release.
         self._provider_events.cancel_output_watchdog()
         for task in list(self._track_tasks):
             task.cancel()
@@ -355,7 +385,8 @@ class HalfDuplexPttPipeline(BasePipeline):
             transcriber=transcriber,
             agent_output_active=self._agent_output_active_for_ptt,
             preempt_agent_output=self._preempt_agent_output_for_ptt,
-            tap_to_stop_max_audio_sec=ptt.segment_tap_to_stop_max_audio_ms / 1000.0,
+            tap_to_stop_max_audio_sec=(0.0 if self._role_group is not None
+                                       else ptt.segment_tap_to_stop_max_audio_ms / 1000.0),
         )
 
     def _build_idle_watchdog(self) -> IdleWatchdog:
@@ -520,6 +551,14 @@ class HalfDuplexPttPipeline(BasePipeline):
                     result.state,
                 )
                 return
+            if self._role_group is not None:
+                try:
+                    self._role_group.press(f"ptt-{self._ptt_controller.generation}")
+                except (ConnectionError, ValueError):
+                    self._ptt_controller.abort()
+                    self._close_error = "role_group_unavailable"
+                    self._session_closed_event.set()
+                    return
             self._last_ptt_held = True
             self._start_ptt_timeline(result)
             self._publish_ptt_turn_status(PTT_OUTCOME_RECORDING, result.reason)
@@ -536,6 +575,15 @@ class HalfDuplexPttPipeline(BasePipeline):
             # Seal the segment in the release callback, before another packet or
             # audio frame can run. Keep the generation across the ASR await.
             transcription = self._ptt_controller.release()
+            if self._role_group is not None:
+                try:
+                    self._role_group.release(f"ptt-{self._ptt_controller.generation}")
+                except (ConnectionError, ValueError):
+                    transcription.close()
+                    self._ptt_controller.abort()
+                    self._close_error = "role_group_unavailable"
+                    self._session_closed_event.set()
+                    return
             task = asyncio.create_task(
                 self._finalize_ptt_turn(transcription, self._ptt_controller.generation)
             )
@@ -550,6 +598,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         except Exception:
             if generation != self._ptt_controller.generation:
                 return
+            self._group_transcript(generation, "")
             logger.exception("[HalfDuplexPttPipeline] PTT segment transcription failed")
             self._publish_ptt_turn_status(
                 ptt_rejected_outcome("transcription_error"),
@@ -563,6 +612,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         if generation != self._ptt_controller.generation:
             return
         if result.action == "reject":
+            self._group_transcript(generation, "")
             self._publish_ptt_turn_status(
                 ptt_rejected_outcome(result.reason),
                 result.reason,
@@ -590,6 +640,15 @@ class HalfDuplexPttPipeline(BasePipeline):
             result.transcript,
             boundary=TurnCommitBoundary.PTT_SEGMENT,
         )
+        if self._role_group is not None:
+            if not self._group_transcript(generation, result.transcript,
+                                          committed_turn_decision.as_metadata()):
+                return
+            self._flush_ptt_timeline(
+                terminal={"action": "commit", "reason": "role_group_dispatch"},
+                result=result, reason="ptt_role_group_dispatched",
+            )
+            return
         publish_committed_turn_decision(
             factory=self._factory,
             decision=committed_turn_decision,
@@ -605,6 +664,18 @@ class HalfDuplexPttPipeline(BasePipeline):
                 output_timeline.set_attr("ptt_generate_reply_error", True)
                 self._flush_output_timeline(output_timeline, "ptt_generate_reply_error")
             raise
+
+    def _group_transcript(self, generation: int, text: str, commitment=None) -> bool:
+        if self._role_group is None:
+            return False
+        try:
+            self._role_group.transcript(f"ptt-{generation}", text, commitment)
+            return True
+        except (ConnectionError, ValueError):
+            self._ptt_controller.abort()
+            self._close_error = "role_group_unavailable"
+            self._session_closed_event.set()
+            return False
 
     def _record_ptt_result(self, result: PttSegmentTurnResult) -> None:
         logger.info(

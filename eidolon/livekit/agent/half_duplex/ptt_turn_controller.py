@@ -94,6 +94,15 @@ class HalfDuplexPttTurnController:
             preempted_agent_output=preempted,
         )
 
+    def abort(self) -> None:
+        """Close capture and invalidate pending ASR when its serving scope ends."""
+        self._generation += 1
+        if self._transcription_task is not None:
+            self._transcription_task.cancel()
+            self._transcription_task = None
+        self._recorder.reset()
+        self._state = "idle"
+
     def push_frame(self, frame: Any) -> bool:
         if self._state != "recording":
             return False

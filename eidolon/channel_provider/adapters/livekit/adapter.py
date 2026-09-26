@@ -27,6 +27,7 @@ from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.control.shared_session import SharedSessionInvitation
 from eidolon_sdk.biz.control.protocol import command_status_from_ack
+from eidolon.livekit.control_receipts import read_control_receipt
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
 from eidolon_sdk.biz.contracts import (
     CHANNEL_PROVIDER_IDENTITY_PREFIX,
@@ -528,18 +529,8 @@ class LiveKitChannelAdapter:
                 future.exception()
 
     def _control_receipt(self, packet: Any, *, room: str, device: str) -> None:
-        if (getattr(packet, "topic", None) != CONTROL_TOPIC
-                or getattr(getattr(packet, "participant", None), "identity", None) != device):
-            return
-        try:
-            body = json.loads(bytes(packet.data))
-        except (TypeError, ValueError, UnicodeDecodeError):
-            return
-        if (not isinstance(body, dict) or type(body.get("v")) is not int or body["v"] != 1
-                or body.get("kind") not in ("ack", "result")
-                or body.get("device_id") != device
-                or not isinstance(body.get("ref"), str)
-                or not isinstance(body.get("status"), str)):
+        body = read_control_receipt(packet, device=device)
+        if body is None:
             return
         pending = self._control_receipts.get((room, body["ref"]))
         if pending is None or pending.future.done() or body.get("op") != pending.op:

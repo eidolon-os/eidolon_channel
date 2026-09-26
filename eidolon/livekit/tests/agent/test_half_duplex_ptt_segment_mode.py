@@ -1075,7 +1075,7 @@ def _group_pipeline(stt):
     factory = _FakeFactory(stt)
     factory.outputs = OutputSelection(speech=False, dialogue_text=False, audio_cue=False)
     group = _GroupInput()
-    pipeline = HalfDuplexPttPipeline(factory, turn_policy=_segment_policy(), role_group=group)
+    pipeline = HalfDuplexPttPipeline(factory, turn_policy=_segment_policy(), destination=group)
     pipeline._room = SimpleNamespace(name="group-input", local_participant=_FakeLocalParticipant())
     pipeline._session = _FakeSession()
     return pipeline, group
@@ -1113,7 +1113,7 @@ async def test_role_group_empty_capture_releases_agent_asr_wait():
 
 def test_role_group_refuses_audible_input_pipeline():
     with pytest.raises(ValueError, match="must not publish audio"):
-        HalfDuplexPttPipeline(_FakeFactory(_FakeSttStage()), role_group=_GroupInput())
+        HalfDuplexPttPipeline(_FakeFactory(_FakeSttStage()), destination=_GroupInput())
 
 
 async def test_abort_closes_ptt_and_invalidates_pending_asr():

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -122,6 +123,85 @@ async def test_disconnection_fails_pending_delivery_and_releases_slot(monkeypatc
         await task
     assert not adapter._control_receipts
     await adapter.shutdown()
+
+
+async def test_playback_stop_bypasses_pending_control_without_losing_correlation(monkeypatch):
+    from eidolon_sdk.biz.control.protocol import build_command_envelope
+
+    adapter, grant, connection, sent, published = await setup(monkeypatch)
+    device = grant.handle["device"]
+    commands = [build_command_envelope(command_id=ref, device_id=device,
+                payload={}, op=op) for ref, op in
+                (("join", "room.join"), ("stop", "playback.stop"))]
+    tasks = []
+    try:
+        tasks.append(asyncio.create_task(adapter.deliver_control(
+            grant.handle, commands[0], wait_for_terminal=True)))
+        await asyncio.wait_for(published.wait(), 1)
+        published.clear()
+        tasks.append(asyncio.create_task(adapter.deliver_control(
+            grant.handle, commands[1], wait_for_terminal=True)))
+        await asyncio.wait_for(published.wait(), 1)
+        assert [item[0]["id"] for item in sent] == ["join", "stop"]
+        # A duplicate urgent command must not replace the original receipt future.
+        with pytest.raises(InvalidTransition):
+            await adapter.deliver_control(grant.handle, commands[1], wait_for_terminal=True)
+        ordinary = build_command_envelope(command_id="join-2", device_id=device,
+                                          payload={}, op="room.join")
+        with pytest.raises(InvalidTransition):
+            await adapter.deliver_control(grant.handle, ordinary, wait_for_terminal=True)
+        receipt(connection, device, ref="stop", op="playback.stop", status="accepted")
+        receipt(connection, device, ref="stop", op="room.join", status="completed")
+        await asyncio.sleep(0)
+        assert not any(task.done() for task in tasks)
+        receipt(connection, device, ref="stop", op="playback.stop", status="completed")
+        assert await tasks[1] == "succeeded"
+        assert not tasks[0].done()
+        receipt(connection, device, ref="join", op="room.join", status="completed")
+        assert await tasks[0] == "succeeded"
+        assert not adapter._control_receipts
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await adapter.shutdown()
+
+
+async def test_slow_stop_receipt_does_not_block_another_device(monkeypatch):
+    from eidolon_sdk.biz.control.protocol import build_command_envelope
+
+    adapter, first, connection, sent, published = await setup(monkeypatch)
+    second = await adapter.open(replace(_spec(), device_id="second-device"), issued_at_ms=1000)
+    other_connection = await _listening(monkeypatch, adapter, second)
+    other_published = asyncio.Event()
+
+    async def publish(data, **kwargs):
+        assert kwargs["destination_identities"] == [second.handle["device"]]
+        other_published.set()
+
+    other_connection.local_participant = SimpleNamespace(publish_data=publish)
+    tasks = []
+    try:
+        # Identical command IDs across distinct device channels remain independent.
+        for grant in (first, second):
+            command = build_command_envelope(command_id="stop", device_id=grant.handle["device"],
+                                             payload={}, op="playback.stop")
+            tasks.append(asyncio.create_task(adapter.deliver_control(
+                grant.handle, command, wait_for_terminal=True)))
+        await asyncio.wait_for(asyncio.gather(published.wait(), other_published.wait()), 1)
+        receipt(other_connection, second.handle["device"], ref="stop",
+                op="playback.stop", status="completed")
+        assert await asyncio.wait_for(tasks[1], 1) == "succeeded"
+        assert not tasks[0].done()
+        connection.drop()
+        with pytest.raises(BackendUnavailable):
+            await tasks[0]
+        assert not adapter._control_receipts
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await adapter.shutdown()
 
 
 async def test_expired_invitation_never_sends(monkeypatch):

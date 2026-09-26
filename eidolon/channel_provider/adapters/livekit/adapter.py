@@ -30,6 +30,7 @@ from eidolon_sdk.biz.control.protocol import command_status_from_ack
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
 from eidolon_sdk.biz.contracts import (
     CHANNEL_PROVIDER_IDENTITY_PREFIX,
+    CONTROL_OP_PLAYBACK_STOP,
     CONTROL_TOPIC,
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
@@ -492,7 +493,14 @@ class LiveKitChannelAdapter:
         if watch is None or watch.device != device or watch.connection is None:
             raise BackendUnavailable("device control channel is not connected")
         key = (room, command_id)
-        if any(pending_room == room for pending_room, _ in self._control_receipts):
+        if key in self._control_receipts:
+            raise InvalidTransition("control command is already in flight")
+        # Stop playback immediately even when an ordinary command is awaiting
+        # its receipt. Keep both exchanges correlated; do not replace or cancel
+        # the earlier operation's future.
+        if op != CONTROL_OP_PLAYBACK_STOP and any(
+            pending_room == room for pending_room, _ in self._control_receipts
+        ):
             raise InvalidTransition("device already has a control delivery in flight")
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._control_receipts[key] = _ControlReceipt(op, future, wait_for_terminal)

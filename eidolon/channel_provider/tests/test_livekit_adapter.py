@@ -1584,3 +1584,45 @@ async def test_channel_presence_requires_active_transport_not_just_identity(stat
     grant = await adapter.open(first, issued_at_ms=1000)
     client.room.participants = [SimpleNamespace(identity=first.device_id, state=state)]
     assert await adapter.device_is_on_channel(grant.handle) is ready
+
+
+@pytest.mark.parametrize('session_id', [None, 'native-session'])
+async def test_prepared_cleanup_waits_for_correlated_device_receipt(session_id):
+    from unittest.mock import AsyncMock
+    from eidolon_sdk.biz.body.capabilities import BODY_OP_ROOM_LEAVE
+    adapter, _ = _adapter()
+    handle = {'device': _DEVICE_1}
+    receipt = asyncio.Event()
+    async def deliver(h, command, **kwargs):
+        assert h == handle
+        assert command['op'] == BODY_OP_ROOM_LEAVE
+        assert command['payload']['control_request_id'] == 'join:owned'
+        assert command['payload'].get('conversation_id') == session_id
+        assert kwargs == {'wait_for_terminal': True}
+        await receipt.wait()
+        return 'succeeded'
+    adapter.deliver_control = AsyncMock(side_effect=deliver)
+    adapter.close_session = AsyncMock()
+    task = asyncio.create_task(adapter.end_prepared_session(handle, session_id,
+        control_request_id='join:owned'))
+    await asyncio.sleep(0)
+    assert not task.done()
+    adapter.close_session.assert_not_awaited()
+    receipt.set()
+    await task
+    if session_id:
+        adapter.close_session.assert_awaited_once_with(handle, session_id)
+    else:
+        adapter.close_session.assert_not_awaited()
+
+
+@pytest.mark.parametrize('result', ['failed', 'rejected', 'expired'])
+async def test_failed_device_cleanup_does_not_release_native_dispatch(result):
+    from unittest.mock import AsyncMock
+    from eidolon.channel_provider.contracts import BackendUnavailable
+    adapter, _ = _adapter()
+    adapter.deliver_control = AsyncMock(return_value=result)
+    adapter.close_session = AsyncMock()
+    with pytest.raises(BackendUnavailable, match='did not confirm'):
+        await adapter.end_prepared_session({'device': _DEVICE_1}, 'native-session')
+    adapter.close_session.assert_not_awaited()

@@ -1262,15 +1262,33 @@ class LiveKitChannelAdapter:
                     and str(getattr(participant, "identity", "")).startswith("presentation-")):
                 raise InvalidTransition("previous presentation is still closing")
 
-    async def end_prepared_session(self, handle: dict, session_id: str) -> None:
-        watch = self._listeners.get(str(handle.get("room") or ""))
-        if watch is not None and watch.connection is not None:
-            await watch.connection.local_participant.publish_data(canonical_json({
-                "schema_v": WIRE_SCHEMA_VERSION, "type": SESSION_END_TYPE,
-                SESSION_CONVERSATION_ID_FIELD: session_id, "reason": "user_left",
-            }).encode(), reliable=True, topic=SESSION_CONTROL_TOPIC,
-                destination_identities=[handle["device"]])
-        await self.close_session(handle, session_id)
+    async def end_prepared_session(self, handle: dict, session_id: str | None,
+                                   *, control_request_id: str | None = None) -> None:
+        """Revoke device IO with a correlated terminal receipt before releasing it.
+
+        The Provider cannot impersonate an Agent's session_end. Use the existing
+        room.leave Body capability over the authenticated device-control path.
+        A join correlation also closes preparation that failed before a native
+        conversation request arrived. Never close an unrelated conversation.
+        """
+        from eidolon_sdk.biz.body.capabilities import BODY_OP_ROOM_LEAVE
+        from eidolon_sdk.biz.control.protocol import build_command_envelope
+        if not session_id and not control_request_id:
+            raise InvalidTransition("session cleanup requires an owned correlation")
+        payload = {}
+        if session_id:
+            payload[SESSION_CONVERSATION_ID_FIELD] = session_id
+        if control_request_id:
+            payload['control_request_id'] = control_request_id
+        command = build_command_envelope(command_id=f"leave:{uuid4().hex}",
+            device_id=handle['device'], op=BODY_OP_ROOM_LEAVE, payload=payload,
+            capability_version=1, src_type='channel', src_id='channel-provider',
+            priority='urgent', ttl_ms=10_000)
+        result = await self.deliver_control(handle, command, wait_for_terminal=True)
+        if result != 'succeeded':
+            raise BackendUnavailable(f"device did not confirm conversation cleanup: {result}")
+        if session_id:
+            await self.close_session(handle, session_id)
 
     async def open_team_session(self, opened, handles, sessions):
         from eidolon_sdk.biz.presentation import InputSelection, OutputSelection

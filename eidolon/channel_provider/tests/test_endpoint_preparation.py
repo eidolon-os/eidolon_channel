@@ -90,3 +90,32 @@ def test_foreign_device_and_duplicate_endpoints_are_rejected():
     visit = EndpointPreparation(Adapter(), ({'device': 'a'},), AsyncMock())
     with pytest.raises(InvalidTransition, match='outside'):
         visit.request('foreign', ServingRequest(ServingAction.START, 'native'))
+
+
+async def test_early_join_receipt_cleans_every_invited_device_without_session_request():
+    adapter = Adapter()
+    adapter.deliver_control = AsyncMock(return_value='succeeded')
+    activate = AsyncMock()
+    visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), activate)
+    await visit.run()
+    assert visit.state == 'failed'
+    assert 'ended early' in visit.error
+    assert visit.sessions == {}
+    activate.assert_not_awaited()
+    await visit.cleanup()
+    assert adapter.end_prepared_session.await_count == 2
+    for handle in visit.handles:
+        adapter.end_prepared_session.assert_any_await(handle, None,
+            control_request_id=visit.command_ids[handle['device']])
+
+
+async def test_partial_preparation_closes_known_session_and_pending_join():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), AsyncMock())
+    visit.command_ids = {'a': 'join:a', 'b': 'join:b'}
+    visit.sessions = {'a': 'native-a'}
+    await visit.cleanup()
+    adapter.end_prepared_session.assert_any_await({'device': 'a'}, 'native-a',
+        control_request_id='join:a')
+    adapter.end_prepared_session.assert_any_await({'device': 'b'}, None,
+        control_request_id='join:b')

@@ -4,6 +4,7 @@ Owns transport preparation only; callers own authorization, reservations and
 activation of their scene's worker. No inference, media or conversation mode.
 """
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -104,6 +105,7 @@ class EndpointPreparation:
         except Exception as exc:
             self.state = "failed"
             self.error = str(exc)
+            logging.getLogger(__name__).warning("endpoint preparation failed: %s", self.error)
         finally:
             for wake in wakes:
                 wake.cancel()
@@ -115,8 +117,10 @@ class EndpointPreparation:
         # Keep failure visible; cleanup failure must retain the reservation so
         # a later close/revoke can retry rather than authorizing overlapping IO.
         results = await asyncio.gather(*(
-            self.adapter.end_prepared_session(handle, self.sessions[handle["device"]])
-            for handle in self.handles if handle["device"] in self.sessions
+            self.adapter.end_prepared_session(handle, self.sessions.get(handle["device"]),
+                control_request_id=self.command_ids.get(handle["device"]))
+            for handle in self.handles
+            if handle["device"] in self.sessions or handle["device"] in self.command_ids
         ), return_exceptions=True)
         failures = [result for result in results if isinstance(result, BaseException)]
         if failures:

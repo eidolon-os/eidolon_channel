@@ -166,3 +166,22 @@ async def test_closing_old_visit_never_cancels_new_visit_on_same_devices(tmp_pat
     assert not active.task.done()
     assert len(service._transport_scopes) == 2
     await service.shutdown()
+
+
+async def test_partial_cleanup_failure_keeps_all_reservations_until_retry(tmp_path):
+    service, backend, selection = await prepare(tmp_path)
+    await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
+    visit = service._device_conversations[('owner_1', selection.session_id)]
+    await wait_for(lambda: visit.state == 'ready')
+    backend.end_prepared_session.side_effect = [RuntimeError('endpoint unavailable'), None]
+    backend.observers[selection.input_device.device_instance_id]()
+    with pytest.raises(ExceptionGroup):
+        await visit.task
+    assert backend.end_prepared_session.await_count == 2
+    assert len(service._transport_scopes) == 2
+    backend.end_prepared_session.side_effect = None
+    result = await service.device_conversation(selection.session_id,
+        authenticated_owner_id='owner_1', close=True)
+    assert result['state'] == 'closed'
+    assert not service._transport_scopes
+    await service.shutdown()

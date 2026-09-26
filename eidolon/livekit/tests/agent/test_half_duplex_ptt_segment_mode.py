@@ -481,26 +481,63 @@ async def test_duplicate_press_while_recording_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_press_while_transcribing_rejects_busy_without_new_segment() -> None:
-    stt = _FakeSttStage(streaming_text="旧问题", delay_sec=0.01)
-    controller = _controller(stt, strategy="streaming")
-
+async def test_press_while_transcribing_supersedes_old_segment() -> None:
+    stt = _FakeSttStage(streaming_text="新问题", delay_sec=0.01)
+    controller = _controller(stt)
     controller.press()
     controller.push_frame(_Frame(_pcm(120, sample=1200)))
-    release_task = asyncio.create_task(controller.release())
+    old = asyncio.create_task(controller.release())
     await asyncio.sleep(0)
+    pressed = controller.press()
+    assert pressed.reason == "pressed"
+    assert controller.push_frame(_Frame(_pcm(140, sample=1300)))
+    result = await old
+    assert result.action == "none"
+    assert controller.state == "recording"
+    result = await controller.release()
+    assert result.transcript == "新问题"
+    assert stt.recognize_streaming_calls[-1] == _pcm(140, sample=1300)
 
-    busy = controller.press()
 
-    assert busy.action == "reject"
-    assert busy.reason == "busy_transcribing"
-    assert busy.state == "transcribing"
-    assert controller.push_frame(_Frame(_pcm(120, sample=1300))) is False
+@pytest.mark.asyncio
+async def test_release_seals_audio_before_transcription_is_scheduled() -> None:
+    stt = _FakeSttStage(streaming_text="第一句")
+    controller = _controller(stt)
+    controller.press()
+    controller.push_frame(_Frame(_pcm(120)))
+    transcription = controller.release()
+    assert controller.state == "transcribing"
+    assert not controller.push_frame(_Frame(_pcm(80)))
+    assert (await transcription).action == "commit"
+    assert stt.recognize_streaming_calls == [_pcm(120)]
 
-    result = await release_task
-    assert result.action == "commit"
-    assert result.transcript == "旧问题"
-    assert len(stt.recognize_streaming_calls) == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late_error", [False, True])
+async def test_superseded_asr_that_ignores_cancellation_cannot_reset_new_capture(late_error) -> None:
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    class LateStt(_FakeSttStage):
+        async def recognize_streaming(self, audio: bytes) -> str:
+            started.set()
+            try:
+                await finish.wait()
+            except asyncio.CancelledError:
+                await finish.wait()
+            if late_error:
+                raise RuntimeError("late ASR failure")
+            return "迟到的旧句子"
+
+    controller = _controller(LateStt())
+    controller.press()
+    controller.push_frame(_Frame(_pcm(120)))
+    old = asyncio.create_task(controller.release())
+    await started.wait()
+    controller.press()
+    finish.set()
+    assert (await old).action == "none"
+    assert controller.state == "recording"
+    assert controller.push_frame(_Frame(_pcm(140)))
 
 
 @pytest.mark.asyncio
@@ -877,43 +914,41 @@ async def test_new_ptt_segment_does_not_steal_committed_output_owner(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_pipeline_busy_press_during_finalizing_does_not_fake_release(
-    tmp_path,
+@pytest.mark.parametrize("yield_before_next_press", [False, True])
+async def test_pipeline_new_press_supersedes_finalizing_without_old_commit(
+    tmp_path, yield_before_next_press,
 ) -> None:
     timeline_path = tmp_path / "turns.jsonl"
-    stt = _FakeSttStage(streaming_text="旧问题", delay_sec=0.01)
+    stt = _FakeSttStage(streaming_text="新问题", delay_sec=0.01)
     pipeline = _segment_pipeline(
-        stt,
-        observability=ObservabilityConfig(timeline_debug_path=str(timeline_path)),
+        stt, observability=ObservabilityConfig(timeline_debug_path=str(timeline_path)),
     )
 
-    packet_down = _packet(ptt=True)
-    pipeline._room_data.handle_packet(packet_down)
-    pipeline._on_room_packet(packet_down)
-    pipeline._ptt_controller.push_frame(_Frame(_pcm(120, sample=1200)))
-    packet_up = _packet(ptt=False)
-    pipeline._room_data.handle_packet(packet_up)
-    pipeline._on_room_packet(packet_up)
-    await asyncio.sleep(0)
+    def edge(held):
+        packet = _packet(ptt=held)
+        pipeline._room_data.handle_packet(packet)
+        pipeline._on_room_packet(packet)
 
-    busy_press = _packet(ptt=True)
-    pipeline._room_data.handle_packet(busy_press)
-    pipeline._on_room_packet(busy_press)
-    busy_release = _packet(ptt=False)
-    pipeline._room_data.handle_packet(busy_release)
-    pipeline._on_room_packet(busy_release)
+    edge(True)
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(120)))
+    edge(False)
+    assert pipeline._ptt_controller.state == "transcribing"
+    if yield_before_next_press:
+        await asyncio.sleep(0)
+    edge(True)
+    assert pipeline._ptt_controller.state == "recording"
+    pipeline._ptt_controller.push_frame(_Frame(_pcm(140, sample=1300)))
+    edge(False)
     await asyncio.gather(*pipeline._turn_tasks)
-
-    local = pipeline._room.local_participant
-    outcomes = [
-        payload["payload"]["outcome"]
-        for _, payload in local.published
-        if payload.get("op") == "ptt.turn_status"
+    assert pipeline._session.generate_reply_calls == [
+        {"user_input": "新问题", "input_modality": "audio"}
     ]
-    assert outcomes.count("finalizing") == 1
-    assert "rejected:busy_transcribing" in outcomes
-    assert outcomes[-1] == "committed"
-    assert len(stt.recognize_streaming_calls) == 1
+    assert stt.recognize_streaming_calls[-1] == _pcm(140, sample=1300)
+    assert len(pipeline._factory.turn_decisions) == 1
+    rows = [json.loads(line) for line in timeline_path.read_text().splitlines()]
+    assert rows[0]["attrs"]["ptt_segment_terminal"] == {
+        "action": "cancel", "reason": "superseded_by_ptt",
+    }
 
 
 def test_pipeline_observes_existing_subscribed_audio_tracks() -> None:
@@ -990,3 +1025,32 @@ async def test_ptt_room_io_links_device_even_when_provider_arrives_first():
     io._on_participant_connected(provider)
     io._on_participant_connected(device)
     assert linked == [device]
+
+
+@pytest.mark.asyncio
+async def test_zero_tap_threshold_preserves_short_spoken_ptt_interrupt() -> None:
+    stt = _FakeSttStage(streaming_text="换一个")
+    controller = _controller(stt, agent_output_active=True, tap_to_stop_max_audio_sec=0)
+    controller.press()
+    controller.push_frame(_Frame(_pcm(180)))
+    result = await controller.release()
+    assert result.action == "commit"
+    assert result.transcript == "换一个"
+
+
+@pytest.mark.asyncio
+async def test_zero_tap_threshold_empty_interrupt_still_skips_asr() -> None:
+    stt = _FakeSttStage(streaming_text="不应该调用")
+    controller = _controller(stt, agent_output_active=True, tap_to_stop_max_audio_sec=0)
+    controller.press()
+    result = await controller.release()
+    assert result.reason == "empty_audio"
+    assert stt.recognize_streaming_calls == []
+
+
+def test_capture_is_open_before_output_preemption_callback() -> None:
+    controller = _controller(_FakeSttStage(), agent_output_active=True)
+    observed = []
+    controller._preempt_agent_output = lambda: observed.append(controller.state)
+    controller.press()
+    assert observed == ["recording"]

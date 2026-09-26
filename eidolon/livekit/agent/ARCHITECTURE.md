@@ -226,9 +226,10 @@ eidolon/livekit/agent/
 1. **Push-to-talk（`ptt` → `HalfDuplexPttPipeline`）** — 按住说话（hold-to-talk）：只在设备按钮按住期间开麦，release 是显式的 turn 结束；其余时间关麦。面向可穿戴 / 按键设备（如 waveshare 2.06）。
    - 入口证据：`client.audio_state.ptt`、设备 playback state、服务端采集到的 press-to-release 音频段。
    - 所有按钮/手势只是显式输入信号，不是设备侧决策。设备不判断“要不要打断”。
-   - 设备 release 后保留一个很短的采集尾窗（`EIDOLON_PTT_RELEASE_TAIL_MS`），尾窗结束后才发布 `ptt=false`，避免截断末尾音节。
+   - 设备 release 按板级配置关闭采集；协同输入 Waveshare 2.06 的 `EIDOLON_PTT_RELEASE_TAIL_MS=0`，松键即停录，不等待其他设备停播回执。
    - `server.py` 只对 `interaction_mode=ptt` 进入 `HalfDuplexPttPipeline`；ptt 路径不消费 `StreamingPipeline` 的流式 STT transcript / EOT owner。
-   - `HalfDuplexPttTurnController` 是 ptt turn owner：press 打开音频段，release 关闭音频段，一次性 STT 转写后只输出一个 terminal outcome：`commit`、`tap_to_stop` 或 `reject`。
+   - `HalfDuplexPttTurnController` 是 ptt turn owner：press 先打开音频段，再触发输出抢占；release 在数据事件回调内同步封闭音频段，异步执行一次 STT。转写期间的新 press 递增 generation 并取消旧 ASR，不阻塞新录音。旧结果、异常和 finally 不得改变新轮次状态或触发回复。有效轮次输出 `commit` 或 `reject`，被替代轮次不再发布终态。
+   - 单机场景保留配置中的短按停播阈值；阈值为 0 表示禁用该启发式，短语仍进入 ASR，空录音仍由转写器拒绝。协同入口必须显式选择该策略，不能因其他设备正在说话而丢弃用户的短句。
    - PTT 专用阈值使用 `turn_policy.ptt`：`segment_stt_strategy`、`segment_min_audio_ms`、`segment_max_audio_ms`、`segment_min_rms_ppm`、`segment_tap_to_stop_max_audio_ms`。
    - 空按 / 无有效语音是显式协议结果：Channel 发布 session-local `eidolon.control` / `op=ptt.turn_status`，设备只清理 UI 状态并 ACK，不参与 turn 裁决。
    - `session/client_control.py` 是 streaming path 与 ptt segment path 共享的 `eidolon.control` envelope 与 timeline event helper；PTT 专用 `ptt.turn_status` payload / no-turn terminal 规则位于 `half_duplex/control.py`。

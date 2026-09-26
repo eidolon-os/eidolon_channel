@@ -504,6 +504,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         was_held = self._last_ptt_held
         if held and not was_held:
             self._mark_activity()
+            self._flush_ptt_timeline(
+                terminal={"action": "cancel", "reason": "superseded_by_ptt"},
+                reason="ptt_segment_superseded",
+            )
             result = self._ptt_controller.press()
             if result.action == "reject":
                 self._publish_ptt_turn_status(
@@ -529,14 +533,23 @@ class HalfDuplexPttPipeline(BasePipeline):
             self._last_ptt_held = False
             self._mark_ptt_released()
             self._publish_ptt_turn_status(PTT_OUTCOME_FINALIZING, "released")
-            task = asyncio.create_task(self._finalize_ptt_turn())
+            # Seal the segment in the release callback, before another packet or
+            # audio frame can run. Keep the generation across the ASR await.
+            transcription = self._ptt_controller.release()
+            task = asyncio.create_task(
+                self._finalize_ptt_turn(transcription, self._ptt_controller.generation)
+            )
             self._turn_tasks.add(task)
             task.add_done_callback(self._turn_tasks.discard)
 
-    async def _finalize_ptt_turn(self) -> None:
+    async def _finalize_ptt_turn(
+        self, transcription: Awaitable[PttSegmentTurnResult], generation: int,
+    ) -> None:
         try:
-            result = await self._ptt_controller.release()
+            result = await transcription
         except Exception:
+            if generation != self._ptt_controller.generation:
+                return
             logger.exception("[HalfDuplexPttPipeline] PTT segment transcription failed")
             self._publish_ptt_turn_status(
                 ptt_rejected_outcome("transcription_error"),
@@ -546,6 +559,8 @@ class HalfDuplexPttPipeline(BasePipeline):
                 terminal={"action": "reject", "reason": "transcription_error"},
                 reason="ptt_segment_transcription_error",
             )
+            return
+        if generation != self._ptt_controller.generation:
             return
         if result.action == "reject":
             self._publish_ptt_turn_status(

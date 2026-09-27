@@ -9,9 +9,50 @@ from .test_service import _service
 
 
 class TeamAdapter(Adapter):
+    async def require_team_input(self, handle):
+        pass
+
     async def open_team_session(self, opened, handles, sessions):
         self.team = (opened, handles, sessions)
         self.launched.set()
+
+
+async def test_non_ptt_input_is_rejected_before_any_device_wakes():
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from eidolon.channel_provider.contracts import InvalidTransition
+    from eidolon.channel_provider.team_conversation import TeamConversation
+    backend = TeamAdapter()
+    backend.require_team_input = AsyncMock(side_effect=InvalidTransition('TEAM_INPUT_REQUIRES_PTT'))
+    visit = TeamConversation(SimpleNamespace(selection=SimpleNamespace(session_id='team')),
+                             backend, ({'device': 'input'}, {'device': 'output'}))
+    await visit.run()
+    assert visit.state == 'failed'
+    assert visit.error == 'TEAM_INPUT_REQUIRES_PTT'
+    assert not backend.sent and not visit.sessions
+    assert not backend.launched.is_set()
+
+
+@pytest.mark.parametrize('metadata,accepted', [
+    ('{"interaction_mode":"ptt"}', True),
+    ('{"interaction_mode":"full_duplex"}', False),
+    ('{}', False), ('[]', False), ('broken', False),
+])
+async def test_team_input_preflight_uses_actual_selected_actor(metadata, accepted):
+    from types import SimpleNamespace
+    from .test_livekit_adapter import _adapter
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    client.room.participants = [
+        SimpleNamespace(identity='bridge', metadata='{"interaction_mode":"ptt"}'),
+        SimpleNamespace(identity='input', metadata=metadata),
+    ]
+    if accepted:
+        await adapter.require_team_input({'room': 'room', 'device': 'input'})
+    else:
+        with pytest.raises(InvalidTransition, match='TEAM_INPUT_REQUIRES_PTT'):
+            await adapter.require_team_input({'room': 'room', 'device': 'input'})
+    await adapter.shutdown()
 
 
 @pytest.mark.parametrize("close_failure", [False, True])

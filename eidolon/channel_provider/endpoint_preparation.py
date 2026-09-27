@@ -91,13 +91,16 @@ class EndpointPreparation:
         if len(self.sessions) == len(self.handles):
             self.prepared.set()
 
+    async def validate_endpoints(self) -> None:
+        for handle in self.handles:
+            await self.adapter.require_idle(handle)
+
     async def run(self) -> None:
         wakes = []
         try:
             # Checking precedes any wake. A private conversation is never
             # silently replaced by preparing a cross-device presentation.
-            for handle in self.handles:
-                await self.adapter.require_idle(handle)
+            await self.validate_endpoints()
             for handle in self.handles:
                 command_id = f"join:{uuid4().hex}"
                 self.command_ids[handle["device"]] = command_id
@@ -141,7 +144,7 @@ class EndpointPreparation:
             raise
         except Exception as exc:
             self.state = "failed"
-            self.error = str(exc)
+            self.error = str(exc) or type(exc).__name__
             logging.getLogger(__name__).warning("endpoint preparation failed: %s", self.error)
         finally:
             for wake in wakes:

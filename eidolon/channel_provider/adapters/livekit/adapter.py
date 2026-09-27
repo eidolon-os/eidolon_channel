@@ -1247,6 +1247,22 @@ class LiveKitChannelAdapter:
                 and body.get(SESSION_CONVERSATION_ID_FIELD) == observer[0]):
             observer[1]()
 
+    async def require_team_input(self, handle: dict) -> None:
+        # Read the same Provider-stamped actor metadata the worker validates,
+        # before waking any endpoint. Board names never imply capabilities.
+        result = await self._client().room.list_participants(
+            api.ListParticipantsRequest(room=handle['room']))
+        participant = next((p for p in result.participants
+                            if p.identity == handle['device']), None)
+        if participant is None:
+            raise BackendUnavailable('TEAM_INPUT_OFFLINE: input device is not on its channel')
+        try:
+            metadata = json.loads(participant.metadata or '{}')
+        except (TypeError, ValueError):
+            metadata = {}
+        if not isinstance(metadata, dict) or metadata.get('interaction_mode') != 'ptt':
+            raise InvalidTransition('TEAM_INPUT_REQUIRES_PTT: select a device configured for PTT')
+
     async def require_idle(self, handle: dict) -> None:
         room, agent = self._serving(handle)
         await self._require_no_remote_presentation(room)

@@ -46,3 +46,22 @@ async def test_old_remote_publisher_blocks_new_single_session(monkeypatch):
         await adapter.open_session(grant.handle, 'new-single', session_intent='user_initiated')
     assert not adapter._api.agent_dispatch.created
     await adapter.shutdown()
+
+
+@pytest.mark.parametrize('kind', ['presentation_endpoint', 'team_dispatch'])
+@pytest.mark.parametrize('current', [True, False])
+async def test_channel_refresh_preserves_only_owned_scene_dispatch(monkeypatch, kind, current):
+    import json
+    from .test_livekit_adapter import _adapter, _spec, FakeDispatch
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    handle = dict(grant.handle, output_template={'inputs': {'microphone': True},
+        'outputs': {'speech': False}, 'policy_revision': 1})
+    room = handle['room']
+    client.agent_dispatch.dispatches[room] = [FakeDispatch('scene-worker', handle['agent'], metadata=json.dumps({
+        'conversation_id': 'native-session', kind: {'room': 'speaker'}}))]
+    remove = adapter.observe_session_end(handle, 'native-session' if current else 'another-session', Mock())
+    await adapter._reconcile_output_dispatches(handle)
+    assert client.agent_dispatch.deleted == ([] if current else [(room, 'scene-worker')])
+    remove()
+    await adapter.shutdown()

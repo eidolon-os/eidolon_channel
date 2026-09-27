@@ -258,3 +258,61 @@ async def test_status_cannot_keep_ready_after_transport_was_lost(tmp_path):
     backend.quiesce_prepared_sessions.assert_awaited_once()
     assert not service._transport_scopes
     await service.shutdown()
+
+
+@pytest.mark.parametrize('closing', [False, True])
+@pytest.mark.parametrize('renewal', ['expired', 'runtime_changed'])
+async def test_standing_channel_renewal_never_waits_for_scene_cleanup(tmp_path, closing, renewal):
+    service, backend, selection = await prepare(tmp_path)
+    await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
+    visit = service._device_conversations[('owner_1', selection.session_id)]
+    await wait_for(lambda: visit.state == 'ready')
+    if closing:
+        backend.end_prepared_session.side_effect = BackendUnavailable('device must reconnect for ACK')
+        visit.stopped.set()
+        with pytest.raises(BackendUnavailable):
+            await visit.task
+    original_scopes = dict(service._transport_scopes)
+    if renewal == 'expired':
+        service._now_ms = lambda: 1700000000000 + backend.ttl_seconds * 1000 + 1
+    else:
+        backend.binding_current = lambda handle: False
+    payload = provision_payload(device_id=selection.input_device.device_instance_id)
+    payload.update(operation='channel.refresh-device', operation_id='renew-to-reconnect')
+    # A device cannot ACK anything until this credential response reaches it.
+    response = await asyncio.wait_for(service.provision(ProvisionRequest.parse(encoded(payload))), 1)
+    assert 'channel.provisioned-device' in response
+    assert service._transport_scopes == original_scopes
+    if not closing:
+        assert visit.state == 'ready' and not visit.task.done()
+        backend.quiesce_prepared_sessions.assert_not_awaited()
+    backend.end_prepared_session.side_effect = None
+    await service.device_conversation(selection.session_id, authenticated_owner_id='owner_1', close=True)
+    assert visit.closure_complete and not service._transport_scopes
+    await service.shutdown()
+
+
+@pytest.mark.parametrize('change', ['manifest', 'resource'])
+async def test_real_configuration_replacement_still_requires_confirmed_scene_close(tmp_path, change):
+    service, backend, selection = await prepare(tmp_path)
+    await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
+    visit = service._device_conversations[('owner_1', selection.session_id)]
+    await wait_for(lambda: visit.state == 'ready')
+    backend.end_prepared_session.side_effect = BackendUnavailable('unconfirmed')
+    backend.binding_current = lambda handle: False
+    payload = provision_payload(device_id=selection.input_device.device_instance_id)
+    payload.update(operation='channel.refresh-device', operation_id='replace')
+    if change == 'manifest':
+        payload['device']['manifest_revision'] = 'new-manifest'
+    else:
+        original = backend.open
+        async def different_resource(*args, **kwargs):
+            grant = await original(*args, **kwargs)
+            return replace(grant, handle=grant.handle | {'resource': 'new-resource'})
+        backend.open = different_resource
+    with pytest.raises(BackendUnavailable):
+        await service.provision(ProvisionRequest.parse(encoded(payload)))
+    assert len(service._transport_scopes) == 2
+    assert not visit.closure_complete
+    backend.end_prepared_session.side_effect = None
+    await service.shutdown()

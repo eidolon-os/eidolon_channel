@@ -659,10 +659,13 @@ class LiveKitChannelAdapter:
             if dispatch.agent_name != agent:
                 continue
             metadata = self._dispatch_metadata(dispatch)
-            # A new listener has no in-memory reservation for this pair. Never
-            # resurrect a directed worker from an old Provider process.
+            # A standing-channel renewal must not delete a currently owned
+            # scene. After process recovery there is no live observer, so an
+            # orphaned worker is still withdrawn, never resurrected.
             if metadata.get("presentation_endpoint") is not None or metadata.get("team_dispatch") is not None:
-                await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
+                observer = self._session_end_observers.get(room)
+                if observer is None or metadata.get(SESSION_CONVERSATION_ID_FIELD) != observer[0]:
+                    await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
                 continue
             plan = metadata.get("output_plan")
             compatible = (isinstance(plan, dict) and all(plan.get(k) == v for k,v in template.items()))

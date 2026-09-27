@@ -195,11 +195,30 @@ class ChannelProviderService:
             if (request.operation == "channel.refresh-device" and previous is not None
                     and not adapter.binding_current(json.loads(previous.handle_json))):
                 runtime_refresh_of = previous
-            if request.device_id in self._transport_scopes:
+            reserved = request.device_id in self._transport_scopes
+            # The standing control channel must be renewable while a scene is
+            # active or awaiting exit ACKs. Otherwise renewal waits for cleanup
+            # while cleanup waits for the disconnected device to renew.
+            same_authority = (
+                request.operation == "channel.refresh-device" and previous is not None
+                and previous.device_ref == request.device_ref
+                and previous.owner_id == str(request.device.owner_id)
+                and previous.manifest_revision == request.device.manifest_revision
+                and previous.output_policy == request.device.output_policy
+                and previous.adapter_name == adapter.name
+            )
+            if reserved and not same_authority:
                 raise _TransportTransitionRequired("selected device configuration is changing")
             grant = await adapter.open(
                 spec, issued_at_ms=now, observed_host_address=request.observed_host_address
             )
+            if reserved and not self._same_transport_resource(
+                adapter, grant.handle, adapter, json.loads(previous.handle_json)
+            ):
+                # Minting a candidate is not a committed device grant. A real
+                # resource replacement must still retire its scene first.
+                await adapter.close(grant.handle)
+                raise _TransportTransitionRequired("standing transport resource is changing")
             channel_id = self._channel_id(request)
             response = self._response(
                 request=request,

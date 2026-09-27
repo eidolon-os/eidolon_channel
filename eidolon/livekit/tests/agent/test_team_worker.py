@@ -46,15 +46,18 @@ def runtime(monkeypatch):
         def __init__(self, opened, **kwargs):
             self.ready, self.closed = asyncio.Event(), asyncio.Event()
             self.cleanup_ok = False
+            self.closing = asyncio.Event()
             self.kwargs = kwargs
             clients.append(self)
         async def run(self, *args, **kwargs):
             self.ready.set()
             try:
-                await asyncio.Event().wait()
+                await self.closing.wait()
             finally:
                 self.cleanup_ok = True
                 self.closed.set()
+        def close(self):
+            self.closing.set()
     class Pipeline:
         def __init__(self, factory, **kwargs):
             self.factory, self.kwargs = factory, kwargs
@@ -157,8 +160,127 @@ async def test_team_maps_real_playback_and_round_completion_to_device_ui(runtime
         assert states(kwargs['input_room']) == ['thinking', 'speaking']
         assert states(kwargs['outputs'][0].room) == ['thinking', 'speaking', 'listening']
         assert states(kwargs['outputs'][1].room) == []
-        await clients[0].kwargs['on_state'](SimpleNamespace(state='idle'))
-        assert states(kwargs['input_room'])[-1] == 'listening'
+        await clients[0].kwargs['on_state'](SimpleNamespace(
+            outcome='finished', error_code='', capture_id='one'))
+        assert states(kwargs['input_room'])[-1] == 'waiting'
     finally:
         finish.set()
         await task
+
+
+@pytest.mark.parametrize('trigger', ['input_end', 'speaking_end', 'worker_cancel', 'output_loss', 'peer_loss'])
+@pytest.mark.parametrize('stop_ok', [True, False])
+async def test_worker_drains_control_before_releasing_outputs(runtime, monkeypatch, trigger, stop_ok):
+    """Actual worker/client over TCP; only peer and media are test adapters."""
+    import aiohttp
+    from aiohttp import web
+    from eidolon_sdk.biz.control.coordination_stream import ROLE_GROUP_STREAM_PATH
+    from eidolon.livekit.agent.coordination.client import RoleGroupClient
+    from .test_role_group_client import frame
+    sessions, pipelines, clients, launched, finish = runtime
+    monkeypatch.setattr(worker, 'RoleGroupClient', RoleGroupClient)
+    opened, kwargs = arguments()
+    entered, release, disconnect = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    speaking, revoked = asyncio.Event(), asyncio.Event()
+    receipts, calls = [], []
+    async def present(start, text, on_speaking):
+        on_speaking()
+        speaking.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            revoked.set()
+    monkeypatch.setattr(worker, 'NativeSpeechPresenter', lambda endpoints: present)
+    async def stop(device):
+        calls.append(device)
+        if trigger == 'speaking_end' and not team.client._close_requested:
+            return True  # Initial PTT barrier, before closing during speech.
+        entered.set()
+        await release.wait()
+        assert not any(s.aclose.called for s in sessions)
+        return stop_ok
+    kwargs['stop'] = stop
+    async def peer(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive_json()
+        await ws.send_str(frame('prepared', policy='semantic-step-v2', physical_devices_ready=False))
+        if trigger == 'speaking_end':
+            assert (await ws.receive_json())['type'] == 'press'
+            await ws.send_str(frame('capturing', capture_id='one', epoch=1))
+            assert (await ws.receive_json())['type'] == 'release'
+            member = opened.selection.members[0]
+            await ws.send_str(frame('reply_start', request_id='reply', turn_id='reply',
+                device_id=member.output_device.device_instance_id,
+                companion_id=member.companion_id, epoch=1))
+            assert (await ws.receive_json())['type'] == 'speaking'
+        if trigger == 'peer_loss':
+            await disconnect.wait()
+            await ws.close(code=1011)
+            return ws
+        request = await ws.receive_json()
+        assert request['type'] == 'close'
+        for m in opened.selection.members:
+            await ws.send_str(frame('stop', request_id=m.companion_id,
+                device_id=m.output_device.device_instance_id, epoch=1))
+        for _ in opened.selection.members:
+            receipts.append(await ws.receive_json())
+        await ws.close()
+        return ws
+    app = web.Application()
+    app.router.add_get(ROLE_GROUP_STREAM_PATH, peer)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    team = worker.TeamWorker(opened, **kwargs)
+    try:
+        async with aiohttp.ClientSession() as http:
+            task = asyncio.create_task(team.run(http, agent_url=f'http://127.0.0.1:{port}', service_token='test'))
+            try:
+                await asyncio.wait_for(launched.wait(), 2)
+                if trigger == 'speaking_end':
+                    team.client.press('one')
+                    team.client.release('one')
+                    await asyncio.wait_for(speaking.wait(), 2)
+                if trigger == 'worker_cancel':
+                    task.cancel()
+                elif trigger == 'output_loss':
+                    sessions[0].handlers['close'](None)
+                elif trigger == 'peer_loss':
+                    disconnect.set()
+                else:
+                    finish.set()
+                await asyncio.wait_for(entered.wait(), 2)
+                assert not task.done()
+                assert not any(s.aclose.called for s in sessions)
+                with pytest.raises(ConnectionError):
+                    team.client.press('late-input')
+                # A repeated end is idempotent while receipts are in flight.
+                if trigger != 'peer_loss':
+                    team.client.close()
+                release.set()
+                result = (await asyncio.gather(task, return_exceptions=True))[0]
+                if trigger == 'worker_cancel':
+                    assert isinstance(result, asyncio.CancelledError)
+                elif trigger == 'peer_loss':
+                    assert isinstance(result, ConnectionError)
+                else:
+                    assert result is None
+                assert team.cleanup_ok is stop_ok
+                assert set(calls) == set(team.client.members)
+                assert all(s.aclose.await_count == 1 for s in sessions)
+                if trigger == 'speaking_end':
+                    assert revoked.is_set()
+                if trigger != 'peer_loss':
+                    assert len(receipts) == 2
+                    assert all(r['result'] == ('completed' if stop_ok else 'failed') for r in receipts)
+                else:
+                    assert not receipts  # Physical fallback is not a peer receipt.
+            finally:
+                release.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    finally:
+        await runner.cleanup()

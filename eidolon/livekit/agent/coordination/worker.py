@@ -77,6 +77,7 @@ class TeamWorker:
         self._started = True
         sessions = []
         tasks = []
+        transport = None
         pipeline = None
         ended = asyncio.Event()
         source = self.opened.selection.input_device.device_instance_id
@@ -161,13 +162,30 @@ class TeamWorker:
             for task in done:
                 task.result()
         finally:
-            # Revoke the scene before closing outputs; the client's finally
-            # independently sends stop to every member, even on transport loss.
+            # Stop accepting work first, but keep the control transport and output
+            # rooms alive until Close/Stop/Receipt has drained. Cancelling the
+            # transport with the input task loses the very receipts we await.
+            if self.client is not None and transport is not None and not transport.done():
+                if self.client.ready.is_set():
+                    try:
+                        self.client.close()
+                    except ConnectionError:
+                        pass  # Already draining after transport loss.
+                else:
+                    transport.cancel()  # No prepared peer to complete a handshake.
             for task in tasks:
-                if not task.done():
+                if task is not transport and not task.done():
                     task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*(t for t in tasks if t is not transport),
+                                 return_exceptions=True)
+            if transport is not None:
+                # RoleGroupClient owns the bounded handshake and independent
+                # physical-stop fallback. The worker owns resource destruction.
+                results = await asyncio.gather(transport, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, BaseException):
+                        logging.getLogger(__name__).warning(
+                            'team control teardown failed cause=%r', result)
             cleanup = [s.aclose() for s in sessions]
             if pipeline is not None:
                 cleanup.append(pipeline.shutdown())

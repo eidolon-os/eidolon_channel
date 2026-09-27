@@ -477,7 +477,8 @@ class ChannelProviderService:
                 present = False
             if not present and visit.state == "ready":
                 visit.state = "closing"
-                visit.error = "endpoint reachability lost; closing scene"
+                visit.primary_error = "ENDPOINT_REACHABILITY_LOST"
+                visit.error = visit.primary_error
                 visit.checkpoint()
                 visit.stopped.set()
         if close:
@@ -490,7 +491,7 @@ class ChannelProviderService:
                             if scope is not None and scope.task is visit.task:
                                 await self._retire_transport_scope(ref.device_instance_id)
                         visit.state = "closed"
-                        visit.error = ""
+                        visit.error = visit.primary_error
                         visit.checkpoint()
                         return
                     except BackendUnavailable:

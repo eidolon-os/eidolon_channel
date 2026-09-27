@@ -253,7 +253,8 @@ async def test_status_cannot_keep_ready_after_transport_was_lost(tmp_path):
     status = await service.device_conversation(selection.session_id, authenticated_owner_id='owner_1')
     assert status['state'] == 'closing'
     await visit.task
-    assert visit.state == 'closed'
+    assert visit.state == 'failed' and visit.closure_complete
+    assert visit.error == 'ENDPOINT_REACHABILITY_LOST'
     backend.quiesce_prepared_sessions.assert_awaited_once()
     assert not service._transport_scopes
     await service.shutdown()

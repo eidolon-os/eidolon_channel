@@ -18,6 +18,7 @@ import aiohttp
 
 from eidolon_sdk.biz.control.coordination_stream import (
     MAX_FRAME_BYTES,
+    STOP_EXECUTION_TIMEOUT,
     ROLE_GROUP_STREAM_PATH,
     SERVER_FRAME,
     Capturing,
@@ -37,6 +38,14 @@ from eidolon_sdk.biz.control.coordination_stream import (
 )
 
 
+@dataclass(frozen=True)
+class StopResult:
+    error_code: str = ""
+
+    def __bool__(self):
+        return not self.error_code
+
+
 @dataclass
 class Playback:
     start: ReplyStart
@@ -52,7 +61,7 @@ class RoleGroupClient:
         *,
         present: Callable[[ReplyStart, AsyncIterator[str], Callable[[], None]], Awaitable[bool]],
         stop: Callable[[str], Awaitable[bool]],
-        stop_timeout: float = 2.0,
+        stop_timeout: float = STOP_EXECUTION_TIMEOUT,
         on_state: Callable[[SceneState], Awaitable[None]] | None = None,
     ):
         self.opened = opened
@@ -76,11 +85,14 @@ class RoleGroupClient:
         self._outbound = asyncio.Queue(maxsize=128)
         self._tasks: set[asyncio.Task] = set()
         self._failure = asyncio.Event()
+        self._failure_cause: BaseException | None = None
+        self._capture_stops: dict[str, dict[str, asyncio.Task]] = {}
         self._running = False
         self._closing = False
         self._close_requested = False
         self._close_requested_event = asyncio.Event()
         self._seen_turns: set[str] = set()
+        self._discarded_turns: set[str] = set()
         self._stop_locks = {device: asyncio.Lock() for device in self.members}
 
     def _send(self, frame):
@@ -103,6 +115,7 @@ class RoleGroupClient:
         def done(task):
             self._tasks.discard(task)
             if not task.cancelled() and task.exception() is not None:
+                self._failure_cause = self._failure_cause or task.exception()
                 self._failure.set()
                 self._epoch = None
                 self._revoke()
@@ -133,8 +146,12 @@ class RoleGroupClient:
         self._capture, self._released, self._epoch = capture_id, False, None
         self.state = None
         # Warm device controls start locally, without a Channel -> Agent round trip.
-        for device in self.members:
-            self._spawn(self._local_stop(device))
+        if len(self._capture_stops) >= 256:
+            raise ValueError("session capture budget exhausted")
+        self._capture_stops[capture_id] = {
+            device: self._spawn(self._stop_device(device, capture_id=capture_id))
+            for device in self.members
+        }
         self._send(frame)
 
     def release(self, capture_id: str):
@@ -153,30 +170,42 @@ class RoleGroupClient:
             Transcript(type="transcript", capture_id=capture_id, text=text, commitment=commitment)
         )
 
-    async def _stop_device(self, device):
-        try:
-            async with asyncio.timeout(self.stop_timeout):
-                async with self._stop_locks[device]:
-                    return await self.stop(device) is True
-        except Exception:
-            return False
-
-    async def _local_stop(self, device):
-        if not await self._stop_device(device):
-            raise RuntimeError("local role-group stop failed")
+    async def _stop_device(self, device, *, capture_id=None, epoch=None):
+        # Serialize commands, but start the physical execution budget only when
+        # this operation owns the endpoint. Superseded queued controls never run.
+        async with self._stop_locks[device]:
+            if ((capture_id is not None and capture_id != self._capture)
+                    or (epoch is not None and epoch < self._last_epoch)):
+                return StopResult("TEAM_STOP_SUPERSEDED")
+            try:
+                async with asyncio.timeout(self.stop_timeout):
+                    confirmed = await self.stop(device)
+                result = StopResult() if confirmed is True else StopResult("TEAM_STOP_UNCONFIRMED")
+            except TimeoutError:
+                result = StopResult("TEAM_STOP_TIMEOUT")
+            except Exception as exc:
+                result = StopResult(getattr(exc, "code", "TEAM_STOP_TRANSPORT_FAILED"))
+                logging.getLogger(__name__).warning(
+                    "team stop failed device=%s capture=%s epoch=%s cause=%r",
+                    device, capture_id, epoch, exc)
+            if not result:
+                logging.getLogger(__name__).warning(
+                    "team stop unconfirmed device=%s capture=%s epoch=%s code=%s",
+                    device, capture_id, epoch, result.error_code)
+            return result
 
     async def _remote_stop(self, frame: Stop):
-        stopped = await self._stop_device(frame.device_id)
-        self._send(
-            Receipt(
-                type="receipt",
-                request_id=frame.request_id,
-                device_id=frame.device_id,
-                result="completed" if stopped else "failed",
-            )
-        )
-        if not stopped:
-            raise RuntimeError("role-group stop failed")
+        if frame.capture_id is not None:
+            operation = self._capture_stops.get(frame.capture_id, {}).get(frame.device_id)
+            # Missing correlation is never permission to issue a late physical stop.
+            stopped = (await asyncio.shield(operation) if operation is not None
+                       else StopResult("TEAM_STOP_UNKNOWN_CAPTURE"))
+        else:
+            stopped = await self._stop_device(frame.device_id, epoch=frame.epoch)
+        self._send(Receipt(
+            type="receipt", request_id=frame.request_id, device_id=frame.device_id,
+            result="completed" if stopped else "failed", error_code=stopped.error_code,
+        ))
 
     async def _present(self, playback: Playback):
         async def text():
@@ -197,7 +226,10 @@ class RoleGroupClient:
                 )
 
         try:
-            played = await self.present(playback.start, text(), speaking)
+            barriers = self._capture_stops.get(self._capture, {})
+            silence = await asyncio.gather(*(asyncio.shield(t) for t in barriers.values()))
+            played = (await self.present(playback.start, text(), speaking)
+                      if len(silence) == len(self.members) and all(silence) else False)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -210,6 +242,8 @@ class RoleGroupClient:
         # The physical adapter cannot complete before the producer closed the text.
         completed = played is True and playback.ended and playback.text.empty()
         self._playback = None
+        if not completed:
+            self._discarded_turns.add(playback.start.turn_id)
         logging.getLogger(__name__).info(
             "team playout turn=%s device=%s completed=%s text_ended=%s",
             playback.start.turn_id, playback.start.device_id, completed, playback.ended)
@@ -220,10 +254,9 @@ class RoleGroupClient:
                 device_id=playback.start.device_id,
                 result="completed" if completed else "failed",
                 completion_basis="native_playout",
+                error_code="" if completed else "TEAM_PLAYBACK_UNCONFIRMED",
             )
         )
-        if not completed:
-            raise RuntimeError("role-group physical playback failed")
 
     def accept(self, data: str):
         frame = SERVER_FRAME.validate_json(data)
@@ -281,6 +314,8 @@ class RoleGroupClient:
             self._playback = playback
             playback.task = self._spawn(self._present(playback))
             return
+        if frame.turn_id in self._discarded_turns:
+            return  # A failed presentation may still have text in flight.
         playback = self._playback
         if (
             playback is None
@@ -358,7 +393,7 @@ class RoleGroupClient:
                 for task in done:
                     task.result()
                 if not self._close_requested or self._failure.is_set():
-                    raise ConnectionError("role-group stream lost")
+                    raise ConnectionError("role-group stream lost") from self._failure_cause
         finally:
             self._closing = True
             self._revoke()

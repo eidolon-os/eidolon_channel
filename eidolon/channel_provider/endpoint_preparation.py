@@ -21,6 +21,8 @@ class EndpointPreparation:
     activate: Callable[[dict[str, str]], Awaitable[None]]
     state: str = "preparing"
     error: str = ""
+    primary_error: str = ""
+    cleanup_error: str = ""
     task: asyncio.Task | None = None
     command_ids: dict[str, str] = field(default_factory=dict)
     sessions: dict[str, str] = field(default_factory=dict)
@@ -45,7 +47,8 @@ class EndpointPreparation:
         return self._cleanup_complete
 
     def lifecycle_checkpoint(self) -> dict:
-        return dict(state=self.state, error=self.error, sessions=dict(self.sessions),
+        return dict(state=self.state, error=self.error, primary_error=self.primary_error,
+            cleanup_error=self.cleanup_error, sessions=dict(self.sessions),
             command_ids=dict(self.command_ids), producers_revoked=self._producers_revoked,
             ended_devices=sorted(self._ended_devices), cleanup_failed=self._cleanup_failed,
             cleanup_complete=self._cleanup_complete)
@@ -61,11 +64,29 @@ class EndpointPreparation:
         if data["cleanup_complete"] and (not data["producers_revoked"] or ended != attempted):
             raise InvalidTransition("closure checkpoint has no terminal proof")
         self.state, self.error = data["state"], data["error"]
+        self.primary_error = data.get("primary_error", "" if data["cleanup_failed"] else self.error)
+        self.cleanup_error = data.get("cleanup_error", self.error if data["cleanup_failed"] else "")
         self.sessions, self.command_ids = sessions, commands
         self._producers_revoked, self._ended_devices = data["producers_revoked"], ended
         self._cleanup_failed, self._cleanup_complete = data["cleanup_failed"], data["cleanup_complete"]
         if not self._cleanup_complete:
             self.state = "closing"
+
+    def session_ended(self, reason: str = "") -> None:
+        # Closure callbacks during an explicit close are expected, not failures.
+        if reason and self.state in ("preparing", "ready") and not self.stopped.is_set():
+            self.primary_error = reason
+            self.error = reason
+            self.state = "failed"
+        self.stopped.set()
+
+    def _record_cleanup_error(self, reason: str) -> None:
+        if not self.primary_error and not self._cleanup_failed:
+            self.primary_error = self.error
+        self.cleanup_error = reason
+        self.error = "; ".join(filter(None, (self.primary_error, reason)))
+        self._cleanup_failed = True
+        self.state = "failed"
 
     def request(self, device_id: str, request: ServingRequest) -> None:
         if device_id not in self._device_ids:
@@ -126,7 +147,7 @@ class EndpointPreparation:
                             raise BackendUnavailable(f"device preparation ended early: {result}")
                     for handle in self.handles:
                         self.remove_observers.append(self.adapter.observe_session_end(
-                            handle, self.sessions[handle["device"]], self.stopped.set))
+                            handle, self.sessions[handle["device"]], self.session_ended))
                     if self.stopped.is_set():
                         raise InvalidTransition("preparation was stopped")
                     await self.activate(dict(self.sessions))
@@ -144,7 +165,8 @@ class EndpointPreparation:
             raise
         except Exception as exc:
             self.state = "failed"
-            self.error = str(exc) or type(exc).__name__
+            self.primary_error = self.primary_error or str(exc) or type(exc).__name__
+            self.error = self.primary_error
             logging.getLogger(__name__).warning("endpoint preparation failed: %s", self.error)
         finally:
             for wake in wakes:
@@ -186,9 +208,7 @@ class EndpointPreparation:
                         ", ".join(device for device, _ in failures)) from BaseExceptionGroup(
                             "endpoint cleanup failed", [error for _, error in failures])
             except BaseException as exc:
-                self._cleanup_failed = True
-                self.state = "failed"
-                self.error = str(exc) or "close interrupted; confirmation remains pending"
+                self._record_cleanup_error(str(exc) or "close interrupted; confirmation remains pending")
                 self.checkpoint()
                 logging.getLogger(__name__).warning(
                     "scene close incomplete producers_revoked=%s confirmed=%d pending=%d error=%s",
@@ -198,16 +218,14 @@ class EndpointPreparation:
             for remove in self.remove_observers:
                 remove()
             self.remove_observers.clear()
-            if self.state != "failed" or self._cleanup_failed:
-                self.state = "closed"
-                self.error = ""
+            self.state = "failed" if self.primary_error else "closed"
+            self.error = self.primary_error
+            self.cleanup_error = ""
             self._cleanup_failed = False
             self._cleanup_complete = True
             try:
                 self.checkpoint()
             except Exception as exc:
                 self._cleanup_complete = False
-                self._cleanup_failed = True
-                self.state = "failed"
-                self.error = "close checkpoint could not be committed"
+                self._record_cleanup_error("close checkpoint could not be committed")
                 raise BackendUnavailable(self.error) from exc

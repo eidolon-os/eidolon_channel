@@ -208,3 +208,23 @@ def test_recovery_refuses_completed_state_without_every_owned_endpoint_proof():
     data.update(cleanup_complete=False, ended_devices=['foreign'])
     with pytest.raises(InvalidTransition, match='unowned endpoint'):
         visit.restore_lifecycle(data)
+
+
+async def test_cleanup_failure_and_recovery_preserve_primary_failure_across_restart():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'},), AsyncMock())
+    visit.sessions = {'a': 'native-a'}
+    visit.state = 'ready'
+    visit.session_ended('TEAM_WORKER_DISCONNECTED')
+    adapter.end_prepared_session.side_effect = RuntimeError('receipt lost')
+    with pytest.raises(BackendUnavailable):
+        await visit.cleanup()
+    assert 'TEAM_WORKER_DISCONNECTED' in visit.error
+    assert 'cleanup unconfirmed' in visit.error
+    restored = EndpointPreparation(adapter, visit.handles, AsyncMock())
+    restored.restore_lifecycle(visit.lifecycle_checkpoint())
+    adapter.end_prepared_session.side_effect = None
+    await restored.cleanup()
+    assert restored.closure_complete
+    assert restored.error == 'TEAM_WORKER_DISCONNECTED'
+    assert not restored.cleanup_error

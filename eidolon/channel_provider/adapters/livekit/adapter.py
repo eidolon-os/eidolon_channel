@@ -706,7 +706,8 @@ class LiveKitChannelAdapter:
                 participant.identity == watch.device
                 or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
             ):
-                observer[1]()
+                observer[1]("TEAM_DEVICE_DISCONNECTED" if participant.identity == watch.device
+                            else "TEAM_WORKER_DISCONNECTED")
 
         @connection.on("disconnected")
         def _dropped(reason: Any = None) -> None:
@@ -719,7 +720,7 @@ class LiveKitChannelAdapter:
                 self._fail_control_delivery(room)
                 observer = self._session_end_observers.get(room)
                 if observer is not None:
-                    observer[1]()
+                    observer[1]("CHANNEL_LISTENER_DISCONNECTED")
                 self._rejoin_later(room, watch, reason)
 
         try:

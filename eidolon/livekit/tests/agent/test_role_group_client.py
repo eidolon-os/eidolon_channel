@@ -240,7 +240,7 @@ async def test_real_tcp_disconnect_independently_stops_every_endpoint(stop_succe
         await runner.cleanup()
 
 
-async def test_local_stop_failure_revokes_permission_before_any_reply():
+async def test_local_stop_failure_blocks_speech_without_destroying_scene():
     client = prepared()
 
     async def failed(device):
@@ -249,11 +249,13 @@ async def test_local_stop_failure_revokes_permission_before_any_reply():
     client.stop = failed
     capture(client)
     await settle(client)
-    assert client._failure.is_set()
+    assert not client._failure.is_set()
     output(client, "reply_start")
+    await settle(client)
     assert client._playback is None
-    with pytest.raises(ConnectionError):
-        client.press("two")
+    assert not client._failure.is_set()
+    client.press("two")
+    await settle(client)
 
 
 async def test_close_cannot_be_reopened_by_a_late_capture_ack():
@@ -296,4 +298,76 @@ async def test_failed_round_state_survives_stop_but_cannot_clear_new_capture():
     client.accept(frame('state', capture_id='one', epoch=2, state='waiting',
                         members={}, outcome='finished'))
     assert client.state is None
+    await settle(client)
+
+
+async def test_agent_confirmation_reuses_local_stop_even_after_completion():
+    client = prepared()
+    calls = []
+    async def stop(device):
+        calls.append(device)
+        return True
+    client.stop = stop
+    capture(client)
+    await settle(client)
+    for device in client.members:
+        client.accept(frame("stop", request_id=device, device_id=device,
+                            capture_id="one", epoch=1))
+    await settle(client)
+    assert len(calls) == len(client.members)
+    receipts = [x for x in client._outbound._queue if x["type"] == "receipt"]
+    assert len(receipts) == len(client.members)
+    assert all(x["result"] == "completed" for x in receipts)
+
+
+async def test_stop_execution_budget_excludes_lock_wait_and_stale_controls_are_fenced():
+    client = prepared(stop_timeout=.1)
+    calls = []
+    async def stop(device):
+        calls.append(device)
+        await asyncio.sleep(.06)
+        return True
+    client.stop = stop
+    device = next(iter(client.members))
+    assert all(await asyncio.gather(client._stop_device(device), client._stop_device(device)))
+    assert len(calls) == 2
+    client._last_epoch = 3
+    result = await client._stop_device(device, epoch=2)
+    assert result.error_code == "TEAM_STOP_SUPERSEDED"
+    assert len(calls) == 2
+
+
+async def test_failed_stop_receipt_keeps_connection_available_for_fresh_capture():
+    client = prepared()
+    async def failed(device):
+        return False
+    client.stop = failed
+    capture(client)
+    for device in client.members:
+        client.accept(frame("stop", request_id=device, device_id=device,
+                            capture_id="one", epoch=1))
+    await settle(client)
+    receipts = [x for x in client._outbound._queue if x["type"] == "receipt"]
+    assert all(x["error_code"] == "TEAM_STOP_UNCONFIRMED" for x in receipts)
+    assert not client._failure.is_set()
+    client.stop = stop_ok
+    capture(client, capture="two", epoch=3)
+    await settle(client)
+    assert all(t.result() for t in client._capture_stops["two"].values())
+
+
+async def test_failed_presentation_discards_inflight_text_without_losing_scene():
+    client = prepared()
+    async def failed(*args):
+        return False
+    client.present = failed
+    capture(client)
+    output(client, "reply_start")
+    await settle(client)
+    output(client, "reply_delta", text="already queued before failure")
+    output(client, "reply_end")
+    assert not client._failure.is_set()
+    receipts = [x for x in client._outbound._queue if x["type"] == "receipt"]
+    assert receipts[-1]["error_code"] == "TEAM_PLAYBACK_UNCONFIRMED"
+    client.press("retry")
     await settle(client)

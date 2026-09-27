@@ -82,11 +82,11 @@ class TeamWorker:
         source = self.opened.selection.input_device.device_instance_id
         by_device = {o.endpoint.participant_identity: o for o in self.outputs}
 
-        async def ui(room, device, state):
+        async def ui(room, device, state, reason=None):
             try:
                 async with asyncio.timeout(1):
                     await room.local_participant.publish_data(json.dumps(
-                        build_companion_ui_state_payload(state, 'agent_state:' + state)).encode(),
+                        build_companion_ui_state_payload(state, reason or 'agent_state:' + state)).encode(),
                         topic=COMPANION_UI_STATE_TOPIC, reliable=True,
                         destination_identities=[device])
             except Exception:
@@ -95,7 +95,10 @@ class TeamWorker:
         async def round_state(frame):
             # Only a terminal round update is emitted by the coordinator.
             # Generation/stream completion alone never returns PTT to idle.
-            await ui(self.input_room, source, 'listening')
+            logging.getLogger(__name__).info(
+                'team round outcome=%s error=%s capture=%s',
+                frame.outcome, frame.error_code, frame.capture_id)
+            await ui(self.input_room, source, 'waiting', 'team:' + frame.outcome)
 
         try:
             endpoints = {}

@@ -26,7 +26,6 @@ def opening():
         dict(
             type="open",
             owner_id="owner",
-            mock_order=["a", "b"],
             selection=dict(
                 scenario="ip_role_group",
                 session_id="scene",
@@ -59,7 +58,7 @@ async def unused(*args):
 def prepared(**kwargs):
     client = RoleGroupClient(opening(), present=unused, stop=stop_ok, **kwargs)
     client._running = True
-    client.accept(frame("prepared", policy="explicit-demo-order-v1", physical_devices_ready=False))
+    client.accept(frame("prepared", policy="semantic-step-v2", physical_devices_ready=False))
     return client
 
 
@@ -81,16 +80,16 @@ async def test_round_ui_completion_is_revoked_by_new_ptt_before_delivery():
         delivered.append(frame.epoch)
     client = prepared(on_state=state)
     capture(client)
-    client.accept(frame('state', state='idle', members={}, epoch=1))
+    client.accept(frame('state', capture_id='one', state='waiting', members={}, epoch=1))
     client.press('next')
     await settle(client)
     assert not delivered
     client.release('next')
     client.accept(frame('capturing', capture_id='next', epoch=2))
-    client.accept(frame('state', state='idle', members={}, epoch=1))
+    client.accept(frame('state', capture_id='one', state='waiting', members={}, epoch=1))
     await settle(client)
     assert not delivered
-    client.accept(frame('state', state='idle', members={}, epoch=2))
+    client.accept(frame('state', capture_id='next', state='waiting', members={}, epoch=2))
     await settle(client)
     assert delivered == [2]
 
@@ -217,7 +216,7 @@ async def test_real_tcp_disconnect_independently_stops_every_endpoint(stop_succe
         await socket.prepare(request)
         assert (await socket.receive_json())["type"] == "open"
         await socket.send_str(
-            frame("prepared", policy="explicit-demo-order-v1", physical_devices_ready=False)
+            frame("prepared", policy="semantic-step-v2", physical_devices_ready=False)
         )
         await socket.close()
         return socket
@@ -274,10 +273,27 @@ async def test_speaking_and_scene_state_do_not_advance_physical_completion():
     client = prepared()
     capture(client)
     client.accept(
-        frame("state", epoch=1, state="waiting", members={"a": "waiting", "b": "waiting"})
+        frame("state", capture_id="one", epoch=1, state="waiting", members={"a": "waiting", "b": "waiting"})
     )
     assert client.state.state == "waiting"
     assert not any(x["type"] == "receipt" for x in client._outbound._queue)
     with pytest.raises(ValueError, match="unknown scene state member"):
-        client.accept(frame("state", epoch=1, state="waiting", members={"outsider": "waiting"}))
+        client.accept(frame("state", capture_id="one", epoch=1, state="waiting", members={"outsider": "waiting"}))
+    await settle(client)
+
+async def test_failed_round_state_survives_stop_but_cannot_clear_new_capture():
+    client = prepared()
+    capture(client)
+    client.accept(frame('stop', request_id='failure-stop', device_id=named_device_instance_id('a'), epoch=2))
+    # The failure stop revoked the old playback epoch, but this terminal outcome
+    # belongs to the current capture and must reach the device UI.
+    client.accept(frame('state', capture_id='one', epoch=2, state='failed',
+                        members={'a': 'waiting', 'b': 'waiting'}, outcome='error',
+                        error_code='DECISION_TIMEOUT'))
+    assert client.state.error_code == 'DECISION_TIMEOUT'
+    client.press('two')
+    client.release('two')
+    client.accept(frame('state', capture_id='one', epoch=2, state='waiting',
+                        members={}, outcome='finished'))
+    assert client.state is None
     await settle(client)

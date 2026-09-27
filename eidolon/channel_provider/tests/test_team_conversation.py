@@ -25,10 +25,9 @@ async def test_three_device_team_http_start_status_close_and_shared_occupancy(tm
         req = ProvisionRequest.parse(encoded(provision_payload(device_id=named_device_instance_id(name))))
         await service.provision(req)
         refs.append(req.device_ref)
-    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', mock_order=['a', 'b'],
-        selection=dict(scenario='ip_role_group', session_id='team', input_device=refs[0],
+    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(scenario='ip_role_group', session_id='team', input_device=refs[0],
             members=[dict(companion_id=key, output_device=ref) for key, ref in zip(('a', 'b'), refs[1:])],
-            discussion=True, reply_budget=4)))
+            goal="讨论旅行", reply_budget=4)))
     token = 'test-team-service-token-at-least-32-bytes'
     async with TestClient(TestServer(create_app(service=service, bearer_token=token))) as client:
         body = opened.model_dump(mode='json')
@@ -78,8 +77,7 @@ async def test_real_adapter_creates_single_explicit_team_dispatch():
     adapter, client = _adapter()
     refs = [ProvisionRequest.parse(encoded(provision_payload(
         device_id=named_device_instance_id(name)))).device_ref for name in ('input', 'a', 'b')]
-    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', mock_order=['b', 'a'],
-        selection=dict(scenario='ip_role_group', session_id='demo', input_device=refs[0], members=[
+    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(scenario='ip_role_group', session_id='demo', input_device=refs[0], members=[
             dict(companion_id=key, output_device=ref) for key, ref in zip(('a','b'), refs[1:])])) )
     handles = tuple(dict(device=ref.device_instance_id, room='room-' + str(i), agent='eidolon',
         output_template=SessionOutputPlan(session_id='unused', policy_revision=1,
@@ -93,8 +91,56 @@ async def test_real_adapter_creates_single_explicit_team_dispatch():
     team = TeamDispatch.model_validate(metadata['team_dispatch'])
     assert not team.input_plan.outputs.can_respond
     assert all(not e.plan.inputs.microphone for e in team.endpoints)
-    assert team.opened.mock_order == ('b', 'a')
+    assert team.opened.selection == opened.selection
     assert 'presentation_endpoint' not in metadata and 'target_companion_id' not in metadata
     await adapter.open_team_session(opened, handles, sessions)
     assert len(client.agent_dispatch.created) == 1  # Idempotent dispatch.
     await adapter.shutdown()
+
+async def test_legacy_order_checkpoint_recovers_closure_only(tmp_path):
+    from eidolon.channel_provider.contracts import BackendUnavailable
+    backend = TeamAdapter()
+    service, store, _ = _service(tmp_path, [1700000000000], backend)
+    refs = []
+    for name in ('input', 'a'):
+        req = ProvisionRequest.parse(encoded(provision_payload(device_id=named_device_instance_id(name))))
+        await service.provision(req)
+        refs.append(req.device_ref)
+    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(
+        scenario='ip_role_group', session_id='legacy', input_device=refs[0],
+        members=[dict(companion_id='a', output_device=refs[1])])) )
+    await service.open_team_conversation(opened, authenticated_owner_id='owner_1')
+    visit = service._team_conversations[('owner_1', 'legacy')]
+    await wait_for(lambda: visit.state == 'ready')
+    pending = refs[0].device_instance_id
+    async def lost_ack(handle, *args, **kwargs):
+        if handle['device'] == pending:
+            raise BackendUnavailable('lost terminal ACK')
+    backend.end_prepared_session.side_effect = lost_ack
+    backend.observers[pending]()
+    with pytest.raises(BackendUnavailable):
+        await visit.task
+    owner, session, scenario, data = store.prepared_scenes()[0]
+    data['version'] = 1
+    data['selection'].pop('schema_version', None)
+    data['selection']['mock_order'] = ['a']
+    data['selection']['selection']['schema_version'] = 1
+    data['selection']['selection']['discussion'] = True
+    data['selection']['selection'].pop('goal', None)
+    store.save_prepared_scene(owner, session, scenario, data)
+    restored_backend = TeamAdapter()
+    restored, _, _ = _service(tmp_path, [1700000000000], restored_backend)
+    await restored.start()
+    recovered = restored._team_conversations[(owner, session)]
+    assert len(restored._transport_scopes) == 2
+    await recovered.task
+    assert recovered.state == 'closed'
+    assert not restored._transport_scopes
+    assert not hasattr(restored_backend, 'team')  # no old dialogue resumed
+    assert not restored_backend.sent
+    assert restored_backend.end_prepared_session.await_count == 1
+    assert 'mock_order' not in store.prepared_scenes()[0][3]['selection']
+    assert store.prepared_scenes()[0][3]['version'] == 2
+    await restored.shutdown()
+    backend.end_prepared_session.side_effect = None
+    await service.shutdown()

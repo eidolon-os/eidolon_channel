@@ -54,9 +54,9 @@ async def run(args):
         if any(row['owner_id'] != source['owner_id'] or not row['companion_id'] for row in selected):
             raise ValueError('outputs require same-Owner Companion bindings')
         opened = OpenScene.model_validate(dict(type='open', owner_id=source['owner_id'],
-            mock_order=[row['companion_id'] for row in selected], selection=dict(
+            selection=dict(
                 scenario='ip_role_group', session_id=args.session or 'team-' + uuid4().hex,
-                input_device=source['device_ref'], discussion=args.discussion,
+                input_device=source['device_ref'], goal=args.goal,
                 reply_budget=args.budget, members=[dict(companion_id=row['companion_id'],
                     output_device=row['device_ref']) for row in selected])))
         body = opened.model_dump(mode='json')
@@ -79,7 +79,7 @@ def main():
     start = commands.add_parser('start')
     start.add_argument('--input', required=True)
     start.add_argument('--output', action='append', required=True)
-    start.add_argument('--discussion', action='store_true')
+    start.add_argument('--goal', default='')
     start.add_argument('--budget', type=int, default=4)
     start.add_argument('--session')
     for name in ('status', 'close'):

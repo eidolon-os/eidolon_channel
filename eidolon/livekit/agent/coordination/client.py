@@ -246,7 +246,8 @@ class RoleGroupClient:
         if isinstance(frame, SceneState):
             if not set(frame.members) <= set(self.members.values()):
                 raise ValueError("unknown scene state member")
-            if self._epoch is not None and frame.epoch >= self._epoch:
+            if (frame.capture_id == self._capture and self._released
+                    and frame.epoch >= self._last_epoch):
                 self.state = frame
                 if self.on_state is not None:
                     self._spawn(self._notify_state(frame))
@@ -298,7 +299,8 @@ class RoleGroupClient:
 
     async def _notify_state(self, frame: SceneState):
         # A queued completion must not clear a newer PTT capture's UI.
-        if self.state is frame and self.on_state is not None:
+        if (self.state is frame and frame.capture_id == self._capture
+                and self._released and self.on_state is not None):
             await self.on_state(frame)
 
     async def run(self, http: aiohttp.ClientSession, *, base_url: str, token: str):

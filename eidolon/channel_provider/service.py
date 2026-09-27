@@ -387,7 +387,7 @@ class ChannelProviderService:
 
         def checkpoint():
             self._store.save_prepared_scene(*key, scenario, {
-                "version": 1, "adapter": adapter_name, "handles": visit.handles,
+                "version": 2, "adapter": adapter_name, "handles": visit.handles,
                 "selection": (visit.opened if team else visit.selection).model_dump(mode="json"),
                 **visit.lifecycle_checkpoint(),
             })
@@ -431,12 +431,23 @@ class ChannelProviderService:
         from eidolon_sdk.biz.control.coordination_stream import OpenScene
         from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
         for owner, session, scenario, data in self._store.prepared_scenes():
-            if data.get("version") != 1:
+            if data.get("version") not in {1, 2}:
                 raise InvalidTransition("unsupported prepared scene checkpoint")
             adapter = self._registry.get(data["adapter"])
             handles = tuple(data["handles"])
             if scenario == "ip_role_group":
-                visit = TeamConversation(OpenScene.model_validate(data["selection"]), adapter, handles)
+                opened = data["selection"]
+                if data["version"] == 1 and opened["selection"].get("schema_version", 1) == 1:
+                    # Read-only conversion of the legacy closure checkpoint, never
+                    # wire compatibility or a runnable legacy decision policy.
+                    # Recovery below only completes cleanup; it cannot generate.
+                    opened = dict(opened)
+                    opened.pop("mock_order", None)
+                    selected = dict(opened["selection"])
+                    selected.pop("discussion", None)
+                    selected["schema_version"] = 2
+                    opened.update(schema_version=2, selection=selected)
+                visit = TeamConversation(OpenScene.model_validate(opened), adapter, handles)
                 catalog = self._team_conversations
                 if visit.opened.owner_id != owner:
                     raise InvalidTransition("persisted scene Owner mismatch")

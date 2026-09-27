@@ -1610,10 +1610,8 @@ async def test_prepared_cleanup_waits_for_correlated_device_receipt(session_id):
     adapter.close_session.assert_not_awaited()
     receipt.set()
     await task
-    if session_id:
-        adapter.close_session.assert_awaited_once_with(handle, session_id)
-    else:
-        adapter.close_session.assert_not_awaited()
+    # Dispatch withdrawal belongs to the preceding producer phase.
+    adapter.close_session.assert_not_awaited()
 
 
 @pytest.mark.parametrize('result', ['failed', 'rejected', 'expired'])
@@ -1626,3 +1624,46 @@ async def test_failed_device_cleanup_does_not_release_native_dispatch(result):
     with pytest.raises(BackendUnavailable, match='did not confirm'):
         await adapter.end_prepared_session({'device': _DEVICE_1}, 'native-session')
     adapter.close_session.assert_not_awaited()
+
+
+async def test_producer_teardown_waits_for_remote_presenter_before_returning():
+    from livekit import rtc
+    from unittest.mock import AsyncMock
+    adapter, client = _adapter()
+    adapter.close_session = AsyncMock()
+    client.room.participants = [SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT, identity='presentation-team-owned')]
+    handles = ({'room': 'source', 'device': 'a'}, {'room': 'target', 'device': 'b'})
+    task = asyncio.create_task(adapter.quiesce_prepared_sessions(handles, {'a': 'sid-a', 'b': 'sid-b'}))
+    await asyncio.sleep(.02)
+    assert not task.done()
+    assert adapter.close_session.await_count == 2
+    client.room.participants.clear()
+    await asyncio.wait_for(task, 1)
+    await adapter.shutdown()
+
+
+async def test_unavailable_room_query_is_not_producer_teardown_confirmation():
+    from eidolon.channel_provider.contracts import BackendUnavailable
+    from unittest.mock import AsyncMock
+    adapter, client = _adapter()
+    adapter.close_session = AsyncMock()
+    client.room.participants_raise = True
+    with pytest.raises(BackendUnavailable, match='producers'):
+        await adapter.quiesce_prepared_sessions(({'room': 'source', 'device': 'a'},), {'a': 'sid'})
+    await adapter.shutdown()
+
+
+async def test_recovery_listener_cannot_restore_expired_io_grants_or_start_conversation():
+    from eidolon.channel_provider.contracts import InvalidTransition
+    from unittest.mock import AsyncMock
+    adapter, _ = _adapter()
+    adapter.accept_requests = AsyncMock()
+    handle = dict(room='old-room', device=_DEVICE_1, input_permissions={'microphone': True},
+        input_revision=99, output_template={'speech': True}, agent='eidolon')
+    await adapter.resume_prepared_channels((handle,))
+    call = adapter.accept_requests.call_args
+    assert call.args[0] == {'room': 'old-room', 'device': _DEVICE_1}
+    with pytest.raises(InvalidTransition, match='cleanup only'):
+        await call.kwargs['sink'](None)
+    await adapter.shutdown()

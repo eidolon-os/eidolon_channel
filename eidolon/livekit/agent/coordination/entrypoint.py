@@ -11,7 +11,7 @@ from .worker import TeamWorker, TeamOutput
 
 async def run_team_dispatch(ctx, cfg, raw):
     from ..server import _session_lifecycle_payload
-    from eidolon_sdk.biz.contracts import SESSION_STARTED_TYPE, SESSION_END_TYPE
+    from eidolon_sdk.biz.contracts import SESSION_STARTED_TYPE
     team = TeamDispatch.model_validate(raw)
     url = os.environ.get('EIDOLON_TEAM_AGENT_URL', 'http://127.0.0.1:8081')
     token = os.environ.get('EIDOLON_AGENT_ADMIN_API_TOKEN', '')
@@ -46,30 +46,24 @@ async def run_team_dispatch(ctx, cfg, raw):
             plan = output.endpoint.plan
             return await stop_playback(output.room, device, plan.session_id, plan.policy_revision)
 
-        async def lifecycle(kind):
+        async def announce_started():
             await asyncio.gather(*(
-                output.room.local_participant.publish_data(_session_lifecycle_payload(kind,
-                    output.endpoint.plan.session_id, output_plan=(
-                        output.endpoint.plan if kind == SESSION_STARTED_TYPE else None),
-                    reason='user_left' if kind == SESSION_END_TYPE else None),
+                output.room.local_participant.publish_data(_session_lifecycle_payload(SESSION_STARTED_TYPE,
+                    output.endpoint.plan.session_id, output_plan=output.endpoint.plan),
                     reliable=True, topic=SESSION_CONTROL_TOPIC,
                     destination_identities=[output.endpoint.participant_identity]) for output in outputs))
-            await ctx.room.local_participant.publish_data(_session_lifecycle_payload(kind,
-                team.input_plan.session_id, output_plan=(
-                    team.input_plan if kind == SESSION_STARTED_TYPE else None),
-                reason='user_left' if kind == SESSION_END_TYPE else None),
+            await ctx.room.local_participant.publish_data(_session_lifecycle_payload(SESSION_STARTED_TYPE,
+                team.input_plan.session_id, output_plan=team.input_plan),
                 reliable=True, topic=SESSION_CONTROL_TOPIC, destination_identities=[source])
 
         worker = TeamWorker(team.opened, input_room=ctx.room, input_factory=source_factory,
-            outputs=tuple(outputs), stop=stop, on_ready=lambda: lifecycle(SESSION_STARTED_TYPE),
+            outputs=tuple(outputs), stop=stop, on_ready=announce_started,
             turn_policy=cfg.turn_policy, observability=cfg.observability,
             audio_sample_rate=cfg.behavior.audio_sample_rate)
         async with aiohttp.ClientSession() as http:
-            try:
-                await worker.run(http, agent_url=url, service_token=token)
-            finally:
-                if worker.cleanup_ok:
-                    await lifecycle(SESSION_END_TYPE)
+            # Provider owns Body closure. Worker teardown only revokes its
+            # generation/media; it must not independently end the same devices.
+            await worker.run(http, agent_url=url, service_token=token)
         if not worker.cleanup_ok:
             raise RuntimeError('team device cleanup did not complete')
     finally:

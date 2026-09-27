@@ -14,7 +14,7 @@ from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
 from .contracts import IdempotencyConflict, InvalidTransition, StaleGeneration
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 PROVISION = "channel.provision-device"
 REFRESH = "channel.refresh-device"
 REVOKE = "channel.revoke-device"
@@ -89,7 +89,7 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
                 )
@@ -98,6 +98,9 @@ class ChannelProviderStore:
                 if version in {1, 2, 3}:
                     self._migrate_legacy(connection, version)
                 self._create_schema(connection)
+                connection.execute("""CREATE TABLE IF NOT EXISTS prepared_scenes (
+                    owner_id TEXT NOT NULL, session_id TEXT NOT NULL, scenario TEXT NOT NULL,
+                    value_json TEXT NOT NULL, PRIMARY KEY(owner_id, session_id, scenario))""")
                 self._validate_schema(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()
@@ -213,6 +216,19 @@ class ChannelProviderStore:
         connection.execute("DROP INDEX IF EXISTS uq_provider_active_device")
         connection.execute("DROP TABLE provider_provisions")
         connection.execute("DROP TABLE provider_revocations")
+
+    def save_prepared_scene(self, owner: str, session: str, scenario: str, value: dict) -> None:
+        """Commit a closure checkpoint before its reservation can be released."""
+        with self._connect() as connection:
+            connection.execute("""INSERT INTO prepared_scenes(owner_id, session_id, scenario, value_json)
+                VALUES (?, ?, ?, ?) ON CONFLICT(owner_id, session_id, scenario)
+                DO UPDATE SET value_json=excluded.value_json""",
+                (owner, session, scenario, json.dumps(value, ensure_ascii=False)))
+
+    def prepared_scenes(self) -> list[tuple[str, str, str, dict]]:
+        with self._connect() as connection:
+            return [(r[0], r[1], r[2], json.loads(r[3])) for r in connection.execute(
+                "SELECT owner_id, session_id, scenario, value_json FROM prepared_scenes")]
 
     def healthcheck(self) -> None:
         with self._connect() as connection:

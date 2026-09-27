@@ -505,6 +505,7 @@ class LiveKitChannelAdapter:
             raise InvalidTransition("device already has a control delivery in flight")
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._control_receipts[key] = _ControlReceipt(op, future, wait_for_terminal)
+        logger.info("control send room=%s device=%s op=%s command=%s", room, device, op, command_id)
         try:
             async with asyncio.timeout(min((issued + ttl - now_ms) / 1000, 30.0)):
                 await watch.connection.local_participant.publish_data(
@@ -513,7 +514,8 @@ class LiveKitChannelAdapter:
                 )
                 return await future
         except TimeoutError as exc:
-            logger.warning("control receipt timed out room=%s device=%s op=%s", room, device, op)
+            logger.warning("control receipt timed out room=%s device=%s op=%s command=%s",
+                           room, device, op, command_id)
             raise BackendUnavailable("control receipt timed out") from exc
         except asyncio.CancelledError:
             raise
@@ -541,8 +543,8 @@ class LiveKitChannelAdapter:
         code = body.get("code")
         if not isinstance(code, str) or len(code) > 64 or not code.replace("_", "").isalnum():
             code = "UNSPECIFIED"
-        logger.info("control receipt room=%s device=%s op=%s status=%s code=%s",
-                    room, device, pending.op, status, code)
+        logger.info("control receipt room=%s device=%s op=%s command=%s status=%s code=%s",
+                    room, device, pending.op, body["ref"], status, code)
         pending.future.set_result(status)
 
     def _fail_control_delivery(self, room: str) -> None:
@@ -591,6 +593,7 @@ class LiveKitChannelAdapter:
             watch = self._listeners[room]
             if handle.get("input_revision", 0) >= watch.input_handle.get("input_revision", 0):
                 watch.input_handle = handle
+                watch.sink = sink
             await self._reconcile_input_permissions(watch.input_handle)
             await self._reconcile_output_dispatches(watch.input_handle)
             return
@@ -1262,6 +1265,66 @@ class LiveKitChannelAdapter:
                     and str(getattr(participant, "identity", "")).startswith("presentation-")):
                 raise InvalidTransition("previous presentation is still closing")
 
+    async def resume_prepared_channels(self, handles) -> None:
+        """Recover only Host receipt listeners, never device credentials or IO grants.
+
+        A prepared scene may outlive its join credential. Its immutable closure
+        correlations still need a receipt path after Provider restart.
+        """
+        async def reject_start(request):
+            raise InvalidTransition("recovered channel is for scene cleanup only")
+        for handle in handles:
+            if handle['room'] not in self._listeners:
+                await self.accept_requests({k: handle[k] for k in ('room', 'device')},
+                    sink=reject_start)
+
+    async def prepared_endpoints_present(self, handles) -> bool:
+        """Observe current transport, not a cached preparation acknowledgement."""
+        async def present(handle):
+            try:
+                result = await self._client().room.list_participants(
+                    api.ListParticipantsRequest(room=handle['room']))
+                return any(p.identity == handle['device'] for p in result.participants)
+            except TwirpError as exc:
+                if exc.code == TwirpErrorCode.NOT_FOUND:
+                    return False
+                raise
+        try:
+            async with asyncio.timeout(3):
+                return all(await asyncio.gather(*(present(h) for h in handles)))
+        except Exception as exc:
+            raise BackendUnavailable("prepared endpoint presence is unknown") from exc
+
+    async def quiesce_prepared_sessions(self, handles, sessions) -> None:
+        """Withdraw generation ownership before asking any Body to leave.
+
+        Dispatch deletion revokes the source job. Its presentation connections
+        must disappear before Body cleanup: those workers drain/cancel using
+        still-live device controls. A missing device is NOT a silence receipt.
+        """
+        await asyncio.gather(*(self.close_session(h, sessions[h['device']])
+            for h in handles if h['device'] in sessions))
+        try:
+            async with asyncio.timeout(15):
+                while True:
+                    active = False
+                    for handle in handles:
+                        try:
+                            result = await self._client().room.list_participants(
+                                api.ListParticipantsRequest(room=handle['room']))
+                        except TwirpError as exc:
+                            if exc.code == TwirpErrorCode.NOT_FOUND:
+                                continue
+                            raise
+                        active |= any(p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+                            and p.identity.startswith('presentation-')
+                            for p in result.participants)
+                    if not active:
+                        return
+                    await asyncio.sleep(0.1)
+        except Exception as exc:
+            raise BackendUnavailable("scene producers have not confirmed teardown") from exc
+
     async def end_prepared_session(self, handle: dict, session_id: str | None,
                                    *, control_request_id: str | None = None) -> None:
         """Revoke device IO with a correlated terminal receipt before releasing it.
@@ -1287,8 +1350,6 @@ class LiveKitChannelAdapter:
         result = await self.deliver_control(handle, command, wait_for_terminal=True)
         if result != 'succeeded':
             raise BackendUnavailable(f"device did not confirm conversation cleanup: {result}")
-        if session_id:
-            await self.close_session(handle, session_id)
 
     async def open_team_session(self, opened, handles, sessions):
         from eidolon_sdk.biz.presentation import InputSelection, OutputSelection

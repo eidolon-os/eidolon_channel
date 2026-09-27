@@ -17,6 +17,9 @@ class Adapter(FakeAdapter):
         self.launched = asyncio.Event()
         self.sent = []
         self.end_prepared_session = AsyncMock()
+        self.quiesce_prepared_sessions = AsyncMock()
+        self.prepared_endpoints_present = AsyncMock(return_value=True)
+        self.resume_prepared_channels = AsyncMock()
         self.require_idle = AsyncMock()
         self.defer_requests = False
         self.observers = {}
@@ -187,5 +190,70 @@ async def test_partial_cleanup_failure_keeps_all_reservations_until_retry(tmp_pa
         authenticated_owner_id='owner_1', close=True)
     assert result['state'] == 'closed'
     assert result['error'] == ''
+    assert not service._transport_scopes
+    await service.shutdown()
+
+
+async def test_restart_recovers_only_unconfirmed_close_without_reopening_generation(tmp_path):
+    service, backend, selection = await prepare(tmp_path)
+    await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
+    visit = service._device_conversations[('owner_1', selection.session_id)]
+    await wait_for(lambda: visit.state == 'ready')
+    pending = selection.input_device.device_instance_id
+    async def close_endpoint(handle, *args, **kwargs):
+        if handle['device'] == pending:
+            raise BackendUnavailable('ACK lost after physical execution')
+    backend.end_prepared_session.side_effect = close_endpoint
+    backend.observers[pending]()
+    with pytest.raises(BackendUnavailable):
+        await visit.task
+    assert visit._ended_devices == {selection.output_device.device_instance_id}
+    recovered_backend = Adapter()
+    recovered, _, _ = _service(tmp_path, [1700000000000], recovered_backend)
+    await recovered.start()
+    restored = recovered._device_conversations[('owner_1', selection.session_id)]
+    # Reservation exists before the recovery task gets any opportunity to run.
+    assert len(recovered._transport_scopes) == 2
+    await restored.task
+    assert restored.state == 'closed'
+    assert not recovered._transport_scopes
+    assert not recovered_backend.sent and not recovered_backend.directed
+    recovered_backend.quiesce_prepared_sessions.assert_not_awaited()
+    recovered_backend.resume_prepared_channels.assert_awaited_once()
+    assert recovered_backend.end_prepared_session.await_count == 1
+    assert recovered_backend.end_prepared_session.call_args.args[0]['device'] == pending
+    await recovered.shutdown()
+    backend.end_prepared_session.side_effect = None
+    await service.shutdown()
+
+
+async def test_closed_scene_survives_restart_without_claiming_new_scene_devices(tmp_path):
+    service, backend, selection = await prepare(tmp_path)
+    await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
+    visit = service._device_conversations[('owner_1', selection.session_id)]
+    await wait_for(lambda: visit.state == 'ready')
+    await service.device_conversation(selection.session_id, authenticated_owner_id='owner_1', close=True)
+    recovered_backend = Adapter()
+    recovered, _, _ = _service(tmp_path, [1700000000000], recovered_backend)
+    await recovered.start()
+    assert not recovered._transport_scopes
+    status = await recovered.device_conversation(selection.session_id, authenticated_owner_id='owner_1')
+    assert status['state'] == 'closed'
+    recovered_backend.end_prepared_session.assert_not_awaited()
+    await recovered.shutdown()
+    await service.shutdown()
+
+
+async def test_status_cannot_keep_ready_after_transport_was_lost(tmp_path):
+    service, backend, selection = await prepare(tmp_path)
+    await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
+    visit = service._device_conversations[('owner_1', selection.session_id)]
+    await wait_for(lambda: visit.state == 'ready')
+    backend.prepared_endpoints_present.return_value = False
+    status = await service.device_conversation(selection.session_id, authenticated_owner_id='owner_1')
+    assert status['state'] == 'closing'
+    await visit.task
+    assert visit.state == 'closed'
+    backend.quiesce_prepared_sessions.assert_awaited_once()
     assert not service._transport_scopes
     await service.shutdown()

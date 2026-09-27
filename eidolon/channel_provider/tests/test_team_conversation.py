@@ -46,9 +46,14 @@ async def test_three_device_team_http_start_status_close_and_shared_occupancy(tm
         response = await client.post('/v1/role-groups/status', json=query, headers=headers)
         assert (await response.json())['state'] == 'ready'
         if close_failure:
-            backend.end_prepared_session.side_effect = [RuntimeError('input ACK timeout'), None, None]
+            async def offline_input(handle, *args, **kwargs):
+                if handle['device'] == refs[0].device_instance_id:
+                    raise RuntimeError('input ACK timeout')
+            backend.end_prepared_session.side_effect = offline_input
             response = await client.post('/v1/role-groups/close', json=query, headers=headers)
-            assert response.status == 503, await response.text()
+            assert response.status == 200, await response.text()
+            assert (await response.json())['state'] == 'closing'
+            await wait_for(lambda: visit.close_task.done())
             assert len(service._transport_scopes) == 3
             response = await client.post('/v1/role-groups/status', json=query, headers=headers)
             status = await response.json()
@@ -57,7 +62,9 @@ async def test_three_device_team_http_start_status_close_and_shared_occupancy(tm
             backend.end_prepared_session.side_effect = None
         response = await client.post('/v1/role-groups/close', json=query, headers=headers)
         assert response.status == 200, await response.text()
-        status = await response.json()
+        assert (await response.json())['state'] == 'closing'
+        await wait_for(lambda: visit.close_task.done())
+        status = visit.snapshot()
         assert status['state'] == 'closed'
         assert status['error'] == ''
         assert not service._transport_scopes

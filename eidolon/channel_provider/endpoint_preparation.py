@@ -28,11 +28,44 @@ class EndpointPreparation:
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     remove_observers: list = field(default_factory=list)
     _cleanup_failed: bool = field(default=False, init=False)
+    _cleanup_complete: bool = field(default=False, init=False)
+    close_task: asyncio.Task | None = field(default=None, init=False)
+    checkpoint: Callable[[], None] = field(default_factory=lambda: (lambda: None), init=False)
+    _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _producers_revoked: bool = field(default=False, init=False)
+    _ended_devices: set[str] = field(default_factory=set, init=False)
 
     def __post_init__(self):
         self._device_ids = {handle["device"] for handle in self.handles}
         if not self.handles or len(self._device_ids) != len(self.handles):
             raise InvalidTransition("preparation requires distinct endpoints")
+
+    @property
+    def closure_complete(self) -> bool:
+        return self._cleanup_complete
+
+    def lifecycle_checkpoint(self) -> dict:
+        return dict(state=self.state, error=self.error, sessions=dict(self.sessions),
+            command_ids=dict(self.command_ids), producers_revoked=self._producers_revoked,
+            ended_devices=sorted(self._ended_devices), cleanup_failed=self._cleanup_failed,
+            cleanup_complete=self._cleanup_complete)
+
+    def restore_lifecycle(self, data: dict) -> None:
+        sessions, commands = dict(data["sessions"]), dict(data["command_ids"])
+        ended = set(data["ended_devices"])
+        attempted = set(sessions) | set(commands)
+        if not attempted <= self._device_ids or not ended <= attempted:
+            raise InvalidTransition("closure checkpoint contains an unowned endpoint")
+        if any(not isinstance(v, str) or not v for v in (*sessions.values(), *commands.values())):
+            raise InvalidTransition("closure checkpoint lacks endpoint correlation")
+        if data["cleanup_complete"] and (not data["producers_revoked"] or ended != attempted):
+            raise InvalidTransition("closure checkpoint has no terminal proof")
+        self.state, self.error = data["state"], data["error"]
+        self.sessions, self.command_ids = sessions, commands
+        self._producers_revoked, self._ended_devices = data["producers_revoked"], ended
+        self._cleanup_failed, self._cleanup_complete = data["cleanup_failed"], data["cleanup_complete"]
+        if not self._cleanup_complete:
+            self.state = "closing"
 
     def request(self, device_id: str, request: ServingRequest) -> None:
         if device_id not in self._device_ids:
@@ -54,6 +87,7 @@ class EndpointPreparation:
         if previous is not None and previous != request.conversation_id:
             raise InvalidTransition("device changed its pending conversation")
         self.sessions[device_id] = request.conversation_id
+        self.checkpoint()
         if len(self.sessions) == len(self.handles):
             self.prepared.set()
 
@@ -67,6 +101,7 @@ class EndpointPreparation:
             for handle in self.handles:
                 command_id = f"join:{uuid4().hex}"
                 self.command_ids[handle["device"]] = command_id
+                self.checkpoint()
                 command = build_command_envelope(command_id=command_id,
                     device_id=handle["device"], payload={"prepare_only": True}, op="room.join",
                     src_type="channel", src_id="channel-provider", ttl_ms=20_000)
@@ -100,6 +135,7 @@ class EndpointPreparation:
                         waiter.cancel()
                     await asyncio.gather(prepared, stopped, return_exceptions=True)
             self.state = "ready"
+            self.checkpoint()
             await self.stopped.wait()
         except asyncio.CancelledError:
             raise
@@ -115,28 +151,60 @@ class EndpointPreparation:
                 self.state = "closing"
 
     async def cleanup(self) -> None:
-        # Keep failure visible; cleanup failure must retain the reservation so
-        # a later close/revoke can retry rather than authorizing overlapping IO.
-        handles = tuple(handle for handle in self.handles
-                        if handle["device"] in self.sessions or handle["device"] in self.command_ids)
-        results = await asyncio.gather(*(
-            self.adapter.end_prepared_session(handle, self.sessions.get(handle["device"]),
-                control_request_id=self.command_ids.get(handle["device"]))
-            for handle in handles
-        ), return_exceptions=True)
-        failures = [(handle["device"], result) for handle, result in zip(handles, results)
-                    if isinstance(result, BaseException)]
-        if failures:
-            self._cleanup_failed = True
-            self.state = "failed"
-            self.error = "endpoint cleanup unconfirmed: " + ", ".join(device for device, _ in failures)
-            logging.getLogger(__name__).warning("%s; causes=%r", self.error, failures)
-            raise BackendUnavailable(self.error) from BaseExceptionGroup(
-                "endpoint cleanup failed", [error for _, error in failures])
-        for remove in self.remove_observers:
-            remove()
-        self.remove_observers.clear()
-        if self.state != "failed" or self._cleanup_failed:
-            self.state = "closed"
-            self.error = ""
-        self._cleanup_failed = False
+        """One monotonic close transaction, shared by stop, failure and retry.
+
+        Producer revocation precedes Body revocation. Terminal device receipts
+        are checkpoints: a retry never reopens a completed stage or asks an
+        already-confirmed endpoint to be reachable again. Unknown stays unknown.
+        The service releases the group reservation only when this returns.
+        """
+        async with self._close_lock:
+            handles = tuple(handle for handle in self.handles
+                if handle["device"] in self.sessions or handle["device"] in self.command_ids)
+            try:
+                if not self._producers_revoked:
+                    await self.adapter.quiesce_prepared_sessions(handles, dict(self.sessions))
+                    self._producers_revoked = True
+                    self.checkpoint()
+                pending = tuple(h for h in handles if h["device"] not in self._ended_devices)
+
+                async def end(handle):
+                    device = handle["device"]
+                    await self.adapter.end_prepared_session(handle, self.sessions.get(device),
+                        control_request_id=self.command_ids.get(device))
+                    self._ended_devices.add(device)
+                    self.checkpoint()
+
+                results = await asyncio.gather(*(end(h) for h in pending), return_exceptions=True)
+                failures = [(h["device"], r) for h, r in zip(pending, results)
+                            if isinstance(r, BaseException)]
+                if failures:
+                    raise BackendUnavailable("endpoint cleanup unconfirmed: " +
+                        ", ".join(device for device, _ in failures)) from BaseExceptionGroup(
+                            "endpoint cleanup failed", [error for _, error in failures])
+            except BaseException as exc:
+                self._cleanup_failed = True
+                self.state = "failed"
+                self.error = str(exc) or "close interrupted; confirmation remains pending"
+                self.checkpoint()
+                logging.getLogger(__name__).warning(
+                    "scene close incomplete producers_revoked=%s confirmed=%d pending=%d error=%s",
+                    self._producers_revoked, len(self._ended_devices),
+                    len(handles) - len(self._ended_devices), self.error)
+                raise
+            for remove in self.remove_observers:
+                remove()
+            self.remove_observers.clear()
+            if self.state != "failed" or self._cleanup_failed:
+                self.state = "closed"
+                self.error = ""
+            self._cleanup_failed = False
+            self._cleanup_complete = True
+            try:
+                self.checkpoint()
+            except Exception as exc:
+                self._cleanup_complete = False
+                self._cleanup_failed = True
+                self.state = "failed"
+                self.error = "close checkpoint could not be committed"
+                raise BackendUnavailable(self.error) from exc

@@ -86,6 +86,7 @@ class ChannelProviderService:
         self._device_conversations: dict = {}
         self._team_conversations: dict = {}
         self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
+        self._recovery_ready = asyncio.Event()
 
     def initialize(self) -> None:
         self._store.initialize()
@@ -98,6 +99,7 @@ class ChannelProviderService:
         so we re-state what we want watched from the only durable record there
         is. Failing to reach one channel must not cost the others theirs.
         """
+        self._restore_prepared_scenes()
         self._store.expire_credentials(self._now_ms())
         for stored in self._store.active_provisions():
             try:
@@ -108,6 +110,16 @@ class ChannelProviderService:
                     "served by request, but the device cannot ask",
                     stored.device_id,
                 )
+
+        for catalog in (self._device_conversations, self._team_conversations):
+            for visit in catalog.values():
+                if not visit.closure_complete:
+                    try:
+                        await visit.adapter.resume_prepared_channels(visit.handles)
+                    except Exception:
+                        logger.exception("scene recovery control unavailable session=%s",
+                                         visit.selection.session_id)
+        self._recovery_ready.set()
 
     async def healthcheck(self) -> None:
         self._store.healthcheck()
@@ -364,28 +376,80 @@ class ChannelProviderService:
             if not callable(getattr(adapter, capability, None)):
                 raise InvalidTransition("transport does not support directed sessions")
             visit = create(adapter, tuple(json.loads(record.handle_json) for record in records))
-            scope = _TransportScope(asyncio.current_task(), request=visit.request)
-            device_ids = tuple(record.device_id for record in records)
-
-            async def cleanup():
-                await visit.cleanup()
-                for device_id in device_ids:
-                    if self._transport_scopes.get(device_id) is scope:
-                        self._transport_scopes.pop(device_id)
-
-            async def run():
-                try:
-                    await visit.run()
-                finally:
-                    await cleanup()
-
-            scope.cleanup = cleanup
-            for device_id in device_ids:
-                self._transport_scopes[device_id] = scope
-            catalog[key] = visit
-            visit.task = scope.task = asyncio.create_task(run())
-            visit.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+            self._attach_prepared_scene(visit, key, catalog, records[0].adapter_name)
             return visit.snapshot()
+
+    def _attach_prepared_scene(self, visit, key, catalog, adapter_name, *, recovering=False):
+        team = catalog is self._team_conversations
+        scenario = "ip_role_group" if team else "device_conversation"
+        device_ids = tuple(ref.device_instance_id for ref in visit.selection.devices)
+        scope = _TransportScope(asyncio.current_task(), request=visit.request)
+
+        def checkpoint():
+            self._store.save_prepared_scene(*key, scenario, {
+                "version": 1, "adapter": adapter_name, "handles": visit.handles,
+                "selection": (visit.opened if team else visit.selection).model_dump(mode="json"),
+                **visit.lifecycle_checkpoint(),
+            })
+
+        visit.checkpoint = checkpoint
+
+        async def cleanup():
+            await visit.cleanup()
+            for device_id in device_ids:
+                if self._transport_scopes.get(device_id) is scope:
+                    self._transport_scopes.pop(device_id)
+
+        async def run():
+            if recovering:
+                # Install reservations before listening; recovery never reopens
+                # generation, and waits for all control listeners to be started.
+                await self._recovery_ready.wait()
+                visit.state = "closing"
+                await cleanup()
+                return
+            try:
+                await visit.run()
+            finally:
+                await cleanup()
+
+        scope.cleanup = cleanup
+        catalog[key] = visit
+        checkpoint()  # Write intent before dispatching any room.join.
+        if visit.closure_complete:
+            return
+        for device_id in device_ids:
+            if device_id in self._transport_scopes:
+                raise InvalidTransition("persisted scenes have conflicting reservations")
+            self._transport_scopes[device_id] = scope
+        visit.task = scope.task = asyncio.create_task(run())
+        visit.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
+    def _restore_prepared_scenes(self):
+        from .team_conversation import TeamConversation
+        from .device_conversation import DeviceConversation
+        from eidolon_sdk.biz.control.coordination_stream import OpenScene
+        from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
+        for owner, session, scenario, data in self._store.prepared_scenes():
+            if data.get("version") != 1:
+                raise InvalidTransition("unsupported prepared scene checkpoint")
+            adapter = self._registry.get(data["adapter"])
+            handles = tuple(data["handles"])
+            if scenario == "ip_role_group":
+                visit = TeamConversation(OpenScene.model_validate(data["selection"]), adapter, handles)
+                catalog = self._team_conversations
+                if visit.opened.owner_id != owner:
+                    raise InvalidTransition("persisted scene Owner mismatch")
+            elif scenario == "device_conversation":
+                visit = DeviceConversation(DeviceConversationSelection.model_validate(data["selection"]),
+                    owner, adapter, handles)
+                catalog = self._device_conversations
+            else:
+                raise InvalidTransition("unknown persisted scene type")
+            if visit.selection.session_id != session:
+                raise InvalidTransition("persisted scene identity mismatch")
+            visit.restore_lifecycle(data)
+            self._attach_prepared_scene(visit, (owner, session), catalog, data["adapter"], recovering=True)
 
     async def device_conversation(self, session_id: str, *, authenticated_owner_id: str,
                                   close: bool = False, team: bool = False) -> dict:
@@ -393,13 +457,50 @@ class ChannelProviderService:
         visit = catalog.get((authenticated_owner_id, session_id))
         if visit is None:
             raise UnknownChannel("device conversation is not known on this Provider")
+        if not close and visit.state == "ready":
+            try:
+                present = await visit.adapter.prepared_endpoints_present(visit.handles)
+            except BackendUnavailable:
+                # A status read cannot turn an unavailable transport into a
+                # positive ready claim. Fail-stop uses the same close operation.
+                present = False
+            if not present and visit.state == "ready":
+                visit.state = "closing"
+                visit.error = "endpoint reachability lost; closing scene"
+                visit.checkpoint()
+                visit.stopped.set()
         if close:
-            for ref in visit.selection.devices:
-                scope = self._transport_scopes.get(ref.device_instance_id)
-                if scope is not None and scope.task is visit.task:
-                    await self._retire_transport_scope(ref.device_instance_id)
-            visit.state = "closed"
-            visit.error = ""
+            async def finish():
+                attempts = 3 if team else 1
+                for attempt in range(attempts):
+                    try:
+                        for ref in visit.selection.devices:
+                            scope = self._transport_scopes.get(ref.device_instance_id)
+                            if scope is not None and scope.task is visit.task:
+                                await self._retire_transport_scope(ref.device_instance_id)
+                        visit.state = "closed"
+                        visit.error = ""
+                        visit.checkpoint()
+                        return
+                    except BackendUnavailable:
+                        if attempt + 1 == attempts:
+                            raise
+                        visit.state = "closing"
+                        visit.checkpoint()
+                        await asyncio.sleep((0.25, 1.0)[attempt])
+
+            if team:
+                # HTTP acknowledges intent; the operation belongs to the Host,
+                # not the request's timeout/cancellation. Poll observes outcome.
+                if visit.state != "closed" and (visit.close_task is None or visit.close_task.done()):
+                    visit.state = "closing"
+                    visit.error = ""
+                    visit.checkpoint()
+                    visit.close_task = asyncio.create_task(finish())
+                    visit.close_task.add_done_callback(
+                        lambda t: None if t.cancelled() else t.exception())
+            else:
+                await finish()
         return visit.snapshot()
 
     async def open_shared_session(

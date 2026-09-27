@@ -13,6 +13,8 @@ class Adapter:
         self.sent = []
         self.require_idle = AsyncMock()
         self.end_prepared_session = AsyncMock()
+        self.quiesce_prepared_sessions = AsyncMock()
+        self.prepared_endpoints_present = AsyncMock(return_value=True)
         self.removed = []
 
     async def deliver_control(self, handle, command, **kwargs):
@@ -119,3 +121,90 @@ async def test_partial_preparation_closes_known_session_and_pending_join():
         control_request_id='join:a')
     adapter.end_prepared_session.assert_any_await({'device': 'b'}, None,
         control_request_id='join:b')
+
+
+async def test_producer_barrier_precedes_every_device_close_and_is_retryable():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), AsyncMock())
+    visit.sessions = {'a': 'native-a', 'b': 'native-b'}
+    adapter.quiesce_prepared_sessions.side_effect = BackendUnavailable('worker still publishing')
+    with pytest.raises(BackendUnavailable):
+        await visit.cleanup()
+    adapter.end_prepared_session.assert_not_awaited()
+    adapter.quiesce_prepared_sessions.side_effect = None
+    await visit.cleanup()
+    assert adapter.quiesce_prepared_sessions.await_count == 2
+    assert visit.state == 'closed'
+
+
+async def test_lost_ack_retries_only_unknown_device_after_actual_execution():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), AsyncMock())
+    visit.sessions = {'a': 'native-a', 'b': 'native-b'}
+    applied, calls = set(), []
+    async def end(handle, session, **kwargs):
+        device = handle['device']
+        calls.append(device)
+        if device not in applied:
+            applied.add(device)  # Physical close happened before the lost ACK.
+            if device == 'a':
+                raise BackendUnavailable('receipt lost')
+        # A second correlated room.leave answers SESSION_ALREADY_ENDED.
+    adapter.end_prepared_session.side_effect = end
+    with pytest.raises(BackendUnavailable):
+        await visit.cleanup()
+    assert applied == {'a', 'b'}
+    assert visit.state != 'closed'
+    await asyncio.gather(visit.cleanup(), visit.cleanup())
+    assert calls == ['a', 'b', 'a']
+    assert adapter.quiesce_prepared_sessions.await_count == 1
+    assert visit.state == 'closed'
+
+
+async def test_cancellation_preserves_completed_device_checkpoint():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), AsyncMock())
+    visit.sessions = {'a': 'native-a', 'b': 'native-b'}
+    blocked = asyncio.Event()
+    async def end(handle, *args, **kwargs):
+        if handle['device'] == 'b':
+            blocked.set()
+            await asyncio.Event().wait()
+    adapter.end_prepared_session.side_effect = end
+    task = asyncio.create_task(visit.cleanup())
+    await blocked.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    adapter.end_prepared_session.reset_mock(side_effect=True)
+    await visit.cleanup()
+    adapter.end_prepared_session.assert_awaited_once_with({'device': 'b'}, 'native-b',
+        control_request_id=None)
+
+
+async def test_failed_terminal_checkpoint_never_releases_reservation_as_closed():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'},), AsyncMock())
+    visit.sessions = {'a': 'native-a'}
+    def disk_full():
+        if visit._cleanup_complete:
+            raise OSError('disk full')
+    visit.checkpoint = disk_full
+    with pytest.raises(BackendUnavailable, match='checkpoint'):
+        await visit.cleanup()
+    assert visit.state == 'failed' and not visit._cleanup_complete
+    visit.checkpoint = lambda: None
+    await visit.cleanup()
+    assert visit.state == 'closed'
+    adapter.end_prepared_session.assert_awaited_once()
+
+
+def test_recovery_refuses_completed_state_without_every_owned_endpoint_proof():
+    visit = EndpointPreparation(Adapter(), ({'device': 'a'},), AsyncMock())
+    data = dict(state='closed', error='', sessions={'a': 'native-a'}, command_ids={},
+        producers_revoked=True, ended_devices=[], cleanup_failed=False, cleanup_complete=True)
+    with pytest.raises(InvalidTransition, match='terminal proof'):
+        visit.restore_lifecycle(data)
+    data.update(cleanup_complete=False, ended_devices=['foreign'])
+    with pytest.raises(InvalidTransition, match='unowned endpoint'):
+        visit.restore_lifecycle(data)

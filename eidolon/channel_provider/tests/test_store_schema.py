@@ -136,7 +136,7 @@ def test_a_two_room_database_does_not_stop_the_provider_starting(tmp_path) -> No
     ChannelProviderStore(path).initialize()
 
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
     columns = {row[1] for row in connection.execute("PRAGMA table_info(provider_operations)")}
     assert {
         "device_instance_id",
@@ -204,7 +204,7 @@ def test_v3_migration_preserves_audit_but_activates_no_generation_blind_row(tmp_
     store.initialize()
 
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
     assert connection.execute("SELECT COUNT(*) FROM provider_operations").fetchone()[0] == 0
     audit = connection.execute(
         "SELECT record_json, terminal_reason FROM provider_migration_audit ORDER BY source_table"
@@ -264,3 +264,17 @@ def test_a_schema_from_the_future_still_stops_the_provider(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="unsupported"):
         ChannelProviderStore(path).initialize()
+
+
+def test_v4_migration_preserves_provider_rows_and_adds_closure_ledger(tmp_path):
+    path = tmp_path / 'provider.sqlite3'
+    store = ChannelProviderStore(path)
+    store.initialize()
+    with sqlite3.connect(path) as db:
+        db.execute('DROP TABLE prepared_scenes')
+        db.execute('PRAGMA user_version = 4')
+    store.initialize()
+    store.save_prepared_scene('owner', 'scene', 'ip_role_group', {'version': 1})
+    assert store.prepared_scenes() == [('owner', 'scene', 'ip_role_group', {'version': 1})]
+    with sqlite3.connect(path) as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 5

@@ -169,16 +169,17 @@ async def test_team_maps_real_playback_and_round_completion_to_device_ui(runtime
 
 
 @pytest.mark.parametrize('trigger', ['input_end', 'speaking_end', 'worker_cancel', 'output_loss', 'peer_loss'])
-@pytest.mark.parametrize('stop_ok', [True, False])
+@pytest.mark.parametrize('stop_ok', [True, False, None])
 async def test_worker_drains_control_before_releasing_outputs(runtime, monkeypatch, trigger, stop_ok):
     """Actual worker/client over TCP; only peer and media are test adapters."""
     import aiohttp
     from aiohttp import web
+    from functools import partial
     from eidolon_sdk.biz.control.coordination_stream import ROLE_GROUP_STREAM_PATH
     from eidolon.livekit.agent.coordination.client import RoleGroupClient
     from .test_role_group_client import frame
     sessions, pipelines, clients, launched, finish = runtime
-    monkeypatch.setattr(worker, 'RoleGroupClient', RoleGroupClient)
+    monkeypatch.setattr(worker, 'RoleGroupClient', partial(RoleGroupClient, stop_timeout=.1))
     opened, kwargs = arguments()
     entered, release, disconnect = asyncio.Event(), asyncio.Event(), asyncio.Event()
     speaking, revoked = asyncio.Event(), asyncio.Event()
@@ -198,6 +199,8 @@ async def test_worker_drains_control_before_releasing_outputs(runtime, monkeypat
         entered.set()
         await release.wait()
         assert not any(s.aclose.called for s in sessions)
+        if stop_ok is None:
+            await asyncio.Event().wait()  # Device never acknowledges.
         return stop_ok
     kwargs['stop'] = stop
     async def peer(request):
@@ -268,7 +271,7 @@ async def test_worker_drains_control_before_releasing_outputs(runtime, monkeypat
                     assert isinstance(result, ConnectionError)
                 else:
                     assert result is None
-                assert team.cleanup_ok is stop_ok
+                assert team.cleanup_ok is (stop_ok is True)
                 assert set(calls) == set(team.client.members)
                 assert all(s.aclose.await_count == 1 for s in sessions)
                 if trigger == 'speaking_end':
@@ -276,6 +279,8 @@ async def test_worker_drains_control_before_releasing_outputs(runtime, monkeypat
                 if trigger != 'peer_loss':
                     assert len(receipts) == 2
                     assert all(r['result'] == ('completed' if stop_ok else 'failed') for r in receipts)
+                    if stop_ok is None:
+                        assert all(r['error_code'] == 'TEAM_STOP_TIMEOUT' for r in receipts)
                 else:
                     assert not receipts  # Physical fallback is not a peer receipt.
             finally:

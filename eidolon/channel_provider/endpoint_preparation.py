@@ -69,7 +69,11 @@ class EndpointPreparation:
         self.sessions, self.command_ids = sessions, commands
         self._producers_revoked, self._ended_devices = data["producers_revoked"], ended
         self._cleanup_failed, self._cleanup_complete = data["cleanup_failed"], data["cleanup_complete"]
-        if not self._cleanup_complete:
+        if self._cleanup_complete:
+            # Older checkpoints retained `failed` after confirmed cleanup.
+            # Lifecycle is terminal; the failure outcome remains in error.
+            self.state = "closed"
+        else:
             self.state = "closing"
 
     def session_ended(self, reason: str = "") -> None:
@@ -218,7 +222,9 @@ class EndpointPreparation:
             for remove in self.remove_observers:
                 remove()
             self.remove_observers.clear()
-            self.state = "failed" if self.primary_error else "closed"
+            # `closed` describes resource ownership, not a successful dialogue.
+            # Keep the initiating failure without requiring a second user close.
+            self.state = "closed"
             self.error = self.primary_error
             self.cleanup_error = ""
             self._cleanup_failed = False

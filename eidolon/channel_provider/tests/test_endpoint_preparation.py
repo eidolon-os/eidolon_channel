@@ -228,3 +228,26 @@ async def test_cleanup_failure_and_recovery_preserve_primary_failure_across_rest
     assert restored.closure_complete
     assert restored.error == 'TEAM_WORKER_DISCONNECTED'
     assert not restored.cleanup_error
+
+
+async def test_failure_outcome_does_not_keep_confirmed_closed_resources_active():
+    adapter = Adapter()
+    visit = EndpointPreparation(adapter, ({'device': 'a'},), AsyncMock())
+    visit.sessions = {'a': 'native-a'}
+    visit.state = 'ready'
+    visit.session_ended('TEAM_DEVICE_DISCONNECTED')
+    adapter.end_prepared_session.side_effect = RuntimeError('receipt unavailable')
+    with pytest.raises(BackendUnavailable):
+        await visit.cleanup()
+    assert visit.state == 'failed' and not visit.closure_complete
+    assert visit.primary_error == 'TEAM_DEVICE_DISCONNECTED'
+    adapter.end_prepared_session.side_effect = None
+    await visit.cleanup()
+    assert visit.state == 'closed' and visit.closure_complete
+    assert visit.error == 'TEAM_DEVICE_DISCONNECTED'
+    checkpoint = visit.lifecycle_checkpoint()
+    checkpoint['state'] = 'failed'
+    restored = EndpointPreparation(Adapter(), ({'device': 'a'},), AsyncMock())
+    restored.restore_lifecycle(checkpoint)
+    assert restored.state == 'closed' and restored.closure_complete
+    assert restored.error == visit.error

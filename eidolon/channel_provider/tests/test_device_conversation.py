@@ -156,7 +156,8 @@ async def test_closing_old_visit_never_cancels_new_visit_on_same_devices(tmp_pat
     await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
     failed = service._device_conversations[('owner_1', selection.session_id)]
     await failed.task
-    assert failed.state == 'failed'
+    assert failed.state == 'closed'
+    assert failed.error == 'device busy'
     backend.require_idle.side_effect = None
     other = selection.model_copy(update={'session_id': 'new-dialogue'})
     await service.open_device_conversation(other, authenticated_owner_id='owner_1')
@@ -253,7 +254,7 @@ async def test_status_cannot_keep_ready_after_transport_was_lost(tmp_path):
     status = await service.device_conversation(selection.session_id, authenticated_owner_id='owner_1')
     assert status['state'] == 'closing'
     await visit.task
-    assert visit.state == 'failed' and visit.closure_complete
+    assert visit.state == 'closed' and visit.closure_complete
     assert visit.error == 'ENDPOINT_REACHABILITY_LOST'
     backend.quiesce_prepared_sessions.assert_awaited_once()
     assert not service._transport_scopes

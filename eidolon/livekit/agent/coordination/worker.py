@@ -116,6 +116,10 @@ class TeamWorker:
                             audio_input=False, video_input=False, text_input=False,
                             audio_output=True, text_output=output.endpoint.plan.outputs.dialogue_text,
                             close_on_disconnect=True))
+                    # AgentSession.start schedules RoomIO initialization. The
+                    # selected participant and audio subscription must be ready
+                    # before any endpoint receives session_started.
+                    await session.room_io.wait_for_ready()
                     endpoints[(output.companion_id, output.endpoint.participant_identity)] = (
                         SpeechEndpoint(session, output.confirm_playback))
             presenter = NativeSpeechPresenter(endpoints)

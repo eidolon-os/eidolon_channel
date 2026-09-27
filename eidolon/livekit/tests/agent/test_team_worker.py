@@ -39,6 +39,7 @@ def runtime(monkeypatch):
             self.handlers = {}
             self.aclose = AsyncMock()
             self.start = AsyncMock()
+            self.room_io = SimpleNamespace(wait_for_ready=AsyncMock())
             sessions.append(self)
         def on(self, event, callback):
             self.handlers[event] = callback
@@ -289,3 +290,49 @@ async def test_worker_drains_control_before_releasing_outputs(runtime, monkeypat
                 await asyncio.gather(task, return_exceptions=True)
     finally:
         await runner.cleanup()
+
+
+@pytest.mark.parametrize('outcome', ['ready', 'failed', 'cancelled'])
+async def test_output_subscription_is_a_startup_barrier(runtime, monkeypatch, outcome):
+    sessions, pipelines, clients, launched, finish = runtime
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_session = worker.AgentSession
+
+    async def wait_for_media():
+        entered.set()
+        await release.wait()
+        if outcome == 'failed':
+            raise ConnectionError('subscription negotiation failed')
+
+    def session_factory(**kwargs):
+        session = original_session(**kwargs)
+        session.room_io.wait_for_ready = AsyncMock(side_effect=wait_for_media)
+        return session
+
+    monkeypatch.setattr(worker, 'AgentSession', session_factory)
+    opened, kwargs = arguments()
+    team = worker.TeamWorker(opened, **kwargs)
+    task = asyncio.create_task(team.run(None, agent_url='http://agent', service_token='test'))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        kwargs['on_ready'].assert_not_awaited()
+        assert not clients and not pipelines
+        if outcome == 'cancelled':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            if outcome == 'failed':
+                with pytest.raises(ConnectionError, match='negotiation'):
+                    await task
+                kwargs['on_ready'].assert_not_awaited()
+            else:
+                await asyncio.wait_for(launched.wait(), 2)
+                kwargs['on_ready'].assert_awaited_once()
+                finish.set()
+                await task
+        assert all(s.aclose.await_count == 1 for s in sessions)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

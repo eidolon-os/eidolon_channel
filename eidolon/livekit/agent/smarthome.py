@@ -1,4 +1,4 @@
-"""Deliver one committed Korvo-1 transcript to the smart-home use case."""
+"""Deliver one committed device transcript to the smart-home use case."""
 
 from __future__ import annotations
 

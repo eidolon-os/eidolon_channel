@@ -92,3 +92,18 @@ async def test_smarthome_startup_failure_withdraws_its_dispatch(monkeypatch) -> 
         "conversation_id": "esp32-test-00000001",
         "reason": "error",
     }]
+
+
+@pytest.mark.asyncio
+async def test_smarthome_connect_failure_withdraws_dispatch_without_room_notice() -> None:
+    ctx = _Context()
+
+    async def fail_connect():
+        raise ConnectionError("room unavailable")
+
+    ctx.connect = fail_connect
+    with pytest.raises(ConnectionError, match="room unavailable"):
+        await server.run_agent(ctx, server.AgentConfig())
+
+    assert ctx.deleted == ["AD_test"]
+    assert ctx.room.published == []

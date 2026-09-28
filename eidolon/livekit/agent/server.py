@@ -457,7 +457,12 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             reason = first_reason
         else:
             session_end_state["reason"] = reason
-        local = getattr(room, "local_participant", None)
+        # LiveKit raises while the job has not connected yet. Startup failure
+        # still needs to withdraw its dispatch, even when no notice can be sent.
+        try:
+            local = room.local_participant
+        except Exception:
+            local = None
         if local is None:
             logger.info(
                 "[lifecycle] session_end reason=%s room=%s skipped (no local participant)",
@@ -596,6 +601,8 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
 
         ctx.add_shutdown_callback(_home_shutdown)
         try:
+            # Room participant metadata is unavailable until the job joins.
+            await ctx.connect()
             await run_smarthome_session(
                 room=room,
                 cfg=cfg,
@@ -607,7 +614,10 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 on_closed=lambda: _end_serving("session closed"),
             )
         except Exception:
-            await _publish_session_end(SESSION_END_ERROR)
+            try:
+                await _publish_session_end(SESSION_END_ERROR)
+            finally:
+                await _end_serving("smart-home startup failed")
             raise
         return
 

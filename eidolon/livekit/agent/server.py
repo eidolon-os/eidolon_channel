@@ -618,6 +618,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 prebuilt_vad=prebuilt_vad,
                 owner_id=owner_id,
                 device_ref=device_ref,
+                session_id=runtime_session_id,
                 on_started=_publish_session_started,
                 on_end=_publish_session_end,
                 on_closed=lambda: _end_serving("session closed"),

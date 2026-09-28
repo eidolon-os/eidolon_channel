@@ -22,6 +22,7 @@ async def run_smarthome_session(
     prebuilt_vad,
     owner_id: str,
     device_ref: str,
+    session_id: str,
     on_started: Callable[[], Awaitable[None]],
     on_end: Callable[[str], Awaitable[None]],
     on_closed: Callable[[], Awaitable[None]],
@@ -48,7 +49,7 @@ async def run_smarthome_session(
             transcript = (new_message.text_content or "").strip()
             if transcript:
                 try:
-                    await handle_transcript(owner_id, device_ref, transcript)
+                    await handle_transcript(owner_id, device_ref, transcript, session_id=session_id)
                 except Exception:
                     logger.exception("smart-home panel result delivery failed room=%s", room.name)
             raise StopResponse()
@@ -87,11 +88,14 @@ async def run_smarthome_session(
             await on_end("user_left")
             await on_closed()
     finally:
-        await session.aclose()
-        await stt.aclose()
+        try:
+            await end_home_session(owner_id, device_ref, session_id)
+        finally:
+            await session.aclose()
+            await stt.aclose()
 
 
-async def handle_transcript(owner_id: str, device_ref: str, transcript: str) -> None:
+async def handle_transcript(owner_id: str, device_ref: str, transcript: str, *, session_id: str) -> None:
     turn_id = generate_turn_id()
     utterance = " ".join(transcript.split())[:200]
     agent_token = os.environ.get("EIDOLON_AGENT_ADMIN_API_TOKEN", "")
@@ -110,6 +114,7 @@ async def handle_transcript(owner_id: str, device_ref: str, transcript: str) -> 
                     "device_ref": device_ref,
                     "turn_id": turn_id,
                     "utterance": transcript[:512],
+                    "session_id": session_id,
                 },
             )
             response.raise_for_status()
@@ -135,3 +140,19 @@ async def handle_transcript(owner_id: str, device_ref: str, transcript: str) -> 
         )
         response.raise_for_status()
         logger.info("smart-home turn=%s outcome=%s delivered", turn_id, result.outcome)
+
+
+async def end_home_session(owner_id: str, device_ref: str, session_id: str) -> None:
+    """Forward lifecycle only; conversational state belongs to Agent."""
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=3) as client:
+            response = await client.post(
+                os.environ.get("EIDOLON_AGENT_ADMIN_URL", "http://127.0.0.1:8081").rstrip("/")
+                + "/api/admin/smarthome/session/end",
+                headers={"Authorization": f"Bearer {os.environ.get('EIDOLON_AGENT_ADMIN_API_TOKEN', '')}"},
+                json={"owner_id": owner_id, "device_ref": device_ref, "session_id": session_id},
+            )
+            response.raise_for_status()
+    except httpx.HTTPError:
+        # Agent also expires context, including after transport/process failures.
+        logger.warning("home session close notification failed session=%s", session_id)

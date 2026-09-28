@@ -20,30 +20,31 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
-from eidolon_sdk.biz.smarthome import ExecuteRequest, ExecuteResult, VoiceResult
-from eidolon.capability_runtime.smarthome import SmartHomeRuntime
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
     SharedSessionSelection,
 )
+from eidolon_sdk.biz.smarthome import VoiceResult
+
+from eidolon.capability_runtime.smarthome import SmartHomeRuntime
 
 from .contracts import (
     BackendUnavailable,
+    CurrentRequest,
     Forbidden,
     IdempotencyConflict,
     InvalidTransition,
     ProvisionRequest,
-    CurrentRequest,
     RevokeRequest,
     SessionRequest,
     UnknownChannel,
     canonical_json,
     request_fingerprint,
 )
-from .shared_admission import SharedAdmission
-from .shared_invitation import invitation_command, SHARED_VISIT_MAX_SECONDS
 from .ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
+from .shared_admission import SharedAdmission
+from .shared_invitation import SHARED_VISIT_MAX_SECONDS, invitation_command
 from .spec import ChannelSpec, MediaFlow, derive_spec
 from .store import ChannelProviderStore, StoredProvision
 
@@ -136,18 +137,6 @@ class ChannelProviderService:
     async def healthcheck(self) -> None:
         self._store.healthcheck()
         await self._registry.healthcheck()
-
-    async def smarthome_snapshot(self, owner_id: str) -> dict:
-        if self._smarthome is None:
-            raise BackendUnavailable("smart home is not configured")
-        return await self._smarthome.snapshot(owner_id)
-
-    async def smarthome_execute(
-        self, owner_id: str, command: ExecuteRequest
-    ) -> ExecuteResult:
-        if self._smarthome is None:
-            raise BackendUnavailable("smart home is not configured")
-        return await self._smarthome.execute(owner_id, command)
 
     async def smarthome_result(
         self, owner_id: str, device_ref: str, result: VoiceResult
@@ -488,10 +477,11 @@ class ChannelProviderService:
         visit.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
 
     def _restore_prepared_scenes(self):
-        from .team_conversation import TeamConversation
-        from .device_conversation import DeviceConversation
         from eidolon_sdk.biz.control.coordination_stream import OpenScene
         from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
+
+        from .device_conversation import DeviceConversation
+        from .team_conversation import TeamConversation
         for owner, session, scenario, data in self._store.prepared_scenes():
             if data.get("version") not in {1, 2}:
                 raise InvalidTransition("unsupported prepared scene checkpoint")

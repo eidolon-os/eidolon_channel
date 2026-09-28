@@ -55,8 +55,8 @@ class ProviderConfig:
     livekit: LiveKitConfig
     bearer_token: str
     traces: TracesConfig = TracesConfig()
-    smarthome_workspace_url: str | None = None
-    smarthome_workspace_token: str | None = None
+    smarthome_hub_url: str | None = None
+    smarthome_hub_token: str | None = None
     # Adapter names in the order this deployment prefers them. Selection walks
     # this list and takes the first one that can carry the device's spec.
     adapter_preference: tuple[str, ...] = ("livekit",)
@@ -182,7 +182,7 @@ def load_provider_config() -> ProviderConfig:
     traces = _mapping(root.get("traces"), "traces")
     _exact(traces, name="traces", allowed={"root"})
     smarthome = _mapping(root.get("smarthome"), "smarthome")
-    _exact(smarthome, name="smarthome", allowed={"workspace_url"})
+    _exact(smarthome, name="smarthome", allowed={"hub_url"})
     livekit = _mapping(root.get("livekit"), "livekit")
     _exact(http, name="http", allowed={"host", "port"})
     _exact(storage, name="storage", allowed={"path"})
@@ -262,13 +262,13 @@ def load_provider_config() -> ProviderConfig:
             channels=channels,
         ),
         bearer_token=_required_secret("EIDOLON_CHANNEL_PROVIDER_TOKEN", minimum=32),
-        smarthome_workspace_url=(
-            _url(smarthome["workspace_url"], name="smarthome.workspace_url", client=False)
-            if "workspace_url" in smarthome else None
+        smarthome_hub_url=(
+            _url(smarthome["hub_url"], name="smarthome.hub_url", client=False)
+            if "hub_url" in smarthome else None
         ),
-        smarthome_workspace_token=(
-            _required_secret("EIDOLON_DATA_WORKSPACE_AUTHORITY_TOKEN", minimum=24)
-            if "workspace_url" in smarthome else None
+        smarthome_hub_token=(
+            _required_secret("EIDOLON_HUB_SMARTHOME_TOKEN", minimum=24)
+            if "hub_url" in smarthome else None
         ),
         adapter_preference=tuple(name.strip() for name in preference),
     )

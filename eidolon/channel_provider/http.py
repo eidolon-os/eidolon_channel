@@ -9,24 +9,24 @@ from datetime import datetime
 from typing import Any
 
 from aiohttp import web
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from eidolon_sdk.biz.smarthome import ExecuteRequest, VoiceResult
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .contracts import (
     CLOSE_SESSION,
     OPEN_SESSION,
-    ContractError,
     BackendUnavailable,
+    ContractError,
+    CurrentRequest,
     DomainError,
     ProvisionRequest,
-    CurrentRequest,
     RevokeRequest,
     SessionRequest,
     Unauthenticated,
 )
 from .service import ChannelProviderService
 from .session_traces import SessionTraceReader, TraceQuery
-from .shared_session_contract import OpenSharedSession, CloseSharedSession
+from .shared_session_contract import CloseSharedSession, OpenSharedSession
 
 logger = logging.getLogger("eidolon.channel_provider.http")
 
@@ -212,8 +212,8 @@ def create_app(
     app.router.add_post("/v1/device-channels/sessions/close", close_session)
 
     async def device_conversation(request: web.Request) -> web.Response:
-        from pydantic import BaseModel, ConfigDict, Field
         from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
+        from pydantic import BaseModel, ConfigDict, Field
 
         class OpenRequest(BaseModel):
             model_config = ConfigDict(extra="forbid")
@@ -311,13 +311,6 @@ def create_app(
         try:
             action = request.match_info["action"]
             body = await request.read()
-            if action == "snapshot":
-                scope = _HomeScope.model_validate_json(body)
-                return _json_body(await service.smarthome_snapshot(scope.owner_id))
-            if action == "execute":
-                command = _HomeExecute.model_validate_json(body)
-                result = await service.smarthome_execute(command.owner_id, command.request)
-                return _json_body(result.model_dump(mode="json"))
             command = _HomeResult.model_validate_json(body)
             await service.smarthome_result(
                 command.owner_id, command.device_ref, command.result
@@ -331,7 +324,7 @@ def create_app(
             logger.exception("smart home %s failed", request.match_info["action"])
             return _problem(BackendUnavailable("smart home service unavailable"))
 
-    app.router.add_post("/v1/smarthome/{action:snapshot|execute|result}", smarthome)
+    app.router.add_post("/v1/smarthome/{action:result}", smarthome)
     app.on_cleanup.append(close)
     return app
 

@@ -8,7 +8,7 @@ storage:
   path: $EIDOLON_STATE_ROOT/channel/provider.sqlite3
 
 smarthome:
-  workspace_url: http://127.0.0.1:8085
+  hub_url: http://127.0.0.1:8082
 
 traces:
   # Where the Agent worker writes its per-session link traces

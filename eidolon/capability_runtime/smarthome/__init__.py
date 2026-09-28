@@ -6,11 +6,13 @@ The contract (vocabulary, registry, execute and panel wire) is
 
 from .ports import PanelSink, RegistrySource, SmartHomeProvider
 from .runtime import IdempotencyConflict, SmartHomeRuntime
+from .http_registry import HttpRegistrySource
 from .virtual import VirtualProvider, apply_command
 from .wire import panel_command
 
 __all__ = [
     "IdempotencyConflict",
+    "HttpRegistrySource",
     "PanelSink",
     "RegistrySource",
     "SmartHomeProvider",

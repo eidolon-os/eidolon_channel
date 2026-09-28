@@ -11,6 +11,11 @@ import logging
 
 from aiohttp import web
 from eidolon_sdk.system import declared_management_networks
+from eidolon.capability_runtime.smarthome import (
+    HttpRegistrySource,
+    SmartHomeRuntime,
+    VirtualProvider,
+)
 
 from eidolon.locked_environment import require_locked_environment
 
@@ -21,6 +26,7 @@ from .selection import AdapterRegistry
 from .service import ChannelProviderService
 from .session_traces import SessionTraceReader
 from .store import ChannelProviderStore
+from .smarthome_panel import ChannelPanelSink
 
 logger = logging.getLogger("eidolon.channel_provider.server")
 
@@ -44,10 +50,21 @@ def main() -> None:
         [LiveKitChannelAdapter(config.livekit, declared_management_networks())],
         preference=config.adapter_preference,
     )
+    store = ChannelProviderStore(config.storage.path)
+    smarthome = None
+    if config.smarthome_workspace_url is not None:
+        smarthome = SmartHomeRuntime(
+            registry=HttpRegistrySource(
+                config.smarthome_workspace_url, config.smarthome_workspace_token
+            ),
+            panels=ChannelPanelSink(store, registry),
+            providers={"virtual": VirtualProvider(config.storage.path.with_name("smarthome.sqlite3"))},
+        )
     service = ChannelProviderService(
-        store=ChannelProviderStore(config.storage.path),
+        store=store,
         registry=registry,
         agent_name=config.livekit.agent_name,
+        smarthome=smarthome,
     )
     service.initialize()
     app = create_app(

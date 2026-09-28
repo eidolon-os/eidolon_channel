@@ -7,6 +7,9 @@ http:
 storage:
   path: $EIDOLON_STATE_ROOT/channel/provider.sqlite3
 
+smarthome:
+  workspace_url: http://127.0.0.1:8085
+
 traces:
   # Where the Agent worker writes its per-session link traces
   # (channel settings.yaml: observability.session_trace_path). Read-only here:

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+from eidolon.capability_runtime.smarthome import SmartHomeRuntime
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
     SharedSessionSelection,
@@ -76,11 +77,14 @@ class ChannelProviderService:
         registry: AdapterRegistry,
         agent_name: str,
         now_ms: Callable[[], int] | None = None,
+        smarthome: SmartHomeRuntime | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._agent_name = agent_name
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
+        self._smarthome = smarthome
+        self._smarthome_poller: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._transport_scopes: dict[str, _TransportScope] = {}
         self._device_conversations: dict = {}
@@ -120,12 +124,26 @@ class ChannelProviderService:
                         logger.exception("scene recovery control unavailable session=%s",
                                          visit.selection.session_id)
         self._recovery_ready.set()
+        if self._smarthome is not None:
+            self._smarthome_poller = asyncio.create_task(self._poll_smarthome())
+
+    async def _poll_smarthome(self) -> None:
+        while True:
+            await asyncio.sleep(5)
+            await self._smarthome.refresh_active_panels()
 
     async def healthcheck(self) -> None:
         self._store.healthcheck()
         await self._registry.healthcheck()
 
     async def shutdown(self) -> None:
+        if self._smarthome_poller is not None:
+            self._smarthome_poller.cancel()
+            try:
+                await self._smarthome_poller
+            except asyncio.CancelledError:
+                pass
+            self._smarthome_poller = None
         for owner, session_id in tuple(self._shared_visits):
             await self.close_shared_session(session_id, authenticated_owner_id=owner)
         for device_id in tuple(self._transport_scopes):
@@ -276,6 +294,11 @@ class ChannelProviderService:
                 or previous.operation_kind != committed.operation_kind
                 or previous.operation_id != committed.operation_id
             ):
+                if self._smarthome is not None and (
+                    previous.owner_id != committed.owner_id
+                    or previous.device_id != committed.device_id
+                ):
+                    self._smarthome.detach_panel(previous.owner_id, previous.device_id)
                 previous_adapter = self._registry.get(previous.adapter_name)
                 previous_handle = json.loads(previous.handle_json)
                 if not self._same_transport_resource(
@@ -883,6 +906,8 @@ class ChannelProviderService:
                 raise _TransportTransitionRequired("selected device is being revoked")
             active = self._store.active_device(request.device_ref)
             if active is not None:
+                if self._smarthome is not None:
+                    self._smarthome.detach_panel(active.owner_id, active.device_id)
                 adapter = self._registry.get(active.adapter_name)
                 handle = json.loads(active.handle_json)
                 # Stop listening before the channel goes: a revoked device has
@@ -1017,9 +1042,17 @@ class ChannelProviderService:
 
     async def _accept_requests(self, stored: StoredProvision) -> None:
         adapter = self._registry.get(stored.adapter_name)
+        panel_kwargs = {}
+        if self._smarthome is not None:
+            async def panel_request(body: object) -> None:
+                await self._smarthome.handle_panel_request(
+                    stored.owner_id, stored.device_id, body
+                )
+            panel_kwargs["panel_sink"] = panel_request
         await adapter.accept_requests(
             json.loads(stored.handle_json),
             sink=self._sink_for(stored.device_ref),
+            **panel_kwargs,
         )
 
     def _response(

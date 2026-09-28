@@ -55,6 +55,7 @@ class ServingRequest:
 # Called by an adapter when the device on a channel asks. Awaited, so an adapter
 # learns whether the request was actually carried out.
 ServingRequestSink = Callable[[ServingRequest], Awaitable[None]]
+PanelRequestSink = Callable[[object], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +204,8 @@ class ChannelAdapter(Protocol):
         ...
 
     async def accept_requests(
-        self, handle: dict[str, Any], *, sink: ServingRequestSink
+        self, handle: dict[str, Any], *, sink: ServingRequestSink,
+        panel_sink: PanelRequestSink | None = None,
     ) -> None:
         """Start carrying this channel's own requests to be served.
 
@@ -216,6 +218,12 @@ class ChannelAdapter(Protocol):
         Idempotent per handle, because the service re-states what it wants
         watched on every provision and on every restart.
         """
+        ...
+
+    async def send_panel_control(
+        self, handle: dict[str, Any], command: dict[str, Any]
+    ) -> None:
+        """Hand a best-effort panel snapshot or delta to the current channel."""
         ...
 
     async def stop_accepting(self, handle: dict[str, Any]) -> None:

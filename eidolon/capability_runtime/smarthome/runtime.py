@@ -298,6 +298,7 @@ class SmartHomeRuntime:
         owner = self._owner(owner_id)
         async with owner.lock:
             registry = await self._registry(owner_id, owner)
+            owner.panels[device_ref] = None
             logger.debug(
                 "smart home panel sync owner=%s panel=%s known=(%s,%s) current=(%s,%s)",
                 owner_id,
@@ -327,6 +328,17 @@ class SmartHomeRuntime:
                 lambda device_ref: self._snapshot(owner, registry, device_ref),
             )
 
+    async def refresh_active_panels(self) -> None:
+        """Catch registry edits made through System Data while panels are open."""
+        for owner_id, owner in tuple(self._owners.items()):
+            if not owner.panels:
+                continue
+            try:
+                async with owner.lock:
+                    await self._registry(owner_id, owner)
+            except Exception:
+                logger.exception("smart home registry refresh failed owner=%s", owner_id)
+
     # -- internals ---------------------------------------------------------
 
     def _owner(self, owner_id: str) -> _Owner:
@@ -335,8 +347,9 @@ class SmartHomeRuntime:
         return self._owners.setdefault(owner_id, _Owner())
 
     async def _registry(self, owner_id: str, owner: _Owner) -> Registry:
-        if owner.registry is None:
-            registry = await self._registry_source.get(owner_id)
+        registry = await self._registry_source.get(owner_id)
+        if owner.registry is None or owner.registry.revision != registry.revision:
+            previous = owner.registry
             states: dict[str, dict[str, Any]] = {}
             # Every Provider converges, including one left with no devices, so
             # removing a device from the registry forgets its state.
@@ -345,6 +358,11 @@ class SmartHomeRuntime:
                 await provider.reconcile(owner_id, devices)
                 states.update(await provider.states(owner_id, devices))
             owner.registry, owner.states = registry, states
+            if previous is not None:
+                await self._broadcast(
+                    owner_id, owner, OP_SNAPSHOT,
+                    lambda device_ref: self._snapshot(owner, registry, device_ref),
+                )
         return owner.registry
 
     def _snapshot(self, owner: _Owner, registry: Registry, device_ref: str) -> dict[str, Any]:

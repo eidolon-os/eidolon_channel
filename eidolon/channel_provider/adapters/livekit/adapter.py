@@ -26,6 +26,7 @@ import psutil
 from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.control.shared_session import SharedSessionInvitation
+from eidolon_sdk.biz.smarthome import PANEL_REQUEST_TOPIC
 from eidolon_sdk.biz.control.protocol import command_status_from_ack
 from eidolon.livekit.control_receipts import read_control_receipt
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
@@ -54,7 +55,7 @@ from livekit.protocol.agent import JobStatus
 from livekit.protocol.models import ParticipantInfo
 
 from ...contracts import BackendUnavailable, ChannelNotServable, InvalidTransition, canonical_json
-from ...ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
+from ...ports import ChannelGrant, PanelRequestSink, ServingAction, ServingRequest, ServingRequestSink
 from ...spec import ChannelSpec, MediaFlow
 from .config import LiveKitConfig
 
@@ -161,6 +162,7 @@ class _Listening:
 
     device: str
     sink: ServingRequestSink
+    panel_sink: PanelRequestSink | None = None
     connection: Any = None
     retry: asyncio.Task[None] | None = None
     attempt: int = 0
@@ -530,6 +532,29 @@ class LiveKitChannelAdapter:
             elif not future.cancelled():
                 future.exception()
 
+    async def send_panel_control(
+        self, handle: dict[str, Any], command: dict[str, Any]
+    ) -> None:
+        room = str(handle.get("room") or "")
+        device = str(handle.get("device") or "")
+        watch = self._listeners.get(room)
+        if (
+            command.get("dst") != {"type": "device", "id": device}
+            or watch is None
+            or watch.device != device
+            or watch.connection is None
+        ):
+            raise BackendUnavailable("panel control channel is not connected")
+        try:
+            await watch.connection.local_participant.publish_data(
+                canonical_json(command).encode(),
+                reliable=False,
+                topic=CONTROL_TOPIC,
+                destination_identities=[device],
+            )
+        except Exception as exc:
+            raise BackendUnavailable("panel control delivery failed") from exc
+
     def _control_receipt(self, packet: Any, *, room: str, device: str) -> None:
         body = read_control_receipt(packet, device=device)
         if body is None:
@@ -569,7 +594,8 @@ class LiveKitChannelAdapter:
     # -- hearing the device -----------------------------------------------
 
     async def accept_requests(
-        self, handle: dict[str, Any], *, sink: ServingRequestSink
+        self, handle: dict[str, Any], *, sink: ServingRequestSink,
+        panel_sink: PanelRequestSink | None = None,
     ) -> None:
         """Sit in the room so the device can say when it wants to be served.
 
@@ -594,10 +620,11 @@ class LiveKitChannelAdapter:
             if handle.get("input_revision", 0) >= watch.input_handle.get("input_revision", 0):
                 watch.input_handle = handle
                 watch.sink = sink
+                watch.panel_sink = panel_sink
             await self._reconcile_input_permissions(watch.input_handle)
             await self._reconcile_output_dispatches(watch.input_handle)
             return
-        watch = _Listening(device=device, sink=sink)
+        watch = _Listening(device=device, sink=sink, panel_sink=panel_sink)
         watch.input_handle = handle
         self._listeners[room] = watch
         try:
@@ -699,6 +726,20 @@ class LiveKitChannelAdapter:
             request = self._requested(packet, device=watch.device, room=room)
             if request is not None:
                 self._dispatch_request(watch.sink, request, room=room)
+            if (
+                self._listeners.get(room) is watch
+                and watch.connection is connection
+                and watch.panel_sink is not None
+                and getattr(packet, "topic", None) == PANEL_REQUEST_TOPIC
+                and getattr(getattr(packet, "participant", None), "identity", None) == watch.device
+                and len(bytes(packet.data)) <= 16 * 1024
+            ):
+                try:
+                    body = json.loads(bytes(packet.data))
+                except (TypeError, ValueError, UnicodeDecodeError):
+                    logger.warning("room=%s sent an unreadable panel request", room)
+                else:
+                    self._dispatch_panel_request(watch.panel_sink, body, room=room)
 
         @connection.on("participant_disconnected")
         def _participant_disconnected(participant: Any) -> None:
@@ -1047,6 +1088,19 @@ class LiveKitChannelAdapter:
                         logger.exception("room=%s could not deliver session rejection", room)
             except Exception:
                 logger.exception("room=%s could not act on %s", room, request.action.value)
+
+        task = asyncio.create_task(_carry())
+        self._requests.add(task)
+        task.add_done_callback(self._requests.discard)
+
+    def _dispatch_panel_request(
+        self, sink: PanelRequestSink, body: object, *, room: str
+    ) -> None:
+        async def _carry() -> None:
+            try:
+                await sink(body)
+            except Exception:
+                logger.exception("room=%s could not act on panel request", room)
 
         task = asyncio.create_task(_carry())
         self._requests.add(task)

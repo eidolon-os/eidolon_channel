@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from eidolon_sdk.biz.contracts import SESSION_APPLICATION_FIELD, SESSION_APPLICATION_HOME_COMMAND
 
 from eidolon.livekit.agent import server
 from eidolon.livekit.agent import smarthome
@@ -39,7 +40,7 @@ class _Context:
         self.job = SimpleNamespace(
             metadata=json.dumps({
                 "conversation_id": "esp32-test-00000001",
-                "smarthome_panel": True,
+                SESSION_APPLICATION_FIELD: SESSION_APPLICATION_HOME_COMMAND,
                 "smarthome_owner": "owner-test",
                 "smarthome_device": "device-instance-test",
             }),

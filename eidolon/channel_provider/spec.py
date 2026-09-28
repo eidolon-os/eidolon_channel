@@ -16,6 +16,12 @@ from typing import Any
 from .contracts import ProvisionDevice, ContractError
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
 from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
+from eidolon_sdk.biz.contracts import (
+    SESSION_APPLICATION_COMPANION,
+    SESSION_APPLICATION_HOME_COMMAND,
+    VALID_SESSION_APPLICATIONS,
+    VOICE_APPLICATION_PROPERTY,
+)
 from eidolon_sdk.biz.presentation.negotiation import (
     validate_output_contract,
     manifest_outputs,
@@ -67,6 +73,7 @@ class ServingSpec:
 
     agent_name: str
     interaction_mode: str
+    application: str = SESSION_APPLICATION_COMPANION
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +147,19 @@ def _declared_interaction_mode(manifest: dict[str, Any]) -> str:
     return DEFAULT_INTERACTION_MODE
 
 
+def _declared_voice_application(manifest: dict[str, Any]) -> str:
+    """The device's voice use case; display properties never select it."""
+    for prop in manifest.get("properties", ()):
+        if not isinstance(prop, dict) or prop.get("name") != VOICE_APPLICATION_PROPERTY:
+            continue
+        schema = prop.get("schema")
+        application = schema.get("const") if isinstance(schema, dict) else None
+        if application not in VALID_SESSION_APPLICATIONS:
+            raise ContractError("unsupported voice.application")
+        return application
+    return SESSION_APPLICATION_COMPANION
+
+
 def derive_spec(
     device: ProvisionDevice, *, device_instance_id: str, agent_name: str
 ) -> ChannelSpec:
@@ -185,10 +205,14 @@ def derive_spec(
         ServingSpec(
             agent_name=agent_name,
             interaction_mode=_declared_interaction_mode(manifest),
+            application=_declared_voice_application(manifest),
         )
         if _media_flow(manifest, "audio") is not MediaFlow.NONE or selected is not None
         else None
     )
+    if serving is not None and serving.application == SESSION_APPLICATION_HOME_COMMAND:
+        if not smarthome_panel or not audio.publishes:
+            raise ContractError("home.command.v1 requires a smart-home panel and microphone")
     return ChannelSpec(
         device_id=device_instance_id,
         owner_id=str(device.owner_id),

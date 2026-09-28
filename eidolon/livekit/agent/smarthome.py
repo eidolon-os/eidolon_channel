@@ -102,7 +102,7 @@ async def handle_transcript(owner_id: str, device_ref: str, transcript: str) -> 
     async with httpx.AsyncClient(trust_env=False, timeout=12) as client:
         try:
             response = await client.post(
-                os.environ.get("EIDOLON_TEAM_AGENT_URL", "http://127.0.0.1:8081").rstrip("/")
+                os.environ.get("EIDOLON_AGENT_ADMIN_URL", "http://127.0.0.1:8081").rstrip("/")
                 + "/api/admin/smarthome/command",
                 headers={"Authorization": f"Bearer {agent_token}"},
                 json={
@@ -124,7 +124,8 @@ async def handle_transcript(owner_id: str, device_ref: str, transcript: str) -> 
             )
 
         response = await client.post(
-            "http://127.0.0.1:8767/v1/smarthome/result",
+            os.environ.get("EIDOLON_CHANNEL_PROVIDER_URL", "http://127.0.0.1:8767").rstrip("/")
+            + "/v1/smarthome/result",
             headers={"Authorization": f"Bearer {panel_token}"},
             json={
                 "owner_id": owner_id,

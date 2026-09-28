@@ -36,6 +36,10 @@ from eidolon_sdk.biz.contracts import (
     CONTROL_TOPIC,
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
+    SESSION_APPLICATION_COMPANION,
+    SESSION_APPLICATION_FIELD,
+    SESSION_APPLICATION_HOME_COMMAND,
+    VALID_SESSION_APPLICATIONS,
     SESSION_CONTROL_REQUEST_ID_FIELD,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
@@ -403,6 +407,7 @@ class LiveKitChannelAdapter:
             }
         if spec.serving is not None:
             handle["agent"] = spec.serving.agent_name
+            handle[SESSION_APPLICATION_FIELD] = spec.serving.application
         return ChannelGrant(
             binding_format=BINDING_FORMAT,
             payload=payload,
@@ -1191,6 +1196,17 @@ class LiveKitChannelAdapter:
         if target_companion_id is not None:
             from eidolon.interaction_context import validate_companion_target
             validate_companion_target(target_companion_id)
+        application = handle.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION)
+        if application not in VALID_SESSION_APPLICATIONS:
+            raise InvalidTransition("unsupported voice session application")
+        if application == SESSION_APPLICATION_HOME_COMMAND and target_companion_id is not None:
+            raise InvalidTransition("home command session cannot target a Companion")
+        if application == SESSION_APPLICATION_HOME_COMMAND and "smarthome_owner" not in handle:
+            raise InvalidTransition("home command session has no authorized panel scope")
+        if application == SESSION_APPLICATION_HOME_COMMAND and (
+            team_dispatch is not None or presentation_endpoint is not None
+        ):
+            raise InvalidTransition("home command session cannot join a Companion team")
         if team_dispatch is not None:
             from eidolon.livekit.common.team_dispatch import TeamDispatch
             team = TeamDispatch.model_validate(team_dispatch)
@@ -1231,6 +1247,7 @@ class LiveKitChannelAdapter:
                     or metadata.get("output_plan") != (output_plan.model_dump(mode="json") if output_plan else None)
                     or metadata.get("presentation_endpoint") != presentation_endpoint
                     or metadata.get("team_dispatch") != team_dispatch
+                    or metadata.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION) != application
                 ):
                     raise InvalidTransition("an active conversation cannot change intent or output plan")
                 already_serving = True
@@ -1261,10 +1278,10 @@ class LiveKitChannelAdapter:
                             "schema_v": WIRE_SCHEMA_VERSION,
                             SESSION_CONVERSATION_ID_FIELD: conversation_id,
                             SESSION_INTENT_FIELD: session_intent,
-                            **({"smarthome_panel": True,
-                                "smarthome_owner": handle["smarthome_owner"],
+                            SESSION_APPLICATION_FIELD: application,
+                            **({"smarthome_owner": handle["smarthome_owner"],
                                 "smarthome_device": handle["device"]}
-                               if "smarthome_owner" in handle else {}),
+                               if application == SESSION_APPLICATION_HOME_COMMAND else {}),
                             **({"target_companion_id": target_companion_id}
                                if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),

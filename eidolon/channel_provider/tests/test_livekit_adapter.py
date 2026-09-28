@@ -9,6 +9,10 @@ from dataclasses import replace
 
 import pytest
 from eidolon_sdk.biz.contracts import (
+    SESSION_APPLICATION_COMPANION,
+    SESSION_APPLICATION_FIELD,
+    SESSION_APPLICATION_HOME_COMMAND,
+    VOICE_APPLICATION_PROPERTY,
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
     SESSION_CONTROL_TOPIC,
@@ -33,6 +37,7 @@ from eidolon.channel_provider.spec import derive_spec
 from .helpers import audio_manifest, encoded, livekit_config, provision_payload
 
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
+from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
 
 # Tests name the device they mean; the name becomes a real device
 # instance id, which is a digest of a key and never a chosen string.
@@ -135,8 +140,8 @@ def _adapter() -> tuple[LiveKitChannelAdapter, FakeClient]:
     return adapter, client
 
 
-def _spec(**manifest_kwargs):
-    payload = provision_payload(manifest=audio_manifest(**manifest_kwargs))
+def _spec(*, manifest=None, **manifest_kwargs):
+    payload = provision_payload(manifest=manifest or audio_manifest(**manifest_kwargs))
     request = ProvisionRequest.parse(encoded(payload))
     return derive_spec(
         request.device,
@@ -154,6 +159,7 @@ def _metadata(
             "schema_v": WIRE_SCHEMA_VERSION,
             SESSION_CONVERSATION_ID_FIELD: conversation_id,
             SESSION_INTENT_FIELD: session_intent,
+            SESSION_APPLICATION_FIELD: SESSION_APPLICATION_COMPANION,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -217,6 +223,29 @@ async def test_a_session_brings_the_agent_and_ending_it_keeps_the_channel() -> N
     assert client.agent_dispatch.deleted == [(room, "AD_1")]
     # The device's way back in must survive the end of a conversation.
     assert client.room.deleted == []
+
+
+async def test_home_manifest_dispatches_home_application_without_companion() -> None:
+    manifest = audio_manifest()
+    manifest["properties"].extend([
+        {"name": PANEL_PROFILE_PROPERTY, "schema": {"type": "string", "const": PANEL_PROFILE},
+         "observable": False, "writable": False},
+        {"name": VOICE_APPLICATION_PROPERTY,
+         "schema": {"type": "string", "const": SESSION_APPLICATION_HOME_COMMAND},
+         "observable": False, "writable": False},
+    ])
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(manifest=manifest), issued_at_ms=1_000)
+
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED,
+    )
+
+    metadata = json.loads(client.agent_dispatch.created[0][2])
+    assert metadata[SESSION_APPLICATION_FIELD] == SESSION_APPLICATION_HOME_COMMAND
+    assert metadata["smarthome_owner"] == "owner_1"
+    assert metadata["smarthome_device"] == grant.handle["device"]
+    assert "target_companion_id" not in metadata
 
 
 async def test_opening_a_session_twice_leaves_one_session() -> None:

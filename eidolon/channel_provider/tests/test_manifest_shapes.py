@@ -30,6 +30,11 @@ import pytest
 from eidolon.channel_provider.contracts import ContractError, ProvisionRequest
 from eidolon.channel_provider.selection import AdapterRegistry, NoAdapterAvailable
 from eidolon.channel_provider.spec import MediaFlow, derive_spec
+from eidolon_sdk.biz.contracts import (
+    SESSION_APPLICATION_COMPANION,
+    SESSION_APPLICATION_HOME_COMMAND,
+    VOICE_APPLICATION_PROPERTY,
+)
 from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
 
 from .helpers import device_ref, encoded
@@ -149,6 +154,28 @@ def test_panel_profile_is_derived_from_the_manifest() -> None:
 
     assert ordinary.smarthome_panel is False
     assert panel.smarthome_panel is True
+    assert ordinary.serving.application == SESSION_APPLICATION_COMPANION
+    assert panel.serving.application == SESSION_APPLICATION_COMPANION
+
+
+def test_home_voice_application_is_explicit_and_requires_its_panel() -> None:
+    manifest = deepcopy(BOX3_MANIFEST)
+    manifest.setdefault("properties", []).append({
+        "name": VOICE_APPLICATION_PROPERTY,
+        "observable": False,
+        "schema": {"const": SESSION_APPLICATION_HOME_COMMAND, "type": "string"},
+        "writable": False,
+    })
+    with pytest.raises(ContractError, match="requires a smart-home panel"):
+        _spec(manifest)
+
+    manifest["properties"].append({
+        "name": PANEL_PROFILE_PROPERTY,
+        "observable": False,
+        "schema": {"const": PANEL_PROFILE, "type": "string"},
+        "writable": False,
+    })
+    assert _spec(manifest).serving.application == SESSION_APPLICATION_HOME_COMMAND
 
 
 def test_phone_manifest_is_carried() -> None:

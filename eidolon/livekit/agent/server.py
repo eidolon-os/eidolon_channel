@@ -44,6 +44,10 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_PTT,
     INTERACTION_MODE_HALF_DUPLEX,
     SESSION_CONVERSATION_ID_FIELD,
+    SESSION_APPLICATION_COMPANION,
+    SESSION_APPLICATION_FIELD,
+    SESSION_APPLICATION_HOME_COMMAND,
+    VALID_SESSION_APPLICATIONS,
     SESSION_CONTROL_TOPIC,
     SESSION_END_ERROR,
     SESSION_END_TYPE,
@@ -586,7 +590,12 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         except Exception:
             logger.exception("[Agent] failed to end serving room=%s (%s)", room.name, context)
 
-    if metadata.get("smarthome_panel") is True:
+    application = metadata.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION)
+    if application not in VALID_SESSION_APPLICATIONS:
+        raise ValueError("unsupported voice session application")
+    if application == SESSION_APPLICATION_HOME_COMMAND:
+        if target_companion_id is not None:
+            raise ValueError("home command session cannot target a Companion")
         owner_id = metadata.get("smarthome_owner")
         device_ref = metadata.get("smarthome_device")
         if not isinstance(owner_id, str) or not owner_id or not isinstance(device_ref, str) or not device_ref:

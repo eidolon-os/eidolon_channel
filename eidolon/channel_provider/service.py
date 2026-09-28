@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+from eidolon_sdk.biz.smarthome import ExecuteRequest, ExecuteResult, VoiceResult
 from eidolon.capability_runtime.smarthome import SmartHomeRuntime
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
@@ -135,6 +136,25 @@ class ChannelProviderService:
     async def healthcheck(self) -> None:
         self._store.healthcheck()
         await self._registry.healthcheck()
+
+    async def smarthome_snapshot(self, owner_id: str) -> dict:
+        if self._smarthome is None:
+            raise BackendUnavailable("smart home is not configured")
+        return await self._smarthome.snapshot(owner_id)
+
+    async def smarthome_execute(
+        self, owner_id: str, command: ExecuteRequest
+    ) -> ExecuteResult:
+        if self._smarthome is None:
+            raise BackendUnavailable("smart home is not configured")
+        return await self._smarthome.execute(owner_id, command)
+
+    async def smarthome_result(
+        self, owner_id: str, device_ref: str, result: VoiceResult
+    ) -> None:
+        if self._smarthome is None:
+            raise BackendUnavailable("smart home is not configured")
+        await self._smarthome.send_voice_result(owner_id, device_ref, result)
 
     async def shutdown(self) -> None:
         if self._smarthome_poller is not None:

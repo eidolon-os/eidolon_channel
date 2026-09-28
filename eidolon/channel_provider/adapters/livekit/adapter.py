@@ -385,6 +385,8 @@ class LiveKitChannelAdapter:
         # an Authority that then refreshes it, on every configuration pull,
         # forever.
         handle: dict[str, Any] = {"room": room, "device": spec.device_id, "server_urls": urls}
+        if spec.smarthome_panel:
+            handle["smarthome_owner"] = spec.owner_id
         if spec.output_policy is not None and spec.selected_outputs is not None:
             handle["output_template"] = {
                 "policy_revision": spec.output_policy.revision,
@@ -1259,6 +1261,10 @@ class LiveKitChannelAdapter:
                             "schema_v": WIRE_SCHEMA_VERSION,
                             SESSION_CONVERSATION_ID_FIELD: conversation_id,
                             SESSION_INTENT_FIELD: session_intent,
+                            **({"smarthome_panel": True,
+                                "smarthome_owner": handle["smarthome_owner"],
+                                "smarthome_device": handle["device"]}
+                               if "smarthome_owner" in handle else {}),
                             **({"target_companion_id": target_companion_id}
                                if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),

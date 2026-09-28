@@ -20,6 +20,7 @@ mobile client's channel, not a fact anyone should have to re-derive.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ import pytest
 from eidolon.channel_provider.contracts import ContractError, ProvisionRequest
 from eidolon.channel_provider.selection import AdapterRegistry, NoAdapterAvailable
 from eidolon.channel_provider.spec import MediaFlow, derive_spec
+from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
 
 from .helpers import device_ref, encoded
 
@@ -132,6 +134,21 @@ def test_box3_manifest_is_carried() -> None:
     assert spec.serving is not None
     assert spec.serving.interaction_mode == "full_duplex"
     assert _registry().select(spec).name == "livekit"
+
+
+def test_panel_profile_is_derived_from_the_manifest() -> None:
+    ordinary = _spec(BOX3_MANIFEST)
+    panel_manifest = deepcopy(BOX3_MANIFEST)
+    panel_manifest.setdefault("properties", []).append({
+        "name": PANEL_PROFILE_PROPERTY,
+        "observable": False,
+        "schema": {"const": PANEL_PROFILE, "type": "string"},
+        "writable": False,
+    })
+    panel = _spec(panel_manifest)
+
+    assert ordinary.smarthome_panel is False
+    assert panel.smarthome_panel is True
 
 
 def test_phone_manifest_is_carried() -> None:

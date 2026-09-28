@@ -15,6 +15,7 @@ from typing import Any
 
 from .contracts import ProvisionDevice, ContractError
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
+from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
 from eidolon_sdk.biz.presentation.negotiation import (
     validate_output_contract,
     manifest_outputs,
@@ -81,6 +82,7 @@ class ChannelSpec:
     output_policy: DeviceOutputPolicy | None = None
     selected_outputs: OutputSelection | None = None
     media_declared: bool = False
+    smarthome_panel: bool = False
 
     @property
     def needs_media(self) -> bool:
@@ -143,6 +145,13 @@ def derive_spec(
 ) -> ChannelSpec:
     """Turn one device's declaration into what its channel must provide."""
     manifest = device.manifest
+    smarthome_panel = any(
+        isinstance(prop, dict)
+        and prop.get("name") == PANEL_PROFILE_PROPERTY
+        and isinstance(prop.get("schema"), dict)
+        and prop["schema"].get("const") == PANEL_PROFILE
+        for prop in manifest.get("properties", ())
+    )
     audio = _media_flow(manifest, "audio")
     video = _media_flow(manifest, "video")
     try:
@@ -190,4 +199,5 @@ def derive_spec(
         output_policy=device.output_policy,
         selected_outputs=selected,
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE or _media_flow(manifest, "video") is not MediaFlow.NONE,
+        smarthome_panel=smarthome_panel,
     )

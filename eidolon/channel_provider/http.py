@@ -9,12 +9,14 @@ from datetime import datetime
 from typing import Any
 
 from aiohttp import web
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from eidolon_sdk.biz.smarthome import ExecuteRequest, VoiceResult
 
 from .contracts import (
     CLOSE_SESSION,
     OPEN_SESSION,
     ContractError,
+    BackendUnavailable,
     DomainError,
     ProvisionRequest,
     CurrentRequest,
@@ -27,6 +29,20 @@ from .session_traces import SessionTraceReader, TraceQuery
 from .shared_session_contract import OpenSharedSession, CloseSharedSession
 
 logger = logging.getLogger("eidolon.channel_provider.http")
+
+
+class _HomeScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner_id: str = Field(min_length=1, max_length=128)
+
+
+class _HomeExecute(_HomeScope):
+    request: ExecuteRequest
+
+
+class _HomeResult(_HomeScope):
+    device_ref: str = Field(min_length=1, max_length=128)
+    result: VoiceResult
 
 
 def create_app(
@@ -286,6 +302,36 @@ def create_app(
                                  status=503, detail="shared admission deadline elapsed")
 
     app.router.add_post("/v1/shared-sessions/{action:open|close}", shared_session)
+
+    async def smarthome(request: web.Request) -> web.Response:
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            action = request.match_info["action"]
+            body = await request.read()
+            if action == "snapshot":
+                scope = _HomeScope.model_validate_json(body)
+                return _json_body(await service.smarthome_snapshot(scope.owner_id))
+            if action == "execute":
+                command = _HomeExecute.model_validate_json(body)
+                result = await service.smarthome_execute(command.owner_id, command.request)
+                return _json_body(result.model_dump(mode="json"))
+            command = _HomeResult.model_validate_json(body)
+            await service.smarthome_result(
+                command.owner_id, command.device_ref, command.result
+            )
+            return _json_body({"status": "sent"})
+        except ValidationError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
+        except Exception:
+            logger.exception("smart home %s failed", request.match_info["action"])
+            return _problem(BackendUnavailable("smart home service unavailable"))
+
+    app.router.add_post("/v1/smarthome/{action:snapshot|execute|result}", smarthome)
     app.on_cleanup.append(close)
     return app
 

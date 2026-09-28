@@ -33,6 +33,7 @@ from eidolon_sdk.biz.smarthome import (
     ERROR_UNKNOWN_DEVICE,
     ERROR_UNKNOWN_SCENE,
     OP_DELTA,
+    OP_RESULT,
     OP_SNAPSHOT,
     ChangeSource,
     Command,
@@ -51,6 +52,7 @@ from eidolon_sdk.biz.smarthome import (
     PanelSync,
     Registry,
     SmartHomeError,
+    VoiceResult,
     validate_command,
     validate_state,
 )
@@ -258,6 +260,29 @@ class SmartHomeRuntime:
         owner = self._owners.get(owner_id)
         if owner is not None:
             owner.panels.pop(device_ref, None)
+
+    async def snapshot(self, owner_id: str) -> dict[str, Any]:
+        """Current registry and Provider state for a trusted Agent command."""
+        owner = self._owner(owner_id)
+        async with owner.lock:
+            registry = await self._registry(owner_id, owner)
+            return {
+                "registry": registry.model_dump(mode="json"),
+                "status": {
+                    device.device_id: {
+                        "online": device.device_id in owner.states,
+                        "state": owner.states.get(device.device_id, {}),
+                    }
+                    for device in registry.devices
+                },
+            }
+
+    async def send_voice_result(
+        self, owner_id: str, device_ref: str, result: VoiceResult
+    ) -> None:
+        await self._panels.send(
+            owner_id, device_ref, OP_RESULT, result.model_dump(mode="json")
+        )
 
     async def handle_panel_request(self, owner_id: str, device_ref: str, body: object) -> None:
         """One decoded ``PANEL_REQUEST_TOPIC`` body from the panel bound to ``device_ref``.

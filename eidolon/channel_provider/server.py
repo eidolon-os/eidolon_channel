@@ -53,12 +53,14 @@ def main() -> None:
     store = ChannelProviderStore(config.storage.path)
     smarthome = None
     if config.smarthome_workspace_url is not None:
+        virtual = VirtualProvider(config.storage.path.with_name("smarthome.sqlite3"))
+        virtual.initialize()
         smarthome = SmartHomeRuntime(
             registry=HttpRegistrySource(
                 config.smarthome_workspace_url, config.smarthome_workspace_token
             ),
             panels=ChannelPanelSink(store, registry),
-            providers={"virtual": VirtualProvider(config.storage.path.with_name("smarthome.sqlite3"))},
+            providers={"virtual": virtual},
         )
     service = ChannelProviderService(
         store=store,

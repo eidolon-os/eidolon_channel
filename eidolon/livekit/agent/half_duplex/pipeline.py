@@ -98,7 +98,6 @@ class HalfDuplexPttPipeline(BasePipeline):
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
         on_idle_disconnect: Callable[[], Any] | None = None,
         on_session_closed: Callable[[], Any] | None = None,
-        on_committed_transcript: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         self._destination = destination
@@ -123,7 +122,6 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._on_session_end = on_session_end
         self._on_idle_disconnect = on_idle_disconnect
         self._on_session_closed = on_session_closed
-        self._on_committed_transcript = on_committed_transcript
         self._close_error: Any | None = None
         self._session: AgentSession | None = None
         self._session_closed_event: asyncio.Event = asyncio.Event()
@@ -657,9 +655,6 @@ class HalfDuplexPttPipeline(BasePipeline):
             timeline=self._timeline,
         )
         self._record_ptt_result(result)
-        if self._on_committed_transcript is not None:
-            await self._on_committed_transcript(result.transcript)
-            return
         try:
             session.generate_reply(user_input=result.transcript, input_modality="audio")
         except Exception:

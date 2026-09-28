@@ -581,6 +581,36 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
         except Exception:
             logger.exception("[Agent] failed to end serving room=%s (%s)", room.name, context)
 
+    if metadata.get("smarthome_panel") is True:
+        owner_id = metadata.get("smarthome_owner")
+        device_ref = metadata.get("smarthome_device")
+        if not isinstance(owner_id, str) or not owner_id or not isinstance(device_ref, str) or not device_ref:
+            raise ValueError("invalid smart-home panel dispatch")
+        from eidolon.livekit.agent.smarthome import run_smarthome_session
+
+        async def _home_shutdown(reason: str) -> None:
+            await _publish_session_end(
+                SESSION_END_ERROR if "error" in str(reason).lower() else SESSION_END_USER_LEFT
+            )
+            await _end_serving("shutdown callback")
+
+        ctx.add_shutdown_callback(_home_shutdown)
+        try:
+            await run_smarthome_session(
+                room=room,
+                cfg=cfg,
+                prebuilt_vad=prebuilt_vad,
+                owner_id=owner_id,
+                device_ref=device_ref,
+                on_started=_publish_session_started,
+                on_end=_publish_session_end,
+                on_closed=lambda: _end_serving("session closed"),
+            )
+        except Exception:
+            await _publish_session_end(SESSION_END_ERROR)
+            raise
+        return
+
     # Two buses, because two different parties are entitled to speak on them.
     # What the actor declares about itself (turn-taking, avatar) comes off its
     # own token metadata; why this session exists comes off the Provider's
@@ -590,24 +620,6 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     # session boundary.
     session_intent = _resolve_session_intent(ctx)
     interaction_mode, avatar_requested = await _resolve_session_metadata(ctx)
-    smarthome_panel = metadata.get("smarthome_panel") is True
-    if smarthome_panel and (
-        interaction_mode != INTERACTION_MODE_PTT
-        or not isinstance(metadata.get("smarthome_owner"), str)
-        or not isinstance(metadata.get("smarthome_device"), str)
-        or not metadata["smarthome_owner"]
-        or not metadata["smarthome_device"]
-    ):
-        raise ValueError("invalid smart-home panel dispatch")
-
-    async def _smarthome_transcript(transcript: str) -> None:
-        from eidolon.livekit.agent.smarthome import handle_transcript
-        try:
-            await handle_transcript(
-                metadata["smarthome_owner"], metadata["smarthome_device"], transcript
-            )
-        except Exception:
-            logger.exception("smart-home result delivery failed in room=%s", room.name)
     # A remote speaker cannot supply the input board with its local AEC reference.
     # Preserve explicit PTT; directed open-mic sessions are half-duplex.
     if presentation_endpoint is not None and interaction_mode != INTERACTION_MODE_PTT:
@@ -668,7 +680,6 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             on_session_end=_publish_session_end,
             on_idle_disconnect=lambda: _end_serving("idle timeout"),
             on_session_closed=lambda: _end_serving("session closed"),
-            on_committed_transcript=(_smarthome_transcript if smarthome_panel else None),
         )
     else:
         pipeline = StreamingPipeline(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
+from collections.abc import Awaitable, Callable
 
 import httpx
 from eidolon_sdk.biz.smarthome import VoiceResult
@@ -11,6 +13,82 @@ from eidolon_sdk.biz.smarthome import VoiceResult
 from eidolon.livekit.agent.shared.types import generate_turn_id
 
 logger = logging.getLogger(__name__)
+
+
+async def run_smarthome_session(
+    *,
+    room,
+    cfg,
+    prebuilt_vad,
+    owner_id: str,
+    device_ref: str,
+    on_started: Callable[[], Awaitable[None]],
+    on_end: Callable[[str], Awaitable[None]],
+    on_closed: Callable[[], Awaitable[None]],
+) -> None:
+    """Listen on the existing device room; this profile has no output track."""
+    from livekit.agents import StopResponse
+    from livekit.agents.voice import Agent, AgentSession
+    from livekit.agents.voice.room_io import RoomOptions
+
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.agent.runtime.resolver import wait_for_runtime_participant_identity
+
+    participant = await wait_for_runtime_participant_identity(room)
+    if participant != device_ref:
+        raise ValueError("smart-home dispatch does not match room participant")
+
+    stt = SharedStageFactory._build_stt(cfg).stt
+    vad = prebuilt_vad if prebuilt_vad is not None else SharedStageFactory._build_vad(cfg)
+    closed = asyncio.Event()
+    disconnected = asyncio.Event()
+
+    class HomeAgent(Agent):
+        async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+            transcript = (new_message.text_content or "").strip()
+            if transcript:
+                try:
+                    await handle_transcript(owner_id, device_ref, transcript)
+                except Exception:
+                    logger.exception("smart-home panel result delivery failed room=%s", room.name)
+            raise StopResponse()
+
+    session = AgentSession(
+        stt=stt,
+        vad=vad,
+        turn_handling={
+            "turn_detection": "vad" if vad is not None else "stt",
+            "interruption": {"enabled": False},
+        },
+    )
+    session.on("close", lambda *_: closed.set())
+    room.on("disconnected", lambda *_: disconnected.set())
+    try:
+        await session.start(
+            agent=HomeAgent(instructions="仅转写本次家居指令。", llm=None, tts=None),
+            room=room,
+            room_options=RoomOptions(
+                participant_identity=device_ref,
+                audio_output=False,
+                text_output=False,
+                text_input=False,
+            ),
+        )
+        await on_started()
+        waits = {asyncio.create_task(closed.wait()), asyncio.create_task(disconnected.wait())}
+        try:
+            done, pending = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*waits, return_exceptions=True)
+            for task in done:
+                task.result()
+        finally:
+            await on_end("user_left")
+            await on_closed()
+    finally:
+        await session.aclose()
+        await stt.aclose()
 
 
 async def handle_transcript(owner_id: str, device_ref: str, transcript: str) -> None:

@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 import httpx
+from eidolon_sdk.core.http import create_async_client
 from eidolon_sdk.biz.system_data import SystemDataRuntimeClient
 
 
@@ -101,7 +102,7 @@ def _open_system_data_runtime(settings: Any) -> SystemDataRuntimeResolver:
     token = os.environ.get(token_env, "").strip()
     if not token:
         raise RuntimeError(f"[runtime] {token_env} is required for System Data")
-    http_client = httpx.AsyncClient(
+    http_client = create_async_client(
         timeout=httpx.Timeout(
             float(getattr(settings, "http_timeout_sec", 5.0)),
             connect=float(getattr(settings, "http_connect_timeout_sec", 2.0)),

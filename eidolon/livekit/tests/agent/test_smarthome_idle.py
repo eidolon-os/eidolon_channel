@@ -72,7 +72,7 @@ def home_runtime(monkeypatch):
     async def participant(_room):
         return "device-instance-test"
 
-    async def end_home_session(*_args) -> None:
+    async def end_home_session(*_args, **_kwargs) -> None:
         pass
 
     monkeypatch.setattr(resolver, "wait_for_runtime_participant_identity", participant)

@@ -6,8 +6,10 @@ import logging
 import os
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 
 import httpx
+from eidolon_sdk.core.http import create_async_client
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
 from eidolon_sdk.biz.smarthome import VoiceResult
 
@@ -70,7 +72,7 @@ async def run_smarthome_session(
                 delivering += 1
                 watchdog.mark_activity()
                 try:
-                    await handle_transcript(owner_id, device_ref, transcript, session_id=session_id)
+                    await handle_transcript(owner_id, device_ref, transcript, session_id=session_id, client=http)
                 except Exception:
                     logger.exception("smart-home panel result delivery failed room=%s", room.name)
                 finally:
@@ -118,6 +120,7 @@ async def run_smarthome_session(
     )
     session.on("close", lambda *_: closed.set())
     room.on("disconnected", lambda *_: disconnected.set())
+    http = create_async_client(trust_env=False, timeout=12)
     try:
         await session.start(
             agent=HomeAgent(instructions="仅转写本次家居指令。", llm=None, tts=None),
@@ -151,13 +154,16 @@ async def run_smarthome_session(
                 await on_closed()
     finally:
         try:
-            await end_home_session(owner_id, device_ref, session_id)
+            await end_home_session(owner_id, device_ref, session_id, client=http)
         finally:
-            await session.aclose()
-            await stt.aclose()
+            try:
+                await session.aclose()
+                await stt.aclose()
+            finally:
+                await http.aclose()
 
 
-async def handle_transcript(owner_id: str, device_ref: str, transcript: str, *, session_id: str) -> None:
+async def handle_transcript(owner_id: str, device_ref: str, transcript: str, *, session_id: str, client: httpx.AsyncClient | None = None) -> None:
     turn_id = generate_turn_id()
     utterance = " ".join(transcript.split())[:200]
     agent_token = os.environ.get("EIDOLON_AGENT_ADMIN_API_TOKEN", "")
@@ -165,7 +171,7 @@ async def handle_transcript(owner_id: str, device_ref: str, transcript: str, *, 
     if not agent_token or not panel_token:
         raise RuntimeError("smart-home service credentials are missing")
 
-    async with httpx.AsyncClient(trust_env=False, timeout=12) as client:
+    async with (nullcontext(client) if client is not None else create_async_client(trust_env=False, timeout=12)) as client:
         try:
             response = await client.post(
                 os.environ.get("EIDOLON_AGENT_ADMIN_URL", "http://127.0.0.1:8081").rstrip("/")
@@ -204,15 +210,16 @@ async def handle_transcript(owner_id: str, device_ref: str, transcript: str, *, 
         logger.info("smart-home turn=%s outcome=%s delivered", turn_id, result.outcome)
 
 
-async def end_home_session(owner_id: str, device_ref: str, session_id: str) -> None:
+async def end_home_session(owner_id: str, device_ref: str, session_id: str, *, client: httpx.AsyncClient | None = None) -> None:
     """Forward lifecycle only; conversational state belongs to Agent."""
     try:
-        async with httpx.AsyncClient(trust_env=False, timeout=3) as client:
+        async with (nullcontext(client) if client is not None else create_async_client(trust_env=False, timeout=3)) as client:
             response = await client.post(
                 os.environ.get("EIDOLON_AGENT_ADMIN_URL", "http://127.0.0.1:8081").rstrip("/")
                 + "/api/admin/smarthome/session/end",
                 headers={"Authorization": f"Bearer {os.environ.get('EIDOLON_AGENT_ADMIN_API_TOKEN', '')}"},
                 json={"owner_id": owner_id, "device_ref": device_ref, "session_id": session_id},
+                timeout=3,
             )
             response.raise_for_status()
     except httpx.HTTPError:

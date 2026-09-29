@@ -51,11 +51,11 @@ def main() -> None:
     )
     store = ChannelProviderStore(config.storage.path)
     smarthome = None
+    home_client = None
     if config.smarthome_hub_url is not None:
+        home_client = HubSmartHomeClient(config.smarthome_hub_url, config.smarthome_hub_token)
         smarthome = SmartHomeRuntime(
-            backend=HubSmartHomeClient(
-                config.smarthome_hub_url, config.smarthome_hub_token
-            ),
+            backend=home_client,
             panels=ChannelPanelSink(store, registry),
         )
     service = ChannelProviderService(
@@ -70,6 +70,10 @@ def main() -> None:
         bearer_token=config.bearer_token,
         traces=SessionTraceReader(config.traces.root),
     )
+    if home_client is not None:
+        async def close_home_client(_app):
+            await home_client.aclose()
+        app.on_cleanup.append(close_home_client)
     web.run_app(
         app,
         host=config.http.host,

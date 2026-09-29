@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from eidolon_sdk.core.http import create_async_client
 from eidolon_sdk.device_foundation.v1 import (
     DERIVED_ENDPOINT_ID,
     BodyAssignment,
@@ -116,7 +117,7 @@ class KernelBodyHttpClient:
 
     async def resolve(self, *, owner_id: str, device_id: str) -> DeviceConnectionContext:
         if self._http is None:
-            async with httpx.AsyncClient(trust_env=False) as http:
+            async with create_async_client(timeout=5.0, trust_env=False) as http:
                 return await self._resolve_with(
                     http,
                     owner_id=owner_id,

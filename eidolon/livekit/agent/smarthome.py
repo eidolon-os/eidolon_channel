@@ -8,6 +8,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 import httpx
+from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
 from eidolon_sdk.biz.smarthome import VoiceResult
 
 from eidolon.livekit.agent.shared.types import generate_turn_id
@@ -26,14 +27,29 @@ async def run_smarthome_session(
     on_started: Callable[[], Awaitable[None]],
     on_end: Callable[[str], Awaitable[None]],
     on_closed: Callable[[], Awaitable[None]],
+    on_idle: Callable[[], Awaitable[None]] | None = None,
+    session_intent: str = SESSION_INTENT_USER_INITIATED,
 ) -> None:
-    """Listen on the existing device room; this profile has no output track."""
+    """Listen on the existing device room; this profile has no output track.
+
+    Bounded by the same idle window as a Companion session. Nothing else ends
+    this session when its device does not: the room outlives the device (the
+    Provider's listener keeps it occupied), and the participant disconnect a
+    reset or power loss produces is not one AgentSession closes on — the next
+    connection with the same identity is linked instead. Without the window
+    a device that restarted mid-session left this session attached to its
+    next run until the host was restarted, and every conversation the device
+    asked for meanwhile was refused (2026-09-29). `on_idle` withdraws the
+    dispatch; `on_closed` is not called after it.
+    """
     from livekit.agents import StopResponse
     from livekit.agents.voice import Agent, AgentSession
     from livekit.agents.voice.room_io import RoomOptions
 
     from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.agent.runtime.interaction_mode import resolve_idle_policy
     from eidolon.livekit.agent.runtime.resolver import wait_for_runtime_participant_identity
+    from eidolon.livekit.agent.session.idle import IdleWatchdog
 
     participant = await wait_for_runtime_participant_identity(room)
     if participant != device_ref:
@@ -43,15 +59,23 @@ async def run_smarthome_session(
     vad = prebuilt_vad if prebuilt_vad is not None else SharedStageFactory._build_vad(cfg)
     closed = asyncio.Event()
     disconnected = asyncio.Event()
+    delivering = 0
+    idle_ended = False
 
     class HomeAgent(Agent):
         async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+            nonlocal delivering
             transcript = (new_message.text_content or "").strip()
             if transcript:
+                delivering += 1
+                watchdog.mark_activity()
                 try:
                     await handle_transcript(owner_id, device_ref, transcript, session_id=session_id)
                 except Exception:
                     logger.exception("smart-home panel result delivery failed room=%s", room.name)
+                finally:
+                    delivering -= 1
+                    watchdog.mark_activity()
             raise StopResponse()
 
     session = AgentSession(
@@ -61,6 +85,36 @@ async def run_smarthome_session(
             "turn_detection": "vad" if vad is not None else "stt",
             "interruption": {"enabled": False},
         },
+    )
+
+    async def _idle_disconnect() -> None:
+        nonlocal idle_ended
+        idle_ended = True
+        if on_idle is not None:
+            await on_idle()
+
+    idle_policy = resolve_idle_policy(
+        session_intent=session_intent, idle_config=cfg.turn_policy.idle
+    )
+    watchdog = IdleWatchdog(
+        timeout_sec=idle_policy.timeout_sec,
+        get_session=lambda: session,
+        get_room=lambda: room,
+        get_timeline=lambda: None,
+        session_closed_event=closed,
+        on_idle_disconnect=_idle_disconnect,
+        on_session_end=on_end,
+        disconnect_grace_sec=cfg.turn_policy.idle.disconnect_grace_ms / 1000.0,
+        idle_end_reason=idle_policy.end_reason,
+        # A command being delivered is work even though nobody is speaking.
+        is_busy=lambda: delivering > 0 or getattr(session, "user_state", None) == "speaking",
+    )
+    # Recognised text is activity; raw VAD and noise are not, the same rule as
+    # a Companion session, so a noisy but silent panel still goes idle.
+    session.on(
+        "user_input_transcribed",
+        lambda event: watchdog.mark_activity()
+        if (getattr(event, "transcript", "") or "").strip() else None,
     )
     session.on("close", lambda *_: closed.set())
     room.on("disconnected", lambda *_: disconnected.set())
@@ -76,6 +130,7 @@ async def run_smarthome_session(
             ),
         )
         await on_started()
+        watchdog.start()
         waits = {asyncio.create_task(closed.wait()), asyncio.create_task(disconnected.wait())}
         try:
             done, pending = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
@@ -85,8 +140,15 @@ async def run_smarthome_session(
             for task in done:
                 task.result()
         finally:
+            if idle_ended and watchdog.task is not None:
+                # The idle end is withdrawing the dispatch, and withdrawing it
+                # is what drops the room; let it finish rather than cancel it
+                # half way and leave the dispatch behind.
+                await asyncio.gather(watchdog.task, return_exceptions=True)
+            watchdog.stop()
             await on_end("user_left")
-            await on_closed()
+            if not idle_ended:
+                await on_closed()
     finally:
         try:
             await end_home_session(owner_id, device_ref, session_id)

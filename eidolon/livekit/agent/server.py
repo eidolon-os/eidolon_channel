@@ -622,6 +622,8 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 on_started=_publish_session_started,
                 on_end=_publish_session_end,
                 on_closed=lambda: _end_serving("session closed"),
+                on_idle=lambda: _end_serving("idle timeout"),
+                session_intent=_resolve_session_intent(ctx),
             )
         except Exception:
             try:

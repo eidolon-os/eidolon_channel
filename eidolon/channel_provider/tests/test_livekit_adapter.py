@@ -778,6 +778,7 @@ async def _settle(adapter: LiveKitChannelAdapter) -> None:
 
 async def test_a_dispatch_that_never_serves_is_reported(monkeypatch, caplog) -> None:
     monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    monkeypatch.setattr(adapter_mod, "_UNSERVED_RECLAIM_AFTER", 0.0)
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     client.room.participants = [_device_participant()]
@@ -874,6 +875,7 @@ async def test_a_job_that_died_is_reported_with_its_own_error(monkeypatch, caplo
     answer differently — so the answer has to reach the log that reports it.
     """
     monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    monkeypatch.setattr(adapter_mod, "_UNSERVED_RECLAIM_AFTER", 0.0)
     adapter, client = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1_000)
     client.room.participants = [_device_participant()]
@@ -1696,3 +1698,227 @@ async def test_recovery_listener_cannot_restore_expired_io_grants_or_start_conve
     with pytest.raises(InvalidTransition, match='cleanup only'):
         await call.kwargs['sink'](None)
     await adapter.shutdown()
+
+
+# -- a device's new conversation supersedes the one it abandoned --------------
+#
+# 2026-09-29: a device reset mid-conversation; after it came back, every
+# conversation it asked for was refused because the one its previous run opened
+# was still "live", and only that run knew the id needed to close it.
+
+
+def _device_metadata(conversation_id: str) -> str:
+    value = json.loads(_metadata(conversation_id))
+    value["requested_by"] = "device"
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+async def test_a_device_request_is_stamped_as_the_devices_own() -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED,
+        device_requested=True,
+    )
+
+    assert json.loads(client.agent_dispatch.created[0][2])["requested_by"] == "device"
+
+
+@pytest.mark.parametrize("statuses", [[], [JobStatus.JS_PENDING], [JobStatus.JS_RUNNING]])
+async def test_a_device_conversation_supersedes_its_abandoned_one(statuses, caplog) -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+    client.agent_dispatch._room(room).append(
+        FakeDispatch("AD_old", "eidolon", [FakeJob(s) for s in statuses],
+                     _device_metadata("from-previous-run"))
+    )
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(
+            grant.handle, "incoming", session_intent=SESSION_INTENT_USER_INITIATED,
+            device_requested=True,
+        )
+
+    assert client.agent_dispatch.deleted == [(room, "AD_old")]
+    assert [json.loads(m)["conversation_id"] for _, _, m in client.agent_dispatch.created] == [
+        "incoming"
+    ]
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("superseding dispatch=AD_old" in m and "from-previous-run" in m for m in warned)
+
+
+@pytest.mark.parametrize(
+    "occupant",
+    [
+        # Opened by an orchestrator or a Provider older than the stamp.
+        _metadata("orchestrated"),
+        # A team scene that happens to carry the stamp is still someone else's.
+        json.dumps({**json.loads(_metadata("team")), "team_dispatch": {"x": 1}}),
+    ],
+)
+async def test_a_device_cannot_supersede_a_conversation_it_did_not_open(occupant) -> None:
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+    client.agent_dispatch._room(room).append(
+        FakeDispatch("AD_other", "eidolon", [FakeJob(JobStatus.JS_RUNNING)], occupant)
+    )
+
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(
+            grant.handle, "incoming", session_intent=SESSION_INTENT_USER_INITIATED,
+            device_requested=True,
+        )
+
+    assert client.agent_dispatch.deleted == []
+    assert client.agent_dispatch.created == []
+
+
+async def test_an_orchestrator_cannot_supersede_the_devices_conversation() -> None:
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+    client.agent_dispatch._room(room).append(
+        FakeDispatch("AD_device", "eidolon", [FakeJob(JobStatus.JS_RUNNING)],
+                     _device_metadata("the-users"))
+    )
+
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(
+            grant.handle, "a-wake", session_intent=SESSION_INTENT_PRESENCE,
+        )
+
+    assert client.agent_dispatch.deleted == []
+
+
+async def test_reasserting_the_current_conversation_still_drops_an_abandoned_one() -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+    current = json.loads(_device_metadata("current"))
+    client.agent_dispatch._room(room).extend([
+        FakeDispatch("AD_current", "eidolon", [FakeJob(JobStatus.JS_RUNNING)],
+                     json.dumps(current)),
+        FakeDispatch("AD_stale", "eidolon", [FakeJob(JobStatus.JS_RUNNING)],
+                     _device_metadata("stale")),
+    ])
+
+    await adapter.open_session(
+        grant.handle, "current", session_intent=SESSION_INTENT_USER_INITIATED,
+        device_requested=True,
+    )
+
+    assert client.agent_dispatch.deleted == [(room, "AD_stale")]
+    assert client.agent_dispatch.created == []
+
+
+async def test_a_rebooted_device_is_served_again_through_the_provider(tmp_path, monkeypatch):
+    """The 2026-09-29 sequence end to end, with LiveKit replaced by its fake."""
+    from eidolon.channel_provider.contracts import InvalidTransition, OPEN_SESSION, SessionRequest
+    from .test_service import _service
+    from .helpers import session_payload
+    adapter, client = _adapter()
+
+    async def no_rtc_listener(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(adapter, "accept_requests", no_rtc_listener)
+    service, _, _ = _service(tmp_path, [1_700_000_000_000], backend=adapter)
+    request = ProvisionRequest.parse(encoded(provision_payload()))
+    await service.provision(request)
+    device = service._sink_for(request.device_ref)  # noqa: SLF001 - the device's own road
+
+    await device(ServingRequest(ServingAction.START, "esp32-run1-00000001"))
+    # Reset: the run that knew that id is gone and never closes it.
+    await device(ServingRequest(ServingAction.START, "esp32-run2-00000001"))
+
+    room = next(iter(client.agent_dispatch.dispatches))
+    live = [json.loads(d.metadata)["conversation_id"]
+            for d in client.agent_dispatch.dispatches[room] if d.agent_name == "eidolon"]
+    assert live == ["esp32-run2-00000001"]
+
+    payload = session_payload(operation=OPEN_SESSION)
+    payload["conversation_id"] = "an-orchestrated-wake"
+    with pytest.raises(InvalidTransition):
+        await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION))
+    await adapter.shutdown()
+
+
+# -- closing without naming the conversation -----------------------------------
+
+
+async def test_an_unnamed_close_ends_the_ordinary_conversation_and_spares_scenes(caplog) -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+    client.agent_dispatch._room(room).extend([
+        FakeDispatch("AD_ordinary", "eidolon", [FakeJob(JobStatus.JS_RUNNING)],
+                     _device_metadata("ordinary")),
+        FakeDispatch("AD_team", "eidolon", [FakeJob(JobStatus.JS_RUNNING)],
+                     json.dumps({**json.loads(_metadata("team")), "team_dispatch": {"x": 1}})),
+    ])
+
+    with caplog.at_level(logging.INFO):
+        closed = await adapter.close_session(grant.handle, None)
+
+    assert closed == ["ordinary"]
+    assert client.agent_dispatch.deleted == [(room, "AD_ordinary")]
+    assert any("conversation_ids=['ordinary']" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_close_that_matched_nothing_does_not_say_it_closed(caplog) -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+
+    with caplog.at_level(logging.INFO):
+        closed = await adapter.close_session(grant.handle, "nobody")
+
+    assert closed == []
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("no session to close") for m in messages)
+    assert not any(m.startswith("closed session") for m in messages)
+
+
+# -- an unserved dispatch is withdrawn once the device has stopped waiting -----
+
+
+async def test_a_dispatch_nobody_ever_serves_is_withdrawn(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    monkeypatch.setattr(adapter_mod, "_UNSERVED_RECLAIM_AFTER", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    room = grant.handle["room"]
+    client.room.participants = [_device_participant()]
+
+    with caplog.at_level(logging.INFO):
+        await adapter.open_session(
+            grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+        )
+        await _settle(adapter)
+
+    assert client.agent_dispatch.deleted == [(room, "AD_1")]
+    assert any(r.getMessage().startswith("withdrew dispatch=AD_1") for r in caplog.records)
+
+
+async def test_a_late_agent_keeps_its_dispatch(monkeypatch) -> None:
+    """Served by the second look is served; nothing is withdrawn under it."""
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    monkeypatch.setattr(adapter_mod, "_UNSERVED_RECLAIM_AFTER", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    looks = iter([[_device_participant()], [_device_participant(), _agent_participant()]])
+
+    async def list_participants(request):
+        return SimpleNamespace(participants=next(looks))
+
+    client.room.list_participants = list_participants
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED
+    )
+    await _settle(adapter)
+
+    assert client.agent_dispatch.deleted == []

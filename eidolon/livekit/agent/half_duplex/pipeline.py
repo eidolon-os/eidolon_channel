@@ -416,7 +416,16 @@ class HalfDuplexPttPipeline(BasePipeline):
 
     def _idle_busy(self) -> bool:
         ptt_controller = getattr(self, "_ptt_controller", None)
-        if ptt_controller is not None and getattr(ptt_controller, "state", "idle") != "idle":
+        state = getattr(ptt_controller, "state", "idle") if ptt_controller is not None else "idle"
+        if state == "recording":
+            # A hold is work only for as long as a segment can last. Past that
+            # the release is not late but lost — a device reset mid-hold never
+            # sends one — and counting the hold as busy would keep the session
+            # from ever going idle.
+            limit = self._turn_policy.ptt.segment_max_audio_ms / 1000.0
+            if getattr(ptt_controller, "recording_seconds", 0.0) <= limit:
+                return True
+        elif state != "idle":
             return True
         if self._state in {PipelineState.GENERATING, PipelineState.SPEAKING}:
             return True

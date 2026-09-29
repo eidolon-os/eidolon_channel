@@ -100,6 +100,25 @@ def test_session_rejects_contract_drift(mutation) -> None:
         SessionRequest.parse(encoded(value), expected=OPEN_SESSION)
 
 
+def test_a_close_may_leave_the_conversation_unnamed_but_an_open_may_not() -> None:
+    """Whoever picked the id may be a device run that no longer exists."""
+    value = session_payload(operation=CLOSE_SESSION)
+    value.pop("conversation_id")
+
+    assert SessionRequest.parse(encoded(value), expected=CLOSE_SESSION).conversation_id is None
+
+    value["operation"] = OPEN_SESSION
+    with pytest.raises(ContractError, match="conversation_id"):
+        SessionRequest.parse(encoded(value), expected=OPEN_SESSION)
+
+
+def test_a_named_close_still_needs_a_valid_conversation_id() -> None:
+    value = session_payload(operation=CLOSE_SESSION, conversation_id="")
+
+    with pytest.raises(ContractError, match="conversation_id"):
+        SessionRequest.parse(encoded(value), expected=CLOSE_SESSION)
+
+
 def test_a_close_request_cannot_name_a_session_intent() -> None:
     """Ending a conversation has no intent to state, so naming one is drift."""
     value = session_payload(

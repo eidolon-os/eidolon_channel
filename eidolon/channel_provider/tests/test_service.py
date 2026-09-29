@@ -664,3 +664,130 @@ async def test_presence_keeps_unobservable_devices_unknown(tmp_path, monkeypatch
     rows = json.loads(await service.presence())["bodies"]
     assert len(rows) == 1 and rows[0]["on_channel"] is None
     assert adapter.sessions_opened == []
+
+
+# -- ending is not gated by the credential ------------------------------------
+#
+# 2026-09-28: a conversation opened 24s before the device's credential lapsed;
+# the device's stop arrived one second after, was refused as "no active
+# channel", and the conversation it meant to end blocked every later one. The
+# room, the device and the dispatch all outlive the credential, so the stop
+# that ends them must too.
+
+_TTL_MS = 1_800_000
+
+
+async def test_a_stop_after_the_credential_lapses_still_ends_the_conversation(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    await backend.device_asks(_DEVICE_1, ServingRequest(ServingAction.START, "conversation-1"))
+
+    clock[0] += _TTL_MS + 1_000
+    await backend.device_asks(_DEVICE_1, ServingRequest(ServingAction.STOP, "conversation-1"))
+
+    handle = {"resource": f"livekit:{_DEVICE_1}"}
+    assert backend.sessions_closed == [(handle, "conversation-1")]
+
+
+async def test_a_lapsed_credential_still_refuses_a_new_conversation(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    clock[0] += _TTL_MS + 1_000
+    with pytest.raises(UnknownChannel):
+        await backend.device_asks(
+            _DEVICE_1, ServingRequest(ServingAction.START, "conversation-1")
+        )
+
+    assert backend.sessions_opened == []
+
+
+async def test_a_revoked_channel_still_refuses_a_stop(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload())))
+
+    with pytest.raises(UnknownChannel):
+        await service.close_session(
+            SessionRequest.parse(
+                encoded(session_payload(operation=CLOSE_SESSION)), expected=CLOSE_SESSION
+            )
+        )
+
+    assert backend.sessions_closed == []
+
+
+async def test_a_restart_listens_to_a_lapsed_channel_for_its_stop(tmp_path) -> None:
+    """The device may be in the room holding a conversation opened before the deadline."""
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    clock[0] += _TTL_MS + 1_000
+    restarted, _store2, fresh_backend = _service(tmp_path, clock)
+    await restarted.start()
+
+    assert list(fresh_backend.watched) == [f"livekit:{_DEVICE_1}"]
+    await fresh_backend.device_asks(
+        _DEVICE_1, ServingRequest(ServingAction.STOP, "conversation-1")
+    )
+    assert fresh_backend.sessions_closed == [
+        ({"resource": f"livekit:{_DEVICE_1}"}, "conversation-1")
+    ]
+    with pytest.raises(UnknownChannel):
+        await fresh_backend.device_asks(
+            _DEVICE_1, ServingRequest(ServingAction.START, "conversation-2")
+        )
+
+
+async def test_a_restart_does_not_listen_to_a_revoked_channel(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, store, _backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload())))
+
+    restarted, _store2, fresh_backend = _service(tmp_path, clock)
+    await restarted.start()
+
+    assert fresh_backend.watched == {}
+
+
+async def test_a_close_without_a_conversation_id_reports_what_it_ended(tmp_path) -> None:
+    """An operator recovering a device cannot know the id its dead run picked."""
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    clock[0] += _TTL_MS + 1_000
+    value = session_payload(operation=CLOSE_SESSION)
+    value.pop("conversation_id")
+
+    closed = json.loads(
+        await service.close_session(SessionRequest.parse(encoded(value), expected=CLOSE_SESSION))
+    )
+
+    handle = {"resource": f"livekit:{_DEVICE_1}"}
+    assert backend.sessions_closed == [(handle, None)]
+    assert closed["closed_conversation_ids"] == []
+    assert "conversation_id" not in closed
+    assert closed["serving"] is False
+
+
+async def test_only_the_device_road_is_marked_as_the_devices_own(tmp_path) -> None:
+    """What lets a device's new conversation replace its abandoned one."""
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    await backend.device_asks(_DEVICE_1, ServingRequest(ServingAction.START, "conversation-1"))
+    assert backend.last_device_requested is True
+
+    await service.open_session(
+        SessionRequest.parse(
+            encoded(session_payload(operation=OPEN_SESSION, conversation_id="conversation-2")),
+            expected=OPEN_SESSION,
+        )
+    )
+    assert backend.last_device_requested is False

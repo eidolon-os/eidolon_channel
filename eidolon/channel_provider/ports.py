@@ -161,7 +161,7 @@ class ChannelAdapter(Protocol):
 
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
-        target_companion_id: str | None = None,
+        target_companion_id: str | None = None, device_requested: bool = False,
     ) -> None:
         """Bring this channel's agent to it, so a conversation can happen.
 
@@ -186,6 +186,11 @@ class ChannelAdapter(Protocol):
         different conversation must be refused without withdrawing it; the
         caller must explicitly close the old conversation before switching.
         Active intent/output-plan changes are conflicts, not implicit restarts.
+        The one exception is `device_requested`: the request arrived on the
+        device's own channel, and a live conversation that also arrived that
+        way is the device's own abandoned one. It is superseded, not refused —
+        the device only picks a new conversation id when it holds none, and
+        the old id may have died with the device run that picked it.
 
         Two requirements on an adapter, both from the same place — the intent
         decides what the session is allowed to do, so it is authorization, not
@@ -195,11 +200,15 @@ class ChannelAdapter(Protocol):
         """
         ...
 
-    async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+    async def close_session(
+        self, handle: dict[str, Any], conversation_id: str | None
+    ) -> list[str]:
         """Send the agent away. The channel itself stays open.
 
         The device keeps its place and its credentials; only the served part of
         the channel ends. Must tolerate there being no session to close.
+        `conversation_id=None` ends the device's ordinary conversation whatever
+        its id, for a caller that cannot know it. Returns the ids ended.
         """
         ...
 

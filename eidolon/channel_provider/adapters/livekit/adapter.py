@@ -154,6 +154,17 @@ _REJOIN_MAX_DELAY = 30.0
 # then joined in under a second, so this is far outside the normal spread
 # and only fires when nothing arrived at all.
 _SERVING_CONFIRM_DELAY = 10.0
+# How much longer an unserved dispatch is kept after that report before it is
+# withdrawn. The two together (30s) outlast the device's own 25s wait for
+# `session_started`, after which a device that is still there has already sent
+# its close; what is left by then is a dispatch nobody will ever end. Waiting
+# past the device's deadline, rather than acting at the report, is what keeps
+# a slow start from being torn down under a device that is about to be served.
+_UNSERVED_RECLAIM_AFTER = 20.0
+# Written into a dispatch opened because the device asked on its own channel.
+# Only this adapter writes dispatch metadata, so the device cannot claim it.
+_REQUESTED_BY_FIELD = "requested_by"
+_REQUESTED_BY_DEVICE = "device"
 
 
 @dataclass
@@ -874,21 +885,28 @@ class LiveKitChannelAdapter:
         This never fails a request. The device has already been answered by the
         time this runs; what it changes is that the Provider stops being the
         last component to know.
+
+        A dispatch still unserved `_UNSERVED_RECLAIM_AFTER` later is withdrawn.
+        By then the device has stopped waiting for it, so nothing can still be
+        started by it, and left in place it is an occupied room: its job may
+        read as running forever with no agent anywhere (2026-09-28: a job that
+        crashed on startup kept its dispatch "JS_RUNNING" for 21 minutes, and
+        every conversation the device asked for in that time was refused).
         """
 
-        async def _confirm() -> None:
-            await asyncio.sleep(_SERVING_CONFIRM_DELAY)
+        async def _unserved() -> Any | None:
+            """The dispatch, if it is still wanted and nobody is serving it."""
             try:
                 dispatch = await self._dispatch_for(
                     room, agent=agent, conversation_id=conversation_id
                 )
             except Exception:
                 logger.debug("could not read dispatch of room=%s", room, exc_info=True)
-                return
+                return None
             if dispatch is None:
                 # Withdrawn while we waited: this conversation ended, which is
                 # what a short exchange looks like from here.
-                return
+                return None
             try:
                 participants = await self._client().room.list_participants(
                     api.ListParticipantsRequest(room=room)
@@ -898,12 +916,19 @@ class LiveKitChannelAdapter:
                 logger.debug(
                     "could not confirm serving on room=%s", room, exc_info=True
                 )
-                return
+                return None
             listed = getattr(participants, "participants", []) or []
             if any(
                 getattr(p, "kind", None) == ParticipantInfo.Kind.AGENT
                 for p in listed
             ):
+                return None
+            return dispatch
+
+        async def _confirm() -> None:
+            await asyncio.sleep(_SERVING_CONFIRM_DELAY)
+            dispatch = await _unserved()
+            if dispatch is None:
                 return
             logger.error(
                 "dispatch=%s on room=%s agent=%s conversation_id=%s produced no serving "
@@ -914,6 +939,29 @@ class LiveKitChannelAdapter:
                 agent,
                 conversation_id,
                 _SERVING_CONFIRM_DELAY,
+                _why_unserved(dispatch),
+            )
+            await asyncio.sleep(_UNSERVED_RECLAIM_AFTER)
+            dispatch = await _unserved()
+            if dispatch is None:
+                return
+            try:
+                await self._client().agent_dispatch.delete_dispatch(
+                    dispatch_id=dispatch.id, room_name=room
+                )
+            except Exception:
+                logger.warning(
+                    "could not withdraw unserved dispatch=%s on room=%s", dispatch.id, room,
+                    exc_info=True,
+                )
+                return
+            logger.warning(
+                "withdrew dispatch=%s on room=%s conversation_id=%s: still nobody serving it "
+                "%.0fs after it was placed (%s)",
+                dispatch.id,
+                room,
+                conversation_id,
+                _SERVING_CONFIRM_DELAY + _UNSERVED_RECLAIM_AFTER,
                 _why_unserved(dispatch),
             )
 
@@ -1182,7 +1230,7 @@ class LiveKitChannelAdapter:
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, presentation_endpoint: dict | None = None,
-        team_dispatch: dict | None = None,
+        team_dispatch: dict | None = None, device_requested: bool = False,
     ) -> None:
         """Place the standing order, and say on it why this session exists.
 
@@ -1192,6 +1240,17 @@ class LiveKitChannelAdapter:
         handed to the device once per provision and lives in its flash for
         hours. It joins `conversation_id` and `output_plan`, which are on this
         bus for the same reason — the agent must be able to trust them.
+
+        Another live conversation refuses the open, with one exception: when
+        both it and this request came from the device's own channel. A device
+        holds one conversation at a time and only picks a new id when it holds
+        none, so a new id on its channel means it has let the old one go — most
+        often because it restarted and the old id died with that run, which is
+        also why it can never close the old one itself (2026-09-29: every
+        conversation refused until the host restarted). Such a conversation is
+        superseded. One that anybody else opened — an orchestrator, a team, a
+        directed scene — still refuses the open: replacing another party's
+        conversation is what 466e78b removed, and this does not bring it back.
         """
         if target_companion_id is not None:
             from eidolon.interaction_context import validate_companion_target
@@ -1231,6 +1290,7 @@ class LiveKitChannelAdapter:
                 if dispatch.agent_name == agent
             ]
             already_serving = False
+            superseded: list[Any] = []
             # Inspect the entire snapshot before any mutation, including when
             # a matching retry appears before a conflicting live dispatch.
             for dispatch in dispatches:
@@ -1241,6 +1301,9 @@ class LiveKitChannelAdapter:
                 if _is_spent(dispatch):
                     continue
                 if not same_conversation:
+                    if device_requested and metadata.get(_REQUESTED_BY_FIELD) == _REQUESTED_BY_DEVICE:
+                        superseded.append(dispatch)
+                        continue
                     raise InvalidTransition("device is serving another conversation; close it explicitly first")
                 if (
                     metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED) != session_intent
@@ -1251,11 +1314,27 @@ class LiveKitChannelAdapter:
                 ):
                     raise InvalidTransition("an active conversation cannot change intent or output plan")
                 already_serving = True
+            for dispatch in superseded:
+                logger.warning(
+                    "superseding dispatch=%s on room=%s previous_conversation=%s "
+                    "conversation_id=%s — the device opened a new conversation on its "
+                    "own channel, so it no longer holds the previous one",
+                    dispatch.id,
+                    room,
+                    self._dispatch_metadata(dispatch).get(SESSION_CONVERSATION_ID_FIELD, ""),
+                    conversation_id,
+                )
+                await self._client().agent_dispatch.delete_dispatch(
+                    dispatch_id=dispatch.id, room_name=room
+                )
             if already_serving:
                 return
             # Only terminal jobs may be recovered without an explicit close.
             # Preserve failure evidence in logs before deleting their records.
+            superseded_ids = {dispatch.id for dispatch in superseded}
             for dispatch in dispatches:
+                if dispatch.id in superseded_ids:
+                    continue
                 metadata = self._dispatch_metadata(dispatch)
                 failure = _failure_of(dispatch)
                 logger.log(
@@ -1287,6 +1366,7 @@ class LiveKitChannelAdapter:
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
                             **({"presentation_endpoint": presentation_endpoint} if presentation_endpoint else {}),
                             **({"team_dispatch": team_dispatch} if team_dispatch else {}),
+                            **({_REQUESTED_BY_FIELD: _REQUESTED_BY_DEVICE} if device_requested else {}),
                         }
                     ),
                 )
@@ -1509,7 +1589,9 @@ class LiveKitChannelAdapter:
             target_companion_id=target_companion_id,
             presentation_endpoint=endpoint.model_dump(mode="json"))
 
-    async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+    async def close_session(
+        self, handle: dict[str, Any], conversation_id: str | None
+    ) -> list[str]:
         """Withdraw the standing order, which is what ends the agent's job.
 
         Deleting the dispatch — rather than deleting the room — is what keeps
@@ -1520,25 +1602,50 @@ class LiveKitChannelAdapter:
         Matches on the agent name rather than a remembered dispatch id: LiveKit
         also keeps dispatch records of its own, and a session that a previous
         process opened must still be closable by this one.
+
+        `conversation_id=None` ends whatever ordinary conversation this device
+        is being served, for a caller that cannot know the id — typically
+        because the device run that picked it is gone. Team and directed
+        scenes are left alone: they have their own close, which also owns
+        their cleanup. Returns the conversations actually ended.
         """
         room, agent = self._serving(handle)
+        closed: list[str] = []
         try:
             for dispatch in await self._client().agent_dispatch.list_dispatch(room_name=room):
-                if (
-                    dispatch.agent_name == agent
-                    and self._dispatch_metadata(dispatch).get(SESSION_CONVERSATION_ID_FIELD)
-                    == conversation_id
-                ):
-                    await self._client().agent_dispatch.delete_dispatch(
-                        dispatch_id=dispatch.id, room_name=room
-                    )
+                if dispatch.agent_name != agent:
+                    continue
+                metadata = self._dispatch_metadata(dispatch)
+                if conversation_id is None:
+                    if (metadata.get("team_dispatch") is not None
+                            or metadata.get("presentation_endpoint") is not None):
+                        continue
+                elif metadata.get(SESSION_CONVERSATION_ID_FIELD) != conversation_id:
+                    continue
+                await self._client().agent_dispatch.delete_dispatch(
+                    dispatch_id=dispatch.id, room_name=room
+                )
+                closed.append(str(metadata.get(SESSION_CONVERSATION_ID_FIELD, "")))
         except TwirpError as exc:
             if exc.code == TwirpErrorCode.NOT_FOUND:
-                return
+                return closed
             raise BackendUnavailable("LiveKit agent dispatch withdrawal failed") from exc
         except Exception as exc:
             raise BackendUnavailable("LiveKit agent dispatch withdrawal failed") from exc
-        logger.info("closed session on room=%s agent=%s", room, agent)
+        if closed:
+            logger.info(
+                "closed session on room=%s agent=%s conversation_ids=%s", room, agent, closed
+            )
+        else:
+            # A close for a conversation nobody is serving is still a success,
+            # but it ended nothing. Logged as "closed", four of these on
+            # 2026-09-28 read like conversations ending while the one blocking
+            # the device stayed six more minutes.
+            logger.info(
+                "no session to close on room=%s agent=%s conversation_id=%s",
+                room, agent, conversation_id or "*",
+            )
+        return closed
 
     @staticmethod
     def _dispatch_metadata(dispatch: Any) -> dict[str, Any]:

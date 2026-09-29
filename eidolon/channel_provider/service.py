@@ -104,10 +104,18 @@ class ChannelProviderService:
         to be heard. Nothing tells us on restart which devices are mid-silence,
         so we re-state what we want watched from the only durable record there
         is. Failing to reach one channel must not cost the others theirs.
+
+        A channel whose credential lapsed is still watched. Its device may be
+        in the room holding a conversation it opened before the deadline, and
+        the stop it sends is the one way that conversation ends without waiting
+        for a timer. `_converge_serving` honours a stop on such a channel and
+        still refuses to start anything on it.
         """
         self._restore_prepared_scenes()
         self._store.expire_credentials(self._now_ms())
-        for stored in self._store.active_provisions():
+        for stored in self._store.observable_provisions():
+            if self._store.current_channel(stored.device_ref) != stored:
+                continue  # A superseded row cannot speak for the device.
             try:
                 await self._accept_requests(stored)
             except Exception:
@@ -954,7 +962,7 @@ class ChannelProviderService:
         return await self._serve(request, serving=False)
 
     async def _serve(self, request: SessionRequest, *, serving: bool) -> str:
-        channel = await self._converge_serving(
+        channel, closed = await self._converge_serving(
             request.device_ref,
             serving=serving,
             conversation_id=request.conversation_id,
@@ -966,7 +974,11 @@ class ChannelProviderService:
                 "operation": "channel.opened-session" if serving else "channel.closed-session",
                 "device_ref": request.device_ref.model_dump(mode="json"),
                 "channel_id": channel.channel_id,
-                "conversation_id": request.conversation_id,
+                # A close that named no conversation reports what it ended
+                # instead, since the caller did not know and is being told.
+                **({"conversation_id": request.conversation_id}
+                   if request.conversation_id is not None
+                   else {"closed_conversation_ids": closed}),
                 "serving": serving,
                 # Echoed so the caller can see which intent was actually
                 # honoured. An orchestrator that asked for a presence wake and
@@ -978,9 +990,9 @@ class ChannelProviderService:
         )
 
     async def _converge_serving(
-        self, device_ref, *, serving: bool, conversation_id: str, session_intent: str,
-        target_companion_id: str | None = None,
-    ) -> StoredProvision:
+        self, device_ref, *, serving: bool, conversation_id: str | None, session_intent: str,
+        target_companion_id: str | None = None, device_requested: bool = False,
+    ) -> tuple[StoredProvision, list[str]]:
         """Converge one device's channel onto served or unserved.
 
         The single place a conversation starts or stops, whether the device
@@ -988,17 +1000,34 @@ class ChannelProviderService:
         arrive here saying only which device, which way, and why — and the two
         roads differ in exactly that last part, because only one of them has
         the standing to name it. `session_intent` is read only when opening;
-        ending a conversation has no intent to state.
+        ending a conversation has no intent to state. `device_requested` says
+        the request arrived on the device's own channel, which is what lets a
+        new conversation of the device's replace one it abandoned.
 
         Takes the same lock as provision and revocation so that reading the
         channel and acting on it cannot straddle a revocation — otherwise a
         device could be granted a conversation on a channel that was withdrawn
         a moment earlier. Nothing is written: this is a statement of desired
         state the adapter converges onto, not an event to record.
+
+        A credential gates starting, never stopping. Ending a conversation only
+        takes a privilege away, and the conversation it ends outlives the
+        credential: the room, the device in it and the dispatch all stay when
+        the credential lapses. Refusing the stop there protected nothing and
+        left the conversation with no end (a stop sent one second after the
+        deadline was dropped on 2026-09-28, and the device was refused every
+        conversation after it). So a stop is honoured on the device's current
+        channel whether its credential is live or lapsed; fenced and revoked
+        channels are gone and stay refused.
+
+        Returns the channel acted on and, for a stop, the conversations it
+        ended.
         """
         async with self._lock:
             self._store.expire_credentials(self._now_ms())
             active = self._store.active_device(device_ref)
+            if active is None and not serving:
+                active = self._lapsed_channel(device_ref)
             if active is None:
                 raise UnknownChannel("device has no active channel")
             if serving and active.device_id in self._transport_scopes:
@@ -1009,10 +1038,17 @@ class ChannelProviderService:
                 await adapter.open_session(
                     handle, conversation_id, session_intent=session_intent,
                     target_companion_id=target_companion_id,
+                    device_requested=device_requested,
                 )
-            else:
-                await adapter.close_session(handle, conversation_id)
-            return active
+                return active, []
+            return active, await adapter.close_session(handle, conversation_id)
+
+    def _lapsed_channel(self, device_ref) -> StoredProvision | None:
+        """This exact device's current channel, when only its credential lapsed."""
+        stored = self._store.current_channel(device_ref)
+        if stored is None or stored.status != "expired" or stored.device_ref != device_ref:
+            return None
+        return stored
 
     def _sink_for(self, device_ref) -> ServingRequestSink:
         """Bind a channel's requests to the device it can only ever speak for.
@@ -1046,6 +1082,7 @@ class ChannelProviderService:
                 # as a literal rather than defaulted so that a later reader
                 # sees a decision instead of an omission.
                 session_intent=SESSION_INTENT_USER_INITIATED,
+                device_requested=True,
             )
 
         return _requested

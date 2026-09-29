@@ -379,20 +379,26 @@ class SessionRequest:
 
     operation: str
     device_ref: DeviceRef
-    conversation_id: str
+    conversation_id: str | None
     session_intent: str = SESSION_INTENT_USER_INITIATED
     target_companion_id: str | None = None
 
     @classmethod
     def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
         value = decode_json_object(raw)
+        opening = expected == OPEN_SESSION
         root = _exact_object(
             value,
             name="session request",
-            required={"operation", "device_ref", "conversation_id"},
+            required={"operation", "device_ref", "conversation_id"} if opening
+            else {"operation", "device_ref"},
             # Closing a conversation has no intent to state, so naming one there
             # is drift rather than a request, and is rejected as an unknown field.
-            optional={SESSION_INTENT_FIELD, "target_companion_id"} if expected == OPEN_SESSION else None,
+            # A close may leave the conversation unnamed and mean "whatever this
+            # device is being served": the one party that knew the id may be a
+            # device run that no longer exists.
+            optional={SESSION_INTENT_FIELD, "target_companion_id"} if opening
+            else {"conversation_id"},
         )
         if root["operation"] != expected:
             raise ContractError(f"operation must be {expected}")
@@ -400,9 +406,11 @@ class SessionRequest:
             device_ref = DeviceRef.model_validate(root["device_ref"])
         except ValidationError as exc:
             raise ContractError("device_ref is invalid") from exc
-        conversation_id = normalize_conversation_id(root["conversation_id"])
-        if conversation_id is None:
-            raise ContractError("conversation_id is invalid")
+        conversation_id = None
+        if "conversation_id" in root:
+            conversation_id = normalize_conversation_id(root["conversation_id"])
+            if conversation_id is None:
+                raise ContractError("conversation_id is invalid")
         session_intent = root.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED)
         if session_intent not in VALID_SESSION_INTENTS:
             raise ContractError(f"{SESSION_INTENT_FIELD} is invalid")

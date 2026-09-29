@@ -337,6 +337,39 @@ async def test_half_duplex_idle_watchdog_rearms_while_ptt_turn_is_busy() -> None
 
 
 @pytest.mark.asyncio
+async def test_a_hold_whose_release_never_comes_does_not_keep_the_session() -> None:
+    """A device reset mid-hold never sends the release.
+
+    Busy for as long as a segment can last; past that the release is lost, and
+    counting the hold as work would keep the session from ever going idle.
+    """
+    policy = _segment_policy()
+    policy = replace(
+        policy,
+        ptt=replace(policy.ptt, segment_max_audio_ms=100),
+        idle=replace(policy.idle, disconnect_after_idle_ms=50, disconnect_grace_ms=0),
+    )
+    on_idle_disconnect = AsyncMock()
+    pipeline = HalfDuplexPttPipeline(
+        _FakeFactory(_FakeSttStage()),
+        turn_policy=policy,
+        on_idle_disconnect=on_idle_disconnect,
+    )
+    pipeline._room = SimpleNamespace(
+        name="ptt-room",
+        local_participant=_FakeLocalParticipant(),
+    )
+    pipeline._session = SimpleNamespace(agent_state="idle", user_state="listening")
+
+    pipeline._ptt_controller.press()
+    pipeline._start_idle_watchdog()
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=2.0)
+
+    assert pipeline._ptt_controller.state == "recording"
+    on_idle_disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_empty_ptt_tap_rejects_without_stt_call() -> None:
     stt = _FakeSttStage(offline_text="不应该调用")
     controller = _controller(stt, strategy="auto")

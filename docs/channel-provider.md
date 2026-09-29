@@ -181,6 +181,10 @@ token 里**没有** `session_intent`：它描述的是某一次会话而不是�
   逐 byte 结果，跨进程重启仍成立；同 scope/ID 不同 payload 返回 `IDEMPOTENCY_CONFLICT`。
 - credential 到期后 operation 明确进入 `expired/credential_expired`，不再占 active 唯一锁。
   刷新必须用新 idempotency key 和 `channel.refresh-device`；原 provision replay 不延长 TTL。
+- credential 只约束「开始」，不约束「结束」。到期不删房间、不停监听、不撤 dispatch，设备与 agent
+  仍在房间里；因此对当前 channel（`active` 或 `expired`，DeviceRef 完全一致）的 stop——设备在
+  自己 channel 上的 `session_close` 与 `sessions/close`——照常执行，只有 fenced/revoked 拒绝。
+  open 仍要求 `active`。Provider 重启后也恢复监听 `expired` 的当前 channel，以便听见这个 stop。
 - 更高 owner-domain/claim/trust generation 到达时，旧 active/expired operation 进入
   `fenced/generation_advanced`；旧代请求返回 `STALE_GENERATION`，不能关闭或覆盖新代。
 - `INVALID_TRANSITION`、`UNAUTHENTICATED`、`FORBIDDEN`、`PROVIDER_UNAVAILABLE` 保持独立
@@ -204,7 +208,9 @@ POST /v1/device-channels/sessions/open
 ```
 
 `session_intent` 可选，缺省 `user_initiated`；`sessions/close` 不接受该字段（结束一次会话没有
-意图可言，带上就是 drift，返回 422）。非法取值一律 422 拒绝，**不做降级**：
+意图可言，带上就是 drift，返回 422）。`sessions/close` 的 `conversation_id` 可省略，表示结束该设备
+当前的普通会话（不含团队与定向场景，它们有自己的 close 与清理）：开启它的设备运行可能已经不在，
+调用方无从得知 ID。此时响应不含 `conversation_id`，改为 `closed_conversation_ids` 列出实际结束的会话。非法取值一律 422 拒绝，**不做降级**：
 `normalize_session_intent` 是给不可信 wire value 用的失败安全语义，而这里调用方已通过 bearer
 认证，把拼错的 presence 唤醒静默变成普通会话，会让编排方以为自己拿到了并不存在的 Owner lease。
 成功响应回显 `session_intent`，调用方据此分辨"被授予"和"被降级"。
@@ -320,7 +326,21 @@ opaque payload。客户端在自身连接生命周期中尝试候选，信令地
 
 同一设备、同一 serving agent 已有未结束的另一段会话时，`sessions/open` 返回 `409 INVALID_TRANSITION`，不删除或替换已有 dispatch。空 jobs、pending、running 均视为未结束；不能把尚未调度的任务当作闲置。相同会话且目标、意图、输出计划一致的请求继续幂等复用。目标变更仍须新 conversation ID。
 
+唯一例外是设备自己的会话。设备在自己 channel 上发来的 open 会在 dispatch metadata 里写上
+`requested_by: "device"`（只有 Provider 写 dispatch，设备写不了）。当新请求同样来自设备 channel、
+而占着房间的未结束会话也带这个标记时，旧会话被**接替**：撤回旧 dispatch（日志 `superseding
+dispatch=…`），再开新会话。理由是设备同一时刻只持有一个会话，只在不持有会话时才取新 ID，所以设备
+channel 上的新 ID 就说明它已放弃旧的；而旧 ID 往往随上一次设备运行一起消失（设备复位不落盘），
+设备不可能再显式 close 它（2026-09-29 korvo-1 因此被自己的旧会话锁死到主机重启）。编排方经 HTTP
+开启的会话、团队与定向场景、以及没有这个标记的旧 dispatch 都不被接替，仍按上一段返回 409；这不是
+恢复 `466e78b` 之前的隐式抢占——那次修正防的是 open 误删别人的会话。
+
 Provider 先检查完整 dispatch 列表，确认没有冲突后才清理结束任务；不会先删除一部分再返回冲突。所有 jobs 已 success/failed 的残留 dispatch 仍可恢复。切换会话需要先显式 close 原 conversation ID，再以新 ID open；旧会话的迟到 close 不匹配新会话。权限撤销和设备配置权威触发的资源回收仍沿用原机制，不受普通 open 的占用检查替代。
+
+无人服务的 dispatch 在开启 30 s 后收回：10 s 确认窗报告「produced no serving agent」之后，再过
+20 s 仍没有 agent 在房间里、会话也未被结束，就撤回 dispatch（日志 `withdrew dispatch=…`）。30 s 晚于
+设备等待 `session_started` 的 25 s，所以还在等的设备此时已自己发了 close，不会与慢启动竞争；剩下的
+只可能是没人会结束的空壳（2026-09-28 一个启动即崩的 job 让 dispatch 以 JS_RUNNING 占了 21 分钟）。
 
 并发请求由已有 Provider service 锁串行化；这一保证限于同一个服务进程，不声称具备多副本分布式互斥或共享房间预留事务。普通设备 RTC 请求仍只发送开始/停止，拒绝目前沿现有日志/客户端超时路径处理；可操作的 busy 回执及 UI 恢复尚需后续协议接入。因此本批不直接部署改变设备交互行为。
 

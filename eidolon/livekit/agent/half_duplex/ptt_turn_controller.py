@@ -13,6 +13,7 @@ It does not consume streaming STT interim/final events and it does not use EOT.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -60,6 +61,7 @@ class HalfDuplexPttTurnController:
         self._preempted_agent_output = False
         self._generation = 0
         self._transcription_task: asyncio.Task | None = None
+        self._recording_since: float | None = None
 
     @property
     def generation(self) -> int:
@@ -68,6 +70,13 @@ class HalfDuplexPttTurnController:
     @property
     def state(self) -> PttSegmentTurnState:
         return self._state
+
+    @property
+    def recording_seconds(self) -> float:
+        """How long the current hold has lasted; 0 when nothing is held."""
+        if self._state != "recording" or self._recording_since is None:
+            return 0.0
+        return time.monotonic() - self._recording_since
 
     def press(self) -> PttSegmentTurnResult:
         if self._state == "recording":
@@ -84,6 +93,7 @@ class HalfDuplexPttTurnController:
         preempted = self._agent_output_active()
         self._recorder.start()
         self._state = "recording"
+        self._recording_since = time.monotonic()
         self._preempted_agent_output = preempted
         if preempted:
             self._preempt_agent_output()
@@ -102,6 +112,7 @@ class HalfDuplexPttTurnController:
             self._transcription_task = None
         self._recorder.reset()
         self._state = "idle"
+        self._recording_since = None
 
     def push_frame(self, frame: Any) -> bool:
         if self._state != "recording":
@@ -113,6 +124,7 @@ class HalfDuplexPttTurnController:
         if self._state != "recording":
             return self._release_without_hold()
         self._state = "transcribing"
+        self._recording_since = None
         segment = self._recorder.stop()
         return self._transcribe(segment, self._generation, self._preempted_agent_output)
 

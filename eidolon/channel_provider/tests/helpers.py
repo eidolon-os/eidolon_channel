@@ -141,7 +141,9 @@ class FakeAdapter:
         # (handle, conversation_id, session_intent) — the intent is recorded
         # because which one reached the transport is the whole authority story.
         self.sessions_opened: list[tuple[dict[str, Any], str, str]] = []
-        self.sessions_closed: list[tuple[dict[str, Any], str]] = []
+        self.sessions_closed: list[tuple[dict[str, Any], str | None]] = []
+        # Whether the last open arrived on the device's own channel.
+        self.last_device_requested = False
         # Channels currently listened to, keyed the way a real adapter would
         # have to key them, so re-stating one cannot leave two behind.
         self.watched: dict[str, ServingRequestSink] = {}
@@ -202,13 +204,17 @@ class FakeAdapter:
 
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
-        target_companion_id: str | None = None,
+        target_companion_id: str | None = None, device_requested: bool = False,
     ) -> None:
         self.sessions_opened.append((handle, conversation_id, session_intent))
         self.last_target_companion_id = target_companion_id
+        self.last_device_requested = device_requested
 
-    async def close_session(self, handle: dict[str, Any], conversation_id: str) -> None:
+    async def close_session(
+        self, handle: dict[str, Any], conversation_id: str | None
+    ) -> list[str]:
         self.sessions_closed.append((handle, conversation_id))
+        return [conversation_id] if conversation_id is not None else []
 
     async def accept_requests(self, handle: dict[str, Any], *, sink) -> None:
         self.watched[handle["resource"]] = sink

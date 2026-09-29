@@ -108,3 +108,19 @@ async def test_smarthome_connect_failure_withdraws_dispatch_without_room_notice(
 
     assert ctx.deleted == ["AD_test"]
     assert ctx.room.published == []
+
+
+@pytest.mark.asyncio
+async def test_smarthome_idle_end_withdraws_its_own_dispatch(monkeypatch) -> None:
+    ctx = _Context()
+    seen = {}
+
+    async def run_smarthome_session(**kwargs):
+        seen.update(kwargs)
+        await kwargs["on_idle"]()
+
+    monkeypatch.setattr(smarthome, "run_smarthome_session", run_smarthome_session)
+    await server.run_agent(ctx, server.AgentConfig())
+
+    assert seen["session_intent"] == "user_initiated"
+    assert ctx.deleted == ["AD_test"]

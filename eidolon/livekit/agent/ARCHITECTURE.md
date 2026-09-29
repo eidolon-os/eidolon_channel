@@ -849,7 +849,7 @@ except ImportError:
 
 ## 10. 启动命令
 
-日常本地开发推荐通过 **eidolon_admin** 的 supervisord（`deploy/supervisor/available/channel.conf` + `with-env.sh` 加载 `config/.env`），或全栈 `./deploy/dev/run_all.sh`。
+日常本地开发通过 eidolon_ops 的 `./eidolon mac start` 拉起全栈；只重启 worker 用 `./eidolon mac service restart channel`（经 eidolond 执行，不直接用 supervisorctl）。
 
 单独调试 worker（须先 `./deploy/dev/init.sh` 生成 `config/.env`）：
 

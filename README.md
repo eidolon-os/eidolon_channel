@@ -37,7 +37,9 @@ pip install -e ".[dev]"
 ```
 
 初始化配置：`./deploy/dev/init.sh`（生成 `config/.env` 与 `config/settings.yaml`）。  
-全栈本地开发由 [eidolon_admin](https://github.com/eidolon/eidolon_admin) 的 `./deploy/dev/run_all.sh` 拉起 channel worker；env 旋钮见 [`config/.env.example`](config/.env.example)。
+全栈本地开发由 eidolon_ops 的 `./eidolon mac start` 拉起 channel worker 与 Provider；只重启其中一个用
+`./eidolon mac service restart channel`（或 `channel-provider`），它经 eidolond 执行，不要直接用 supervisorctl。
+env 旋钮见 [`config/.env.example`](config/.env.example)。
 
 ## 进入语音会话的提示
 

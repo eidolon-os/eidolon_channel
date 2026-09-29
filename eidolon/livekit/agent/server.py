@@ -6,8 +6,9 @@ session is requested; joining a standing room alone does not start processing.
 The worker combines trusted dispatch settings with participant interaction mode
 to assemble the session pipeline.
 
-Recommended local startup: ``eidolon_admin`` supervisord / ``./deploy/dev/run_all.sh``
-(loads ``config/.env`` via ``with-env.sh``).
+Recommended local startup: eidolon_ops ``./eidolon mac start`` (loads the
+generated channel env via ``with-env.sh``); restart only this worker with
+``./eidolon mac service restart channel``.
 
 Standalone worker after ``./deploy/dev/init.sh``::
 

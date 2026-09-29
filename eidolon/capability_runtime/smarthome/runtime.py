@@ -71,11 +71,6 @@ class SmartHomeRuntime:
         self._utc_offset_minutes = utc_offset_minutes
         self._owners: dict[str, _Owner] = {}
 
-    async def execute(self, owner_id: str, request: ExecuteRequest) -> ExecuteResult:
-        result = await self._backend.execute(owner_id, request)
-        await self.on_registry_changed(owner_id)
-        return result
-
     async def handle_panel_execute(
         self, owner_id: str, device_ref: str, message: PanelExecute
     ) -> ExecuteResult:
@@ -87,7 +82,9 @@ class SmartHomeRuntime:
             deadline_ms=self._now_ms() + self._touch_deadline_ms,
         )
         # A panel's request ids are only unique to that panel.
-        return await self.execute(owner_id, request)
+        result = await self._backend.execute(owner_id, request)
+        await self.on_registry_changed(owner_id)
+        return result
 
     # -- panels ------------------------------------------------------------
 
@@ -157,7 +154,7 @@ class SmartHomeRuntime:
             )
 
     async def on_registry_changed(self, owner_id: str) -> None:
-        """Re-read the registry, converge Providers on it, and re-snapshot every panel.
+        """Re-read Hub's authoritative snapshot and update panel projections.
 
         A registry change is never a delta: panels replace everything they hold.
         """

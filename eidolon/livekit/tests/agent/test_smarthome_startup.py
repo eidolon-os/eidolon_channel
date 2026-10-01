@@ -76,6 +76,22 @@ async def test_smarthome_joins_before_resolving_participant(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_smarthome_forwards_explicit_companion_to_shared_resolution(monkeypatch) -> None:
+    ctx = _Context()
+    metadata = json.loads(ctx.job.metadata)
+    metadata["target_companion_id"] = "companion-selected"
+    ctx.job.metadata = json.dumps(metadata)
+    seen = {}
+
+    async def run_smarthome_session(**kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(smarthome, "run_smarthome_session", run_smarthome_session)
+    await server.run_agent(ctx, server.AgentConfig())
+    assert seen["target_companion_id"] == "companion-selected"
+
+
+@pytest.mark.asyncio
 async def test_smarthome_startup_failure_withdraws_its_dispatch(monkeypatch) -> None:
     ctx = _Context()
 

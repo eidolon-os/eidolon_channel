@@ -1258,8 +1258,6 @@ class LiveKitChannelAdapter:
         application = handle.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION)
         if application not in VALID_SESSION_APPLICATIONS:
             raise InvalidTransition("unsupported voice session application")
-        if application == SESSION_APPLICATION_HOME_COMMAND and target_companion_id is not None:
-            raise InvalidTransition("home command session cannot target a Companion")
         if application == SESSION_APPLICATION_HOME_COMMAND and "smarthome_owner" not in handle:
             raise InvalidTransition("home command session has no authorized panel scope")
         if application == SESSION_APPLICATION_HOME_COMMAND and (

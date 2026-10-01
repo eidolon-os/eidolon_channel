@@ -225,7 +225,7 @@ async def test_a_session_brings_the_agent_and_ending_it_keeps_the_channel() -> N
     assert client.room.deleted == []
 
 
-async def test_home_manifest_dispatches_home_application_without_companion() -> None:
+async def test_home_manifest_dispatches_independent_application_with_companion_target() -> None:
     manifest = audio_manifest()
     manifest["properties"].extend([
         {"name": PANEL_PROFILE_PROPERTY, "schema": {"type": "string", "const": PANEL_PROFILE},
@@ -239,13 +239,14 @@ async def test_home_manifest_dispatches_home_application_without_companion() -> 
 
     await adapter.open_session(
         grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED,
+        target_companion_id="selected",
     )
 
     metadata = json.loads(client.agent_dispatch.created[0][2])
     assert metadata[SESSION_APPLICATION_FIELD] == SESSION_APPLICATION_HOME_COMMAND
     assert metadata["smarthome_owner"] == "owner_1"
     assert metadata["smarthome_device"] == grant.handle["device"]
-    assert "target_companion_id" not in metadata
+    assert metadata["target_companion_id"] == "selected"
 
 
 async def test_opening_a_session_twice_leaves_one_session() -> None:

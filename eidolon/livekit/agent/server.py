@@ -595,8 +595,6 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
     if application not in VALID_SESSION_APPLICATIONS:
         raise ValueError("unsupported voice session application")
     if application == SESSION_APPLICATION_HOME_COMMAND:
-        if target_companion_id is not None:
-            raise ValueError("home command session cannot target a Companion")
         owner_id = metadata.get("smarthome_owner")
         device_ref = metadata.get("smarthome_device")
         if not isinstance(owner_id, str) or not owner_id or not isinstance(device_ref, str) or not device_ref:
@@ -620,6 +618,7 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
                 owner_id=owner_id,
                 device_ref=device_ref,
                 session_id=runtime_session_id,
+                target_companion_id=target_companion_id,
                 on_started=_publish_session_started,
                 on_end=_publish_session_end,
                 on_closed=lambda: _end_serving("session closed"),

@@ -1,8 +1,9 @@
 """The ``eidolon.control`` envelope a panel payload travels in.
 
-Snapshots and deltas are best-effort: a lost one shows up at the panel as a
-revision or seq it cannot apply, and the panel asks for a fresh snapshot. So
-they go fire-and-forget, never through a receipt-and-retry path.
+Panels recover missing state through their existing snapshot/sequence protocol.
+The envelope therefore needs no command receipt. This application-level
+fire-and-forget policy does not disable reliable delivery in the transport:
+a complete snapshot must survive packet loss and fragmentation.
 """
 
 from __future__ import annotations

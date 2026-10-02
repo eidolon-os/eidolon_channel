@@ -563,13 +563,24 @@ class LiveKitChannelAdapter:
             or watch.connection is None
         ):
             raise BackendUnavailable("panel control channel is not connected")
+        wire = canonical_json(command).encode()
+        payload = command.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        logger.info(
+            "panel publish room=%s device=%s command=%s op=%s bytes=%s "
+            "revision=%s seq=%s reliable=true",
+            room, device, command.get("id"), command.get("op"), len(wire),
+            payload.get("revision"), payload.get("seq"),
+        )
         try:
             await watch.connection.local_participant.publish_data(
-                canonical_json(command).encode(),
-                reliable=False,
+                wire,
+                reliable=True,
                 topic=CONTROL_TOPIC,
                 destination_identities=[device],
             )
+            logger.info("panel published room=%s command=%s", room, command.get("id"))
         except Exception as exc:
             raise BackendUnavailable("panel control delivery failed") from exc
 

@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-02",
+  "host_comparison": {
+    "Mac_and_opi5max_panel_sink_sha256": "f77f0772008b89ca871938b6fe3b41a1a3d2d7a18e78df7bc932d82b26ea175a",
+    "Mac_and_opi5max_livekit_adapter_sha256_before_diagnostics": "ab2cf96bf5a996bc17b8c62f7e6ec0d8ffc1065018c47505bfe1d795787fc77e",
+    "both_snapshot_devices": 18,
+    "both_snapshot_areas": 7
+  },
+  "lease_reproduction": [
+    {
+      "phase": "before_expiry",
+      "listener_still_present": true,
+      "snapshots_delivered": 1
+    },
+    {
+      "phase": "at_expiry",
+      "listener_still_present": true,
+      "snapshots_delivered": 0
+    },
+    {
+      "phase": "retry_after_expiry",
+      "listener_still_present": true,
+      "snapshots_delivered": 0
+    },
+    {
+      "phase": "after_existing_refresh",
+      "snapshots_delivered": 1,
+      "transport_closed": 0
+    }
+  ],
+  "opi5max_boots": [
+    {
+      "round": 1,
+      "ready": true,
+      "no_control_callback_for_minutes": true,
+      "recovered_without_device_or_host_restart_during_probes": true
+    },
+    {
+      "round": 2,
+      "snapshot_at_seconds": 14.21,
+      "devices": 18
+    },
+    {
+      "round": 3,
+      "snapshot_at_seconds": 14.23,
+      "devices": 18
+    }
+  ],
+  "first_probe": {
+    "lossy_received": 4,
+    "lossy_sent": 6,
+    "reliable_received": 6,
+    "reliable_sent": 6
+  },
+  "interleaved_probe": [
+    {
+      "bytes": 600,
+      "reliable": false,
+      "sent": 25,
+      "received": 25,
+      "missing": []
+    },
+    {
+      "bytes": 600,
+      "reliable": true,
+      "sent": 25,
+      "received": 25,
+      "missing": []
+    },
+    {
+      "bytes": 3454,
+      "reliable": false,
+      "sent": 25,
+      "received": 24,
+      "missing": [
+        "probe2-3454-0-0"
+      ]
+    },
+    {
+      "bytes": 3454,
+      "reliable": true,
+      "sent": 25,
+      "received": 25,
+      "missing": []
+    }
+  ],
+  "probe_safety": "Distinct diagnostic participant; no Provider identity impersonation; all diagnostic commands were rejected before payload application. Actual Provider snapshot was logged separately.",
+  "scope": "Loss is observed before the application control callback. Captures do not identify the precise Wi-Fi, SCTP, SDK, or MTU mechanism, nor prove that switching production Provider transport alone resolves every startup failure.",
+  "production_changes": "Investigation initially used logging-only firmware. Fix adds reliable panel delivery in the shared Provider adapter and timed standing-channel renewal through the existing ESP32 Owner configuration recovery path. Deployment/HIL results recorded separately.",
+  "local_validation": "442 Provider/smarthome Python tests passed. ESP32 production controller loop virtual-clock tests passed under ASan/UBSan, including idle/flood expiry, unchanged configuration retry pacing, failure handoff, authorization/shared/disconnected guards and tick rounding. Channel recovery, permission refresh and configuration snapshot tests passed; Korvo firmware build passed."
+}

@@ -1923,3 +1923,32 @@ async def test_a_late_agent_keeps_its_dispatch(monkeypatch) -> None:
     await _settle(adapter)
 
     assert client.agent_dispatch.deleted == []
+
+
+async def test_panel_snapshot_uses_reliable_transport_without_command_receipts():
+    """Large panel state uses reliable delivery without application receipts."""
+    from eidolon.capability_runtime.smarthome.wire import panel_command
+    from eidolon_sdk.biz.smarthome import OP_SNAPSHOT
+    from eidolon.channel_provider.contracts import BackendUnavailable
+
+    adapter, _ = _adapter()
+    delivered = []
+    async def publish(data, **options):
+        delivered.append((json.loads(data), options))
+    adapter._listeners['panel-room'] = adapter_mod._Listening(
+        device=_DEVICE_1, sink=None,
+        connection=SimpleNamespace(local_participant=SimpleNamespace(publish_data=publish)))
+    command = panel_command(device_ref=_DEVICE_1, op=OP_SNAPSHOT,
+                            payload={'devices': [{'name': 'lamp', 'state': 'x' * 3500}]})
+    await adapter.send_panel_control({'room': 'panel-room', 'device': _DEVICE_1}, command)
+    assert len(delivered) == 1
+    body, options = delivered[0]
+    assert body == command and body['qos'] == 'fire_and_forget'
+    assert options['reliable'] is True
+    assert options['destination_identities'] == [_DEVICE_1]
+    assert options['topic'] == 'eidolon.control'
+    assert not adapter._control_receipts
+    with pytest.raises(BackendUnavailable):
+        await adapter.send_panel_control({'room': 'panel-room', 'device': 'different'}, command)
+    assert len(delivered) == 1
+    adapter._listeners.clear()

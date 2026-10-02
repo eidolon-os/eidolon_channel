@@ -140,7 +140,7 @@ class SmartHomeRuntime:
         async with owner.lock:
             registry = await self._registry(owner_id, owner)
             owner.panels[device_ref] = None
-            logger.debug(
+            logger.info(
                 "smart home panel sync owner=%s panel=%s known=(%s,%s) current=(%s,%s)",
                 owner_id,
                 device_ref,

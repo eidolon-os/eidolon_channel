@@ -1,0 +1,22 @@
+[
+  {
+    "phase": "before_expiry",
+    "listener_still_present": true,
+    "snapshots_delivered": 1
+  },
+  {
+    "phase": "at_expiry",
+    "listener_still_present": true,
+    "snapshots_delivered": 0
+  },
+  {
+    "phase": "retry_after_expiry",
+    "listener_still_present": true,
+    "snapshots_delivered": 0
+  },
+  {
+    "phase": "after_existing_refresh",
+    "snapshots_delivered": 1,
+    "transport_closed": 0
+  }
+]

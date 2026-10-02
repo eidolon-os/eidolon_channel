@@ -1,0 +1,52 @@
+2026-10-02T23:25:54.351578 I (122372) SystemInfo: free sram: 152419 minimal sram: 42080
+2026-10-02T23:26:04.351504 I (132372) SystemInfo: free sram: 153079 minimal sram: 42080
+2026-10-02T23:26:14.351622 I (142372) SystemInfo: free sram: 153503 minimal sram: 42080
+2026-10-02T23:26:24.351715 I (152372) SystemInfo: free sram: 153503 minimal sram: 42080
+2026-10-02T23:26:34.351996 I (162372) SystemInfo: free sram: 153503 minimal sram: 42080
+2026-10-02T23:26:44.351845 I (172372) SystemInfo: free sram: 153503 minimal sram: 42080
+2026-10-02T23:26:54.352156 I (182372) SystemInfo: free sram: 153503 minimal sram: 42080
+2026-10-02T23:26:55.609238 I (183632) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:26:55.614687 I (183632) EidolonVoice: [smarthome] command received id=diagnostic-600-0-0 op=smarthome.snapshot gen=1
+2026-10-02T23:26:55.622519 W (183632) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:26:57.138690 I (185162) LiveKitSession: Control packet received: bytes=3457 provider=1 gen=1
+2026-10-02T23:26:57.149962 I (185162) EidolonVoice: [smarthome] command received id=smarthome.snapshot:a95a08f9aa3040fd83bebe58555337ae op=smarthome.snapshot gen=1
+2026-10-02T23:26:57.155840 I (185172) HomePanel: [smarthome] snapshot revision=1 devices=18 areas=7 scenes=4
+2026-10-02T23:26:57.172676 I (185192) EidolonVoice: [smarthome] command handled id=smarthome.snapshot:a95a08f9aa3040fd83bebe58555337ae outcome=0
+2026-10-02T23:26:57.614820 I (185632) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:26:57.620244 I (185632) EidolonVoice: [smarthome] command received id=diagnostic-600-0-2 op=smarthome.snapshot gen=1
+2026-10-02T23:26:57.628101 W (185642) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:26:59.633314 I (187652) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:26:59.638674 I (187652) EidolonVoice: [smarthome] command received id=diagnostic-3454-0-1 op=smarthome.snapshot gen=1
+2026-10-02T23:26:59.646513 W (187662) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:00.644631 I (188662) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:27:00.650349 I (188672) EidolonVoice: [smarthome] command received id=diagnostic-3454-0-2 op=smarthome.snapshot gen=1
+2026-10-02T23:27:00.658139 W (188672) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:01.645463 I (189662) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:27:01.651257 I (189672) EidolonVoice: [smarthome] command received id=diagnostic-3454-1-0 op=smarthome.snapshot gen=1
+2026-10-02T23:27:01.658985 W (189672) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:03.056743 I (191072) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:27:03.061897 I (191082) EidolonVoice: [smarthome] command received id=diagnostic-3454-1-1 op=smarthome.snapshot gen=1
+2026-10-02T23:27:03.069821 W (191082) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:03.648643 I (191672) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:27:03.654080 I (191672) EidolonVoice: [smarthome] command received id=diagnostic-3454-1-2 op=smarthome.snapshot gen=1
+2026-10-02T23:27:03.662098 W (191672) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:04.352439 I (192372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:27:05.648484 I (193672) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:27:05.653982 I (193672) EidolonVoice: [smarthome] command received id=diagnostic-600-1-0 op=smarthome.snapshot gen=1
+2026-10-02T23:27:05.665249 W (193672) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:05.670569 I (193682) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:27:05.676414 I (193692) EidolonVoice: [smarthome] command received id=diagnostic-600-1-1 op=smarthome.snapshot gen=1
+2026-10-02T23:27:05.684245 W (193692) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:06.660080 I (194682) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:27:06.665653 I (194682) EidolonVoice: [smarthome] command received id=diagnostic-600-1-2 op=smarthome.snapshot gen=1
+2026-10-02T23:27:06.673396 W (194682) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:27:14.352421 I (202372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:27:24.352504 I (212372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:27:34.352512 I (222372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:27:44.352557 I (232372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:27:54.352706 I (242372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:28:04.354239 I (252372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:28:14.352941 I (262372) SystemInfo: free sram: 147803 minimal sram: 39896
+2026-10-02T23:28:24.353264 I (272372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:28:34.353294 I (282372) SystemInfo: free sram: 148227 minimal sram: 39896
+2026-10-02T23:28:44.353322 I (292372) SystemInfo: free sram: 148227 minimal sram: 39896

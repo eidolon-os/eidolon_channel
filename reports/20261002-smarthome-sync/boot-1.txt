@@ -1,0 +1,7 @@
+[  10.71] I (10682) SystemInfo: free sram: 214219 minimal sram: 104640
+[  13.39] I (13352) EidolonVoice: [lifecycle] operational_ready=1 reason=channel_connected room_kind=control gen=1
+[  13.39] I (13362) Application: [EIDOLON_UI] queue operational_ready=1
+[  22.39] I (22372) SystemInfo: free sram: 152419 minimal sram: 42080
+[  32.39] I (32372) SystemInfo: free sram: 152419 minimal sram: 42080
+[  42.39] I (42372) SystemInfo: free sram: 152419 minimal sram: 42080
+[  52.39] I (52372) SystemInfo: free sram: 152419 minimal sram: 42080

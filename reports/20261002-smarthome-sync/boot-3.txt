@@ -1,0 +1,9 @@
+[   9.36] I (9332) SystemInfo: free sram: 214207 minimal sram: 105148
+[  11.87] I (11842) EidolonVoice: [lifecycle] operational_ready=1 reason=channel_connected room_kind=control gen=1
+[  11.87] I (11852) Application: [EIDOLON_UI] queue operational_ready=1
+[  14.21] I (14192) LiveKitSession: Control packet received: bytes=3457 provider=1 gen=1
+[  14.23] I (14202) EidolonVoice: [smarthome] command received id=smarthome.snapshot:83ea7e0c37f34751a034fc21a1c74515 op=smarthome.snapshot gen=1
+[  14.23] I (14212) HomePanel: [smarthome] snapshot revision=1 devices=18 areas=7 scenes=4
+[  14.25] I (14222) EidolonVoice: [smarthome] command handled id=smarthome.snapshot:83ea7e0c37f34751a034fc21a1c74515 outcome=0
+[  21.37] I (21352) SystemInfo: free sram: 146603 minimal sram: 38092
+[  31.37] I (31352) SystemInfo: free sram: 146603 minimal sram: 38092

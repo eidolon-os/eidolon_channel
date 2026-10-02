@@ -1,0 +1,310 @@
+2026-10-02T23:32:11.990424 I (91352) SystemInfo: free sram: 146603 minimal sram: 38092
+2026-10-02T23:32:21.990307 I (101352) SystemInfo: free sram: 146603 minimal sram: 38092
+2026-10-02T23:32:27.559571 I (106912) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:27.564865 I (106922) EidolonVoice: [smarthome] command received id=probe2-3454-1-99 op=smarthome.snapshot gen=1
+2026-10-02T23:32:27.572466 W (106922) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:31.990513 I (111352) SystemInfo: free sram: 146603 minimal sram: 38092
+2026-10-02T23:32:35.808122 I (115162) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:35.813642 I (115172) EidolonVoice: [smarthome] command received id=probe2-3454-1-0 op=smarthome.snapshot gen=1
+2026-10-02T23:32:35.821216 W (115172) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:36.094754 I (115452) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:36.100246 I (115452) EidolonVoice: [smarthome] command received id=probe2-600-0-0 op=smarthome.snapshot gen=1
+2026-10-02T23:32:36.107600 W (115452) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:36.398183 I (115752) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:36.403834 I (115752) EidolonVoice: [smarthome] command received id=probe2-600-1-0 op=smarthome.snapshot gen=1
+2026-10-02T23:32:36.411188 W (115762) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:36.714246 I (116072) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:36.719604 I (116072) EidolonVoice: [smarthome] command received id=probe2-3454-0-1 op=smarthome.snapshot gen=1
+2026-10-02T23:32:36.727196 W (116072) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:37.018675 I (116372) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:37.024220 I (116382) EidolonVoice: [smarthome] command received id=probe2-3454-1-1 op=smarthome.snapshot gen=1
+2026-10-02T23:32:37.031830 W (116382) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:37.317393 I (116672) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:37.322775 I (116672) EidolonVoice: [smarthome] command received id=probe2-600-0-1 op=smarthome.snapshot gen=1
+2026-10-02T23:32:37.330313 W (116682) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:37.619846 I (116972) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:37.625145 I (116982) EidolonVoice: [smarthome] command received id=probe2-600-1-1 op=smarthome.snapshot gen=1
+2026-10-02T23:32:37.632771 W (116982) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:37.924517 I (117282) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:37.929938 I (117282) EidolonVoice: [smarthome] command received id=probe2-3454-0-2 op=smarthome.snapshot gen=1
+2026-10-02T23:32:37.937600 W (117282) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:38.238880 I (117592) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:38.244308 I (117602) EidolonVoice: [smarthome] command received id=probe2-3454-1-2 op=smarthome.snapshot gen=1
+2026-10-02T23:32:38.251917 W (117602) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:38.530156 I (117892) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:38.535590 I (117892) EidolonVoice: [smarthome] command received id=probe2-600-0-2 op=smarthome.snapshot gen=1
+2026-10-02T23:32:38.543194 W (117892) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:38.832937 I (118192) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:38.838582 I (118192) EidolonVoice: [smarthome] command received id=probe2-600-1-2 op=smarthome.snapshot gen=1
+2026-10-02T23:32:38.846089 W (118192) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:39.143917 I (118502) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:39.149494 I (118502) EidolonVoice: [smarthome] command received id=probe2-3454-0-3 op=smarthome.snapshot gen=1
+2026-10-02T23:32:39.157068 W (118502) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:39.453793 I (118812) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:39.459267 I (118812) EidolonVoice: [smarthome] command received id=probe2-3454-1-3 op=smarthome.snapshot gen=1
+2026-10-02T23:32:39.466953 W (118812) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:39.755847 I (119112) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:39.761167 I (119112) EidolonVoice: [smarthome] command received id=probe2-600-0-3 op=smarthome.snapshot gen=1
+2026-10-02T23:32:39.768793 W (119122) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:40.066039 I (119422) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:40.071525 I (119422) EidolonVoice: [smarthome] command received id=probe2-600-1-3 op=smarthome.snapshot gen=1
+2026-10-02T23:32:40.079003 W (119432) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:40.368134 I (119722) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:40.373594 I (119732) EidolonVoice: [smarthome] command received id=probe2-3454-0-4 op=smarthome.snapshot gen=1
+2026-10-02T23:32:40.381335 W (119732) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:40.672404 I (120032) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:40.677773 I (120032) EidolonVoice: [smarthome] command received id=probe2-3454-1-4 op=smarthome.snapshot gen=1
+2026-10-02T23:32:40.685363 W (120032) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:40.975093 I (120332) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:40.980820 I (120332) EidolonVoice: [smarthome] command received id=probe2-600-0-4 op=smarthome.snapshot gen=1
+2026-10-02T23:32:40.988227 W (120332) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:41.276546 I (120632) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:41.282022 I (120632) EidolonVoice: [smarthome] command received id=probe2-600-1-4 op=smarthome.snapshot gen=1
+2026-10-02T23:32:41.289608 W (120642) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:41.582956 I (120942) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:41.588401 I (120942) EidolonVoice: [smarthome] command received id=probe2-3454-0-5 op=smarthome.snapshot gen=1
+2026-10-02T23:32:41.596059 W (120942) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:41.888634 I (121242) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:41.894076 I (121252) EidolonVoice: [smarthome] command received id=probe2-3454-1-5 op=smarthome.snapshot gen=1
+2026-10-02T23:32:41.901680 W (121252) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:41.990493 I (121352) SystemInfo: free sram: 146603 minimal sram: 38092
+2026-10-02T23:32:42.188466 I (121542) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:42.193700 I (121542) EidolonVoice: [smarthome] command received id=probe2-600-0-5 op=smarthome.snapshot gen=1
+2026-10-02T23:32:42.201399 W (121552) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:42.491398 I (121852) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:42.496837 I (121852) EidolonVoice: [smarthome] command received id=probe2-600-1-5 op=smarthome.snapshot gen=1
+2026-10-02T23:32:42.504331 W (121852) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:42.801495 I (122162) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:42.806852 I (122162) EidolonVoice: [smarthome] command received id=probe2-3454-0-6 op=smarthome.snapshot gen=1
+2026-10-02T23:32:42.814530 W (122162) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:43.106892 I (122462) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:43.112351 I (122462) EidolonVoice: [smarthome] command received id=probe2-3454-1-6 op=smarthome.snapshot gen=1
+2026-10-02T23:32:43.119979 W (122472) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:43.407627 I (122762) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:43.413037 I (122762) EidolonVoice: [smarthome] command received id=probe2-600-0-6 op=smarthome.snapshot gen=1
+2026-10-02T23:32:43.420460 W (122772) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:43.713819 I (123072) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:43.719364 I (123072) EidolonVoice: [smarthome] command received id=probe2-600-1-6 op=smarthome.snapshot gen=1
+2026-10-02T23:32:43.726746 W (123072) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:44.025775 I (123382) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:44.031158 I (123382) EidolonVoice: [smarthome] command received id=probe2-3454-0-7 op=smarthome.snapshot gen=1
+2026-10-02T23:32:44.038833 W (123392) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:44.335541 I (123692) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:44.340993 I (123692) EidolonVoice: [smarthome] command received id=probe2-3454-1-7 op=smarthome.snapshot gen=1
+2026-10-02T23:32:44.348703 W (123702) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:44.636053 I (123992) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:44.641591 I (123992) EidolonVoice: [smarthome] command received id=probe2-600-0-7 op=smarthome.snapshot gen=1
+2026-10-02T23:32:44.649017 W (124002) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:44.942418 I (124302) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:44.948045 I (124302) EidolonVoice: [smarthome] command received id=probe2-600-1-7 op=smarthome.snapshot gen=1
+2026-10-02T23:32:44.955587 W (124302) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:45.247752 I (124602) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:45.253155 I (124612) EidolonVoice: [smarthome] command received id=probe2-3454-0-8 op=smarthome.snapshot gen=1
+2026-10-02T23:32:45.260899 W (124612) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:45.562966 I (124922) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:45.568349 I (124922) EidolonVoice: [smarthome] command received id=probe2-3454-1-8 op=smarthome.snapshot gen=1
+2026-10-02T23:32:45.575979 W (124922) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:45.853561 I (125212) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:45.859177 I (125212) EidolonVoice: [smarthome] command received id=probe2-600-0-8 op=smarthome.snapshot gen=1
+2026-10-02T23:32:45.866575 W (125212) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:46.156811 I (125512) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:46.162243 I (125512) EidolonVoice: [smarthome] command received id=probe2-600-1-8 op=smarthome.snapshot gen=1
+2026-10-02T23:32:46.169726 W (125522) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:46.466904 I (125822) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:46.472392 I (125822) EidolonVoice: [smarthome] command received id=probe2-3454-0-9 op=smarthome.snapshot gen=1
+2026-10-02T23:32:46.480005 W (125832) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:46.773735 I (126132) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:46.779200 I (126132) EidolonVoice: [smarthome] command received id=probe2-3454-1-9 op=smarthome.snapshot gen=1
+2026-10-02T23:32:46.786787 W (126132) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:47.072104 I (126432) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:47.077508 I (126432) EidolonVoice: [smarthome] command received id=probe2-600-0-9 op=smarthome.snapshot gen=1
+2026-10-02T23:32:47.085093 W (126432) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:47.374087 I (126732) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:47.379574 I (126732) EidolonVoice: [smarthome] command received id=probe2-600-1-9 op=smarthome.snapshot gen=1
+2026-10-02T23:32:47.387084 W (126732) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:47.688300 I (127042) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:47.693801 I (127052) EidolonVoice: [smarthome] command received id=probe2-3454-0-10 op=smarthome.snapshot gen=1
+2026-10-02T23:32:47.701412 W (127052) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:48.006938 I (127362) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:48.012496 I (127372) EidolonVoice: [smarthome] command received id=probe2-3454-1-10 op=smarthome.snapshot gen=1
+2026-10-02T23:32:48.019918 W (127372) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:48.288414 I (127642) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:48.293716 I (127642) EidolonVoice: [smarthome] command received id=probe2-600-0-10 op=smarthome.snapshot gen=1
+2026-10-02T23:32:48.299416 W (127652) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:48.594905 I (127952) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:48.600365 I (127952) EidolonVoice: [smarthome] command received id=probe2-600-1-10 op=smarthome.snapshot gen=1
+2026-10-02T23:32:48.606233 W (127952) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:48.904610 I (128262) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:48.910028 I (128262) EidolonVoice: [smarthome] command received id=probe2-3454-0-11 op=smarthome.snapshot gen=1
+2026-10-02T23:32:48.917671 W (128262) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:49.218063 I (128572) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:49.223566 I (128582) EidolonVoice: [smarthome] command received id=probe2-3454-1-11 op=smarthome.snapshot gen=1
+2026-10-02T23:32:49.231016 W (128582) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:49.509223 I (128862) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:49.514753 I (128872) EidolonVoice: [smarthome] command received id=probe2-600-0-11 op=smarthome.snapshot gen=1
+2026-10-02T23:32:49.520405 W (128872) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:49.809758 I (129162) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:49.815066 I (129172) EidolonVoice: [smarthome] command received id=probe2-600-1-11 op=smarthome.snapshot gen=1
+2026-10-02T23:32:49.820809 W (129172) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:50.122399 I (129482) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:50.128004 I (129482) EidolonVoice: [smarthome] command received id=probe2-3454-0-12 op=smarthome.snapshot gen=1
+2026-10-02T23:32:50.135419 W (129482) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:50.437035 I (129792) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:50.442531 I (129792) EidolonVoice: [smarthome] command received id=probe2-3454-1-12 op=smarthome.snapshot gen=1
+2026-10-02T23:32:50.450290 W (129802) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:50.722465 I (130082) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:50.727925 I (130082) EidolonVoice: [smarthome] command received id=probe2-600-0-12 op=smarthome.snapshot gen=1
+2026-10-02T23:32:50.733523 W (130082) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:51.024968 I (130382) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:51.030470 I (130382) EidolonVoice: [smarthome] command received id=probe2-600-1-12 op=smarthome.snapshot gen=1
+2026-10-02T23:32:51.036001 W (130382) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:51.335897 I (130692) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:51.341348 I (130692) EidolonVoice: [smarthome] command received id=probe2-3454-0-13 op=smarthome.snapshot gen=1
+2026-10-02T23:32:51.348911 W (130702) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:51.639875 I (130992) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:51.645299 I (131002) EidolonVoice: [smarthome] command received id=probe2-3454-1-13 op=smarthome.snapshot gen=1
+2026-10-02T23:32:51.652860 W (131002) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:51.939196 I (131292) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:51.944721 I (131302) EidolonVoice: [smarthome] command received id=probe2-600-0-13 op=smarthome.snapshot gen=1
+2026-10-02T23:32:51.950375 W (131302) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:51.990640 I (131352) SystemInfo: free sram: 147259 minimal sram: 38092
+2026-10-02T23:32:52.241247 I (131602) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:52.246636 I (131602) EidolonVoice: [smarthome] command received id=probe2-600-1-13 op=smarthome.snapshot gen=1
+2026-10-02T23:32:52.252459 W (131602) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:52.550764 I (131912) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:52.556217 I (131912) EidolonVoice: [smarthome] command received id=probe2-3454-0-14 op=smarthome.snapshot gen=1
+2026-10-02T23:32:52.563769 W (131912) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:52.855024 I (132212) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:52.860486 I (132212) EidolonVoice: [smarthome] command received id=probe2-3454-1-14 op=smarthome.snapshot gen=1
+2026-10-02T23:32:52.868057 W (132212) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:53.154745 I (132512) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:53.160218 I (132512) EidolonVoice: [smarthome] command received id=probe2-600-0-14 op=smarthome.snapshot gen=1
+2026-10-02T23:32:53.165941 W (132512) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:53.457168 I (132812) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:53.462644 I (132812) EidolonVoice: [smarthome] command received id=probe2-600-1-14 op=smarthome.snapshot gen=1
+2026-10-02T23:32:53.468392 W (132822) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:53.767627 I (133122) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:53.773122 I (133132) EidolonVoice: [smarthome] command received id=probe2-3454-0-15 op=smarthome.snapshot gen=1
+2026-10-02T23:32:53.780635 W (133132) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:54.071368 I (133432) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:54.076749 I (133432) EidolonVoice: [smarthome] command received id=probe2-3454-1-15 op=smarthome.snapshot gen=1
+2026-10-02T23:32:54.084320 W (133432) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:54.374071 I (133732) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:54.379602 I (133732) EidolonVoice: [smarthome] command received id=probe2-600-0-15 op=smarthome.snapshot gen=1
+2026-10-02T23:32:54.385395 W (133732) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:54.675568 I (134032) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:54.681132 I (134032) EidolonVoice: [smarthome] command received id=probe2-600-1-15 op=smarthome.snapshot gen=1
+2026-10-02T23:32:54.686767 W (134032) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:54.983599 I (134342) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:54.989218 I (134342) EidolonVoice: [smarthome] command received id=probe2-3454-0-16 op=smarthome.snapshot gen=1
+2026-10-02T23:32:54.996466 W (134342) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:55.290630 I (134642) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:55.296192 I (134652) EidolonVoice: [smarthome] command received id=probe2-3454-1-16 op=smarthome.snapshot gen=1
+2026-10-02T23:32:55.303627 W (134652) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:55.594088 I (134952) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:55.599699 I (134952) EidolonVoice: [smarthome] command received id=probe2-600-0-16 op=smarthome.snapshot gen=1
+2026-10-02T23:32:55.605253 W (134952) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:55.898437 I (135252) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:55.903885 I (135252) EidolonVoice: [smarthome] command received id=probe2-600-1-16 op=smarthome.snapshot gen=1
+2026-10-02T23:32:55.909522 W (135262) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:56.199687 I (135552) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:56.205181 I (135552) EidolonVoice: [smarthome] command received id=probe2-3454-0-17 op=smarthome.snapshot gen=1
+2026-10-02T23:32:56.212795 W (135562) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:56.503306 I (135862) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:56.508875 I (135862) EidolonVoice: [smarthome] command received id=probe2-3454-1-17 op=smarthome.snapshot gen=1
+2026-10-02T23:32:56.516471 W (135862) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:56.803322 I (136162) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:56.808748 I (136162) EidolonVoice: [smarthome] command received id=probe2-600-0-17 op=smarthome.snapshot gen=1
+2026-10-02T23:32:56.814365 W (136162) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:57.105112 I (136462) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:57.110376 I (136462) EidolonVoice: [smarthome] command received id=probe2-600-1-17 op=smarthome.snapshot gen=1
+2026-10-02T23:32:57.116165 W (136462) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:57.414110 I (136772) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:57.419448 I (136772) EidolonVoice: [smarthome] command received id=probe2-3454-0-18 op=smarthome.snapshot gen=1
+2026-10-02T23:32:57.427028 W (136772) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:57.720122 I (137072) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:57.725647 I (137072) EidolonVoice: [smarthome] command received id=probe2-3454-1-18 op=smarthome.snapshot gen=1
+2026-10-02T23:32:57.733210 W (137082) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:58.021185 I (137372) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:58.026615 I (137372) EidolonVoice: [smarthome] command received id=probe2-600-0-18 op=smarthome.snapshot gen=1
+2026-10-02T23:32:58.032176 W (137382) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:58.325643 I (137682) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:58.331129 I (137682) EidolonVoice: [smarthome] command received id=probe2-600-1-18 op=smarthome.snapshot gen=1
+2026-10-02T23:32:58.336887 W (137682) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:58.638333 I (137992) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:58.643705 I (137992) EidolonVoice: [smarthome] command received id=probe2-3454-0-19 op=smarthome.snapshot gen=1
+2026-10-02T23:32:58.651304 W (137992) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:58.946743 I (138302) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:58.952277 I (138302) EidolonVoice: [smarthome] command received id=probe2-3454-1-19 op=smarthome.snapshot gen=1
+2026-10-02T23:32:58.959815 W (138302) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:59.248523 I (138602) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:59.253819 I (138602) EidolonVoice: [smarthome] command received id=probe2-600-0-19 op=smarthome.snapshot gen=1
+2026-10-02T23:32:59.259622 W (138602) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:59.549706 I (138902) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:32:59.555107 I (138902) EidolonVoice: [smarthome] command received id=probe2-600-1-19 op=smarthome.snapshot gen=1
+2026-10-02T23:32:59.560875 W (138902) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:32:59.860085 I (139212) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:32:59.865532 I (139212) EidolonVoice: [smarthome] command received id=probe2-3454-0-20 op=smarthome.snapshot gen=1
+2026-10-02T23:32:59.873182 W (139212) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:00.173117 I (139522) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:00.178609 I (139522) EidolonVoice: [smarthome] command received id=probe2-3454-1-20 op=smarthome.snapshot gen=1
+2026-10-02T23:33:00.186111 W (139532) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:00.471486 I (139822) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:00.477028 I (139822) EidolonVoice: [smarthome] command received id=probe2-600-0-20 op=smarthome.snapshot gen=1
+2026-10-02T23:33:00.482705 W (139832) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:00.772426 I (140122) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:00.777898 I (140122) EidolonVoice: [smarthome] command received id=probe2-600-1-20 op=smarthome.snapshot gen=1
+2026-10-02T23:33:00.783624 W (140132) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:01.083840 I (140432) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:01.089179 I (140432) EidolonVoice: [smarthome] command received id=probe2-3454-0-21 op=smarthome.snapshot gen=1
+2026-10-02T23:33:01.096770 W (140442) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:01.389680 I (140742) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:01.395210 I (140742) EidolonVoice: [smarthome] command received id=probe2-3454-1-21 op=smarthome.snapshot gen=1
+2026-10-02T23:33:01.402766 W (140742) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:01.687891 I (141042) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:01.693312 I (141042) EidolonVoice: [smarthome] command received id=probe2-600-0-21 op=smarthome.snapshot gen=1
+2026-10-02T23:33:01.698987 W (141042) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:01.996052 I (141342) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:02.001325 I (141352) EidolonVoice: [smarthome] command received id=probe2-600-1-21 op=smarthome.snapshot gen=1
+2026-10-02T23:33:02.007180 W (141352) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:02.014288 I (141352) SystemInfo: free sram: 147363 minimal sram: 38092
+2026-10-02T23:33:02.309114 I (141662) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:02.314655 I (141662) EidolonVoice: [smarthome] command received id=probe2-3454-0-22 op=smarthome.snapshot gen=1
+2026-10-02T23:33:02.322089 W (141662) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:02.612228 I (141962) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:02.617608 I (141962) EidolonVoice: [smarthome] command received id=probe2-3454-1-22 op=smarthome.snapshot gen=1
+2026-10-02T23:33:02.625395 W (141962) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:02.916057 I (142262) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:02.921580 I (142272) EidolonVoice: [smarthome] command received id=probe2-600-0-22 op=smarthome.snapshot gen=1
+2026-10-02T23:33:02.927305 W (142272) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:03.217658 I (142562) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:03.223022 I (142572) EidolonVoice: [smarthome] command received id=probe2-600-1-22 op=smarthome.snapshot gen=1
+2026-10-02T23:33:03.228712 W (142572) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:03.527922 I (142882) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:03.533326 I (142882) EidolonVoice: [smarthome] command received id=probe2-3454-0-23 op=smarthome.snapshot gen=1
+2026-10-02T23:33:03.541142 W (142882) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:03.833182 I (143182) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:03.838648 I (143182) EidolonVoice: [smarthome] command received id=probe2-3454-1-23 op=smarthome.snapshot gen=1
+2026-10-02T23:33:03.846171 W (143192) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:04.132923 I (143482) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:04.138398 I (143482) EidolonVoice: [smarthome] command received id=probe2-600-0-23 op=smarthome.snapshot gen=1
+2026-10-02T23:33:04.144129 W (143482) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:04.440002 I (143792) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:04.445488 I (143792) EidolonVoice: [smarthome] command received id=probe2-600-1-23 op=smarthome.snapshot gen=1
+2026-10-02T23:33:04.451191 W (143792) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:04.743131 I (144092) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:04.748525 I (144092) EidolonVoice: [smarthome] command received id=probe2-3454-0-24 op=smarthome.snapshot gen=1
+2026-10-02T23:33:04.756211 W (144092) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:05.050828 I (144402) LiveKitSession: Control packet received: bytes=3454 provider=0 gen=1
+2026-10-02T23:33:05.056107 I (144402) EidolonVoice: [smarthome] command received id=probe2-3454-1-24 op=smarthome.snapshot gen=1
+2026-10-02T23:33:05.063795 W (144402) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:05.350855 I (144702) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:05.356235 I (144702) EidolonVoice: [smarthome] command received id=probe2-600-0-24 op=smarthome.snapshot gen=1
+2026-10-02T23:33:05.361872 W (144702) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:05.652620 I (145002) LiveKitSession: Control packet received: bytes=600 provider=0 gen=1
+2026-10-02T23:33:05.658004 I (145002) EidolonVoice: [smarthome] command received id=probe2-600-1-24 op=smarthome.snapshot gen=1
+2026-10-02T23:33:05.663817 W (145002) EidolonVoice: [smarthome] rejected unauthorized panel command
+2026-10-02T23:33:12.002097 I (151352) SystemInfo: free sram: 147687 minimal sram: 38092
+2026-10-02T23:33:22.004574 I (161352) SystemInfo: free sram: 148107 minimal sram: 38092
+2026-10-02T23:33:32.005833 I (171352) SystemInfo: free sram: 148107 minimal sram: 38092
+2026-10-02T23:33:42.006674 I (181352) SystemInfo: free sram: 148275 minimal sram: 38092

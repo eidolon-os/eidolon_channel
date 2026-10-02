@@ -87,5 +87,14 @@
   "probe_safety": "Distinct diagnostic participant; no Provider identity impersonation; all diagnostic commands were rejected before payload application. Actual Provider snapshot was logged separately.",
   "scope": "Loss is observed before the application control callback. Captures do not identify the precise Wi-Fi, SCTP, SDK, or MTU mechanism, nor prove that switching production Provider transport alone resolves every startup failure.",
   "production_changes": "Investigation initially used logging-only firmware. Fix adds reliable panel delivery in the shared Provider adapter and timed standing-channel renewal through the existing ESP32 Owner configuration recovery path. Deployment/HIL results recorded separately.",
-  "local_validation": "442 Provider/smarthome Python tests passed. ESP32 production controller loop virtual-clock tests passed under ASan/UBSan, including idle/flood expiry, unchanged configuration retry pacing, failure handoff, authorization/shared/disconnected guards and tick rounding. Channel recovery, permission refresh and configuration snapshot tests passed; Korvo firmware build passed."
+  "local_validation": "443 Provider/smarthome Python tests passed, including an isolated real-store/service expiry, refresh and revocation regression. ESP32 production controller loop virtual-clock tests passed under ASan/UBSan, including idle/flood expiry, unchanged configuration retry pacing, failure handoff, authorization/shared/disconnected guards and tick rounding. Channel recovery, permission refresh and configuration snapshot tests passed; Korvo firmware build passed.",
+  "fixed_adapter_sha256_both_hosts": "f917531798a20ccd8ddc2b2796dbad42440fc0af47a124f2110ed3e143eecaff",
+  "production_validation": {
+    "release": "rk3588-panel-sync-20261002-1",
+    "channel_commit": "59f4fae35a28a431dc797a557168e206271404a4",
+    "deployment": "activated; doctor and app_ready passed",
+    "snapshot_delivery": "Two reliable 3457-byte snapshots matched by command ID to successful Korvo application: 18 devices, 7 areas, 4 scenes.",
+    "firmware_evidence": "eidolon-client-esp32/docs/reports/20261003-standing-channel-renewal/verification.json",
+    "natural_expiry": "PASS: at 2026-10-03 00:21:35.643 +08:00 old lease expired; device automatically refreshed, new lease issued at 00:21:36.499, reliable snapshot published at 00:21:40.539 and applied by Korvo (18 devices/7 areas/4 scenes). No manual restart."
+  }
 }

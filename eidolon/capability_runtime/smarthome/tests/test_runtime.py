@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 from eidolon_sdk.biz.smarthome import (
+    OP_DELTA,
     OP_SNAPSHOT,
     ExecuteResult,
     PanelExecute,
@@ -122,3 +123,73 @@ async def test_panel_send_can_block_without_blocking_backend(setup):
     )
     blocked.set()
     await projection
+
+
+class PushingBackend(Backend):
+    """A Hub that also streams observed changes."""
+
+    def __init__(self):
+        super().__init__()
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.latest = 0
+
+    async def changes(self, owner_id, *, since, timeout_ms):
+        if timeout_ms == 0:
+            return {"changes": [], "seq": self.latest}
+        change = await self.queue.get()
+        self.latest = change["seq"]
+        return {"changes": [change], "seq": change["seq"]}
+
+    def push(self, device_id, *, reachable=True, state=None):
+        self.latest += 1
+        self.queue.put_nowait(
+            {
+                "device_id": device_id,
+                "reachable": reachable,
+                "state": state,
+                "observed_at_ms": 1,
+                "seq": self.latest,
+            }
+        )
+
+
+async def test_observed_changes_reach_panels_as_deltas():
+    backend, panels = PushingBackend(), RecordingPanels()
+    runtime = SmartHomeRuntime(backend=backend, panels=panels, now_ms=Clock())
+    await runtime.attach_panel(OWNER, PANEL)
+    backend.push("living.main_light", state={"on": True, "level": 90})
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if panels.to(PANEL, OP_DELTA):
+            break
+    delta = panels.last(PANEL, OP_DELTA)
+    assert delta["seq"] == 1 and delta["changes"][0] == {
+        "device_id": "living.main_light",
+        "online": True,
+        "state": {"on": True, "level": 90},
+    }
+    assert delta["source"] == {"kind": "automation", "label": "observed"}
+    # The poll afterwards sees the same state and sends nothing new.
+    backend.states["living.main_light"]["state"] = {"on": True, "level": 90}
+    await runtime.refresh_active_panels()
+    assert panels.ops(PANEL) == [(OP_SNAPSHOT, 0), (OP_DELTA, 1)]
+    # Unreachable: online false, last state kept for the tile.
+    backend.push("living.main_light", reachable=False)
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if len(panels.to(PANEL, OP_DELTA)) == 2:
+            break
+    assert panels.last(PANEL, OP_DELTA)["changes"][0]["online"] is False
+    # A device the registry does not know is not a delta.
+    backend.push("ghost.device", state={"on": True})
+    await asyncio.sleep(0.05)
+    assert len(panels.to(PANEL, OP_DELTA)) == 2
+    runtime.detach_panel(OWNER, PANEL)
+    await asyncio.sleep(0)
+    await runtime.close()
+
+
+async def test_backend_without_changes_is_polled_only(setup):
+    runtime, backend, panels = setup
+    await runtime.attach_panel(OWNER, PANEL)
+    assert runtime._owners[OWNER].watcher is None

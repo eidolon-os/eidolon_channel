@@ -11,12 +11,17 @@ from datetime import datetime
 from typing import Any
 
 from eidolon_sdk.biz.smarthome import (
+    MAX_DELTA_CHANGES,
+    OP_DELTA,
     OP_RESULT,
     OP_SNAPSHOT,
+    ChangeSource,
     ExecuteRequest,
     ExecuteResult,
     Origin,
     PanelArea,
+    PanelChange,
+    PanelDelta,
     PanelDevice,
     PanelExecute,
     PanelRequest,
@@ -34,6 +39,10 @@ logger = logging.getLogger("eidolon.capability_runtime.smarthome")
 
 TOUCH_DEADLINE_MS = 3_000
 PANEL_SEND_TIMEOUT_S = 5.0
+# How long one long poll for observed changes waits at Hub, and how long to
+# back off after it fails. Shorter than Hub's cap so a hung poll ends on time.
+CHANGES_WAIT_MS = 25_000
+CHANGES_RETRY_S = 5.0
 
 
 def local_utc_offset_minutes(now_ms: int) -> int:
@@ -50,6 +59,9 @@ class _Owner:
     states: dict[str, dict[str, Any]] = field(default_factory=dict)
     seq: int = 0
     panels: dict[str, None] = field(default_factory=dict)  # insertion-ordered set
+    # Observed-change stream from Hub: the cursor and the task following it.
+    observed_seq: int = 0
+    watcher: asyncio.Task | None = None
 
 
 class SmartHomeRuntime:
@@ -70,6 +82,7 @@ class SmartHomeRuntime:
         self._touch_deadline_ms = touch_deadline_ms
         self._utc_offset_minutes = utc_offset_minutes
         self._owners: dict[str, _Owner] = {}
+        self._pushes = hasattr(backend, "changes")
 
     async def handle_panel_execute(
         self, owner_id: str, device_ref: str, message: PanelExecute
@@ -97,11 +110,94 @@ class SmartHomeRuntime:
             await self._panels.send(
                 owner_id, device_ref, OP_SNAPSHOT, self._snapshot(owner, registry, device_ref)
             )
+        self._watch(owner_id, owner)
 
     def detach_panel(self, owner_id: str, device_ref: str) -> None:
         owner = self._owners.get(owner_id)
         if owner is not None:
             owner.panels.pop(device_ref, None)
+            if not owner.panels and owner.watcher is not None:
+                owner.watcher.cancel()
+                owner.watcher = None
+
+    async def close(self) -> None:
+        for owner in self._owners.values():
+            if owner.watcher is not None:
+                owner.watcher.cancel()
+                owner.watcher = None
+
+    # -- observed changes: Hub pushes, panels get deltas ---------------------
+
+    def _watch(self, owner_id: str, owner: _Owner) -> None:
+        """Follow Hub's observed-change stream while this Owner has a panel attached."""
+        if not self._pushes or not owner.panels:
+            return
+        if owner.watcher is not None and not owner.watcher.done():
+            return
+        owner.watcher = asyncio.create_task(
+            self._follow_changes(owner_id, owner), name=f"smarthome-changes-{owner_id}"
+        )
+
+    async def _follow_changes(self, owner_id: str, owner: _Owner) -> None:
+        # Start after what the snapshot already showed; older changes are in it.
+        try:
+            head = await self._backend.changes(owner_id, since=0, timeout_ms=0)
+            owner.observed_seq = max(owner.observed_seq, int(head.get("seq") or 0))
+        except Exception:
+            logger.warning("smart home change stream unavailable owner=%s", owner_id)
+        while owner.panels:
+            try:
+                body = await self._backend.changes(
+                    owner_id, since=owner.observed_seq, timeout_ms=CHANGES_WAIT_MS
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("smart home change stream failed owner=%s; retrying", owner_id)
+                await asyncio.sleep(CHANGES_RETRY_S)
+                continue
+            changes = list(body.get("changes") or [])
+            if not changes:
+                continue
+            owner.observed_seq = max(owner.observed_seq, int(body.get("seq") or 0))
+            async with owner.lock:
+                await self.apply_changes(owner_id, owner, changes)
+
+    async def apply_changes(
+        self, owner_id: str, owner: _Owner, changes: list[dict[str, Any]]
+    ) -> None:
+        """Turn Hub observations into one delta per batch; unknown devices mean a stale registry."""
+        if owner.registry is None:
+            return
+        known = {d.device_id for d in owner.registry.devices}
+        items: list[PanelChange] = []
+        for change in changes:
+            device_id = change.get("device_id")
+            if device_id not in known:
+                # A device the panel has never seen: the registry moved on, and
+                # the poll will send a whole snapshot.
+                continue
+            reachable = bool(change.get("reachable", True))
+            state = change.get("state")
+            if state is None:
+                state = owner.states.get(device_id, {})
+            if reachable:
+                owner.states[device_id] = dict(state)
+            else:
+                owner.states.pop(device_id, None)
+            items.append(PanelChange(device_id=device_id, online=reachable, state=dict(state)))
+        if not items:
+            return
+        for start in range(0, len(items), MAX_DELTA_CHANGES):
+            owner.seq += 1
+            delta = PanelDelta(
+                revision=owner.registry.revision,
+                seq=owner.seq,
+                source=ChangeSource(kind="automation", label="observed"),
+                changes=tuple(items[start : start + MAX_DELTA_CHANGES]),
+            )
+            payload = delta.model_dump(mode="json")
+            await self._broadcast(owner_id, owner, OP_DELTA, lambda _ref, p=payload: p)
 
     async def send_voice_result(self, owner_id: str, device_ref: str, result: VoiceResult) -> None:
         await self._panels.send(owner_id, device_ref, OP_RESULT, result.model_dump(mode="json"))

@@ -72,6 +72,8 @@ def main() -> None:
     )
     if home_client is not None:
         async def close_home_client(_app):
+            if smarthome is not None:
+                await smarthome.close()
             await home_client.aclose()
         app.on_cleanup.append(close_home_client)
     web.run_app(

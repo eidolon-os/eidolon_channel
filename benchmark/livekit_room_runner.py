@@ -37,6 +37,7 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
 )
 from eidolon_sdk.biz.control import CONTROL_PROTOCOL_VERSION
+from eidolon_sdk.biz.presentation import OutputSelection
 
 from eidolon.livekit.common.config import load_effective_config
 from eidolon.livekit.common.welcome import WelcomeAudio
@@ -138,6 +139,8 @@ async def run_livekit_room_suite(
     welcome = resolve_welcome(
         session_intent=options.session_intent,
         welcome_message=cfg.behavior.welcome_message,
+        # The virtual room client receives speech, text and audio cues.
+        outputs=OutputSelection(speech=True, dialogue_text=True, audio_cue=True),
     )
     options = replace(
         options,

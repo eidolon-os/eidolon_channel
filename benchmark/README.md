@@ -69,6 +69,14 @@ merged `metrics.json` / `report.*` at the runner root carry:
 Run at least 5 repeats (ideally 10-20) before treating real-provider SLO gates
 as hard pass/fail rather than advisory.
 
+### Exit status
+
+Every selected runner returns a nonzero CLI exit status when its report contains
+failed cases or no cases. With `--enforce-slo`, the room runner also fails when
+required latency metrics are missing. Present but undersampled percentile gates
+remain advisory; a smoke run does not certify those SLOs. Dashboard partial-run
+semantics and latency thresholds are unchanged.
+
 ### Room latency reference
 
 Room `user_audio_done_ms` now records the last voiced 20 ms microphone frame

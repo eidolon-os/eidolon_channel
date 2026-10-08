@@ -308,7 +308,12 @@ def _slo_enforcement_failures(output_dir: Path) -> list[dict]:
         "summary": metrics.get("summary", {}),
         "timeline": summarize_timeline_records(load_timeline_records(output_dir)),
     }
-    return enforcement_failures(evaluate_slo_gates(payload))
+    results = evaluate_slo_gates(payload)
+    # An explicit release gate cannot certify a run with absent required data.
+    # Keep the dashboard's partial-run/advisory semantics unchanged.
+    return enforcement_failures(results) + [
+        result for result in results if result["required"] and result["missing"]
+    ]
 
 
 async def _main() -> int:
@@ -356,7 +361,7 @@ async def _main() -> int:
         "--enforce-slo",
         action="store_true",
         help=(
-            "Exit non-zero if any required SLO gate hard-fails on the "
+            "Exit non-zero if a required SLO gate fails or lacks data on the "
             "livekit_room run (CI / release gate). Advisory and unmet "
             "Phase-2 gates never block."
         ),
@@ -433,14 +438,22 @@ async def _main() -> int:
         room_output = await _run_livekit_room(args, suites)
         outputs.append(room_output)
 
+    failed_run = False
     for path in outputs:
         print(path)
+        summary = load_metrics(path).get("summary", {})
+        if not summary.get("total") or summary.get("failed", 0):
+            print(f"Benchmark failed or empty: {path}")
+            failed_run = True
 
     if args.enforce_slo and room_output is not None:
         failures = _slo_enforcement_failures(room_output)
         if failures:
             print("SLO ENFORCEMENT FAILED (required gates):")
             for f in failures:
+                if f.get("missing"):
+                    print(f"  {f['name']}: required metric missing")
+                    continue
                 value = f.get("value")
                 value_str = f"{value:.1f}" if isinstance(value, (int, float)) else str(value)
                 print(
@@ -448,8 +461,11 @@ async def _main() -> int:
                     f"{f['metric']}.{f['statistic']}={value_str} > {f['max_value']:.1f}"
                 )
             return 1
-        print("SLO enforcement: all required gates passed.")
-    return 0
+        print(
+            "SLO enforcement: no measured required gate failed; "
+            "low-sample advisory gates are not certified."
+        )
+    return 1 if failed_run else 0
 
 
 if __name__ == "__main__":

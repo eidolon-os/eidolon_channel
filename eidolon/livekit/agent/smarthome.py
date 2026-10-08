@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 
@@ -181,6 +182,8 @@ async def run_smarthome_session(
 
 async def handle_transcript(scope: HomeSessionScope, transcript: str, *, client: httpx.AsyncClient | None = None) -> None:
     turn_id = generate_turn_id()
+    started = time.monotonic()
+    logger.info("smart-home turn=%s stage=handler_started", turn_id)
     utterance = " ".join(transcript.split())[:200]
     agent_token = os.environ.get("EIDOLON_AGENT_ADMIN_API_TOKEN", "")
     panel_token = os.environ.get("EIDOLON_CHANNEL_PROVIDER_TOKEN", "")
@@ -208,6 +211,8 @@ async def handle_transcript(scope: HomeSessionScope, transcript: str, *, client:
                 message="智能家居服务暂不可用，请稍后重试",
             )
 
+        agent_done = time.monotonic()
+        logger.info("smart-home turn=%s stage=agent elapsed_ms=%.1f", turn_id, (agent_done-started)*1000)
         response = await client.post(
             os.environ.get("EIDOLON_CHANNEL_PROVIDER_URL", "http://127.0.0.1:8767").rstrip("/")
             + "/v1/smarthome/result",
@@ -219,7 +224,8 @@ async def handle_transcript(scope: HomeSessionScope, transcript: str, *, client:
             },
         )
         response.raise_for_status()
-        logger.info("smart-home turn=%s outcome=%s delivered", turn_id, result.outcome)
+        logger.info("smart-home turn=%s stage=result_delivery elapsed_ms=%.1f", turn_id, (time.monotonic()-agent_done)*1000)
+        logger.info("smart-home turn=%s outcome=%s delivered elapsed_ms=%.1f", turn_id, result.outcome, (time.monotonic()-started)*1000)
 
 
 async def end_home_session(scope: HomeSessionScope, *, client: httpx.AsyncClient | None = None) -> None:

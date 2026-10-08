@@ -1,5 +1,7 @@
 # eidolon_channel
 
+
+2026-10-08: [Smart-home turn timing](docs/smarthome-turn-timing.md).
 独立仓库：Eidolon **LiveKit 语音 Channel**（`eidolon.livekit`）—— Agent worker、STT/TTS/VAD/EOT 插件与测试。
 
 Channel 的接入边界区分 Owner-scoped `DeviceConnectionContext` 与完整

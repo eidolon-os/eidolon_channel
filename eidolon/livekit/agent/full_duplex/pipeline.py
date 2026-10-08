@@ -331,7 +331,7 @@ class StreamingPipeline(BasePipeline):
         # silent. The watchdog closes the session after
         # ``idle.disconnect_after_idle_ms`` of no recognized speech and no agent
         # activity. ``IdleWatchdog.last_activity_monotonic`` is refreshed by
-        # ``_mark_activity()`` on real ASR text and on agent thinking/speaking;
+        # ``_mark_activity()`` on real ASR text and on entering/leaving agent work;
         # raw VAD/noise (which yields empty ASR) deliberately does NOT count, so
         # a silent-but-noisy room still disconnects. <=0 disables the watchdog.
         # Idle window + teardown reason are chosen by
@@ -1612,7 +1612,7 @@ class StreamingPipeline(BasePipeline):
         """Record that the session is doing real work *right now*.
 
         Refreshing this timestamp pushes back the idle-disconnect deadline.
-        Called on recognized ASR text and on agent thinking/speaking — never
+        Called on recognized ASR text and on entering/leaving agent work — never
         on bare VAD/noise, so a connected-but-silent client still times out.
         """
         self._ensure_idle_watchdog_controller()

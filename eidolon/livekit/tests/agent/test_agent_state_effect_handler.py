@@ -109,7 +109,7 @@ def test_speaking_resets_played_counter() -> None:
 
     handler.handle(SimpleNamespace(old_state="thinking", new_state="speaking"))
 
-    mark_activity.assert_called_once_with()
+    mark_activity.assert_not_called()
     ducking.on_agent_started_speaking.assert_called_once_with()
 
 
@@ -175,3 +175,18 @@ def test_agent_output_coordinator_keeps_response_identity_across_new_candidate()
     assert coordinator.active_timeline is response
     assert coordinator.release(response) is True
     assert coordinator.active_timeline is None
+
+
+def test_idle_clock_changes_only_at_busy_boundary():
+    handler, activity, *_ = _handler()
+    for old, new in [("listening", "thinking"), ("thinking", "speaking"),
+                     ("speaking", "speaking"), ("speaking", "listening"),
+                     ("listening", "listening")]:
+        handler.handle(AgentStateTransition(old, new))
+    assert activity.call_count == 2
+
+
+def test_generation_failure_also_starts_a_fresh_idle_window():
+    handler, activity, *_ = _handler()
+    handler.handle(AgentStateTransition("thinking", "listening"))
+    activity.assert_called_once_with()

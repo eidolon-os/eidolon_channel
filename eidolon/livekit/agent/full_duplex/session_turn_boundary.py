@@ -90,13 +90,6 @@ class FullDuplexSessionTurnBoundary:
         except Exception:
             logger.exception("[StreamingPipeline] context-error fallback announcement failed")
             return
-        try:
-            pipeline._mark_activity()
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] mark_activity after context-error say failed",
-                exc_info=True,
-            )
 
     def notify_silent_output_failure_once(
         self,
@@ -196,11 +189,4 @@ class FullDuplexSessionTurnBoundary:
             attr_name,
             {"attempted": True, "spoken": True, "reason": reason},
         )
-        try:
-            self._pipeline._mark_activity()
-        except Exception:
-            logger.debug(
-                "[StreamingPipeline] mark_activity after silent-output fallback failed",
-                exc_info=True,
-            )
         return True

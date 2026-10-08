@@ -74,7 +74,7 @@ def test_terminal_llm_failure_without_delta_announces_once_outside_chat_context(
         "刚才卡了一下，请再说一遍好吗？",
         add_to_chat_ctx=False,
     )
-    p._mark_activity.assert_called_once_with()
+    p._mark_activity.assert_not_called()
     assert timeline.attrs["silent_failure_fallback"]["spoken"] is True
 
 
@@ -129,7 +129,7 @@ def test_transcription_timeout_announces_once_outside_chat_context():
         "抱歉，刚才没听清，请再说一遍好吗？",
         add_to_chat_ctx=False,
     )
-    p._mark_activity.assert_called_once_with()
+    p._mark_activity.assert_not_called()
     assert timeline.attrs["transcription_timeout_fallback"] == {
         "attempted": True,
         "spoken": True,

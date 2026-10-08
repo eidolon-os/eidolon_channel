@@ -50,6 +50,7 @@ from eidolon.livekit.agent.session.client_control import (
 )
 from eidolon.livekit.agent.session.committed_turn import publish_committed_turn_decision
 from eidolon.livekit.agent.session.agent_output_coordinator import AgentOutputCoordinator
+from eidolon.livekit.agent.session.agent_state import AgentStateTransition
 from eidolon.livekit.agent.session.idle import IdleWatchdog
 from eidolon.livekit.agent.session.provider_events import ProviderEventObserver
 from eidolon.livekit.agent.session.room_data import RoomDataHandler
@@ -881,7 +882,7 @@ class HalfDuplexPttPipeline(BasePipeline):
     def _on_agent_state_changed(self, event: Any) -> None:
         super()._on_agent_state_changed(event)
         new = str(getattr(event, "new_state", "") or "")
-        if new:
+        if AgentStateTransition.from_event(event).crosses_activity_boundary:
             self._mark_activity()
         if new == "thinking":
             output_timeline = self._agent_output.active_timeline

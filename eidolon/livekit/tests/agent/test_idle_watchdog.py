@@ -168,3 +168,36 @@ async def test_recognized_speech_marks_activity_empty_does_not():
         SimpleNamespace(transcript="你好", is_final=True)
     )
     assert pipeline._idle_watchdog_controller.last_activity_monotonic > 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("work_seconds", [0.08, 0.30])
+@pytest.mark.parametrize("terminal_state", ["speaking", "thinking"])
+async def test_full_idle_window_after_work_finishes(work_seconds, terminal_state):
+    """Short/long replies and failed generation all leave a full idle window."""
+    import time
+    from livekit.agents.voice.events import AgentStateChangedEvent
+    from eidolon.livekit.agent.session.agent_state import AgentStateEffectHandler
+
+    pipeline = _make_pipeline(timeout_sec=0.15)
+    handler = AgentStateEffectHandler(
+        get_timeline=lambda: None, mark_activity=pipeline._mark_activity,
+        cancel_soft_interrupt=lambda: None, soft_interrupt_active=lambda: False,
+        ducking=MagicMock(), get_filler=lambda: None,
+        flush_timeline_debug=lambda *args: None,
+    )
+    pipeline._start_idle_watchdog()
+    pipeline._session.agent_state = terminal_state
+    handler.handle(AgentStateChangedEvent(old_state="listening", new_state=terminal_state))
+    await asyncio.sleep(work_seconds)
+    pipeline._session.aclose.assert_not_awaited()
+    pipeline._session.agent_state = "listening"
+    ended = time.monotonic()
+    handler.handle(AgentStateChangedEvent(old_state=terminal_state, new_state="listening"))
+    await asyncio.sleep(0.08)
+    pipeline._session.aclose.assert_not_awaited()
+    # Duplicate idle notifications cannot postpone the deadline.
+    handler.handle(AgentStateChangedEvent(old_state="listening", new_state="listening"))
+    await asyncio.wait_for(pipeline._idle_watchdog_controller.task, timeout=1)
+    assert time.monotonic() - ended >= 0.15
+    pipeline._session.aclose.assert_awaited_once()

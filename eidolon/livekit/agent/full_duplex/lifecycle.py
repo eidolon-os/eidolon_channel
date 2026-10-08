@@ -458,8 +458,9 @@ class FullDuplexSessionLifecycle:
             getattr(report, "intent", ""),
             len(text),
         )
-        pipeline._mark_activity()
         if not pipeline._factory.outputs.speech:
+            # A text-only notification has no AgentSession speech transition.
+            pipeline._mark_activity()
             # A notification is a fact that a report arrived. It does not claim
             # its contents were read or that the underlying task succeeded.
             transport = getattr(pipeline._factory.llm.llm, "presentation_transport", None)

@@ -29,6 +29,12 @@ class AgentStateTransition:
         )
 
     @property
+    def crosses_activity_boundary(self) -> bool:
+        """Refresh only when entering/leaving work, not between busy states."""
+        busy = {"thinking", "speaking"}
+        return (self.old_state in busy) != (self.new_state in busy)
+
+    @property
     def starts_output_activity(self) -> bool:
         return self.new_state in ("thinking", "speaking")
 
@@ -80,8 +86,10 @@ class AgentStateEffectHandler:
     def handle(self, event: Any) -> None:
         transition = AgentStateTransition.from_event(event)
 
-        if transition.starts_output_activity:
+        if transition.crosses_activity_boundary:
             self._mark_activity()
+
+        if transition.starts_output_activity:
             filler = self._get_filler()
             if filler is not None:
                 filler.cancel()

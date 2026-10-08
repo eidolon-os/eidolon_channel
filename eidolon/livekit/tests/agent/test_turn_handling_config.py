@@ -107,7 +107,7 @@ async def test_session_uses_livekit_transcription_timeout_event(
         # and opens the trace on the way to session.start().
         session_mark=MagicMock(),
         open_session_trace=MagicMock(),
-        _build_agent=lambda: object(),
+        _build_agent=lambda **kwargs: object(),
         _build_turn_handling=lambda: {"interruption": {"enabled": False}},
         _aec_warmup_duration=0.4,
         _stt_commit_transcript_timeout=1.5,
@@ -126,8 +126,9 @@ async def test_session_uses_livekit_transcription_timeout_event(
     )
     room = SimpleNamespace(name="room-1", on=MagicMock())
 
-    with pytest.raises(SessionStarted):
+    with pytest.raises(ExceptionGroup) as startup_error:
         await FullDuplexSessionLifecycle(pipeline).run(room)
+    assert isinstance(startup_error.value.exceptions[0], SessionStarted)
 
     assert captured["options"] == {
         "turn_handling": {"interruption": {"enabled": False}},

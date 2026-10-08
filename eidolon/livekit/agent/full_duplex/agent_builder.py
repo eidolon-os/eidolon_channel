@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import inspect
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent")
 
 
-def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
+def build_full_duplex_agent(
+    pipeline: StreamingPipeline, *, ready: asyncio.Event | None = None,
+) -> lk_Agent:
     """Build the LiveKit Agent used by the full-duplex pipeline."""
 
     from livekit.agents import StopResponse
@@ -59,6 +62,10 @@ def build_full_duplex_agent(pipeline: StreamingPipeline) -> lk_Agent:
                 raise
 
         async def on_enter(self) -> None:
+            # Media starts alongside prewarm; do not speak before the device
+            # receives the session confirmation that authorizes its output.
+            if ready is not None:
+                await ready.wait()
             # [lifecycle] welcome timestamp — anchors "welcome played" so Phase
             # 0 can measure the gap to a later idle teardown and confirm
             # whether "回 JOIN after welcome" is the idle watchdog firing.

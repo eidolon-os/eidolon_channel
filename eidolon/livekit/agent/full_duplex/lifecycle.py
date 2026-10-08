@@ -100,7 +100,8 @@ class FullDuplexSessionLifecycle:
             participant_identity,
         )
 
-        agent = pipeline._build_agent()
+        ready = asyncio.Event()
+        agent = pipeline._build_agent(ready=ready)
         session = AgentSession(
             turn_handling=pipeline._build_turn_handling(),
             aec_warmup_duration=pipeline._aec_warmup_duration,
@@ -119,11 +120,6 @@ class FullDuplexSessionLifecycle:
                 "[StreamingPipeline] VAD inference callback not registered; "
                 "EOT is running without per-frame speech probability"
             )
-
-        await pipeline._warmup_stages()
-        if pipeline._filler is not None:
-            await pipeline._filler.warmup()
-        pipeline.session_mark("warmup_done")
 
         logger.info("[StreamingPipeline] calling session.start()...")
         pipeline._ensure_room_data_bridge().install(room)
@@ -146,8 +142,7 @@ class FullDuplexSessionLifecycle:
                 room_audio_output = False
                 pipeline.session_mark("avatar_ready")
 
-        from ..session.room_io import start_room_session
-        pipeline._presentation_io = await start_room_session(
+        await self._prepare_session(
             session=session, agent=agent, input_room=room,
             output_room=output_room, output_participant_identity=output_participant_identity,
             options=RoomOptions(
@@ -161,6 +156,7 @@ class FullDuplexSessionLifecycle:
         if pipeline._on_session_started is not None:
             await pipeline._on_session_started()
         pipeline._publish_companion_ui_state("listening", "session_started")
+        ready.set()
         if pipeline._uses_livekit_native_adaptive_interruption():
             logger.info(
                 "[StreamingPipeline] LiveKit native adaptive interruption owner "
@@ -205,6 +201,31 @@ class FullDuplexSessionLifecycle:
             raise
         finally:
             await self.shutdown()
+
+    async def _prepare_session(self, **room_session_options: Any) -> None:
+        """Overlap provider prewarm with media setup; own both until completion.
+
+        The existing provider pools support lazy use during warmup. Keep the
+        session confirmation after this barrier, and cancel the sibling on
+        failure or job cancellation so no startup task survives teardown.
+        """
+        from ..session.room_io import start_room_session
+
+        pipeline = self._pipeline
+
+        async def warmup() -> None:
+            await pipeline._warmup_stages()
+            if pipeline._filler is not None:
+                await pipeline._filler.warmup()
+            pipeline.session_mark("warmup_done")
+
+        async def start_media() -> None:
+            pipeline._presentation_io = await start_room_session(**room_session_options)
+            pipeline.session_mark("media_started")
+
+        async with asyncio.TaskGroup() as startup:
+            startup.create_task(warmup())
+            startup.create_task(start_media())
 
     async def _start_avatar_worker(self, room: Room, session: Any) -> bool:
         """Start the avatar worker and route session audio to it.

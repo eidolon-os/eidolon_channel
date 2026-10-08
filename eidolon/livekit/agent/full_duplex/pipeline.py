@@ -1600,9 +1600,9 @@ class StreamingPipeline(BasePipeline):
             return
         self._assistant_speech.on_playback_finished()
 
-    def _build_agent(self) -> lk_Agent:
+    def _build_agent(self, *, ready: asyncio.Event | None = None) -> lk_Agent:
         """Build the LiveKit Agent."""
-        return build_full_duplex_agent(self)
+        return build_full_duplex_agent(self, ready=ready)
 
     # ------------------------------------------------------------------
     # Idle-disconnect watchdog

@@ -1698,16 +1698,18 @@ class StreamingPipeline(BasePipeline):
         timeline = self._active_agent_output_timeline()
         if timeline is None:
             return
-        error_type = str(getattr(event, "type", "") or "session_error")
-        recoverable = bool(getattr(event, "recoverable", False))
-        error = getattr(event, "error", event)
+        # AgentSession wraps provider errors in ErrorEvent(type="error").
+        # Classification and retryability belong to the nested provider error.
+        error = event.error
+        error_type = str(getattr(error, "type", "") or "session_error")
+        recoverable = bool(getattr(error, "recoverable", False))
         mark = "tts_error_at" if error_type == "tts_error" else "session_error_at"
         timeline.mark(mark)
         timeline.set_attr(
             "output_error",
             {
                 "type": error_type,
-                "label": str(getattr(event, "label", "") or ""),
+                "label": str(getattr(error, "label", "") or ""),
                 "recoverable": recoverable,
                 "error": str(error or "")[:240],
             },

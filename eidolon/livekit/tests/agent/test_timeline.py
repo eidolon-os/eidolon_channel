@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
+from livekit.agents.voice.events import ErrorEvent
+from livekit.agents.llm import LLMError
+from livekit.agents.tts import TTSError
 
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC
 
@@ -717,12 +720,10 @@ def test_nonrecoverable_tts_error_closes_response_not_new_speech_candidate(tmp_p
     pipeline._timeline = candidate
     pipeline._timeline_debug_flushed = False
     pipeline._on_session_error(
-        SimpleNamespace(
-            type="tts_error",
-            label="bailian",
-            error=RuntimeError("provider 427"),
-            recoverable=False,
-        )
+        ErrorEvent(source=MagicMock(), error=TTSError(
+            timestamp=1.0, label="bailian",
+            error=RuntimeError("provider 427"), recoverable=False,
+        ))
     )
 
     rows = [json.loads(line) for line in debug_path.read_text().splitlines()]
@@ -749,12 +750,10 @@ def test_nonrecoverable_llm_error_without_delta_announces_before_closing(tmp_pat
     pipeline._claim_agent_output_timeline(response)
 
     pipeline._on_session_error(
-        SimpleNamespace(
-            type="llm_error",
-            label="eidolon_agent",
-            error=RuntimeError("first delta timed out"),
-            recoverable=False,
-        )
+        ErrorEvent(source=MagicMock(), error=LLMError(
+            timestamp=1.0, label="eidolon_agent",
+            error=RuntimeError("first delta timed out"), recoverable=False,
+        ))
     )
 
     pipeline._session.say.assert_called_once_with(
@@ -1456,3 +1455,26 @@ def test_rollback_marks_timeline_before_terminal_verdict_can_flush_it() -> None:
     flushed = flushed_snapshots[0]
     assert flushed["attrs"]["interrupt_action"] == "rollback"
     assert "interrupt_rollback_resolved_at" in flushed["timestamps"]
+
+
+@pytest.mark.parametrize("error_class", [LLMError, TTSError])
+def test_recoverable_session_error_keeps_response_open(error_class, tmp_path):
+    from eidolon.livekit.agent.full_duplex import StreamingPipeline
+
+    pipeline = StreamingPipeline.__new__(StreamingPipeline)
+    pipeline._state = PipelineState.GENERATING
+    pipeline._callbacks = MagicMock()
+    pipeline._observability = ObservabilityConfig(timeline_debug_path=str(tmp_path / "retry.jsonl"))
+    pipeline._session = SimpleNamespace(user_state="listening", say=MagicMock())
+    response = TurnTimeline("retry")
+    response.mark("turn_committed_at")
+    pipeline._timeline = response
+    pipeline._claim_agent_output_timeline(response)
+    pipeline._on_session_error(ErrorEvent(source=MagicMock(), error=error_class(
+        timestamp=1.0, label="provider", error=RuntimeError("retry"), recoverable=True,
+    )))
+    pipeline._session.say.assert_not_called()
+    assert pipeline._active_agent_output_timeline() is response
+    assert response.attrs["output_error"]["recoverable"] is True
+    assert response.attrs["output_error"]["label"] == "provider"
+    assert not (tmp_path / "retry.jsonl").exists()

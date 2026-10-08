@@ -27,6 +27,18 @@ class TimelineCapture:
         size = source.stat().st_size if source.exists() else 0
         return cls(source=source, start_size=size)
 
+    def read_new_records(self) -> list[dict[str, Any]]:
+        """Read completed records since capture; a live trailing row may be partial."""
+        if self.source is None or not self.source.exists():
+            return []
+        size = self.source.stat().st_size
+        with self.source.open("rb") as stream:
+            stream.seek(self.start_size if size >= self.start_size else 0)
+            data = stream.read()
+        complete = data.rsplit(b"\n", 1)[0] if b"\n" in data else b""
+        records = [json.loads(line) for line in complete.splitlines() if line.strip()]
+        return [record for record in records if isinstance(record, dict)]
+
     def write_new_lines(self, output_path: Path) -> int:
         if self.source is None or not self.source.exists():
             return 0

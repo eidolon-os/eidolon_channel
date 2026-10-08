@@ -51,6 +51,8 @@ from .device_envelope import (
     render_device_envelope_mic_pcm,
 )
 from .realcall import provider_config_from_cfg
+from .timeline import TimelineCapture
+from .timeline_expectations import _canonical_reply_records
 from .schema import (
     ROOM_NAME_PREFIX,
     BenchmarkCase,
@@ -70,6 +72,7 @@ class LiveKitRoomOptions:
     # Worker startup and welcome synthesis can delay the first audio. A missing
     # expected greeting must fail setup, not turn an idle case into barge-in.
     agent_first_audio_wait_sec: float = 6.0
+    timeline_path: str = ""
     # Derived from the effective welcome policy by run_livekit_room_suite.
     # Missing expected greeting audio is setup failure, not proof of silence.
     greeting_expected: bool = False
@@ -144,6 +147,7 @@ async def run_livekit_room_suite(
     )
     options = replace(
         options,
+        timeline_path=cfg.observability.timeline_debug_path,
         greeting_expected=welcome is not None,
         greeting_audio_only=isinstance(welcome, WelcomeAudio),
     )
@@ -331,6 +335,7 @@ async def _run_room_case(
     api_secret: str,
 ) -> CaseResult:
     started = time.monotonic()
+    timeline = TimelineCapture.start(options.timeline_path)
     metrics: dict[str, float | int | str | bool | None] = {}
     events: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -471,6 +476,13 @@ async def _run_room_case(
             if wait_mode != "none":
                 wait_timeout_sec = _agent_audio_wait_timeout_sec(case, options)
                 metrics["agent_audio_wait_timeout_sec"] = wait_timeout_sec
+                if case.expectations.canonical_response_required:
+                    await asyncio.wait_for(
+                        _wait_for_canonical_reply(
+                            timeline, room_name, case.expectations.canonical_contains,
+                        ),
+                        timeout=wait_timeout_sec,
+                    )
                 response_event = (
                     state.agent_audio_after_user_done
                     if wait_mode == "after_user_done"
@@ -847,6 +859,22 @@ async def _refresh_client_audio_state(
             mic_muted=mic_muted,
             reliable=False,
         )
+
+
+async def _wait_for_canonical_reply(
+    capture: TimelineCapture, room_name: str, needles: tuple[str, ...],
+) -> None:
+    """Keep the room open for the same reply evidence the final validator needs."""
+    if capture.source is None:
+        raise ValueError("canonical reply waiting requires a worker timeline path")
+    while True:
+        records = [
+            record for record in capture.read_new_records()
+            if record.get("attrs", {}).get("room_name") == room_name
+        ]
+        if _canonical_reply_records(records, needles):
+            return
+        await asyncio.sleep(0.05)
 
 
 async def _wait_for_agent_quiet(

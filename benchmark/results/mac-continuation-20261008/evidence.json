@@ -1,0 +1,104 @@
+{
+  "run_id": "mac-continuation-wait-20261008",
+  "checkout_head": "b65831adfd13ebf314346a2fbcca338dab8139f2",
+  "checkout_dirty": true,
+  "runtime_revision": "not verified; existing running Mac Host workers; no restart",
+  "repetitions_per_case": 1,
+  "source_sha256": {
+    "livekit_room_results.jsonl": "5d3e6fa8ad05207775f986520c88d0ac09acc95c9296d388a83393b45b1c7e67",
+    "turn_timeline.jsonl": "0fa1906dae17c776db2a8a3651817df8f52eed081c0e399a40952ec2c3d198ef",
+    "metrics.json": "c7b475a0fd026b210193c15ed61f6c661bdafe526db4e9ccb825dda4fe1c0641"
+  },
+  "cases": [
+    {
+      "case_id": "fd_continuation_people_500",
+      "passed": false,
+      "errors": [
+        "timeline speech-stop-to-reply-audio exceeded 2500ms: [4005.5]"
+      ],
+      "metrics": {
+        "functional_outcome_passed": true,
+        "experience_slo_passed": false,
+        "canonical_reply_speech_stop_to_audio_ms": 4005.5499999980384,
+        "timeline_speech_stop_to_commit_ms": 2501.193666998006,
+        "timeline_interruption_owner_chain": "turn_policy_decision@1474ms:hold:continuation_grace_wait_for_speech:人数方面改成两个人。 ; turn_policy_decision@1703ms:hold:deadline_wait_for_final_commit:人数方面改成两个人。 ; transcript_evidence@2053ms:?:?:人数方面改成两个人。 ; turn_policy_decision@2053ms:hold:semantic_score_wait score=0.42 evidence=final_transcript final=true:人数方面改成两个人。 ; turn_policy_decision@2154ms:hold:deadline_wait_for_final_commit:人数方面改成两个人。 ; transcript_evidence@2404ms:?:?:人数方面改成两个人。 ; turn_policy_decision@2404ms:cancel:stable_normal_interrupt age_ms=351 window_ms=350 score=0.42 base_reason=semantic_score_wait score=0.42 evidence=final_transcript final=true:人数方面改成两个人。 ; candidate_resolved@2407ms:cancel:eot_cancel:",
+        "timeline_framework_completed_gate_chain": "candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:帮我详细介绍一下这个方案。 ; transcript_settlement:continue:candidate_segments_covered:帮我详细介绍一下这个方案。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:人数方面。 改成两个人。 ; transcript_settlement:continue:candidate_segments_covered:人数方面。 改成两个人。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:人数方面。改成两个人。 ; interruption_verdict:continue:eot_cancel:人数方面改成两个人。",
+        "canonical_reply_audio_source": "application_tts",
+        "canonical_reply_receiver_status": "not_measured",
+        "real_call_verified": true
+      }
+    },
+    {
+      "case_id": "fd_continuation_people_900",
+      "passed": false,
+      "errors": [
+        "timeline speech-stop-to-reply-audio exceeded 2500ms: [3620.6]"
+      ],
+      "metrics": {
+        "functional_outcome_passed": true,
+        "experience_slo_passed": false,
+        "canonical_reply_speech_stop_to_audio_ms": 3620.6259159989713,
+        "timeline_speech_stop_to_commit_ms": 2501.9247499985795,
+        "timeline_interruption_owner_chain": "transcript_evidence@1835ms:?:?:人数方面改成两个人。 ; turn_policy_decision@1835ms:hold:continuation_grace_wait_for_speech:人数方面改成两个人。 ; transcript_evidence@2106ms:?:?:人数方面改成两个人。 ; turn_policy_decision@2106ms:hold:semantic_score_wait score=0.42 evidence=final_transcript final=true:人数方面改成两个人。 ; turn_policy_decision@2216ms:hold:deadline_wait_for_final_commit:人数方面改成两个人。 ; transcript_evidence@2456ms:?:?:人数方面改成两个人。 ; turn_policy_decision@2457ms:cancel:stable_normal_interrupt age_ms=351 window_ms=350 score=0.42 base_reason=semantic_score_wait score=0.42 evidence=final_transcript final=true:人数方面改成两个人。 ; candidate_resolved@2458ms:cancel:eot_cancel:",
+        "timeline_framework_completed_gate_chain": "candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:帮我详细介绍一下这个方案。 ; transcript_settlement:continue:candidate_segments_covered:帮我详细介绍一下这个方案。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:人数方面。 改成两个人。 ; transcript_settlement:continue:candidate_segments_covered:人数方面。 改成两个人。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:人数方面。改成两个人。 ; interruption_verdict:continue:eot_cancel:人数方面改成两个人。",
+        "canonical_reply_audio_source": "application_tts",
+        "canonical_reply_receiver_status": "not_measured",
+        "real_call_verified": true
+      }
+    },
+    {
+      "case_id": "fd_continuation_cost_500",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true,
+        "canonical_reply_speech_stop_to_audio_ms": 1485.7312500025728,
+        "timeline_speech_stop_to_commit_ms": 118.26199999995879,
+        "timeline_interruption_owner_chain": "post_speech_evidence_wait@1807ms:hold:deadline_wait_for_semantic_score:enough_cjk_interim score=0.21:费用方面控制在500元 ; transcript_evidence@1890ms:?:?:费用方面控制在500元 ; transcript_evidence@1896ms:?:?:费用方面控制在500元 ; turn_policy_decision@1896ms:hold:continuation_grace_wait_for_speech:费用方面控制在500元 ; transcript_evidence@1903ms:?:?:费用方面控制在500元以内。 ; transcript_evidence@1910ms:?:?:费用方面控制在500元以内。 ; turn_policy_decision@1910ms:cancel:eot_score_high score=0.90>=0.70 evidence=final_transcript:费用方面控制在500元以内。 ; candidate_resolved@1911ms:cancel:eot_cancel:",
+        "timeline_framework_completed_gate_chain": "candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:帮我详细介绍一下这个方案。 ; transcript_settlement:continue:candidate_segments_covered:帮我详细介绍一下这个方案。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:费用方面。 控制在500元以内。 ; transcript_settlement:continue:candidate_segments_covered:费用方面。 控制在500元以内。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:费用方面。控制在500元以内。 ; interruption_verdict:continue:eot_cancel:费用方面控制在500元以内。",
+        "canonical_reply_audio_source": "application_tts",
+        "canonical_reply_receiver_status": "not_measured",
+        "real_call_verified": true
+      }
+    }
+  ],
+  "canonical_timeline": [
+    {
+      "turn_id": "6d641dd707dc4a7a",
+      "room_name": "voice-bench-fd_continuation_people_500-cba85c65",
+      "text": "人数方面。改成两个人。",
+      "timestamps": {
+        "speech_stopped_at": 22130.238344083,
+        "turn_committed_at": 22132.73953775,
+        "brain_request_sent_at": 22132.740712583,
+        "brain_first_answer_delta_at": 22133.926459666,
+        "tts_first_audio_at": 22134.243894083
+      }
+    },
+    {
+      "turn_id": "4b771cd8a644401c",
+      "room_name": "voice-bench-fd_continuation_people_900-091ca394",
+      "text": "人数方面。改成两个人。",
+      "timestamps": {
+        "speech_stopped_at": 22149.188473875,
+        "turn_committed_at": 22151.690398625,
+        "brain_request_sent_at": 22151.694327458,
+        "brain_first_answer_delta_at": 22152.406423291,
+        "tts_first_audio_at": 22152.809099791
+      }
+    },
+    {
+      "turn_id": "86dfd577a7e545f0",
+      "room_name": "voice-bench-fd_continuation_cost_500-ecafd833",
+      "text": "费用方面。控制在500元以内。",
+      "timestamps": {
+        "speech_stopped_at": 22179.587783416,
+        "turn_committed_at": 22179.706045416,
+        "brain_request_sent_at": 22179.708974458,
+        "brain_first_answer_delta_at": 22180.77201,
+        "tts_first_audio_at": 22181.073514666
+      }
+    }
+  ]
+}

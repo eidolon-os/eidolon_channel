@@ -116,22 +116,26 @@ def test_silent_failure_fallback_is_suppressed_while_user_is_speaking():
     assert timeline.attrs["silent_failure_fallback"]["reason"] == "user_speaking"
 
 
-def test_transcription_timeout_announces_once_outside_chat_context():
-    p = _pipeline_with_session()
-    p._mark_activity = Mock()
-    timeline = TurnTimeline("transcription-timeout")
-    boundary = p._ensure_turn_completion()._session_turns
+async def test_terminal_error_fallback_produces_audio_through_real_session():
+    from livekit.agents.llm import LLMError
+    from livekit.agents.voice.events import ErrorEvent
+    from eidolon.livekit.tests._harness.production import production_session
+    from eidolon.livekit.tests._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD
 
-    assert boundary.notify_transcription_timeout_once(timeline=timeline) is True
-    assert boundary.notify_transcription_timeout_once(timeline=timeline) is False
-
-    p._session.say.assert_called_once_with(
-        "抱歉，刚才没听清，请再说一遍好吗？",
-        add_to_chat_ctx=False,
-    )
-    p._mark_activity.assert_not_called()
-    assert timeline.attrs["transcription_timeout_fallback"] == {
-        "attempted": True,
-        "spoken": True,
-        "reason": "user_transcription_timeout",
-    }
+    tts = MockTTS(char_seconds=0.01)
+    async with production_session(
+        llm=MockLLM.scripted([]), stt=MockSTT.scripted([]),
+        tts=tts, vad=MockVAD.silent(), mode="half_duplex",
+    ) as (pipeline, handle):
+        timeline = TurnTimeline("terminal-error-audio")
+        timeline.mark("turn_committed_at")
+        pipeline._timeline = timeline
+        pipeline._claim_agent_output_timeline(timeline)
+        pipeline._on_session_error(ErrorEvent(source=Mock(), error=LLMError(
+            timestamp=1, label="eidolon_agent", error=RuntimeError("unavailable"),
+            recoverable=False,
+        )))
+        await handle.audio_out.wait_for_first_audio()
+        assert tts.synth_texts == ["刚才卡了一下，请再说一遍好吗？"]
+        assert handle.audio_out.collected_pcm
+        assert timeline.attrs["silent_failure_fallback"]["spoken"] is True

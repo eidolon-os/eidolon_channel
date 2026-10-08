@@ -80,7 +80,9 @@ class FullDuplexTurnCompletion:
         )
         self.cancel_completed_voiceprint_turn()
         self.reset_candidate_voiceprint_tasks()
-        self._session_turns.notify_transcription_timeout_once(timeline=timeline)
+        # VAD without any transcript is not evidence of a user request or a
+        # provider failure. Reject quietly: speaking here turns ambient noise
+        # into assistant activity and perpetually renews the room idle window.
         pipeline._flush_turn_timeline(timeline, reason)
         return True
 

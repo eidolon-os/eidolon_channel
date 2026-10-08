@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent")
 
 _SILENT_OUTPUT_FALLBACK_TEXT = "刚才卡了一下，请再说一遍好吗？"
-_TRANSCRIPTION_TIMEOUT_FALLBACK_TEXT = "抱歉，刚才没听清，请再说一遍好吗？"
 
 
 class FullDuplexSessionTurnBoundary:
@@ -115,22 +114,6 @@ class FullDuplexSessionTurnBoundary:
             attr_name="silent_failure_fallback",
             reason="llm_error_without_delta",
             text=_SILENT_OUTPUT_FALLBACK_TEXT,
-        )
-
-    def notify_transcription_timeout_once(
-        self,
-        *,
-        timeline: TurnTimeline | None,
-    ) -> bool:
-        """Prompt for a retry after LiveKit reports a transcript-less turn."""
-
-        if timeline is None:
-            return False
-        return self._speak_local_fallback_once(
-            timeline=timeline,
-            attr_name="transcription_timeout_fallback",
-            reason="user_transcription_timeout",
-            text=_TRANSCRIPTION_TIMEOUT_FALLBACK_TEXT,
         )
 
     def _speak_local_fallback_once(

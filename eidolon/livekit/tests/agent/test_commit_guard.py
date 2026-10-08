@@ -150,10 +150,11 @@ def test_livekit_transcription_timeout_rejects_transcriptless_candidate() -> Non
     assert expiry["outcome"] == "rejected"
     assert expiry["source"] == "livekit_user_transcription_timeout"
     assert expiry["speech_duration"] == 1.2
-    pipeline._session.say.assert_called_once_with(
-        "抱歉，刚才没听清，请再说一遍好吗？",
-        add_to_chat_ctx=False,
-    )
+    pipeline._session.say.assert_not_called()
+    assert "transcription_timeout_fallback" not in timeline.attrs
+    assert pipeline._ensure_turn_completion().handle_transcription_timeout(
+        SimpleNamespace(speech_duration=1.2, vad_speech_started_at=123.0)
+    ) is False
     assert timeline.attrs["timeline_flush_reason"] == ("speech_stopped_without_transcript_deadline")
 
 
@@ -902,3 +903,43 @@ async def test_hard_stop_terminal_closes_before_next_turn_consumes_context() -> 
     assert next_context.messages()[0].role == "system"
     assert manager.last_context is None
     assert pipeline._full_duplex_state.unexpected_transition_count == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_transcriptless_noise_does_not_renew_idle_window():
+    from eidolon.livekit.agent.session.idle import IdleWatchdog
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    pipeline._session.agent_state = "listening"
+    pipeline._session.user_state = "listening"
+    closed = asyncio.Event()
+    ended = AsyncMock()
+    watchdog = IdleWatchdog(
+        timeout_sec=0.08,
+        get_session=lambda: pipeline._session,
+        get_room=lambda: None,
+        get_timeline=lambda: None,
+        session_closed_event=closed,
+        on_idle_disconnect=ended,
+        disconnect_grace_sec=0,
+    )
+    pipeline._mark_activity = watchdog.mark_activity
+    watchdog.start()
+    anchor = watchdog.last_activity_monotonic
+    try:
+        for index in range(4):
+            timeline = TurnTimeline(f"ambient-{index}")
+            pipeline._timeline = timeline
+            pipeline._user_turns.start_speech(timeline=timeline)
+            pipeline._user_turns.note_speech_stopped(eot_score=0)
+            assert pipeline._ensure_turn_completion().handle_transcription_timeout(
+                SimpleNamespace(speech_duration=0.8)
+            )
+            await asyncio.sleep(0.01)
+        pipeline._session.say.assert_not_called()
+        assert watchdog.last_activity_monotonic == anchor
+        await asyncio.wait_for(closed.wait(), 0.3)
+        ended.assert_awaited_once()
+    finally:
+        watchdog.stop()

@@ -1,0 +1,165 @@
+{
+  "run_id": "mac-continuation-verified-20261008",
+  "checkout_head": "1313ff58f1ab2d351f48350ce8842cbf51a02b09",
+  "source_dirty_at_run": false,
+  "machine": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "python": "3.13.13",
+  "livekit_agents": "1.7.1",
+  "repetitions_per_case": 1,
+  "channel_runtime": {
+    "restart": "Ops eidolon mac service restart channel",
+    "request_id": "ops-1d43c8ba8095414298bfc7a7801c79af",
+    "audit_position": 434,
+    "pid_before": 17656,
+    "pid_after": 16500,
+    "started_at": "2026-10-08T16:39:37+08:00",
+    "cwd": "/Users/manson/ai/eidolon/eidolon_channel",
+    "verification": "Ops ready + new PID/cwd/start after source commit + real-room traces; other components not restarted or version-certified"
+  },
+  "identity": {
+    "registered_owner_preflight_ok": true,
+    "test_companion_differs_from_xiaohe": true,
+    "rooms": "separate voice-bench-* per case; existing test companion, not a new Realm"
+  },
+  "endpointing": {
+    "interface": "non-streaming InterruptAwareTurnDetector",
+    "min_silence_ms": 500,
+    "max_delay_seconds": 3.0,
+    "unlikely_threshold": 0.5,
+    "people_score_logged": 0.424,
+    "cost_score_logged": 0.9
+  },
+  "source_sha256": {
+    "metrics.json": "2cfd6352eb50fd4f66c85bfd8bb61bd3435a5776acd6bc0977017989fd806781",
+    "livekit_room_results.jsonl": "6bc8c8d4ccfb439e3dcc2d0898f6abbbef893716b935ac1a4dc56d0b22e0eaf6",
+    "turn_timeline.jsonl": "f40b1619262ea54298e269aa52241f5c66d2d1688409142f6d62b2ffb5e84fe9",
+    "identity_preflight.json": "76f3d22bf83da9ad2d7c9f4ed38214ecf5cd3b7f8bbd035cabca296ad64b53ce",
+    "preflight.json": "0ffe0f783dedce80c48c649b6b5a3a3337a65ddccaeb656a8a2dd402bf941ad2"
+  },
+  "implementation_sha256": {
+    "uv.lock": "ce9611795ead8dcfd342f4537330aa17a43205419cde2580c0fc0a076624aa80",
+    "eidolon/livekit/agent/full_duplex/agent_builder.py": "dedd3deed7048d50aa601cfbbd9b4727f73aa9f4040b4bfca7ea29f79d9c99b8",
+    "eidolon/livekit/agent/session/eot_model.py": "3c975b207b98af12b4765eaadb37ed1c5248fe4ee933867f1f98722017974901",
+    "eidolon/livekit/plugins/eot/models/base.py": "ff692ed5fdd7a0faf051feb0f7b599ae4b88a11c240f6e7ec477064faa792a4f",
+    ".venv/lib/python3.13/site-packages/livekit/agents/voice/audio_recognition.py": "6a847a6648b2fb8324514fc746d4901d1164b540785df8a9b24bf1a8e687a70a",
+    ".venv/lib/python3.13/site-packages/livekit/agents/voice/turn.py": "13476dda9790261991a386700f2bde6ed886ae8e329b5fae21aba3e02031d8fe",
+    "/Users/manson/ai/eidolon/.eidolon/mac-product/config/settings/channel.yaml": "ae0eb46f5e380b760a9ee4c83b8fe929a8e4c55aca533be9516243e6284e99ab",
+    "eidolon/livekit/plugins/eot/data/model/firered_chat_turn_detector/chinese_best_model_q8.onnx": "e0738b2d2f8cf17ee75fc8ac8a36f2b0a9dcb29f288387df4ab7554f0c3f6317",
+    "eidolon/livekit/plugins/eot/data/model/firered_chat_turn_detector/multilingual_best_model_q8.onnx": "285cafedb0263b065d83964ecc728b795bb281688b0d6525f6c7ca6cb1f756df"
+  },
+  "cases": [
+    {
+      "case_id": "fd_continuation_people_500",
+      "passed": false,
+      "errors": [
+        "timeline speech-stop-to-reply-audio exceeded 2500ms: [3246.0]"
+      ],
+      "metrics": {
+        "functional_outcome_passed": true,
+        "experience_slo_passed": false,
+        "canonical_reply_speech_stop_to_audio_ms": 3246.0072499998205,
+        "timeline_speech_stop_to_commit_ms": 2501.7627500019444,
+        "real_call_verified": true,
+        "canonical_reply_audio_source": "application_tts",
+        "canonical_reply_receiver_status": "not_measured",
+        "timeline_interruption_owner_chain": "turn_policy_decision@1354ms:hold:deadline_wait_for_semantic_score:enough_cjk_interim score=0.42:人数方面改成两个人。 ; post_speech_evidence_wait@1370ms:hold:deadline_wait_for_semantic_score:enough_cjk_interim score=0.42:人数方面改成两个人。 ; transcript_evidence@1370ms:?:?:人数方面改成两个人。 ; turn_policy_decision@1370ms:hold:continuation_grace_wait_for_speech:人数方面改成两个人。 ; turn_policy_decision@1822ms:hold:deadline_wait_for_final_commit:人数方面改成两个人。 ; transcript_evidence@2172ms:?:?:人数方面改成两个人。 ; turn_policy_decision@2172ms:cancel:stable_normal_interrupt age_ms=962 window_ms=350 score=0.42 base_reason=semantic_score_wait score=0.42 evidence=final_transcript final=true:人数方面改成两个人。 ; candidate_resolved@2175ms:cancel:eot_cancel:",
+        "timeline_framework_completed_gate_chain": "candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:帮我详细介绍一下这个方案。 ; transcript_settlement:continue:candidate_segments_covered:帮我详细介绍一下这个方案。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:人数方面。 改成两个人。 ; transcript_settlement:continue:candidate_segments_covered:人数方面。 改成两个人。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:人数方面。改成两个人。 ; interruption_verdict:continue:eot_cancel:人数方面改成两个人。"
+      }
+    },
+    {
+      "case_id": "fd_continuation_people_900",
+      "passed": false,
+      "errors": [
+        "timeline speech-stop-to-reply-audio exceeded 2500ms: [3490.4]"
+      ],
+      "metrics": {
+        "functional_outcome_passed": true,
+        "experience_slo_passed": false,
+        "canonical_reply_speech_stop_to_audio_ms": 3490.355207999528,
+        "timeline_speech_stop_to_commit_ms": 2502.420249998977,
+        "real_call_verified": true,
+        "canonical_reply_audio_source": "application_tts",
+        "canonical_reply_receiver_status": "not_measured",
+        "timeline_interruption_owner_chain": "post_speech_evidence_wait@1265ms:hold:semantic_score_wait score=0.42 evidence=enough_cjk_interim:人数方面改成两个人 ; transcript_evidence@1306ms:?:?:人数方面改成两个人。 ; transcript_evidence@1312ms:?:?:人数方面改成两个人。 ; turn_policy_decision@1312ms:hold:continuation_grace_wait_for_speech:人数方面改成两个人。 ; turn_policy_decision@1717ms:hold:deadline_wait_for_final_commit:人数方面改成两个人。 ; transcript_evidence@2066ms:?:?:人数方面改成两个人。 ; turn_policy_decision@2066ms:cancel:stable_normal_interrupt age_ms=1010 window_ms=350 score=0.42 base_reason=semantic_score_wait score=0.42 evidence=final_transcript final=true:人数方面改成两个人。 ; candidate_resolved@2067ms:cancel:eot_cancel:",
+        "timeline_framework_completed_gate_chain": "candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:帮我详细介绍一下这个方案。 ; transcript_settlement:continue:candidate_segments_covered:帮我详细介绍一下这个方案。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:人数方面。 改成两个人。 ; transcript_settlement:continue:candidate_segments_covered:人数方面。 改成两个人。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:人数方面。改成两个人。 ; interruption_verdict:continue:eot_cancel:人数方面改成两个人。"
+      }
+    },
+    {
+      "case_id": "fd_continuation_cost_500",
+      "passed": true,
+      "errors": [],
+      "metrics": {
+        "functional_outcome_passed": true,
+        "experience_slo_passed": true,
+        "canonical_reply_speech_stop_to_audio_ms": 1341.736750000564,
+        "timeline_speech_stop_to_commit_ms": 55.862290999357356,
+        "real_call_verified": true,
+        "canonical_reply_audio_source": "application_tts",
+        "canonical_reply_receiver_status": "not_measured",
+        "timeline_interruption_owner_chain": "transcript_evidence@1389ms:?:?:费用方面控制在500元 ; transcript_evidence@1398ms:?:?:费用方面控制在500元 ; turn_policy_decision@1399ms:hold:semantic_score_wait score=0.21 evidence=enough_cjk_interim:费用方面控制在500元 ; transcript_evidence@1426ms:?:?:费用方面控制在500元 ; turn_policy_decision@1427ms:cancel:stable_normal_interrupt age_ms=352 window_ms=350 score=0.21 base_reason=semantic_score_wait score=0.21 evidence=enough_cjk_interim:费用方面控制在500元 ; confirmed_cancel_collecting_turn@1428ms:?:stable_normal_interrupt age_ms=352 window_ms=350 score=0.21 base_reason=semantic_score_wait score=0.21 evidence=enough_cjk_interim:费用方面控制在500元 ; confirmed_cancel_speech_stopped@1709ms:?:?:费用方面。控制在500元 ; candidate_resolved@1709ms:cancel:confirmed_cancel_speech_completed:",
+        "timeline_framework_completed_gate_chain": "candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:帮我详细介绍一下这个方案。 ; transcript_settlement:continue:candidate_segments_covered:帮我详细介绍一下这个方案。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:帮我详细介绍一下这个方案。 ; received:observe:framework_completed_turn:费用方面。 控制在500元以内。 ; transcript_settlement:continue:candidate_segments_covered:费用方面。 控制在500元以内。 ; candidate_assembled:evaluate:canonical_user_turn_candidate:费用方面。控制在500元以内。 ; interruption_verdict:continue:confirmed_cancel_speech_completed:费用方面。控制在500元"
+      }
+    }
+  ],
+  "canonical_timeline": [
+    {
+      "turn_id": "467acff021f743c0",
+      "room_name": "voice-bench-fd_continuation_people_500-4dfdefa2",
+      "text": "人数方面。改成两个人。",
+      "timestamps": {
+        "speech_stopped_at": 28042.643557916,
+        "turn_committed_at": 28045.145320666,
+        "brain_request_sent_at": 28045.146505583,
+        "brain_first_answer_delta_at": 28045.480367708,
+        "tts_first_audio_at": 28045.889565166
+      },
+      "durations_ms": {
+        "stop_to_commit": 2501.763,
+        "commit_to_rpc": 1.185,
+        "rpc_to_answer": 333.862,
+        "answer_to_audio": 409.197
+      }
+    },
+    {
+      "turn_id": "1a44c175d0044330",
+      "room_name": "voice-bench-fd_continuation_people_900-49d6b31a",
+      "text": "人数方面。改成两个人。",
+      "timestamps": {
+        "speech_stopped_at": 28081.645993375,
+        "turn_committed_at": 28084.148413625,
+        "brain_request_sent_at": 28084.153719208,
+        "brain_first_answer_delta_at": 28084.735873291,
+        "tts_first_audio_at": 28085.136348583
+      },
+      "durations_ms": {
+        "stop_to_commit": 2502.42,
+        "commit_to_rpc": 5.306,
+        "rpc_to_answer": 582.154,
+        "answer_to_audio": 400.475
+      }
+    },
+    {
+      "turn_id": "5acacc3a5e4b461b",
+      "room_name": "voice-bench-fd_continuation_cost_500-aa560084",
+      "text": "费用方面。控制在500元以内。",
+      "timestamps": {
+        "speech_stopped_at": 28117.072956,
+        "turn_committed_at": 28117.128818291,
+        "brain_request_sent_at": 28117.136264083,
+        "brain_first_answer_delta_at": 28117.972728291,
+        "tts_first_audio_at": 28118.41469275
+      },
+      "durations_ms": {
+        "stop_to_commit": 55.862,
+        "commit_to_rpc": 7.446,
+        "rpc_to_answer": 836.464,
+        "answer_to_audio": 441.964
+      }
+    }
+  ],
+  "regression": {
+    "passed": 157,
+    "xfailed_known": 11,
+    "log_sha256": "68dd9b9a48ed1f6cce6888abc4bf386b1b7db67d0cce87eec756f0ca70101618"
+  }
+}

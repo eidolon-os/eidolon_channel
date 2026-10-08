@@ -95,6 +95,16 @@ baselines before comparing: historical reports without `user_audio_done_referenc
 used the end of the entire feed, including an extra 800 ms of silence, and are
 not directly comparable. Existing SLO thresholds have not been relaxed.
 
+Server timeline `speech_stopped_at` uses the Channel user-state transition to
+listening, after VAD has confirmed silence. It is distinct from the client's
+last voiced frame above. Consequently, `timeline_speech_stop_to_commit_ms` and
+`canonical_reply_speech_stop_to_audio_ms` exclude the preceding VAD silence
+confirmation; the latter ends at application TTS audio, not receiver playback.
+For example, the Mac configuration's 500 ms VAD silence and LiveKit's 3 s
+incomplete-turn endpoint can appear as roughly 2.5 s from this server event to
+commit. Do not subtract or compare these client/server clocks directly, or
+interpret the server metric as acoustic stop-to-speaker latency.
+
 ### PTT transcript evidence
 
 For a PTT device case, `min_user_finals` requires distinct, nonempty committed

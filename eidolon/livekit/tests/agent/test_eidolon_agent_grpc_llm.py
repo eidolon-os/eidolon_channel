@@ -16,9 +16,9 @@ from unittest.mock import AsyncMock
 import grpc
 import grpc.aio
 import pytest
+from eidolon_sdk.biz.dialogue_control import CommittedTurnDecision, TurnCommitBoundary
 from google.protobuf import struct_pb2
 from livekit.agents.llm import ChatContext, ChatMessage
-from eidolon_sdk.biz.dialogue_control import CommittedTurnDecision, TurnCommitBoundary
 
 from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import (
     EidolonAgentGrpcLlm,
@@ -1201,3 +1201,85 @@ async def test_tool_status_roles_are_rendered_by_latency_policy() -> None:
             await adapter.aclose()
     finally:
         await server.stop(grace=0.5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["completed", "rejected", "failed"])
+async def test_explicit_motion_round_trip_waits_for_device_evidence(monkeypatch, terminal):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from eidolon_sdk.biz.contracts import CONTROL_TOPIC
+    from eidolon_sdk.biz.presentation import OutputSelection, SessionOutputPlan
+
+    feedback = []
+
+    class MotionServicer(pbg.EidolonAgentServicer):
+        async def Chat(self, requests, context):
+            async for frame in requests:
+                if frame.HasField("start"):
+                    tid = frame.start.turn_id
+                    assert frame.start.metadata["motion_profile"] == "stackchan.head.v1"
+                    yield pb.TurnEvent(
+                        turn_id=tid,
+                        kind=pb.TurnEvent.MOTION,
+                        motion=pb.HeadMotionRequest(
+                            command_id="motion:test", action="shake", times=2
+                        ),
+                    )
+                elif frame.HasField("motion_feedback"):
+                    feedback.append(frame.motion_feedback)
+                    yield _delta(frame.motion_feedback.turn_id, 1, terminal)
+                    yield _done(frame.motion_feedback.turn_id, 2)
+                    return
+
+    server, target = await _serve(MotionServicer())
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    adapter = EidolonAgentGrpcLlm(
+        target=target,
+        device_token=lambda: "test-token",
+        conversation_id="c",
+        output_plan=SessionOutputPlan(
+            session_id="s",
+            policy_revision=1,
+            outputs=OutputSelection(motion=True, dialogue_text=True),
+            motion_profile="stackchan.head.v1",
+        ),
+        presentation_room=room,
+    )
+
+    async def consume():
+        return [c async for c in adapter.chat(chat_ctx=_ctx("摇头两次"))]
+
+    task = asyncio.create_task(consume())
+    try:
+        async with asyncio.timeout(5):
+            while not room.local_participant.publish_data.called:
+                await asyncio.sleep(0.01)
+        envelope = json.loads(room.local_participant.publish_data.call_args.args[0])
+        assert envelope["payload"]["name"] == "shake" and envelope["payload"]["times"] == 2
+        assert not feedback and not task.done()
+        adapter.presentation_transport.receive(
+            SimpleNamespace(
+                topic=CONTROL_TOPIC,
+                participant=SimpleNamespace(identity="device"),
+                data=json.dumps(
+                    {"op": "head.gesture", "ref": envelope["id"], "status": terminal}
+                ).encode(),
+            )
+        )
+        chunks = await asyncio.wait_for(task, 5)
+        assert feedback[0].receipt["status"] == terminal
+        assert any(c.delta and c.delta.content == terminal for c in chunks)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await adapter.aclose()
+        await server.stop(None)

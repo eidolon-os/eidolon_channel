@@ -13,21 +13,22 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .contracts import ProvisionDevice, ContractError
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
-from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
 from eidolon_sdk.biz.contracts import (
     SESSION_APPLICATION_COMPANION,
     SESSION_APPLICATION_HOME_COMMAND,
     VALID_SESSION_APPLICATIONS,
     VOICE_APPLICATION_PROPERTY,
 )
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
 from eidolon_sdk.biz.presentation.negotiation import (
-    validate_output_contract,
     manifest_outputs,
     output_policy_required,
     select_outputs,
+    validate_output_contract,
 )
+from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
+
+from .contracts import ContractError, ProvisionDevice
 
 # Turn-taking is a device constraint, not a deployment preference: whether a
 # device may listen while it speaks depends on its echo cancellation, not on
@@ -90,6 +91,7 @@ class ChannelSpec:
     selected_outputs: OutputSelection | None = None
     media_declared: bool = False
     smarthome_panel: bool = False
+    motion_profile: str | None = None
 
     @property
     def needs_media(self) -> bool:
@@ -222,6 +224,21 @@ def derive_spec(
         serving=serving,
         output_policy=device.output_policy,
         selected_outputs=selected,
-        media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE or _media_flow(manifest, "video") is not MediaFlow.NONE,
+        motion_profile=(
+            "stackchan.head.v1"
+            if selected
+            and selected.motion
+            and any(
+                p.get("name") == "motion.profile"
+                and p.get("writable") is False
+                and isinstance(p.get("schema"), dict)
+                and p["schema"].get("const") == "stackchan.head.v1"
+                for p in manifest.get("properties", ())
+                if isinstance(p, dict)
+            )
+            else None
+        ),
+        media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
+        or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,
     )

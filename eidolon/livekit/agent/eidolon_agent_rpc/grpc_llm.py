@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.biz.presentation import ResponseIntent, SessionOutputPlan
+from eidolon_sdk.biz.presentation.motion import MotionReceipt, MotionRequest
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
@@ -405,11 +406,31 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 session.start_turn(
                     text=user_text,
                     conversation_id=conversation_id,
-                    metadata=({**({"turn_decision": self._turn_decision_metadata} if self._turn_decision_metadata else {}),
-                        **({"selected_outputs": llm_v.output_plan.outputs.model_dump()}
-                           if llm_v.output_plan else {}),
-                        **({"presentation_profile": llm_v.output_plan.expression_profile}
-                           if llm_v.output_plan and llm_v.output_plan.outputs.expression else {})} or None),
+                    metadata=(
+                        {
+                            **(
+                                {"turn_decision": self._turn_decision_metadata}
+                                if self._turn_decision_metadata
+                                else {}
+                            ),
+                            **(
+                                {"motion_profile": llm_v.output_plan.motion_profile}
+                                if llm_v.output_plan
+                                else {}
+                            ),
+                            **(
+                                {"selected_outputs": llm_v.output_plan.outputs.model_dump()}
+                                if llm_v.output_plan
+                                else {}
+                            ),
+                            **(
+                                {"presentation_profile": llm_v.output_plan.expression_profile}
+                                if llm_v.output_plan and llm_v.output_plan.outputs.expression
+                                else {}
+                            ),
+                        }
+                        or None
+                    ),
                     trace_id=self._trace_id,
                 ),
                 timeout=timeout,
@@ -558,6 +579,21 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             ),
                         )
                     )
+                elif isinstance(payload, MotionRequest):
+                    first_model_activity_seen = True
+                    if payload.turn_id != turn_id:
+                        raise ValueError("UNEXPECTED_MOTION_REQUEST")
+                    transport = llm_v.presentation_transport
+                    receipt = (
+                        await transport.execute_motion(payload)
+                        if transport is not None
+                        else MotionReceipt(
+                            command_id=payload.command_id,
+                            status="rejected",
+                            reason="MOTION_NOT_SELECTED",
+                        )
+                    )
+                    await session.report_motion(turn_id, receipt)
                 elif isinstance(payload, ResponseIntent):
                     if payload.turn_id != turn_id:
                         raise ValueError("UNEXPECTED_RESPONSE_INTENT")

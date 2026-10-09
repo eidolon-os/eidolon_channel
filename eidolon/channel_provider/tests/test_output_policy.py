@@ -7,7 +7,6 @@ from eidolon.channel_provider.contracts import (
     ProvisionRequest,
     ContractError,
     InvalidTransition,
-    ChannelNotServable,
 )
 from eidolon.channel_provider.spec import derive_spec, MediaFlow
 from .helpers import provision_payload, encoded
@@ -257,3 +256,16 @@ async def test_failed_input_revocation_stays_pending_and_stale_callbacks_cannot_
     assert adapter.binding_current(denied.handle)
     assert len(updates) == 1 and updates[0].permission.can_publish is False
     await adapter.shutdown()
+
+@pytest.mark.parametrize('profile,selected,expected', [(None,True,None), ('stackchan.head.v1',True,'stackchan.head.v1'), ('stackchan.head.v1',False,None)])
+def test_explicit_head_profile_requires_manifest_and_owner_selection(profile, selected, expected):
+    payload = provision_payload(output_policy=DeviceOutputPolicy(revision=1,
+        allowed=OutputSelection(dialogue_text=True,motion=selected)).model_dump(mode='json'))
+    properties = [
+        {'name':'output.dialogue_text','observable':False,'writable':False,'schema':{'type':'boolean','const':True}},
+        {'name':'output.motion','observable':False,'writable':False,'schema':{'type':'boolean','const':True}},
+    ]
+    if profile:
+        properties.append({'name':'motion.profile','observable':False,'writable':False,'schema':{'type':'string','const':profile}})
+    payload['device']['manifest']['properties'] = properties
+    assert spec(ProvisionRequest.parse(encoded(payload))).motion_profile == expected

@@ -408,6 +408,7 @@ class LiveKitChannelAdapter:
                 "inputs": {"microphone": spec.audio.publishes},
                 "outputs": spec.selected_outputs.model_dump(mode="json"),
                 "expression_profile": FACE_PROFILE if spec.selected_outputs.expression else None,
+                "motion_profile": spec.motion_profile,
             }
         if spec.output_policy is not None and spec.output_policy.inputs is not None:
             handle["input_revision"] = spec.output_policy.revision

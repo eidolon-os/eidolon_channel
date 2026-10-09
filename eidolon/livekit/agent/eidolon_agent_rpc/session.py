@@ -23,6 +23,7 @@ import grpc
 import grpc.aio
 from eidolon_sdk.biz.chat_stream import DeltaRole
 from eidolon_sdk.biz.presentation import PresentationReceipt, ResponseIntent
+from eidolon_sdk.biz.presentation.motion import MotionReceipt, MotionRequest
 from eidolon_sdk.core.grpc import (
     DEFAULT_LOW_LATENCY_CHANNEL_OPTIONS,
     GrpcTlsConfig,
@@ -150,8 +151,9 @@ _DONE = _DonePayload()
 
 # Union of everything the inbox queue can carry to a turn consumer.
 TurnPayload = (
-    ResponseIntent
-    |     DeltaPayload
+    MotionRequest
+    | ResponseIntent
+    | DeltaPayload
     | UsagePayload
     | StatePayload
     | ProgressPayload
@@ -249,6 +251,13 @@ class EidolonAgentSession:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def report_motion(self, turn_id: str, receipt: MotionReceipt) -> None:
+        value = struct_pb2.Struct()
+        value.update(receipt.model_dump(mode="json"))
+        await self._write(
+            pb.ChatRequest(motion_feedback=pb.MotionFeedback(turn_id=turn_id, receipt=value))
+        )
 
     async def report_presentation(self, turn_id: str, receipt: PresentationReceipt) -> None:
         await self._write(pb.ChatRequest(presentation_feedback=pb.PresentationFeedback(
@@ -519,16 +528,28 @@ class EidolonAgentSession:
                 if data_fields is not None and name in data_fields:
                     return int(data_fields[name].number_value)
                 return 0
+
             def _s(name: str) -> str:
                 if data_fields is not None and name in data_fields:
                     return data_fields[name].string_value
                 return ""
+
             q.put_nowait(UsagePayload(
                 prompt_tokens=_i("prompt_tokens"),
                 completion_tokens=_i("completion_tokens"),
                 total_tokens=_i("total_tokens"),
                 model=_s("model"),
             ))
+        elif kind == pb.TurnEvent.MOTION:
+            try:
+                request = MotionRequest(
+                    turn_id=ev.turn_id,
+                    command_id=ev.motion.command_id,
+                    action={"action": ev.motion.action, "times": ev.motion.times},
+                )
+                q.put_nowait(request)
+            except ValueError:
+                q.put_nowait(ValueError("INVALID_MOTION_REQUEST"))
         elif kind == pb.TurnEvent.PRESENTATION:
             value = ev.presentation
             try:

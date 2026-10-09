@@ -2,6 +2,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+
 import pytest
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from eidolon_sdk.biz.presentation import (
@@ -10,8 +11,9 @@ from eidolon_sdk.biz.presentation import (
     ResponseIntent,
     SessionOutputPlan,
 )
-from eidolon.livekit.agent.session.presentation import PresentationTransport, compile_expression
+
 from eidolon.livekit.agent.session.agent_output_coordinator import AgentOutputCoordinator
+from eidolon.livekit.agent.session.presentation import PresentationTransport, compile_expression
 
 
 def output():
@@ -146,8 +148,9 @@ def test_output_coordinator_does_not_mark_completed_expression_as_silent_failure
 
 @pytest.mark.asyncio
 async def test_real_grpc_feedback_finishes_silent_turn_without_text(monkeypatch):
-    from .test_eidolon_agent_grpc_llm import _serve, _ctx, pb, pbg
     from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
+
+    from .test_eidolon_agent_grpc_llm import _ctx, _serve, pb, pbg
 
     class Servicer(pbg.EidolonAgentServicer):
         feedback = None
@@ -265,8 +268,9 @@ async def test_device_refusal_is_a_typed_output_result(monkeypatch, status, code
 
 @pytest.mark.asyncio
 async def test_generation_finishes_before_expression_receipt_and_never_retries(monkeypatch):
-    from .test_eidolon_agent_grpc_llm import _serve, _ctx, pb, pbg
     from eidolon.livekit.agent.eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
+
+    from .test_eidolon_agent_grpc_llm import _ctx, _serve, pb, pbg
 
     class Servicer(pbg.EidolonAgentServicer):
         starts = 0
@@ -413,6 +417,7 @@ async def test_missing_receipt_times_out_only_expression_and_cancels_device(monk
     assert not transport.pending
     await transport.close()
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal", ["completed", "rejected", "failed", "cancelled"])
 async def test_motion_waits_for_target_device_and_terminal_execution(monkeypatch, terminal):
@@ -448,6 +453,7 @@ async def test_motion_waits_for_target_device_and_terminal_execution(monkeypatch
     assert any(c.args[0] == f"brain_motion_{terminal}" for c in emit.call_args_list)
     await transport.close()
 
+
 @pytest.mark.asyncio
 async def test_motion_cancellation_is_scoped_to_original_command(monkeypatch):
     monkeypatch.setattr("eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
@@ -469,6 +475,7 @@ async def test_motion_cancellation_is_scoped_to_original_command(monkeypatch):
     assert stop["payload"]["session_id"] == "session-1"
     assert not transport.motion_pending
     await transport.close()
+
 
 @pytest.mark.asyncio
 async def test_unselected_motion_never_publishes():
@@ -502,4 +509,91 @@ async def test_motion_only_delivers_and_reports_without_a_face(monkeypatch):
     receipt = report.call_args.args[1]
     assert receipt.status == 'completed' and receipt.presentation_id == 'head:turn-1'
     assert [json.loads(call.args[0])['op'] for call in room.local_participant.publish_data.call_args_list] == ['head.gesture']
+    await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,gesture",
+    [("shake", "shake"), ("nod", "nod"), ("home", "home"), ("look_left", "glance")],
+)
+async def test_explicit_motion_waits_for_ack_and_suppresses_accompaniment(
+    monkeypatch, action, gesture
+):
+    from eidolon_sdk.biz.presentation.motion import MotionRequest
+
+    monkeypatch.setattr(
+        "eidolon.livekit.agent.session.presentation.wait_for_runtime_participant_identity",
+        AsyncMock(return_value="device"),
+    )
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    selected = SessionOutputPlan(
+        session_id="session-1",
+        policy_revision=1,
+        outputs=OutputSelection(motion=True),
+        motion_profile="stackchan.head.v1",
+    )
+    transport = PresentationTransport(room, selected, Mock())
+    task = asyncio.create_task(
+        transport.execute_motion(
+            MotionRequest(turn_id="turn-1", command_id="motion:explicit", action={"action": action})
+        )
+    )
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if room.local_participant.publish_data.called:
+            break
+    envelope = json.loads(room.local_participant.publish_data.call_args.args[0])
+    assert envelope["payload"]["name"] == gesture
+
+    def reply(status):
+        transport.receive(
+            SimpleNamespace(
+                topic=CONTROL_TOPIC,
+                participant=SimpleNamespace(identity="device"),
+                data=json.dumps(
+                    {"op": "head.gesture", "ref": envelope["id"], "status": status}
+                ).encode(),
+            )
+        )
+
+    reply("started")
+    await asyncio.sleep(0)
+    assert not task.done()
+    reply("completed")
+    result = await task
+    assert result.status == "completed" and result.completion_basis == "software_sequence"
+    report = AsyncMock()
+    transport.start(intent("confirm"), report)
+    await asyncio.sleep(0)
+    assert room.local_participant.publish_data.call_count == 1
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_motion_requires_versioned_profile():
+    from eidolon_sdk.biz.presentation.motion import MotionRequest
+
+    room = SimpleNamespace(
+        on=Mock(), off=Mock(), local_participant=SimpleNamespace(publish_data=AsyncMock())
+    )
+    transport = PresentationTransport(room, output(), Mock())
+    receipt = await transport.execute_motion(
+        MotionRequest(turn_id="turn-1", command_id="motion:1", action={"action": "nod"})
+    )
+    assert receipt.status == "rejected"
+    room.local_participant.publish_data.assert_not_called()
+    await transport.close()
+
+@pytest.mark.asyncio
+async def test_stop_without_known_command_does_not_claim_stopped():
+    from eidolon_sdk.biz.presentation.motion import MotionRequest
+    room = SimpleNamespace(on=Mock(),off=Mock(),local_participant=SimpleNamespace(publish_data=AsyncMock()))
+    plan = SessionOutputPlan(session_id='s',policy_revision=1,outputs=OutputSelection(motion=True),motion_profile='stackchan.head.v1')
+    transport = PresentationTransport(room,plan,Mock())
+    result = await transport.execute_motion(MotionRequest(turn_id='t',command_id='motion:stop',action={'action':'stop'}))
+    assert result.status == 'rejected' and result.completion_basis == 'unconfirmed'
+    room.local_participant.publish_data.assert_not_called()
     await transport.close()

@@ -282,7 +282,9 @@ class HalfDuplexPttPipeline(BasePipeline):
         self.session_mark("warmup_done")
         self._provider_events.install_all()
 
-        session = AgentSession(turn_handling=self._build_turn_handling())
+        # Closing ends input admission; do not wait for another final transcript.
+        session = AgentSession(turn_handling=self._build_turn_handling(),
+                               session_close_transcript_timeout=0.0)
         self._bind_session(session)
 
         from ..session.room_io import start_room_session

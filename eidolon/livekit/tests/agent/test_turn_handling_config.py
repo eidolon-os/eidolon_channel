@@ -134,6 +134,7 @@ async def test_session_uses_livekit_transcription_timeout_event(
         "turn_handling": {"interruption": {"enabled": False}},
         "aec_warmup_duration": 0.4,
         "transcription_timeout": 1.5,
+        "session_close_transcript_timeout": 0.0,
     }
     assert captured["events"]["user_transcription_timeout"] is (
         pipeline._on_user_transcription_timeout

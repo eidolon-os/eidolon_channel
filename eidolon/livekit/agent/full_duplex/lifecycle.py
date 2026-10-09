@@ -102,7 +102,9 @@ class FullDuplexSessionLifecycle:
 
         ready = asyncio.Event()
         agent = pipeline._build_agent(ready=ready)
+        # Closing ends input admission; do not wait for another final transcript.
         session = AgentSession(
+            session_close_transcript_timeout=0.0,
             turn_handling=pipeline._build_turn_handling(),
             aec_warmup_duration=pipeline._aec_warmup_duration,
             transcription_timeout=pipeline._stt_commit_transcript_timeout,

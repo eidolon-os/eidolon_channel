@@ -378,8 +378,8 @@ def _session_lifecycle_payload(
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
-async def run_agent(ctx, cfg: AgentConfig) -> None:
-    """Agent job entrypoint — runs the voice pipeline in the LiveKit room."""
+async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = None) -> None:
+    """Run the voice pipeline; signal readiness for the job-owned lifetime."""
     from eidolon.livekit.agent.factory import SharedStageFactory
     from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
@@ -453,6 +453,8 @@ async def run_agent(ctx, cfg: AgentConfig) -> None:
             runtime_session_id,
             room.name,
         )
+        if started is not None:
+            started.set()
 
     async def _publish_session_end(reason: str) -> None:
         if session_end_state["sent"]:
@@ -832,8 +834,10 @@ async def _on_session(ctx) -> None:
     else:
         logger.info("[_on_session] using cached _agent_config")
 
-    await run_agent(ctx, cfg)
-    logger.info("[_on_session] run_agent returned")
+    from .session.job_lifecycle import start_job_pipeline
+
+    await start_job_pipeline(ctx, lambda ready: run_agent(ctx, cfg, started=ready))
+    logger.info("[_on_session] pipeline started; lifecycle owned by job")
 
 
 def _validate_config(cfg: AgentConfig) -> None:

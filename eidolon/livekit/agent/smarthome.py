@@ -97,7 +97,9 @@ async def run_smarthome_session(
                     watchdog.mark_activity()
             raise StopResponse()
 
+    # Closing ends input admission; do not wait for another final transcript.
     session = AgentSession(
+        session_close_transcript_timeout=0.0,
         stt=stt,
         vad=vad,
         turn_handling={

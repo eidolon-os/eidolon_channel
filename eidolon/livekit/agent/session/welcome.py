@@ -32,8 +32,20 @@ def play_welcome(
     if isinstance(welcome, WelcomeAudio):
         if pcm is None:
             raise ValueError("welcome audio must be prepared before session entry")
-        # SDK 1.7 requires the positional text argument even for audio-only say.
-        return session.say("", audio=_audio_frames(pcm, sample_rate), add_to_chat_ctx=False)
+
+        async def audio_only() -> AsyncIterator[rtc.AudioFrame]:
+            # Executed when this queued speech starts, not when it is queued.
+            # SDK skips empty text deltas, so explicitly finish the empty text
+            # segment through the public sink before the first audio frame.
+            # No invented subtitle or transcript is sent to the conversation.
+            text_output = session.output.transcription
+            if text_output is not None:
+                await text_output.capture_text("")
+                text_output.flush()
+            async for frame in _audio_frames(pcm, sample_rate):
+                yield frame
+
+        return session.say("", audio=audio_only(), add_to_chat_ctx=False)
     if queue_text is not None:
         queue_text(welcome, source="welcome")
     return session.say(welcome)

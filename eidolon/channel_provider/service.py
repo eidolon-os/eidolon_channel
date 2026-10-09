@@ -1041,6 +1041,11 @@ class ChannelProviderService:
                     device_requested=device_requested,
                 )
                 return active, []
+            logger.info(
+                "session close requested source=%s device=%s conversation_id=%s",
+                "device-channel" if device_requested else "control-api",
+                device_ref.device_instance_id, conversation_id or "*",
+            )
             return active, await adapter.close_session(handle, conversation_id)
 
     def _lapsed_channel(self, device_ref) -> StoredProvision | None:

@@ -1952,3 +1952,14 @@ async def test_panel_snapshot_uses_reliable_transport_without_command_receipts()
         await adapter.send_panel_control({'room': 'panel-room', 'device': 'different'}, command)
     assert len(delivered) == 1
     adapter._listeners.clear()
+
+
+@pytest.mark.parametrize("code,expected", [("not_found", False), ("unavailable", None), ("unauthenticated", None)])
+async def test_presence_distinguishes_missing_room_from_failed_observation(code, expected):
+    from livekit.api.twirp_client import TwirpError
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1000)
+    async def failed(request):
+        raise TwirpError(code=code, msg="unavailable", status=404 if code == "not_found" else 503)
+    client.room.list_participants = failed
+    assert await adapter.device_is_on_channel(grant.handle) is expected

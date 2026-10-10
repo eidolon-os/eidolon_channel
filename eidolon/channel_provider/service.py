@@ -853,11 +853,9 @@ class ChannelProviderService:
     async def presence(self) -> str:
         """Which of this Host's bodies are on their channel right now.
 
-        Presence had no producer anywhere on this Host. Hub publishes existence
-        and lifecycle and refuses liveness by contract; Kernel commits an
-        assignment and says so about the assignment, not the body; the runtime
-        blackboard's reader was withdrawn. So every body on the Owner's map read
-        「未探测」 while its speaker was plainly in a call.
+        The device stays on its channel during standby as well as during a
+        conversation. This observes the device's transport connection, never
+        inferring it from a Claim, mount, or an agent participant.
 
         This is the smallest thing that can answer it truthfully, and it is a
         read: for each channel this provider granted, ask its adapter whether
@@ -874,9 +872,18 @@ class ChannelProviderService:
         async with self._lock:
             self._store.expire_credentials(self._now_ms())
             active = self._store.observable_provisions()
+        # Bound concurrency so one unavailable adapter does not serialize the
+        # whole inventory behind its timeout.
+        gate = asyncio.Semaphore(16)
+
+        async def observe(stored):
+            async with gate:
+                present = await self._read_channel_presence(stored)
+                return stored, present, self._now_ms()
+
+        observations = await asyncio.gather(*(observe(stored) for stored in active))
         bodies = []
-        for stored in active:
-            on_channel = await self._read_channel_presence(stored)
+        for stored, on_channel, observed_at_ms in observations:
             async with self._lock:
                 if self._store.current_channel(stored.device_ref) != stored:
                     continue  # A retired handle cannot speak for a new lifecycle.
@@ -893,6 +900,8 @@ class ChannelProviderService:
                     # Three states. `null` is "this channel cannot say", which
                     # is not the same answer as "the body is not there".
                     "on_channel": on_channel,
+                    "device_ref": stored.device_ref.model_dump(mode="json"),
+                    "observed_at_ms": observed_at_ms,
                 }
             )
         return canonical_json({"operation": "channel.presence", "bodies": bodies})

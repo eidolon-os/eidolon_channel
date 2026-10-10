@@ -489,6 +489,8 @@ async def test_presence_answers_for_the_channels_it_granted(tmp_path) -> None:
     answer = json.loads(await service.presence())
 
     assert answer["operation"] == "channel.presence"
+    assert answer["bodies"][0]["observed_at_ms"] == clock[0]
+    assert answer["bodies"][0]["device_ref"]["device_instance_id"] == _DEVICE_1
     assert [(row["device_id"], row["on_channel"]) for row in answer["bodies"]] == [
         (_DEVICE_1, True)
     ]

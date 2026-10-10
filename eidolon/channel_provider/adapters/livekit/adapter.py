@@ -1003,10 +1003,13 @@ class LiveKitChannelAdapter:
             participants = await self._client().room.list_participants(
                 api.ListParticipantsRequest(room=room)
             )
+        except TwirpError as exc:
+            # A successful authoritative "room absent" answer is different
+            # from losing contact with LiveKit.
+            if exc.code == TwirpErrorCode.NOT_FOUND:
+                return False
+            return None
         except Exception:
-            # Includes the ordinary case of a room LiveKit has already reaped,
-            # which is indistinguishable here from a transport failure — and
-            # guessing between them is exactly what `None` exists to avoid.
             logger.debug("could not read participants of room=%s", room, exc_info=True)
             return None
         return any(

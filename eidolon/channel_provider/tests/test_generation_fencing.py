@@ -7,6 +7,7 @@ import pytest
 from eidolon_sdk.device_foundation.v1 import DeviceRef
 
 from eidolon.channel_provider.contracts import (
+    CurrentRequest,
     IdempotencyConflict,
     InvalidTransition,
     ProvisionRequest,
@@ -17,7 +18,26 @@ from eidolon.channel_provider.selection import AdapterRegistry
 from eidolon.channel_provider.service import ChannelProviderService
 from eidolon.channel_provider.store import PROVISION, ChannelProviderStore
 
-from .helpers import FakeAdapter, encoded, provision_payload, revoke_payload
+from .helpers import FakeAdapter, current_payload, encoded, provision_payload, revoke_payload
+
+
+@pytest.mark.parametrize("generation", ["owner_domain_generation", "claim_generation", "trust_epoch"])
+async def test_current_does_not_return_credentials_from_another_generation(tmp_path, generation):
+    service, store, backend = _service(tmp_path / "provider.sqlite3", [1_700_000_000_000])
+    old = _request()
+    await service.provision(old)
+    newer = {generation: 2}
+    answer = json.loads(await service.current(CurrentRequest.parse(
+        encoded(current_payload(device_ref=newer)))))
+    assert answer["binding"] is None
+    assert len(backend.opened) == 1
+    assert store.active_device(old.device_ref) is not None
+
+    new = _request(operation_id="new-generation", **newer)
+    await service.provision(new)
+    assert store.active_device(new.device_ref) is not None
+    with pytest.raises(StaleGeneration):
+        await service.current(CurrentRequest.parse(encoded(current_payload())))
 
 
 def _service(path, clock: list[int], adapter: FakeAdapter | None = None):

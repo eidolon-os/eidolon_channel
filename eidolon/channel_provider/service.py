@@ -359,7 +359,13 @@ class ChannelProviderService:
 
         async with self._lock:
             self._store.expire_credentials(self._now_ms())
+            self._store.assert_not_stale(request.device_ref)
             stored = self._store.current_channel(request.device_ref)
+            # A new authorization generation has no binding yet. Returning the
+            # previous generation's credentials makes Hub reject this response
+            # instead of provisioning and fencing the old grant.
+            if stored is not None and stored.device_ref != request.device_ref:
+                stored = None
         binding = json.loads(stored.response_json) if stored is not None else None
         refresh_required = stored is not None and not self._registry.get(
             stored.adapter_name

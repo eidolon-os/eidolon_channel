@@ -508,6 +508,7 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         logger.info("[StreamingPipeline] shutting down")
         self._stop_proactive_consumer()
+        pipeline._interruption_orchestrator.close()
         if hasattr(pipeline, "_semantic_interrupts"):
             await pipeline._semantic_interrupts.aclose()
         if hasattr(pipeline, "_interruption_effects"):

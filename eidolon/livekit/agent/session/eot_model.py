@@ -1,11 +1,15 @@
 """Session-local EOT state over the existing shared ONNX weight registry."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from eidolon.livekit.agent.turn_policy import eot_kwargs_from_turn_policy
 from eidolon.livekit.common.config import TurnPolicyConfig
+
+logger = logging.getLogger(__name__)
 
 
 def create_session_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
@@ -25,17 +29,21 @@ class InterruptAwareTurnDetector:
     LiveKit checks whether the current speech can be interrupted *before* its
     completed-turn hook. A Channel cancellation must finish its SpeechHandle
     before SDK reply scheduling, including when no model intent is configured.
-    Waiting only in that hook loses the reply or slow intent results.
+    Wait for all pending owner evidence, including the default policy's
+    continuation/stability windows; model-intent completion alone is not a
+    terminal verdict. Waiting only in the completed hook loses the reply.
     The existing detector still owns the EOT probability and endpointing delay.
     """
 
     def __init__(
         self, detector: Any, settle: Callable[[], Awaitable[None]],
         *, resolve_transcript: Callable[[str], str] | None = None,
+        begin_observation: Callable[[], Callable[[str, float | None], None]] | None = None,
     ) -> None:
         self.eot_model = detector
         self._settle = settle
         self._resolve_transcript = resolve_transcript
+        self._begin_observation = begin_observation
 
     @property
     def model(self) -> str:
@@ -66,5 +74,24 @@ class InterruptAwareTurnDetector:
                     chat_ctx = chat_ctx.copy()
                     chat_ctx.items[index] = message.model_copy(update={"content": [resolved]})
                 break
-        await self._settle()
-        return await self.eot_model.predict_end_of_turn(chat_ctx, timeout=timeout)
+        finish = None
+        if self._begin_observation is not None:
+            try:
+                finish = self._begin_observation()
+            except Exception:
+                logger.debug("endpointing observation unavailable", exc_info=True)
+        outcome, score = "error", None
+        try:
+            await self._settle()
+            score = await self.eot_model.predict_end_of_turn(chat_ctx, timeout=timeout)
+            outcome = "returned"
+            return score
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            if finish is not None:
+                try:
+                    finish(outcome, score)
+                except Exception:
+                    logger.debug("endpointing observation unavailable", exc_info=True)

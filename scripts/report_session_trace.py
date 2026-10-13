@@ -198,11 +198,48 @@ def _render_turns(records: list[dict[str, Any]]) -> list[str]:
                 f"terminal_reason={terminal.get('terminal_reason')}"
             )
         lines.append("-" * 78)
+        lines.extend(_render_interruption_diagnostics(turn, events_by_turn.get(turn_id, [])))
         if not durations:
             lines.append("  (no segment had both of its marks — the turn ended early)")
             continue
         for label, value in durations:
             lines.append(f"  {label:52s} {_ms(value):>9}  {_bar(value, longest)}")
+    return lines
+
+
+def _render_interruption_diagnostics(
+    turn: dict[str, Any], events: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Show boundary gaps as observations, never as proof of SDK failure."""
+    attrs = turn.get("attrs") or {}
+    stamps = turn.get("timestamps") or {}
+    verdict = attrs.get("interruption_verdict") or {}
+    observations = {row["started_at"]: row for row in attrs.get("endpointing_observations") or []}
+    for event in events or []:
+        if event.get("event_type") == "channel.endpointing.observed":
+            observations[event["started_at"]] = event
+    if not verdict and not observations:
+        return []
+    lines = [f"  interruption: {verdict.get('action', 'unresolved')} "
+             f"continue_to_llm={verdict.get('continue_to_llm', 'unknown')}"]
+    for row in sorted(observations.values(), key=lambda row: row["started_at"]):
+        before, after = row.get("before") or {}, row.get("after") or {}
+        changed = (before.get("candidate_id"), before.get("generation_id")) != (
+            after.get("candidate_id"), after.get("generation_id"))
+        lines.append(
+            f"  EOT {row.get('outcome')}: score={row.get('score')} "
+            f"speech={after.get('speech_id')} allow_interruptions={after.get('speech_allow_interruptions')} "
+            f"interrupted={after.get('speech_interrupted')} done={after.get('speech_done')} "
+            f"owner={after.get('interruption_state')} candidate_changed={changed}"
+        )
+    if verdict.get("continue_to_llm") is True and "turn_committed_at" not in stamps:
+        boundary = ("framework completion observed; inspect product admission"
+                    if "framework_completed_turn_at" in stamps else
+                    "no framework completion observed; inspect EOT / speech admission")
+        lines.append(f"  GAP: reply-eligible interruption without commit; {boundary}.")
+        lines.append("       Missing trace marks are not proof of a dropped reply; check session closure and trace loss.")
+    if stamps.get("playback_stop_sent_at"):
+        lines.append("  playback.stop recorded at server; physical speaker stop is not measured here.")
     return lines
 
 

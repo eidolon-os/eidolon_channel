@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from collections.abc import Callable
 from typing import Any
@@ -110,6 +111,7 @@ class InterruptionCandidate:
     last_vad_active: bool | None = None
     last_decision_signature: tuple[object, ...] | None = None
     last_event_at: float | None = None
+    resolution: asyncio.Event = field(default_factory=asyncio.Event, repr=False, compare=False)
 
     @property
     def speech_duration_sec(self) -> float:
@@ -153,6 +155,17 @@ class InterruptionOrchestrator:
         self._candidate: InterruptionCandidate | None = None
         self._timeline: TurnTimeline | None = None
         self._resolved_verdicts: dict[tuple[str | None, int], InterruptionVerdict] = {}
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        """Release endpointing on session exit without inventing a policy verdict."""
+        self._closed = True
+        if self._candidate is not None:
+            self._candidate.resolution.set()
 
     @property
     def state(self) -> InterruptionState:
@@ -210,6 +223,30 @@ class InterruptionOrchestrator:
         if generation_id is None:
             return None
         return self._resolved_verdicts.get((candidate_id, generation_id))
+
+    async def wait_for_resolution(self, key: tuple[str | None, int]) -> None:
+        """Wait for this generation's verdict within its existing evidence budget.
+
+        Output resumption is provisional: only resolve() releases this wait.
+        Each waiter owns its cancellation; cancelling SDK endpointing must not
+        cancel another waiter or the policy/model task that supplies evidence.
+        Supersession resolves the old candidate and wakes its waiters too.
+        """
+        if self._closed:
+            raise asyncio.CancelledError("interruption owner closed")
+        candidate = self._candidate
+        if candidate is None or self.active_key != key:
+            return
+        remaining = self.hold_remaining_sec()
+        if remaining is None:
+            remaining = max(0.0, self._evidence_timeout_sec - (
+                self._now() - (candidate.stopped_at if candidate.stopped_at is not None
+                               else candidate.started_at)
+            ))
+        async with asyncio.timeout(remaining):
+            await candidate.resolution.wait()
+        if self._closed:
+            raise asyncio.CancelledError("interruption owner closed")
 
     def start_candidate(
         self,
@@ -734,6 +771,7 @@ class InterruptionOrchestrator:
             reason,
         )
         self._candidate = None
+        candidate.resolution.set()
         if self._on_terminal_verdict is not None:
             self._on_terminal_verdict(verdict)
 

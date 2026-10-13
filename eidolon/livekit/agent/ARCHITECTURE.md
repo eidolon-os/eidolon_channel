@@ -255,6 +255,7 @@ eidolon/livekit/agent/
 本轮已完成产品输入终态 owner 切换：
 
 - 保留 LiveKit automatic turn lifecycle 和 Eidolon 自有 EOT/semantic interruption 策略，不切换 manual mode。
+- Channel owner 的 `interruption.enabled=False` 会使 SDK speech 默认不可打断，SDK 的回复准入检查又早于 `on_user_turn_completed`。因此 EOT 适配器必须先等待该 candidate/generation 的打断终态（包括无意图模型时的 continuation/stability 等待），确认取消后等待旧 speech 收尾，才能返回 EOT 分数。等待沿用 owner 剩余证据预算与 deadline policy；暂时恢复输出不是终态，新代际使旧端点失效，公开 `Agent.on_exit` 与 pipeline shutdown 解除等待。不能把迟到的取消当成 SDK 会自动重试用户轮次的保证。
 - `FINAL -> 后续 INTERIM` 按新 sentence segment 组装，framework completion 使用 coordinator canonical text。
 - VAD-stop、output interruption、voiceprint callback、timer 都不能 commit/reject/clear 用户 turn；正常 commit 只来自 framework-completed gate。
 - 删除 `turn_commit.py`、`deferred_commit_state.py`、`post_speech_interruption.py` 及对应测试；删除 6 个仅服务旧 defer/statement merge 的配置字段。

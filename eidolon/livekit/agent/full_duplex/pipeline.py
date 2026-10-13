@@ -1527,8 +1527,53 @@ class StreamingPipeline(BasePipeline):
             return InterruptAwareTurnDetector(
                 self._get_eot_model(), self._settle_interrupt_before_endpointing,
                 resolve_transcript=lambda text: self._user_turns.endpointing_text(text),
+                begin_observation=self._begin_endpointing_observation,
             )
         return self._get_eot_model()
+
+    def _begin_endpointing_observation(self) -> Callable[[str, float | None], None]:
+        """Observe the public SDK boundary without changing turn admission.
+
+        Bind to the original timeline before awaiting: a new user candidate may
+        replace it during prediction. No text/audio is added to the trace.
+        """
+        timeline = self._timeline
+
+        def snapshot() -> dict[str, Any]:
+            session = self._session
+            speech = session.current_speech if session is not None else None
+            candidate = self._user_turns.active
+            return {
+                "candidate_id": candidate.candidate_id if candidate is not None else None,
+                "generation_id": self._user_turns.current_generation_id,
+                "interruption_state": self._interruption_orchestrator.state.value,
+                "interruption_pending": self._interruption_orchestrator.active,
+                "speech_id": speech.id if speech is not None else None,
+                "speech_allow_interruptions": speech.allow_interruptions if speech is not None else None,
+                "speech_interrupted": speech.interrupted if speech is not None else None,
+                "speech_done": speech.done() if speech is not None else None,
+            }
+
+        observation = {"started_at": time.monotonic(), "before": snapshot()}
+
+        def finish(outcome: str, score: float | None) -> None:
+            observation.update(finished_at=time.monotonic(), outcome=outcome,
+                               score=score, after=snapshot())
+            if timeline is None:
+                return
+            rows = list(timeline.attrs.get("endpointing_observations") or ())
+            total = int(timeline.attrs.get("endpointing_observation_count", 0)) + 1
+            timeline.set_attr("endpointing_observation_count", total)
+            timeline.set_attr("endpointing_observations", (rows + [observation])[-16:])
+            # The final turn may already have been flushed while EOT awaited.
+            # Also emit independently through the existing bounded writer.
+            writer = getattr(self, "_session_trace", None)
+            if writer is not None:
+                writer.event("channel.endpointing.observed", {
+                    "channel_turn_id": timeline.turn_id, **observation,
+                })
+
+        return finish
 
     def _lifecycle_stages(self) -> list[Any]:
         stages = super()._lifecycle_stages()
@@ -1539,9 +1584,38 @@ class StreamingPipeline(BasePipeline):
 
     async def _settle_interrupt_before_endpointing(self) -> None:
         speech = self._session.current_speech if self._session is not None else None
+        candidate = self._user_turns.active
+        scope = (candidate.candidate_id, self._user_turns.current_generation_id) if candidate else None
+
+        def check_scope() -> None:
+            if self._interruption_orchestrator.closed:
+                raise asyncio.CancelledError("endpointing session closed")
+            current = self._user_turns.active
+            if scope is not None and (
+                current is None or (current.candidate_id, self._user_turns.current_generation_id) != scope
+            ):
+                # The SDK normally cancels endpointing on renewed speech. Fence
+                # it here too: a stale EOT result must not complete a new turn.
+                raise asyncio.CancelledError("endpointing candidate superseded")
+
+        check_scope()
         await self._semantic_interrupts.wait_for_pending_intent()
+        check_scope()
+        if scope is not None:
+            try:
+                await self._interruption_orchestrator.wait_for_resolution(scope)
+            except TimeoutError:
+                check_scope()
+                # Reuse the existing deadline policy/effects, including rollback;
+                # endpointing must never invent a CANCEL or a user-turn commit.
+                await self._duck_deadline.run(0)
+                check_scope()
+                if self._interruption_orchestrator.active_key == scope:
+                    raise asyncio.CancelledError("endpointing evidence still active")
+            check_scope()
         if speech is not None and speech.interrupted:
             await speech.wait_for_playout()
+            check_scope()
 
     def _welcome_on_enter(self) -> WelcomeMessage | None:
         """Welcome text/audio to play on session start, or None to stay silent.

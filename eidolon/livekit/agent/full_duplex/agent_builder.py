@@ -93,6 +93,12 @@ def build_full_duplex_agent(
                 queue_text=pipeline._queue_fixed_assistant_speech,
             )
 
+        async def on_exit(self) -> None:
+            # SDK shutdown drains endpointing after on_exit. Wake our policy
+            # barrier now, including when callers close AgentSession directly.
+            pipeline._interruption_orchestrator.close()
+            await pipeline._semantic_interrupts.aclose()
+
         async def on_user_turn_completed(
             self,
             turn_ctx: Any,

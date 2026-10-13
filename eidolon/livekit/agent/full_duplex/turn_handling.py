@@ -42,7 +42,7 @@ def build_full_duplex_turn_handling(
     )
     channel_owned = bool(allow_interruptions) and not native_adaptive
 
-    # The public LiveKit contract is sufficient to separate the two owners:
+    # Separate interruption owners through the public LiveKit options:
     #
     # * native-adaptive: LiveKit detects and applies interruptions;
     # * channel-owned: automatic interruption is disabled and Eidolon's
@@ -55,6 +55,9 @@ def build_full_duplex_turn_handling(
     # user's overlapping speech with silence before STT can supply policy
     # evidence.  The explicit accepted-interruption path deliberately uses the
     # public forced-interrupt API to end those handles.
+    # This alone is not a reply-admission contract: the EOT adapter must wait
+    # for the Channel verdict and cancelled speech cleanup before the SDK's
+    # uninterruptible-speech guard, which precedes on_user_turn_completed.
     interruption: dict[str, Any] = {
         "enabled": native_adaptive,
         "discard_audio_if_uninterruptible": not channel_owned,

@@ -57,6 +57,16 @@ async def test_already_synthesized_roomio_tail_obeys_duck(monkeypatch, cancel):
             output.reset()
             await settle()
             assert sink._audio_source.frames == [], "cancelled queued speech must not resume"
+            next_frame = rtc.AudioFrame(np.full(1600, 5678, dtype=np.int16).tobytes(),
+                                        sample_rate=16000, num_channels=1,
+                                        samples_per_channel=1600)
+            await output.capture_frame(next_frame)
+            output.flush()
+            await asyncio.wait_for(sink._flush_task, 1)
+            played = np.concatenate([np.frombuffer(f.data, dtype=np.int16)
+                                     for f in sink._audio_source.frames])
+            assert len(played) == 1600
+            assert (played == 5678).all(), "the next answer must play without the cancelled tail"
         else:
             # Repeated VAD and opt-in passthrough cannot release a native backlog.
             output.duck()

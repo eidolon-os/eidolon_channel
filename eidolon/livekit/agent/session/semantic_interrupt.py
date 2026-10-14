@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -183,21 +184,41 @@ class SemanticInterruptHandler:
         self._apply_decision(decision, transcript=text, vad_active=vad_active, eot_score=score)
 
     async def _classify_final(self, key: Any, text: str, assistant_text: str) -> None:
+        # Keep the originating timeline: late results must not annotate the
+        # next candidate any more than they may control its playback.
+        timeline = self._get_timeline()
+        started_at = time.monotonic()
+        outcome = "cancelled"
+        result = None
         try:
-            timeout = max(.001, self._turn_runtime.config.interrupt.intent_timeout_ms / 1000)
-            async with asyncio.timeout(timeout):
-                result = await self._intent_classifier.classify(text, assistant_text=assistant_text)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("[SemanticInterruptHandler] intent unavailable: %s", type(exc).__name__)
-            result = InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, "unavailable", type(exc).__name__)
-        # Cancellation alone is insufficient: a provider can finish after
-        # supersession. Recheck the acoustic generation, response and final text.
-        if not self._owns_current_candidate(key):
-            return
-        self._intent_result = result
-        self.run(text, is_final=True)
+            try:
+                timeout = max(.001, self._turn_runtime.config.interrupt.intent_timeout_ms / 1000)
+                async with asyncio.timeout(timeout):
+                    result = await self._intent_classifier.classify(text, assistant_text=assistant_text)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[SemanticInterruptHandler] intent unavailable: %s", type(exc).__name__)
+                result = InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, "unavailable", type(exc).__name__)
+            # Cancellation alone is insufficient: a provider can finish after
+            # supersession. Recheck generation, response and final text.
+            outcome = "accepted" if self._owns_current_candidate(key) else "stale"
+        finally:
+            if timeline is not None:
+                events = list(timeline.attrs.get("interrupt_intent_observations") or ())
+                events.append({
+                    "started_at": started_at,
+                    "finished_at": time.monotonic(),
+                    "outcome": outcome,
+                    "intent": result.intent.value if result is not None else None,
+                    "source": result.source if result is not None else None,
+                    "reason": result.reason if result is not None else None,
+                    "budget_ms": self._turn_runtime.config.interrupt.intent_timeout_ms,
+                })
+                timeline.set_attr("interrupt_intent_observations", events[-16:])
+        if outcome == "accepted":
+            self._intent_result = result
+            self.run(text, is_final=True)
 
     def _handle_duck_active(
         self,

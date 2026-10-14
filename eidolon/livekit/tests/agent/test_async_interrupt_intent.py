@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from eidolon.livekit.agent.output import DuckingStats
+from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.semantic_interrupt import SemanticInterruptHandler
 from eidolon.livekit.agent.turn_policy import Action, InterruptIntent, InterruptIntentResult, TurnPolicyRuntime
 from eidolon.livekit.common.config import TurnPolicyConfig
@@ -17,7 +18,7 @@ def result(intent):
     return InterruptIntentResult(intent, 0.0, 'model', 'test evidence')
 
 
-def setup_handler(classifier, *, vad=False, timeout=1500):
+def setup_handler(classifier, *, vad=False, timeout=1500, timeline=None):
     cfg = TurnPolicyConfig()
     cfg = replace(cfg, interrupt=replace(cfg.interrupt, intent_provider='llm', intent_timeout_ms=timeout))
     runtime = TurnPolicyRuntime(cfg)
@@ -32,7 +33,7 @@ def setup_handler(classifier, *, vad=False, timeout=1500):
     model = SimpleNamespace(current_eot_score=.99, should_interrupt=MagicMock())
     handler = SemanticInterruptHandler(
         get_eot_model=lambda: model, turn_runtime=runtime,
-        get_timeline=lambda: None, get_duck_active=lambda: state.active,
+        get_timeline=lambda: timeline, get_duck_active=lambda: state.active,
         get_duck_stats=lambda: DuckingStats(), get_vad_active=lambda: state.vad,
         soft_interrupt_active=lambda: False, soft_interrupt_timeout=lambda: .45,
         apply_decision=apply, interrupt_current_turn=MagicMock(), enter_soft_interrupt=MagicMock(),
@@ -40,6 +41,36 @@ def setup_handler(classifier, *, vad=False, timeout=1500):
         get_final_transcript=lambda: state.text, get_assistant_text=lambda: '正在介绍方案',
     )
     return handler, state, decisions, model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('superseded', [False, True])
+async def test_intent_observation_stays_with_originating_candidate(superseded):
+    ready = asyncio.Event()
+    async def classify(*args, **kwargs):
+        await ready.wait()
+        return result(InterruptIntent.HARD_STOP)
+    timeline = TurnTimeline('origin')
+    handler, state, decisions, _ = setup_handler(
+        SimpleNamespace(classify=classify), timeline=timeline,
+    )
+    try:
+        handler.run(state.text, is_final=True)
+        await asyncio.sleep(0)
+        next_timeline = TurnTimeline('next')
+        if superseded:
+            state.scope = (('candidate', 2), 456)
+            handler._get_timeline = lambda: next_timeline
+        ready.set()
+        await handler._intent_task
+        observation = timeline.attrs['interrupt_intent_observations'][0]
+        assert observation['outcome'] == ('stale' if superseded else 'accepted')
+        assert observation['finished_at'] >= observation['started_at']
+        assert observation['intent'] == InterruptIntent.HARD_STOP.value
+        assert 'interrupt_intent_observations' not in next_timeline.attrs
+        assert (decisions[-1].action is Action.CANCEL) is (not superseded)
+    finally:
+        await handler.aclose()
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-from dataclasses import replace
 
 import pytest
 import pytest_asyncio
@@ -19,15 +18,9 @@ from .._harness.production import production_session
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def model_policy():
     cfg = load_effective_config()
-    # 2500 rather than the shipped 1500: measured over 36 classifications of
-    # these very texts the provider runs 652/1023/1497/1599 ms for
-    # min/median/p90/max, so 1500 sits on its p90 and truncates roughly one
-    # call in six once the pipeline is also driving audio. The budget decides
-    # how long an answer may take, not what it says; the verdicts asserted
-    # below are unchanged.
-    cfg = replace(cfg, turn_policy=replace(cfg.turn_policy, interrupt=replace(
-        cfg.turn_policy.interrupt, intent_provider='llm', intent_timeout_ms=2500,
-    )))
+    # Exercise the shipped policy, including its deadline, not a more generous
+    # test-only model path. Half duplex/PTT remove this capability at admission.
+    assert cfg.turn_policy.uses_channel_model_intent
     classifier = SharedStageFactory.build_interrupt_classifier(cfg)
     try:
         yield classifier, cfg.turn_policy
@@ -50,6 +43,8 @@ async def model_policy():
     ('呃……嗯，明白了，你接着说', 'resume'),
     ('不是让你停，我是说这个词叫 stop，接着解释吧', 'resume'),
     ('等等，先别说了，我需要想一想', 'stop'),
+    ('不要说了。', 'stop'),
+    ('这个故事换一个。', 'reply'),
 ])
 async def test_real_model_overlap_effects(text, action, model_policy, record_property):
     classifier, policy = model_policy

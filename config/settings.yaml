@@ -53,14 +53,9 @@ llm:
   base_url: https://api.deepseek.com
   model: deepseek-v4-flash
   # Direct voice replies; Agent RPC manages its own model configuration.
-  #
-  # `extra_body` waits for the next release (see the file header). A Host loses
-  # nothing meanwhile: brain_provider is eidolon_agent and
-  # interrupt.intent_provider is none, so no direct LLM adapter is built from
-  # this section at all. Local direct_llm work against DeepSeek does lose the
-  # disabled thinking on the brain until then — the interrupt classifier
-  # disables it for itself in AgentFactory.build_interrupt_classifier, the brain
-  # path reads extra_body as written.
+  # Channel also uses this adapter for bounded interruption intent inference.
+  # AgentFactory disables thinking for the DeepSeek intent request; the brain
+  # retains its own configuration and EOT retains reply endpointing ownership.
   api_key: OPENAI_LLM_API_KEY
   temperature: 0.7
   timeout: 120
@@ -135,12 +130,11 @@ turn_policy:
     transcript_revision_min_normalized_chars: 4
     speech_merge_grace_ms: 800
   interrupt:
-    # `intent_provider` / `intent_timeout_ms` wait for the next release (see the
-    # file header). Both were written here at their schema defaults — none and
-    # 1500 — so naming them changed nothing and omitting them changes nothing.
-    # Opting in to llm in a controlled test is an overlay edit meanwhile; its
-    # latency/quality is not yet accepted for the production RPC/RTC chain, and
-    # half duplex and PTT do not use it at all.
+    # Intent answers stop / reply / keep / wait; EOT answers when a reply may
+    # begin. Low EOT must not veto an explicit semantic stop or takeover.
+    # The replaced release already supports these keys (reversible cutover).
+    intent_provider: llm
+    intent_timeout_ms: 2500
     decision_timeout_ms: 450
     post_speech_evidence_timeout_ms: 6000
     post_speech_evidence_min_speech_ms: 250

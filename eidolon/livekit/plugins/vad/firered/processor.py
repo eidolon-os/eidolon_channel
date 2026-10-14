@@ -28,12 +28,14 @@ import os
 import threading
 from functools import cached_property
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-import onnxruntime as ort
 
 from .log import logger
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 # ------------------------------------------------------------------------------------------
 # Constants
@@ -242,6 +244,8 @@ class PvadProcessor:
     @cached_property
     def onnx_session(self) -> ort.InferenceSession:
         """Lazily create and cache the ONNX Runtime session."""
+        import onnxruntime as ort
+
         if self._model_dir is None:
             raise RuntimeError("PvadProcessor model directory not resolved")
 

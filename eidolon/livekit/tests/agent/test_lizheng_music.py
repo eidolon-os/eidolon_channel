@@ -1,0 +1,102 @@
+import base64
+import json
+from collections.abc import AsyncIterator
+
+import aiohttp
+import pytest
+from aiohttp import web
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.padding import PKCS7
+
+from eidolon.livekit.agent.session.lizheng_music import (
+    LizhengMusicApi,
+    LizhengMusicApiError,
+    LizhengMusicConfig,
+)
+
+
+def _encrypted_payload(value: dict[str, object], key: str) -> str:
+    padder = PKCS7(algorithms.AES.block_size).padder()
+    padded = padder.update(json.dumps(value).encode()) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key.encode()), modes.ECB()).encryptor()
+    encrypted = encryptor.update(padded) + encryptor.finalize()
+    return base64.b64encode(encrypted).decode()
+
+
+@pytest.fixture
+async def lizheng_server() -> AsyncIterator[tuple[str, list[dict[str, object]]]]:
+    key = "0123456789abcdef"
+    requests: list[dict[str, object]] = []
+    auth_calls = 0
+    app = web.Application()
+
+    async def handler(request: web.Request) -> web.Response:
+        nonlocal auth_calls
+        requests.append({"path": request.path, "query": dict(request.query)})
+        if request.path.endswith("/queryDevcie"):
+            auth_calls += 1
+            payload = _encrypted_payload({"qq_api_music": {"sn": "sn-1", "ak": "ak-1"}}, key)
+            return web.json_response({"success": True, "data": payload})
+        if request.path.endswith("/songs"):
+            if auth_calls == 1:
+                return web.json_response({"success": False, "code": 410, "message": "expired"})
+            return web.json_response({"success": True, "data": [{"songId": "song-1"}]})
+        if "/play-url/" in request.path:
+            return web.json_response({"success": True, "data": {"mediaList": [{"url": "https://cdn/song.mp3"}]}})
+        raise AssertionError(request.path)
+
+    app.router.add_route("*", "/{tail:.*}", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}", requests
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_search_reauthenticates_after_expired_credentials(
+    lizheng_server: tuple[str, list[dict[str, object]]],
+) -> None:
+    base_url, requests = lizheng_server
+    config = LizhengMusicConfig(base_url, "channel-1", "AA:BB", "0123456789abcdef")
+    async with aiohttp.ClientSession() as http:
+        songs = await LizhengMusicApi(config, http).search("hello")
+
+    assert songs == [{"songId": "song-1"}]
+    assert [request["path"] for request in requests] == [
+        "/thrid/mlmusic/app/channel-1/queryDevcie",
+        "/thrid/mlmusic/app/songs",
+        "/thrid/mlmusic/app/channel-1/queryDevcie",
+        "/thrid/mlmusic/app/songs",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_for_song_returns_signed_media_url(
+    lizheng_server: tuple[str, list[dict[str, object]]],
+) -> None:
+    base_url, requests = lizheng_server
+    config = LizhengMusicConfig(base_url, "channel-1", "AA:BB", "0123456789abcdef")
+    async with aiohttp.ClientSession() as http:
+        source = await LizhengMusicApi(config, http).source_for_song("song-1")
+
+    assert source.song_id == "song-1"
+    assert source.url == "https://cdn/song.mp3"
+    play_request = requests[-1]
+    assert play_request["path"] == "/thrid/mlmusic/app/play-url/song-1"
+    query = play_request["query"]
+    assert query["channel"] == "channel-1"
+    assert query["sn"] == "sn-1"
+    assert len(query["sign"]) == 32
+
+
+def test_environment_requires_aes_key_of_exactly_16_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIZHENG_MUSIC_API_MAC", "AA:BB")
+    monkeypatch.setenv("LIZHENG_MUSIC_API_AES_KEY", "short")
+
+    with pytest.raises(LizhengMusicApiError, match="16-byte"):
+        LizhengMusicConfig.from_environment()

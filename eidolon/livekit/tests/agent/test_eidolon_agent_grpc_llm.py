@@ -103,6 +103,20 @@ def _tool_result(turn_id: str, seq: int, *, name: str, ok: bool, error: str = ""
     return pb.TurnEvent(turn_id=turn_id, seq=seq, kind=pb.TurnEvent.TOOL_RESULT, data=data)
 
 
+def _channel_tool_call(turn_id: str, call_id: str, name: str, arguments: dict) -> pb.TurnEvent:
+    value = struct_pb2.Struct()
+    value.update(arguments)
+    return pb.TurnEvent(
+        turn_id=turn_id,
+        kind=pb.TurnEvent.CHANNEL_TOOL_CALL,
+        channel_tool_call=pb.ChannelToolCall(
+            call_id=call_id,
+            name=name,
+            arguments=value,
+        ),
+    )
+
+
 class _ScriptedServicer(pbg.EidolonAgentServicer):
     """Replays a canned DELTA+DONE per StartTurn. Records cancels for assertions.
 
@@ -151,6 +165,35 @@ class _ScriptedServicer(pbg.EidolonAgentServicer):
                 await drain_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+
+
+class _ChannelToolServicer(pbg.EidolonAgentServicer):
+    def __init__(self) -> None:
+        self.calls: list[pb.ChannelToolCall] = []
+
+    async def Chat(self, request_iterator, context):  # type: ignore[override]
+        async for request in request_iterator:
+            if request.WhichOneof("payload") != "start":
+                continue
+            start = request.start
+            assert "music.status" in start.channel_tool_capabilities
+            yield _channel_tool_call(
+                start.turn_id,
+                "music-status-1",
+                "music.status",
+                {},
+            )
+            response = await request_iterator.__anext__()
+            assert response.WhichOneof("payload") == "channel_tool_result"
+            result = response.channel_tool_result
+            assert result.turn_id == start.turn_id
+            assert result.call_id == "music-status-1"
+            self.calls.append(
+                pb.ChannelToolCall(call_id=result.call_id, name=result.name)
+            )
+            yield _delta(start.turn_id, 1, "音乐当前未播放。")
+            yield _done(start.turn_id, 2)
+            return
 
 
 class _UsageStateServicer(pbg.EidolonAgentServicer):
@@ -846,6 +889,45 @@ def test_tls_config_validation_missing_ca_file(tmp_path) -> None:
             conversation_id="livekit:test",
             tls=TlsConfig(mode="tls", ca_path=str(tmp_path / "nope.pem")),
         )
+
+
+@pytest.mark.asyncio
+async def test_channel_tool_call_roundtrips_on_authenticated_chat() -> None:
+    servicer = _ChannelToolServicer()
+    server, target = await _serve(servicer)
+    adapter = EidolonAgentGrpcLlm(
+        target=target,
+        device_token=lambda: "test-token",
+        conversation_id="music-roundtrip",
+    )
+    handled: list[tuple[str, str]] = []
+
+    async def handle(call):
+        handled.append((call.turn_id, call.name))
+        from eidolon.livekit.agent.eidolon_agent_rpc.channel_tools import ChannelToolResult
+
+        return ChannelToolResult(
+            turn_id=call.turn_id,
+            call_id=call.call_id,
+            name=call.name,
+            ok=True,
+            content={"status": "not_found"},
+        )
+
+    try:
+        adapter.configure_channel_tools(
+            handle,
+            lambda _call: asyncio.sleep(0),
+            frozenset({"music.status"}),
+        )
+        chunks = [chunk async for chunk in adapter.chat(chat_ctx=_ctx("音乐状态？"))]
+
+        assert [chunk.delta.content for chunk in chunks if chunk.delta and chunk.delta.content]
+        assert handled and handled[0][1] == "music.status"
+        assert len(servicer.calls) == 1
+    finally:
+        await adapter.aclose()
+        await server.stop(grace=0.5)
 
 
 @pytest.mark.asyncio

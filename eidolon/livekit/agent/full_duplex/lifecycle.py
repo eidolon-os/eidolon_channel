@@ -154,6 +154,7 @@ class FullDuplexSessionLifecycle:
                 participant_identity=participant_identity,
             ),
         )
+        await pipeline._start_music_runtime(session)
         pipeline.session_mark("session_started")
         if pipeline._on_session_started is not None:
             await pipeline._on_session_started()

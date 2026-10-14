@@ -32,6 +32,7 @@ class FullDuplexClientControlPublisher:
 
     def __init__(self, pipeline: StreamingPipeline) -> None:
         self._pipeline = pipeline
+        self._agent_state = "listening"
 
     def record_event(
         self,
@@ -79,6 +80,9 @@ class FullDuplexClientControlPublisher:
     def publish_companion_ui_state(self, state: str, reason: str) -> None:
         """Best-effort state bridge for thin clients such as ESP32 displays."""
 
+        # User presence is an input, not proof that agent playback ended.
+        if reason in {"user_state:listening", "user_state:away"}:
+            state = self._project_companion_state(fallback=state)
         pipeline = self._pipeline
         room = getattr(pipeline, "_room", None)
         local = getattr(room, "local_participant", None) if room else None
@@ -111,14 +115,40 @@ class FullDuplexClientControlPublisher:
 
         task.add_done_callback(_log_failure)
 
+    def _project_companion_state(self, *, fallback: str = "listening") -> str:
+        """Project SDK activity through Channel's authoritative output gate.
+
+        A rejected interruption resumes the same SDK speech handle, so there
+        need not be another agent_state event. Conversely, cancellation can
+        precede the SDK's speaking -> listening event.
+        """
+        ducking = getattr(self._pipeline, "_ducking", None)
+        if ducking is not None and (ducking.is_suspended is True or ducking.is_cancelled is True):
+            return "listening"
+        if self._agent_state in {"speaking", "thinking"}:
+            return self._agent_state
+        return fallback
+
+    def refresh_output_state(self, reason: str) -> None:
+        state = self._project_companion_state()
+        logger.info(
+            "[StreamingPipeline] companion UI projection state=%s agent_state=%s reason=%s",
+            state,
+            self._agent_state,
+            reason,
+        )
+        self.publish_companion_ui_state(state, f"output_state:{reason}")
+
     def publish_companion_ui_state_for_agent_state(self, state: str) -> None:
-        if state == "thinking":
-            companion_state = "thinking"
-        elif state == "speaking":
-            companion_state = "speaking"
-        else:
-            companion_state = "listening"
+        self._agent_state = state
+        projected = self._project_companion_state()
+        # Keep real SDK events intact: ESP32 also uses agent_state packets as
+        # playback evidence for echo gating. A UI projection must not forge or
+        # rewrite that evidence. The ordered override only changes presentation.
+        companion_state = state if state in {"thinking", "speaking"} else "listening"
         self.publish_companion_ui_state(companion_state, f"agent_state:{state}")
+        if projected != companion_state:
+            self.refresh_output_state("agent_state_projected")
 
     def publish_client_control(
         self,

@@ -541,6 +541,9 @@ class StreamingPipeline(BasePipeline):
             cancel_response_outputs=lambda: getattr(
                 self._factory.llm.llm, "cancel_response_outputs", lambda: None
             )(),
+            refresh_output_ui=lambda reason: (
+                self._ensure_client_control_publisher().refresh_output_state(reason)
+            ),
             finish_agent_output=self._finish_agent_output,
             snapshot_interrupted_context=lambda: self._ensure_context_ledger().snapshot(),
             cancel_residual_commit_suppress_sec=self._cancel_residual_commit_suppress_sec,

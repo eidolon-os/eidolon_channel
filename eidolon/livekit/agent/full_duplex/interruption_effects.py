@@ -47,12 +47,14 @@ class FullDuplexInterruptionEffects:
         correction_topic_stability_window_ms: Callable[[], int],
         set_interrupt_cancel_suppression: Callable[[bool, float], None],
         soft_interrupt_timeout_sec: Callable[[], float],
+        refresh_output_ui: Callable[[str], None] | None = None,
         cancel_response_outputs: Callable[[], None] | None = None,
         finish_agent_output: Callable[[str], None] | None = None,
         playback_evidence_active: Callable[[], bool] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
         claim_irreversible_side_effect: Callable[..., bool] | None = None,
     ) -> None:
+        self._refresh_output_ui = refresh_output_ui or (lambda _reason: None)
         self._cancel_response_outputs = cancel_response_outputs or (lambda: None)
         self._ducking = ducking
         self._callbacks = callbacks
@@ -301,6 +303,7 @@ class FullDuplexInterruptionEffects:
         )
         self._publish_playback_stop("interrupt_cancel")
         self._ducking.cancel_output()
+        self._refresh_output_ui("cancel")
         self._finish_agent_output("interrupted_by_user")
         if collect_confirmed_cancel_turn:
             orchestrator.mark_confirmed_cancel_collecting_turn()
@@ -360,6 +363,7 @@ class FullDuplexInterruptionEffects:
             timeline = self._get_timeline()
             if timeline is not None:
                 self._record_duck_event(timeline, "output_resumed_pending_evidence", reason=reason)
+            self._refresh_output_ui(reason)
             self._callbacks.on_duck_resolved("unduck")
 
     def rollback_if_suspended(
@@ -445,6 +449,7 @@ class FullDuplexInterruptionEffects:
         # flush and detach the active timeline, so all resolution evidence must
         # be recorded before crossing that boundary.
         orchestrator.resolve(action="rollback", reason=reason)
+        self._refresh_output_ui(reason)
         self._callbacks.on_duck_resolved("unduck")
 
     def cancel_silent_generation_for_explicit_preempt(self) -> None:
@@ -452,6 +457,7 @@ class FullDuplexInterruptionEffects:
 
         self.cancel_stable_signal_timer()
         self._ducking.cancel_output()
+        self._refresh_output_ui("cancel")
         timeline = self._get_timeline()
         if timeline is not None:
             timeline.set_attr(

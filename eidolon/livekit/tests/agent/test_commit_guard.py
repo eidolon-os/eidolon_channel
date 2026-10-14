@@ -8,6 +8,7 @@ that may admit or reject a turn before the LLM.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -15,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from livekit.agents.llm import ChatContext, ChatMessage
+from eidolon_sdk.biz.contracts import CONTROL_TOPIC, COMPANION_UI_STATE_TOPIC
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.output.ducking import OutputDuckingController
@@ -735,7 +737,11 @@ async def test_confirmed_cjk_barge_in_stops_playback_and_reaches_output_once() -
     pipeline._ensure_interruption_effects().cancel_and_interrupt()
     await asyncio.sleep(0)
 
-    pipeline._room.local_participant.publish_data.assert_awaited_once()
+    packets = pipeline._room.local_participant.publish_data.await_args_list
+    controls = [call for call in packets if call.kwargs["topic"] == CONTROL_TOPIC]
+    assert len(controls) == 1
+    ui = [call for call in packets if call.kwargs["topic"] == COMPANION_UI_STATE_TOPIC]
+    assert json.loads(ui[-1].args[0])["state"] == "listening"
     assert timeline.attrs["client_control_events"][-1]["op"] == "playback.stop"
     assert "interrupt_cancel_resolved_at" in timeline.timestamps
     assert pipeline._interruption_orchestrator.state.value == ("confirmed_cancel_collecting_turn")

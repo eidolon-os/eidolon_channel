@@ -13,10 +13,10 @@ from eidolon.livekit.agent.output import OutputController, OutputDuckingControll
 
 
 class _FakeInnerOutput(lk_io.AudioOutput):
-    def __init__(self) -> None:
+    def __init__(self, *, pause: bool = True) -> None:
         super().__init__(
             label="fake-inner",
-            capabilities=lk_io.AudioOutputCapabilities(pause=True),
+            capabilities=lk_io.AudioOutputCapabilities(pause=pause),
             sample_rate=16000,
         )
 
@@ -108,7 +108,7 @@ def test_unduck_only_when_suspended() -> None:
 
 def test_suspended_passthrough_only_enables_while_suspended() -> None:
     controller = OutputDuckingController()
-    controller.install(_session(_FakeInnerOutput()), _cfg())
+    controller.install(_session(_FakeInnerOutput(pause=False)), _cfg())
 
     assert controller.enable_suspended_passthrough(volume=0.25) is False
 

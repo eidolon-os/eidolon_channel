@@ -37,7 +37,9 @@ class _StubInnerSink(lk_io.AudioOutput):
     def __init__(self, sample_rate: int = 16000) -> None:
         super().__init__(
             label="stub-inner",
-            capabilities=lk_io.AudioOutputCapabilities(pause=True),
+            # This immediate sink has no queue/pause implementation. Native
+            # RoomIO queue semantics are exercised in test_output_native_pause.
+            capabilities=lk_io.AudioOutputCapabilities(pause=False),
             sample_rate=sample_rate,
         )
         self.captured: int = 0

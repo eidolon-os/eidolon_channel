@@ -78,6 +78,7 @@ class OutputController(lk_io.AudioOutput):
         self._write_task: asyncio.Task | None = None
         self._drain_task: asyncio.Task | None = None
         self._flush_pending = False
+        self._sink_paused = False
         self._buffer_duration_sec: float = 0.0
         self._suspended_passthrough_volume: float | None = None
         self._suspended_passthrough_enabled_at: float | None = None
@@ -223,11 +224,19 @@ class OutputController(lk_io.AudioOutput):
         self._first_suspended_passthrough_frame_at = None
         self._last_suspended_passthrough_frame_at = None
         self._begin_ramp(target=self._suspend_volume, duration_ms=self._fade_ms)
+        if self._suspend_volume == 0.0 and self._inner.can_pause:
+            # RoomIO accepts synthesized audio ahead of playout. Admission-only
+            # ducking cannot silence that queue; its public pause API can.
+            self._inner.pause()
+            self._sink_paused = True
+            self._volume_current = 0.0
+            self._ramp_samples_remaining = 0
         logger.info(
             "[OutputController] duck  %s→SUSPENDED  target_vol=%.2f  "
-            "fade=%dms  t=%.3f",
+            "fade=%dms  t=%.3f native_sink_paused=%s",
             prev, self._suspend_volume, self._fade_ms,
             self._duck_start_time,
+            self._sink_paused,
         )
 
     def on_agent_started_speaking(self) -> None:
@@ -254,6 +263,10 @@ class OutputController(lk_io.AudioOutput):
         and out of order. Terminal cancel/unduck behaviour remains unchanged.
         """
         if self._state != "SUSPENDED":
+            return False
+        if self._sink_paused:
+            # A queued native sink has no gain API. Releasing its full-volume
+            # backlog would defeat suspension; retain the reversible pause.
             return False
         clamped = max(0.0, min(1.0, float(volume)))
         if clamped <= 0.0:
@@ -303,6 +316,7 @@ class OutputController(lk_io.AudioOutput):
             self._total_suspend_ms += suspend_ms
         self._state = "NORMAL"
         self._total_unducks += 1
+        self._resume_sink()
 
         dropped = 0
         dropped_sec = 0.0
@@ -367,6 +381,7 @@ class OutputController(lk_io.AudioOutput):
     def reset(self) -> None:
         """Reset to NORMAL/v=1.0 without ramp. For session boundaries."""
         self._invalidate_writes()
+        self._resume_sink()
         self._state = "NORMAL"
         self._volume_current = 1.0
         self._ramp_target = 1.0
@@ -378,6 +393,11 @@ class OutputController(lk_io.AudioOutput):
         self._last_suspended_passthrough_frame_at = None
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
+
+    def _resume_sink(self) -> None:
+        if self._sink_paused:
+            self._inner.resume()
+            self._sink_paused = False
 
     # ------------------------------------------------------------------
     # AudioOutput abstract methods
@@ -490,6 +510,7 @@ class OutputController(lk_io.AudioOutput):
         self._invalidate_writes()
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
+        self._resume_sink()
         super().on_detached()
 
     # ------------------------------------------------------------------

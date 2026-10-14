@@ -32,6 +32,14 @@ from eidolon.locked_environment import (
 _REPOSITORY = Path(__file__).resolve().parents[3]
 
 
+def test_packaging_is_declared_as_a_base_runtime_dependency() -> None:
+    project = tomllib.loads((_REPOSITORY / "pyproject.toml").read_text())[
+        "project"
+    ]
+
+    assert any(requirement.startswith("packaging") for requirement in project["dependencies"])
+
+
 def _write_lock(
     directory: Path,
     *,

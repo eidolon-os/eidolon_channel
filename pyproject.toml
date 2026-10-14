@@ -25,6 +25,7 @@ dependencies = [
     "python-socks>=2.4",
     "python-dotenv>=1.0",
     "eidolon-sdk",
+    "packaging>=24",
     "simplejson>=3.19",
     "sortedcontainers>=2.4",
     "soundfile>=0.12",

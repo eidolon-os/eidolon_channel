@@ -216,3 +216,119 @@ async def test_semantic_verdict_drives_native_queue_and_companion_ui(
     finally:
         await handler.aclose()
         await sink.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forwarded_prefix", [True, False])
+async def test_cancel_finishes_deferred_flush_before_next_turn(monkeypatch, forwarded_prefix):
+    """TTS ended while duck held its tail: no producer remains to flush again."""
+    monkeypatch.setattr(rtc, "AudioSource", Source)
+    sink = _ParticipantAudioOutput(
+        None, sample_rate=16000, num_channels=1, track_publish_options=rtc.TrackPublishOptions()
+    )
+    sink._subscribed_fut.set_result(None)
+    output = OutputController(sink)
+    frame = rtc.AudioFrame(
+        np.full(1600, 1234, dtype=np.int16).tobytes(),
+        sample_rate=16000, num_channels=1, samples_per_channel=1600,
+    )
+    sink._forwarding_task = asyncio.create_task(sink._forward_audio())
+    finished = []
+    output.on("playback_finished", finished.append)
+    try:
+        if forwarded_prefix:
+            await output.capture_frame(frame)
+            await settle()
+        output.duck()
+        await output.capture_frame(frame)
+        output.flush()
+        assert output.buffered_frames == 1
+        assert output._flush_pending
+        output.cancel()
+        # The real SDK waits here BEFORE starting the next turn/reset.
+        event = await asyncio.wait_for(output.wait_for_playout(), .3)
+        assert event.interrupted
+        assert len(finished) == 1
+        output.clear_buffer()  # SDK interruption cleanup is idempotent.
+        output.reset()
+        sink._audio_source.frames.clear()
+        next_frame = rtc.AudioFrame(
+            np.full(1600, 5678, dtype=np.int16).tobytes(),
+            sample_rate=16000, num_channels=1, samples_per_channel=1600,
+        )
+        await output.capture_frame(next_frame)
+        output.flush()
+        await asyncio.wait_for(output.wait_for_playout(), .3)
+        played = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in sink._audio_source.frames])
+        assert len(played) == 1600
+        assert (played == 5678).all()
+        assert len(finished) == 2
+    finally:
+        await sink.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("producer_ended", [True, False])
+@pytest.mark.parametrize("forwarded_prefix", [True, False])
+async def test_real_session_interrupts_suspended_synthesis_and_plays_next_reply(
+    monkeypatch, producer_ended, forwarded_prefix, caplog
+):
+    from livekit.agents import Agent, AgentSession
+    from livekit.agents.voice.transcription import TranscriptSynchronizer
+
+    monkeypatch.setattr(rtc, "AudioSource", Source)
+    sink = _ParticipantAudioOutput(
+        None, sample_rate=16000, num_channels=1, track_publish_options=rtc.TrackPublishOptions()
+    )
+    sink._subscribed_fut.set_result(None)
+    sink._forwarding_task = asyncio.create_task(sink._forward_audio())
+    sync = TranscriptSynchronizer(next_in_chain_audio=sink, next_in_chain_text=None)
+    output = OutputController(sync.audio_output, buffer_max_sec=.1)
+    session = AgentSession(turn_handling={"turn_detection": "manual", "interruption": {"enabled": False}})
+    session.output.audio = output
+    session.output.transcription = sync.text_output
+    tail_ready = asyncio.Event()
+
+    def frame(value):
+        return rtc.AudioFrame(
+            np.full(1600, value, dtype=np.int16).tobytes(),
+            sample_rate=16000, num_channels=1, samples_per_channel=1600,
+        )
+
+    async def old_audio():
+        if forwarded_prefix:
+            yield frame(1234)
+            await settle()
+        output.duck()
+        yield frame(2345)
+        tail_ready.set()
+        if not producer_ended:
+            yield frame(3456)  # blocked by local capacity until interruption
+
+    async def new_audio():
+        yield frame(5678)
+
+    try:
+        await session.start(Agent(instructions=""))
+        old = session.say("旧回答", audio=old_audio())
+        await asyncio.wait_for(tail_ready.wait(), 1)
+        await settle()
+        assert output.buffered_frames == 1
+        assert output._flush_pending is producer_ended
+        output.cancel()
+        session.interrupt(force=True)
+        await asyncio.wait_for(old.wait_for_playout(), .5)
+        assert old.done() and old.interrupted
+        output.reset()
+        sink._audio_source.frames.clear()
+        new = session.say("新回答", audio=new_audio())
+        await asyncio.wait_for(new.wait_for_playout(), 1)
+        played = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in sink._audio_source.frames])
+        np.testing.assert_array_equal(played, np.full(1600, 5678, dtype=np.int16))
+        assert not new.interrupted
+        assert "speech not done in time" not in caplog.text
+        assert "more times than playback segments" not in caplog.text
+    finally:
+        await session.aclose()
+        await sync.aclose()
+        await sink.aclose()

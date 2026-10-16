@@ -78,6 +78,8 @@ class OutputController(lk_io.AudioOutput):
         self._write_task: asyncio.Task | None = None
         self._drain_task: asyncio.Task | None = None
         self._flush_pending = False
+        self._segment_open = False
+        self._sink_segments_before = 0
         self._sink_paused = False
         self._buffer_duration_sec: float = 0.0
         self._suspended_passthrough_volume: float | None = None
@@ -371,8 +373,9 @@ class OutputController(lk_io.AudioOutput):
         self._buffer_duration_sec = 0.0
         try:
             self._inner.clear_buffer()
+            self._finish_segment(interrupted=True)
         except Exception:
-            logger.warning("[OutputController] inner.clear_buffer() failed")
+            logger.warning("[OutputController] interrupted segment finalization failed", exc_info=True)
         logger.info(
             "[OutputController] cancel  %s→CANCELLED  discarded=%d frames (%.3fs)",
             previous, dropped, dropped_sec,
@@ -409,6 +412,9 @@ class OutputController(lk_io.AudioOutput):
         async with self._write_lock:
             if generation != self._generation or self._state == "CANCELLED":
                 return
+            if not self._segment_open:
+                self._segment_open = True
+                self._sink_segments_before = self._inner.captured_playout_segments
             await super().capture_frame(frame)
             while generation == self._generation and self._state != "CANCELLED":
                 if self._state == "NORMAL":
@@ -440,8 +446,27 @@ class OutputController(lk_io.AudioOutput):
     def _flush_if_ready(self) -> None:
         if self._flush_pending and not self._buffer and not self._write_lock.locked():
             self._flush_pending = False
-            super().flush()
+            self._finish_segment(interrupted=self._state == "CANCELLED")
+
+    def _finish_segment(self, *, interrupted: bool) -> None:
+        """Seal an admitted segment exactly once, including a deferred flush.
+
+        RoomIO's clear only signals interruption; its flush starts the task
+        that clears the native queue and emits playback_finished. Discarding
+        a local tail must still seal that segment, even after TTS has exited.
+        A wholly local segment has no downstream completion to forward.
+        """
+        if not self._segment_open:
+            if not interrupted:
+                self._inner.flush()
+            return
+        self._segment_open = False
+        self._flush_pending = False
+        super().flush()
+        if self._inner.captured_playout_segments > self._sink_segments_before:
             self._inner.flush()
+        else:
+            self.on_playback_finished(playback_position=0.0, interrupted=interrupted)
 
     def _invalidate_writes(self) -> None:
         self._generation += 1
@@ -458,6 +483,7 @@ class OutputController(lk_io.AudioOutput):
         self._buffer.clear()
         self._buffer_duration_sec = 0.0
         self._inner.clear_buffer()
+        self._finish_segment(interrupted=True)
 
     def _can_accept_suspended(self, frame: rtc.AudioFrame) -> bool:
         return (

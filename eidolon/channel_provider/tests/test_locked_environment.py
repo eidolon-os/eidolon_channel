@@ -40,6 +40,15 @@ def test_packaging_is_declared_as_a_base_runtime_dependency() -> None:
     assert any(requirement.startswith("packaging") for requirement in project["dependencies"])
 
 
+def test_eot_runtime_dependencies_are_base_dependencies() -> None:
+    project = tomllib.loads((_REPOSITORY / "pyproject.toml").read_text())[
+        "project"
+    ]
+    dependencies = {requirement.split(">=")[0] for requirement in project["dependencies"]}
+
+    assert {"onnxruntime", "transformers"} <= dependencies
+
+
 def _write_lock(
     directory: Path,
     *,

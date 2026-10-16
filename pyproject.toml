@@ -30,6 +30,8 @@ dependencies = [
     "sortedcontainers>=2.4",
     "soundfile>=0.12",
     "cryptography>=42",
+    "onnxruntime>=1.19",
+    "transformers>=4.40",
 ]
 
 [project.scripts]
@@ -40,11 +42,9 @@ inference = [
     "addict>=2.4",
     "datasets>=4.0",
     "modelscope>=1.37.1",
-    "onnxruntime>=1.19",
     "scikit-learn>=1.3.2",
     "torch>=2.2",
     "torchaudio>=2.2",
-    "transformers>=4.40",
 ]
 audio-test = [
     "pytest>=8.0",

@@ -69,3 +69,53 @@ short Chinese turns scoring below threshold. Changing that threshold without
 an accuracy corpus would also affect unfinished utterances and is outside this
 root-cause fix. Real-device latency after deployment remains to be measured;
 automated completion bounds are not acoustic latency measurements.
+
+## Regression provenance
+
+Replaying historical controllers against the same installed SDK locates the
+missing deferred-flush completion at `67cf3b0` (2026-09-06). Its parent starts
+the native flush worker and completes the interrupted segment; `67cf3b0` does
+neither. Both sides of the later native-pause change `14f101c` (2026-10-14)
+also fail this check. `eb50405` restores completion. This comparison isolates
+the controller change; it does not recreate every historical deployment's SDK.
+
+## Pi5 deployment and BOX-3 follow-up
+
+With explicit user approval, Ops activated
+`pi5-playout-finalization-20261016-1`, carrying Channel
+`eb5040569350f293909a38ff02a6cc0e47da99d4`. Only Channel advanced relative to
+the prior release. Release doctor was healthy; the separate App-ready check
+passed all 26 checks. An offline probe using that release's actual Python
+runtime, AgentSession, TranscriptSynchronizer and RoomIO passed all four
+prefix/no-prefix × producer-ended/blocked cases. Cancel-to-speech-done took
+0.538–1.178 ms, and all 1600 next-reply PCM samples matched. These are process
+completion measurements using an in-memory AudioSource, not acoustic latency.
+
+The user's subsequent BOX-3 + Pi5 session
+`esp32-a3c6ced5-687a95ab-00000002` started at 18:36:20 on 2026-10-16.
+Host timestamps (Asia/Shanghai) show:
+
+| Request | ASR final | Cancel | Old speech → listening | Thinking | Speaking |
+| --- | --- | --- | --- | --- | --- |
+| 给我讲一个笑话 | 18:36:24.925 | — | — | 18:36:25.001 | 18:36:27.388 |
+| 换一个笑话 | 18:36:37.809 | 18:36:38.427 | 18:36:38.439 | 18:36:40.036 | 18:36:41.936 |
+| 停，不要说了 | 18:36:55.138 | 18:36:55.564 | 18:36:55.573 | — | — |
+
+For replacement, final-to-cancel was 618 ms, cancel-to-old-speech-finished
+12 ms, cancel-to-thinking 1609 ms, and thinking-to-speaking 1900 ms.
+Final-to-new-speaking was 4127 ms. For stop, final-to-cancel was 426 ms and
+old speech finished 9 ms later. No SDK interruption timeout occurred, and the
+replacement did enter speaking. Host speaking events do not acknowledge
+physical speaker output. The stop transcript was correct in this run.
+
+Both cancellations discarded zero *local* buffered frames; the first TTS
+had completed before ducking. Therefore this run confirms ordinary native-tail
+cancellation and next-turn scheduling after deployment, but does not itself
+replay the original Mobile failure's seven locally held frames. The automated
+regressions cover that deferred-flush path. This run also confirms the separate
+remaining endpointing wait: the replacement scored 0.104, then spent roughly
+1.56 seconds between EOT prediction and thinking.
+
+Follow-up evidence is in workspace
+`diagnostics/2026-10-16-box3-compare/box3-after-playout-fix-journal.log`,
+`result-box3-after-playout-fix.json`, and `playout-probe-pi5-after.json`.

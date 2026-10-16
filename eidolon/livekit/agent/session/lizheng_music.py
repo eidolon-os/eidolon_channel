@@ -7,6 +7,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Final
 
 import aiohttp
@@ -21,10 +22,34 @@ HTTP_TIMEOUT_SECONDS: Final = 15.0
 
 
 class LizhengMusicApiError(RuntimeError):
-    def __init__(self, code: int | str, message: str) -> None:
+    def __init__(
+        self,
+        code: int | str,
+        message: str,
+        *,
+        source: LizhengErrorSource,
+        endpoint: LizhengEndpoint,
+    ) -> None:
         super().__init__(f"Lizheng music API code={code}: {message}")
         self.code = code
         self.message = message
+        self.source = source
+        self.endpoint = endpoint
+
+
+class LizhengErrorSource(StrEnum):
+    HTTP_STATUS = "http_status"
+    API_RESPONSE = "api_response"
+    LOCAL_RESPONSE = "local_response"
+
+
+class LizhengEndpoint(StrEnum):
+    AUTHENTICATION = "authentication"
+    SEARCH = "search"
+    RECOMMENDATION = "recommendation"
+    PLAYBACK_URL = "playback_url"
+    CONFIGURATION = "configuration"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +69,8 @@ class LizhengMusicConfig:
             raise LizhengMusicApiError(
                 "configuration",
                 "LIZHENG_MUSIC_API_MAC and a 16-byte LIZHENG_MUSIC_API_AES_KEY are required",
+                source=LizhengErrorSource.LOCAL_RESPONSE,
+                endpoint=LizhengEndpoint.CONFIGURATION,
             )
         return cls(base_url, channel, mac, aes_key)
 
@@ -78,7 +105,12 @@ class LizhengMusicApi:
                 params["version"] = version
             if language:
                 params["language"] = language
-            return await self._request("GET", "/thrid/mlmusic/app/songs", params=params) or []
+            return await self._request(
+                "GET",
+                "/thrid/mlmusic/app/songs",
+                endpoint=LizhengEndpoint.SEARCH,
+                params=params,
+            ) or []
 
         try:
             songs = await request(force_auth=False)
@@ -94,6 +126,7 @@ class LizhengMusicApi:
             data = await self._request(
                 "GET",
                 "/thrid/mlmusic/app/recommend",
+                endpoint=LizhengEndpoint.RECOMMENDATION,
                 params={"sn": sn, "ak": ak, "pageSize": page_size},
             )
             songs = data.get("songList", []) if isinstance(data, dict) else []
@@ -123,11 +156,17 @@ class LizhengMusicApi:
             data = await self._request(
                 "GET",
                 f"/thrid/mlmusic/app/play-url/{song_id}",
+                endpoint=LizhengEndpoint.PLAYBACK_URL,
                 params=params,
             )
             media = data.get("mediaList", []) if isinstance(data, dict) else []
             if not media or not isinstance(media[0], dict) or not media[0].get("url"):
-                raise LizhengMusicApiError(-1, "playback URL is empty")
+                raise LizhengMusicApiError(
+                    -1,
+                    "playback URL is empty",
+                    source=LizhengErrorSource.LOCAL_RESPONSE,
+                    endpoint=LizhengEndpoint.PLAYBACK_URL,
+                )
             return MusicSource(song_id=song_id, url=str(media[0]["url"]))
 
         try:
@@ -158,22 +197,45 @@ class LizhengMusicApi:
         payload = await self._request(
             "POST",
             f"/thrid/mlmusic/app/{self._config.channel}/queryDevcie",
+            endpoint=LizhengEndpoint.AUTHENTICATION,
             json={"mac": self._config.mac, "type": 5},
         )
         if not isinstance(payload, str):
-            raise LizhengMusicApiError(-1, "authentication response is not encrypted text")
+            raise LizhengMusicApiError(
+                -1,
+                "authentication response is not encrypted text",
+                source=LizhengErrorSource.LOCAL_RESPONSE,
+                endpoint=LizhengEndpoint.AUTHENTICATION,
+            )
         try:
             plain = _decrypt(payload, self._config.aes_key)
             node = plain.get("qq_api_music", {})
             sn, ak = node.get("sn"), node.get("ak")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise LizhengMusicApiError(-1, "invalid authentication response") from exc
+            raise LizhengMusicApiError(
+                -1,
+                "invalid authentication response",
+                source=LizhengErrorSource.LOCAL_RESPONSE,
+                endpoint=LizhengEndpoint.AUTHENTICATION,
+            ) from exc
         if not sn or not ak:
-            raise LizhengMusicApiError(-1, "authentication response lacks sn or ak")
+            raise LizhengMusicApiError(
+                -1,
+                "authentication response lacks sn or ak",
+                source=LizhengErrorSource.LOCAL_RESPONSE,
+                endpoint=LizhengEndpoint.AUTHENTICATION,
+            )
         self._credentials = (str(sn), str(ak))
         return self._credentials
 
-    async def _request(self, method: str, path: str, **kwargs: object) -> object:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        endpoint: LizhengEndpoint,
+        **kwargs: object,
+    ) -> object:
         timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
         async with self._http.request(
             method,
@@ -183,13 +245,33 @@ class LizhengMusicApi:
         ) as response:
             if response.status < 200 or response.status >= 300:
                 if response.status == 410:
-                    raise LizhengMusicApiError(410, "credentials expired")
-                raise LizhengMusicApiError(response.status, "HTTP request failed")
+                    raise LizhengMusicApiError(
+                        410,
+                        "credentials expired",
+                        source=LizhengErrorSource.HTTP_STATUS,
+                        endpoint=endpoint,
+                    )
+                raise LizhengMusicApiError(
+                    response.status,
+                    "HTTP request failed",
+                    source=LizhengErrorSource.HTTP_STATUS,
+                    endpoint=endpoint,
+                )
             body = await response.json()
         if not isinstance(body, dict):
-            raise LizhengMusicApiError(-1, "API response is not an object")
+            raise LizhengMusicApiError(
+                -1,
+                "API response is not an object",
+                source=LizhengErrorSource.API_RESPONSE,
+                endpoint=endpoint,
+            )
         if not body.get("success"):
-            raise LizhengMusicApiError(body.get("code", -1), body.get("message", "unknown"))
+            raise LizhengMusicApiError(
+                body.get("code", -1),
+                body.get("message", "unknown"),
+                source=LizhengErrorSource.API_RESPONSE,
+                endpoint=endpoint,
+            )
         return body.get("data")
 
 

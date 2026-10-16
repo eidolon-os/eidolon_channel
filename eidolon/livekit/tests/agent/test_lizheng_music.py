@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 
 from eidolon.livekit.agent.session.lizheng_music import (
+    LizhengEndpoint,
+    LizhengErrorSource,
     LizhengMusicApi,
     LizhengMusicApiError,
     LizhengMusicConfig,
@@ -73,6 +75,72 @@ async def test_search_reauthenticates_after_expired_credentials(
         "/thrid/mlmusic/app/channel-1/queryDevcie",
         "/thrid/mlmusic/app/songs",
     ]
+
+
+@pytest.mark.asyncio
+async def test_http_forbidden_error_preserves_source_and_endpoint(
+    lizheng_server: tuple[str, list[dict[str, object]]],
+) -> None:
+    base_url, _ = lizheng_server
+    app = web.Application()
+
+    async def forbidden(_request: web.Request) -> web.Response:
+        return web.Response(status=403, text="private proxy detail")
+
+    app.router.add_route("*", "/{tail:.*}", forbidden)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    config = LizhengMusicConfig(
+        f"http://127.0.0.1:{port}", "channel-1", "AA:BB", "0123456789abcdef"
+    )
+    try:
+        async with aiohttp.ClientSession() as http:
+            with pytest.raises(LizhengMusicApiError) as caught:
+                await LizhengMusicApi(config, http).search("hello")
+    finally:
+        await runner.cleanup()
+
+    assert caught.value.code == 403
+    assert caught.value.source is LizhengErrorSource.HTTP_STATUS
+    assert caught.value.endpoint is LizhengEndpoint.AUTHENTICATION
+    assert "private proxy detail" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_business_forbidden_error_preserves_source_and_endpoint(
+    lizheng_server: tuple[str, list[dict[str, object]]],
+) -> None:
+    base_url, _ = lizheng_server
+    app = web.Application()
+
+    async def forbidden(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {"success": False, "code": 403, "message": "private business detail"}
+        )
+
+    app.router.add_route("*", "/{tail:.*}", forbidden)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    config = LizhengMusicConfig(
+        f"http://127.0.0.1:{port}", "channel-1", "AA:BB", "0123456789abcdef"
+    )
+    try:
+        async with aiohttp.ClientSession() as http:
+            with pytest.raises(LizhengMusicApiError) as caught:
+                await LizhengMusicApi(config, http).search("hello")
+    finally:
+        await runner.cleanup()
+
+    assert caught.value.code == 403
+    assert caught.value.source is LizhengErrorSource.API_RESPONSE
+    assert caught.value.endpoint is LizhengEndpoint.AUTHENTICATION
+    assert "private business detail" in str(caught.value)
 
 
 @pytest.mark.asyncio

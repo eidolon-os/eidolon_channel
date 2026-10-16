@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 
 from eidolon.livekit.agent.session.music import MusicPlaybackService
-from eidolon.livekit.agent.session.lizheng_music import LizhengMusicApiError
+from eidolon.livekit.agent.session.lizheng_music import (
+    LizhengEndpoint,
+    LizhengErrorSource,
+    LizhengMusicApiError,
+)
 from eidolon.livekit.agent.session.music_commands import (
     MusicCommandService,
     MusicCommandStatus,
@@ -79,7 +83,14 @@ async def test_play_logs_provider_failure_stage_without_error_details(
         FakeSession(),
         music_dir=music_dir,
         decoder=FakeDecoder(),
-        cache=FailingCache(LizhengMusicApiError(401, secret_detail)),
+        cache=FailingCache(
+            LizhengMusicApiError(
+                401,
+                secret_detail,
+                source=LizhengErrorSource.HTTP_STATUS,
+                endpoint=LizhengEndpoint.AUTHENTICATION,
+            )
+        ),
     ) as playback:
         with caplog.at_level("WARNING", logger="agent.session.music"):
             receipt = await MusicCommandService(playback).play(

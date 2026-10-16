@@ -37,9 +37,13 @@ class MusicCommandService:
             result = await self._playback.play_song(playback_ref, song_id=song_id)
         except (OSError, RuntimeError, ValueError) as exc:
             provider_code = "-"
+            provider_source = "-"
+            provider_endpoint = "-"
             match exc:
                 case LizhengMusicApiError():
                     stage = "provider_api"
+                    provider_source = exc.source.value
+                    provider_endpoint = exc.endpoint.value
                     match exc.code:
                         case int() as code:
                             provider_code = str(code)
@@ -52,11 +56,14 @@ class MusicCommandService:
                 case _:
                     stage = "music_setup"
             logger.warning(
-                "music command failed request_id=%s stage=%s error_type=%s provider_code=%s",
+                "music command failed request_id=%s stage=%s error_type=%s "
+                "provider_code=%s provider_source=%s provider_endpoint=%s",
                 request_id,
                 stage,
                 type(exc).__name__,
                 provider_code,
+                provider_source,
+                provider_endpoint,
             )
             return MusicCommandReceipt(request_id, playback_ref, MusicCommandStatus.FAILED, str(exc))
         return MusicCommandReceipt(

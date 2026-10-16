@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from eidolon.livekit.agent.session.music import MusicPlaybackService
+from eidolon.livekit.agent.session.lizheng_music import LizhengMusicApiError
 from eidolon.livekit.agent.session.music_commands import (
     MusicCommandService,
     MusicCommandStatus,
@@ -16,6 +17,14 @@ class FakeCache:
 
     async def get(self, _song_id: str) -> Path:
         return self.path
+
+
+class FailingCache:
+    def __init__(self, error: RuntimeError) -> None:
+        self.error = error
+
+    async def get(self, _song_id: str) -> Path:
+        raise self.error
 
 
 @pytest.fixture
@@ -58,6 +67,34 @@ async def test_status_without_playback_returns_not_found(music_dir: Path) -> Non
 
     assert receipt.status is MusicCommandStatus.NOT_FOUND
     assert receipt.playback_ref is None
+
+
+@pytest.mark.asyncio
+async def test_play_logs_provider_failure_stage_without_error_details(
+    music_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_detail = "signed-url?ak=secret&token=private"
+    async with MusicPlaybackService(
+        FakeSession(),
+        music_dir=music_dir,
+        decoder=FakeDecoder(),
+        cache=FailingCache(LizhengMusicApiError(401, secret_detail)),
+    ) as playback:
+        with caplog.at_level("WARNING", logger="agent.session.music"):
+            receipt = await MusicCommandService(playback).play(
+                request_id="request-42",
+                playback_ref="play-42",
+                song_id="song-42",
+            )
+
+    assert receipt.status is MusicCommandStatus.FAILED
+    assert (
+        "request_id=request-42 stage=provider_api error_type=LizhengMusicApiError "
+        "provider_code=401" in caplog.text
+    )
+    assert secret_detail not in caplog.text
+    assert "secret" not in caplog.text
 
 
 @pytest.mark.asyncio

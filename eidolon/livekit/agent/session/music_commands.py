@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import assert_never
 
+from .lizheng_music import LizhengMusicApiError
 from .music import MusicPlayback, MusicPlaybackService, MusicStatus
+from .music_cache import MusicDownloadError
+
+logger = logging.getLogger("agent.session.music")
 
 
 class MusicCommandStatus(StrEnum):
@@ -31,6 +36,28 @@ class MusicCommandService:
         try:
             result = await self._playback.play_song(playback_ref, song_id=song_id)
         except (OSError, RuntimeError, ValueError) as exc:
+            provider_code = "-"
+            match exc:
+                case LizhengMusicApiError():
+                    stage = "provider_api"
+                    match exc.code:
+                        case int() as code:
+                            provider_code = str(code)
+                        case str():
+                            pass
+                case MusicDownloadError():
+                    stage = "source_download"
+                case OSError():
+                    stage = "local_io"
+                case _:
+                    stage = "music_setup"
+            logger.warning(
+                "music command failed request_id=%s stage=%s error_type=%s provider_code=%s",
+                request_id,
+                stage,
+                type(exc).__name__,
+                provider_code,
+            )
             return MusicCommandReceipt(request_id, playback_ref, MusicCommandStatus.FAILED, str(exc))
         return MusicCommandReceipt(
             request_id,

@@ -257,7 +257,11 @@ class MusicPlaybackService:
         except anyio.get_cancelled_exc_class():
             raise
         except (OSError, RuntimeError, ValueError) as exc:
-            logger.warning("music playback failed ref=%s: %s", self._playback_ref, exc)
+            logger.warning(
+                "music playback failed ref=%s error_type=%s",
+                self._playback_ref,
+                type(exc).__name__,
+            )
             if generation == self._generation:
                 self._status = MusicStatus.FAILED
                 self._error = str(exc)

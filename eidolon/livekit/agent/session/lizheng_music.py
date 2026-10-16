@@ -3,22 +3,46 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import random
 import time
 from dataclasses import dataclass
 from enum import StrEnum
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Final
 
 import aiohttp
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
+from yarl import URL
 
 from .music_cache import MusicDownloadError, MusicSource
 
 DEFAULT_BASE_URL: Final = "https://api.lizheng.design"
 DEFAULT_CHANNEL: Final = "bf117132ace49f34"
 HTTP_TIMEOUT_SECONDS: Final = 15.0
+SENSITIVE_FIELDS: Final = frozenset(
+    {
+        "ak",
+        "aeskey",
+        "appkey",
+        "authorization",
+        "credential",
+        "credentials",
+        "key",
+        "mac",
+        "password",
+        "secret",
+        "secretkey",
+        "sign",
+        "signature",
+        "sn",
+        "token",
+    }
+)
+
+logger = logging.getLogger("agent.session.music")
 
 
 class LizhengMusicApiError(RuntimeError):
@@ -105,12 +129,15 @@ class LizhengMusicApi:
                 params["version"] = version
             if language:
                 params["language"] = language
-            return await self._request(
-                "GET",
-                "/thrid/mlmusic/app/songs",
-                endpoint=LizhengEndpoint.SEARCH,
-                params=params,
-            ) or []
+            return (
+                await self._request(
+                    "GET",
+                    "/thrid/mlmusic/app/songs",
+                    endpoint=LizhengEndpoint.SEARCH,
+                    params=params,
+                )
+                or []
+            )
 
         try:
             songs = await request(force_auth=False)
@@ -183,9 +210,11 @@ class LizhengMusicApi:
         version: str = "",
         language: str = "",
     ) -> MusicSource:
-        songs = await (self.recommend() if query == "random" else self.search(
-            query, version=version, language=language
-        ))
+        songs = await (
+            self.recommend()
+            if query == "random"
+            else self.search(query, version=version, language=language)
+        )
         if not songs:
             raise MusicDownloadError("no music matched the query")
         song = random.choice(songs)
@@ -237,12 +266,45 @@ class LizhengMusicApi:
         **kwargs: object,
     ) -> object:
         timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
+        request_url = f"{self._config.base_url}{path}"
+        params = kwargs.get("params")
+        if isinstance(params, dict):
+            log_url = str(
+                URL(request_url).with_query(
+                    [(str(key), str(value)) for key, value in params.items()]
+                )
+            )
+        else:
+            log_url = request_url
+        logger.info(
+            "lizheng http request method=%s endpoint=%s url=%s",
+            method,
+            endpoint.value,
+            _redact_url(log_url),
+        )
         async with self._http.request(
             method,
-            f"{self._config.base_url}{path}",
+            request_url,
             timeout=timeout,
             **kwargs,
         ) as response:
+            safe_url = _redact_url(str(response.url))
+            try:
+                body: object = await response.json(content_type=None)
+            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                body = {"body": "<non-json response>"}
+            logger.info(
+                "lizheng http response endpoint=%s url=%s http_status=%d body=%s",
+                endpoint.value,
+                safe_url,
+                response.status,
+                json.dumps(
+                    _redact_json(body, redact_data=endpoint is LizhengEndpoint.AUTHENTICATION),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            )
             if response.status < 200 or response.status >= 300:
                 if response.status == 410:
                     raise LizhengMusicApiError(
@@ -257,7 +319,6 @@ class LizhengMusicApi:
                     source=LizhengErrorSource.HTTP_STATUS,
                     endpoint=endpoint,
                 )
-            body = await response.json()
         if not isinstance(body, dict):
             raise LizhengMusicApiError(
                 -1,
@@ -285,3 +346,40 @@ def _decrypt(encoded: str, aes_key: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("decrypted response is not an object")
     return value
+
+
+def _redact_url(value: str, *, redact_all_query_values: bool = False) -> str:
+    parts = urlsplit(value)
+    hostname = parts.hostname or ""
+    if parts.port is not None:
+        hostname = f"{hostname}:{parts.port}"
+    if parts.username is not None or parts.password is not None:
+        hostname = "<redacted>@" + hostname
+    query = [
+        (
+            key,
+            "<redacted>" if redact_all_query_values or _field_is_sensitive(key) else item,
+        )
+        for key, item in parse_qsl(parts.query, keep_blank_values=True)
+    ]
+    return urlunsplit((parts.scheme, hostname, parts.path, urlencode(query), ""))
+
+
+def _redact_json(value: object, *, redact_data: bool = False) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): "<redacted>"
+            if _field_is_sensitive(str(key)) or (redact_data and str(key) == "data")
+            else _redact_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_json(item) for item in value]
+    if isinstance(value, str) and value.startswith(("http://", "https://")):
+        return _redact_url(value, redact_all_query_values=True)
+    return value
+
+
+def _field_is_sensitive(name: str) -> bool:
+    normalized = "".join(character for character in name.lower() if character.isalnum())
+    return normalized in SENSITIVE_FIELDS

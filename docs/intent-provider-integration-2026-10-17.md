@@ -136,3 +136,24 @@ Pi5 首轮快照缺少提示音资源，补齐只读资源后仍有一项缺少�
 - 保留 LLM 兼容发布与 Ops 配置快照，便于回退。完整收据：工作区 `diagnostics/2026-10-17-intent-provider-integration/results/pi5-d3-deployment.json`。
 
 现在可以开始 BOX-3 真机测试。上述部署后探测不包含物理麦克风、扬声器、AEC 或实际用户打断效果；这些由下一轮 BOX-3 操作验证。
+
+## 7. Mac Host 切换与模糊意图建议
+
+2026-10-17 用户确认保留 Pi5 的 D3，并授权 Mac 同样切换。Mac 配置提交在 Ops 仓库 `28b2646`，通过既有 Host overlay 选择 `systemone / d3`。共享 Channel 默认仍为 `llm`，两种实现均保留；Pi5 配置未变更。
+
+执行与验证：
+
+- 使用标准 Ops `debug prepare` 渲染配置，前后文件摘要对比确认仅 `settings/channel.yaml` 改变，内容差异仅 intent provider 和 SystemOne endpoint/model。
+- 通过 Ops `service restart channel` 请求 eidolond 重启，结果 `restarted` / `ready`，没有重启其他组件。Mac Channel PID 从 11660 变为 88038；23:47:45 重新注册 LiveKit worker。
+- 新 worker 有效配置日志确认 `intent_provider=systemone`、`model=d3`，业务回答仍走 `eidolon_agent`；重启后 Host status 为 `healthy`。
+- Worker `/`、`/worker` 均返回 HTTP 200，注册身份为 `eidolon`。完整 `app-ready` 为 degraded：17 项中只有 `lan_name_resolves=false`，其余后端、Channel、LiveKit、IP 连通及身份检查通过。此轮未改动网络配置，也没有切换前的 app-ready 对照，不能声称名称解析问题是新引入或早已存在；它可能影响按 `.local` 名称接入，需要与本次 D3 生效结果分开说明。
+- 从 Mac 的实际生成配置构造正式分类器，继续、停止、引用停止词三次真实服务调用全部符合预期：504.2 / 103.5 / 99.1 ms。第一条包含新连接开销，不把它当作稳定态基准。引用问题 reply 概率 0.703，正常采纳。
+- 证据保存在工作区 `diagnostics/2026-10-17-mac-d3-switch/`；属于配置和分类服务验证，不冒充新的 Mac 实机语音测试。
+
+模糊意图建议：本次保持现有策略，不加固定置信度门槛、不做句子特判、不自动串联 DS 回退。
+
+“算了，我还不知道怎么表达。”在冻结标签中预设 wait，D3 返回 stop。但从体验看，停止当前播报、不再抢话、仍让用户继续输入，是合理解释。现有 stop 取消当前输出，不等于退出会话；因此这一条标签差异不足以证明需要修复。
+
+现有 wait/UNCERTAIN 在 VAD 静止后可能恢复旧播放。把低置信 stop 一律变成 wait，可能让用户犹豫时助手又接着说，反而更差；此前也已经实测固定 0.8 会过滤正确 reply 并导致漏答。
+
+如果后续真实使用暴露“用户尚未组织好语言，助手恢复旧播报”的问题，应作为独立的 Channel 交互语义需求处理：区分明确附和、明确停止、用户仍要继续表达、模型暂时无法判定。D3 提供分类证据，Channel 在现有候选与播放所有权机制中决定让出话筒、接受续说或恢复播放；Agent 继续只负责已提交请求。不要为单个模型或一句话增加第二套状态机。是否需要询问澄清、何时结束等待，应通过多轮体验测试决定，不能只按单轮标签准确率上线。

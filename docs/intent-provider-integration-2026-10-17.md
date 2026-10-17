@@ -1,6 +1,6 @@
 # 意图分类接口与可配置实现（2026-10-17）
 
-本次实现将 Channel 的异步打断意图分类抽象为 `InterruptIntentClassifier`，保留 `LlmInterruptClassifier`，新增 `SystemOneInterruptClassifier`。两者由已有 `SharedStageFactory` 按配置构建，业务 Agent、EOT 和 VAD 不随意图 provider 切换。现有生产配置仍选 `llm`；d3 已在独立测试中通过正式工厂接入。
+本次实现将 Channel 的异步打断意图分类抽象为 `InterruptIntentClassifier`，保留 `LlmInterruptClassifier`，新增 `SystemOneInterruptClassifier`。两者由已有 `SharedStageFactory` 按配置构建，业务 Agent、EOT 和 VAD 不随意图 provider 切换。独立验证阶段生产配置仍选 `llm`；之后已按用户授权在 Pi5 启用 d3，见第 6 节。
 
 ## 1. 架构边界
 
@@ -55,7 +55,7 @@ turn_policy:
 
 提供 `config/overlays/intent_d3.yaml`，使用现有 `EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML` 加载。若主机已经使用 BOX3 或其他 overlay，将上述字段合入当前 overlay，保留其余主机参数；现有加载器只有一个 overlay 路径。
 
-切回只需将 `intent_provider` 改回 `llm`，或移除 d3 overlay 恢复原配置。配置在服务/worker 启动时读取，需要通过正常运行流程重新加载；不支持正在进行的会话热切换。本次没有发布、激活或重启 Mac/Pi5 服务。
+切回只需将 `intent_provider` 改回 `llm`，或移除 d3 overlay 恢复原配置。配置在服务/worker 启动时读取，需要通过正常运行流程重新加载；不支持正在进行的会话热切换。独立验证阶段没有发布或重启服务；之后 Pi5 的授权发布见第 6 节，Mac 未切换。
 
 同一个 SystemOne 实现也可通过 endpoint/model 指向符合相同协议的其他服务；不会在代码里按 `d3` 或 `pplx` 写业务分支。本轮真实服务验证对象是 d3。
 
@@ -121,3 +121,18 @@ Pi5 首轮快照缺少提示音资源，补齐只读资源后仍有一项缺少�
 ## 5. 结论边界
 
 本次交付的是可配置的模型接口和实际接入验证，不改变意图识别的产品范围。目前仍主要覆盖助手输出/打断窗口；普通空闲发起、持续等待、等待后的恢复不是本次扩展内容。真实服务 + SDK 测试不等于 BOX3 的 RTC、AEC、麦克风和扬声器体验验收，也不构成长期服务可用性结论。
+
+
+## 6. Pi5 / BOX-3 发布结果
+
+用户授权后，标准 Ops 可回退流程分两阶段执行：先激活支持接口的 `pi5-intent-provider-20261017-1`，保持 LLM；再激活配置发布 `pi5-intent-d3-20261017-1`，选择 SystemOne d3。两次均为 `activated`、`doctor=healthy`、`app_ready=app_ready`，没有数据库迁移。
+
+- 实现提交：`8480fb5`；最终 Channel 发布提交：`1ca3438c96e7236fce88c12039074405c573ad6d`。
+- Ops Pi5 配置提交：`dac9461`。只在 Pi5 host overlay 选择 `systemone`、d3 endpoint 和 model；共享 Channel 默认及 Mac 仍为 LLM。
+- 其他组件固定为此前 Pi5 发布的精确 revision，未随本地 HEAD 升级。
+- 最终 Ops status：当前和实际运行版本均为 `pi5-intent-d3-20261017-1`，21/21 服务正常。
+- 从实际发布的安装包和 `/etc/eidolon/channel.yaml` 构建分类器，确认 `SystemOneInterruptClassifier`、model=d3、预算 2,500 ms。继续、只停止、引用“别说了”的新问题三次真实调用均通过；耗时分别 297.4 / 98.7 / 101.9 ms，首条包含新连接开销。
+- 引用问题 reply 概率约 0.703，仍正常采纳；没有引入 0.8 门槛。
+- 保留 LLM 兼容发布与 Ops 配置快照，便于回退。完整收据：工作区 `diagnostics/2026-10-17-intent-provider-integration/results/pi5-d3-deployment.json`。
+
+现在可以开始 BOX-3 真机测试。上述部署后探测不包含物理麦克风、扬声器、AEC 或实际用户打断效果；这些由下一轮 BOX-3 操作验证。

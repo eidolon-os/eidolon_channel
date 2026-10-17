@@ -86,3 +86,39 @@ async def test_sdk_close_releases_pending_channel_endpointing(intent_provider):
         await asyncio.wait_for(h.session.aclose(), 2)
         assert pipeline._interruption_orchestrator.closed
         assert not h.events.user_messages()
+
+
+@pytest.mark.asyncio
+async def test_sdk_exit_rejects_candidate_before_transcript_settlement_deadline(monkeypatch):
+    """Channel ends its pending turn before the SDK drains provider input."""
+    async with production_session(
+        welcome='', llm=MockLLM.scripted([]),
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text='好啊。', trigger_after_ms=700),
+            ScriptedTranscript(text='', interims=['再帮我查一下'], final=False,
+                               trigger_after_ms=1100),
+        ]),
+        tts=MockTTS(char_seconds=.01),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1000, .1),
+        ]),
+        real_time_audio=True,
+    ) as (pipeline, h):
+        monkeypatch.setattr(pipeline._get_eot_model(), 'predict_end_of_turn',
+                            AsyncMock(return_value=.99))
+        h.audio_in.feed_pcm(synth_voiced(1.5))
+        await wait_until(lambda: bool(pipeline._user_turns._transcript_change_waiters), timeout=4)
+        candidate = pipeline._user_turns.active
+        closing = asyncio.create_task(h.session.aclose())
+        try:
+            await wait_until(lambda: candidate.state == 'rejected'
+                             and not pipeline._user_turns._transcript_change_waiters, timeout=1)
+        finally:
+            # The SDK independently gives a provider with no FINAL its existing
+            # transcription timeout. This test constrains Channel settlement,
+            # not that separate SDK drain; do not patch the SDK or its timer.
+            await asyncio.wait_for(closing, timeout=6)
+        assert candidate.state == 'rejected'
+        assert not pipeline._user_turns._transcript_change_waiters
+        assert not h.events.user_messages()
+        assert not h.events.agent_messages()

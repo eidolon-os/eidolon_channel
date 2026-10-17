@@ -248,7 +248,11 @@ class UserTurnCoordinator:
             self._transcript_change_waiters.discard(future)
 
     def can_merge_new_speech(self, *, now: float | None = None, continue_pending: bool = False) -> bool:
-        """Merge only an acoustically continuous fragment into the open turn."""
+        """Keep accepted text until the product boundary settles its turn.
+
+        Acoustic grace may expire a text-free VAD candidate. It cannot discard
+        recognized, unsubmitted text that the framework still accumulates.
+        """
 
         candidate = self._active
         if candidate is None or candidate.state != "open":
@@ -256,7 +260,7 @@ class UserTurnCoordinator:
         segment = candidate.current_segment
         if segment is None:
             return False
-        if segment.ended_at is None or continue_pending:
+        if segment.ended_at is None or continue_pending or candidate.selected_text:
             return True
         return (self._now(now) - segment.ended_at) <= self._speech_merge_grace_sec
 
@@ -652,19 +656,37 @@ class UserTurnCoordinator:
         the completion for A.  Starting generation for A would split one
         physical utterance and let the later completion cancel that generation.
         The framework boundary is ready only when its own transcript covers the
-        trailing interim.  An interim-only candidate remains admissible because
-        there is no stale earlier FINAL to supersede.
+        trailing interim. A newer acoustic segment without any transcript must
+        first obtain evidence; an old FINAL cannot stand in for that speech.
+        An empty framework message may still use the current interim candidate.
         """
 
         candidate = self._active
         if candidate is None or candidate.state != "open":
             return FrameworkCompletionReadiness(True, "no_open_candidate")
 
+        current = candidate.current_segment
+        # One provider revision can legitimately span multiple VAD segments.
+        # Only a FINAL already received before renewed speech proves that its
+        # text precedes the continuation. A later final of an open revision
+        # still follows the existing provider-identity/coverage rules below.
+        prior_revision = next(
+            (revision for revision in reversed(candidate.revisions)
+             if current is not None and revision.received_at < current.started_at),
+            None,
+        )
+        if prior_revision is not None and prior_revision.is_final and not any(
+            segment.generation_id == candidate.latest_generation_id
+            and (segment.selected_text or segment.covered_by_generation_id is not None)
+            for segment in candidate.segments
+        ):
+            return FrameworkCompletionReadiness(False, "speech_segment_awaiting_transcript")
+
         has_final = any(bool(segment.final_text.strip()) for segment in candidate.segments)
-        if not has_final:
+        framework_text = transcript.strip()
+        if not has_final and not framework_text:
             return FrameworkCompletionReadiness(True, "interim_only_candidate")
 
-        framework_text = transcript.strip()
         framework_length = len(normalize_revision_text(framework_text))
         for segment in candidate.segments:
             pending = (

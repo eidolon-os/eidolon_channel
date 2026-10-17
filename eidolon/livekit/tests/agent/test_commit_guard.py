@@ -413,6 +413,9 @@ async def test_new_candidate_supersedes_turn_waiting_for_provider_evidence() -> 
     await asyncio.sleep(0)
     assert completion.done() is False
 
+    # A genuine replacement requires the product owner to terminate the old
+    # candidate. Acoustic silence alone no longer discards accepted text.
+    pipeline._user_turns.reject_active('explicit_rejection', now=1.9)
     new_timeline = TurnTimeline("new-acoustic-turn")
     new_candidate = pipeline._user_turns.start_speech(
         timeline=new_timeline,
@@ -421,7 +424,7 @@ async def test_new_candidate_supersedes_turn_waiting_for_provider_evidence() -> 
 
     assert await completion is False
     assert old_candidate.state == "rejected"
-    assert old_candidate.reject_reason == "superseded_by_new_speech"
+    assert old_candidate.reject_reason == "explicit_rejection"
     assert new_candidate.state == "open"
     assert pipeline._user_turns.active is new_candidate
     assert old_timeline.attrs["framework_completed_settlement"]["outcome"] == ("candidate_replaced")
@@ -445,6 +448,98 @@ async def test_interim_only_candidate_replaces_empty_framework_message() -> None
 
     assert allowed is True
     assert message.text_content == "那你记下来吧，这是我们约定。"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('interim', ['', '帮我查一下'])
+async def test_audio_completion_waits_for_continuation_transcript(interim):
+    pipeline = _make_pipeline_with_session()
+    pipeline._stt_commit_transcript_timeout = 1
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline('audio-eot-delayed-asr')
+    pipeline._timeline = timeline
+    first = pipeline._user_turns.start_speech(timeline=timeline, now=0)
+    pipeline._user_turns.add_transcript('嗯，那个。', is_final=True, now=.1)
+    pipeline._user_turns.note_speech_stopped(eot_score=.1, now=.2)
+    pipeline._user_turns.start_speech(timeline=timeline, now=1.7)
+    if interim:
+        pipeline._on_user_transcribed(_transcript_event(interim, is_final=False))
+    pipeline._user_turns.note_speech_stopped(eot_score=.9, now=3)
+    message = ChatMessage(role='user', content=['嗯，那个。'])
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(), new_message=message,
+        )
+    )
+    await asyncio.sleep(0)
+    assert not completion.done()
+    assert first.state == 'open'
+
+    pipeline._on_user_transcribed(_transcript_event('帮我查一下明天的天气。', is_final=True))
+    assert await completion is True
+    assert message.text_content == '嗯，那个。帮我查一下明天的天气。'
+    assert pipeline._user_turns.active is first
+    assert timeline.attrs['framework_completed_settlement']['outcome'] == 'ready'
+
+
+@pytest.mark.asyncio
+async def test_resuming_same_candidate_invalidates_waiting_audio_completion():
+    pipeline = _make_pipeline_with_session()
+    pipeline._stt_commit_transcript_timeout = 1
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline('speech-resumes-during-settlement')
+    pipeline._timeline = timeline
+    candidate = pipeline._user_turns.start_speech(timeline=timeline, now=0)
+    pipeline._on_user_transcribed(_transcript_event('先说一下。', is_final=True))
+    pipeline._on_user_transcribed(_transcript_event('这个方案', is_final=False))
+    pipeline._user_turns.note_speech_stopped(eot_score=.9, now=.2)
+    message = ChatMessage(role='user', content=['先说一下。'])
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(), new_message=message,
+        )
+    )
+    await asyncio.sleep(0)
+    assert not completion.done()
+    pipeline._user_turns.start_speech(timeline=timeline, now=.5)
+
+    assert await completion is False
+    assert candidate.state == 'open'
+    assert timeline.attrs['framework_completed_settlement']['outcome'] == 'speech_resumed'
+    assert message.text_content == '先说一下。'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('verdict', ['allow', 'reject', 'error'])
+async def test_new_speech_invalidates_completion_awaiting_voiceprint(verdict):
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline('voiceprint-scope')
+    pipeline._timeline = timeline
+    candidate = pipeline._user_turns.start_speech(timeline=timeline, now=0)
+    pipeline._user_turns.add_transcript('先说一下。', is_final=True, now=.1)
+    pipeline._user_turns.note_speech_stopped(eot_score=.9, now=.2)
+    result = asyncio.get_running_loop().create_future()
+    pipeline._completed_turn_voiceprint_task = result
+    pipeline._completed_turn_voiceprint_timeline = timeline
+    completion = asyncio.create_task(
+        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(),
+            new_message=ChatMessage(role='user', content=['先说一下。']),
+        )
+    )
+    await asyncio.sleep(0)
+    assert not completion.done()
+    pipeline._user_turns.start_speech(timeline=timeline, now=1.7)
+    if verdict == 'error':
+        result.set_exception(RuntimeError('voiceprint unavailable'))
+    else:
+        result.set_result(_voiceprint_result(allowed=verdict == 'allow', reason=verdict))
+    with pytest.raises(asyncio.CancelledError):
+        await completion
+    assert candidate.state == 'open'
+    assert candidate.current_segment.selected_text == ''
+    pipeline._session.clear_user_turn.assert_not_called()
 
 
 @pytest.mark.asyncio

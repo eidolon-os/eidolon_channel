@@ -11,7 +11,7 @@ from ..session.user_turn_coordinator import (
     UserTurnCoordinator,
 )
 
-TranscriptSettlementOutcome = Literal["ready", "deadline", "candidate_replaced"]
+TranscriptSettlementOutcome = Literal["ready", "deadline", "candidate_replaced", "speech_resumed"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,7 @@ class TranscriptSettlementLease:
         started_at = loop.time()
         deadline = started_at + self._timeout_sec
         updates = 0
+        generation = self._coordinator.current_generation_id
         while True:
             # Capture the notification version before evaluating readiness.
             # If evidence lands during the evaluation, wait_for_transcript_change
@@ -63,6 +64,17 @@ class TranscriptSettlementLease:
                     readiness=FrameworkCompletionReadiness(
                         ready=False,
                         reason="candidate_replaced_during_settlement",
+                    ),
+                    elapsed_sec=loop.time() - started_at,
+                    evidence_updates=updates,
+                )
+
+            if self._coordinator.current_generation_id != generation:
+                return TranscriptSettlementResult(
+                    outcome="speech_resumed",
+                    readiness=FrameworkCompletionReadiness(
+                        ready=False,
+                        reason="speech_resumed_during_settlement",
                     ),
                     elapsed_sec=loop.time() - started_at,
                     evidence_updates=updates,

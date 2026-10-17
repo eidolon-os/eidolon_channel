@@ -127,13 +127,61 @@ def test_new_speech_outside_merge_grace_starts_new_candidate() -> None:
     assert second.latest_generation_id == 2
 
 
+@pytest.mark.parametrize('is_final', [False, True])
+def test_unsubmitted_text_survives_a_pause_beyond_acoustic_grace(is_final):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    timeline = TurnTimeline('unsubmitted-continuation')
+    first = coordinator.start_speech(timeline=timeline, now=0)
+    coordinator.add_transcript('嗯，那个。', is_final=is_final, now=.1)
+    coordinator.note_speech_stopped(eot_score=.1, now=.2)
+
+    assert coordinator.can_merge_new_speech(now=1.7)
+    assert coordinator.start_speech(timeline=timeline, now=1.7) is first
+    assert first.latest_generation_id == 2
+    assert first.selected_text == '嗯，那个。'
+
+
+@pytest.mark.parametrize('terminal', ['commit', 'reject'])
+def test_terminal_turn_does_not_absorb_later_supplement(terminal):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    first = coordinator.start_speech(timeline=TurnTimeline('first'), now=0)
+    coordinator.add_transcript('先讨论方案。', is_final=True, now=.1)
+    coordinator.note_speech_stopped(eot_score=.9, now=.2)
+    if terminal == 'commit':
+        coordinator.mark_framework_completed(
+            transcript=first.selected_text, reason='framework_completed_turn', now=.3,
+        )
+    else:
+        coordinator.reject_active('explicit_rejection', now=.3)
+
+    second = coordinator.start_speech(timeline=TurnTimeline('second'), now=.4)
+    coordinator.add_transcript('再讨论部署。', is_final=True, now=.5)
+    assert second is not first
+    assert second.selected_text == '再讨论部署。'
+
+
+def test_old_final_cannot_cover_new_speech_without_transcript():
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    coordinator.start_speech(timeline=None, now=0)
+    coordinator.add_transcript('嗯，那个。', is_final=True, now=.1)
+    coordinator.note_speech_stopped(eot_score=.1, now=.2)
+    coordinator.start_speech(timeline=None, now=.5)
+    coordinator.note_speech_stopped(eot_score=.9, now=.8)
+
+    readiness = coordinator.framework_completion_readiness('嗯，那个。')
+    assert readiness.ready is False
+    assert readiness.reason == 'speech_segment_awaiting_transcript'
+    coordinator.add_transcript('帮我查天气。', is_final=True, now=.9)
+    assert coordinator.framework_completion_readiness('嗯，那个。').ready
+
+
 def test_pending_interruption_can_continue_beyond_acoustic_grace():
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
     timeline = TurnTimeline("pending-interruption")
     first = coordinator.start_speech(timeline=timeline, now=0)
     coordinator.add_transcript("交付时间方面。", is_final=True, now=.1)
     coordinator.note_speech_stopped(eot_score=.003, now=.2)
-    assert not coordinator.can_merge_new_speech(now=1.4)
+    assert coordinator.can_merge_new_speech(now=1.4)
     second = coordinator.start_speech(timeline=timeline, now=1.4, continue_pending=True)
     coordinator.add_transcript("改到下周。", is_final=True, now=1.6)
     assert second is first

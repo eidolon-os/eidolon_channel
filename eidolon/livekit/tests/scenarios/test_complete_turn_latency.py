@@ -397,7 +397,11 @@ async def test_incomplete_turn_survives_long_pause_then_replies_promptly(
             record_property('sdk_complete_to_reply_audio_ms', report['sdk_complete_to_reply_audio_ms'])
             assert report['sdk_complete_to_reply_audio_ms'] is not None
             assert 0 <= report['stop_to_reply_audio_ms'] <= 1000
-            assert h.events.user_messages() == [f'{prefix} {continuation}']
+            # The coordinator now retains both Chinese fragments across the
+            # pause. Assert their ordered content, not the SDK's inserted space.
+            assert [''.join(text.split()) for text in h.events.user_messages()] == [
+                prefix + continuation,
+            ]
             assert h.events.agent_messages() == [reply]
             classifier.classify.assert_not_awaited()
         finally:

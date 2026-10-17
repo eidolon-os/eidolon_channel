@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -235,6 +236,42 @@ def test_identity_strategy_updates_one_segment_even_when_text_is_rewritten() -> 
     assert len(coordinator.active.segments) == 1
 
 
+@pytest.mark.parametrize('earlier_sentence', [False, True])
+def test_one_open_provider_revision_can_span_vad_segments(earlier_sentence) -> None:
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    evidence = _evidence(revision='sentence-1')
+    coordinator.start_speech(timeline=None, now=0)
+    if earlier_sentence:
+        coordinator.add_transcript(
+            '好。', is_final=True, evidence=_evidence(revision='sentence-0'), now=.05,
+        )
+    coordinator.add_transcript('帮我介绍', is_final=False, evidence=evidence, now=.1)
+    coordinator.note_speech_stopped(eot_score=.1, now=.2)
+    coordinator.start_speech(timeline=None, now=.5)
+    coordinator.add_transcript(
+        '帮我介绍一下这个方案。', is_final=True, evidence=evidence, now=.7,
+    )
+
+    assert coordinator.framework_completion_readiness('帮我介绍一下这个方案。').ready
+    assert coordinator.selected_text == ('好。' if earlier_sentence else '') + '帮我介绍一下这个方案。'
+
+
+def test_late_revision_of_closed_sentence_does_not_cover_new_speech() -> None:
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    evidence = _evidence(revision='sentence-1')
+    coordinator.start_speech(timeline=None, now=0)
+    coordinator.add_transcript('嗯，那个。', is_final=True, evidence=evidence, now=.1)
+    coordinator.note_speech_stopped(eot_score=.1, now=.2)
+    coordinator.start_speech(timeline=None, now=1.7)
+    coordinator.add_transcript('嗯那个。', is_final=True, evidence=evidence, now=1.8)
+
+    assert not coordinator.framework_completion_readiness('嗯那个。').ready
+    coordinator.add_transcript(
+        '帮我查天气。', is_final=True, evidence=_evidence(revision='sentence-2'), now=2,
+    )
+    assert coordinator.framework_completion_readiness('嗯那个。').ready
+
+
 def test_timestamp_strategy_updates_one_segment_without_identity() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     coordinator.start_speech(timeline=None)
@@ -304,6 +341,7 @@ async def test_settlement_does_not_miss_evidence_arriving_during_readiness_check
     class CoordinatorWithInterleavedEvidence:
         def __init__(self) -> None:
             self.active = SimpleNamespace(candidate_id="candidate-1")
+            self.current_generation_id = 1
             self.transcript_change_version = 0
             self._ready = False
             self.waited_after_versions: list[int] = []
@@ -338,3 +376,28 @@ async def test_settlement_does_not_miss_evidence_arriving_during_readiness_check
     assert result.outcome == "ready"
     assert result.evidence_updates == 1
     assert coordinator.waited_after_versions == [0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cancel', [False, True])
+async def test_untranscribed_continuation_wait_is_bounded_and_releases_waiters(cancel):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    candidate = coordinator.start_speech(timeline=None, now=0)
+    coordinator.add_transcript('嗯，那个。', is_final=True, now=.1)
+    coordinator.note_speech_stopped(eot_score=.1, now=.2)
+    coordinator.start_speech(timeline=None, now=1.7)
+    pending = asyncio.create_task(TranscriptSettlementLease(
+        coordinator, timeout_sec=.01 if not cancel else 1,
+    ).settle(candidate_id=candidate.candidate_id, framework_transcript='嗯，那个。'))
+    await asyncio.sleep(0)
+    assert not pending.done()
+    if cancel:
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    else:
+        result = await pending
+        assert result.outcome == 'deadline'
+        assert result.readiness.reason == 'speech_segment_awaiting_transcript'
+    assert candidate.state == 'open'
+    assert not coordinator._transcript_change_waiters

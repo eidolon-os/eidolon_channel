@@ -97,6 +97,12 @@ def build_full_duplex_agent(
             # SDK shutdown drains endpointing after on_exit. Wake our policy
             # barrier now, including when callers close AgentSession directly.
             pipeline._interruption_orchestrator.close()
+            # Transcript settlement is also a speech task drained by the SDK.
+            # Settle its product owner before drain, not only in the later
+            # session-close notification. Reuse the existing terminal effects.
+            pipeline._ensure_lifecycle()._reject_open_user_turn_on_close(
+                error=getattr(pipeline, "_close_error", None),
+            )
             await pipeline._semantic_interrupts.aclose()
 
         async def on_user_turn_completed(

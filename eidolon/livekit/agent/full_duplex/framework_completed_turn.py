@@ -50,6 +50,7 @@ class FullDuplexFrameworkCompletedTurnGate:
         owner = self._pipeline
         completion = self._completion
         owner._ensure_runtime_defaults()
+        _, check_scope = owner._endpointing_scope()
         voiceprint_turn = completion.completed_voiceprint_turn(
             fallback_timeline=getattr(owner, "_timeline", None)
         )
@@ -85,9 +86,11 @@ class FullDuplexFrameworkCompletedTurnGate:
         if result is None and task is not None:
             try:
                 result = await task
+                check_scope()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                check_scope()
                 reject_reason = voiceprint_error_reason(type(exc).__name__)
                 completion._record_voiceprint_commit_gate(
                     timeline,
@@ -193,7 +196,7 @@ class FullDuplexFrameworkCompletedTurnGate:
             self._record_completed_gate_event(
                 timeline,
                 stage="transcript_settlement",
-                action=("continue" if settlement.outcome != "candidate_replaced" else "reject"),
+                action=("continue" if settlement.outcome in {"ready", "deadline"} else "reject"),
                 reason=settlement.readiness.reason,
                 transcript=completed_transcript,
                 outcome=settlement.outcome,
@@ -201,11 +204,12 @@ class FullDuplexFrameworkCompletedTurnGate:
                 evidence_updates=settlement.evidence_updates,
                 pending_text_preview=settlement.readiness.pending_transcript[:120],
             )
-        if settlement.outcome == "candidate_replaced":
+        if settlement.outcome in {"candidate_replaced", "speech_resumed"}:
             logger.info(
-                "[StreamingPipeline] framework completion candidate replaced "
-                "while settling candidate=%s framework=%r",
+                "[StreamingPipeline] framework completion superseded "
+                "while settling candidate=%s outcome=%s framework=%r",
                 candidate_id,
+                settlement.outcome,
                 completed_transcript[:80],
             )
             return False
@@ -230,10 +234,9 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript=completed_transcript,
             timeline=timeline,
         )
-        # Settlement may assemble later acoustic fragments of the same product
-        # turn. Judge that candidate using its current generation's verdict,
-        # not the stale SDK prefix's generation. The lease above rejects a
-        # replaced product candidate before this boundary can affect it.
+        # Settlement may assemble delayed transcripts for the same acoustic
+        # generation. The lease rejects renewed speech or a replaced candidate;
+        # neither may inherit this completion's audio evidence.
         completion_generation = owner._user_turns.current_generation_id
         if timeline is not None:
             timeline.set_attr(

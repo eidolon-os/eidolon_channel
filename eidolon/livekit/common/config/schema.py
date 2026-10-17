@@ -122,9 +122,9 @@ class EotPolicyConfig:
     mini_unlikely_threshold: float | None = None
     eot_unlikely_threshold: float = 0.50
     transcript_revision_min_normalized_chars: int = 4
-    # Maximum silence between VAD fragments that may still belong to one
-    # product user turn. The coordinator consumes this policy; it does not own
-    # an independent timing default.
+    # Acoustic grace for text-free VAD candidates and playback continuation.
+    # Accepted, unsubmitted text stays in its product turn until commit/reject;
+    # the coordinator does not own an independent timing default.
     speech_merge_grace_ms: int = 800
 
 

@@ -18,9 +18,9 @@ def result(intent):
     return InterruptIntentResult(intent, 0.0, 'model', 'test evidence')
 
 
-def setup_handler(classifier, *, vad=False, timeout=1500, timeline=None):
+def setup_handler(classifier, *, vad=False, timeout=1500, timeline=None, provider='llm'):
     cfg = TurnPolicyConfig()
-    cfg = replace(cfg, interrupt=replace(cfg.interrupt, intent_provider='llm', intent_timeout_ms=timeout))
+    cfg = replace(cfg, interrupt=replace(cfg.interrupt, intent_provider=provider, intent_timeout_ms=timeout))
     runtime = TurnPolicyRuntime(cfg)
     state = SimpleNamespace(vad=vad, text='完整转写', scope=(('candidate', 1), 123), active=True)
     decisions = []
@@ -240,5 +240,62 @@ async def test_endpointing_cancellation_does_not_cancel_current_intent():
         pending.set()
         await handler._intent_task
         assert decisions[-1].action is Action.CANCEL
+    finally:
+        await handler.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider', ['llm', 'systemone'])
+async def test_provider_cannot_return_action_after_swallowing_deadline_cancellation(provider):
+    async def classify(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return result(InterruptIntent.HARD_STOP)
+    handler, state, decisions, _ = setup_handler(SimpleNamespace(classify=classify), timeout=10, provider=provider)
+    try:
+        handler.run(state.text, is_final=True)
+        await handler._intent_task
+        assert decisions[-1].action is Action.ROLLBACK
+        assert handler._intent_result.reason == 'TimeoutError'
+        assert not any(d.action is Action.CANCEL for d in decisions)
+    finally:
+        await handler.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider', ['llm', 'systemone'])
+async def test_old_request_cannot_own_text_after_a_b_a_revision(provider):
+    ready = asyncio.Event()
+    calls = 0
+    async def classify(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        first = calls == 1
+        try:
+            await ready.wait()
+        except asyncio.CancelledError:
+            if not first:
+                raise
+            await ready.wait()
+        return result(InterruptIntent.HARD_STOP if first else InterruptIntent.BACKCHANNEL)
+    handler, state, decisions, _ = setup_handler(SimpleNamespace(classify=classify), provider=provider)
+    try:
+        original = state.text
+        handler.run(original, is_final=True)
+        old = handler._intent_task
+        await asyncio.sleep(0)
+        state.text = '修订后的文本'
+        handler.run(state.text, is_final=False)
+        await asyncio.sleep(0)
+        state.text = original
+        handler.run(original, is_final=True)
+        current = handler._intent_task
+        await asyncio.sleep(0)
+        ready.set()
+        await asyncio.gather(old, current)
+        assert not any(d.action is Action.CANCEL for d in decisions)
+        assert decisions[-1].action is Action.ROLLBACK
+        assert handler._intent_result.intent is InterruptIntent.BACKCHANNEL
     finally:
         await handler.aclose()

@@ -85,14 +85,15 @@ async def test_explicit_preempt_during_question_does_not_wait_for_old_model_requ
 @pytest.mark.asyncio
 @pytest.mark.parametrize('delay', [.05, .7, 1.2])
 @pytest.mark.parametrize('intent', [InterruptIntent.NORMAL_INTERRUPT, InterruptIntent.BACKCHANNEL, InterruptIntent.HARD_STOP])
-async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay):
+@pytest.mark.parametrize('provider', ['llm', 'systemone'])
+async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay, provider):
     async def classify(*args, **kwargs):
         await asyncio.sleep(delay)
         return InterruptIntentResult(intent, 0.0, 'fault_injection', '')
 
     classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
     policy = TurnPolicyConfig()
-    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm'))
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider=provider))
     welcome = '这里正在播放原本的回答，后面还有几个细节需要继续说明。'
     text = '测试中由外部意图证据决定这轮交互'
     tts = MockTTS(char_seconds=.1, chunk_delay_ms=40)

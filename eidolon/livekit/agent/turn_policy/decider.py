@@ -9,7 +9,7 @@ from typing import TypedDict
 from eidolon.livekit.common.config import InterruptPolicyConfig
 from .intent_classifier import (
     InterruptIntent,
-    InterruptIntentClassifier,
+    InterruptIntentHintClassifier,
     InterruptIntentResult,
     NoopModelInterruptClassifier,
     normalize_transcript_text,
@@ -62,7 +62,7 @@ class InterruptDecider:
         self,
         config: InterruptPolicyConfig | None = None,
         *,
-        classifier: InterruptIntentClassifier | None = None,
+        classifier: InterruptIntentHintClassifier | None = None,
         min_interim_chars: int | None = None,
         early_cancel_score_threshold: float | None = None,
         early_resume_score_threshold: float | None = None,
@@ -136,7 +136,7 @@ class InterruptDecider:
         )
         hint_fields = self._hint_fields(intent)
 
-        if self._config.intent_provider == "llm":
+        if self._config.uses_model_intent:
             # Model meaning and provider finality are independent evidence.
             # A transient prefix must never authorize an irreversible cut.
             if not is_final or intent_result is None:
@@ -199,7 +199,7 @@ class InterruptDecider:
         transcript: str = "",
         eot_score: float = 0.0,
     ) -> Decision:
-        if self._config.intent_provider == "llm":
+        if self._config.uses_model_intent:
             # The bounded classifier request or the owner deadline settles it;
             # the old EOT-only timer must not race the semantic decision.
             if vad_still_active or has_transcript:

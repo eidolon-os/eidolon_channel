@@ -13,6 +13,7 @@ from eidolon.livekit.agent.output import DuckingStats
 from eidolon.livekit.agent.turn_policy import (
     Decision,
     InterruptIntent,
+    InterruptIntentClassifier,
     InterruptIntentResult,
     TurnPolicyRuntime,
 )
@@ -44,7 +45,7 @@ class SemanticInterruptHandler:
         interrupt_current_turn: Callable[[], None],
         enter_soft_interrupt: Callable[[], None],
         decide_from_transcript: Callable[..., Decision] | None = None,
-        intent_classifier: Any = None,
+        intent_classifier: InterruptIntentClassifier | None = None,
         get_candidate_scope: Callable[[], Any] = lambda: None,
         get_final_transcript: Callable[[], str] = lambda: "",
         get_assistant_text: Callable[[], str] = lambda: "",
@@ -75,7 +76,7 @@ class SemanticInterruptHandler:
 
     @property
     def uses_model_intent(self) -> bool:
-        return self._turn_runtime.config.interrupt.intent_provider == "llm"
+        return self._turn_runtime.config.interrupt.uses_model_intent
 
     async def wait_for_pending_intent(self) -> None:
         # Endpointing cancellation must not cancel the candidate's shared
@@ -202,7 +203,15 @@ class SemanticInterruptHandler:
                 result = InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, "unavailable", type(exc).__name__)
             # Cancellation alone is insufficient: a provider can finish after
             # supersession. Recheck generation, response and final text.
-            outcome = "accepted" if self._owns_current_candidate(key) else "stale"
+            if time.monotonic() - started_at >= timeout:
+                result = InterruptIntentResult(
+                    InterruptIntent.UNCERTAIN, 0.0, "unavailable", "TimeoutError",
+                )
+            # Text may change A -> B -> A while an old provider ignores cancellation.
+            # Only the current request, not merely an equal text/scope, owns evidence.
+            outcome = "accepted" if (
+                asyncio.current_task() is self._intent_task and self._owns_current_candidate(key)
+            ) else "stale"
         finally:
             if timeline is not None:
                 events = list(timeline.attrs.get("interrupt_intent_observations") or ())
@@ -213,6 +222,7 @@ class SemanticInterruptHandler:
                     "intent": result.intent.value if result is not None else None,
                     "source": result.source if result is not None else None,
                     "reason": result.reason if result is not None else None,
+                    "probabilities": getattr(result, "probabilities", None),
                     "budget_ms": self._turn_runtime.config.interrupt.intent_timeout_ms,
                 })
                 timeline.set_attr("interrupt_intent_observations", events[-16:])

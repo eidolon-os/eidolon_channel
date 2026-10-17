@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from livekit.agents import vad as lk_vad
 
     from eidolon.livekit.common.config import AgentConfig
+    from .turn_policy.intent_classifier import InterruptIntentClassifier
 
 from eidolon_sdk.biz.contracts.local_tts import (
     AUDIO_SAMPLE_RATE as LOCAL_TTS_SAMPLE_RATE,
@@ -179,7 +180,7 @@ class SharedStageFactory:
         runtime_context_resolver: "Any | None" = None,
         runtime_services: "Any | None" = None,
         llm_params: LlmParams | None = None,
-        interrupt_classifier: Any = None,
+        interrupt_classifier: InterruptIntentClassifier | None = None,
         runtime_session_id: str = "",
         output_plan: SessionOutputPlan | None = None,
     ) -> None:
@@ -462,10 +463,18 @@ class SharedStageFactory:
         )
 
     @classmethod
-    def build_interrupt_classifier(cls, cfg: "AgentConfig") -> Any:
-        """Reuse the configured direct LLM adapter for stateless intent evidence."""
+    def build_interrupt_classifier(cls, cfg: "AgentConfig") -> InterruptIntentClassifier | None:
+        """Select the evidence transport; dialogue policy stays provider-independent."""
         if not cfg.turn_policy.uses_channel_model_intent:
             return None
+        intr = cfg.turn_policy.interrupt
+        if intr.intent_provider == "systemone":
+            from .turn_policy.systemone_intent_classifier import SystemOneInterruptClassifier
+
+            return SystemOneInterruptClassifier(
+                endpoint=intr.systemone.endpoint, model=intr.systemone.model,
+                timeout_sec=intr.intent_timeout_ms / 1000,
+            )
         from .turn_policy.intent_classifier import LlmInterruptClassifier
 
         extra_body = dict(cfg.llm.extra_body)

@@ -126,8 +126,15 @@ class EotPolicyConfig:
 
 
 @dataclass(frozen=True)
+class SystemOneIntentConfig:
+    endpoint: str = ""
+    model: str = ""
+
+
+@dataclass(frozen=True)
 class InterruptPolicyConfig:
-    intent_provider: Literal["none", "llm"] = "none"
+    intent_provider: Literal["none", "llm", "systemone"] = "none"
+    systemone: SystemOneIntentConfig = field(default_factory=SystemOneIntentConfig)
     intent_timeout_ms: int = 1500
     decision_timeout_ms: int = 450
     post_speech_evidence_timeout_ms: int = 6_000
@@ -155,6 +162,10 @@ class InterruptPolicyConfig:
     cancel_residual_commit_suppress_ms: int = 2_000
     stabilize_normal_interrupts: bool = True
     weak_signal_followup_hold: bool = True
+
+    @property
+    def uses_model_intent(self) -> bool:
+        return self.intent_provider in ("llm", "systemone")
 
 
 @dataclass(frozen=True)
@@ -266,8 +277,8 @@ class TurnPolicyConfig:
 
     @property
     def uses_channel_model_intent(self) -> bool:
-        """Whether the configured interruption owner consumes the LLM evidence."""
-        return self.interruption_owner == "channel" and self.interrupt.intent_provider == "llm"
+        """Whether the configured interruption owner consumes model evidence."""
+        return self.interruption_owner == "channel" and self.interrupt.uses_model_intent
 
 
 @dataclass(frozen=True)

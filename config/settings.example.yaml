@@ -103,7 +103,11 @@ turn_policy:
     transcript_revision_min_normalized_chars: 4
     speech_merge_grace_ms: 800
   interrupt:
+    # llm: existing llm section; systemone: structured choice API below; none: no model intent.
     intent_provider: llm
+    systemone:
+      endpoint: http://decider.yangtzeailab.com/d3/v1/systemone
+      model: d3
     intent_timeout_ms: 2500
     decision_timeout_ms: 450
     post_speech_evidence_timeout_ms: 6000

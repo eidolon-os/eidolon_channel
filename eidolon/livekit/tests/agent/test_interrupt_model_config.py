@@ -158,6 +158,9 @@ async def test_intent_warmup_is_stateless_and_bounded():
 
 @pytest.mark.parametrize('mode,owner,provider,stage_included,adapter_included', [
     ('full_duplex', 'channel', 'llm', True, True),
+    ('full_duplex', 'channel', 'systemone', True, True),
+    ('half_duplex', 'channel', 'systemone', False, False),
+    ('full_duplex', 'livekit_native_adaptive', 'systemone', False, False),
     ('half_duplex', 'channel', 'llm', False, False),
     ('full_duplex', 'livekit_native_adaptive', 'llm', False, False),
     ('full_duplex', 'channel', 'none', False, True),

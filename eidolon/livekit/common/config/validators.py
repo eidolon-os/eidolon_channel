@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from eidolon_sdk.biz.contracts.local_asr import (
     LOCAL_ASR_CAPABILITY as LOCAL_ASR_PROVIDER,
 )
@@ -61,7 +63,10 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not (1 <= cfg.core.port <= 65535):
         errors.append("core.port must be in [1, 65535]")
 
-    if cfg.providers.brain_provider == "direct_llm" or cfg.turn_policy.uses_channel_model_intent:
+    if cfg.providers.brain_provider == "direct_llm" or (
+        cfg.turn_policy.uses_channel_model_intent
+        and cfg.turn_policy.interrupt.intent_provider == "llm"
+    ):
         if not cfg.llm.model:
             errors.append("llm.model is required for direct_llm or llm interruption intent")
         if not cfg.llm.base_url:
@@ -104,8 +109,25 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.eot.speech_merge_grace_ms must be in [0, 5000]")
 
     intr = cfg.turn_policy.interrupt
-    if intr.intent_provider not in ("none", "llm"):
-        errors.append("turn_policy.interrupt.intent_provider must be 'none' or 'llm'")
+    if intr.intent_provider not in ("none", "llm", "systemone"):
+        errors.append("turn_policy.interrupt.intent_provider must be 'none', 'llm' or 'systemone'")
+    if intr.intent_provider == "systemone":
+        endpoint = intr.systemone.endpoint
+        try:
+            url = urlsplit(endpoint) if isinstance(endpoint, str) else None
+            valid_url = (
+                url is not None and url.scheme in ("http", "https") and bool(url.hostname)
+                and url.username is None and url.password is None and not url.fragment
+                and not any(c.isspace() for c in endpoint)
+            )
+            if url is not None:
+                _ = url.port  # Reject malformed ports at startup, not on the first turn.
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            errors.append("turn_policy.interrupt.systemone.endpoint must be an HTTP(S) URL")
+        if not isinstance(intr.systemone.model, str) or not intr.systemone.model.strip():
+            errors.append("turn_policy.interrupt.systemone.model is required")
     if not 0 < intr.intent_timeout_ms <= intr.post_speech_evidence_timeout_ms:
         errors.append(
             "turn_policy.interrupt.intent_timeout_ms must be in (0, post_speech_evidence_timeout_ms]"

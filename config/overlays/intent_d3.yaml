@@ -1,0 +1,7 @@
+# Select with EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML; keep all other host settings.
+turn_policy:
+  interrupt:
+    intent_provider: systemone
+    systemone:
+      endpoint: http://decider.yangtzeailab.com/d3/v1/systemone
+      model: d3

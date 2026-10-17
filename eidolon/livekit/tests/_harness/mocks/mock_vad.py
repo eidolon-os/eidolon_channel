@@ -240,7 +240,7 @@ class _MockVADStream(lk_vad.VADStream):
             now = time.monotonic()
             if target_t > now:
                 await asyncio.sleep(target_t - now)
-            self._emit_inference(ev.probability)
+            self._emit_inference(ev.probability, raw_silence=ev.silence_duration)
             if ev.type == "start":
                 self._emit_start(probability=ev.probability)
             else:
@@ -266,7 +266,8 @@ class _MockVADStream(lk_vad.VADStream):
             self._event_ch.send_nowait(event)
 
     def _emit_inference(
-        self, probability: float, *, frame: Optional[rtc.AudioFrame] = None
+        self, probability: float, *, frame: Optional[rtc.AudioFrame] = None,
+        raw_silence: float = 0.0,
     ) -> None:
         self._send(
             lk_vad.VADEvent(
@@ -279,6 +280,7 @@ class _MockVADStream(lk_vad.VADStream):
                 probability=probability,
                 inference_duration=self._mock._inference_interval_sec,
                 speaking=self._phase == _Phase.SPEAKING,
+                raw_accumulated_silence=raw_silence,
             )
         )
 

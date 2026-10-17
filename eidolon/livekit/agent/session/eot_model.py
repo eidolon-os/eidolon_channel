@@ -1,4 +1,4 @@
-"""Session-local EOT state over the existing shared ONNX weight registry."""
+"""Select session-local EOT state using each provider's existing model runtime."""
 from __future__ import annotations
 
 import asyncio
@@ -13,11 +13,15 @@ logger = logging.getLogger(__name__)
 
 
 def create_session_eot_model(turn_policy: TurnPolicyConfig | None = None) -> Any:
-    """Create mutable turn state; EotManager reuses the heavyweight backend.
+    """Create mutable turn state; the selected provider owns shared weights.
 
     Transcripts, VAD transitions, cooldown and reset belong to one conversation.
     Caching ChineseModel globally lets one participant change another's decisions.
     """
+    if turn_policy is not None and turn_policy.eot.provider == "livekit_mini":
+        from .streaming_eot import MiniEotSession
+
+        return MiniEotSession(turn_policy)
     from eidolon.livekit.plugins.eot import ChineseModel
 
     return ChineseModel(**eot_kwargs_from_turn_policy(turn_policy))

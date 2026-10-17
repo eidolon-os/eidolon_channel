@@ -1,0 +1,6 @@
+# Experimental opt-in. Apply alongside an existing llm/systemone intent profile.
+# Production remains firered until the paired product evaluation is reviewed.
+turn_policy:
+  eot:
+    provider: livekit_mini
+    mini_unlikely_threshold: null

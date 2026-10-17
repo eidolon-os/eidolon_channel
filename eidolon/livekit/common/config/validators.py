@@ -103,6 +103,15 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.vad.min_silence_duration_ms must be in [100, 5000]")
 
     eot = cfg.turn_policy.eot
+    if eot.provider not in ("firered", "livekit_mini"):
+        errors.append("turn_policy.eot.provider must be firered or livekit_mini")
+    if eot.mini_unlikely_threshold is not None and not 0 < eot.mini_unlikely_threshold < 1:
+        errors.append("turn_policy.eot.mini_unlikely_threshold must be in (0, 1)")
+    if eot.provider == "livekit_mini":
+        if not cfg.turn_policy.uses_channel_model_intent:
+            errors.append("livekit_mini requires Channel-owned llm or systemone intent")
+        if cfg.providers.vad_provider in ("none", "disabled") or vad.min_silence_duration_ms < 200:
+            errors.append("livekit_mini requires VAD with at least 200 ms silence")
     if not 1 <= eot.transcript_revision_min_normalized_chars <= 20:
         errors.append("turn_policy.eot.transcript_revision_min_normalized_chars must be in [1, 20]")
     if not 0 <= eot.speech_merge_grace_ms <= 5_000:

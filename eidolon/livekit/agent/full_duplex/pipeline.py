@@ -1524,15 +1524,24 @@ class StreamingPipeline(BasePipeline):
 
     def _turn_detection(self) -> Any:
         """The full-duplex Agent ``turn_detection`` model."""
+        from ..session.streaming_eot import MiniEotSession
+
+        model = self._get_eot_model()
+        if isinstance(model, MiniEotSession):
+            return model.detector(
+                settle=self._settle_interrupt_before_endpointing,
+                begin_observation=self._begin_endpointing_observation,
+                bind_scope=lambda: self._endpointing_scope()[1],
+            )
         if self._barge_in_enabled and not self._uses_livekit_native_adaptive_interruption():
             from ..session.eot_model import InterruptAwareTurnDetector
 
             return InterruptAwareTurnDetector(
-                self._get_eot_model(), self._settle_interrupt_before_endpointing,
+                model, self._settle_interrupt_before_endpointing,
                 resolve_transcript=lambda text: self._user_turns.endpointing_text(text),
                 begin_observation=self._begin_endpointing_observation,
             )
-        return self._get_eot_model()
+        return model
 
     def _begin_endpointing_observation(self) -> Callable[[str, float | None], None]:
         """Observe the public SDK boundary without changing turn admission.
@@ -1585,8 +1594,8 @@ class StreamingPipeline(BasePipeline):
             stages.append(classifier)
         return stages
 
-    async def _settle_interrupt_before_endpointing(self) -> None:
-        speech = self._session.current_speech if self._session is not None else None
+    def _endpointing_scope(self) -> tuple[Any, Callable[[], None]]:
+        """Bind the existing candidate/generation fence before asynchronous work."""
         candidate = self._user_turns.active
         scope = (candidate.candidate_id, self._user_turns.current_generation_id) if candidate else None
 
@@ -1600,6 +1609,12 @@ class StreamingPipeline(BasePipeline):
                 # The SDK normally cancels endpointing on renewed speech. Fence
                 # it here too: a stale EOT result must not complete a new turn.
                 raise asyncio.CancelledError("endpointing candidate superseded")
+
+        return scope, check_scope
+
+    async def _settle_interrupt_before_endpointing(self) -> None:
+        speech = self._session.current_speech if self._session is not None else None
+        scope, check_scope = self._endpointing_scope()
 
         check_scope()
         await self._semantic_interrupts.wait_for_pending_intent()

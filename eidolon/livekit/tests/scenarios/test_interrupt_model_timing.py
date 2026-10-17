@@ -86,14 +86,16 @@ async def test_explicit_preempt_during_question_does_not_wait_for_old_model_requ
 @pytest.mark.parametrize('delay', [.05, .7, 1.2])
 @pytest.mark.parametrize('intent', [InterruptIntent.NORMAL_INTERRUPT, InterruptIntent.BACKCHANNEL, InterruptIntent.HARD_STOP])
 @pytest.mark.parametrize('provider', ['llm', 'systemone'])
-async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay, provider):
+@pytest.mark.parametrize('eot_provider', ['firered', 'livekit_mini'])
+async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay, provider, eot_provider):
     async def classify(*args, **kwargs):
         await asyncio.sleep(delay)
         return InterruptIntentResult(intent, 0.0, 'fault_injection', '')
 
     classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
     policy = TurnPolicyConfig()
-    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider=provider))
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider=provider),
+                     eot=replace(policy.eot, provider=eot_provider))
     welcome = '这里正在播放原本的回答，后面还有几个细节需要继续说明。'
     text = '测试中由外部意图证据决定这轮交互'
     tts = MockTTS(char_seconds=.1, chunk_delay_ms=40)
@@ -102,7 +104,7 @@ async def test_model_result_on_either_side_of_sdk_endpoint(intent, delay, provid
         interrupt_classifier=classifier, turn_policy=policy,
         stt=MockSTT.scripted([ScriptedTranscript(text=text, trigger_after_ms=700)]),
         tts=tts,
-        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1050, .1)]),
+        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1550, .1, .5)]),
     ) as (pipeline, h):
         h.audio_in.feed_pcm(synth_voiced(1.1))
         await h.audio_out.wait_for_first_audio()
@@ -401,23 +403,27 @@ async def test_incomplete_speech_resumes_output_then_expires_without_reply(recor
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['timeout', 'error'])
-async def test_model_unavailable_resumes_original_speech_after_vad_end(failure):
+@pytest.mark.parametrize('failure', ['timeout', 'error', 'uncertain'])
+@pytest.mark.parametrize('eot_provider', ['firered', 'livekit_mini'])
+async def test_model_unavailable_resumes_original_speech_after_vad_end(failure, eot_provider):
     async def classify(*args, **kwargs):
+        if failure == 'uncertain':
+            return InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, 'fault_injection', '')
         if failure == 'error':
             raise ConnectionError('injected failure')
         await asyncio.sleep(10)
 
     classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
     policy = TurnPolicyConfig()
-    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm', intent_timeout_ms=150))
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm', intent_timeout_ms=150),
+                     eot=replace(policy.eot, provider=eot_provider))
     welcome = '原来的回答仍然在这里播放，模型暂时不可用时需要保留这段内容。'
     async with production_session(
         welcome=welcome, llm=MockLLM.scripted([]),
         interrupt_classifier=classifier, turn_policy=policy,
         stt=MockSTT.scripted([ScriptedTranscript(text='测试输入', trigger_after_ms=700)]),
         tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
-        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1050, .1)]),
+        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1550, .1, .5)]),
     ) as (pipeline, h):
         orchestrator = pipeline._interruption_orchestrator
         h.audio_in.feed_pcm(synth_voiced(1.1))
@@ -530,7 +536,8 @@ async def test_overlap_delivery_waits_for_final_and_replies_once(profile_name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('vad_end_ms', [950, 1400])
 @pytest.mark.parametrize('intent', [InterruptIntent.NORMAL_INTERRUPT, InterruptIntent.BACKCHANNEL])
-async def test_fragmented_final_intent_survives_deadline_and_vad_stop(intent, vad_end_ms):
+@pytest.mark.parametrize('eot_provider', ['firered', 'livekit_mini'])
+async def test_fragmented_final_intent_survives_deadline_and_vad_stop(intent, vad_end_ms, eot_provider):
     """Provider sentence fragments must retain one canonical interruption candidate."""
     async def classify(*args, **kwargs):
         await asyncio.sleep(.7)
@@ -538,7 +545,8 @@ async def test_fragmented_final_intent_survives_deadline_and_vad_stop(intent, va
 
     classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
     policy = TurnPolicyConfig()
-    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm'))
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm'),
+                     eot=replace(policy.eot, provider=eot_provider))
     prefix, tail = (
         ('不是。', '我刚才说错了。') if intent is InterruptIntent.NORMAL_INTERRUPT
         else ('别停。', '继续讲。')
@@ -554,7 +562,7 @@ async def test_fragmented_final_intent_survives_deadline_and_vad_stop(intent, va
             ScriptedTranscript(text=tail, trigger_after_ms=1100),
         ]),
         tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
-        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', vad_end_ms, .1)]),
+        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', vad_end_ms, .1, .2)]),
     ) as (pipeline, h):
         h.audio_in.feed_pcm(synth_voiced(1.5))
         await h.audio_out.wait_for_first_audio()

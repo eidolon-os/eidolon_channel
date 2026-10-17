@@ -117,6 +117,9 @@ class VadPolicyConfig:
 
 @dataclass(frozen=True)
 class EotPolicyConfig:
+    provider: Literal["firered", "livekit_mini"] = "firered"
+    # Separate calibration: FireRed's text score is not a mini probability.
+    mini_unlikely_threshold: float | None = None
     eot_unlikely_threshold: float = 0.50
     transcript_revision_min_normalized_chars: int = 4
     # Maximum silence between VAD fragments that may still belong to one

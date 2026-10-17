@@ -117,9 +117,14 @@ def build_full_duplex_agent(
     # detector still overrides the session default through that structure.
     from eidolon.livekit.plugins.eot.models.base import EidolonEOTModel
     from ..session.eot_model import InterruptAwareTurnDetector
+    from ..session.streaming_eot import NativeAudioTurnDetector
 
     detector = pipeline._turn_detection()
     turn_handling: dict[str, Any] = {"turn_detection": detector}
+    if isinstance(detector, NativeAudioTurnDetector):
+        # Match the deployed FireRed endpoint delays. Streaming SDK defaults
+        # differ, which would otherwise confound a provider comparison.
+        turn_handling["endpointing"] = {"min_delay": 0.25, "max_delay": 3.0}
     eot_model = detector.eot_model if isinstance(detector, InterruptAwareTurnDetector) else detector
     if isinstance(eot_model, EidolonEOTModel):
         # Bind the complete-turn fast path through the public SDK contract.

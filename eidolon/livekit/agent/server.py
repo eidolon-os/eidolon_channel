@@ -214,10 +214,18 @@ def _load_prewarm_models(proc) -> None:
         logger.warning("[Agent] prewarm: VAD load failed: %s", e)
 
     try:
-        from eidolon.livekit.plugins.eot import ChineseModel
+        from eidolon.livekit.common.config import load_effective_config
 
-        proc.userdata["eot_model"] = ChineseModel()
-        logger.info("[Agent] prewarm: EOT model loaded")
+        eot_policy = load_effective_config().turn_policy.eot
+        if eot_policy.provider == "livekit_mini":
+            from livekit.local_inference import init_eot
+
+            init_eot()
+        else:
+            from eidolon.livekit.plugins.eot import ChineseModel
+
+            proc.userdata["eot_model"] = ChineseModel()
+        logger.info("[Agent] prewarm: EOT provider=%s loaded", eot_policy.provider)
     except Exception as e:
         logger.warning("[Agent] prewarm: EOT load failed: %s", e)
 

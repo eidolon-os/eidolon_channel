@@ -8,6 +8,7 @@ from typing import assert_never
 from .lizheng_music import LizhengMusicApiError
 from .music import MusicPlayback, MusicPlaybackService, MusicStatus
 from .music_cache import MusicDownloadError
+from .music_trace import MusicTraceContext
 
 logger = logging.getLogger("agent.session.music")
 
@@ -32,9 +33,27 @@ class MusicCommandService:
     def __init__(self, playback: MusicPlaybackService) -> None:
         self._playback = playback
 
-    async def play(self, *, request_id: str, playback_ref: str, song_id: str) -> MusicCommandReceipt:
+    async def play(
+        self,
+        *,
+        request_id: str,
+        playback_ref: str,
+        song_id: str,
+        trace: MusicTraceContext | None = None,
+    ) -> MusicCommandReceipt:
         try:
-            result = await self._playback.play_song(playback_ref, song_id=song_id)
+            result = await self._playback.play_song(
+                playback_ref,
+                song_id=song_id,
+                trace=trace,
+            )
+            logger.info(
+                "music command completed request_id=%s playback_ref=%s song_id=%s status=%s",
+                request_id,
+                result.playback_ref,
+                song_id,
+                result.status.value,
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             provider_code = "-"
             provider_source = "-"

@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from yarl import URL
 
 from .music_cache import MusicDownloadError, MusicSource
+from .music_trace import current_music_trace
 
 DEFAULT_BASE_URL: Final = "https://api.lizheng.design"
 DEFAULT_CHANNEL: Final = "bf117132ace49f34"
@@ -277,7 +278,12 @@ class LizhengMusicApi:
         else:
             log_url = request_url
         logger.info(
-            "lizheng http request method=%s endpoint=%s url=%s",
+            "lizheng http request turn_id=%s call_id=%s request_id=%s playback_ref=%s "
+            "method=%s endpoint=%s url=%s",
+            _trace_value("turn_id"),
+            _trace_value("call_id"),
+            _trace_value("request_id"),
+            _trace_value("playback_ref"),
             method,
             endpoint.value,
             _redact_url(log_url),
@@ -294,7 +300,12 @@ class LizhengMusicApi:
             except (aiohttp.ContentTypeError, json.JSONDecodeError):
                 body = {"body": "<non-json response>"}
             logger.info(
-                "lizheng http response endpoint=%s url=%s http_status=%d body=%s",
+                "lizheng http response turn_id=%s call_id=%s request_id=%s playback_ref=%s "
+                "endpoint=%s url=%s http_status=%d body=%s",
+                _trace_value("turn_id"),
+                _trace_value("call_id"),
+                _trace_value("request_id"),
+                _trace_value("playback_ref"),
                 endpoint.value,
                 safe_url,
                 response.status,
@@ -363,6 +374,11 @@ def _redact_url(value: str, *, redact_all_query_values: bool = False) -> str:
         for key, item in parse_qsl(parts.query, keep_blank_values=True)
     ]
     return urlunsplit((parts.scheme, hostname, parts.path, urlencode(query), ""))
+
+
+def _trace_value(name: str) -> str:
+    trace = current_music_trace()
+    return getattr(trace, name, "-") if trace is not None else "-"
 
 
 def _redact_json(value: object, *, redact_data: bool = False) -> object:

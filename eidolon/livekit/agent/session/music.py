@@ -17,6 +17,7 @@ from anyio.abc import CancelScope, TaskGroup, TaskStatus
 from .lizheng_music import LizhengMusicApi, LizhengMusicApiError, LizhengMusicConfig
 from ..eidolon_agent_rpc.channel_tools import ChannelToolCall, ChannelToolResult
 from .music_cache import MusicCache
+from .music_trace import MusicTraceContext, reset_music_trace, set_music_trace
 
 logger = logging.getLogger("agent.session.music")
 
@@ -170,13 +171,30 @@ class MusicPlaybackService:
         path = self._resolve_file(file_name)
         return await self._start(playback_ref, path)
 
-    async def play_song(self, playback_ref: str, *, song_id: str) -> MusicPlayback:
+    async def play_song(
+        self,
+        playback_ref: str,
+        *,
+        song_id: str,
+        trace: MusicTraceContext | None = None,
+    ) -> MusicPlayback:
         if self._cache is None:
             raise RuntimeError("MusicPlaybackService has no music cache")
-        path = await self._cache.get(song_id)
-        return await self._start(playback_ref, path)
+        token = set_music_trace(trace) if trace is not None else None
+        try:
+            path = await self._cache.get(song_id)
+            return await self._start(playback_ref, path, trace=trace)
+        finally:
+            if token is not None:
+                reset_music_trace(token)
 
-    async def _start(self, playback_ref: str, path: Path) -> MusicPlayback:
+    async def _start(
+        self,
+        playback_ref: str,
+        path: Path,
+        *,
+        trace: MusicTraceContext | None = None,
+    ) -> MusicPlayback:
         async with self._lock:
             await self._stop_locked(MusicStatus.INTERRUPTED)
             if self._task_group is None:
@@ -190,6 +208,7 @@ class MusicPlaybackService:
                 self._run,
                 generation,
                 path,
+                trace,
                 name=f"music-playback-{playback_ref}",
             )
             return MusicPlayback(playback_ref, MusicStatus.ACCEPTED)
@@ -219,20 +238,26 @@ class MusicPlaybackService:
         self,
         generation: int,
         path: Path,
+        trace: MusicTraceContext | None = None,
         *,
         task_status: TaskStatus[CancelScope] = anyio.TASK_STATUS_IGNORED,
     ) -> None:
-        with anyio.CancelScope() as cancel_scope:
-            self._cancel_scope = cancel_scope
-            self._finished = anyio.Event()
-            task_status.started(cancel_scope)
-            try:
-                await self._play(generation, path)
-            finally:
-                if generation == self._generation:
-                    self._speech = None
-                    self._cancel_scope = None
-                self._finished.set()
+        token = set_music_trace(trace) if trace is not None else None
+        try:
+            with anyio.CancelScope() as cancel_scope:
+                self._cancel_scope = cancel_scope
+                self._finished = anyio.Event()
+                task_status.started(cancel_scope)
+                try:
+                    await self._play(generation, path)
+                finally:
+                    if generation == self._generation:
+                        self._speech = None
+                        self._cancel_scope = None
+                    self._finished.set()
+        finally:
+            if token is not None:
+                reset_music_trace(token)
 
     async def _play(self, generation: int, path: Path) -> None:
         async def audio() -> AsyncIterator[rtc.AudioFrame]:
@@ -244,6 +269,11 @@ class MusicPlaybackService:
                 yield frame
 
         try:
+            logger.info(
+                "music playback started playback_ref=%s path=%s",
+                self._playback_ref,
+                path,
+            )
             speech = self._session.say("", audio=audio(), add_to_chat_ctx=False)
             self._speech = speech
             await speech.wait_for_playout()
@@ -254,13 +284,19 @@ class MusicPlaybackService:
             )
             if speech.interrupted:
                 self._error = "speech interrupted"
+            logger.info(
+                "music playback completed playback_ref=%s status=%s",
+                self._playback_ref,
+                self._status.value,
+            )
         except anyio.get_cancelled_exc_class():
             raise
         except (OSError, RuntimeError, ValueError) as exc:
             logger.warning(
-                "music playback failed ref=%s error_type=%s",
+                "music playback failed playback_ref=%s error_type=%s error=%s",
                 self._playback_ref,
                 type(exc).__name__,
+                str(exc),
             )
             if generation == self._generation:
                 self._status = MusicStatus.FAILED
@@ -342,6 +378,12 @@ class SessionMusicRuntime:
                     request_id=call.call_id,
                     playback_ref=f"music:{call.call_id}",
                     song_id=song_id,
+                    trace=MusicTraceContext(
+                        turn_id=call.turn_id,
+                        call_id=call.call_id,
+                        request_id=call.call_id,
+                        playback_ref=f"music:{call.call_id}",
+                    ),
                 )
             case "music.stop":
                 playback_ref = call.arguments.get("playback_ref")
@@ -355,6 +397,16 @@ class SessionMusicRuntime:
                 receipt = await commands.status(request_id=call.call_id)
             case _:
                 return _channel_tool_error(call, "TOOL_NOT_FOUND", "unsupported Channel tool")
+        logger.info(
+            "music channel tool completed turn_id=%s call_id=%s name=%s status=%s "
+            "playback_ref=%s error_code=%s",
+            call.turn_id,
+            call.call_id,
+            call.name,
+            receipt.status.value,
+            receipt.playback_ref or "-",
+            "MUSIC_COMMAND_FAILED" if receipt.status.value == "failed" else "-",
+        )
         content: dict[str, object] = {"status": str(receipt.status)}
         if receipt.playback_ref is not None:
             content["playback_ref"] = receipt.playback_ref

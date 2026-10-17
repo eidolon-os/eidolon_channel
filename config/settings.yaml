@@ -134,6 +134,10 @@ turn_policy:
     # begin. Low EOT must not veto an explicit semantic stop or takeover.
     # The replaced release already supports these keys (reversible cutover).
     intent_provider: llm
+    # Schema is deployed; hosts may now select a SystemOne service via Ops overlays.
+    systemone:
+      endpoint: ""
+      model: ""
     intent_timeout_ms: 2500
     decision_timeout_ms: 450
     post_speech_evidence_timeout_ms: 6000

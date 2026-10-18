@@ -78,13 +78,11 @@ async def lizheng_server() -> AsyncIterator[tuple[str, list[dict[str, object]]]]
 @pytest.mark.asyncio
 async def test_search_reauthenticates_after_expired_credentials(
     lizheng_server: tuple[str, list[dict[str, object]]],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     base_url, requests = lizheng_server
     config = LizhengMusicConfig(base_url, "channel-1", "AA:BB", "0123456789abcdef")
     async with aiohttp.ClientSession() as http:
-        with caplog.at_level("INFO", logger="agent.session.music"):
-            songs = await LizhengMusicApi(config, http).search("hello")
+        songs = await LizhengMusicApi(config, http).search("hello")
 
     assert songs == [{"songId": "song-1", "sn": "body-sn", "ak": "body-ak"}]
     assert [request["path"] for request in requests] == [
@@ -93,17 +91,6 @@ async def test_search_reauthenticates_after_expired_credentials(
         "/thrid/mlmusic/app/channel-1/queryDevcie",
         "/thrid/mlmusic/app/songs",
     ]
-    assert "lizheng http request" in caplog.text
-    assert "lizheng http response" in caplog.text
-    assert "endpoint=authentication" in caplog.text
-    assert "endpoint=search" in caplog.text
-    assert "sn=%3Credacted%3E" in caplog.text
-    assert "ak=%3Credacted%3E" in caplog.text
-    assert "body-sn" not in caplog.text
-    assert "body-ak" not in caplog.text
-    assert "iFeqb" not in caplog.text
-
-
 @pytest.mark.asyncio
 async def test_search_candidates_include_only_playable_song_ids(
     lizheng_server: tuple[str, list[dict[str, object]]],
@@ -319,29 +306,6 @@ async def test_source_for_song_rejects_mismatched_media_identity() -> None:
                 await LizhengMusicApi(config, http).source_for_song("requested-song")
     finally:
         await runner.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_media_link_log_preserves_route_and_redacts_all_query_values(
-    lizheng_server: tuple[str, list[dict[str, object]]],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    base_url, _ = lizheng_server
-    config = LizhengMusicConfig(base_url, "channel-1", "AA:BB", "0123456789abcdef")
-    async with aiohttp.ClientSession() as http:
-        with caplog.at_level("INFO", logger="agent.session.music"):
-            source = await LizhengMusicApi(config, http).source_for_song("song-1")
-
-    assert source.song_id == "song-1"
-    assert "endpoint=playback_url" in caplog.text
-    assert "play-url/song-1" in caplog.text
-    assert "https://cdn.example/song.mp3" in caplog.text
-    assert "sign=%3Credacted%3E" in caplog.text
-    assert "token=%3Credacted%3E" in caplog.text
-    assert "transDeliveryCode=%3Credacted%3E" in caplog.text
-    assert "media-sign" not in caplog.text
-    assert "media-token" not in caplog.text
-    assert "delivery-secret" not in caplog.text
 
 
 def test_environment_requires_aes_key_of_exactly_16_bytes(monkeypatch: pytest.MonkeyPatch) -> None:

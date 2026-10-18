@@ -707,11 +707,10 @@ class EidolonAgentSession:
             )
             return
         logger.info(
-            "channel_tool_call received turn_id=%s call_id=%s name=%s arguments=%s",
+            "channel_tool_call received turn_id=%s call_id=%s name=%s",
             request.turn_id,
             request.call_id,
             request.name,
-            dict(request.arguments),
         )
         try:
             result = await handler(request)
@@ -748,13 +747,12 @@ class EidolonAgentSession:
     async def _send_channel_tool_result(self, result: ChannelToolResult) -> None:
         logger.info(
             "channel_tool_result sent turn_id=%s call_id=%s name=%s ok=%s "
-            "error_code=%s content=%s",
+            "error_code=%s",
             result.turn_id,
             result.call_id,
             result.name,
             result.ok,
             result.error_code or "-",
-            result.content,
         )
         content = struct_pb2.Struct()
         content.update(result.content)

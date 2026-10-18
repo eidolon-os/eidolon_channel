@@ -15,14 +15,13 @@ from typing import Final
 import aiohttp
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
-from yarl import URL
 
 from .music_cache import MusicDownloadError, MusicSource
-from .music_trace import current_music_trace
 
 DEFAULT_BASE_URL: Final = "https://api.lizheng.design"
 DEFAULT_CHANNEL: Final = "bf117132ace49f34"
 HTTP_TIMEOUT_SECONDS: Final = 15.0
+logger = logging.getLogger("agent.session.music")
 SENSITIVE_FIELDS: Final = frozenset(
     {
         "ak",
@@ -42,8 +41,6 @@ SENSITIVE_FIELDS: Final = frozenset(
         "token",
     }
 )
-
-logger = logging.getLogger("agent.session.music")
 
 
 class LizhengMusicApiError(RuntimeError):
@@ -298,53 +295,20 @@ class LizhengMusicApi:
     ) -> object:
         timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
         request_url = f"{self._config.base_url}{path}"
-        params = kwargs.get("params")
-        if isinstance(params, dict):
-            log_url = str(
-                URL(request_url).with_query(
-                    [(str(key), str(value)) for key, value in params.items()]
-                )
-            )
-        else:
-            log_url = request_url
-        logger.info(
-            "lizheng http request turn_id=%s call_id=%s request_id=%s playback_ref=%s "
-            "method=%s endpoint=%s url=%s",
-            _trace_value("turn_id"),
-            _trace_value("call_id"),
-            _trace_value("request_id"),
-            _trace_value("playback_ref"),
-            method,
-            endpoint.value,
-            _redact_url(log_url),
-        )
         async with self._http.request(
             method,
             request_url,
             timeout=timeout,
             **kwargs,
         ) as response:
-            safe_url = _redact_url(str(response.url))
             try:
                 body: object = await response.json(content_type=None)
             except (aiohttp.ContentTypeError, json.JSONDecodeError):
                 body = {"body": "<non-json response>"}
-            logger.info(
-                "lizheng http response turn_id=%s call_id=%s request_id=%s playback_ref=%s "
-                "endpoint=%s url=%s http_status=%d body=%s",
-                _trace_value("turn_id"),
-                _trace_value("call_id"),
-                _trace_value("request_id"),
-                _trace_value("playback_ref"),
+            logger.debug(
+                "lizheng request completed endpoint=%s http_status=%d",
                 endpoint.value,
-                safe_url,
                 response.status,
-                json.dumps(
-                    _redact_json(body, redact_data=endpoint is LizhengEndpoint.AUTHENTICATION),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    default=str,
-                ),
             )
             if response.status < 200 or response.status >= 300:
                 if response.status == 410:
@@ -422,26 +386,6 @@ def _redact_url(value: str, *, redact_all_query_values: bool = False) -> str:
         for key, item in parse_qsl(parts.query, keep_blank_values=True)
     ]
     return urlunsplit((parts.scheme, hostname, parts.path, urlencode(query), ""))
-
-
-def _trace_value(name: str) -> str:
-    trace = current_music_trace()
-    return getattr(trace, name, "-") if trace is not None else "-"
-
-
-def _redact_json(value: object, *, redact_data: bool = False) -> object:
-    if isinstance(value, dict):
-        return {
-            str(key): "<redacted>"
-            if _field_is_sensitive(str(key)) or (redact_data and str(key) == "data")
-            else _redact_json(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_json(item) for item in value]
-    if isinstance(value, str) and value.startswith(("http://", "https://")):
-        return _redact_url(value, redact_all_query_values=True)
-    return value
 
 
 def _field_is_sensitive(name: str) -> bool:

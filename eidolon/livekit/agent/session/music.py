@@ -269,11 +269,6 @@ class MusicPlaybackService:
                 yield frame
 
         try:
-            logger.info(
-                "music playback started playback_ref=%s path=%s",
-                self._playback_ref,
-                path,
-            )
             speech = self._session.say("", audio=audio(), add_to_chat_ctx=False)
             self._speech = speech
             await speech.wait_for_playout()
@@ -284,11 +279,6 @@ class MusicPlaybackService:
             )
             if speech.interrupted:
                 self._error = "speech interrupted"
-            logger.info(
-                "music playback completed playback_ref=%s status=%s",
-                self._playback_ref,
-                self._status.value,
-            )
         except anyio.get_cancelled_exc_class():
             raise
         except (OSError, RuntimeError, ValueError) as exc:
@@ -437,16 +427,6 @@ class SessionMusicRuntime:
                 receipt = await commands.status(request_id=call.call_id)
             case _:
                 return _channel_tool_error(call, "TOOL_NOT_FOUND", "unsupported Channel tool")
-        logger.info(
-            "music channel tool completed turn_id=%s call_id=%s name=%s status=%s "
-            "playback_ref=%s error_code=%s",
-            call.turn_id,
-            call.call_id,
-            call.name,
-            receipt.status.value,
-            receipt.playback_ref or "-",
-            "MUSIC_COMMAND_FAILED" if receipt.status.value == "failed" else "-",
-        )
         content: dict[str, object] = {"status": str(receipt.status)}
         if receipt.playback_ref is not None:
             content["playback_ref"] = receipt.playback_ref

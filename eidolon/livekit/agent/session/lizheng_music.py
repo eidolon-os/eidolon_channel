@@ -100,6 +100,13 @@ class LizhengMusicConfig:
         return cls(base_url, channel, mac, aes_key)
 
 
+@dataclass(frozen=True, slots=True)
+class MusicSearchCandidate:
+    song_id: str
+    title: str
+    artist: str
+
+
 class LizhengMusicApi:
     def __init__(
         self,
@@ -168,6 +175,21 @@ class LizhengMusicApi:
             songs = await request(force_auth=True)
         return [song for song in songs if isinstance(song, dict) and song.get("songId")]
 
+    async def search_candidates(
+        self,
+        keyword: str,
+        *,
+        version: str = "",
+        language: str = "",
+    ) -> list[MusicSearchCandidate]:
+        songs = await self.search(keyword, version=version, language=language)
+        if not songs and (version or language):
+            songs = await self.search(keyword)
+        return _candidate_list(songs)
+
+    async def recommend_candidates(self) -> list[MusicSearchCandidate]:
+        return _candidate_list(await self.recommend())
+
     async def source_for_song(self, song_id: str) -> MusicSource:
         async def request(force_auth: bool) -> MusicSource:
             sn, ak = await self._credentials_for(force_auth=force_auth)
@@ -192,6 +214,14 @@ class LizhengMusicApi:
                 raise LizhengMusicApiError(
                     -1,
                     "playback URL is empty",
+                    source=LizhengErrorSource.LOCAL_RESPONSE,
+                    endpoint=LizhengEndpoint.PLAYBACK_URL,
+                )
+            media_song_id = media[0].get("songId")
+            if media_song_id is not None and str(media_song_id) != song_id:
+                raise LizhengMusicApiError(
+                    -1,
+                    "playback URL song identity does not match request",
                     source=LizhengErrorSource.LOCAL_RESPONSE,
                     endpoint=LizhengEndpoint.PLAYBACK_URL,
                 )
@@ -357,6 +387,24 @@ def _decrypt(encoded: str, aes_key: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("decrypted response is not an object")
     return value
+
+
+def _candidate_list(songs: list[dict[str, object]]) -> list[MusicSearchCandidate]:
+    candidates: list[MusicSearchCandidate] = []
+    for song in songs:
+        song_id = song.get("songId")
+        if not isinstance(song_id, str) or not song_id.strip():
+            continue
+        title = song.get("songName")
+        artist = song.get("artist")
+        candidates.append(
+            MusicSearchCandidate(
+                song_id=song_id.strip(),
+                title=title.strip() if isinstance(title, str) else "",
+                artist=artist.strip() if isinstance(artist, str) else "",
+            )
+        )
+    return candidates
 
 
 def _redact_url(value: str, *, redact_all_query_values: bool = False) -> str:

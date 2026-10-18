@@ -121,7 +121,8 @@ class MusicCache:
         if source.expected_sha256 is not None and digest.hexdigest() != source.expected_sha256:
             raise MusicDownloadError("music source digest does not match metadata")
         with temporary.open("rb") as input_file:
-            if input_file.read(3) != b"ID3":
+            header = input_file.read(4)
+            if not _looks_like_mp3(header):
                 raise MusicDownloadError("music source is not an MP3 file")
 
     async def _chunks(self, content: aiohttp.StreamReader) -> AsyncIterator[bytes]:
@@ -137,3 +138,9 @@ def _trace_fields() -> str:
         f"turn_id={trace.turn_id} call_id={trace.call_id} "
         f"request_id={trace.request_id} playback_ref={trace.playback_ref}"
     )
+
+
+def _looks_like_mp3(header: bytes) -> bool:
+    if header.startswith(b"ID3"):
+        return True
+    return len(header) >= 2 and header[0] == 0xFF and header[1] & 0xE0 == 0xE0

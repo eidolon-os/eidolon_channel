@@ -325,6 +325,7 @@ class SessionMusicRuntime:
         self._session = session
         self._music_dir = music_dir
         self._http: aiohttp.ClientSession | None = None
+        self._api: LizhengMusicApi | None = None
         self.playback: MusicPlaybackService | None = None
         from .music_commands import MusicCommandService
 
@@ -349,6 +350,7 @@ class SessionMusicRuntime:
 
             runtime = cls(session, music_dir=music_dir)
             runtime._http = http
+            runtime._api = api
             cache = MusicCache(
                 music_dir,
                 source_resolver=api.source_for_song,
@@ -364,9 +366,47 @@ class SessionMusicRuntime:
 
     async def execute_channel_tool(self, call: ChannelToolCall) -> ChannelToolResult:
         commands = self.commands
-        if commands is None:
+        api = self._api
+        if commands is None or api is None:
             return _channel_tool_error(call, "MUSIC_DISABLED", "Online music is disabled")
         match call.name:
+            case "music.search":
+                keyword = call.arguments.get("keyword")
+                version = call.arguments.get("version", "")
+                language = call.arguments.get("language", "")
+                if not isinstance(keyword, str) or not keyword.strip():
+                    return _channel_tool_error(call, "INVALID_ARGUMENT", "keyword is required")
+                if not isinstance(version, str) or not isinstance(language, str):
+                    return _channel_tool_error(call, "INVALID_ARGUMENT", "search filters are invalid")
+                try:
+                    songs = await (
+                        api.recommend_candidates()
+                        if keyword.strip().lower() == "random"
+                        else api.search_candidates(keyword.strip(), version=version, language=language)
+                    )
+                except (LizhengMusicApiError, OSError, RuntimeError, ValueError):
+                    logger.warning(
+                        "music search failed turn_id=%s call_id=%s keyword=%s",
+                        call.turn_id,
+                        call.call_id,
+                        keyword,
+                    )
+                    return _channel_tool_error(call, "MUSIC_SEARCH_FAILED", "music search failed")
+                candidates = [
+                    {
+                        "song_id": song.song_id,
+                        "title": song.title,
+                        "artist": song.artist,
+                    }
+                    for song in songs
+                ]
+                return ChannelToolResult(
+                    turn_id=call.turn_id,
+                    call_id=call.call_id,
+                    name=call.name,
+                    ok=True,
+                    content={"status": "completed", "songs": candidates},
+                )
             case "music.play":
                 song_id = call.arguments.get("song_id")
                 playback_ref = call.arguments.get("playback_ref", f"music:{call.call_id}")
@@ -436,6 +476,7 @@ class SessionMusicRuntime:
         if self._http is not None:
             await self._http.close()
             self._http = None
+        self._api = None
 
 
 def _channel_tool_error(

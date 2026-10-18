@@ -145,6 +145,10 @@ class InterruptDecider:
                 return Decision(Action.HOLD, "empty_intent_transcript", **hint_fields)
             if intent.intent is InterruptIntent.HARD_STOP or intent_requires_reply(intent.intent):
                 return Decision(Action.CANCEL, "confirmed_final_intent", **hint_fields)
+            # Uncertainty is not consent to resume. The existing owner bounds
+            # the continuation pause and subsequent evidence wait separately.
+            if intent.intent is InterruptIntent.UNCERTAIN:
+                return Decision(Action.HOLD, "final_intent_wait", **hint_fields)
             if not vad_active:
                 return Decision(
                     Action.ROLLBACK, "final_intent_resume", rollback_drop_buffered=False,

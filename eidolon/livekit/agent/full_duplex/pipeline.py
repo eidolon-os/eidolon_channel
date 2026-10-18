@@ -1277,7 +1277,8 @@ class StreamingPipeline(BasePipeline):
             get_candidate_active=lambda: self._interruption_orchestrator.active,
             get_playback_hold_remaining_sec=lambda: (
                 self._interruption_orchestrator.playback_hold_remaining_sec()
-                if self._turn_policy.interrupt.intent_provider == "none"
+                if not self._turn_policy.interrupt.uses_model_intent
+                or self._semantic_interrupts.current_intent_result is not None
                 else None
             ),
             get_duck_stats=lambda: self._ducking.stats(),

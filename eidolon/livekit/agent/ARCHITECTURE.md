@@ -247,6 +247,8 @@ eidolon/livekit/agent/
    - `FullDuplexInterruptionEffects` 负责 terminal decision 之后的输出/框架副作用；它不判断“要不要打断”。
    - 关键 terminal outcomes：`cancel`（hard-stop/真实插话）、`resume`/rollback（backchannel、false-start、noise）、`commit`（真实用户 turn）、`reject`（echo/低证据/非 owner 等）。
    - backchannel 和 false-start 的产品目标是快速恢复 agent 输出且不污染 context ledger；topic switch/correction/normal interrupt 的目标是稳定后 cancel，并只提交真实用户 turn。
+   - 意图接口沿用 `keep / stop / reply / wait`：`wait`（`UNCERTAIN`，包括模型不可用）只提供等待证据，不是恢复许可。LLM、SystemOne 与无意图模型路径共用 `InterruptionOrchestrator` 的续说窗口和证据期限：停声后的既有续说窗口内保持暂停，窗口到期可暂时恢复输出但保留候选，证据期限到期才无回复收尾；明确 `keep` 仍可在停声后快速恢复。模型仍在推理时沿用原有请求超时，只有属于当前文本/代际/响应的结果才能启用续说恢复窗口，避免恢复使待返回的明确意图失去目标。没有新增意图类别、阈值或计时器。
+   - 播放冷却只限制没有待提交文本的重复触发；attention 已准入且 coordinator 仍持有 open 文本候选时，续说可立即重新暂停。已提交、已拒绝或空候选不借用此豁免；暂停输出仍不等于取消旧回复或提交新请求。
    - `full_duplex/client_preempt.py` 只处理 full-duplex explicit client preempt bridge，用于把客户端显式控制转换成输出抢占副作用；它不拥有 ptt segment turn lifecycle。无 speech/VAD timeline 的 explicit client PTT 会由 `StreamingPipeline` 创建 control-only timeline，记录 `cancel/hard_stop/client_ptt`、`playback.stop` 与 interrupted-context evidence，不等待 STT，也不提交用户 turn。
    - `full_duplex/client_audio.py` 拥有 full-duplex `client.audio_state` 的新鲜度视图、播放态判断，以及 room data -> explicit preempt handler 的桥接；pipeline 不再重复实现这些判断。
 

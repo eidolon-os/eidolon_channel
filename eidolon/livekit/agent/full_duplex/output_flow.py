@@ -55,7 +55,14 @@ class FullDuplexOutputFlow:
             logger.info("[StreamingPipeline] duck skipped - filler playing")
             return False
         now = time.monotonic()
-        if now - pipeline._ducking.last_unduck_time < cfg.duck_cooldown_sec:
+        candidate = pipeline._user_turns.active
+        pending_transcript = (
+            pipeline._user_speaking_start_time is not None
+            and candidate is not None and candidate.state == "open" and bool(candidate.selected_text)
+        )
+        # Cooldown suppresses repeated empty triggers, not an admitted speaker's
+        # pending request. Its text survives provisional playback resumption.
+        if not pending_transcript and now - pipeline._ducking.last_unduck_time < cfg.duck_cooldown_sec:
             logger.info(
                 "[StreamingPipeline] duck skipped - within cooldown "
                 "(%.2fs since last unduck)",

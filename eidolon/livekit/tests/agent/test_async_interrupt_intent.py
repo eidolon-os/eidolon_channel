@@ -160,7 +160,7 @@ async def test_late_result_cannot_control_revised_or_replaced_turn(change):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure', ['timeout', 'error'])
-async def test_failed_intent_resumes_after_silence_without_destroying_audio(failure):
+async def test_failed_intent_leaves_recovery_to_existing_owner_deadline(failure):
     async def classify(*args, **kwargs):
         if failure == 'error':
             raise RuntimeError('unavailable')
@@ -169,8 +169,8 @@ async def test_failed_intent_resumes_after_silence_without_destroying_audio(fail
     try:
         handler.run(state.text, is_final=True)
         await handler._intent_task
-        assert decisions[-1].action is Action.ROLLBACK
-        assert not decisions[-1].rollback_drop_buffered
+        assert decisions[-1].action is Action.HOLD
+        assert state.active
     finally:
         await handler.aclose()
 
@@ -256,7 +256,7 @@ async def test_provider_cannot_return_action_after_swallowing_deadline_cancellat
     try:
         handler.run(state.text, is_final=True)
         await handler._intent_task
-        assert decisions[-1].action is Action.ROLLBACK
+        assert decisions[-1].action is Action.HOLD
         assert handler._intent_result.reason == 'TimeoutError'
         assert not any(d.action is Action.CANCEL for d in decisions)
     finally:
@@ -297,5 +297,39 @@ async def test_old_request_cannot_own_text_after_a_b_a_revision(provider):
         assert not any(d.action is Action.CANCEL for d in decisions)
         assert decisions[-1].action is Action.ROLLBACK
         assert handler._intent_result.intent is InterruptIntent.BACKCHANNEL
+    finally:
+        await handler.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["llm", "systemone"])
+@pytest.mark.parametrize("vad", [False, True])
+async def test_uncertain_final_keeps_candidate_open_for_existing_deadline(provider, vad):
+    classifier = SimpleNamespace(classify=AsyncMock(return_value=result(InterruptIntent.UNCERTAIN)))
+    handler, state, decisions, _ = setup_handler(classifier, provider=provider, vad=vad)
+    try:
+        handler.run(state.text, is_final=True)
+        await handler._intent_task
+        assert decisions[-1].action is Action.HOLD
+        assert state.active
+    finally:
+        await handler.aclose()
+
+
+@pytest.mark.asyncio
+async def test_current_intent_evidence_excludes_pending_and_superseded_results():
+    ready = asyncio.Event()
+    async def classify(*args, **kwargs):
+        await ready.wait()
+        return result(InterruptIntent.UNCERTAIN)
+    handler, state, _, _ = setup_handler(SimpleNamespace(classify=classify))
+    try:
+        handler.run(state.text, is_final=True)
+        assert handler.current_intent_result is None
+        ready.set()
+        await handler._intent_task
+        assert handler.current_intent_result.intent is InterruptIntent.UNCERTAIN
+        state.scope = (("candidate", 2), 123)
+        assert handler.current_intent_result is None
     finally:
         await handler.aclose()

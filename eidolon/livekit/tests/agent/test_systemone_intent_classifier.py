@@ -144,7 +144,7 @@ async def test_failure_uses_existing_channel_uncertainty_policy(fault):
         try:
             handler.run(state.text, is_final=True)
             await handler._intent_task
-            assert decisions[-1].action is Action.ROLLBACK
+            assert decisions[-1].action is Action.HOLD
             assert decisions[-1].intent_source == 'unavailable'
             assert not decisions[-1].rollback_drop_buffered
         finally:
@@ -168,7 +168,7 @@ async def test_four_labels_follow_same_policy_without_probability_gate(label, pr
             handler.run(state.text, is_final=True)
             await handler._intent_task
             expected = Action.CANCEL if label in ('stop', 'reply') else (
-                Action.HOLD if vad else Action.ROLLBACK
+                Action.HOLD if vad or label == 'wait' else Action.ROLLBACK
             )
             assert decisions[-1].action is expected
             assert timeline.attrs['interrupt_intent_observations'][0]['probabilities'][label] == probability

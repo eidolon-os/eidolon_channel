@@ -436,26 +436,22 @@ async def test_model_unavailable_resumes_original_speech_after_vad_end(failure, 
 
         def resume_event():
             return next((event for event in timeline.attrs.get('duck_events') or ()
-                         if event['event'] == 'duck_unducked'), None)
+                         if event['event'] == 'output_resumed_pending_evidence'), None)
 
-        # The fallback resolves at VAD stop, ~470 ms before the fixed 1.5 s
-        # sample this used to take. Wait for the recorded resume instead: a
-        # sample on a clock of its own only records whether the production path
-        # kept pace with the test, which is what load changes.
-        await wait_until(lambda: resume_event() is not None and not orchestrator.active, timeout=5)
+        # Failure and semantic uncertainty share bounded owner recovery, not
+        # a synthetic keep verdict. Playback resumes before candidate expiry.
+        await wait_until(lambda: resume_event() is not None, timeout=4)
         assert pipeline._ducking.mixer.state == 'NORMAL'
         assert not speech.interrupted
-        # An unavailable provider is not evidence of a barge-in: the candidate
-        # is rejected without reaching the LLM, and playback recovers on speech
-        # end. The provider's own timeout has already elapsed by then, so the
-        # fallback adds no wait of its own -- it never spends the continuation
-        # grace, let alone the evidence budget behind it.
+        assert orchestrator.active
         resume = resume_event()
-        assert resume['reason'] == 'final_intent_resume'
+        assert resume['reason'] == 'continuation_grace_elapsed_pending_evidence'
         stop_to_resume_ms = (resume['at'] - resume['speech_stopped_at']) * 1000.0
-        assert 0 <= stop_to_resume_ms <= pipeline._turn_policy.interrupt.intent_timeout_ms
+        grace_ms = policy.eot.speech_merge_grace_ms
+        assert grace_ms - 20 <= stop_to_resume_ms <= grace_ms + 500
+        await wait_until(lambda: not orchestrator.active, timeout=7)
         verdict = timeline.attrs['interruption_verdict']
-        assert verdict['action'] == 'rejected_resume'
+        assert verdict['action'] == 'expired_resume'
         assert verdict['continue_to_llm'] is False
         await h.events.wait_for_agent_messages(1, timeout=6)
         assert h.events.agent_messages() == [welcome]
@@ -589,3 +585,105 @@ async def test_fragmented_final_intent_survives_deadline_and_vad_stop(intent, va
             assert not any(s.cleared for s in h.audio_out.segments)
             assert llm.call_count == 0
         assert not pipeline._semantic_interrupts._intent_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["llm", "systemone"])
+@pytest.mark.parametrize("pause_ms", [200, 1000], ids=["within_grace", "after_resume"])
+async def test_wait_intent_preserves_continuation_and_repauses_resumed_output(provider, pause_ms):
+    prefix, tail = "嗯，那让我想想。", "你会做PPT吗？"
+    async def classify(text, **kwargs):
+        return InterruptIntentResult(
+            InterruptIntent.NORMAL_INTERRUPT if "PPT" in text else InterruptIntent.UNCERTAIN,
+            0.0, "fault_injection", "")
+    classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
+    policy = TurnPolicyConfig()
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider=provider))
+    next_start = 1050 + pause_ms
+    reply = "可以，先确定主题。"
+    llm = MockLLM.scripted([("", reply)])
+    async with production_session(
+        welcome="原来的相声介绍还没说完，还有几个细节可以继续介绍。" * 3,
+        llm=llm, interrupt_classifier=classifier, turn_policy=policy,
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix, trigger_after_ms=900),
+            ScriptedTranscript(text=tail, trigger_after_ms=next_start + 850),
+        ]),
+        tts=MockTTS(char_seconds=.15, chunk_delay_ms=80),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', 350), MockVADEvent('end', 1050, .1),
+            MockVADEvent('start', next_start), MockVADEvent('end', next_start + 1000, .1),
+        ]),
+    ) as (pipeline, h):
+        h.audio_in.feed_pcm(synth_voiced((next_start + 1200) / 1000))
+        await h.audio_out.wait_for_first_audio()
+        old_speech = h.session.current_speech
+        await wait_until(lambda: pipeline._timeline is not None, timeout=3)
+        timeline = pipeline._timeline
+        await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+            and getattr(e.payload.item, 'text_content', '') == reply, timeout=10)
+        assert old_speech.interrupted
+        assert [text.replace(' ', '') for text in h.events.user_messages()] == [prefix + tail]
+        assert llm.call_count == 1
+        ducks = timeline.attrs['duck_events']
+        starts = [d for d in ducks if d['event'] == 'duck_started']
+        assert len(starts) >= 2
+        assert starts[1]['vad_to_duck_ms'] < 100
+        resumed = [d for d in ducks if d['event'] == 'output_resumed_pending_evidence']
+        assert bool(resumed) is (pause_ms > policy.eot.speech_merge_grace_ms)
+        assert not any(d['event'] == 'duck_unducked' for d in ducks)
+        if resumed:
+            assert resumed[0]['reason'] == 'continuation_grace_elapsed_pending_evidence'
+        assert classifier.classify.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_recorded_box3_three_fragment_hesitation_stays_one_paused_request(record_property):
+    """Replay observed ASR/VAD and D3 result timing, without network or microphones."""
+    prefix, middle, tail = "嗯，那让我想想。", "你。", "会做PPT吗？"
+    async def classify(text, **kwargs):
+        if "PPT" in text:
+            delay, intent = .142, InterruptIntent.NORMAL_INTERRUPT
+        elif "你" in text:
+            delay, intent = .132, InterruptIntent.UNCERTAIN
+        else:
+            delay, intent = .207, InterruptIntent.UNCERTAIN
+        await asyncio.sleep(delay)
+        return InterruptIntentResult(intent, 0.0, "recorded_systemone", "recorded label")
+    policy = TurnPolicyConfig()
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='systemone'))
+    reply = "可以，先确定主题。"
+    llm = MockLLM.scripted([('', reply)])
+    base = 350
+    async with production_session(
+        welcome="正经的相声我说不了，不过可以来一小段单口的味道。" * 3,
+        llm=llm, turn_policy=policy,
+        interrupt_classifier=SimpleNamespace(classify=AsyncMock(side_effect=classify)),
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=prefix, trigger_after_ms=base + 2424),
+            ScriptedTranscript(text=middle, trigger_after_ms=base + 3724),
+            ScriptedTranscript(text=tail, trigger_after_ms=base + 5349),
+        ]),
+        tts=MockTTS(char_seconds=.15, chunk_delay_ms=80),
+        vad=MockVAD.scripted([
+            MockVADEvent('start', base), MockVADEvent('end', base + 2304, .1),
+            MockVADEvent('start', base + 2595), MockVADEvent('end', base + 3701, .1),
+            MockVADEvent('start', base + 3907), MockVADEvent('end', base + 5202, .1),
+        ]),
+    ) as (pipeline, h):
+        h.audio_in.feed_pcm(synth_voiced(6.1))
+        await h.audio_out.wait_for_first_audio()
+        old_speech = h.session.current_speech
+        await wait_until(lambda: pipeline._timeline is not None, timeout=3)
+        timeline = pipeline._timeline
+        await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
+            and getattr(e.payload.item, 'text_content', '') == reply, timeout=12)
+        assert [text.replace(' ', '') for text in h.events.user_messages()] == [prefix + middle + tail]
+        assert llm.call_count == 1
+        ducks = timeline.attrs['duck_events']
+        record_property('duck_events', json.dumps(ducks, ensure_ascii=False))
+        assert not any(d['event'] in {'duck_unducked', 'output_resumed_pending_evidence'} for d in ducks)
+        assert len([d for d in ducks if d['event'] == 'duck_started']) == 3
+        assert old_speech.interrupted
+        record_property('stop_to_commit_ms', 1000 * (
+            timeline.timestamps['turn_committed_at'] - timeline.timestamps['speech_stopped_at']))

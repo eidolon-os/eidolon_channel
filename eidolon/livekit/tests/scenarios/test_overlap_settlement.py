@@ -44,7 +44,10 @@ async def test_final_and_silence_resume_same_speech(final_at_ms, repeated_interi
 
         # The audio hold is bounded by the continuation grace after VAD stop,
         # not by the candidate's longer evidence budget.
-        recovery = next(event for event in pipeline._timeline.attrs['duck_events']
+        # The live pointer is cleared when the candidate expires. Keep the
+        # completed turn's record for terminal assertions.
+        timeline = pipeline._timeline
+        recovery = next(event for event in timeline.attrs['duck_events']
                         if event['event'] == 'output_resumed_pending_evidence')
         assert recovery['user_speaking'] is False
         stop_to_resume_ms = (recovery['at'] - recovery['speech_stopped_at']) * 1000.0
@@ -54,7 +57,7 @@ async def test_final_and_silence_resume_same_speech(final_at_ms, repeated_interi
 
         # The candidate then expires on its own budget: no cancel, no user turn.
         await wait_until(lambda: not orchestrator.active, timeout=8)
-        verdict = pipeline._timeline.attrs['interruption_verdict']
+        verdict = timeline.attrs['interruption_verdict']
         record_property('interruption_verdict', json.dumps(verdict, ensure_ascii=False))
         assert verdict['action'] in ('rejected_resume', 'expired_resume')
         assert verdict['continue_to_llm'] is False

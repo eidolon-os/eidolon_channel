@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from eidolon.livekit.agent.full_duplex.output_flow import FullDuplexOutputFlow
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.shared.types import PipelineState
+from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
 
 
 def _duck_cfg() -> SimpleNamespace:
@@ -32,6 +33,7 @@ def test_output_flow_installs_duck_mixer_via_ducking_controller() -> None:
     ducking = SimpleNamespace(install=MagicMock(return_value=object()))
     pipeline = SimpleNamespace(
         _ducking=ducking,
+        _user_turns=UserTurnCoordinator(speech_merge_grace_sec=.8),
         _get_eot_model=lambda: SimpleNamespace(_config=cfg),
     )
     session = object()
@@ -50,6 +52,7 @@ def test_output_flow_does_not_arm_when_ducking_not_installed() -> None:
     )
     pipeline = SimpleNamespace(
         _ducking=ducking,
+        _user_turns=UserTurnCoordinator(speech_merge_grace_sec=.8),
         _state=PipelineState.IDLE,
         _get_eot_model=lambda: SimpleNamespace(_config=_duck_cfg()),
         _filler=None,
@@ -79,6 +82,7 @@ async def test_output_flow_arms_after_attention_admits_playback_even_if_state_id
     timeline = TurnTimeline("turn-client-playback")
     pipeline = SimpleNamespace(
         _ducking=ducking,
+        _user_turns=UserTurnCoordinator(speech_merge_grace_sec=.8),
         _state=PipelineState.IDLE,
         _get_eot_model=lambda: SimpleNamespace(_config=cfg),
         _filler=None,
@@ -115,6 +119,7 @@ async def test_output_flow_arms_duck_deadline_and_records_timeline() -> None:
     timeline = TurnTimeline("turn-duck")
     pipeline = SimpleNamespace(
         _ducking=ducking,
+        _user_turns=UserTurnCoordinator(speech_merge_grace_sec=.8),
         _state=PipelineState.SPEAKING,
         _get_eot_model=lambda: SimpleNamespace(_config=cfg),
         _filler=None,
@@ -151,6 +156,7 @@ def test_output_flow_does_not_record_started_when_output_cannot_suspend() -> Non
     timeline = TurnTimeline("turn-duck-skipped")
     pipeline = SimpleNamespace(
         _ducking=ducking,
+        _user_turns=UserTurnCoordinator(speech_merge_grace_sec=.8),
         _state=PipelineState.SPEAKING,
         _get_eot_model=lambda: SimpleNamespace(_config=cfg),
         _filler=None,
@@ -170,3 +176,34 @@ def test_output_flow_does_not_record_started_when_output_cannot_suspend() -> Non
         "reason": "output_not_suspendable",
         "output_state": "CANCELLED",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_state", ["open", "empty", "committed", "rejected"])
+@pytest.mark.parametrize("speaking", [True, False])
+async def test_pending_transcript_continuation_can_pause_inside_output_cooldown(candidate_state, speaking):
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    timeline = TurnTimeline("continuation")
+    coordinator.start_speech(timeline=timeline)
+    if candidate_state != "empty":
+        coordinator.add_transcript("让我想想。", is_final=True)
+    if candidate_state == "committed":
+        coordinator.mark_framework_completed(transcript=coordinator.selected_text,
+                                             timeline=timeline, reason="test")
+    elif candidate_state == "rejected":
+        coordinator.reject_active("test")
+    cfg = _duck_cfg()
+    cfg.duck_cooldown_sec = .8
+    ducking = SimpleNamespace(installed=True, last_unduck_time=time.monotonic(),
+        cancel_timeout=MagicMock(), duck=MagicMock(return_value=True), timeout_task=None)
+    pipeline = SimpleNamespace(_ducking=ducking, _user_turns=coordinator,
+        _get_eot_model=lambda: SimpleNamespace(_config=cfg), _filler=None,
+        _timeline=timeline, _user_speaking_start_time=time.monotonic() if speaking else None,
+        _callbacks=SimpleNamespace(on_duck_started=MagicMock()),
+        _duck_deadline=SimpleNamespace(run=AsyncMock()),
+        _record_full_duplex_transition=MagicMock())
+    armed = FullDuplexOutputFlow(pipeline).duck_and_arm_timeout()
+    await asyncio.sleep(0)
+    assert armed is (candidate_state == "open" and speaking)
+    assert ducking.duck.call_count == int(armed)
+    assert pipeline._duck_deadline.run.await_count == int(armed)

@@ -78,6 +78,11 @@ class SemanticInterruptHandler:
     def uses_model_intent(self) -> bool:
         return self._turn_runtime.config.interrupt.uses_model_intent
 
+    @property
+    def current_intent_result(self) -> InterruptIntentResult | None:
+        """Completed evidence for this exact text, generation and response."""
+        return self._intent_result if self._owns_current_candidate(self._intent_key) else None
+
     async def wait_for_pending_intent(self) -> None:
         # Endpointing cancellation must not cancel the candidate's shared
         # inference. A revised final owns a new task and its own timeout.

@@ -255,7 +255,7 @@ class InterruptionOrchestrator:
         generation_id: int = 1,
         already_suspended: bool = True,
     ) -> InterruptionDecision:
-        """Start owning a possible interruption after output has soft-ducked."""
+        """Own evidence with or without a preceding acoustic soft-duck."""
 
         if self.active:
             current = self._candidate

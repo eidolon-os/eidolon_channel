@@ -299,3 +299,13 @@ def test_attention_enforce_observes_short_overlap_without_direct_signal() -> Non
     on_duck.assert_not_called()
     on_interrupt.assert_not_called()
     assert timeline.attrs["attention_admission"]["enforced"] is True
+
+
+def test_provider_only_start_observes_without_pausing_output():
+    handler, timeline, on_duck, on_interrupt = _handler(
+        client_state=_client_state(), soft_duck_on_playback_speech_start=True,
+    )
+    assert handler.handle_transcript_started()
+    on_duck.assert_not_called()
+    on_interrupt.assert_not_called()
+    assert timeline.attrs["attention_admission"]["state"]["speech_started"] is False

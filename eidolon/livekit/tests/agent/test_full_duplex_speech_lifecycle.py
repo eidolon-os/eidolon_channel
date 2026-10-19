@@ -456,3 +456,16 @@ def test_same_text_new_source_is_not_absorbed_as_committed_revision():
     assert not StreamingPipeline._absorb_committed_turn_transcript_revision(owner,
         FullDuplexTranscriptEvent(transcript="再来。", is_final=True, evidence=TranscriptEvidence(
             stream_key="stream", revision_key="two", source_span=TranscriptSourceSpan(3, 4))))
+
+
+def test_provider_only_candidate_does_not_claim_an_acoustic_start():
+    owner = _owner()
+    owner._ducking.is_suspended = False
+    owner._attention_effects.handle_transcript_started.return_value = True
+    FullDuplexSpeechLifecycle(owner).handle_transcript_started()
+    owner._attention_effects.handle_speaking_started.assert_not_called()
+    owner._attention_effects.handle_transcript_started.assert_called_once_with()
+    owner._interruption_orchestrator.start_candidate.assert_called_once_with(
+        timeline=owner._timeline, generation_id=1, already_suspended=False,
+    )
+    owner._output_flow.arm_evidence_timeout.assert_called_once_with()

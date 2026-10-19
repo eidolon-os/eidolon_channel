@@ -178,3 +178,74 @@ async def test_withdrawn_interim_restores_final_and_delivers_one_sdk_reply():
         assert old_speech.interrupted
         assert h.events.user_messages() == [text]
         assert h.events.agent_messages().count(reply) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_vad", [False, True])
+async def test_playback_continues_through_withdrawn_partial_but_short_stop_still_cancels(with_vad):
+    import time
+    from eidolon.livekit.agent.integration.client_audio_state import ClientAudioState
+    from eidolon.livekit.agent.turn_policy import InterruptIntent, InterruptIntentResult
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+
+    def evidence(revision, sequence):
+        return TranscriptEvidence(stream_key="admission-stream", revision_key=revision,
+                                  sequence=sequence).as_metadata()
+
+    class SessionSTT(MockSTT):
+        def stream(self, **kwargs):
+            if self.streams_opened:
+                # clear_user_turn restarts SDK input. Do not replay old noise or
+                # restart its clock; the next utterance belongs to a new stream.
+                self._scripts = [ScriptedTranscript(
+                    text="停。", trigger_after_ms=900, metadata=evidence("stop", 3),
+                )]
+            return super().stream(**kwargs)
+
+    policy = TurnPolicyConfig()
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider="llm"))
+    classify = AsyncMock(return_value=InterruptIntentResult(
+        InterruptIntent.HARD_STOP, .99, "model", "stop request"))
+    async with production_session(
+        welcome="我正在讲一个很长的故事，后面还有许多内容没有讲完。",
+        llm=MockLLM.scripted([]),
+        stt=SessionSTT.scripted([
+            ScriptedTranscript(text="", interims=["嗯"], final=False,
+                               trigger_after_ms=500, metadata=evidence("noise", 1)),
+            ScriptedTranscript(text="", trigger_after_ms=800, metadata=evidence("noise", 2)),
+            ScriptedTranscript(text="停。", trigger_after_ms=1700, metadata=evidence("stop", 3)),
+        ]),
+        tts=MockTTS(char_seconds=.4, chunk_delay_ms=50),
+        vad=MockVAD.scripted([
+            MockVADEvent("start", 1200), MockVADEvent("end", 1500, .1),
+        ] if with_vad else []),
+        turn_policy=policy, real_time_audio=True,
+        interrupt_classifier=SimpleNamespace(classify=classify),
+    ) as (pipeline, h):
+        pipeline._attention_effects._latest_client_audio_state = lambda _: ClientAudioState(
+            participant_identity="device", input_mode="auto", playback_state="agent_speaking",
+            received_at=time.monotonic(),
+        )
+        duck = pipeline._attention_effects._on_duck
+        pauses = []
+        def track_duck():
+            pauses.append(time.monotonic())
+            return duck()
+        pipeline._attention_effects._on_duck = track_duck
+        h.audio_in.feed_pcm(synth_voiced(2))
+        await h.audio_out.wait_for_first_audio()
+        old_speech = h.session.current_speech
+        await wait_until(lambda: pipeline._user_turns.active is not None
+                         and pipeline._user_turns.active.state == "rejected", timeout=3)
+        assert pauses == []
+        assert not old_speech.interrupted
+        classify.assert_not_awaited()
+        if with_vad:
+            await wait_until(lambda: bool(pauses), timeout=2)
+            assert pipeline._user_speaking_start_time is not None
+            assert pauses[0] - pipeline._user_speaking_start_time < .1
+        await wait_until(lambda: old_speech.interrupted, timeout=3)
+        classify.assert_awaited_once()
+        assert classify.call_args.args[0] == "停。"
+        assert not h.events.user_messages()
+        assert not h.events.agent_messages()

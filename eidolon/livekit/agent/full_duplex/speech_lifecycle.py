@@ -146,7 +146,10 @@ class FullDuplexSpeechLifecycle:
                 owner._timeline.set_attr("interruption_owner", "disabled_no_barge_in")
             return
 
-        interrupt_window_started = owner._attention_effects.handle_speaking_started()
+        interrupt_window_started = (
+            owner._attention_effects.handle_speaking_started()
+            if acoustic else owner._attention_effects.handle_transcript_started()
+        )
         if interrupt_window_started and owner._ducking.installed and not owner._ducking.is_cancelled:
             owner._interruption_orchestrator.start_candidate(
                 timeline=owner._timeline,

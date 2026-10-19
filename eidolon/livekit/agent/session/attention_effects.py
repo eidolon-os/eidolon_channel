@@ -79,6 +79,21 @@ class AttentionEffectHandler:
         )
         return False
 
+    def handle_transcript_started(self) -> bool:
+        """Observe provider-only evidence without pretending VAD detected speech.
+
+        The existing interruption owner can classify a final and cancel output
+        even while output remains audible. Actual VAD edges keep the fast duck
+        path; an ASR hypothesis alone must not manufacture that edge.
+        """
+        decision, state = self._decide_with_state("", speech_started=False)
+        self.record_admission(decision, state=state)
+        return bool(
+            state["agent_speaking"]
+            and (not self._turn_policy.attention.enforce
+                 or decision.action is not AdmissionAction.IGNORE)
+        )
+
     def allows_eot_check(
         self,
         transcript: str,

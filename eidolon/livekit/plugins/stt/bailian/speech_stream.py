@@ -540,12 +540,20 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             logger.warning("[Bailian STT] _handle_result: latest_sentence() returned None")
             return
 
+        revision = (result.task_id, latest.sentence_id)
+        if latest.sentence_id is not None and revision != getattr(self, "_last_provider_revision", None):
+            self._cancel_preflight()
+            self._last_interim_text = ""
+            self._preflight_sent_text = ""
+            self._last_provider_revision = revision
         text = latest.text
-        if not text:
-            logger.warning("[Bailian STT] _handle_result: empty text in latest sentence")
+        if not text and not latest.sentence_end:
             return
 
+
         if latest.sentence_end:
+            self._last_interim_text = ""
+            self._preflight_sent_text = ""
             self._cancel_preflight()
             self._emit_provider_event_once(
                 "stt_provider_final",

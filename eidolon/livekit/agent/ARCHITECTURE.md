@@ -197,7 +197,7 @@ eidolon/livekit/agent/
 
 `full_duplex/voiceprint_commit_state.py` 是 full-duplex voiceprint task/result/timeline 的 runtime state adapter。它只管理 candidate tasks 和 completed-turn task/result；不再存在 pending direct-commit task 集合。
 
-`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的唯一产品终态 owner。 SDK hook 可以携带同一产品轮次的较早 FINAL；必须先通过既有 transcript settlement 收集后续证据并确认候选未被替换，再用组装后的候选当前声学 generation 读取裁决。等待转写时如果再次开口，旧 completion 失效，保留候选等待新一段的结束证据；等待声纹结果也复用既有 candidate/generation fence，旧结果不能提交或拒绝新语音。 `Agent.on_exit` 在 SDK drain 之前调用既有 lifecycle owner 的关闭候选处理，使转写等待及时退出；session-close 通知仍作幂等收尾，SDK 自身的 ASR 排空期限保持原样。不能用旧 hook 文本反查的 generation 拒绝整轮，也不能用旧片段的放行越过当前拒绝。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。这个边界原子收口同一个产品结果的三种投影：`UserTurnCoordinator` 的 `committed/rejected`、`FullDuplexStateMachine` 的 terminal transition，以及 timeline terminal flush；任何 reject 都不能只关闭其中一层。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
+`full_duplex/framework_completed_turn.py` 是 LiveKit framework `on_user_turn_completed` hook 的提交 owner；不进入 LLM 的 interruption terminal verdict 由同步裁决回调关闭候选。 SDK hook 可以携带同一产品轮次的较早 FINAL；必须先通过既有 transcript settlement 收集后续证据并确认候选未被替换，再用组装后的候选当前声学 generation 读取裁决。等待转写时如果再次开口，旧 completion 失效，保留候选等待新一段的结束证据；等待声纹结果也复用既有 candidate/generation fence，旧结果不能提交或拒绝新语音。 `Agent.on_exit` 在 SDK drain 之前调用既有 lifecycle owner 的关闭候选处理，使转写等待及时退出；session-close 通知仍作幂等收尾，SDK 自身的 ASR 排空期限保持原样。不能用旧 hook 文本反查的 generation 拒绝整轮，也不能用旧片段的放行越过当前拒绝。它只消费 voiceprint owner 结果和 `InterruptionOrchestrator` 按 turn-id 保存的 typed verdict，再对齐 canonical text 并决定是否进入 LLM；不再从 timeline dict、中文短语、字符数或 EOT 重新推断 interruption 结果。这个边界原子收口同一个产品结果的三种投影：`UserTurnCoordinator` 的 `committed/rejected`、`FullDuplexStateMachine` 的 terminal transition，以及 timeline terminal flush；任何 reject 都不能只关闭其中一层。它不调用 `clear_user_turn()`，避免清掉已经开始的下一段音频。
 
 当打断 owner 为 `channel` 且 `turn_policy.interrupt.intent_provider=llm` 时，现有 `SemanticInterruptHandler` 只在全双工重叠输入的 final 到达后异步获取语义证据，复用 `SharedStageFactory` 的 LLM 适配器。结果绑定候选、声学 generation、SpeechHandle 和 final 文本；过期结果不能操作新回答。附和/不确定结果在用户停止说话后恢复原缓冲，纯停止不进入回复生成，明确接管交给原有裁决 owner。超时或错误也恢复原播报，不冒充高置信度判断。生产 settings 显式启用 `llm`，复用现有 2500ms 有界分类路径；schema 的 `none` 只保留为兼容模式。EOT 完成度不再作为生产打断意图的替代物：停止与接管由语义证据决定，接管后的回复结束点仍由 EOT 决定。意图推理的起止时间、预算、来源、失败原因和 stale/cancelled 结果记录在原候选 timeline，不能归入后续候选。真实模型与 SDK 会话回归不等同于真机外放验收。
 
@@ -862,3 +862,16 @@ EIDOLON_ENV=dev python -m eidolon.livekit.agent.server
 ```
 
 配置加载顺序见上文「8.6 配置优先级」；默认读取 `config/.env`，也可用 `EIDOLON_CHANNEL_ENV_FILE` 覆盖路径。
+
+
+### Terminal interruption and provider withdrawal
+
+`InterruptionOrchestrator` 的 typed terminal verdict 是“不进入 LLM”的输入终态依据。
+Pipeline 同步核对 candidate-id / acoustic-generation，再关闭 `UserTurnCoordinator`、记录状态机终态和 flush timeline；不等待可能不会到来的 framework completion。
+需要回复的 CANCEL 保持开放，继续走唯一的 framework commit 边界；临时 RESUME 不产生输入终态。
+此同步、generation-fenced 的终止边界通过公开 `AgentSession.clear_user_turn()` 丢弃 SDK 对应输入（包括重置 STT），防止旧片段留在 SDK 文本缓冲；异步 completed-turn hook 仍禁止清输入。
+已拒绝轮次的 provider stream/revision identity 有界保留，迟到片段不能重开或污染下一轮；新 stream 或新 revision 的相同文字不是重复请求。
+等待 transcript settlement 时发生拒绝必须立即唤醒并退出，不得等到 deadline 后提交。
+
+ASR 适配层保留空 FINAL 及其 source identity；公共 `stt_node` 边界将它交给 coordinator 撤销同一 revision 的假设，不创建空用户请求。
+撤销不按字符、语言或业务意图匹配，也不清除其他 revision。Bailian 的 interim/preflight 去重限定在同一 provider sentence 内。

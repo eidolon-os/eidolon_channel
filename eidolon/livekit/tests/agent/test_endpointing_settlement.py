@@ -1,7 +1,7 @@
 """Generation-scoped settlement at the automatic SDK endpoint boundary."""
 
 import asyncio
-from types import SimpleNamespace as NS
+from types import SimpleNamespace as NS, MethodType
 from unittest.mock import AsyncMock
 
 import pytest
@@ -73,13 +73,15 @@ async def test_session_exit_releases_waiters_and_refuses_new_endpoint_queries():
 
 
 def pipeline(owner):
-    return NS(
+    result = NS(
         _interruption_orchestrator=owner,
         _semantic_interrupts=NS(wait_for_pending_intent=AsyncMock()),
         _user_turns=NS(active=NS(candidate_id="candidate"), current_generation_id=1),
         _session=NS(current_speech=NS(interrupted=False, wait_for_playout=AsyncMock())),
         _duck_deadline=NS(run=AsyncMock()),
     )
+    result._endpointing_scope = MethodType(StreamingPipeline._endpointing_scope, result)
+    return result
 
 
 @pytest.mark.asyncio

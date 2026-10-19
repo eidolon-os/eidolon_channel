@@ -340,7 +340,7 @@ def test_normalized_livekit_item_id_is_optional_revision_identity() -> None:
 async def test_settlement_does_not_miss_evidence_arriving_during_readiness_check() -> None:
     class CoordinatorWithInterleavedEvidence:
         def __init__(self) -> None:
-            self.active = SimpleNamespace(candidate_id="candidate-1")
+            self.active = SimpleNamespace(candidate_id="candidate-1", state="open")
             self.current_generation_id = 1
             self.transcript_change_version = 0
             self._ready = False
@@ -401,3 +401,33 @@ async def test_untranscribed_continuation_wait_is_bounded_and_releases_waiters(c
         assert result.readiness.reason == 'speech_segment_awaiting_transcript'
     assert candidate.state == 'open'
     assert not coordinator._transcript_change_waiters
+
+
+def test_empty_final_withdrawal_is_scoped_and_releases_settlement():
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    coordinator.start_speech(timeline=None)
+    a = _evidence(revision="a")
+    b = _evidence(revision="b")
+    coordinator.add_transcript("暂定词", is_final=False, evidence=a)
+    coordinator.add_transcript("新的句子。", is_final=True, evidence=b)
+    assert not coordinator.framework_completion_readiness("新的句子。").ready
+    assert not coordinator.withdraw_transcript_revision(TranscriptEvidence(stream_key="different", revision_key="a"))
+    assert coordinator.withdraw_transcript_revision(a)
+    assert coordinator.selected_text == "新的句子。"
+    assert coordinator.framework_completion_readiness("新的句子。").ready
+    coordinator.reject_active("done")
+    assert not coordinator.withdraw_transcript_revision(b)
+
+
+def test_stt_restart_after_terminal_turn_accepts_same_text_with_new_source():
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    coordinator.start_speech(timeline=None)
+    old = _evidence(revision="1")
+    coordinator.add_transcript("再说一遍", is_final=True, evidence=old)
+    coordinator.reject_active("consumed")
+    assert not coordinator.transcript_starts_new_turn(old)
+    new = TranscriptEvidence(stream_key="restarted-stream", revision_key="1", sequence=1)
+    assert coordinator.transcript_starts_new_turn(new)
+    coordinator.start_speech(timeline=None)
+    assert coordinator.add_transcript("再说一遍", is_final=True, evidence=new) is not None
+    assert coordinator.selected_text == "再说一遍"

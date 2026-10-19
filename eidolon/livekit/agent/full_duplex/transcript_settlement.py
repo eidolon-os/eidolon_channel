@@ -11,7 +11,7 @@ from ..session.user_turn_coordinator import (
     UserTurnCoordinator,
 )
 
-TranscriptSettlementOutcome = Literal["ready", "deadline", "candidate_replaced", "speech_resumed"]
+TranscriptSettlementOutcome = Literal["ready", "deadline", "candidate_replaced", "speech_resumed", "candidate_rejected"]
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,14 @@ class TranscriptSettlementLease:
                         ready=False,
                         reason="candidate_replaced_during_settlement",
                     ),
+                    elapsed_sec=loop.time() - started_at,
+                    evidence_updates=updates,
+                )
+
+            if active is not None and active.state == "rejected":
+                return TranscriptSettlementResult(
+                    outcome="candidate_rejected",
+                    readiness=FrameworkCompletionReadiness(False, "candidate_rejected_during_settlement"),
                     elapsed_sec=loop.time() - started_at,
                     evidence_updates=updates,
                 )

@@ -107,6 +107,7 @@ from .state_machine import (
 )
 from .transcript_admission import TranscriptAdmissionGate
 from .transcript_handler import FullDuplexTranscriptHandler
+from eidolon.livekit.common.transcript_evidence import transcript_evidence_from_speech_event
 from .transcript_evidence_buffer import TranscriptEvidenceBuffer
 from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
 from .transcript_recorder import FullDuplexTranscriptRecorder
@@ -123,7 +124,6 @@ from ..session.eot_model import create_session_eot_model
 from ..session.interruption_orchestrator import (
     InterruptionOrchestrator,
     InterruptionVerdict,
-    InterruptionVerdictAction,
 )
 from ..session.provider_events import ProviderEventObserver
 from ..session.room_data import RoomDataHandler
@@ -625,20 +625,13 @@ class StreamingPipeline(BasePipeline):
         )
 
     def _on_terminal_interruption_verdict(self, verdict: InterruptionVerdict) -> None:
-        """Close a transcript-less false interruption at its acoustic boundary.
+        """Apply a terminal input verdict at its exact candidate/generation.
 
-        A terminal resume verdict owns exactly one acoustic generation.  With no
-        transcript there is nothing a later framework callback can legitimately
-        commit, so retaining the product candidate would only allow unrelated
-        speech to inherit this verdict.
+        Output recovery and input disposal are one boundary. A rejected or
+        consumed interruption must not await an optional framework completion.
+        Reply-bearing cancellation remains open for normal framework commit.
         """
-
-        if verdict.transcript or verdict.continue_to_llm:
-            return
-        if verdict.action not in {
-            InterruptionVerdictAction.EXPIRED_RESUME,
-            InterruptionVerdictAction.REJECTED_RESUME,
-        }:
+        if verdict.continue_to_llm:
             return
         self._ensure_user_turn_coordinator()
         candidate = self._user_turns.active
@@ -650,13 +643,17 @@ class StreamingPipeline(BasePipeline):
         ):
             return
 
-        reason = f"interruption_no_transcript_terminal:{verdict.action.value}:{verdict.reason}"
+        # Synchronous and fenced to the exact live input generation. Clear
+        # SDK input here, never from a delayed framework-completed hook.
+        if self._session is not None:
+            self._session.clear_user_turn()
+        reason = f"interruption_verdict:{verdict.action.value}:{verdict.reason}"
         decision = self._user_turns.reject_active(reason)
         timeline = candidate.timeline
         if decision.action == "reject":
             self._record_full_duplex_transition(
                 FullDuplexPhase.USER_TURN_REJECTED,
-                event="interruption_no_transcript_terminal",
+                event="interruption_terminal",
                 reason=reason,
                 side_effect="irreversible",
                 timeline=timeline,
@@ -667,7 +664,7 @@ class StreamingPipeline(BasePipeline):
         turn_completion.reset_candidate_voiceprint_tasks()
         self._flush_turn_timeline(
             timeline,
-            f"interruption_{verdict.action.value}_no_transcript",
+            f"interruption_{verdict.action.value}",
         )
 
     def _ensure_interruption_orchestrator(self) -> None:
@@ -1054,7 +1051,29 @@ class StreamingPipeline(BasePipeline):
     def _observe_stt_speech_event(self, event: Any) -> bool:
         """Check provider order and retain evidence before framework normalization."""
 
-        return self._ensure_transcript_evidence_buffer().observe_speech_event(event)
+        evidence = transcript_evidence_from_speech_event(event)
+        self._ensure_user_turn_coordinator()
+        if self._user_turns.is_retired_revision(evidence):
+            return False
+        if not self._ensure_transcript_evidence_buffer().observe_speech_event(event):
+            return False
+        alternatives = getattr(event, "alternatives", None) or ()
+        event_type = getattr(event, "type", None)
+        if (getattr(event_type, "value", event_type) == "final_transcript"
+                and alternatives and not alternatives[0].text.strip()):
+            # Framework transcript callbacks may omit empty text. Consume the
+            # provider's withdrawal at the public STT boundary, without making
+            # an empty user request or treating it as a new acoustic turn.
+            if self._user_turns.withdraw_transcript_revision(evidence):
+                text = self._user_turns.selected_policy_text
+                self._latest_asr_text = text
+                self._get_eot_model().update_asr(text, is_final=True)
+                if not text and getattr(self, "_user_speaking_start_time", None) is None:
+                    self._ensure_interruption_effects().rollback_if_suspended(
+                        reason="provider_revision_withdrawn",
+                    )
+            return False
+        return True
 
     def _close_stt_utterance(self) -> bool:
         """Tell the recognizer the speaker stopped, if it is one that needs telling.

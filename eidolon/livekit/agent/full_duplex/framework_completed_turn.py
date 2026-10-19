@@ -174,6 +174,8 @@ class FullDuplexFrameworkCompletedTurnGate:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
         candidate = owner._user_turns.active
+        if candidate is not None and candidate.state == "rejected":
+            return False
         candidate_id = candidate.candidate_id if candidate is not None else None
         settlement = await TranscriptSettlementLease(
             owner._user_turns,
@@ -204,7 +206,7 @@ class FullDuplexFrameworkCompletedTurnGate:
                 evidence_updates=settlement.evidence_updates,
                 pending_text_preview=settlement.readiness.pending_transcript[:120],
             )
-        if settlement.outcome in {"candidate_replaced", "speech_resumed"}:
+        if settlement.outcome in {"candidate_replaced", "speech_resumed", "candidate_rejected"}:
             logger.info(
                 "[StreamingPipeline] framework completion superseded "
                 "while settling candidate=%s outcome=%s framework=%r",

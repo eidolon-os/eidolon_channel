@@ -667,7 +667,7 @@ async def test_no_transcript_false_interruption_cannot_reject_later_real_speech(
 
     assert blip.state == "rejected"
     assert blip_timeline.attrs["timeline_flush_reason"] == (
-        "interruption_expired_resume_no_transcript"
+        "interruption_expired_resume"
     )
 
     real_timeline = TurnTimeline("real-idle-speech")
@@ -1044,3 +1044,84 @@ async def test_repeated_transcriptless_noise_does_not_renew_idle_window():
         ended.assert_awaited_once()
     finally:
         watchdog.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,reason", [("rollback", "timeout"), ("rollback", "final_intent_resume"), ("cancel", "eot_cancel")])
+async def test_terminal_interruption_disposes_text_without_framework_callback(action, reason):
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline("old-input")
+    pipeline._timeline = timeline
+    old = pipeline._user_turns.start_speech(timeline=timeline)
+    evidence = TranscriptEvidence(stream_key="stream", revision_key="1", sequence=1)
+    pipeline._user_turns.add_transcript("旧的临时内容", is_final=False, evidence=evidence)
+    pipeline._interruption_orchestrator.start_candidate(timeline=timeline, generation_id=pipeline._user_turns.current_generation_id)
+    pipeline._interruption_orchestrator.note_transcript("旧的临时内容", is_final=False)
+    pipeline._interruption_orchestrator.resolve(action=action, reason=reason)
+    assert old.state == "rejected"
+    pipeline._session.clear_user_turn.assert_called_once()
+    pipeline._timeline = TurnTimeline("new-input")
+    new = pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    assert new is not old
+    assert pipeline._user_turns.add_transcript("迟到旧结果", is_final=True, evidence=evidence) is None
+    pipeline._user_turns.add_transcript("介绍一下天气", is_final=True,
+        evidence=TranscriptEvidence(stream_key="stream", revision_key="2", sequence=2))
+    assert pipeline._user_turns.selected_text == "介绍一下天气"
+    assert await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["介绍一下天气"]))
+
+
+@pytest.mark.asyncio
+async def test_rejection_wakes_pending_settlement_without_deadline_or_commit():
+    from eidolon.livekit.agent.full_duplex.transcript_settlement import TranscriptSettlementLease
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    candidate = pipeline._user_turns.start_speech(timeline=TurnTimeline("pending"))
+    pipeline._user_turns.add_transcript("完整内容", is_final=True)
+    pipeline._user_turns.note_speech_stopped(eot_score=1)
+    pipeline._user_turns.start_speech(timeline=candidate.timeline)
+    pipeline._user_turns.add_transcript("未结束内容", is_final=False)
+    lease = asyncio.create_task(TranscriptSettlementLease(pipeline._user_turns, timeout_sec=10).settle(
+        candidate_id=candidate.candidate_id, framework_transcript="完整内容"))
+    await asyncio.sleep(0)
+    pipeline._user_turns.reject_active("terminal_verdict")
+    result = await asyncio.wait_for(lease, .2)
+    assert result.outcome == "candidate_rejected"
+
+
+def test_old_terminal_verdict_cannot_clear_new_acoustic_generation():
+    from eidolon.livekit.agent.session.interruption_orchestrator import InterruptionVerdict, InterruptionVerdictAction
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    timeline = TurnTimeline("shared-candidate")
+    candidate = pipeline._user_turns.start_speech(timeline=timeline)
+    old_generation = pipeline._user_turns.current_generation_id
+    pipeline._user_turns.add_transcript("前一段", is_final=True)
+    pipeline._user_turns.note_speech_stopped(eot_score=.1)
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("后续内容", is_final=False)
+    verdict = InterruptionVerdict(action=InterruptionVerdictAction.EXPIRED_RESUME, reason="timeout",
+        candidate_id=candidate.candidate_id, generation_id=old_generation, continue_to_llm=False,
+        turn_policy_action="rollback", intent="", transcript="前一段")
+    pipeline._on_terminal_interruption_verdict(verdict)
+    assert candidate.state == "open"
+    assert "后续内容" in candidate.selected_text
+    pipeline._session.clear_user_turn.assert_not_called()
+
+
+def test_empty_provider_final_reaches_coordinator_without_user_message():
+    from livekit.agents.stt import SpeechEvent, SpeechEventType, SpeechData
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=TurnTimeline("withdrawal"))
+    evidence = TranscriptEvidence(stream_key="stream", revision_key="1", sequence=1)
+    pipeline._user_turns.add_transcript("临时内容", is_final=False, evidence=evidence)
+    event = SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT,
+        alternatives=[SpeechData(language="zh", text="", metadata=evidence.as_metadata())])
+    assert pipeline._observe_stt_speech_event(event) is False
+    assert pipeline._user_turns.selected_text == ""
+    pipeline._get_eot_model().update_asr.assert_called_with("", is_final=True)
+    pipeline._interruption_effects.rollback_if_suspended.assert_called_once_with(reason="provider_revision_withdrawn")

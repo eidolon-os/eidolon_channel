@@ -8,6 +8,7 @@ hook is the sole normal path that commits or rejects a product user turn.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -174,6 +175,7 @@ class UserTurnCoordinator:
         self._clock = clock or time.monotonic
         self._speech_merge_grace_sec = max(0.0, float(speech_merge_grace_sec))
         self._active: UserTurnCandidate | None = None
+        self._retired_revisions: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._counter = 0
         self._acoustic_generation_counter = 0
         self._transcript_change_version = 0
@@ -332,6 +334,32 @@ class UserTurnCoordinator:
         self._notify_transcript_change()
         return candidate
 
+    def is_retired_revision(self, evidence: TranscriptEvidence | None) -> bool:
+        return bool(evidence and evidence.stream_key and evidence.revision_key
+                    and (evidence.stream_key, evidence.revision_key) in self._retired_revisions)
+
+    def withdraw_transcript_revision(self, evidence: TranscriptEvidence) -> bool:
+        """An empty final retracts only its identified, still-open hypothesis."""
+        candidate = self._active
+        if candidate is None or candidate.state != "open" or not evidence.stream_key or not evidence.revision_key:
+            return False
+        changed = False
+        for segment in candidate.segments:
+            previous = segment.evidence
+            if (previous is None or previous.stream_key != evidence.stream_key
+                    or not evidence.same_revision(previous)):
+                continue
+            if previous.sequence is not None and evidence.sequence is not None and evidence.sequence < previous.sequence:
+                continue
+            segment.text = ""
+            segment.final_text = ""
+            segment.evidence = evidence.merge(previous)
+            changed = True
+        if changed:
+            self._record_attrs(candidate, event="transcript_revision_withdrawn")
+            self._notify_transcript_change()
+        return changed
+
     def add_transcript(
         self,
         text: str,
@@ -344,7 +372,7 @@ class UserTurnCoordinator:
         if candidate is None or candidate.state != "open":
             return None
         stripped = text.strip()
-        if not stripped:
+        if not stripped or self.is_retired_revision(evidence):
             return None
         current_time = self._now(now)
         segment_index, segment = self._select_segment_for_revision(
@@ -490,18 +518,24 @@ class UserTurnCoordinator:
         changed wording alone can also be a delayed correction of the old turn.
         Pending candidates remain owned by the existing completion boundary.
         """
+        if self.is_retired_revision(evidence):
+            return False
         candidate = self._active
         if candidate is None:
             return bool(evidence.revision_key or evidence.source_span)
         if not self._is_terminal(candidate):
             return False
         previous = [r.evidence for r in candidate.revisions if r.evidence is not None]
-        if not previous or any(evidence.same_revision(old) for old in previous):
+        if not previous:
+            return bool(evidence.stream_key and (evidence.revision_key or evidence.source_span))
+        if any(evidence.same_revision(old) for old in previous):
             return False
         comparable = [old for old in previous
                       if evidence.stream_key and old.stream_key == evidence.stream_key]
         if not comparable:
-            return False
+            # Public SDK input disposal may restart STT. A new source stream
+            # has its own revision namespace and cannot inherit the old turn.
+            return bool(evidence.stream_key and (evidence.revision_key or evidence.source_span))
         spans = [old.source_span for old in comparable if old.source_span is not None]
         if evidence.source_span is not None and spans:
             return evidence.source_span.start_time > max(span.end_time for span in spans)
@@ -945,6 +979,14 @@ class UserTurnCoordinator:
         reason: str,
         now: float,
     ) -> UserTurnDecision:
+        for revision in candidate.revisions:
+            evidence = revision.evidence
+            if evidence and evidence.stream_key and evidence.revision_key:
+                key = (evidence.stream_key, evidence.revision_key)
+                self._retired_revisions[key] = None
+                self._retired_revisions.move_to_end(key)
+        while len(self._retired_revisions) > 128:
+            self._retired_revisions.popitem(last=False)
         candidate.state = "rejected"
         candidate.reject_reason = reason
         candidate.updated_at = now

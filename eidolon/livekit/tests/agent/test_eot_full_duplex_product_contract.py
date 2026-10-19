@@ -308,6 +308,7 @@ def test_duck_active_transcript_has_one_interruption_decision_owner() -> None:
     model.current_eot_score = 0.65
     model.hard_interrupt_score_threshold = 0.9
     runtime = MagicMock()
+    runtime.config.interrupt.uses_model_intent = False
     runtime.decide_from_transcript.return_value = Decision(
         action=Action.HOLD,
         reason="awaiting_more_evidence",

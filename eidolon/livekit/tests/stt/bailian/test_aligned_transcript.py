@@ -145,3 +145,29 @@ def test_livekit_native_adaptive_compatibility_accepts_bailian(
     )
 
     assert resolved is detector
+
+
+@pytest.mark.asyncio
+async def test_empty_final_is_preserved_and_identical_next_sentence_is_not_deduplicated():
+    from unittest.mock import Mock
+    from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+    from eidolon.livekit.plugins.stt.bailian.models import FunASRResultGenerated, FunASRSentence
+    stream = object.__new__(BailianFunASRSpeechStream)
+    stream._SpeechData, stream._SpeechEvent, stream._SpeechEventType = SpeechData, SpeechEvent, SpeechEventType
+    stream._language = "zh"
+    stream._parser_confirmed = []
+    stream._last_interim_text = ""
+    stream._cancel_preflight = Mock()
+    stream._arm_preflight = Mock()
+    stream._emit_provider_event_once = Mock()
+    stream._push_event = Mock()
+    for sentence in [
+        FunASRSentence(text="临时内容", sentence_id=1),
+        FunASRSentence(text="", sentence_id=1, sentence_end=True),
+        FunASRSentence(text="临时内容", sentence_id=2),
+    ]:
+        await stream._handle_result(FunASRResultGenerated(task_id="stream", request_id="request", sentences=[sentence]))
+    events = [c.args[0] for c in stream._push_event.call_args_list]
+    assert [e.type for e in events] == [SpeechEventType.INTERIM_TRANSCRIPT, SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.INTERIM_TRANSCRIPT]
+    assert events[1].alternatives[0].text == ""
+    assert transcript_evidence_from_metadata(events[1].alternatives[0].metadata).revision_key == "1"

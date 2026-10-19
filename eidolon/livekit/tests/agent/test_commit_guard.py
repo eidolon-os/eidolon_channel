@@ -1125,3 +1125,95 @@ def test_empty_provider_final_reaches_coordinator_without_user_message():
     assert pipeline._user_turns.selected_text == ""
     pipeline._get_eot_model().update_asr.assert_called_with("", is_final=True)
     pipeline._interruption_effects.rollback_if_suspended.assert_called_once_with(reason="provider_revision_withdrawn")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", ["继续播放。", "换一个话题。"])
+@pytest.mark.parametrize("remaining_final", [True, False])
+async def test_withdrawn_followup_restarts_final_intent_without_replaying_user_event(utterance, remaining_final):
+    from dataclasses import replace
+    from livekit.agents.stt import SpeechEvent, SpeechEventType, SpeechData
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    from eidolon.livekit.common.config import TurnPolicyConfig
+    from eidolon.livekit.agent.full_duplex.transcript_event import FullDuplexTranscriptEvent
+    from eidolon.livekit.agent.full_duplex.transcript_handler import FullDuplexTranscriptHandler
+    from eidolon.livekit.agent.session.semantic_interrupt import SemanticInterruptHandler
+    from eidolon.livekit.agent.turn_policy import InterruptIntentResult, TurnPolicyRuntime
+
+    pipeline = _make_pipeline_with_session()
+    pipeline._ensure_runtime_defaults()
+    pipeline._allow_interruptions = True
+    pipeline._uses_livekit_native_adaptive_interruption = lambda: False
+    pipeline._mark_activity = MagicMock()
+    pipeline._timeline = TurnTimeline("withdraw-followup")
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._interruption_orchestrator = MagicMock()
+    decisions = []
+    ready = asyncio.Event()
+
+    async def classify(*args, **kwargs):
+        await ready.wait()
+        return InterruptIntentResult(InterruptIntent.TOPIC_SWITCH, 1.0, "model", "new request")
+
+    classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
+    config = TurnPolicyConfig()
+    runtime = TurnPolicyRuntime(replace(config, interrupt=replace(config.interrupt, intent_provider="llm")))
+    semantic = SemanticInterruptHandler(
+        get_eot_model=pipeline._get_eot_model, turn_runtime=runtime,
+        get_timeline=lambda: pipeline._timeline, get_duck_active=lambda: True,
+        get_duck_stats=lambda: SimpleNamespace(suspend_ms=0), get_vad_active=lambda: False,
+        soft_interrupt_active=lambda: False, soft_interrupt_timeout=lambda: .45,
+        apply_decision=lambda decision, **kwargs: decisions.append(decision),
+        interrupt_current_turn=MagicMock(), enter_soft_interrupt=MagicMock(),
+        intent_classifier=classifier, get_candidate_scope=lambda: ("candidate", 1),
+        get_final_transcript=lambda: pipeline._user_turns.selected_policy_text,
+    )
+    pipeline._semantic_interrupts = semantic
+    forwarded = MagicMock()
+    pipeline._transcript_handler = FullDuplexTranscriptHandler(
+        admission_gate=lambda: SimpleNamespace(evaluate=lambda event: SimpleNamespace(accepted=True)),
+        record_accepted_event=pipeline._ensure_transcript_recorder().record,
+        allow_interruptions=lambda: True, native_adaptive_owner=lambda: False,
+        agent_output_active=lambda speaker: True, interrupt_window_active=lambda: True,
+        decision_suppressed=lambda: False, attention_allows_eot_check=lambda *args: True,
+        run_semantic_interrupt=lambda text, final: semantic.run(text, is_final=final),
+        reject_agent_echo=MagicMock(), forward_to_base=forwarded,
+    )
+    final = TranscriptEvidence(stream_key="stream", revision_key="final", sequence=1)
+    temporary = TranscriptEvidence(stream_key="stream", revision_key="next", sequence=2)
+    try:
+        pipeline._transcript_handler.handle(FullDuplexTranscriptEvent(transcript=utterance, is_final=True, evidence=final))
+        await asyncio.sleep(0)
+        first_task = semantic._intent_task
+        pipeline._transcript_handler.handle(FullDuplexTranscriptEvent(transcript="杂音", evidence=temporary))
+        await asyncio.sleep(0)
+        assert first_task.cancelled()
+        assert classifier.classify.await_count == 1
+        if not remaining_final:
+            pending = TranscriptEvidence(stream_key="stream", revision_key="pending", sequence=3)
+            pipeline._transcript_handler.handle(FullDuplexTranscriptEvent(transcript="还有", evidence=pending))
+        withdrawal = SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(language="zh", text="", metadata=replace(temporary, sequence=3).as_metadata())])
+        assert pipeline._observe_stt_speech_event(withdrawal) is False
+        await asyncio.sleep(0)
+        if not remaining_final:
+            assert classifier.classify.await_count == 1
+            assert not pipeline._user_turns.selected_policy_is_final
+            assert all(d.action is Action.HOLD for d in decisions)
+            pipeline._interruption_effects.rollback_if_suspended.assert_not_called()
+            return
+        assert classifier.classify.await_count == 2
+        pipeline._interruption_orchestrator.note_transcript.assert_called_with(utterance.rstrip("。"), is_final=True)
+        # Duplicate withdrawal must reuse the restarted inference, not start a third.
+        pipeline._observe_stt_speech_event(withdrawal)
+        await asyncio.sleep(0)
+        assert classifier.classify.await_count == 2
+        ready.set()
+        await semantic.wait_for_pending_intent()
+        assert sum(d.action is Action.CANCEL for d in decisions) == 1
+        assert not any(d.action is Action.ROLLBACK for d in decisions)
+        assert forwarded.call_count == 2
+        pipeline._interruption_effects.rollback_if_suspended.assert_not_called()
+    finally:
+        ready.set()
+        await semantic.aclose()

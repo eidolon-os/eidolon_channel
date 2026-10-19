@@ -193,6 +193,18 @@ class UserTurnCoordinator:
     def selected_policy_text(self) -> str:
         return self._active.selected_policy_text if self._active is not None else ""
 
+    @property
+    def selected_policy_is_final(self) -> bool:
+        """Withdrawn/covered segments contribute no pending text evidence."""
+        candidate = self._active
+        if candidate is None or candidate.state != "open":
+            return False
+        return all(
+            bool(segment.final_text.strip())
+            for segment in candidate.segments
+            if segment.covered_by_generation_id is None and segment.selected_text
+        )
+
     def endpointing_text(self, transcript: str) -> str:
         """Resolve a current final fragment without advancing the turn boundary.
 

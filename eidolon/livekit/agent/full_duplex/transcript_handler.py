@@ -102,6 +102,16 @@ class FullDuplexTranscriptHandler:
             except Exception:  # noqa: BLE001
                 logger.debug("[StreamingPipeline] preemptive warm hook failed", exc_info=True)
 
+        self.evaluate_policy(transcript_event, policy_transcript=policy_transcript)
+        self._forward_to_base(event)
+
+    def evaluate_policy(
+        self,
+        transcript_event: FullDuplexTranscriptEvent,
+        *,
+        policy_transcript: str,
+    ) -> None:
+        """Evaluate current evidence without recording or forwarding a new user event."""
         agent_output_active = self._agent_output_active(transcript_event.speaker_id)
         interrupt_window_active = self._interrupt_window_active()
         decision_suppressed = self._decision_suppressed()
@@ -130,7 +140,6 @@ class FullDuplexTranscriptHandler:
         if semantic_gate.should_forward_and_stop:
             if semantic_gate.reason == "decision_suppressed":
                 logger.debug("[StreamingPipeline] interrupt decision suppressed after cancel")
-            self._forward_to_base(event)
             return
 
         if semantic_gate.needs_attention:
@@ -154,7 +163,6 @@ class FullDuplexTranscriptHandler:
                 evaluated_transcript=policy_transcript,
             )
             if semantic_gate.should_forward_and_stop:
-                self._forward_to_base(event)
                 return
 
         if semantic_gate.should_run:
@@ -162,8 +170,6 @@ class FullDuplexTranscriptHandler:
                 policy_transcript,
                 transcript_event.is_final,
             )
-
-        self._forward_to_base(event)
 
     def _record_admission_event(self, admission: Any) -> None:
         if self._record_transcript_admission_event is None:

@@ -122,3 +122,59 @@ async def test_sdk_exit_rejects_candidate_before_transcript_settlement_deadline(
         assert not pipeline._user_turns._transcript_change_waiters
         assert not h.events.user_messages()
         assert not h.events.agent_messages()
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_interim_restores_final_and_delivers_one_sdk_reply():
+    """Replay FINAL(A), INTERIM(B), empty FINAL(B) while output is suspended."""
+    from eidolon.livekit.agent.turn_policy import InterruptIntent, InterruptIntentResult
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+
+    text, reply = "继续播放。", "好的，继续播放。"
+    calls = 0
+    cancelled = asyncio.Event()
+
+    async def classify(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        return InterruptIntentResult(InterruptIntent.TOPIC_SWITCH, .99, "model", "new request")
+
+    def evidence(revision, sequence):
+        return TranscriptEvidence(stream_key="withdrawal-stream", revision_key=revision,
+                                  sequence=sequence).as_metadata()
+
+    policy = TurnPolicyConfig()
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider="llm"))
+    async with production_session(
+        welcome="我正在讲一个很长的故事，后面还有许多内容没有讲完。",
+        llm=MockLLM.scripted([(text, reply)]),
+        stt=MockSTT.scripted([
+            ScriptedTranscript(text=text, trigger_after_ms=700, metadata=evidence("a", 1)),
+            ScriptedTranscript(text="", interims=["杂音"], final=False,
+                               trigger_after_ms=850, metadata=evidence("b", 2)),
+            ScriptedTranscript(text="", trigger_after_ms=1200, metadata=evidence("b", 3)),
+        ]),
+        tts=MockTTS(char_seconds=.2, chunk_delay_ms=50),
+        vad=MockVAD.scripted([MockVADEvent("start", 350), MockVADEvent("end", 1050, .1)]),
+        turn_policy=policy, real_time_audio=True,
+        interrupt_classifier=SimpleNamespace(classify=classify),
+    ) as (pipeline, h):
+        h.audio_in.feed_pcm(synth_voiced(1.5))
+        await h.audio_out.wait_for_first_audio()
+        old_speech = h.session.current_speech
+        await h.events.wait_for(
+            lambda e: e.type == "conversation_item_added"
+            and getattr(e.payload.item, "text_content", "") == reply,
+            timeout=8,
+        )
+        assert cancelled.is_set()
+        assert calls == 2
+        assert old_speech.interrupted
+        assert h.events.user_messages() == [text]
+        assert h.events.agent_messages().count(reply) == 1

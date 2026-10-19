@@ -87,6 +87,15 @@ class FullDuplexTranscriptRecorder:
             if isinstance(selected_policy_text, str) and selected_policy_text.strip()
             else transcript_event.transcript
         )
+        if pipeline._timeline is not None:
+            pipeline._timeline.mark(transcript_event.timeline_mark)
+        self.sync_policy_state(policy_transcript, is_final=transcript_event.is_final)
+        return policy_transcript
+
+    def sync_policy_state(self, text: str, *, is_final: bool) -> None:
+        """Publish canonical evidence after either an update or a withdrawal."""
+        pipeline = self._pipeline
+        pipeline._latest_asr_text = text
         orchestrator = getattr(pipeline, "_interruption_orchestrator", None)
         if (
             orchestrator is not None
@@ -96,16 +105,13 @@ class FullDuplexTranscriptRecorder:
             # Use the same assembled evidence as the semantic decision. A raw
             # provider segment is not a revision of the whole candidate.
             orchestrator.note_transcript(
-                policy_transcript,
-                is_final=transcript_event.is_final,
+                text,
+                is_final=is_final,
             )
-        if pipeline._timeline is not None:
-            pipeline._timeline.mark(transcript_event.timeline_mark)
         try:
             pipeline._get_eot_model().update_asr(
-                policy_transcript,
-                is_final=transcript_event.is_final,
+                text,
+                is_final=is_final,
             )
         except Exception:
             logger.exception("[StreamingPipeline] eot_model.update_asr failed")
-        return policy_transcript

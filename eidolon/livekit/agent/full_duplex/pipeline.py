@@ -1066,8 +1066,15 @@ class StreamingPipeline(BasePipeline):
             # an empty user request or treating it as a new acoustic turn.
             if self._user_turns.withdraw_transcript_revision(evidence):
                 text = self._user_turns.selected_policy_text
-                self._latest_asr_text = text
-                self._get_eot_model().update_asr(text, is_final=True)
+                is_final = self._user_turns.selected_policy_is_final
+                self._ensure_transcript_recorder().sync_policy_state(text, is_final=is_final)
+                if text:
+                    # Re-evaluate the surviving evidence through the same gates as
+                    # accepted transcripts. Do not append it to SDK input again.
+                    self._ensure_transcript_handler().evaluate_policy(
+                        FullDuplexTranscriptEvent(transcript=text, is_final=is_final),
+                        policy_transcript=text,
+                    )
                 if not text and getattr(self, "_user_speaking_start_time", None) is None:
                     self._ensure_interruption_effects().rollback_if_suspended(
                         reason="provider_revision_withdrawn",

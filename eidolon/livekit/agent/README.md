@@ -143,3 +143,11 @@ or voiceprint audio. Providers without source evidence retain the VAD path.
 Music remains a native AgentSession speech handle: OS forced interruption cancels
 it and closes the decoder; no second music-specific interruption path is needed.
 The real-session regression also verifies subsequent output remains usable.
+
+`music.play` accepts a song ID, not a model-selected playback instance. The
+capability derives the instance reference from the tool invocation's turn/call
+identity. A new invocation starts a new instance even for the same song; retries
+of the current invocation do not resurrect a terminal instance. The existing
+Agent dispatcher deduplicates commands, including old requests after replacement.
+Returned references target `music.stop`; cancellation compares the originating
+invocation's reference so an old request cannot stop a newer playback.

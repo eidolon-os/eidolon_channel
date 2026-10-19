@@ -17,7 +17,7 @@ from .test_music_playback import FakeDecoder, FakeSession
 
 
 @pytest.mark.asyncio
-async def test_custom_ref_can_stop_and_cancel_playback(tmp_path):
+async def test_generated_ref_can_stop_and_cancel_playback(tmp_path):
     source = tmp_path / "song.mp3"
     source.write_bytes(b"ID3fake")
     decoder = FakeDecoder()
@@ -32,9 +32,9 @@ async def test_custom_ref_can_stop_and_cancel_playback(tmp_path):
             "turn", "call", "music.play", {"song_id": "song", "playback_ref": "chosen"}
         )
         result = await runtime.execute_channel_tool(call)
-        assert result.ok and result.content["playback_ref"] == "chosen"
+        assert result.ok and result.content["playback_ref"] == "music:turn:call"
         stopped = await runtime.execute_channel_tool(
-            ChannelToolCall("t2", "c2", "music.stop", {"playback_ref": "chosen"})
+            ChannelToolCall("t2", "c2", "music.stop", {"playback_ref": result.content["playback_ref"]})
         )
         assert stopped.ok and stopped.content["status"] == "stopped"
         await runtime.execute_channel_tool(call)
@@ -109,6 +109,47 @@ async def test_resource_state_is_not_command_outcome(tmp_path):
         mismatch = await invoke("music.stop", {"playback_ref": "another"})
         assert not mismatch.ok and mismatch.outcome_state == "failed"
         assert (await playback.get_status()).status is MusicStatus.PLAYING
-        stopped = await invoke("music.stop", {"playback_ref": "ref"})
+        stopped = await invoke("music.stop", {"playback_ref": played.content["playback_ref"]})
         assert stopped.ok and stopped.outcome_state == "completed"
         assert stopped.content["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["stop", "interrupt", "complete"])
+async def test_new_play_after_terminal_state_creates_instance_and_old_cancel_is_harmless(tmp_path, ending):
+    source = tmp_path / "song.mp3"
+    source.write_bytes(b"ID3fake")
+    session = FakeSession()
+    decoder = FakeDecoder(finite=ending == "complete")
+    async with MusicPlaybackService(session, music_dir=tmp_path, decoder=decoder, cache=FakeCache(source)) as playback:
+        runtime = SessionMusicRuntime(None, music_dir=tmp_path)
+        runtime.playback = playback
+        runtime.commands = MusicCommandService(playback)
+        runtime._api = SimpleNamespace()
+        first = ChannelToolCall("first", "play", "music.play", {"song_id": "song"})
+        result = await runtime.execute_channel_tool(first)
+        if ending == "stop":
+            await playback.stop()
+        elif ending == "interrupt":
+            session.speeches[0].interrupt(force=True)
+        async with asyncio.timeout(2):
+            while (await playback.get_status()).status.value not in {"stopped", "interrupted", "completed"}:
+                await asyncio.sleep(0)
+        # Retrying the same invocation cannot restart its terminal instance.
+        await runtime.execute_channel_tool(first)
+        assert len(session.speeches) == 1
+        decoder.finite = False
+        # Even a stale caller-supplied reference cannot choose the new instance.
+        second = ChannelToolCall("second", "play", "music.play", {
+            "song_id": "song", "playback_ref": result.content["playback_ref"],
+        })
+        replayed = await runtime.execute_channel_tool(second)
+        assert replayed.ok and replayed.outcome_state == "accepted"
+        assert replayed.content["playback_ref"] != result.content["playback_ref"]
+        assert len(session.speeches) == 2
+        await runtime.execute_channel_tool(second)
+        assert len(session.speeches) == 2
+        await runtime.cancel_channel_tool(first)
+        assert (await playback.get_status()).status.value == "playing"
+        await runtime.cancel_channel_tool(second)
+        assert (await playback.get_status()).status.value == "stopped"

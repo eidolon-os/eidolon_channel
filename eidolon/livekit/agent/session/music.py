@@ -78,13 +78,12 @@ class SessionMusicRuntime:
                 )
             case "music.play":
                 song_id = call.arguments.get("song_id")
-                playback_ref = call.arguments.get(
-                    "playback_ref", f"music:{call.turn_id}:{call.call_id}"
-                )
+                # Instance identity belongs to the capability, not model arguments.
+                # A new invocation gets a new instance; a replay of that invocation
+                # keeps its identity. Agent dispatcher owns command deduplication.
+                playback_ref = f"music:{call.turn_id}:{call.call_id}"
                 if not isinstance(song_id, str) or not song_id.strip():
                     return _channel_tool_error(call, "INVALID_ARGUMENT", "song_id is required")
-                if not isinstance(playback_ref, str) or not playback_ref.strip():
-                    return _channel_tool_error(call, "INVALID_ARGUMENT", "playback_ref is invalid")
                 receipt = await commands.play(
                     request_id=call.call_id,
                     playback_ref=playback_ref,
@@ -139,9 +138,7 @@ class SessionMusicRuntime:
     async def cancel_channel_tool(self, call: ChannelToolCall) -> None:
         if call.name == "music.play" and self.playback is not None:
             current = await self.playback.get_status()
-            if current is not None and current.playback_ref == call.arguments.get(
-                "playback_ref", f"music:{call.turn_id}:{call.call_id}"
-            ):
+            if current is not None and current.playback_ref == f"music:{call.turn_id}:{call.call_id}":
                 await self.playback.stop(current.playback_ref)
 
     async def aclose(self) -> None:

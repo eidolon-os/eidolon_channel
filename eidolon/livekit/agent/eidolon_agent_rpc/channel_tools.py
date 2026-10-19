@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -22,3 +22,5 @@ class ChannelToolResult:
     content: dict[str, object]
     error_code: str = ""
     error_message: str = ""
+    outcome_state: str = ""
+    reference_context: dict[str, Any] = field(default_factory=dict)

@@ -13,6 +13,9 @@ logger = logging.getLogger("agent.session.music")
 
 
 class MusicCommandStatus(StrEnum):
+    PREPARING = "preparing"
+    PLAYING = "playing"
+    STOPPED = "stopped"
     ACCEPTED = "accepted"
     COMPLETED = "completed"
     INTERRUPTED = "interrupted"
@@ -45,7 +48,7 @@ class MusicCommandService:
                 song_id=song_id,
             )
             logger.info(
-                "music command completed request_id=%s playback_ref=%s song_id=%s status=%s",
+                "music command result request_id=%s playback_ref=%s song_id=%s status=%s",
                 request_id,
                 result.playback_ref,
                 song_id,
@@ -87,7 +90,8 @@ class MusicCommandService:
         return MusicCommandReceipt(
             request_id,
             result.playback_ref,
-            MusicCommandStatus.ACCEPTED,
+            _command_status(result),
+            result.error,
         )
 
     async def stop(
@@ -95,7 +99,12 @@ class MusicCommandService:
     ) -> MusicCommandReceipt:
         if await self._playback.get_status() is None:
             return MusicCommandReceipt(request_id, None, MusicCommandStatus.NOT_FOUND)
-        result = await self._playback.stop(playback_ref)
+        try:
+            result = await self._playback.stop(playback_ref)
+        except LookupError:
+            return MusicCommandReceipt(
+                request_id, playback_ref, MusicCommandStatus.NOT_FOUND, "playback_ref is not current"
+            )
         return MusicCommandReceipt(
             request_id,
             result.playback_ref,
@@ -117,8 +126,14 @@ class MusicCommandService:
 
 def _command_status(result: MusicPlayback) -> MusicCommandStatus:
     match result.status:
-        case MusicStatus.ACCEPTED | MusicStatus.PLAYING:
+        case MusicStatus.PREPARING:
+            return MusicCommandStatus.PREPARING
+        case MusicStatus.ACCEPTED:
             return MusicCommandStatus.ACCEPTED
+        case MusicStatus.PLAYING:
+            return MusicCommandStatus.PLAYING
+        case MusicStatus.STOPPED:
+            return MusicCommandStatus.STOPPED
         case MusicStatus.COMPLETED:
             return MusicCommandStatus.COMPLETED
         case MusicStatus.INTERRUPTED:

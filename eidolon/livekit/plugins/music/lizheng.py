@@ -141,8 +141,6 @@ class LizhengMusicApi:
         language: str = "",
     ) -> list[MusicSearchCandidate]:
         songs = await self.search(keyword, version=version, language=language)
-        if not songs and (version or language):
-            songs = await self.search(keyword)
         return _candidate_list(songs)
 
     async def recommend_candidates(self) -> list[MusicSearchCandidate]:

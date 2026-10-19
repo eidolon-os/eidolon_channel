@@ -54,3 +54,19 @@ async def test_channel_tool_cleanup_is_awaited(end):
     cleanup.assert_awaited_once()
     assert not session._channel_tool_tasks
     await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_outcome_survives_wire_serialization():
+    from eidolon.livekit.agent.eidolon_agent_rpc.channel_tools import ChannelToolResult
+    session = EidolonAgentSession(target="unused", device_token="unused")
+    session._write = AsyncMock()
+    await session._send_channel_tool_result(ChannelToolResult(
+        "t", "c", "example.start", True, {"state": "preparing"}, outcome_state="accepted",
+        reference_context={"resource_id": "r"},
+    ))
+    frame = session._write.call_args.args[0]
+    decoded = pb.ChatRequest.FromString(frame.SerializeToString())
+    assert decoded.channel_tool_result.outcome_state == "accepted"
+    assert decoded.channel_tool_result.reference_context["resource_id"] == "r"
+    await session.aclose()

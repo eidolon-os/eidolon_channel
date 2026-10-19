@@ -91,3 +91,43 @@ New internal code should import concrete modules directly. Use
 `eidolon.livekit.agent.shared` for pipeline primitives. The root
 `eidolon.livekit.agent` package no longer re-exports mode pipelines and should
 not be used as a compatibility facade.
+
+### Capability boundary: online music
+
+Music is an optional tool capability hosted by Channel. Its current transport is
+ChannelTool over the authenticated Chat stream, not a second MCP server. A future
+MCP adapter must call the same capability implementation, not duplicate its player.
+
+- Eidolon OS owns current-request interpretation, dialogue context, tool transport,
+  cancellation routing, output arbitration and interruption classification. It
+  does not search song catalogues or infer a music provider's resource state.
+- The music capability owns bounded catalogue queries, candidate identities,
+  provider authentication, media resolution, cache, preparation and playback.
+  Search results are non-exhaustive candidates; the tool cannot silently substitute
+  an alternative or drop an explicit version/language constraint.
+- Agent resolves current references/consent against the preceding exchange. Prior
+  dialogue alone never authorizes execution. No music-specific phrase matching or
+  automatic execution on a transcript is allowed.
+- `ChannelToolResult.outcome_state` describes the command (`accepted`, `completed`,
+  `failed`); `content.status` describes the music resource (`preparing`, `accepted`,
+  `playing`, `stopped`, `interrupted`, `completed`, `failed`, `not_found`). A successful
+  status read is completed even when the resource is absent or failed. Legacy
+  producers without an outcome are never presumed completed by the transport.
+- `music.play` acceptance does not prove audible playback. `playing` means decoded
+  frames have begun entering the Channel output, not endpoint acknowledgement.
+  `music.status` supplies subsequent facts; no speculative success expression is
+  permitted for an accepted command. This version does not push resource updates
+  to Agent; callers must not assume such events exist.
+- Preparation and playback share one task owner. Stop, replacement, timeout and
+  shutdown cancel that owner, including an in-flight download. A repeated current
+  playback reference cannot restart it or change its source. A stale stop reference
+  cannot stop a newer task. Completed tool invocation and ongoing playback are
+  separate lifetimes; normal turn completion does not terminate music.
+- Direct voice interruption uses the existing OS audio path. The player observes
+  that speech handle's interruption, so tool status reflects the same outcome.
+  Neither the provider adapter nor the device classifies user dialogue.
+
+Boundary tests cover preparation cancellation, stale references, retries, framework
+interruption, exact versus unverified catalogue candidates, preserved constraints,
+and command outcomes across protobuf. Model interpretation must additionally be
+checked with varied conversations; deterministic tests do not prove semantic accuracy.

@@ -756,6 +756,8 @@ class EidolonAgentSession:
         )
         content = struct_pb2.Struct()
         content.update(result.content)
+        references = struct_pb2.Struct()
+        references.update(result.reference_context)
         await self._write(
             pb.ChatRequest(
                 channel_tool_result=pb.ChannelToolResult(
@@ -766,6 +768,8 @@ class EidolonAgentSession:
                     content=content,
                     error_code=result.error_code,
                     error_message=result.error_message,
+                    outcome_state=result.outcome_state,
+                    reference_context=references,
                 )
             )
         )

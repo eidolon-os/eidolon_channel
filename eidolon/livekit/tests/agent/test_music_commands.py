@@ -109,7 +109,7 @@ async def test_play_logs_provider_failure_stage_without_error_details(
 
 
 @pytest.mark.asyncio
-async def test_stop_maps_interrupted_status(music_dir: Path) -> None:
+async def test_stop_reports_stopped_status(music_dir: Path) -> None:
     session = FakeSession()
     decoder = FakeDecoder()
     async with MusicPlaybackService(session, music_dir=music_dir, decoder=decoder) as playback:
@@ -120,5 +120,5 @@ async def test_stop_maps_interrupted_status(music_dir: Path) -> None:
             playback_ref="play-1",
         )
 
-    assert receipt.status is MusicCommandStatus.INTERRUPTED
+    assert receipt.status is MusicCommandStatus.STOPPED
     assert receipt.playback_ref == "play-1"

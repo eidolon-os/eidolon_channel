@@ -23,10 +23,12 @@ MAX_DECODED_BYTES = SAMPLE_RATE * 2 * 60 * 60
 
 
 class MusicStatus(StrEnum):
+    PREPARING = "preparing"
     ACCEPTED = "accepted"
     PLAYING = "playing"
     COMPLETED = "completed"
     INTERRUPTED = "interrupted"
+    STOPPED = "stopped"
     FAILED = "failed"
 
 
@@ -144,6 +146,7 @@ class MusicPlaybackService:
         self._open = False
         self._task: asyncio.Task[None] | None = None
         self._speech: SpeechHandle | None = None
+        self._source_key: tuple[str, str] | None = None
 
     async def __aenter__(self) -> MusicPlaybackService:
         self._open = True
@@ -159,45 +162,79 @@ class MusicPlaybackService:
 
     async def play(self, playback_ref: str, *, file_name: str) -> MusicPlayback:
         path = self._resolve_file(file_name)
-        return await self._start(playback_ref, path)
+        return await self._start(playback_ref, source_key=("file", str(path)), path=path)
 
-    async def play_song(
-        self,
-        playback_ref: str,
-        *,
-        song_id: str,
-    ) -> MusicPlayback:
+    async def play_song(self, playback_ref: str, *, song_id: str) -> MusicPlayback:
         if self._cache is None:
             raise RuntimeError("MusicPlaybackService has no music cache")
-        path = await self._cache.get(song_id)
-        return await self._start(playback_ref, path)
+        return await self._start(playback_ref, source_key=("song", song_id))
 
     async def _start(
-        self,
-        playback_ref: str,
-        path: Path,
+        self, playback_ref: str, *, source_key: tuple[str, str], path: Path | None = None,
     ) -> MusicPlayback:
         async with self._lock:
-            await self._stop_locked(MusicStatus.INTERRUPTED)
             if not self._open:
                 raise RuntimeError("MusicPlaybackService must be used as an async context manager")
+            if playback_ref == self._playback_ref:
+                if source_key != self._source_key:
+                    raise ValueError("playback_ref reused for a different source")
+                return self._snapshot()
+            await self._stop_locked(MusicStatus.INTERRUPTED)
             self._generation += 1
             generation = self._generation
             self._playback_ref = playback_ref
-            self._status = MusicStatus.ACCEPTED
+            self._source_key = source_key
+            self._status = MusicStatus.PREPARING
             self._error = None
+            ready: asyncio.Future[MusicPlayback] = asyncio.get_running_loop().create_future()
             self._task = asyncio.create_task(
-                self._play(generation, path),
+                self._prepare_and_play(generation, playback_ref, source_key, path, ready),
                 name=f"music-playback-{playback_ref}",
             )
-            await asyncio.sleep(0)  # Let the session acquire its speech handle before returning.
-            return MusicPlayback(playback_ref, MusicStatus.ACCEPTED)
+        # Download is owned by the same task as playback. Stop/replacement/close
+        # can cancel preparation without waiting for network or taking this lock.
+        try:
+            return await ready
+        except asyncio.CancelledError:
+            async with self._lock:
+                if generation == self._generation:
+                    await self._stop_locked(MusicStatus.INTERRUPTED)
+            raise
+
+    async def _prepare_and_play(
+        self, generation: int, playback_ref: str, source_key: tuple[str, str],
+        path: Path | None, ready: asyncio.Future[MusicPlayback],
+    ) -> None:
+        try:
+            if path is None:
+                assert self._cache is not None
+                path = await self._cache.get(source_key[1])
+            if generation != self._generation:
+                return
+            self._status = MusicStatus.ACCEPTED
+            # The command is accepted, not evidence that the endpoint is audible.
+            if not ready.done():
+                ready.set_result(MusicPlayback(playback_ref, MusicStatus.ACCEPTED))
+            await self._play(generation, path)
+        except asyncio.CancelledError:
+            if not ready.done():
+                ready.cancel()
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            if generation == self._generation:
+                self._status = MusicStatus.FAILED
+                self._error = "music preparation failed"
+            if not ready.done():
+                ready.set_exception(exc)
+        finally:
+            if not ready.done():
+                ready.cancel()
 
     async def stop(self, playback_ref: str | None = None) -> MusicPlayback:
         async with self._lock:
-            if self._playback_ref is not None and playback_ref not in (None, self._playback_ref):
-                return self._snapshot()
-            await self._stop_locked(MusicStatus.INTERRUPTED)
+            if playback_ref is not None and playback_ref != self._playback_ref:
+                raise LookupError("playback_ref is not current")
+            await self._stop_locked(MusicStatus.STOPPED)
             return self._snapshot()
 
     async def get_status(self) -> MusicPlayback | None:
@@ -239,11 +276,11 @@ class MusicPlaybackService:
                 "music playback failed playback_ref=%s error_type=%s error=%s",
                 self._playback_ref,
                 type(exc).__name__,
-                str(exc),
+                "audio output failed",
             )
             if generation == self._generation:
                 self._status = MusicStatus.FAILED
-                self._error = str(exc)
+                self._error = "audio output failed"
 
     async def _stop_locked(self, status: MusicStatus) -> None:
         task, speech = self._task, self._speech

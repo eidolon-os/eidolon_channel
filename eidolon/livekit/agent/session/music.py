@@ -5,6 +5,7 @@ import logging
 import aiohttp
 from pathlib import Path
 from ...common.music import MusicCatalogue, MusicProviderError
+from ...plugins.music.search import MusicSearchService, MusicSearchResult
 from ..output.music import MusicPlaybackService, MusicSession
 from ..output.music_cache import MusicCache
 from ..eidolon_agent_rpc.channel_tools import ChannelToolCall, ChannelToolResult
@@ -18,6 +19,7 @@ class SessionMusicRuntime:
         self._music_dir = music_dir
         self._http: aiohttp.ClientSession | None = None
         self._api: MusicCatalogue | None = None
+        self._search: MusicSearchService | None = None
         self.playback: MusicPlaybackService | None = None
         from .music_commands import MusicCommandService
 
@@ -51,45 +53,28 @@ class SessionMusicRuntime:
             return _channel_tool_error(call, "MUSIC_DISABLED", "Online music is disabled")
         match call.name:
             case "music.search":
-                keyword = call.arguments.get("keyword")
-                version = call.arguments.get("version", "")
-                language = call.arguments.get("language", "")
-                if not isinstance(keyword, str) or not keyword.strip():
-                    return _channel_tool_error(call, "INVALID_ARGUMENT", "keyword is required")
-                if not isinstance(version, str) or not isinstance(language, str):
-                    return _channel_tool_error(
-                        call, "INVALID_ARGUMENT", "search filters are invalid"
-                    )
+                fields = {key: call.arguments.get(key, "") for key in (
+                    "keyword", "title", "artist", "version", "language"
+                )}
+                if not all(isinstance(value, str) for value in fields.values()):
+                    return _channel_tool_error(call, "INVALID_ARGUMENT", "search fields must be strings")
+                fields = {key: value.strip() for key, value in fields.items()}
+                if not any(fields[key] for key in ("keyword", "title", "artist")):
+                    return _channel_tool_error(call, "INVALID_ARGUMENT", "a search query is required")
                 try:
-                    songs = await (
-                        api.recommend_candidates()
-                        if keyword.strip().lower() == "random"
-                        else api.search_candidates(
-                            keyword.strip(), version=version, language=language
-                        )
-                    )
+                    if fields["keyword"].lower() == "random" and not (fields["title"] or fields["artist"]):
+                        result = MusicSearchResult(tuple(await api.recommend_candidates()), ("random",), "", "")
+                    else:
+                        if self._search is None:
+                            self._search = MusicSearchService(api)
+                        result = await self._search.search(**fields)
                 except (MusicProviderError, OSError, RuntimeError, ValueError):
-                    logger.warning(
-                        "music search failed turn_id=%s call_id=%s keyword=%s",
-                        call.turn_id,
-                        call.call_id,
-                        keyword,
-                    )
+                    logger.warning("music search failed turn_id=%s call_id=%s", call.turn_id, call.call_id)
                     return _channel_tool_error(call, "MUSIC_SEARCH_FAILED", "music search failed")
-                candidates = [
-                    {
-                        "song_id": song.song_id,
-                        "title": song.title,
-                        "artist": song.artist,
-                    }
-                    for song in songs
-                ]
                 return ChannelToolResult(
-                    turn_id=call.turn_id,
-                    call_id=call.call_id,
-                    name=call.name,
-                    ok=True,
-                    content={"status": "completed", "songs": candidates},
+                    turn_id=call.turn_id, call_id=call.call_id, name=call.name,
+                    ok=True, content=result.content(), outcome_state="completed",
+                    reference_context={"candidates": result.content()["songs"]},
                 )
             case "music.play":
                 song_id = call.arguments.get("song_id")
@@ -122,7 +107,23 @@ class SessionMusicRuntime:
             content["playback_ref"] = receipt.playback_ref
         if receipt.error is not None:
             content["error"] = receipt.error
-        success = receipt.status.value in {"accepted", "completed", "interrupted"}
+        # Invocation success and the resource lifecycle are independent facts.
+        # An empty status read is successful; stopping an absent current player is
+        # idempotent, but a mismatched explicit reference must not claim success.
+        if call.name == "music.status":
+            success = True
+            outcome_state = "completed"
+        elif call.name == "music.stop":
+            success = receipt.status.value != "failed" and not (
+                receipt.status.value == "not_found" and call.arguments.get("playback_ref")
+            )
+            outcome_state = "completed" if success else "failed"
+        else:
+            success = receipt.status.value in {"preparing", "accepted", "playing", "completed"}
+            outcome_state = (
+                "failed" if not success else
+                "completed" if receipt.status.value == "completed" else "accepted"
+            )
         return ChannelToolResult(
             turn_id=call.turn_id,
             call_id=call.call_id,
@@ -131,6 +132,8 @@ class SessionMusicRuntime:
             content=content,
             error_code="MUSIC_COMMAND_FAILED" if not success else "",
             error_message=(receipt.error or "") if not success else "",
+            outcome_state=outcome_state,
+            reference_context={"playback_ref": receipt.playback_ref} if receipt.playback_ref else {},
         )
 
     async def cancel_channel_tool(self, call: ChannelToolCall) -> None:
@@ -149,6 +152,7 @@ class SessionMusicRuntime:
             await self._http.close()
             self._http = None
         self._api = None
+        self._search = None
 
 
 def _channel_tool_error(

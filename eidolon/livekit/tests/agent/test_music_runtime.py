@@ -36,10 +36,10 @@ async def test_custom_ref_can_stop_and_cancel_playback(tmp_path):
         stopped = await runtime.execute_channel_tool(
             ChannelToolCall("t2", "c2", "music.stop", {"playback_ref": "chosen"})
         )
-        assert stopped.ok and stopped.content["status"] == "interrupted"
+        assert stopped.ok and stopped.content["status"] == "stopped"
         await runtime.execute_channel_tool(call)
         await runtime.cancel_channel_tool(call)
-        assert (await playback.get_status()).status.value == "interrupted"
+        assert (await playback.get_status()).status.value == "stopped"
 
 
 @pytest.mark.asyncio
@@ -83,3 +83,32 @@ async def test_cache_failure_disables_music_and_closes_http(monkeypatch, tmp_pat
     monkeypatch.setattr(Path, "mkdir", denied)
     assert await create_music_runtime(FakeSession()) is None
     http.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resource_state_is_not_command_outcome(tmp_path):
+    from eidolon.livekit.agent.output.music import MusicStatus
+
+    source = tmp_path / "song.mp3"
+    source.write_bytes(b"ID3fake")
+    async with MusicPlaybackService(FakeSession(), music_dir=tmp_path, decoder=FakeDecoder(), cache=FakeCache(source)) as playback:
+        runtime = SessionMusicRuntime(None, music_dir=tmp_path)
+        runtime.playback = playback
+        runtime.commands = MusicCommandService(playback)
+        runtime._api = SimpleNamespace()
+        async def invoke(name, args=None):
+            return await runtime.execute_channel_tool(ChannelToolCall("t", name, name, args or {}))
+        empty = await invoke("music.status")
+        assert empty.ok and empty.outcome_state == "completed"
+        assert empty.content["status"] == "not_found"
+        played = await invoke("music.play", {"song_id": "song", "playback_ref": "ref"})
+        assert played.outcome_state == "accepted"
+        state = await invoke("music.status")
+        assert state.ok and state.outcome_state == "completed"
+        assert state.content["status"] == "playing"
+        mismatch = await invoke("music.stop", {"playback_ref": "another"})
+        assert not mismatch.ok and mismatch.outcome_state == "failed"
+        assert (await playback.get_status()).status is MusicStatus.PLAYING
+        stopped = await invoke("music.stop", {"playback_ref": "ref"})
+        assert stopped.ok and stopped.outcome_state == "completed"
+        assert stopped.content["status"] == "stopped"

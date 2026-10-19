@@ -101,14 +101,14 @@ async def test_search_candidates_include_only_playable_song_ids(
     config = LizhengMusicConfig(base_url, "channel-1", "AA:BB", "0123456789abcdef")
     async with aiohttp.ClientSession() as http:
         candidates = await LizhengMusicApi(config, http).search_candidates(
-            "晴天", version="现场版", language="国语"
+            "晴天"
         )
 
     assert [(song.song_id, song.title, song.artist) for song in candidates] == [("song-1", "", "")]
 
 
 @pytest.mark.asyncio
-async def test_search_candidates_retry_without_filters_when_filtered_search_is_empty(
+async def test_search_candidates_preserve_explicit_filters_when_empty(
     lizheng_server: tuple[str, list[dict[str, object]]],
 ) -> None:
     base_url, requests = lizheng_server
@@ -119,11 +119,12 @@ async def test_search_candidates_retry_without_filters_when_filtered_search_is_e
         )
 
     search_requests = [request for request in requests if request["path"].endswith("/songs")]
-    assert len(candidates) == 1
+    assert candidates == []
+    assert len(search_requests) == 1
     assert search_requests[0]["query"]["version"] == "live"
     assert search_requests[0]["query"]["language"] == "en"
-    assert "version" not in search_requests[-1]["query"]
-    assert "language" not in search_requests[-1]["query"]
+    assert search_requests[-1]["query"]["version"] == "live"
+    assert search_requests[-1]["query"]["language"] == "en"
 
 
 @pytest.mark.asyncio

@@ -21,9 +21,9 @@ class SystemOneInterruptClassifier(InterruptIntentClassifier):
     """Reuse a bounded HTTP pool for structured, stateless intent evidence."""
 
     _CRITERIA = {
-        "keep": "保持当前播报：附和、确认听到、希望继续当前内容；撤回其他要求后希望继续也属于此类。",
+        "keep": "保持当前播报即可满足用户诉求：附和、确认听到、继续相同内容；无需新增回答或动作。",
         "stop": "只停止当前播报，不生成新的回答。",
-        "reply": "停止当前播报并回应新的信息、问题、纠正或讲解方向。语法不完整不等于不能打断。",
+        "reply": "需要对话处理：新信息、问题、回答、纠正或后续动作授权。语法不完整不等于不能打断。",
         "wait": "话意尚未形成、指向不明或缺少必要上下文。",
     }
 

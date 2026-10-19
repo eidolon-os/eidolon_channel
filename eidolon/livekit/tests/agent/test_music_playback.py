@@ -131,7 +131,7 @@ async def test_stop_cancels_decoder_and_speech(music_dir):
         speech = session.speeches[0]
         result = await service.stop("play-1")
 
-        assert result.status is MusicStatus.INTERRUPTED
+        assert result.status is MusicStatus.STOPPED
         assert speech.interrupted
         assert decoder.cancelled.is_set()
 
@@ -177,7 +177,7 @@ async def test_decoder_failure_sets_failed_status(music_dir):
         while (status := await service.get_status()).status is not MusicStatus.FAILED:
             await anyio.sleep(0)
         assert status.status is MusicStatus.FAILED
-        assert status.error == "invalid mp3"
+        assert status.error == "audio output failed"
 
 
 @pytest.mark.asyncio
@@ -189,3 +189,74 @@ async def test_rejects_path_outside_music_dir(music_dir, tmp_path):
     ) as service:
         with pytest.raises(ValueError, match="inside music_dir"):
             await service.play("play-1", file_name=str(outside))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["stop", "close", "replace", "cancel"])
+async def test_preparation_is_owned_and_cancellable(music_dir, action):
+    import asyncio
+
+    class SlowCache:
+        def __init__(self):
+            self.entered = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def get(self, song_id):
+            if song_id == "ready":
+                return music_dir / "track.mp3"
+            self.entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.cancelled.set()
+
+    cache = SlowCache()
+    session = FakeSession()
+    async with MusicPlaybackService(session, music_dir=music_dir, decoder=FakeDecoder(), cache=cache) as service:
+        pending = asyncio.create_task(service.play_song("old", song_id="slow"))
+        await cache.entered.wait()
+        assert (await service.get_status()).status is MusicStatus.PREPARING
+        if action == "stop":
+            assert (await service.stop("old")).status is MusicStatus.STOPPED
+        elif action == "close":
+            await service.aclose()
+        elif action == "replace":
+            await service.play_song("new", song_id="ready")
+        else:
+            pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert cache.cancelled.is_set()
+        assert len(session.speeches) == (1 if action == "replace" else 0)
+        if action == "replace":
+            assert (await service.get_status()).playback_ref == "new"
+            assert (await service.get_status()).status is MusicStatus.PLAYING
+
+
+@pytest.mark.asyncio
+async def test_duplicate_reference_does_not_restart_and_wrong_stop_cannot_stop_new_output(music_dir):
+    session = FakeSession()
+    async with MusicPlaybackService(session, music_dir=music_dir, decoder=FakeDecoder()) as service:
+        await service.play("same", file_name="track.mp3")
+        await service.play("same", file_name="track.mp3")
+        assert len(session.speeches) == 1
+        with pytest.raises(ValueError, match="different source"):
+            other = music_dir / "other.mp3"
+            other.write_bytes(b"ID3")
+            await service.play("same", file_name="other.mp3")
+        with pytest.raises(LookupError):
+            await service.stop("stale")
+        assert not session.speeches[0].interrupted
+
+
+@pytest.mark.asyncio
+async def test_framework_interrupt_updates_music_status(music_dir):
+    session = FakeSession()
+    decoder = FakeDecoder()
+    async with MusicPlaybackService(session, music_dir=music_dir, decoder=decoder) as service:
+        await service.play("ref", file_name="track.mp3")
+        await decoder.started.wait()
+        session.speeches[0].interrupt(force=True)
+        with anyio.fail_after(1):
+            while (await service.get_status()).status is not MusicStatus.INTERRUPTED:
+                await anyio.sleep(0)

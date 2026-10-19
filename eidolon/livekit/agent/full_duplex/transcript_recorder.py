@@ -37,17 +37,11 @@ class FullDuplexTranscriptRecorder:
         # Empty/noise transcripts deliberately don't, so a silent room still
         # trips the idle watchdog.
         pipeline._mark_activity()
-        pipeline._latest_asr_text = transcript_event.transcript
         pipeline._ensure_user_turn_coordinator()
-        buffered_evidence = pipeline._ensure_transcript_evidence_buffer().take(
-            transcript_event.transcript,
-            is_final=transcript_event.is_final,
-        )
-        evidence = (
-            buffered_evidence.merge(transcript_event.evidence)
-            if buffered_evidence is not None
-            else transcript_event.evidence
-        )
+        evidence = transcript_event.evidence
+        if pipeline._user_turns.transcript_starts_new_turn(evidence):
+            pipeline._ensure_speech_lifecycle().handle_transcript_started()
+        pipeline._latest_asr_text = transcript_event.transcript
         if evidence.available:
             receipt = pipeline._user_turns.add_transcript(
                 transcript_event.transcript,
@@ -59,6 +53,11 @@ class FullDuplexTranscriptRecorder:
                 transcript_event.transcript,
                 is_final=transcript_event.is_final,
             )
+        if (receipt is not None and transcript_event.is_final
+                and pipeline._timeline is not None
+                and pipeline._timeline.attrs.get("candidate_origin") == "provider_transcript_without_vad"
+                and getattr(pipeline, "_user_speaking_start_time", None) is None):
+            pipeline._user_turns.note_speech_stopped(eot_score=None)
         if receipt is not None:
             covered_segments = self._hypotheses.observe(
                 receipt,

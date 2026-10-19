@@ -47,7 +47,10 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+
+from .transcript_event import FullDuplexTranscriptEvent
 
 if TYPE_CHECKING:
     from livekit.agents.voice import Agent as lk_Agent
@@ -923,13 +926,14 @@ class StreamingPipeline(BasePipeline):
 
     def _absorb_committed_turn_transcript_revision(
         self,
-        transcript: str,
-        is_final: bool,
+        event: FullDuplexTranscriptEvent,
     ) -> bool:
         self._ensure_user_turn_coordinator()
+        if self._user_turns.transcript_starts_new_turn(event.evidence):
+            return False
         return self._user_turns.absorb_committed_transcript_revision(
-            transcript,
-            is_final=is_final,
+            event.transcript,
+            is_final=event.is_final,
             require_framework_completed=True,
         )
 
@@ -1833,7 +1837,13 @@ class StreamingPipeline(BasePipeline):
         The pipeline keeps this method as the LiveKit event boundary.
         """
         self._ensure_runtime_defaults()
-        self._ensure_transcript_handler().handle(event)
+        normalized = FullDuplexTranscriptEvent.from_event(event)
+        evidence = self._ensure_transcript_evidence_buffer().take(
+            normalized.transcript, is_final=normalized.is_final,
+        )
+        if evidence is not None:
+            normalized = replace(normalized, evidence=evidence.merge(normalized.evidence))
+        self._ensure_transcript_handler().handle(normalized)
 
     def _on_user_transcription_timeout(self, event: Any) -> None:
         """Apply product recovery after LiveKit observes speech with no final text."""

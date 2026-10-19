@@ -28,6 +28,13 @@ class FullDuplexSpeechLifecycle:
         self._owner = owner
 
     def handle_started(self) -> None:
+        self._start_candidate(acoustic=True)
+
+    def handle_transcript_started(self) -> None:
+        """Reuse turn ownership for accepted source evidence without a VAD edge."""
+        self._start_candidate(acoustic=False)
+
+    def _start_candidate(self, *, acoustic: bool) -> None:
         owner = self._owner
         turn_completion = owner._ensure_turn_completion()
         owner._ensure_user_turn_coordinator()
@@ -56,8 +63,9 @@ class FullDuplexSpeechLifecycle:
             and getattr(replaced_candidate, "state", None) not in {"committed", "rejected"}
         )
 
-        owner._callbacks.on_user_started_speaking()
-        owner._user_speaking_start_time = time.monotonic()
+        if acoustic:
+            owner._callbacks.on_user_started_speaking()
+            owner._user_speaking_start_time = time.monotonic()
         if not merge_continuation or owner._timeline is None:
             owner._timeline = TurnTimeline(generate_turn_id())
             # First-occurrence-wins, so calling this per turn records only the
@@ -105,17 +113,22 @@ class FullDuplexSpeechLifecycle:
             event="speech_started",
             reason="merge_continuation" if merge_continuation else "new_speech_started",
         )
-        owner._timeline.mark("speech_started_at")
+        if acoustic:
+            owner._timeline.mark("speech_started_at")
+        else:
+            owner._timeline.set_attr("candidate_origin", "provider_transcript_without_vad")
         owner._attach_transcript_ingress_recent_events("speech_started")
         owner._apply_pending_explicit_client_preempt(owner._timeline)
         owner._apply_pending_client_control_events(owner._timeline)
-        owner._voiceprint_turns.start_turn(timeline=owner._timeline)
+        if acoustic:
+            owner._voiceprint_turns.start_turn(timeline=owner._timeline)
         owner._ensure_provider_event_observer()
         owner._provider_events.apply_pending_stt_provider_events()
         owner._provider_events.observe_stt_turn_audio()
         owner._latest_asr_text = ""
 
-        owner._get_eot_model().update_vad(True)
+        if acoustic:
+            owner._get_eot_model().update_vad(True)
 
         if owner._uses_livekit_native_adaptive_interruption():
             if owner._timeline is not None:

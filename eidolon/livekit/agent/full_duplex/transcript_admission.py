@@ -32,13 +32,13 @@ class TranscriptAdmissionGate:
         suppress_until_next_speech: Callable[[], bool],
         agent_output_active: Callable[[str | None], bool],
         echo_gate: Callable[[], TranscriptEchoGate],
-        absorb_committed_turn_revision: Callable[[str, bool], bool] | None = None,
+        absorb_committed_turn_revision: Callable[[FullDuplexTranscriptEvent], bool] | None = None,
     ) -> None:
         self._suppress_until_next_speech = suppress_until_next_speech
         self._agent_output_active = agent_output_active
         self._echo_gate = echo_gate
         self._absorb_committed_turn_revision = (
-            absorb_committed_turn_revision or (lambda _transcript, _is_final: False)
+            absorb_committed_turn_revision or (lambda _event: False)
         )
 
     def evaluate(self, event: Any) -> TranscriptAdmissionDecision:
@@ -54,7 +54,7 @@ class TranscriptAdmissionGate:
                 speaker_id=speaker_id,
                 is_final=is_final,
             )
-        if transcript and self._absorb_committed_turn_revision(transcript, bool(is_final)):
+        if transcript and self._absorb_committed_turn_revision(transcript_event):
             return TranscriptAdmissionDecision(
                 accepted=False,
                 reason="committed_turn_revision",

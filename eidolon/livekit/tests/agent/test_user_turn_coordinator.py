@@ -471,3 +471,34 @@ def test_new_speech_after_terminal_turn_gets_new_candidate() -> None:
 
     assert second.candidate_id == "turn-second"
     assert second.state == "open"
+
+
+@pytest.mark.parametrize("state", ["committed", "rejected"])
+def test_provider_evidence_distinguishes_new_speech_from_late_revision(state):
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence, TranscriptSourceSpan
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    timeline = TurnTimeline("previous")
+    coordinator.start_speech(timeline=timeline)
+    old = TranscriptEvidence(stream_key="stream", revision_key="one", sequence=2,
+                             source_span=TranscriptSourceSpan(1, 2))
+    coordinator.add_transcript("继续。", is_final=True, evidence=old)
+    if state == "committed":
+        coordinator.mark_framework_completed(transcript="继续。", timeline=timeline, reason="test")
+    else:
+        coordinator.reject_active("test")
+    assert not coordinator.transcript_starts_new_turn(old)
+    assert not coordinator.transcript_starts_new_turn(TranscriptEvidence())
+    assert not coordinator.transcript_starts_new_turn(TranscriptEvidence(
+        stream_key="stream", revision_key="late", sequence=3,
+        source_span=TranscriptSourceSpan(.5, 1)))
+    assert coordinator.transcript_starts_new_turn(TranscriptEvidence(
+        stream_key="stream", revision_key="two", sequence=3,
+        source_span=TranscriptSourceSpan(3, 4)))
+
+
+def test_provider_evidence_does_not_split_pending_turn():
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence, TranscriptSourceSpan
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    coordinator.start_speech(timeline=TurnTimeline("pending"))
+    assert not coordinator.transcript_starts_new_turn(TranscriptEvidence(
+        stream_key="stream", revision_key="two", source_span=TranscriptSourceSpan(3, 4)))

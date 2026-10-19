@@ -131,3 +131,15 @@ Boundary tests cover preparation cancellation, stale references, retries, framew
 interruption, exact versus unverified catalogue candidates, preserved constraints,
 and command outcomes across protobuf. Model interpretation must additionally be
 checked with varied conversations; deterministic tests do not prove semantic accuracy.
+
+Recognized speech can arrive without a local VAD start. The existing transcript
+boundary restores provider evidence before admission. A newer source span (or a
+new revision with a higher sequence in the same stream) can open a new candidate
+after the previous candidate is terminal; repeated wording does not make it a
+duplicate. Late revisions and pending turns keep their existing owner. This uses
+the same speech lifecycle and interruption orchestrator without fabricating VAD
+or voiceprint audio. Providers without source evidence retain the VAD path.
+
+Music remains a native AgentSession speech handle: OS forced interruption cancels
+it and closes the decoder; no second music-specific interruption path is needed.
+The real-session regression also verifies subsequent output remains usable.

@@ -108,8 +108,8 @@ def test_rejects_committed_turn_revision_before_echo_gate() -> None:
         suppress_until_next_speech=lambda: False,
         agent_output_active=lambda _speaker_id: True,
         echo_gate=lambda: echo_gate,
-        absorb_committed_turn_revision=lambda transcript, is_final: (
-            absorbed.append((transcript, is_final)) or True
+        absorb_committed_turn_revision=lambda event: (
+            absorbed.append((event.transcript, event.is_final)) or True
         ),
     )
 

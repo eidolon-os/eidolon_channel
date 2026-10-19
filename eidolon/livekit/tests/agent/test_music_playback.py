@@ -260,3 +260,35 @@ async def test_framework_interrupt_updates_music_status(music_dir):
         with anyio.fail_after(1):
             while (await service.get_status()).status is not MusicStatus.INTERRUPTED:
                 await anyio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_real_session_interrupt_terminates_music_without_tool_stop(music_dir):
+    """OS interruption reaches the capability through its native speech handle."""
+    import asyncio
+    from livekit.agents.voice import Agent, AgentSession
+    from .._harness.headless import RecordingAudioOutput
+
+    session = AgentSession(turn_handling={
+        "turn_detection": "manual", "interruption": {"enabled": False},
+    })
+    session.output.audio = RecordingAudioOutput()
+    decoder = FakeDecoder()
+    try:
+        await session.start(Agent(instructions=""))
+        async with MusicPlaybackService(session, music_dir=music_dir, decoder=decoder) as service:
+            await service.play("native-output", file_name="track.mp3")
+            await asyncio.wait_for(decoder.started.wait(), 2)
+            await asyncio.wait_for(session.interrupt(force=True), 2)
+            async with asyncio.timeout(2):
+                while (await service.get_status()).status != MusicStatus.INTERRUPTED:
+                    await asyncio.sleep(0)
+            assert decoder.cancelled.is_set()
+            assert service._task.done()
+            async def next_audio():
+                yield rtc.AudioFrame(bytes(640), SAMPLE_RATE, 1, 320)
+            next_speech = session.say("", audio=next_audio(), add_to_chat_ctx=False)
+            await asyncio.wait_for(next_speech.wait_for_playout(), 2)
+            assert not next_speech.interrupted
+    finally:
+        await session.aclose()

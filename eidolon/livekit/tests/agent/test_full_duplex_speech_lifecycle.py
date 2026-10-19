@@ -397,3 +397,62 @@ def test_speech_lifecycle_stop_marks_no_flush_when_the_plugin_has_none() -> None
 
     owner._close_stt_utterance.assert_called_once_with()
     assert "stt_flush_sent_at" not in owner._timeline.timestamps
+
+
+def test_recognized_new_sentence_without_vad_uses_existing_turn_and_interrupt_owner():
+    from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
+    from eidolon.livekit.agent.full_duplex.transcript_event import FullDuplexTranscriptEvent
+    from eidolon.livekit.agent.full_duplex.transcript_recorder import FullDuplexTranscriptRecorder
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence, TranscriptSourceSpan
+
+    owner = _owner()
+    owner._mark_activity = MagicMock()
+    owner._user_turns = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    owner._timeline = TurnTimeline("old")
+    owner._user_turns.start_speech(timeline=owner._timeline)
+    owner._user_turns.add_transcript("继续。", is_final=True, evidence=TranscriptEvidence(
+        stream_key="stream", revision_key="first", source_span=TranscriptSourceSpan(1, 2)))
+    owner._user_turns.mark_framework_completed(
+        transcript="继续。", timeline=owner._timeline, reason="framework_completed_turn")
+    lifecycle = FullDuplexSpeechLifecycle(owner)
+    owner._ensure_speech_lifecycle = lambda: lifecycle
+    recorder = FullDuplexTranscriptRecorder(owner, transcript_revision_min_normalized_chars=4)
+    assert recorder.record(FullDuplexTranscriptEvent(
+        transcript="继续。", is_final=True, evidence=TranscriptEvidence(
+            stream_key="stream", revision_key="second", source_span=TranscriptSourceSpan(3, 4)),
+    )) == "继续。"
+    assert owner._timeline.turn_id != "old"
+    assert owner._user_turns.active.state == "open"
+    assert owner._user_turns.current_generation_id == 2
+    assert owner._user_turns.active.current_segment.ended_at is not None
+    owner._interruption_orchestrator.start_candidate.assert_called_once()
+    owner._interruption_orchestrator.note_transcript.assert_called_once_with("继续。", is_final=True)
+    owner._callbacks.on_user_started_speaking.assert_not_called()
+    owner._voiceprint_turns.start_turn.assert_not_called()
+    owner._get_eot_model().update_vad.assert_not_called()
+    assert owner._user_speaking_start_time is None
+    assert "speech_started_at" not in owner._timeline.timestamps
+    decision = owner._user_turns.mark_framework_completed(
+        transcript="继续。", timeline=owner._timeline, reason="framework_completed_turn")
+    assert decision.action == "commit"
+
+
+def test_same_text_new_source_is_not_absorbed_as_committed_revision():
+    from eidolon.livekit.agent.full_duplex.pipeline import StreamingPipeline
+    from eidolon.livekit.agent.full_duplex.transcript_event import FullDuplexTranscriptEvent
+    from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence, TranscriptSourceSpan
+
+    owner = _owner()
+    owner._user_turns = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    timeline = TurnTimeline("committed")
+    owner._user_turns.start_speech(timeline=timeline)
+    old = TranscriptEvidence(stream_key="stream", revision_key="one", source_span=TranscriptSourceSpan(1, 2))
+    owner._user_turns.add_transcript("再来。", is_final=True, evidence=old)
+    owner._user_turns.mark_framework_completed(
+        transcript="再来。", timeline=timeline, reason="framework_completed_turn")
+    assert StreamingPipeline._absorb_committed_turn_transcript_revision(owner,
+        FullDuplexTranscriptEvent(transcript="再来。", is_final=True, evidence=old))
+    assert not StreamingPipeline._absorb_committed_turn_transcript_revision(owner,
+        FullDuplexTranscriptEvent(transcript="再来。", is_final=True, evidence=TranscriptEvidence(
+            stream_key="stream", revision_key="two", source_span=TranscriptSourceSpan(3, 4))))

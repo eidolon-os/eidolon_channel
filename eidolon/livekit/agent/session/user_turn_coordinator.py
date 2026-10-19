@@ -483,6 +483,32 @@ class UserTurnCoordinator:
         )
         self._record_attrs(candidate, event="speech_stopped")
 
+    def transcript_starts_new_turn(self, evidence: TranscriptEvidence) -> bool:
+        """Recognized speech may precede (or outlive) local VAD detection.
+
+        Only provider source identity/time can reopen a terminal candidate;
+        changed wording alone can also be a delayed correction of the old turn.
+        Pending candidates remain owned by the existing completion boundary.
+        """
+        candidate = self._active
+        if candidate is None:
+            return bool(evidence.revision_key or evidence.source_span)
+        if not self._is_terminal(candidate):
+            return False
+        previous = [r.evidence for r in candidate.revisions if r.evidence is not None]
+        if not previous or any(evidence.same_revision(old) for old in previous):
+            return False
+        comparable = [old for old in previous
+                      if evidence.stream_key and old.stream_key == evidence.stream_key]
+        if not comparable:
+            return False
+        spans = [old.source_span for old in comparable if old.source_span is not None]
+        if evidence.source_span is not None and spans:
+            return evidence.source_span.start_time > max(span.end_time for span in spans)
+        sequences = [old.sequence for old in comparable if old.sequence is not None]
+        return bool(evidence.revision_key and evidence.sequence is not None and sequences
+                    and evidence.sequence > max(sequences))
+
     def absorb_committed_transcript_revision(
         self,
         text: str,

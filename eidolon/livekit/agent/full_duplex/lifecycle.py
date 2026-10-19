@@ -154,6 +154,7 @@ class FullDuplexSessionLifecycle:
                 participant_identity=participant_identity,
             ),
         )
+        await pipeline._start_music_runtime(session)
         pipeline.session_mark("session_started")
         if pipeline._on_session_started is not None:
             await pipeline._on_session_started()
@@ -529,6 +530,7 @@ class FullDuplexSessionLifecycle:
             pipeline._avatar_worker = None
         if hasattr(pipeline, "_voiceprint_turns"):
             await pipeline._voiceprint_turns.aclose()
+        await pipeline._close_music_runtime()
         if pipeline._session is not None:
             try:
                 await pipeline._session.aclose()

@@ -38,6 +38,7 @@ from eidolon.livekit.common.config import ObservabilityConfig
 from ..factory import SharedStageFactory
 from ..observability.session_trace import SessionTraceSettings, SessionTraceWriter
 from .types import PipelineCallbacks, PipelineState
+from ..session.music import SessionMusicRuntime
 
 logger = logging.getLogger("agent")
 
@@ -70,6 +71,35 @@ class BasePipeline(ABC):
         self._started: bool = False
         self._session_trace: SessionTraceWriter | None = None
         self._pending_session_marks: list[tuple[str, float, dict[str, Any]]] = []
+        self._music_runtime: SessionMusicRuntime | None = None
+
+    async def _start_music_runtime(self, session: Any) -> None:
+        from ..eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
+
+        from ..runtime.music import create_music_runtime
+
+        llm = self._factory.llm.llm
+        if not isinstance(llm, EidolonAgentGrpcLlm) or not self._factory.outputs.speech:
+            return
+        runtime = await create_music_runtime(session)
+        if runtime is None:
+            return
+        llm.configure_channel_tools(
+            runtime.execute_channel_tool,
+            runtime.cancel_channel_tool,
+            frozenset({"music.search", "music.play", "music.stop", "music.status"}),
+        )
+        self._music_runtime = runtime
+
+    async def _close_music_runtime(self) -> None:
+        if self._music_runtime is not None:
+            from ..eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
+
+            llm = self._factory.llm.llm
+            if isinstance(llm, EidolonAgentGrpcLlm):
+                await llm.close_channel_tools()
+            await self._music_runtime.aclose()
+            self._music_runtime = None
 
     @property
     def factory(self) -> SharedStageFactory:
@@ -170,6 +200,7 @@ class BasePipeline(ABC):
     async def shutdown(self) -> None:
         """Shared graceful shutdown — resets state and marks pipeline as stopped."""
         logger.info("[BasePipeline] shutting down")
+        await self._close_music_runtime()
         self.close_session_trace(getattr(self, "_session_trace_close_reason", "session_ended"))
         self._state = PipelineState.IDLE
         self._started = False

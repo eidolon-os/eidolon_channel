@@ -293,6 +293,7 @@ class HalfDuplexPttPipeline(BasePipeline):
             options=self._build_room_options(participant_identity),
             output_room=output_room, output_participant_identity=output_participant_identity,
         )
+        await self._start_music_runtime(session)
         self.session_mark("session_started")
         if self._on_session_started is not None:
             await self._on_session_started()
@@ -349,6 +350,7 @@ class HalfDuplexPttPipeline(BasePipeline):
         output_timeline = self._agent_output.active_timeline
         if output_timeline is not None:
             self._flush_output_timeline(output_timeline, "ptt_pipeline_shutdown")
+        await self._close_music_runtime()
         session = self._session
         if session is not None:
             close = getattr(session, "aclose", None)

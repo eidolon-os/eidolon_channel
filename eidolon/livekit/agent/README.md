@@ -73,6 +73,16 @@ entrypoints; implementation code lives under named boundary packages.
   playback events and non-recoverable output errors remain bound to the response
   until it completes, fails, or is interrupted.
 - `eidolon_agent_rpc/` contains the remote Eidolon Agent LLM/proactive bridge.
+- Online music uses the same authenticated Chat stream for tool calls, results,
+  and cancellation. `runtime/music.py` composes the optional capability;
+  `session/music.py` orchestrates commands; `output/music.py` owns playback and
+  `output/music_cache.py` owns atomic downloads. The Lizheng adapter lives in
+  `eidolon.livekit.plugins.music`, behind `eidolon.livekit.common.music` contracts.
+  Playback uses the existing AgentSession audio output and interruption path.
+  Only sessions with speech output and the remote Agent bridge advertise music.
+  Shutdown drains tool requests and stops playback before closing the session.
+  Credentials are optional; initialization failure disables music without
+  disabling conversation. Cache paths derive from the Host's `EIDOLON_CACHE_ROOT`.
 - `speaker_verification/` contains voiceprint service/store orchestration.
   Model providers and model resources live under `eidolon.livekit.plugins`.
 

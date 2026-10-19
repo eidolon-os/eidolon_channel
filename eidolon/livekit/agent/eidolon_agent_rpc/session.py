@@ -22,6 +22,7 @@ from typing import AsyncIterator
 import grpc
 import grpc.aio
 from eidolon_sdk.biz.chat_stream import DeltaRole
+from eidolon_sdk.core.protobuf import protobuf_struct_to_dict
 from eidolon_sdk.biz.presentation import PresentationReceipt, ResponseIntent
 from eidolon_sdk.biz.presentation.motion import MotionReceipt, MotionRequest
 from eidolon_sdk.core.grpc import (
@@ -36,6 +37,7 @@ from google.protobuf import struct_pb2
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
     eidolon_pb2 as pb,
 )
+from .channel_tools import ChannelToolCall, ChannelToolResult
 from eidolon.livekit.agent.eidolon_agent_rpc.v1.grpc_gen import (
     eidolon_pb2_grpc as pbg,
 )
@@ -221,6 +223,9 @@ class EidolonAgentSession:
         target: str,
         device_token: str,
         tls: TlsConfig | None = None,
+        channel_tool_handler=None,
+        channel_tool_cancel_handler=None,
+        channel_tool_capabilities: frozenset[str] = frozenset(),
     ) -> None:
         self._target = target.strip()
         self._device_token = device_token
@@ -246,6 +251,11 @@ class EidolonAgentSession:
         # cancelled turn_id -> future resolved with already_done when the
         # brain ACKs the CancelTurn frame.
         self._cancel_acks: dict[str, asyncio.Future] = {}
+        self._channel_tool_handler = channel_tool_handler
+        self._channel_tool_cancel_handler = channel_tool_cancel_handler
+        self._channel_tool_capabilities = channel_tool_capabilities
+        self._channel_tool_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._channel_tool_calls: dict[tuple[str, str], ChannelToolCall] = {}
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -317,6 +327,7 @@ class EidolonAgentSession:
                         speculative=speculative,
                         input_modality="voice",
                         metadata=md,
+                        channel_tool_capabilities=sorted(self._channel_tool_capabilities),
                     )
                 )
             )
@@ -325,6 +336,38 @@ class EidolonAgentSession:
             raise
 
         return turn_id, self._consume(turn_id, queue)
+
+    def configure_channel_tools(
+        self,
+        handler,
+        cancel_handler,
+        capabilities: frozenset[str],
+    ) -> None:
+        self._channel_tool_handler = handler
+        self._channel_tool_cancel_handler = cancel_handler
+        self._channel_tool_capabilities = capabilities
+
+    def clear_channel_tools(self) -> None:
+        self._channel_tool_handler = None
+        self._channel_tool_cancel_handler = None
+        self._channel_tool_capabilities = frozenset()
+
+    async def _cancel_channel_tool_tasks(self, turn_id: str | None = None) -> None:
+        tasks = [task for (tid, _), task in self._channel_tool_tasks.items()
+                 if turn_id is None or tid == turn_id]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def close_channel_tools(self) -> None:
+        await self._cancel_channel_tool_tasks()
+        self._channel_tool_calls.clear()
+        self.clear_channel_tools()
+
+    def _channel_tool_done(self, key: tuple[str, str]) -> None:
+        self._channel_tool_tasks.pop(key, None)
+        self._channel_tool_calls.pop(key, None)
 
     async def cancel_turn(
         self,
@@ -344,6 +387,7 @@ class EidolonAgentSession:
         on timeout/no-ack. Safe to call after the turn has already finished;
         write errors are swallowed at debug level.
         """
+        await self._cancel_channel_tool_tasks(turn_id)
         cancel = pb.CancelTurn(turn_id=turn_id)
         if played_chars is not None:
             cancel.played_chars = max(0, int(played_chars))
@@ -415,6 +459,7 @@ class EidolonAgentSession:
             for t in list(self._background_tasks):
                 t.cancel()
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        await self.close_channel_tools()
         if self._channel is not None:
             await self._channel.close()
         # Drain any pending consumers.
@@ -472,6 +517,7 @@ class EidolonAgentSession:
             logger.exception("[EidolonAgentSession] reader crashed")
             self._broadcast_error(exc)
         finally:
+            await self._cancel_channel_tool_tasks()
             # Any remaining turn consumers should unblock.
             self._broadcast_error(RuntimeError("stream ended"))
 
@@ -480,6 +526,34 @@ class EidolonAgentSession:
             # Cancel acknowledgements resolve out-of-band futures and must be
             # handled even when the turn's inbox is already gone.
             self._dispatch_ack(ev)
+            return
+        if ev.kind == pb.TurnEvent.CHANNEL_TOOL_CALL:
+            call = ChannelToolCall(
+                turn_id=ev.turn_id, call_id=ev.channel_tool_call.call_id,
+                name=ev.channel_tool_call.name,
+                arguments=protobuf_struct_to_dict(ev.channel_tool_call.arguments),
+            )
+            key = (call.turn_id, call.call_id)
+            if call.turn_id not in self._inbox:
+                return
+            if key in self._channel_tool_tasks:
+                # A repeated frame must never replace ownership of the running task.
+                if self._channel_tool_calls.get(key) != call:
+                    self.spawn(self._send_channel_tool_error(call, "CHANNEL_TOOL_CALL_REPLAY"))
+                return
+            if self._channel_tool_handler is None or call.name not in self._channel_tool_capabilities:
+                self.spawn(self._send_channel_tool_error(call, "CHANNEL_TOOL_UNAVAILABLE"))
+                return
+            self._channel_tool_calls[key] = call
+            task = self.spawn(self._execute_channel_tool(ev), name=f"channel-tool-{call.call_id}")
+            self._channel_tool_tasks[key] = task
+            task.add_done_callback(lambda done, task_key=key: self._channel_tool_done(task_key))
+            return
+        if ev.kind == pb.TurnEvent.CHANNEL_TOOL_CANCEL:
+            cancellation = ev.channel_tool_cancel
+            task = self._channel_tool_tasks.get((cancellation.turn_id, cancellation.call_id))
+            if task is not None:
+                task.cancel()
             return
         q = self._inbox.get(ev.turn_id)
         if q is None:
@@ -614,6 +688,87 @@ class EidolonAgentSession:
                 pb.TurnEvent.Kind.Name(kind),
                 ev.turn_id,
             )
+
+    async def _execute_channel_tool(self, ev: "pb.TurnEvent") -> None:
+        call = ev.channel_tool_call
+        handler = self._channel_tool_handler
+        key = (ev.turn_id, call.call_id)
+        request = self._channel_tool_calls.get(key)
+        if handler is None or request is None:
+            logger.warning(
+                "channel_tool_call ignored turn_id=%s call_id=%s reason=missing_handler_or_call",
+                ev.turn_id,
+                call.call_id,
+            )
+            return
+        logger.info(
+            "channel_tool_call received turn_id=%s call_id=%s name=%s",
+            request.turn_id,
+            request.call_id,
+            request.name,
+        )
+        try:
+            result = await handler(request)
+        except asyncio.CancelledError:
+            if self._channel_tool_cancel_handler is not None:
+                await self._channel_tool_cancel_handler(request)
+            try:
+                await self._send_channel_tool_error(request, "CHANNEL_TOOL_CANCELLED")
+            except Exception:
+                pass  # The transport may already be closed; cleanup still owns cancellation.
+            raise
+        except Exception as exc:
+            result = ChannelToolResult(
+                turn_id=request.turn_id,
+                call_id=request.call_id,
+                name=request.name,
+                ok=False,
+                content={},
+                error_code="CHANNEL_TOOL_FAILED",
+                error_message=type(exc).__name__,
+            )
+        finally:
+            self._channel_tool_calls.pop(key, None)
+        await self._send_channel_tool_result(result)
+
+    async def _send_channel_tool_error(self, request: ChannelToolCall, code: str) -> None:
+        await self._send_channel_tool_result(
+            ChannelToolResult(
+                turn_id=request.turn_id,
+                call_id=request.call_id,
+                name=request.name,
+                ok=False,
+                content={},
+                error_code=code,
+                error_message=code,
+            )
+        )
+
+    async def _send_channel_tool_result(self, result: ChannelToolResult) -> None:
+        logger.info(
+            "channel_tool_result sent turn_id=%s call_id=%s name=%s ok=%s "
+            "error_code=%s",
+            result.turn_id,
+            result.call_id,
+            result.name,
+            result.ok,
+            result.error_code or "-",
+        )
+        content = struct_pb2.Struct()
+        content.update(result.content)
+        await self._write(
+            pb.ChatRequest(
+                channel_tool_result=pb.ChannelToolResult(
+                    turn_id=result.turn_id,
+                    call_id=result.call_id,
+                    name=result.name,
+                    ok=result.ok,
+                    content=content,
+                    error_code=result.error_code,
+                    error_message=result.error_message,
+                )
+            )
+        )
 
     def _dispatch_ack(self, ev: "pb.TurnEvent") -> None:
         """Resolve a pending cancel-ack future (runs before inbox dispatch)."""

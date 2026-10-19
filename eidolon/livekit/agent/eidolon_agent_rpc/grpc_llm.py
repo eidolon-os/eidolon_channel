@@ -180,6 +180,9 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._pending_turn_decision_metadata: dict[str, Any] | None = None
         self._pending_trace_id: str | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
+        self._channel_tool_handler = None
+        self._channel_tool_cancel_handler = None
+        self._channel_tool_capabilities: frozenset[str] = frozenset()
 
     def emit_provider_event(self, name: str, **payload: Any) -> None:
         """Emit provider-level timing events for Channel observability."""
@@ -222,8 +225,30 @@ class EidolonAgentGrpcLlm(llm.LLM):
                         target=self._target,
                         device_token=token,
                         tls=self._tls,
+                        channel_tool_handler=self._channel_tool_handler,
+                        channel_tool_cancel_handler=self._channel_tool_cancel_handler,
+                        channel_tool_capabilities=self._channel_tool_capabilities,
                     )
         return self._session
+
+    def configure_channel_tools(self, handler, cancel_handler, capabilities: frozenset[str]) -> None:
+        self._channel_tool_handler = handler
+        self._channel_tool_cancel_handler = cancel_handler
+        self._channel_tool_capabilities = capabilities
+        if self._session is not None:
+            self._session.configure_channel_tools(handler, cancel_handler, capabilities)
+
+    def clear_channel_tools(self) -> None:
+        self._channel_tool_handler = None
+        self._channel_tool_cancel_handler = None
+        self._channel_tool_capabilities = frozenset()
+        if self._session is not None:
+            self._session.clear_channel_tools()
+
+    async def close_channel_tools(self) -> None:
+        if self._session is not None:
+            await self._session.close_channel_tools()
+        self.clear_channel_tools()
 
     def set_turn_decision_metadata(self, metadata: dict[str, Any]) -> None:
         """Attach a committed Channel decision to the next StartTurn."""

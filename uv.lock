@@ -403,6 +403,7 @@ source = { editable = "." }
 dependencies = [
     { name = "addict" },
     { name = "aiohttp" },
+    { name = "cryptography" },
     { name = "datasets" },
     { name = "eidolon-sdk" },
     { name = "grpcio" },
@@ -439,6 +440,7 @@ dev = [
 requires-dist = [
     { name = "addict", specifier = ">=2.4" },
     { name = "aiohttp", specifier = ">=3.9" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "datasets", specifier = ">=4.0" },
     { name = "eidolon-sdk", editable = "../eidolon_sdk" },
     { name = "grpcio", specifier = ">=1.68" },

@@ -160,7 +160,7 @@ async def test_late_result_cannot_control_revised_or_replaced_turn(change):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure', ['timeout', 'error'])
-async def test_failed_intent_leaves_recovery_to_existing_owner_deadline(failure):
+async def test_failed_intent_degrades_to_ordinary_interruption(failure):
     async def classify(*args, **kwargs):
         if failure == 'error':
             raise RuntimeError('unavailable')
@@ -169,8 +169,10 @@ async def test_failed_intent_leaves_recovery_to_existing_owner_deadline(failure)
     try:
         handler.run(state.text, is_final=True)
         await handler._intent_task
-        assert decisions[-1].action is Action.HOLD
-        assert state.active
+        assert decisions[-1].action is Action.CANCEL
+        assert decisions[-1].intent is InterruptIntent.NORMAL_INTERRUPT
+        assert decisions[-1].reason == 'intent_unavailable_interrupt'
+        assert not state.active
     finally:
         await handler.aclose()
 
@@ -256,9 +258,10 @@ async def test_provider_cannot_return_action_after_swallowing_deadline_cancellat
     try:
         handler.run(state.text, is_final=True)
         await handler._intent_task
-        assert decisions[-1].action is Action.HOLD
         assert handler._intent_result.reason == 'TimeoutError'
-        assert not any(d.action is Action.CANCEL for d in decisions)
+        assert decisions[-1].action is Action.CANCEL
+        assert decisions[-1].intent is InterruptIntent.NORMAL_INTERRUPT
+        assert decisions[-1].reason == 'intent_unavailable_interrupt'
     finally:
         await handler.aclose()
 

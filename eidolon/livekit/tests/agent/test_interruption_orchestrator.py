@@ -563,7 +563,8 @@ def test_hard_stop_cancel_does_not_collect_user_turn() -> None:
     assert owner.finish_confirmed_cancel_speech("停一下") is False
 
 
-def test_resolved_normal_interrupt_exposes_committable_verdict() -> None:
+@pytest.mark.parametrize("reason", ["eot_score_high", "intent_unavailable_interrupt"])
+def test_resolved_normal_interrupt_exposes_committable_verdict(reason) -> None:
     timeline = TurnTimeline("turn-normal-interrupt")
     owner = InterruptionOrchestrator(
         evidence_timeout_sec=6.0,
@@ -573,7 +574,7 @@ def test_resolved_normal_interrupt_exposes_committable_verdict() -> None:
     owner.note_turn_policy_decision(
         Decision(
             action=Action.CANCEL,
-            reason="eot_score_high",
+            reason=reason,
             intent=InterruptIntent.NORMAL_INTERRUPT,
         ),
         transcript="换一个方向继续讲",

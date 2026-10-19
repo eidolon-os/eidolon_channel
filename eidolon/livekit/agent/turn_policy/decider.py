@@ -143,6 +143,16 @@ class InterruptDecider:
                 return Decision(Action.HOLD, "awaiting_final_intent", **hint_fields)
             if not stripped:
                 return Decision(Action.HOLD, "empty_intent_transcript", **hint_fields)
+            if intent.source == "unavailable" and any(char.isalnum() for char in stripped):
+                # Provider failure is not a semantic verdict. Degrade to ordinary
+                # interruption: stop output and let the existing user-turn path
+                # interpret the accepted final, including any follow-up request.
+                return Decision(
+                    Action.CANCEL, "intent_unavailable_interrupt",
+                    intent=InterruptIntent.NORMAL_INTERRUPT,
+                    intent_source="unavailable",
+                    intent_confidence=0.0,
+                )
             if intent.intent is InterruptIntent.HARD_STOP or intent_requires_reply(intent.intent):
                 return Decision(Action.CANCEL, "confirmed_final_intent", **hint_fields)
             # Uncertainty is not consent to resume. The existing owner bounds

@@ -151,3 +151,11 @@ of the current invocation do not resurrect a terminal instance. The existing
 Agent dispatcher deduplicates commands, including old requests after replacement.
 Returned references target `music.stop`; cancellation compares the originating
 invocation's reference so an old request cannot stop a newer playback.
+
+When the intent provider fails or exceeds its deadline, an admitted nonempty
+lexical final transcript degrades to ordinary interruption: cancel current output
+and route the utterance through the existing user-turn/voiceprint/Agent path.
+This is an availability policy, not a guessed stop intent. Successful semantic
+uncertainty still waits; provisional/empty input and superseded requests do not
+acquire cancellation authority. During an outage, even an acknowledgement may
+interrupt output. No capability-specific keyword rules or second classifier are used.

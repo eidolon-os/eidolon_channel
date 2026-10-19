@@ -546,3 +546,28 @@ def test_decision_is_frozen() -> None:
     d = Decision(action=Action.HOLD, reason="x")
     with pytest.raises((AttributeError, Exception)):
         d.reason = "y"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize('text', ['停。', '换个话题', '谢谢', 'another question'])
+@pytest.mark.parametrize('vad_active', [True, False])
+def test_failed_provider_final_degrades_without_guessing_intent(text, vad_active):
+    decider = InterruptDecider(InterruptPolicyConfig(intent_provider='systemone'))
+    decision = decider.on_stt_interim(text, score=0.0, is_final=True, vad_active=vad_active,
+        intent_result=InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, 'unavailable', 'HTTPStatusError'))
+    assert decision.action is Action.CANCEL
+    assert decision.intent is InterruptIntent.NORMAL_INTERRUPT
+
+
+@pytest.mark.parametrize('text,is_final', [('', True), ('。。。', True), ('新输入', False)])
+def test_failure_does_not_promote_empty_or_provisional_input(text, is_final):
+    decider = InterruptDecider(InterruptPolicyConfig(intent_provider='systemone'))
+    decision = decider.on_stt_interim(text, score=1.0, is_final=is_final,
+        intent_result=InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, 'unavailable', 'TimeoutError'))
+    assert decision.action is Action.HOLD
+
+
+def test_semantic_uncertainty_is_not_provider_failure():
+    decider = InterruptDecider(InterruptPolicyConfig(intent_provider='systemone'))
+    decision = decider.on_stt_interim('那个', score=1.0, is_final=True,
+        intent_result=InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, 'systemone', 'wait'))
+    assert decision.action is Action.HOLD

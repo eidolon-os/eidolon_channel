@@ -15,7 +15,9 @@ from .providers.modelscope_campplus import ModelScopeCampPlusSpeakerVerification
 
 
 class InsufficientSpeech(ValueError):
-    pass
+    def __init__(self, message: str, *, code: str = "insufficient_speech"):
+        super().__init__(message)
+        self.code = code
 
 
 def validate_speaker_consistency(vectors, threshold=0.65):
@@ -24,7 +26,7 @@ def validate_speaker_consistency(vectors, threshold=0.65):
         for b in vectors[index + 1 :]:
             similarity = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
             if not np.isfinite(similarity) or similarity < threshold:
-                raise InsufficientSpeech("multiple or inconsistent voices; speak alone")
+                raise InsufficientSpeech("multiple or inconsistent voices; speak alone", code="inconsistent_speakers")
 
 
 @lru_cache(maxsize=1)
@@ -49,7 +51,7 @@ class VoiceEmbeddingExtractor:
 
     async def extract(self, audio: bytes, sample_rate=16000):
         if sample_rate != 16000 or len(audio) % 2 or not 48000 <= len(audio) <= 960000:
-            raise InsufficientSpeech("record 1.5–30 seconds of mono PCM at 16 kHz")
+            raise InsufficientSpeech("record 1.5–30 seconds of mono PCM at 16 kHz", code="invalid_audio_length_or_format")
         if self._pending >= 2:
             raise RuntimeError("voice extraction busy")
         self._pending += 1
@@ -72,7 +74,7 @@ class VoiceEmbeddingExtractor:
             samples = np.frombuffer(audio, dtype="<i2").astype(np.float32) / 32768.0
             clipping = float(np.mean(np.abs(samples) >= 0.995))
             if clipping > 0.02:
-                raise InsufficientSpeech("audio is clipped; move away from microphone")
+                raise InsufficientSpeech("audio is clipped; move away from microphone", code="audio_clipped")
             if self._vad is None:
                 from eidolon.livekit.plugins.vad.firered.processor import PvadProcessor
 

@@ -208,9 +208,9 @@ class HalfDuplexPttPipeline(BasePipeline):
 
         class PttAgent(PolicyBoundAgent):
             async def on_enter(self) -> None:
-                if not await pipeline._voice_policy_allows_welcome():
-                    return
                 welcome = pipeline._welcome_on_enter()
+                if not await pipeline._voice_policy_allows_welcome(welcome):
+                    return
                 if welcome is None:
                     logger.info(
                         "[HalfDuplexPttPipeline] welcome suppressed intent=%s",

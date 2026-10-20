@@ -73,7 +73,13 @@ class BasePipeline(ABC):
         self._pending_session_marks: list[tuple[str, float, dict[str, Any]]] = []
         self._music_runtime: SessionMusicRuntime | None = None
 
-    async def _voice_policy_allows_welcome(self) -> bool:
+    async def _voice_policy_allows_welcome(self, welcome=None) -> bool:
+        from ...common.welcome import WelcomeAudio
+
+        # The packaged readiness tone acknowledges transport readiness; it
+        # contains no speech. Custom audio may contain a spoken greeting.
+        if isinstance(welcome, WelcomeAudio) and welcome.audio == "builtin:soft-ready":
+            return True
         admission = getattr(getattr(self, "_factory", None), "companion_voice_admission", None)
         if admission is None:
             return True

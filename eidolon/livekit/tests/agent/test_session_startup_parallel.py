@@ -1,6 +1,6 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
@@ -80,6 +80,7 @@ async def test_welcome_waits_for_session_confirmation():
         _factory=SimpleNamespace(outputs=OutputSelection(),
             stt=SimpleNamespace(stt=None), llm=SimpleNamespace(llm=None), tts=None, vad=None),
         _welcome_on_enter=welcome, _is_proactive=False,
+        _voice_policy_allows_welcome=AsyncMock(return_value=True),
     )
     agent = build_full_duplex_agent(pipeline, ready=ready)
     task = asyncio.create_task(agent.on_enter())

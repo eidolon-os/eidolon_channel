@@ -53,8 +53,11 @@ class FullDuplexInterruptionEffects:
         playback_evidence_active: Callable[[], bool] | None = None,
         record_full_duplex_transition: Callable[..., object] | None = None,
         claim_irreversible_side_effect: Callable[..., bool] | None = None,
+        authorize_voice_interruption=None,
     ) -> None:
         self._refresh_output_ui = refresh_output_ui or (lambda _reason: None)
+        self._authorize_voice_interruption = authorize_voice_interruption
+        self._voice_interrupt_task = None
         self._cancel_response_outputs = cancel_response_outputs or (lambda: None)
         self._ducking = ducking
         self._callbacks = callbacks
@@ -80,7 +83,7 @@ class FullDuplexInterruptionEffects:
         )
         self._soft_interrupt = SoftInterruptController(
             timeout_sec=self._soft_interrupt_timeout_sec(),
-            on_timeout=lambda: self.interrupt_current_turn(),
+            on_timeout=lambda: self.cancel_and_interrupt() if self._authorize_voice_interruption is not None else self.interrupt_current_turn(),
         )
         self._stable_signal_timer: asyncio.Task | None = None
 
@@ -89,9 +92,13 @@ class FullDuplexInterruptionEffects:
         *,
         force: bool = False,
         allow_cancelled_output: bool = False,
+        _voice_authorized: bool = False,
     ) -> None:
         """Interrupt the current AgentSession turn."""
 
+        if self._authorize_voice_interruption is not None and not force and not _voice_authorized:
+            self.cancel_and_interrupt()
+            return
         if not force and not self._allow_interruptions():
             return
         if not force and self._ducking.is_cancelled and not allow_cancelled_output:
@@ -228,8 +235,28 @@ class FullDuplexInterruptionEffects:
             or bool(self._playback_evidence_active())
         )
 
-    def cancel_and_interrupt(self, *, force: bool = False) -> None:
+    def cancel_and_interrupt(self, *, force: bool = False, _voice_authorized: bool = False) -> None:
         """Confirm an interruption by dropping buffered output and cancelling TTS."""
+
+        if self._authorize_voice_interruption is not None and not _voice_authorized and not force:
+            if self._voice_interrupt_task is not None and not self._voice_interrupt_task.done():
+                return
+            timeline = self._get_timeline()
+            async def authorize_then_cancel():
+                try:
+                    allowed = await self._authorize_voice_interruption()
+                    if self._get_timeline() is not timeline:
+                        return
+                    if allowed:
+                        self.cancel_and_interrupt(_voice_authorized=True)
+                    else:
+                        self._soft_interrupt.cancel()
+                        self._ducking.unduck_if_suspended()
+                        self._get_interruption_orchestrator().resolve(action="resume", reason="voiceprint_not_accepted")
+                except Exception:
+                    logger.warning("voice interruption authorization unavailable")
+            self._voice_interrupt_task = asyncio.create_task(authorize_then_cancel())
+            return
 
         if self._ducking.is_cancelled and not self._playback_evidence_active():
             logger.debug(
@@ -355,6 +382,7 @@ class FullDuplexInterruptionEffects:
         self.interrupt_current_turn(
             force=force,
             allow_cancelled_output=True,
+            _voice_authorized=_voice_authorized,
         )
 
     def resume_pending_output(self, reason: str) -> None:

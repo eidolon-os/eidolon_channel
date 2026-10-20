@@ -1217,3 +1217,37 @@ async def test_withdrawn_followup_restarts_final_intent_without_replaying_user_e
     finally:
         ready.set()
         await semantic.aclose()
+
+
+@pytest.mark.asyncio
+async def test_managed_final_authority_refusal_blocks_missing_acoustic_result():
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("managed-refused")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("你好世界", is_final=True)
+    pipeline._voiceprint_turns = SimpleNamespace(authorize=AsyncMock(return_value=False))
+    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["你好世界"]))
+    assert not allowed
+    pipeline._voiceprint_turns.authorize.assert_awaited_once_with(None)
+    assert pipeline._user_turns.snapshot()["state"] != "committed"
+
+
+@pytest.mark.asyncio
+async def test_new_speech_during_final_authorization_cannot_inherit_old_evidence():
+    pipeline = _make_pipeline_with_session()
+    timeline = TurnTimeline("managed-old")
+    pipeline._timeline = timeline
+    pipeline._ensure_runtime_defaults()
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.add_transcript("你好世界", is_final=True)
+    async def authorize(_):
+        pipeline._user_turns.start_speech(timeline=TurnTimeline("managed-new"))
+        return True
+    pipeline._voiceprint_turns = SimpleNamespace(authorize=authorize)
+    with pytest.raises(asyncio.CancelledError):
+        await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["你好世界"]))
+    assert pipeline._user_turns.snapshot()["state"] != "committed"

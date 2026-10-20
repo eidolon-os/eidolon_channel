@@ -216,7 +216,13 @@ class SharedStageFactory:
         self.voiceprint_provider = voiceprint_provider
         self.voiceprint_trust_paired_devices = voiceprint_trust_paired_devices
         self.voiceprint_service = None
-        if voiceprint_provider is not None:
+        self.companion_voice_admission = None
+        if runtime_services is not None and getattr(runtime_services, "runtime", None) is not None:
+            from eidolon.livekit.agent.speaker_verification.admission import CompanionVoiceAdmission
+            from eidolon.livekit.plugins.speaker_verification.extractor import shared_voice_extractor
+            self.companion_voice_admission = CompanionVoiceAdmission(
+                runtime_services.runtime, shared_voice_extractor())
+        if voiceprint_provider is not None and self.companion_voice_admission is None:
             from eidolon.livekit.agent.speaker_verification import (
                 SpeakerVerificationService,
                 VoiceprintStore,

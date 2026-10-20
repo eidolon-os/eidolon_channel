@@ -41,6 +41,12 @@ class SystemDataRuntimeResolver:
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         return await self._client.get_companion_face(companion_id)
 
+    async def get_voiceprint_snapshot(self, companion_id: str):
+        return await self._client.get_voiceprint_snapshot(companion_id)
+
+    async def admit_voiceprint(self, companion_id, revision, profile_id):
+        return await self._client.admit_voiceprint(companion_id, revision, profile_id)
+
     async def aclose(self) -> None:
         if self._http_client is not None:
             await self._http_client.aclose()
@@ -71,6 +77,12 @@ class DeferredSystemDataRuntimeResolver:
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         resolver = await self._get()
         return await resolver.get_companion_face(companion_id)
+
+    async def get_voiceprint_snapshot(self, companion_id: str):
+        return await (await self._get()).get_voiceprint_snapshot(companion_id)
+
+    async def admit_voiceprint(self, companion_id, revision, profile_id):
+        return await (await self._get()).admit_voiceprint(companion_id, revision, profile_id)
 
     async def aclose(self) -> None:
         if self._resolver is not None:

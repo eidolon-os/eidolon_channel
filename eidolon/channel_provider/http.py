@@ -52,6 +52,8 @@ def create_app(
     traces: SessionTraceReader | None = None,
 ) -> web.Application:
     app = web.Application(client_max_size=256 * 1024)
+    from .voiceprints import install_voiceprint_routes
+    install_voiceprint_routes(app, lambda request: _authorized(request, bearer_token))
     trace_reader = traces if traces is not None else SessionTraceReader(None)
 
     async def health(_request: web.Request) -> web.Response:

@@ -125,7 +125,7 @@ class FullDuplexSessionLifecycle:
 
         logger.info("[StreamingPipeline] calling session.start()...")
         pipeline._ensure_room_data_bridge().install(room)
-        pipeline._voiceprint_turns.install(room)
+        pipeline._voiceprint_turns.install(room, participant_identity=participant_identity)
 
         # Digital-human video avatar (per-session). When enabled, start the avatar
         # worker and route TTS audio to it via DataStreamAudioOutput instead of the

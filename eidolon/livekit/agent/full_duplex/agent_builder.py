@@ -70,6 +70,8 @@ def build_full_duplex_agent(
             # 0 can measure the gap to a later idle teardown and confirm
             # whether "回 JOIN after welcome" is the idle watchdog firing.
             room_name = getattr(getattr(pipeline, "_room", None), "name", None)
+            if not await pipeline._voice_policy_allows_welcome():
+                return
             welcome = pipeline._welcome_on_enter()
             if welcome is None:
                 # Suppressed: proactive session (report is the opening, §4.3.1)

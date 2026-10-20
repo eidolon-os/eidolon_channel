@@ -41,6 +41,7 @@ def _make_pipeline(*, vad_user_state: str = "listening", eot_score: float = 0.0)
 
     pipeline = StreamingPipeline.__new__(StreamingPipeline)
     pipeline._factory = MagicMock()
+    pipeline._factory.companion_voice_admission = None
 
     # Configuration carrier; G18a reads these.
     cfg = EidolonEOTConfig()

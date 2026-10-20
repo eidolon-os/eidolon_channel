@@ -38,6 +38,7 @@ class PttSegmentTurnResult:
     audio_effective_duration_sec: float = 0.0
     audio_leading_silence_sec: float = 0.0
     audio_rms_ppm: int = 0
+    voice_evidence: Any = None
 
 
 class HalfDuplexPttTurnController:
@@ -51,8 +52,10 @@ class HalfDuplexPttTurnController:
         agent_output_active: Callable[[], bool] | None = None,
         preempt_agent_output: Callable[[], None] | None = None,
         tap_to_stop_max_audio_sec: float = 0.9,
+        verify_segment=None,
     ) -> None:
         self._recorder = recorder
+        self._verify_segment = verify_segment
         self._transcriber = transcriber
         self._agent_output_active = agent_output_active or (lambda: False)
         self._preempt_agent_output = preempt_agent_output or (lambda: None)
@@ -136,6 +139,13 @@ class HalfDuplexPttTurnController:
     async def _transcribe(
         self, segment: PttAudioSegment, generation: int, preempted: bool,
     ) -> PttSegmentTurnResult:
+        evidence = None
+        if self._verify_segment is not None:
+            evidence = await self._verify_segment(segment)
+            if not getattr(evidence, "commit_allowed", False):
+                if generation == self._generation:
+                    self._state = "idle"
+                return PttSegmentTurnResult(action="reject", reason="voiceprint_not_accepted", state=self._state)
         if generation != self._generation:
             return PttSegmentTurnResult(action="none", reason="superseded", state=self._state)
         leading_silence_sec = segment.leading_silence_sec()
@@ -186,6 +196,7 @@ class HalfDuplexPttTurnController:
 
         return PttSegmentTurnResult(
             action="commit",
+            voice_evidence=evidence,
             reason="segment_transcribed",
             transcript=transcription.text,
             state=self._state,

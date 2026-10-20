@@ -335,13 +335,10 @@ class VoiceprintTurnObserver:
             )
 
         if self._admission is not None:
-            logger.info("voiceprint captured audio_ms=%d overflow=%s sample_rate=%d",
-                        audio_ms, turn.overflow, turn.sample_rate)
             result = await self._admission.verify(ctx.companion_id, b"" if turn.overflow else audio, turn.sample_rate)
             timeline.set_attr("voiceprint", {
                 **result.signal.as_timeline_attrs(), "commit_allowed": result.commit_allowed,
                 "commit_reason": result.commit_reason, "policy_revision": result.policy_revision,
-                "captured_audio_ms": audio_ms, "capture_overflow": turn.overflow,
             })
             return result
 

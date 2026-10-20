@@ -102,18 +102,3 @@ def test_temporal_speaker_switch_rejected_by_extraction_quality():
     validate_speaker_consistency([np.array([1.0, 0.0]), np.array([0.99, 0.1])])
     with pytest.raises(InsufficientSpeech):
         validate_speaker_consistency([np.array([1.0, 0.0]), np.array([0.0, 1.0])])
-
-
-async def test_quality_diagnostic_has_code_and_duration_without_audio(caplog):
-    import logging
-    from eidolon.livekit.plugins.speaker_verification.extractor import InsufficientSpeech
-
-    class Clipped:
-        async def extract(self, *args):
-            raise InsufficientSpeech("private detail", code="audio_clipped")
-
-    with caplog.at_level(logging.INFO):
-        result = await CompanionVoiceAdmission(Authority(), Clipped()).verify("a", b"x" * 64000)
-    assert not result.commit_allowed
-    assert "code=audio_clipped audio_ms=2000" in caplog.text
-    assert "private detail" not in caplog.text

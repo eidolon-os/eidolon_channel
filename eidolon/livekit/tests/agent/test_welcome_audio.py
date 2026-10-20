@@ -69,7 +69,6 @@ def test_sound_respects_proactive_and_silent_output_policy(intent, speech):
 
     for pipeline_cls in (StreamingPipeline, HalfDuplexPttPipeline):
         pipeline = pipeline_cls.__new__(pipeline_cls)
-        pipeline._destination = None
         pipeline._factory = SimpleNamespace(outputs=OutputSelection(speech=speech, dialogue_text=True))
         pipeline._session_intent = intent
         pipeline._welcome_message = WelcomeAudio()
@@ -101,7 +100,6 @@ def test_welcome_output_matrix_for_both_pipeline_types(speech, cue, audio, inten
     welcome = WelcomeAudio() if audio else "Hello"
     for pipeline_cls in (StreamingPipeline, HalfDuplexPttPipeline):
         pipeline = pipeline_cls.__new__(pipeline_cls)
-        pipeline._destination = None
         pipeline._factory = SimpleNamespace(outputs=outputs)
         pipeline._session_intent = intent
         pipeline._welcome_message = welcome
@@ -133,7 +131,6 @@ async def test_cue_only_plays_without_a_tts_stage(mode):
 
 def test_ptt_audio_track_depends_on_any_selected_audio_not_tts():
     pipeline = HalfDuplexPttPipeline.__new__(HalfDuplexPttPipeline)
-    pipeline._destination = None
     pipeline._audio_sample_rate = 16000
     for speech in (False, True):
         for cue in (False, True):

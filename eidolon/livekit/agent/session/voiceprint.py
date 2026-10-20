@@ -42,7 +42,6 @@ class _ActiveVoiceprintTurn:
     chunks: list[bytes] = field(default_factory=list)
     sample_rate: int = 16000
     samples: int = 0
-    overflow: bool = False
 
     @property
     def audio_ms(self) -> int:
@@ -60,8 +59,7 @@ class _ActiveVoiceprintTurn:
         if samples <= 0:
             data = bytes(getattr(frame, "data", b""))
             samples = len(data) // 2
-        if (self.samples + samples) * 1000 > max_audio_ms * self.sample_rate:
-            self.overflow = True
+        if self.audio_ms >= max_audio_ms:
             return
         data = bytes(getattr(frame, "data", b""))
         if not data:
@@ -98,11 +96,9 @@ class VoiceprintTurnObserver:
         owner_short_audio_bypass_ms: int | None = None,
         trust_paired_devices: bool = True,
         context_resolver: ContextResolver | None = None,
-        admission=None,
     ) -> None:
         voiceprint_defaults = VoiceprintConfig()
-        self._admission = admission
-        self._service = service or admission
+        self._service = service
         self._sample_rate = sample_rate
         self._max_audio_ms = max_audio_ms or voiceprint_defaults.turn_max_audio_ms
         self._accept_cache_ttl_sec = (
@@ -133,61 +129,19 @@ class VoiceprintTurnObserver:
         self._verify_tasks: set[asyncio.Task] = set()
         self._context_cache: ResolvedContext | None = None
         self._accept_cache: dict[tuple[str, str], tuple[float, SpeakerSignal]] = {}
-        self._participant_identity: str | None = None
-        self._observed_tracks: set[str] = set()
-        self._pre_roll = bytearray()
 
-    async def authorize(self, result) -> bool:
-        if self._admission is None:
-            return True
-        try:
-            ctx = await self._resolve_context()
-            return await self._admission.authorize(ctx.companion_id, result)
-        except Exception:
-            return False
-
-    async def authorize_interruption(self, completed=None) -> bool:
-        if self._admission is None:
-            return True
-        active = self._active
-        if active is None:
-            if completed is not None and getattr(completed, "task", None) is not None:
-                try:
-                    result = await asyncio.shield(completed.task)
-                except Exception:
-                    return False
-                return await self.authorize(result)
-            return await self.authorize(getattr(completed, "result", None))
-        try:
-            ctx = await self._resolve_context()
-            result = await self._admission.verify(ctx.companion_id, b"" if active.overflow else active.audio_bytes(), active.sample_rate)
-            if self._active is not active:
-                return False
-            allowed = await self.authorize(result)
-            return allowed and self._active is active
-        except Exception:
-            return False
-
-    def install(self, room: Any, *, participant_identity: str | None = None) -> None:
+    def install(self, room: Any) -> None:
         """Subscribe to remote audio tracks for observe-only capture."""
         if self._service is None:
             return
         if self._room is room:
             return
         self._room = room
-        if participant_identity is not None:
-            self._participant_identity = participant_identity
 
         @room.on("track_subscribed")
         def _on_track_subscribed(track: Any, publication: Any, participant: Any) -> None:
             del publication
             self._maybe_start_audio_stream(track, participant)
-
-        for participant in getattr(room, "remote_participants", {}).values():
-            for publication in getattr(participant, "track_publications", {}).values():
-                track = getattr(publication, "track", None)
-                if track is not None:
-                    self._maybe_start_audio_stream(track, participant)
 
     def start_turn(self, *, timeline: TurnTimeline) -> None:
         if self._service is None:
@@ -198,10 +152,6 @@ class VoiceprintTurnObserver:
             timeline=timeline,
             sample_rate=self._sample_rate,
         )
-        if self._admission is not None and self._pre_roll:
-            self._active.chunks.append(bytes(self._pre_roll))
-            self._active.samples = len(self._pre_roll) // 2
-            self._pre_roll.clear()
         timeline.set_attr(
             "voiceprint",
             {
@@ -214,26 +164,12 @@ class VoiceprintTurnObserver:
     def append_frame(self, frame: Any) -> None:
         active = self._active
         if active is None:
-            if self._admission is not None:
-                if len(self._stream_tasks) > 1 or getattr(frame, "sample_rate", self._sample_rate) != self._sample_rate:
-                    self._pre_roll.clear()
-                else:
-                    # 200 ms of the selected input preserves the VAD onset;
-                    # never retain a previous completed turn as identity proof.
-                    self._pre_roll.extend(bytes(getattr(frame, "data", b"")))
-                    del self._pre_roll[:-self._sample_rate * 2 // 5]
-            return
-        if self._admission is not None and len(self._stream_tasks) > 1:
-            # Never use one track's identity to authorize another track's text.
-            # Ambiguous multi-track turns require fresh, unambiguous evidence.
-            active.overflow = True
             return
         active.append(frame, max_audio_ms=self._max_audio_ms)
 
     def finish_turn(self) -> asyncio.Task[VoiceprintTurnResult] | None:
         active = self._active
         self._active = None
-        self._pre_roll.clear()
         if active is None or self._service is None:
             return None
         task = asyncio.create_task(self._verify_turn(active))
@@ -242,7 +178,6 @@ class VoiceprintTurnObserver:
         return task
 
     async def aclose(self) -> None:
-        self._pre_roll.clear()
         for task in list(self._stream_tasks):
             task.cancel()
         for task in list(self._verify_tasks):
@@ -255,12 +190,6 @@ class VoiceprintTurnObserver:
         self._verify_tasks.clear()
 
     def _maybe_start_audio_stream(self, track: Any, participant: Any) -> None:
-        identity = str(getattr(participant, "identity", ""))
-        if self._participant_identity is not None and identity != self._participant_identity:
-            return
-        track_id = str(getattr(track, "sid", None) or id(track))
-        if track_id in self._observed_tracks:
-            return
         try:
             from livekit import rtc
 
@@ -273,7 +202,6 @@ class VoiceprintTurnObserver:
                 num_channels=1,
                 capacity=32,
             )
-            self._participant_identity = identity
         except Exception:
             logger.exception(
                 "[VoiceprintTurnObserver] failed to start audio stream participant=%s",
@@ -281,10 +209,8 @@ class VoiceprintTurnObserver:
             )
             return
         task = asyncio.create_task(self._consume_audio_stream(stream, participant))
-        self._observed_tracks.add(track_id)
         self._stream_tasks.add(task)
         task.add_done_callback(self._stream_tasks.discard)
-        task.add_done_callback(lambda _: self._observed_tracks.discard(track_id))
         logger.info(
             "[VoiceprintTurnObserver] observing audio track participant=%s",
             getattr(participant, "identity", ""),
@@ -333,14 +259,6 @@ class VoiceprintTurnObserver:
                 cached=False,
                 trusted_paired_device=False,
             )
-
-        if self._admission is not None:
-            result = await self._admission.verify(ctx.companion_id, b"" if turn.overflow else audio, turn.sample_rate)
-            timeline.set_attr("voiceprint", {
-                **result.signal.as_timeline_attrs(), "commit_allowed": result.commit_allowed,
-                "commit_reason": result.commit_reason, "policy_revision": result.policy_revision,
-            })
-            return result
 
         trusted_paired_device = self._is_trusted_paired_device(ctx)
         tenant_id = self._voiceprint_tenant_id(ctx)

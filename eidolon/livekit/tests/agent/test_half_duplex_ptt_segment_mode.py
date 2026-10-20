@@ -1159,16 +1159,3 @@ async def test_abort_closes_ptt_and_invalidates_pending_asr():
     assert controller.state == "idle"
     assert not controller.push_frame(_Frame(_pcm(120)))
     assert (await controller.release()).action == "reject"
-
-
-async def test_ptt_voice_rejection_never_reaches_transcriber():
-    stt = _FakeSttStage(streaming_text="must not reach agent")
-    controller = _controller(stt)
-    controller._verify_segment = AsyncMock(return_value=SimpleNamespace(commit_allowed=False))
-    controller.press()
-    controller.push_frame(_Frame(b"\x01\x00" * 16000))
-    result = await controller.release()
-    assert result.action == "reject"
-    assert result.reason == "voiceprint_not_accepted"
-    assert stt.recognize_calls == []
-    assert stt.recognize_streaming_calls == []

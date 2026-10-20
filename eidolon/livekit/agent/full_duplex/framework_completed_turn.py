@@ -266,16 +266,6 @@ class FullDuplexFrameworkCompletedTurnGate:
         )
         if interruption_allowed is False:
             return False
-        observer = getattr(owner, "_voiceprint_turns", None)
-        if observer is not None and hasattr(observer, "authorize"):
-            _, check_authorization_scope = owner._endpointing_scope()
-            evidence = self._completion.completed_voiceprint_turn(fallback_timeline=timeline).result
-            if not await observer.authorize(evidence):
-                self._reject_framework_completed_candidate(
-                    "voiceprint_authorization_revoked_or_missing", transcript=candidate_transcript,
-                    timeline=timeline, event="voiceprint_gate_rejected", flush_reason="voiceprint_commit_blocked")
-                return False
-            check_authorization_scope()
         return self._align_framework_completed_turn(
             turn_ctx=turn_ctx,
             completed_transcript=completed_transcript,

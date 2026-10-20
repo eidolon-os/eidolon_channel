@@ -275,26 +275,3 @@ async def test_voiceprint_context_error_still_blocks() -> None:
     vp = timeline.attrs["voiceprint"]
     assert vp["commit_allowed"] is False
     assert vp["commit_reason"].startswith("context_error")
-
-
-@pytest.mark.asyncio
-async def test_managed_voice_never_trusts_paired_device_or_previous_turn():
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-    from eidolon.livekit.agent.speaker_verification.admission import AdmissionEvidence
-    signal = SpeakerSignal(provider="test", model="test", known=True, profile_id="speaker")
-    evidence = AdmissionEvidence(signal, True, "voiceprint_accepted", "companion_1", 1)
-    admission = SimpleNamespace(verify=AsyncMock(return_value=evidence), authorize=AsyncMock(return_value=True))
-    observer = VoiceprintTurnObserver(service=None, admission=admission,
-        context_resolver=_resolve_device_context, max_audio_ms=3000)
-    for index in range(2):
-        observer.start_turn(timeline=TurnTimeline(f"managed_{index}"))
-        observer.append_frame(_Frame(samples_per_channel=16000*2))
-        assert (await observer.finish_turn()).commit_allowed
-    assert admission.verify.await_count == 2
-    observer.start_turn(timeline=TurnTimeline("overflow"))
-    observer.append_frame(_Frame(samples_per_channel=16000*4))
-    observer.append_frame(_Frame(samples_per_channel=160))
-    await observer.finish_turn()
-    assert admission.verify.await_args.args[1] == b""
-    await observer.aclose()

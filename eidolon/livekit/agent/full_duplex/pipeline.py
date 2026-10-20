@@ -249,10 +249,9 @@ class StreamingPipeline(BasePipeline):
         self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
         self._provider_events = self._build_provider_event_observer()
         self._voiceprint_turns = VoiceprintTurnObserver(
-            admission=getattr(getattr(self, "_factory", None), "companion_voice_admission", None),
             service=getattr(self._factory, "voiceprint_service", None),
             context_resolver=getattr(self._factory, "runtime_context_resolver", None),
-            sample_rate=16000 if getattr(getattr(self, "_factory", None), "companion_voice_admission", None) is not None else audio_sample_rate,
+            sample_rate=audio_sample_rate,
             max_audio_ms=self._voiceprint_config.turn_max_audio_ms,
             accept_cache_ttl_sec=(self._voiceprint_config.accept_cache_ttl_ms / 1000.0),
             accept_cache_short_audio_max_ms=(
@@ -527,11 +526,6 @@ class StreamingPipeline(BasePipeline):
 
     def _build_interruption_effects(self) -> FullDuplexInterruptionEffects:
         return FullDuplexInterruptionEffects(
-            authorize_voice_interruption=(
-                lambda: self._voiceprint_turns.authorize_interruption(
-                    self._ensure_turn_completion().completed_voiceprint_turn(
-                        fallback_timeline=getattr(self, "_timeline", None))))
-                if getattr(getattr(self, "_factory", None), "companion_voice_admission", None) is not None else None,
             ducking=self._ducking,
             callbacks=self._callbacks,
             get_session=lambda: getattr(self, "_session", None),
@@ -1026,8 +1020,6 @@ class StreamingPipeline(BasePipeline):
         (min length, dedup, single in-flight). Can later be tightened to EOT
         confidence — the warm() API is already the right seam for that.
         """
-        if getattr(getattr(self, "_factory", None), "companion_voice_admission", None) is not None:
-            return
         warm = getattr(getattr(getattr(self._factory, "llm", None), "llm", None), "warm", None)
         if warm is None:
             return
@@ -1447,18 +1439,12 @@ class StreamingPipeline(BasePipeline):
         its ephemeral result is discarded, not reused as the accepted reply.
         Neither mechanism owns the product turn's commit decision.
         """
-        options = build_full_duplex_turn_handling(
+        return build_full_duplex_turn_handling(
             turn_policy=self._turn_policy,
             allow_interruptions=self._allow_interruptions,
             false_interruption_timeout=self._false_interruption_timeout,
             avatar_mode=self._avatar_enabled,
         )
-        if getattr(getattr(self, "_factory", None), "companion_voice_admission", None) is not None:
-            options["preemptive_generation"]["enabled"] = False
-            options["preemptive_generation"]["preemptive_tts"] = False
-            options["interruption"]["enabled"] = False
-            options["interruption"]["discard_audio_if_uninterruptible"] = False
-        return options
 
     @property
     def _barge_in_enabled(self) -> bool:

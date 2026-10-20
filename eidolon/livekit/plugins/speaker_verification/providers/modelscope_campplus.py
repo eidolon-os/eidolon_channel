@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import time
 import wave
 from collections.abc import Sequence
@@ -148,18 +149,13 @@ class ModelScopeCampPlusSpeakerVerificationProvider:
         return self._pipeline
 
     def _extract_embedding_from_audio(self, audio: bytes, sample_rate: int):
-        import io
-        import numpy as np
-        if audio.startswith(b"RIFF"):
-            with wave.open(io.BytesIO(audio), "rb") as wav:
-                if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
-                    raise ValueError("expected mono PCM16 WAV")
-                sample_rate = wav.getframerate()
-                audio = wav.readframes(wav.getnframes())
-        if sample_rate != 16000:
-            raise ValueError("speaker verification requires 16 kHz audio")
-        samples = np.frombuffer(audio, dtype="<i2").astype(np.float32) / 32768.0
-        result = self._load_pipeline()([samples], output_emb=True)
+        with tempfile.TemporaryDirectory(prefix="eidolon-channel-voiceprint-") as tmp:
+            wav_path = Path(tmp) / "turn.wav"
+            if audio.startswith(b"RIFF"):
+                wav_path.write_bytes(audio)
+            else:
+                _write_pcm_wav(wav_path, audio=audio, sample_rate=sample_rate)
+            result = self._load_pipeline()([str(wav_path)], output_emb=True)
         embedding = result["embs"][0]
         return _normalize(embedding)
 

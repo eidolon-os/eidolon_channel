@@ -35,8 +35,6 @@ def _crop_wav(src: Path, dst: Path, seconds: int) -> int:
 
 
 async def _run(args: argparse.Namespace) -> dict[str, object]:
-    if args.companion_extractor:
-        return await _run_companion_extractor(args)
     store = VoiceprintStore(args.voiceprint_root)
     provider = ModelScopeCampPlusSpeakerVerificationProvider(
         model_dir=args.model_dir,
@@ -134,38 +132,8 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-async def _run_companion_extractor(args):
-    """Exercise the production VAD/quality/extraction path without legacy profiles."""
-    from eidolon.livekit.plugins.speaker_verification.extractor import VoiceEmbeddingExtractor
-    provider = ModelScopeCampPlusSpeakerVerificationProvider(model_dir=args.model_dir)
-    extractor = VoiceEmbeddingExtractor(provider)
-    with wave.open(str(args.sample), "rb") as reader:
-        if (reader.getframerate(), reader.getnchannels(), reader.getsampwidth()) != (16000, 1, 2):
-            raise SystemExit("benchmark input must be mono PCM16 WAV at 16 kHz")
-        pcm = reader.readframes(reader.getnframes())
-    rows = []
-    for seconds in args.durations:
-        for iteration in range(args.rounds):
-            started = time.perf_counter()
-            try:
-                sample = await extractor.extract(pcm[:int(seconds*32000)])
-                status = "ok"
-                speech_ms = sample.speech_ms
-            except Exception as exc:
-                status, speech_ms = type(exc).__name__, None
-            rows.append(dict(seconds=seconds, iteration=iteration, status=status,
-                speech_ms=speech_ms, wall_ms=round((time.perf_counter()-started)*1000, 2)))
-    hot = sorted(row["wall_ms"] for row in rows[1:] if row["status"] == "ok")
-    return dict(path="companion_extractor", weights_hash=extractor.weights_hash,
-        cold=rows[0], rows=rows,
-        warm_p50_ms=statistics.median(hot) if hot else None,
-        warm_p95_ms=hot[min(len(hot)-1, int(len(hot)*.95))] if hot else None,
-        note="Synthetic input measures integration/latency only, never FAR or FRR.")
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--companion-extractor", action="store_true")
     parser.add_argument("--tenant-id", default="default")
     parser.add_argument("--user-id", default="manson")
     parser.add_argument("--voiceprint-root", type=Path, default=default_voiceprint_root())

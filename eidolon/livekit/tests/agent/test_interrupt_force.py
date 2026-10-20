@@ -75,21 +75,3 @@ def test_non_forced_blocked_when_interruptions_disabled() -> None:
     effects, session = _effects(is_cancelled=False, allow_interruptions=False)
     effects.interrupt_current_turn(force=False)
     session.interrupt.assert_not_called()
-
-
-async def test_semantic_direct_interrupt_waits_for_voice_authorization():
-    import asyncio
-    effects, session = _effects(is_cancelled=False, allow_interruptions=True)
-    effects._ducking = MagicMock(is_cancelled=False)
-    release = asyncio.Event()
-    async def denied():
-        await release.wait()
-        return False
-    effects._authorize_voice_interruption = denied
-    effects.interrupt_current_turn()
-    session.interrupt.assert_not_called()
-    release.set()
-    await effects._voice_interrupt_task
-    session.interrupt.assert_not_called()
-    effects._ducking.cancel_output.assert_not_called()
-    effects._ducking.unduck_if_suspended.assert_called_once()

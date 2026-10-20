@@ -208,8 +208,6 @@ class HalfDuplexPttPipeline(BasePipeline):
 
         class PttAgent(PolicyBoundAgent):
             async def on_enter(self) -> None:
-                if not await pipeline._voice_policy_allows_welcome():
-                    return
                 welcome = pipeline._welcome_on_enter()
                 if welcome is None:
                     logger.info(
@@ -278,7 +276,6 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._started = True
         self.session_mark("room_joined")
         participant_identity = await wait_for_runtime_participant_identity(room)
-        self._input_participant_identity = participant_identity
         await self._open_ptt_session_trace(room)
         self._install_room_observers(room)
         await self._warmup_stages()
@@ -389,8 +386,6 @@ class HalfDuplexPttPipeline(BasePipeline):
             ),
         )
         return HalfDuplexPttTurnController(
-            verify_segment=self._verify_voice_segment
-                if getattr(getattr(self, "_factory", None), "companion_voice_admission", None) is not None else None,
             recorder=recorder,
             transcriber=transcriber,
             agent_output_active=self._agent_output_active_for_ptt,
@@ -398,16 +393,6 @@ class HalfDuplexPttPipeline(BasePipeline):
             tap_to_stop_max_audio_sec=(0.0 if self._destination is not None
                                        else ptt.segment_tap_to_stop_max_audio_ms / 1000.0),
         )
-
-    async def _verify_voice_segment(self, segment):
-        if segment.truncated:
-            return None
-        try:
-            context = await self._factory.runtime_context_resolver(self._room)
-            return await self._factory.companion_voice_admission.verify(
-                context.companion_id, segment.audio, segment.sample_rate)
-        except Exception:
-            return None
 
     def _build_idle_watchdog(self) -> IdleWatchdog:
         return IdleWatchdog(
@@ -493,9 +478,6 @@ class HalfDuplexPttPipeline(BasePipeline):
                     self._maybe_start_audio_stream(track, participant)
 
     def _maybe_start_audio_stream(self, track: Any, participant: Any) -> None:
-        selected = getattr(self, "_input_participant_identity", None)
-        if selected is not None and getattr(participant, "identity", None) != selected:
-            return
         if self._ptt_controller is None:
             return
         try:
@@ -538,9 +520,6 @@ class HalfDuplexPttPipeline(BasePipeline):
             async for event in stream:
                 frame = getattr(event, "frame", None)
                 if frame is not None:
-                    if getattr(self._factory, "companion_voice_admission", None) is not None and len(self._track_tasks) > 1:
-                        self._ptt_controller.abort()
-                        continue
                     self._ptt_controller.push_frame(frame)
         except asyncio.CancelledError:
             raise
@@ -656,19 +635,6 @@ class HalfDuplexPttPipeline(BasePipeline):
             return
         if result.action != "commit":
             return
-        admission = getattr(getattr(self, "_factory", None), "companion_voice_admission", None)
-        if admission is not None:
-            try:
-                context = await self._factory.runtime_context_resolver(self._room)
-                allowed = await admission.authorize(context.companion_id, result.voice_evidence)
-            except Exception:
-                allowed = False
-            if generation != self._ptt_controller.generation:
-                return
-            if not allowed:
-                self._deliver_transcript(generation, "")
-                self._publish_ptt_turn_status(ptt_rejected_outcome("voiceprint_not_accepted"), "voiceprint_not_accepted")
-                return
         session = self._session
         if session is None:
             self._publish_ptt_turn_status(ptt_rejected_outcome("no_session"), "no_session")

@@ -73,17 +73,6 @@ class BasePipeline(ABC):
         self._pending_session_marks: list[tuple[str, float, dict[str, Any]]] = []
         self._music_runtime: SessionMusicRuntime | None = None
 
-    async def _voice_policy_allows_welcome(self) -> bool:
-        admission = getattr(getattr(self, "_factory", None), "companion_voice_admission", None)
-        if admission is None:
-            return True
-        try:
-            context = await self._factory.runtime_context_resolver(self._room)
-            # No voice evidence can authorize a welcome in allowlist mode.
-            return await admission.authorize(context.companion_id, None)
-        except Exception:
-            return False
-
     async def _start_music_runtime(self, session: Any) -> None:
         from ..eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
 

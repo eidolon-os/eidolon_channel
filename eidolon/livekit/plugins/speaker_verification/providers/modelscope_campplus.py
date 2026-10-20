@@ -159,6 +159,23 @@ class ModelScopeCampPlusSpeakerVerificationProvider:
         embedding = result["embs"][0]
         return _normalize(embedding)
 
+    def extract_embedding(self, pcm: bytes, sample_rate: int):
+        """Reference preprocessing for explicit PCM, without temporary WAV files.
+
+        Public numerical adapter used by offline evaluation. It does not read
+        profiles or make an identity/admission decision.
+        """
+        import numpy as np
+
+        if sample_rate != 16000 or not pcm or len(pcm) % 2:
+            raise ValueError("mono PCM16 at 16 kHz required")
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        result = self._load_pipeline()([samples], output_emb=True)
+        vector = _normalize(result["embs"][0])
+        if vector.ndim != 1 or not np.isfinite(vector).all():
+            raise ValueError("invalid embedding")
+        return vector
+
     def _load_profile_embedding(self, profile: VoiceprintProfile):
         if not profile.embedding_ref:
             return None

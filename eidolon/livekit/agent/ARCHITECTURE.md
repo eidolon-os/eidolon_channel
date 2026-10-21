@@ -886,7 +886,7 @@ ASR 适配层保留空 FINAL 及其 source identity；公共 `stt_node` 边界�
 
 重建期间使用不读取麦克风的 AudioInput 占位接收公开暂停/恢复回调，不缓存 PCM。再次暂停必须等 attach 后才能恢复；SDK 关闭会话也会先 detach，所以 detach 本身绝不能触发重开。换轨/重连事件由同一 owner 串行处理；每次 await 后重新核对来源变更和输入所有权，不能覆盖另一个 owner 接管的输入。旧 RoomIO 清理失败保持不可用，不能继续创建新读者；关闭会等待同一清理任务完成，失败清理仅可在终止流程重试。新输入启动失败无旧音频回退，保留明确失败状态。
 
-此 owner 要求独占会话音频输入。StreamingPipeline 显式传入 speaker_observation 时，现有生命周期关闭原 RoomIO 默认 audio_input，由 EvidenceRoomInput 接管唯一麦克风入口，保持原音频输入选项及既有输出/文本配置。未映射的 STT、缺运行态 session、显式关闭麦克风均拒绝实验启动；不能与旧 voiceprint_service 并存。生产 server 尚不创建观察器，默认路径和 Pi5 未开启。已在真实 RoomIO/AgentSession 与合成 RTC 传输测试中验证自动恢复，并串联实际 Bailian 适配器/SDK 24→16 kHz 重采样/本机 WebSocket 验证新证据字节。真实网络下重建识别连接的耗时、首字完整性及 Pi5 体验仍待验收，不能以本机测试宣称达到延迟预算。稳定物理输入下的 ASR 自身重试仍使用原有规范化代际机制，不重建整个会话。
+此 owner 要求独占会话音频输入。StreamingPipeline 显式传入 speaker_observation 时，现有生命周期关闭原 RoomIO 默认 audio_input，由 EvidenceRoomInput 接管唯一麦克风入口，保持原音频输入选项及既有输出/文本配置。未映射的 STT、缺运行态 session、显式关闭麦克风均拒绝实验启动；不能与旧 voiceprint_service 并存。生产入口通过下述有限期配置选择观察，默认关闭。已在真实 RoomIO/AgentSession 与合成 RTC 传输测试中验证自动恢复，并串联实际 Bailian 适配器/SDK 24→16 kHz 重采样/本机 WebSocket 验证新证据字节。真实网络下重建识别连接的耗时、首字完整性及 Pi5 体验仍待验收，不能以本机测试宣称达到延迟预算。稳定物理输入下的 ASR 自身重试仍使用原有规范化代际机制，不重建整个会话。
 
 锁定版本 LiveKit Agents 1.7.1 在不可打断播放时可向 STT 发送替代静音，而 VAD 仍收到原帧。故原输入前置旁路和独立房间订阅都不能证明与 ASR 同源。原生采样率 stt_node 取样器已移入 `tests/_harness/audio_evidence_stream.py`，仅保留该 SDK 行为的回归证明，不维护第二套生产 PCM。真实 AgentSession/default stt_node/RecognizeStream→Bailian→本机 WebSocket 测试验证普通输入和不可打断播放时，16 kHz 证据与实际发送字节一致；SDK 重采样静音可能含极低量化抖动，不以逐字节全零作为静音判断。
 
@@ -904,6 +904,8 @@ SpeakerTurnObservation 只挂在既有正常提交成功分支；拒绝、重复
 
 每会话最多一项在途提取，无待处理音频队列，8 秒内超时；满额直接记录 busy。复用 SDK ServiceHTTPClient 与现有 /v1/voiceprints/extract，不重试 POST，不在 worker 加载模型。提取调用仅含连续 16 kHz PCM，不传 Owner/Companion/Device 身份或修改模板。输入变化时旧结果不能记录为提取成功；关闭取消并等待任务。此处是历史轮次的数值观察，后续新候选不接收其结果，既不等待它回复，也不让它发出打断。
 
-观察输出只有候选/来源/样本范围、时长、提取状态和模型版本；不含原音频、向量、匹配分数、allowed 或身份判断。调用者持有 HTTP client 生命周期和有界记录 sink；不要将单次 session_mark 用于多轮结果。认证/音频拒绝/容量忙/服务不可用/超时分开记录，任意错误正文不进入诊断。完整应用尚需受控实验启动入口和真机验证；本轮只经真实 SDK/现有 HTTP 服务与合成 RTC/ASR/模型测试验证接线，未部署或采集个人音频。
+观察输出只有候选/来源/样本范围、时长、提取状态和模型版本；不含原音频、向量、匹配分数、allowed 或身份判断。生命周期持有并关闭 HTTP client；结果逐轮写入现有 session trace event 和 Channel 日志，不使用只记一次的 session_mark。认证/音频拒绝/容量忙/服务不可用/超时分开记录，任意错误正文不进入诊断。
+
+受控启动使用 voiceprint.observation_companion_id 与 observation_until（绝对 Unix 秒），默认空/0。在现有解析器确认实际 Owner/Companion 之后，仅为匹配的 Companion、未来 24 小时内的截止时间创建观察器，沿用 EIDOLON_CHANNEL_PROVIDER_URL/TOKEN；凭据或 provider 不适配时记录不可用并保留普通对话。观察与旧 enabled 门禁互斥。到期立即清空、终止当前 capture、取消在途提取；会话继续，后续恢复建立的 capture 同样不可重新启用。此配置不绑定 Device，不保存原始 PCM。配置新增字段的首次发布先安装兼容代码，再启用新字段，以满足 Ops 的可回退跨版本校验。
 
 其他 provider 缺映射时继续保持未知，不影响其普通转写。缓冲 complete 只证明该范围连续且作用域匹配，不证明传输无丢帧、身份通过或跨设备准确率。模板比对、独立正反例校准、准入和打断仍未交付。

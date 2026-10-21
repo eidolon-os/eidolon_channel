@@ -8,6 +8,7 @@ name to the deployment's preference list — no other layer changes.
 from __future__ import annotations
 
 import logging
+import os
 
 from aiohttp import web
 from eidolon_sdk.system import declared_management_networks
@@ -65,10 +66,21 @@ def main() -> None:
         smarthome=smarthome,
     )
     service.initialize()
+    speaker_engine = None
+    # Host availability is independent of Data-owned Companion authorization.
+    capabilities = {v.strip() for v in os.environ.get('EIDOLON_HOST_CAPABILITIES', '').split(',')}
+    if 'local_speaker_verification' in capabilities:
+        from eidolon.livekit.plugins.speaker_verification.inference import SpeakerInferenceEngine
+        from eidolon.livekit.plugins.speaker_verification.model_paths import default_campplus_model_dir
+        from eidolon.livekit.plugins.speaker_verification.reference_extractor import (
+            ReferenceSpeakerExtractor,
+        )
+        speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(default_campplus_model_dir()))
     app = create_app(
         service=service,
         bearer_token=config.bearer_token,
         traces=SessionTraceReader(config.traces.root),
+        speaker_engine=speaker_engine,
     )
     if home_client is not None:
         async def close_home_client(_app):

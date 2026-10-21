@@ -322,7 +322,8 @@ class ObservabilityConfig:
 
 @dataclass(frozen=True)
 class VoiceprintConfig:
-    enabled: bool = True
+    # Legacy enforcement is opt-in; model availability is not Companion authorization.
+    enabled: bool = False
     provider: str = "3d_speaker"
     model: str = "campplus_zh_16k_common"
     root: str = field(

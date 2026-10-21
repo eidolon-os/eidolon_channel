@@ -68,12 +68,11 @@ runtime_authority:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
-  enabled: true
+  enabled: false
   provider: 3d_speaker
   model: campplus_zh_16k_common
   root: $EIDOLON_STATE_ROOT/voiceprints
-  # Empty means use the bundled model in
-  # eidolon/livekit/plugins/speaker_verification/resources/3dspeaker.
+  # Empty uses the Models-owned artifact; local development may set EIDOLON_3DSPEAKER_MODEL_DIR.
   model_dir: ""
   threshold: 0.31
   min_audio_ms: 1500

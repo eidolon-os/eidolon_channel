@@ -50,8 +50,13 @@ def create_app(
     service: ChannelProviderService,
     bearer_token: str,
     traces: SessionTraceReader | None = None,
+    speaker_engine=None,
 ) -> web.Application:
     app = web.Application(client_max_size=256 * 1024)
+    from .speaker_extraction import register_speaker_extraction
+    register_speaker_extraction(app, engine=speaker_engine,
+                               authorized=lambda request: _authorized(request, bearer_token),
+                               problem=_problem_body)
     trace_reader = traces if traces is not None else SessionTraceReader(None)
 
     async def health(_request: web.Request) -> web.Response:

@@ -1,0 +1,3 @@
+# Explicit operator diagnostics are not part of the deployed product.
+benchmark/voice_diagnostic_capture.py export-ignore
+benchmark/VOICE_DIAGNOSTICS.md export-ignore

@@ -253,6 +253,7 @@ llm:
   model: gpt-4o-mini
   api_key: OPENAI_LLM_API_KEY
 voiceprint:
+  enabled: true
   threshold: 1.2
 """,
     )

@@ -91,6 +91,9 @@ runtime_authority:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
+  # Finite diagnostics only: exact Companion + absolute Unix deadline; default off.
+  observation_companion_id: ""
+  observation_until: 0
   # Voiceprint 只负责已选择 Companion 的语音 interaction 内说话人校验/遥测。
   # Device Mount/Attachment 与无 Device 的虚拟 Companion 入口由 Channel ingress
   # 在进入 audio pipeline 前解析，不能由 voiceprint 推导。

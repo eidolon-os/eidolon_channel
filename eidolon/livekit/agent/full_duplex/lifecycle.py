@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any, TYPE_CHECKING
 
 from eidolon_sdk.biz.contracts import (
@@ -215,6 +216,17 @@ class FullDuplexSessionLifecycle:
         from ..session.room_io import start_room_session
 
         pipeline = self._pipeline
+        observation = getattr(pipeline, "_speaker_observation", None)
+        if observation is not None:
+            # The recovery owner must be the only RoomIO microphone reader.
+            # Reject unsupported providers before starting any media.
+            stt = getattr(getattr(pipeline._factory, "stt", None), "stt", None)
+            if not hasattr(stt, "audio_evidence_capture") or not pipeline._factory.runtime_session_id:
+                raise ValueError("speaker observation requires mapped STT and runtime session scope")
+            audio_options = room_session_options["options"].get_audio_input_options()
+            if audio_options is None:
+                raise ValueError("speaker observation requires microphone input")
+            room_session_options["options"] = replace(room_session_options["options"], audio_input=False)
 
         async def warmup() -> None:
             await pipeline._warmup_stages()
@@ -224,11 +236,35 @@ class FullDuplexSessionLifecycle:
 
         async def start_media() -> None:
             pipeline._presentation_io = await start_room_session(**room_session_options)
+            if observation is not None:
+                from ..session.evidence_room_input import EvidenceRoomInput
+
+                def bind(capture):
+                    stt.audio_evidence_capture = capture
+                    observation.bind_capture(capture)
+
+                pipeline._evidence_input = EvidenceRoomInput(
+                    session=room_session_options["session"], room=room_session_options["input_room"],
+                    participant_identity=room_session_options["options"].participant_identity,
+                    session_id=pipeline._factory.runtime_session_id,
+                    endpoint_id=room_session_options["options"].participant_identity,
+                    audio_options=audio_options,
+                    bind_capture=bind, retire_candidate=pipeline._user_turns.reject_active,
+                )
+                await pipeline._evidence_input.start()
             pipeline.session_mark("media_started")
 
-        async with asyncio.TaskGroup() as startup:
-            startup.create_task(warmup())
-            startup.create_task(start_media())
+        try:
+            async with asyncio.TaskGroup() as startup:
+                startup.create_task(warmup())
+                startup.create_task(start_media())
+        except BaseException:
+            if observation is not None:
+                await observation.aclose()
+            evidence_input = getattr(pipeline, "_evidence_input", None)
+            if evidence_input is not None:
+                await evidence_input.aclose()
+            raise
 
     async def _start_avatar_worker(self, room: Room, session: Any) -> bool:
         """Start the avatar worker and route session audio to it.
@@ -530,6 +566,12 @@ class FullDuplexSessionLifecycle:
             pipeline._avatar_worker = None
         if hasattr(pipeline, "_voiceprint_turns"):
             await pipeline._voiceprint_turns.aclose()
+        observation = getattr(pipeline, "_speaker_observation", None)
+        if observation is not None:
+            await observation.aclose()
+        evidence_input = getattr(pipeline, "_evidence_input", None)
+        if evidence_input is not None:
+            await evidence_input.aclose()
         await pipeline._close_music_runtime()
         if pipeline._session is not None:
             try:

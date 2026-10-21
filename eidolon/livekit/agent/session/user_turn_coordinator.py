@@ -202,6 +202,17 @@ class UserTurnCoordinator:
         return self._active.selected_text if self._active is not None else ""
 
     def capture_audio_reference(self, *, source: AudioSource) -> CandidateAudioReference:
+        return self._capture_audio_reference(source=source)
+
+    def capture_committed_audio_reference(
+        self, *, candidate_id: str, source: AudioSource,
+    ) -> CandidateAudioReference:
+        """Observe the exact terminal candidate, never grant admission from it."""
+        return self._capture_audio_reference(source=source, completed_candidate_id=candidate_id)
+
+    def _capture_audio_reference(
+        self, *, source: AudioSource, completed_candidate_id: str | None = None,
+    ) -> CandidateAudioReference:
         """Freeze exact provider input coverage, without deciding admission.
 
         Text reconciliation is not audio reconciliation. A covered segment must
@@ -217,8 +228,12 @@ class UserTurnCoordinator:
                 self._transcript_change_version, span, reason,
             )
 
-        if candidate is None or candidate.state != "open":
-            return result("no_open_candidate")
+        if completed_candidate_id is None:
+            if candidate is None or candidate.state != "open":
+                return result("no_open_candidate")
+        elif (candidate is None or candidate.state != "committed"
+              or candidate.candidate_id != completed_candidate_id):
+            return result("no_committed_candidate")
         if candidate.current_segment is None or candidate.current_segment.ended_at is None:
             return result("speech_not_ended")
         selected = []
@@ -994,6 +1009,10 @@ class UserTurnCoordinator:
         now: float,
     ) -> None:
         selected = candidate.selected_text
+        if selected == transcript:
+            # An identical framework completion confirms the assembled text;
+            # replacing its segments would destroy the provider audio ranges.
+            return
         if selected and selected in transcript:
             candidate.segments = [
                 SpeechSegment(

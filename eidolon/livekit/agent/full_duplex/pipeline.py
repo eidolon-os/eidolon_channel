@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any
 from .transcript_event import FullDuplexTranscriptEvent
 
 if TYPE_CHECKING:
+    from ..session.speaker_observation import SpeakerTurnObservation
     from livekit.agents.voice import Agent as lk_Agent
     from livekit.agents.voice import AgentSession
     from livekit.rtc import Room
@@ -169,6 +170,7 @@ class StreamingPipeline(BasePipeline):
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
         voiceprint_config: VoiceprintConfig | None = None,
+        speaker_observation: SpeakerTurnObservation | None = None,
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
         on_session_started: Callable[[], Awaitable[None]] | None = None,
         on_session_end: Callable[[str], Awaitable[None]] | None = None,
@@ -210,6 +212,12 @@ class StreamingPipeline(BasePipeline):
         self._observability = observability or ObservabilityConfig()
         self._turn_events = ChannelTurnEventSink(observer=self._observe_channel_event)
         self._voiceprint_config = voiceprint_config or VoiceprintConfig()
+        # Explicit experimental composition only. No default enablement and no
+        # parallel legacy recorder/admission path in an observed session.
+        if speaker_observation is not None and getattr(factory, "voiceprint_service", None) is not None:
+            raise ValueError("speaker observation cannot coexist with legacy verification")
+        self._speaker_observation = speaker_observation
+        self._evidence_input = None
         self._timeline: TurnTimeline | None = None
         self._timeline_debug_flushed = False
         self._flushed_timeline_ids: set[str] = set()

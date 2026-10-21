@@ -432,6 +432,11 @@ class FullDuplexFrameworkCompletedTurnGate:
             timeline=timeline,
         )
         owner._claim_agent_output_timeline(timeline)
+        observation = getattr(owner, "_speaker_observation", None)
+        if observation is not None:
+            # Post-commit, synchronous snapshot + bounded background work.
+            # Numerical extraction must never delay or veto the normal reply.
+            observation.submit(decision, owner._user_turns)
         return True
 
     def _finish_rejected_turn(

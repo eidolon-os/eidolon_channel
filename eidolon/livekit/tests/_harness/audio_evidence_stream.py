@@ -1,10 +1,10 @@
-"""Sample-addressed evidence at LiveKit's public Agent.stt_node boundary.
+"""Test-only tap at LiveKit's public Agent.stt_node boundary.
 
 No room subscription, background reader, resampling, inference or turn guessing.
 The caller must supply explicit boundaries in this input's sample coordinate
 system. Provider timestamps and delayed speech-state callbacks are not such
-boundaries. This adapter is not installed in production until that mapping is
-proven. An input track replacement requires its owner to call reset_source;
+boundaries. Production evidence uses the normalized provider-input coordinate,
+not this native-rate proof harness. An input track replacement calls reset_source;
 the public node receives frames, not track IDs. Keep this tap after SDK audio
 suppression, so evidence cannot include real audio when ASR received silence.
 """
@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from livekit import rtc
 
-from .audio_evidence import AudioEvidence, AudioEvidenceBuffer
+from eidolon.livekit.common.audio_evidence import AudioEvidence, AudioEvidenceBuffer
 
 
 @dataclass(frozen=True)

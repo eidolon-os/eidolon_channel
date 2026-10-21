@@ -26,7 +26,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
-from eidolon.livekit.common.audio_timeline import ProviderAudioTimeline
+from eidolon.livekit.common.audio_timeline import AudioSource, ProviderAudioTimeline
 
 from eidolon.livekit.common.transcript_evidence import (
     TranscriptBoundary,
@@ -123,6 +123,9 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._finished: bool = False
         self._conn: "BailianConnectionManager | None" = None
         self._stream_id = f"bailian-{uuid.uuid4().hex}"
+        self._audio_capture = getattr(stt, "audio_evidence_capture", None)
+        if self._audio_capture is not None:
+            self._audio_capture.select_stream(self._stream_id)
         self._audio_generation = 0
         self._audio_timeline: ProviderAudioTimeline | None = None
         self._first_audio_sent = False
@@ -147,6 +150,17 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
     # ------------------------------------------------------------------
 
     async def _run(self) -> None:
+        self._audio_generation += 1
+        source = AudioSource(self._stream_id, self._audio_generation, self._sample_rate)
+        if self._audio_capture is not None:
+            self._audio_capture.begin_run(source)
+        try:
+            await self._run_connection(source)
+        finally:
+            if self._audio_capture is not None:
+                self._audio_capture.end_run(source)
+
+    async def _run_connection(self, source: AudioSource) -> None:
         """Main body of the receive loop. Called by _main_task in a retry loop.
 
         G7 (2026-05-17): converts unexpected WS close into ``APIError``
@@ -163,7 +177,6 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._recv_error = None
         self._cancel_preflight()
         self._preflight_sent_text = None
-        self._audio_generation += 1
         self._audio_timeline = ProviderAudioTimeline(
             source=self._stream_id, generation=self._audio_generation,
             sample_rate=self._sample_rate, max_samples=self._sample_rate * 30,
@@ -173,6 +186,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._audio_buf = AudioByteStream(sample_rate=self._sample_rate, num_channels=1,
                                           samples_per_channel=_CHUNK_SAMPLES)
         input_chunk_start = 0
+        input_received_samples = 0
 
         conn = BailianConnectionManager(
             api_url=self._stt_ref.api_url,
@@ -251,7 +265,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         silence_frame = b"\x00" * (_CHUNK_SAMPLES * 2)
 
         async def send_loop() -> None:
-            nonlocal input_chunk_start
+            nonlocal input_chunk_start, input_received_samples
             frames_sent = 0
             keepalive_sent = 0
             logger.info("[Bailian STT] send_loop started")
@@ -324,6 +338,21 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
 
                     frame: rtc.AudioFrame = item
                     pcm = frame.data.tobytes()
+                    # This is the canonical evidence coordinate: after the
+                    # SDK resampler, before rechunking, gating and keepalive.
+                    if (self._audio_capture is not None
+                            and self._audio_capture.active_source == source):
+                        if (
+                            frame.sample_rate != self._sample_rate
+                            or frame.num_channels != 1
+                            or len(pcm) != frame.samples_per_channel * 2
+                        ):
+                            self._audio_capture.invalidate("audio_format_changed")
+                        else:
+                            self._audio_capture.append(
+                                source, start=input_received_samples, pcm=pcm,
+                            )
+                    input_received_samples += len(pcm) // 2
                     chunks = self._audio_buf.push(pcm)
                     for chunk in chunks:
                         chunk_bytes = bytes(chunk.data.tobytes())

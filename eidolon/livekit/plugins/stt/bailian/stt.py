@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+
+from eidolon.livekit.common.audio_evidence import AudioEvidenceCapture
 from typing import TYPE_CHECKING, Any
 
 import livekit
@@ -82,6 +84,7 @@ class BailianFunASRSTT(stt.STT):
         sample_rate: int = 16000,
         itn: bool = True,
         conn_options: livekit.agents.types.APIConnectOptions | None = None,
+        audio_evidence_capture: AudioEvidenceCapture | None = None,
     ):
         super().__init__(
             capabilities=STTCapabilities(
@@ -125,6 +128,8 @@ class BailianFunASRSTT(stt.STT):
         # VAD signal into the gate inside the active stream. weakref-style
         # — only one stream is "current" at a time per session.
         self._current_stream: "BailianFunASRSpeechStream | None" = None
+        # Explicit session-input ownership; absent in normal production setup.
+        self.audio_evidence_capture = audio_evidence_capture
 
         if not self._api_key:
             logger.warning(

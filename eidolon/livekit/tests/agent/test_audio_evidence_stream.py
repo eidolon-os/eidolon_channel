@@ -8,7 +8,7 @@ from livekit.agents import Agent, AgentSession
 from livekit.agents import stt
 from livekit.agents.voice.io import AudioInput
 
-from eidolon.livekit.agent.session.audio_evidence_stream import AudioEvidenceStream
+from eidolon.livekit.tests._harness.audio_evidence_stream import AudioEvidenceStream
 from .._harness.headless import RecordingAudioOutput
 
 

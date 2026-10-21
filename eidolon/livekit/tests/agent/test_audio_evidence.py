@@ -2,7 +2,7 @@
 
 import pytest
 
-from eidolon.livekit.agent.session.audio_evidence import AudioEvidenceBuffer
+from eidolon.livekit.common.audio_evidence import AudioEvidenceBuffer
 
 
 def test_snapshot_slices_frames_without_reordering_or_including_neighbours():

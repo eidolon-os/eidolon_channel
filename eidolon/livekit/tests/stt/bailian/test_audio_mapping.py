@@ -11,6 +11,7 @@ from livekit.agents.types import APIConnectOptions
 
 from eidolon.livekit.common.transcript_evidence import transcript_evidence_from_speech_event
 from eidolon.livekit.common.audio_timeline import AudioSource
+from eidolon.livekit.common.audio_evidence import AudioEvidenceCapture
 from eidolon.livekit.agent.full_duplex.transcript_evidence_buffer import TranscriptEvidenceBuffer
 from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
 from eidolon.livekit.agent.observability import TurnTimeline
@@ -20,14 +21,17 @@ from eidolon.livekit.plugins.stt.bailian.models import FunASRResultGenerated, Fu
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("gate_enabled", [False, True])
+@pytest.mark.parametrize("capture_enabled", [False, True])
 async def test_provider_wire_time_maps_to_resampled_input_after_keepalive(
-    monkeypatch, gate_enabled
+    monkeypatch, gate_enabled, capture_enabled
 ):
     monkeypatch.setenv("BAILIAN_STT_GATE_ENABLED", str(gate_enabled).lower())
     monkeypatch.setenv("BAILIAN_STT_KEEPALIVE_INTERVAL_SEC", ".02")
     monkeypatch.setenv("BAILIAN_STT_GATE_KEEPALIVE_INTERVAL_SEC", ".02")
     alive = asyncio.Event()
     sent_samples = []
+    sent_pcm = []
+    capture = AudioEvidenceCapture(session_id="session", endpoint_id="input")
 
     async def server(socket):
         run = json.loads(await socket.recv())
@@ -46,6 +50,7 @@ async def test_provider_wire_time_maps_to_resampled_input_after_keepalive(
             elif not emitted:
                 emitted = True
                 sent_samples.append(size)
+                sent_pcm.append(data)
                 await socket.send(
                     json.dumps(
                         {
@@ -72,6 +77,7 @@ async def test_provider_wire_time_maps_to_resampled_input_after_keepalive(
             api_url=f"ws://127.0.0.1:{port}",
             api_key="test",
             conn_options=APIConnectOptions(max_retry=0, timeout=2),
+            audio_evidence_capture=capture if capture_enabled else None,
         )
         # The gate config uses its own environment spelling; make this test's
         # bounded cadence explicit on the existing provider configuration.
@@ -103,6 +109,14 @@ async def test_provider_wire_time_maps_to_resampled_input_after_keepalive(
             current_source = AudioSource(stream._stream_id, stream._audio_generation, 16000)
             reference = turns.capture_audio_reference(source=current_source)
             assert reference.span == evidence.audio_span
+            if capture_enabled:
+                assert capture.active_source == current_source
+                frozen = capture.snapshot(candidate=reference.candidate_id, span=reference.span)
+                assert frozen.complete and frozen.pcm == sent_pcm[0]
+                assert frozen.sample_rate == 16000
+                assert (frozen.session_id, frozen.endpoint_id) == ("session", "input")
+            else:
+                assert capture.active_source is None and capture.retained_samples == 0
             assert not turns.is_audio_reference_current(
                 reference, source=replace(current_source, generation=2)
             )
@@ -120,3 +134,4 @@ async def test_provider_wire_time_maps_to_resampled_input_after_keepalive(
             assert evidence.audio_span != replace(evidence.audio_span, generation=2)
         finally:
             await stream.aclose()
+        assert capture.active_source is None and capture.retained_samples == 0

@@ -5,7 +5,7 @@ subscribes to a room or infers candidate boundaries from wall-clock events.
 """
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,9 @@ class AudioEvidence:
     end: int
     complete: bool
     reason: str | None
-    pcm: bytes
+    pcm: bytes = field(repr=False)
+    session_id: str = ""
+    endpoint_id: str = ""
 
 
 class AudioEvidenceBuffer:

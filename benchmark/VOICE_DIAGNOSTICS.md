@@ -11,6 +11,11 @@ tracks are not concatenated into the original capture.
 1. Obtain consent for this specific test window. Confirm the existing device room
    and participant through LiveKit's participant inventory; do not guess or create
    a test room. Confirm ordinary conversation remains on the rollback baseline.
+   A connected participant and microphone publication do **not** prove an active
+   conversation: BOX-3 emits zero frames while its microphone input gate is closed.
+   Have the user activate the normal conversation immediately before the window,
+   verify the current session is active, and explicitly signal when to speak.
+   Earlier successful conversation is not evidence that the session is still active.
 2. Run on the Pi5 with its installed Channel environment and existing LiveKit
    credentials. Do not print credentials, tokens, audio, transcripts or embeddings.
    Create a dedicated private parent directory (mode `0700`) outside the release
@@ -37,6 +42,10 @@ tracks are not concatenated into the original capture.
    decoded by LiveKit; receipt timestamps are included to expose arrival gaps.
    Do not assume this subscriber sees the same sample/turn boundaries as the agent.
    The capture is a bounded window, not an automatically detected complete utterance.
+   Reject all-zero PCM before model inference; duration alone is not usable audio.
+   Establish effective speech before interpreting any embedding score. If capture
+   prerequisites failed, report an invalid diagnostic attempt, delete its files and
+   resolve the cause before requesting another test window.
 5. Once analysis finishes, create `analysis.done` inside that exact directory.
    The capture process removes its temporary directory and emits `CAPTURE_DELETED`.
    If analysis never signals completion, the retention deadline removes it.

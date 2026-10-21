@@ -40,20 +40,37 @@ class SpeakerObservation:
 
 class SpeakerTurnObservation:
     def __init__(self, *, extract: Callable[[bytes], Awaitable[ExtractedSample]],
-                 record: Callable[[SpeakerObservation], None], timeout_sec: float = 8):
+                 record: Callable[[SpeakerObservation], None], timeout_sec: float = 8,
+                 lifetime_sec: float | None = None):
         if not math.isfinite(timeout_sec) or not 0 < timeout_sec <= 8:
             raise ValueError("bounded extraction timeout required")
         self._extract, self._record, self._timeout = extract, record, timeout_sec
         self._capture: AudioEvidenceCapture | None = None
         self._pending: asyncio.Task | None = None
         self._closed = False
+        if lifetime_sec is not None and (not math.isfinite(lifetime_sec) or not 0 < lifetime_sec <= 86400):
+            raise ValueError("bounded observation lifetime required")
+        self._deadline = (asyncio.get_running_loop().call_later(lifetime_sec, self._expire)
+                          if lifetime_sec is not None else None)
 
     @property
     def pending(self) -> asyncio.Task | None:
         return self._pending
 
     def bind_capture(self, capture: AudioEvidenceCapture | None) -> None:
+        if self._closed and capture is not None:
+            capture.invalidate("observation_closed")
         self._capture = None if self._closed else capture
+
+    def _expire(self) -> None:
+        self._closed = True
+        if self._deadline is not None:
+            self._deadline.cancel()
+        if self._capture is not None:
+            self._capture.invalidate("observation_closed")
+        self._capture = None
+        if self._pending is not None:
+            self._pending.cancel()
 
     def _emit(self, observation: SpeakerObservation) -> None:
         try:
@@ -133,8 +150,7 @@ class SpeakerTurnObservation:
         self._pending = asyncio.create_task(observe())
 
     async def aclose(self) -> None:
-        self._closed = True
-        self._capture = None
+        self._expire()
         task, self._pending = self._pending, None
         if task is not None:
             task.cancel()

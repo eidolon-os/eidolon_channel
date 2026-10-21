@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from urllib.parse import urlsplit
 
 from eidolon_sdk.biz.contracts.local_asr import (
@@ -258,6 +259,16 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("observability.session_trace_retention_days must be in [0, 365]")
 
     vp = cfg.voiceprint
+    if (type(vp.observation_until) not in (int, float)
+            or not math.isfinite(vp.observation_until) or vp.observation_until < 0):
+        errors.append("voiceprint.observation_until must be nonnegative Unix seconds")
+    if (not isinstance(vp.observation_companion_id, str)
+            or len(vp.observation_companion_id) > 128):
+        errors.append("voiceprint.observation_companion_id must be a bounded string")
+    if bool(vp.observation_companion_id) != bool(vp.observation_until):
+        errors.append("voiceprint observation requires both Companion and deadline")
+    if vp.enabled and vp.observation_until:
+        errors.append("voiceprint observation cannot coexist with legacy enforcement")
     if vp.enabled:
         if vp.provider != "3d_speaker":
             errors.append("voiceprint.provider must be '3d_speaker'")

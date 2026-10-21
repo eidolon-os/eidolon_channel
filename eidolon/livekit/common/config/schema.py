@@ -322,6 +322,9 @@ class ObservabilityConfig:
 
 @dataclass(frozen=True)
 class VoiceprintConfig:
+    # Bounded observation only; zero/empty keeps the normal input unchanged.
+    observation_companion_id: str = ""
+    observation_until: float = 0.0  # absolute Unix seconds, including current sessions
     # Legacy enforcement is opt-in; model availability is not Companion authorization.
     enabled: bool = False
     provider: str = "3d_speaker"

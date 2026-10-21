@@ -68,6 +68,9 @@ runtime_authority:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
+  # Finite diagnostics only: exact Companion + absolute Unix deadline; default off.
+  observation_companion_id: ""
+  observation_until: 0
   enabled: false
   provider: 3d_speaker
   model: campplus_zh_16k_common

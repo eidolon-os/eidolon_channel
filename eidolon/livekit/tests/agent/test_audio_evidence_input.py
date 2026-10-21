@@ -1,7 +1,6 @@
 """Use public SDK input lifecycle; no room subscription or microphone."""
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from livekit import rtc
@@ -81,53 +80,4 @@ async def test_cancelled_input_read_releases_evidence():
     reading.cancel()
     with pytest.raises(asyncio.CancelledError):
         await reading
-    assert capture.active_source is None and capture.retained_samples == 0
-
-
-@pytest.mark.parametrize(
-    "event",
-    [
-        "track_subscribed",
-        "track_unsubscribed",
-        "track_unpublished",
-        "track_muted",
-        "track_unmuted",
-        "participant_disconnected",
-        "reconnecting",
-        "disconnected",
-    ],
-)
-def test_selected_input_room_changes_invalidate_without_choosing_a_new_track(event):
-    capture, raw, guarded, owner = setup()
-    room = rtc.Room()
-    guarded.watch_room(room, participant_identity="selected")
-    participant = SimpleNamespace(identity="selected")
-    publication = SimpleNamespace(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    if event in {"track_subscribed", "track_unsubscribed"}:
-        args = (object(), publication, participant)
-    elif event.startswith("track_"):
-        args = (publication, participant)
-    elif event == "participant_disconnected":
-        args = (participant,)
-    else:
-        args = ()
-    room.emit(event, *args)
-    assert capture.active_source is None and capture.retained_samples == 0
-    # No SDK state or physical source is changed by evidence invalidation.
-    assert owner.audio is guarded and owner.audio_enabled
-    assert (raw.attaches, raw.detaches) == (1, 0)
-    guarded.close()
-
-
-def test_other_participant_and_non_microphone_track_do_not_invalidate_input():
-    capture, raw, guarded, owner = setup()
-    room = rtc.Room()
-    guarded.watch_room(room, participant_identity="selected")
-    mic = SimpleNamespace(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    camera = SimpleNamespace(source=rtc.TrackSource.SOURCE_CAMERA)
-    room.emit("track_subscribed", object(), mic, SimpleNamespace(identity="other"))
-    room.emit("track_unpublished", camera, SimpleNamespace(identity="selected"))
-    room.emit("participant_disconnected", SimpleNamespace(identity="other"))
-    assert capture.active_source is not None and capture.retained_samples == 4
-    guarded.close()
     assert capture.active_source is None and capture.retained_samples == 0

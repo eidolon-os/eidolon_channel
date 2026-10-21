@@ -880,9 +880,13 @@ ASR 适配层保留空 FINAL 及其 source identity；公共 `stt_node` 边界�
 
 唯一的取证坐标是 SDK 既有重采样后的 provider 输入 PCM，在重新分块、计费门控和合成保活之前截取。`common/audio_evidence.py` 复用原 AudioEvidenceBuffer，新增单输入 owner 的 AudioEvidenceCapture；插件不依赖 agent 会话包。仅显式注入 capture 时保留 PCM，生产工厂不注入。一个 capture 同时只拥有一个识别流/连接代际，最多保留 30 秒；关闭、异常、重试和来源失效释放缓冲，旧流的写入、重试和清理不能影响新流。原音频不进入 repr、日志或文件。
 
-`session/audio_evidence_input.py` 只代理 SDK 公开 AudioInput 的原帧及 attach/detach 生命周期，不记录 PCM、不另订阅音轨。由会话 owner 提供已选定输入和 participant identity，监听该参与者的麦克风变化、离开及房间重连；其他参与者和视频轨变化不使当前证据失效。暂停、输入替换、流终止或取消同步失效证据并移除监听，不改变 SDK 的输入开关或转写行为。
+`session/audio_evidence_input.py` 只代理 SDK 公开 AudioInput 的原帧及 attach/detach 生命周期，不记录 PCM、不另订阅音轨；旧 capture 失效后始终不可再次使用。房间事件与恢复统一由 `session/evidence_room_input.py` 的 EvidenceRoomInput 管理，不保留第二套房间监听。它复用 SDK RoomIO 作为唯一音频输入，指定既有 participant identity；其他参与者和视频轨变化不重建输入。
 
-**失效与恢复分开**：RoomIO 的内部音频队列在换轨/暂停后仍可能包含旧帧，房间回调不能证明新帧边界。因此输入失效对当前 capture 是终态；恢复麦克风或重建 ASR 连接不会自动重新授权取证。新的 capture 必须由输入 owner 在建立全新且可证明的输入边界后创建，不能仅递增代际、等待固定延迟或从迟到转写反推来源。稳定物理输入下的 ASR 连接重建则更新规范化坐标代际并清空旧缓冲。生产的自动输入恢复尚未接通，这是启用观察/准入前的未完成项，不是产品要求用户逐设备激活。
+**失效与恢复分开**：RoomIO 的内部队列在换轨/暂停后可能仍有旧帧，回调本身不证明新帧边界。EvidenceRoomInput 先失效旧证据并通知既有候选 owner 终止候选，再断开并等待旧音频 RoomIO 关闭，使用公开 `clear_user_turn()` 重置 SDK 识别输入/重采样器，最后绑定新 capture 和全新的音频 RoomIO。禁止 pre-connect 录音重放进入新来源。该顺序不修改 SDK 私有队列，也不以固定等待、递增代际或 VAD 时刻猜测边界；会话、输出 sink 和进行中的播放均保留。
+
+重建期间使用不读取麦克风的 AudioInput 占位接收公开暂停/恢复回调，不缓存 PCM。再次暂停必须等 attach 后才能恢复；SDK 关闭会话也会先 detach，所以 detach 本身绝不能触发重开。换轨/重连事件由同一 owner 串行处理；每次 await 后重新核对来源变更和输入所有权，不能覆盖另一个 owner 接管的输入。旧 RoomIO 清理失败保持不可用，不能继续创建新读者；关闭会等待同一清理任务完成，失败清理仅可在终止流程重试。新输入启动失败无旧音频回退，保留明确失败状态。
+
+此 owner 要求独占会话音频输入：生产接线时必须关闭原 RoomIO 的默认 audio_input，保持既有输出/文本配置，禁止同时安装两套音频输入。当前工厂尚未安装，模型观察和准入未开启。已在真实 RoomIO/AgentSession 与合成 RTC 传输测试中验证自动恢复，并串联实际 Bailian 适配器/SDK 24→16 kHz 重采样/本机 WebSocket 验证新证据字节。真实网络下重建识别连接的耗时、首字完整性及 Pi5 体验仍待验收，不能以本机测试宣称达到延迟预算。稳定物理输入下的 ASR 自身重试仍使用原有规范化代际机制，不重建整个会话。
 
 锁定版本 LiveKit Agents 1.7.1 在不可打断播放时可向 STT 发送替代静音，而 VAD 仍收到原帧。故原输入前置旁路和独立房间订阅都不能证明与 ASR 同源。原生采样率 stt_node 取样器已移入 `tests/_harness/audio_evidence_stream.py`，仅保留该 SDK 行为的回归证明，不维护第二套生产 PCM。真实 AgentSession/default stt_node/RecognizeStream→Bailian→本机 WebSocket 测试验证普通输入和不可打断播放时，16 kHz 证据与实际发送字节一致；SDK 重采样静音可能含极低量化抖动，不以逐字节全零作为静音判断。
 

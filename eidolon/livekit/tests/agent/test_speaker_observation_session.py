@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestServer
 from livekit import rtc
 from livekit.agents import Agent, AgentSession
 from livekit.agents.llm import ChatContext, ChatMessage
-from livekit.agents.voice.room_io import RoomOptions
+from livekit.agents.voice.room_io import AudioInputOptions, RoomOptions
 
 from eidolon.channel_provider.http import create_app
 from eidolon.channel_provider.tests.test_speaker_extraction_http import Engine, Service
@@ -23,6 +23,7 @@ from eidolon.livekit.agent.session.speaker_extraction_client import SpeakerExtra
 from eidolon.livekit.agent.session.speaker_observation import SpeakerTurnObservation
 from eidolon.livekit.common.audio_timeline import AudioSpan
 from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+from eidolon.livekit.plugins.speaker_verification.inference import InferenceBusy, ModelUnavailable
 from .._harness.headless import RecordingAudioOutput
 from .test_commit_guard import _make_pipeline_with_session
 from .test_evidence_input_recovery import Recognizer, Room, Transport, next_audio
@@ -39,7 +40,8 @@ class MappedRecognizer(Recognizer):
 
 
 @pytest.mark.asyncio
-async def test_session_installs_one_input_and_observes_normal_commit_through_provider(monkeypatch):
+@pytest.mark.parametrize("outcome", ["extracted", "provider_busy", "provider_unavailable", "timeout", "expired"])
+async def test_observation_outcome_preserves_session_input_commit_and_playout(monkeypatch, outcome):
     transports = []
 
     def from_track(*, track, **kwargs):
@@ -50,9 +52,28 @@ async def test_session_installs_one_input_and_observes_normal_commit_through_pro
     monkeypatch.setattr(rtc.AudioStream, "from_track", from_track)
     engine = Engine()
     engine.ready.set()
+    extraction_started, release_extraction = asyncio.Event(), asyncio.Event()
+    original_extract = engine.extract
+
+    async def extract(pcm):
+        sample = await original_extract(pcm)
+        extraction_started.set()
+        if outcome == "provider_busy":
+            raise InferenceBusy()
+        if outcome == "provider_unavailable":
+            raise ModelUnavailable()
+        if outcome in {"timeout", "expired"}:
+            await release_extraction.wait()
+        return sample
+
+    engine.extract = extract
     server = TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
     await server.start_server()
     room, recognizer = Room(), MappedRecognizer()
+    room.local_participant.sid = "agent-sid"
+    room.local_participant.identity = "agent"
+    room.local_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+    room.participant.sid = "user-sid"
     room.register_byte_stream_handler = MagicMock()
     room.unregister_byte_stream_handler = MagicMock()
     room.local_participant.stream_bytes = AsyncMock(return_value=SimpleNamespace(
@@ -70,13 +91,17 @@ async def test_session_installs_one_input_and_observes_normal_commit_through_pro
     pipeline.session_mark = MagicMock()
     async with httpx.AsyncClient(trust_env=False) as http:
         client = SpeakerExtractionClient(http, str(server.make_url("")), token="test")
-        observation = SpeakerTurnObservation(extract=client.extract, record=records.append)
+        observation = SpeakerTurnObservation(extract=client.extract, record=records.append,
+            timeout_sec=0.1 if outcome == "timeout" else 8,
+            lifetime_sec=2 if outcome == "expired" else None)
         pipeline._speaker_observation = observation
         try:
             await FullDuplexSessionLifecycle(pipeline)._prepare_session(
                 session=session, agent=Agent(instructions="", stt=recognizer,
                     turn_handling={"turn_detection": "manual"}), input_room=room,
                 options=RoomOptions(participant_identity="selected", audio_output=False,
+                    # Deterministic sample markers; SDK AGC changes constant PCM.
+                    audio_input=AudioInputOptions(sample_rate=16000, auto_gain_control=False),
                     text_input=False, text_output=False, video_input=False))
             assert len(transports) == 1
             assert session.output.audio is output
@@ -97,14 +122,59 @@ async def test_session_installs_one_input_and_observes_normal_commit_through_pro
             allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
                 turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["测试完整句子"]))
             assert allowed
-            await asyncio.wait_for(asyncio.shield(observation.pending), 2)
+            pending = observation.pending
+            await asyncio.wait_for(extraction_started.wait(), 1)
+            playback_started, release_playback = asyncio.Event(), asyncio.Event()
+
+            async def audio():
+                yield rtc.AudioFrame(b"\x0a\x00" * 240, 24000, 1, 240)
+                playback_started.set()
+                await release_playback.wait()
+                yield rtc.AudioFrame(b"\x14\x00" * 240, 24000, 1, 240)
+
+            speech = session.say("", audio=audio(), allow_interruptions=False)
+            try:
+                await asyncio.wait_for(playback_started.wait(), 1)
+                if outcome == "expired":
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(asyncio.shield(pending), 3)
+                    assert records == []
+                    assert capture.retained_samples == 0
+                    assert capture.active_source is None
+                else:
+                    await asyncio.wait_for(asyncio.shield(pending), 1)
+                    assert records[-1].reason == outcome
+                    assert records[-1].candidate_id == owner.active.candidate_id
+                    assert records[-1].session_id == "session"
+                assert not speech.interrupted
+            finally:
+                release_playback.set()
+            await asyncio.wait_for(speech.wait_for_playout(), 1)
+            assert output.collected_pcm == b"\x0a\x00" * 240 + b"\x14\x00" * 240
             assert engine.calls == [b"".join(chunks)]
-            assert records[-1].reason == "extracted"
-            assert records[-1].candidate_id == owner.active.candidate_id
-            assert records[-1].session_id == "session"
+
+            # The same microphone/ASR stream and next product turn remain usable.
+            transports[0].feed(321)
+            async with asyncio.timeout(1):
+                while True:
+                    next_capture, next_span, pcm = await next_audio(recognizer)
+                    if pcm == (321).to_bytes(2, "little") * 160:
+                        break
+            assert next_capture is capture
+            owner.start_speech(timeline=TurnTimeline("following-turn"))
+            owner.add_transcript("下一句话", is_final=True, evidence=TranscriptEvidence(
+                stream_key="asr", revision_key="next-final", audio_span=next_span))
+            owner.note_speech_stopped(eot_score=None)
+            assert await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+                turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["下一句话"]))
+            assert len(engine.calls) == 1
+            if outcome == "expired":
+                assert capture.retained_samples == 0
+                assert records == []
             assert session.output.audio is output
             assert len(transports) == 1
         finally:
+            release_extraction.set()
             await observation.aclose()
             if getattr(pipeline, "_evidence_input", None):
                 await pipeline._evidence_input.aclose()

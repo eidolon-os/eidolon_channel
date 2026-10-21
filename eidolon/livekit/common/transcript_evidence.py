@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Iterable, Mapping
 
+from .audio_timeline import AudioSpan
+
 
 TRANSCRIPT_EVIDENCE_METADATA_KEY = "eidolon.transcript_evidence"
 
@@ -56,6 +58,7 @@ class TranscriptEvidence:
     word_spans: tuple[TranscriptSourceSpan, ...] = ()
     boundaries: frozenset[TranscriptBoundary] = frozenset()
     stable_prefix: str | None = None
+    audio_span: AudioSpan | None = None
 
     @property
     def capabilities(self) -> frozenset[TranscriptEvidenceCapability]:
@@ -89,6 +92,7 @@ class TranscriptEvidence:
             or self.word_spans
             or self.boundaries
             or self.stable_prefix
+            or self.audio_span is not None
         )
 
     def same_revision(self, other: TranscriptEvidence) -> bool:
@@ -116,7 +120,7 @@ class TranscriptEvidence:
         if other is None or not other.available:
             return self
         if not self.available:
-            return other
+            return replace(other, audio_span=self.audio_span)
         return replace(
             self,
             stream_key=self.stream_key or other.stream_key,
@@ -126,6 +130,8 @@ class TranscriptEvidence:
             word_spans=self.word_spans or other.word_spans,
             boundaries=self.boundaries | other.boundaries,
             stable_prefix=self.stable_prefix or other.stable_prefix,
+            # A prior prefix's audio must never authorize a newer unmapped revision.
+            audio_span=self.audio_span,
         )
 
     def as_metadata(self) -> dict[str, Any]:
@@ -150,6 +156,8 @@ class TranscriptEvidence:
             payload["boundaries"] = sorted(boundary.value for boundary in self.boundaries)
         if self.stable_prefix:
             payload["stable_prefix"] = self.stable_prefix
+        if self.audio_span is not None:
+            payload["audio_span"] = self.audio_span.as_metadata()
         return {TRANSCRIPT_EVIDENCE_METADATA_KEY: payload}
 
 
@@ -221,6 +229,7 @@ def transcript_evidence_from_metadata(metadata: Any) -> TranscriptEvidence:
         word_spans=tuple(word_spans),
         boundaries=frozenset(boundaries),
         stable_prefix=_optional_string(raw.get("stable_prefix")),
+        audio_span=AudioSpan.from_metadata(raw.get("audio_span")),
     )
 
 

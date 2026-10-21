@@ -48,7 +48,7 @@ async def gate_factory(sent: List[bytes]):
     async def _make(**kwargs) -> SttGate:
         defaults = dict(
             sample_rate=16000,
-            sender=lambda b: _async_append(sent, b),
+            sender=lambda b, origin: _async_append(sent, b),
             preroll_ms=200,
             tail_window_ms=300,
             keepalive_interval_sec=0.1,
@@ -71,6 +71,28 @@ async def gate_factory(sent: List[bytes]):
 
 async def _async_append(sent: List[bytes], b: bytes) -> None:
     sent.append(b)
+
+
+@pytest.mark.asyncio
+async def test_preroll_preserves_input_offsets_and_keepalive_has_no_input_origin():
+    sends = []
+
+    async def send(data, start):
+        sends.append((data, start))
+
+    gate = SttGate(sample_rate=16000, sender=send, preroll_ms=200,
+                   keepalive_interval_sec=.01, rms_threshold=1000)
+    await gate.start()
+    try:
+        await gate.feed(_silence(1600), input_start=0)
+        await gate.feed(_silence(1600), input_start=1600)
+        await asyncio.sleep(.025)
+        assert sends and all(start is None for _, start in sends)
+        sends.clear()
+        await gate.feed(_tone(1600), input_start=3200)
+        assert [start for _, start in sends] == [0, 1600, 3200]
+    finally:
+        await gate.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +238,7 @@ async def test_gate_long_speech_buffer_drops_old(gate_factory, sent: List[bytes]
         await g.feed(c)
     # Ring should hold only the last 2 chunks (chunks[3], chunks[4])
     assert len(g._preroll_ring) == 2
-    ring_contents = list(g._preroll_ring)
+    ring_contents = [data for data, _ in g._preroll_ring]
     assert ring_contents[0] == chunks[3]
     assert ring_contents[1] == chunks[4]
 

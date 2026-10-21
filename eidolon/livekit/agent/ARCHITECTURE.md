@@ -882,4 +882,14 @@ ASR 适配层保留空 FINAL 及其 source identity；公共 `stt_node` 边界�
 
 取样点必须位于 SDK 输入抑制之后。锁定版本 LiveKit Agents 1.7.1 在不可打断播放等情况下会向 STT 发送替代静音，而 VAD 仍可收到原帧。在 `AgentInput.audio` 或另一个房间订阅上捕获不能据此证明与 ASR 同源。`test_audio_evidence_stream.py` 使用真实 AgentSession、默认 stt_node、RecognizeStream 和既有音频输出 harness，复现该差异并验证节点入口证据与 STT 接收字节一致，不修改 SDK 私有状态。
 
-当前组件只证明选定节点的样本连续性，未证明传输无丢帧、provider 消费完整性或产品轮次覆盖。Bailian 时间戳属于其发送音频坐标，启用计费门控或插入 keepalive 后不能直接视为此处坐标；local_asr 目前也没有完整输入范围元数据。后续由已有 provider 适配层提供可追溯坐标映射，既有 UserTurnCoordinator 确认完整候选的范围后才能取证。不得用 VAD/FINAL 到达时间代替样本位置。换轨和暂停恢复需要输入生命周期 owner 明确失效旧代际；同一 stt_node 对象不会自动证明物理输入未变。上述映射和生命周期接线未完成，因此当前不安装此组件、不调用模型、不改提交/打断，也不部署线上观察采集。
+当前组件只证明选定节点的样本连续性，未证明传输无丢帧、provider 消费完整性或产品轮次覆盖。Bailian 时间戳属于其发送音频坐标，启用计费门控或插入 keepalive 后不能直接视为此处坐标；local_asr 目前也没有完整输入范围元数据。不得用 VAD/FINAL 到达时间代替样本位置。换轨和暂停恢复需要输入生命周期 owner 明确失效旧代际；同一 stt_node 对象不会自动证明物理输入未变。当前不安装此组件、不调用模型、不改提交/打断，也不部署线上观察采集。
+
+#### 已实现的发送坐标映射与候选引用
+
+`common/audio_timeline.py` 只保存有限的样本区间映射，不保存 PCM。Bailian 在既有 SDK 重采样后、分块与计费门控之前定义输入坐标；正常块、预滚块保留该位置，合成保活为无输入来源。发送与登记使用同一顺序，失败发送不登记；跨合成块、丢弃区间、重复预滚或已过期范围的转写不能得到有效映射。每次识别连接重建更换代际并重建分块缓冲，避免上个连接残余半块混入新坐标。结果 task-id 也必须与当前连接匹配。
+
+此坐标是 **provider 接收的规范化 PCM（当前 16 kHz）**，不是公开 stt_node 的原始 24 kHz 游标，禁止直接混用。它复用 SDK 的重采样，不新增重采样算法。后续实际取证应在这个规范化输入位置使用已有 AudioEvidenceBuffer，并沿同一 source/generation 查询；不能对 stt_node 的另一份缓冲强行套用 16 kHz 下标或同时维护两套权威 PCM。
+
+可选 `TranscriptEvidence.audio_span` 沿既有元数据桥进入 UserTurnCoordinator。协调器冻结 `CandidateAudioReference`，要求完整 FINAL、显式音频覆盖、同一输入来源以及当前候选状态；续说、迟到修订或终止使旧引用失效。较新转写缺映射时不继承旧前缀范围。文字覆盖关系必须另有音频范围包含证据，不能单凭文本等价授权。调用方必须传入输入 owner 当前的 AudioSource，不能从待处理旧转写反推当前来源。
+
+已在合成数据下验证真实 SDK 重采样→本机 WebSocket（含保活/门控）→公开转写元数据桥→完整候选引用。未支持的 provider 仍无 audio_span，不影响其普通转写。物理换轨/暂停恢复与 active-source 的运行态接线、实际 PCM 取证、推理及准入尚未接入；当前生产仍保持原普通对话行为。

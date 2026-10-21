@@ -22,9 +22,11 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
+from eidolon.livekit.common.audio_timeline import ProviderAudioTimeline
 
 from eidolon.livekit.common.transcript_evidence import (
     TranscriptBoundary,
@@ -115,21 +117,14 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._sample_rate = actual_sample_rate
         self._language = actual_language
 
-        # AudioByteStream accumulates raw frames into fixed-size chunks (100 ms)
-        from livekit.agents.utils.audio import AudioByteStream
-
-        self._audio_buf = AudioByteStream(
-            sample_rate=actual_sample_rate,
-            num_channels=1,
-            samples_per_channel=_CHUNK_SAMPLES,
-        )
-
         # Per-utterance state — reset on each _run()
         self._parser_confirmed: list[FunASRSentence] = []
         self._last_interim_text: str = ""
         self._finished: bool = False
         self._conn: "BailianConnectionManager | None" = None
-        self._stream_id = f"bailian-{id(self):x}"
+        self._stream_id = f"bailian-{uuid.uuid4().hex}"
+        self._audio_generation = 0
+        self._audio_timeline: ProviderAudioTimeline | None = None
         self._first_audio_sent = False
         self._first_partial_seen = False
         self._first_final_seen = False
@@ -168,6 +163,16 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._recv_error = None
         self._cancel_preflight()
         self._preflight_sent_text = None
+        self._audio_generation += 1
+        self._audio_timeline = ProviderAudioTimeline(
+            source=self._stream_id, generation=self._audio_generation,
+            sample_rate=self._sample_rate, max_samples=self._sample_rate * 30,
+        )
+        # A partial chunk from a failed connection cannot belong to the new run.
+        from livekit.agents.utils.audio import AudioByteStream
+        self._audio_buf = AudioByteStream(sample_rate=self._sample_rate, num_channels=1,
+                                          samples_per_channel=_CHUNK_SAMPLES)
+        input_chunk_start = 0
 
         conn = BailianConnectionManager(
             api_url=self._stt_ref.api_url,
@@ -179,6 +184,17 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             max_sentence_silence_ms=self._stt_ref.max_sentence_silence_ms,
         )
         self._conn = conn
+        send_lock = asyncio.Lock()
+
+        async def send_audio(data: bytes, input_start: int | None) -> None:
+            # Gate keepalive and normal send_loop share a single wire order.
+            async with send_lock:
+                await conn.send_audio(data)
+                self._audio_timeline.record(samples=len(data) // 2, input_start=input_start)
+            if input_start is not None:
+                self._emit_provider_event_once(
+                    "stt_first_audio_sent", "_first_audio_sent", bytes=len(data))
+                self._emit_turn_first_audio_if_needed(bytes_len=len(data))
 
         # _FlushSentinel is a nested class of RecognizeStream.
         # Get the type so we can use isinstance() in send_loop.
@@ -197,18 +213,9 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         if gate_enabled:
             from ._gate import SttGate
 
-            async def _send_audio_with_event(data: bytes) -> None:
-                self._emit_provider_event_once(
-                    "stt_first_audio_sent",
-                    "_first_audio_sent",
-                    bytes=len(data),
-                )
-                self._emit_turn_first_audio_if_needed(bytes_len=len(data))
-                await conn.send_audio(data)
-
             self._gate = SttGate(
                 sample_rate=self._sample_rate,
-                sender=_send_audio_with_event,
+                sender=send_audio,
                 preroll_ms=gate_cfg.gate_preroll_ms,
                 tail_window_ms=gate_cfg.gate_tail_window_ms,
                 keepalive_interval_sec=gate_cfg.gate_keepalive_interval_sec,
@@ -232,15 +239,6 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         else:
             self._gate = None
 
-        async def send_audio(data: bytes) -> None:
-            self._emit_provider_event_once(
-                "stt_first_audio_sent",
-                "_first_audio_sent",
-                bytes=len(data),
-            )
-            self._emit_turn_first_audio_if_needed(bytes_len=len(data))
-            await conn.send_audio(data)
-
         # Connection keepalive: when no real audio arrives for this interval,
         # push a short silence frame so the DashScope task doesn't hit its ~23s
         # idle timeout (e.g. during a long agent reply when a half-duplex device
@@ -253,6 +251,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         silence_frame = b"\x00" * (_CHUNK_SAMPLES * 2)
 
         async def send_loop() -> None:
+            nonlocal input_chunk_start
             frames_sent = 0
             keepalive_sent = 0
             logger.info("[Bailian STT] send_loop started")
@@ -279,7 +278,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                         if self._finished:
                             break
                         try:
-                            await conn.send_audio(silence_frame)
+                            await send_audio(silence_frame, None)
                         except BailianConnectionError:
                             break
                         keepalive_sent += 1
@@ -307,7 +306,8 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                             flushed_bytes += len(d)
                             # G16: flush bypasses the gate — at stream end we
                             # want every last byte sent regardless of VAD.
-                            await send_audio(d)
+                            await send_audio(d, input_chunk_start)
+                            input_chunk_start += len(d) // 2
                         logger.info(
                             "[Bailian STT] flush sentinel received — flushed %d audio chunks "
                             "(%d bytes), calling finish()",
@@ -330,9 +330,10 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                         # G16: route through gate if enabled. Gate decides
                         # whether to buffer (GATED) or forward (FORWARDING).
                         if self._gate is not None:
-                            await self._gate.feed(chunk_bytes)
+                            await self._gate.feed(chunk_bytes, input_start=input_chunk_start)
                         else:
-                            await send_audio(chunk_bytes)
+                            await send_audio(chunk_bytes, input_chunk_start)
+                        input_chunk_start += len(chunk_bytes) // 2
                         frames_sent += 1
                     # Only log every 50 frames to avoid log spam
                     if frames_sent % 50 == 0:
@@ -718,6 +719,13 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             ),
             boundaries=frozenset(boundaries),
             stable_prefix=stable_prefix,
+            audio_span=(
+                self._audio_timeline.resolve_ms(sentence.begin_time, sentence.end_time)
+                if getattr(self, "_audio_timeline", None) is not None
+                and result.task_id
+                and result.task_id == getattr(getattr(self, "_conn", None), "task_id", None)
+                else None
+            ),
         )
         return evidence.as_metadata()
 

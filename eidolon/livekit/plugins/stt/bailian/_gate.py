@@ -92,7 +92,7 @@ class SttGate:
 
     Lifecycle::
 
-        gate = SttGate(sample_rate=16000, sender=conn.send_audio, ...)
+        gate = SttGate(sample_rate=16000, sender=send_with_input_origin, ...)
         await gate.start()                       # spawns keepalive task
 
         # In send_loop:
@@ -116,7 +116,7 @@ class SttGate:
         self,
         *,
         sample_rate: int,
-        sender: Callable[[bytes], Awaitable[None]],
+        sender: Callable[[bytes, int | None], Awaitable[None]],
         preroll_ms: int = 500,
         tail_window_ms: int = 1500,
         keepalive_interval_sec: float = 1.0,
@@ -149,7 +149,7 @@ class SttGate:
         # Preroll ring: capped deque of recent chunks (bytes).
         # Capacity = ceil(preroll_ms / chunk_ms).
         ring_capacity = max(1, (preroll_ms + chunk_ms - 1) // chunk_ms)
-        self._preroll_ring: collections.deque[bytes] = collections.deque(
+        self._preroll_ring: collections.deque[tuple[bytes, int | None]] = collections.deque(
             maxlen=ring_capacity
         )
 
@@ -192,7 +192,7 @@ class SttGate:
                 pass
             self._keepalive_task = None
 
-    async def feed(self, audio_chunk: bytes) -> None:
+    async def feed(self, audio_chunk: bytes, *, input_start: int | None = None) -> None:
         """Process one audio chunk. Either buffers it (GATED) or forwards (FORWARDING).
 
         Call from the STT send_loop. The chunk's own RMS energy is computed
@@ -225,17 +225,17 @@ class SttGate:
             await self._flush_preroll()
 
         if self._state == self._STATE_FORWARDING:
-            await self._sender(audio_chunk)
+            await self._sender(audio_chunk, input_start)
             self._total_forwarded_bytes += len(audio_chunk)
             # Maintain preroll ring even while forwarding — preserves the
             # most recent samples for a potential FORWARDING→GATED→FORWARDING
             # bounce.
-            self._preroll_ring.append(audio_chunk)
+            self._preroll_ring.append((audio_chunk, input_start))
         else:
             # GATED: ring buffer, count "would-have-been-sent" bytes
             # (savings metric).
             self._total_buffered_dropped_bytes += len(audio_chunk)
-            self._preroll_ring.append(audio_chunk)
+            self._preroll_ring.append((audio_chunk, input_start))
 
     async def _flush_preroll(self) -> None:
         """Drain preroll ring to sender (called once on GATED→FORWARDING)."""
@@ -244,9 +244,9 @@ class SttGate:
         chunks = list(self._preroll_ring)
         self._preroll_ring.clear()
         flushed_bytes = 0
-        for chunk in chunks:
+        for chunk, input_start in chunks:
             try:
-                await self._sender(chunk)
+                await self._sender(chunk, input_start)
                 flushed_bytes += len(chunk)
             except Exception as e:
                 logger.warning(
@@ -324,7 +324,7 @@ class SttGate:
             return
         self._state = self._STATE_FORWARDING
         self._state_transitions += 1
-        ring_bytes = sum(len(c) for c in self._preroll_ring)
+        ring_bytes = sum(len(c) for c, _ in self._preroll_ring)
         logger.info(
             "[SttGate] GATED→FORWARDING (reason=%s, will flush preroll: %d chunks / %d bytes)",
             reason,
@@ -358,7 +358,7 @@ class SttGate:
                 if self._state != self._STATE_GATED:
                     continue
                 try:
-                    await self._sender(self._silence_payload)
+                    await self._sender(self._silence_payload, None)
                     self._total_keepalive_sent += 1
                 except asyncio.CancelledError:
                     return

@@ -193,6 +193,10 @@ class BailianConnectionManager:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def task_id(self) -> str | None:
+        return self._task_id
+
     async def connect(
         self,
         message_callback: Callable[[dict[str, Any]], None] | None = None,

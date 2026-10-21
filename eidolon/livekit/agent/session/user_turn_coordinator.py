@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+from eidolon.livekit.common.audio_timeline import AudioSource, AudioSpan
 from eidolon.livekit.agent.session.transcript_revision import (
     DEFAULT_TRANSCRIPT_REVISION_MIN_NORMALIZED_CHARS,
     normalize_revision_text,
@@ -49,6 +50,15 @@ class FrameworkCompletionReadiness:
     ready: bool
     reason: str
     pending_transcript: str = ""
+
+
+@dataclass(frozen=True)
+class CandidateAudioReference:
+    candidate_id: str | None
+    acoustic_generation: int
+    transcript_version: int
+    span: AudioSpan | None
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -102,6 +112,8 @@ class SpeechSegment:
     covered_by_segment_index: int | None = None
     coverage_reason: str = ""
     evidence: TranscriptEvidence | None = None
+    audio_span: AudioSpan | None = None
+    audio_is_final: bool = False
 
     @property
     def selected_text(self) -> str:
@@ -188,6 +200,57 @@ class UserTurnCoordinator:
     @property
     def selected_text(self) -> str:
         return self._active.selected_text if self._active is not None else ""
+
+    def capture_audio_reference(self, *, source: AudioSource) -> CandidateAudioReference:
+        """Freeze exact provider input coverage, without deciding admission.
+
+        Text reconciliation is not audio reconciliation. A covered segment must
+        itself have a range contained in the replacement's final range. Pending
+        or unmapped suffixes never inherit a preceding final's speaker result.
+        """
+        candidate = self._active
+
+        def result(reason, span=None):
+            return CandidateAudioReference(
+                candidate.candidate_id if candidate else None,
+                candidate.latest_generation_id if candidate else 0,
+                self._transcript_change_version, span, reason,
+            )
+
+        if candidate is None or candidate.state != "open":
+            return result("no_open_candidate")
+        if candidate.current_segment is None or candidate.current_segment.ended_at is None:
+            return result("speech_not_ended")
+        selected = []
+        for segment in candidate.segments:
+            if segment.covered_by_segment_index is not None:
+                target = candidate.segments[segment.covered_by_segment_index]
+                old, new = segment.audio_span, target.audio_span
+                if (old is None or new is None or not target.audio_is_final
+                        or not old.same_source(new) or new.start > old.start or new.end < old.end):
+                    return result("audio_coverage_unproven")
+                continue
+            if not segment.selected_text or not segment.audio_is_final:
+                return result("transcript_not_final")
+            if segment.audio_span is None:
+                return result("audio_mapping_missing")
+            selected.append(segment.audio_span)
+        if not selected:
+            return result("audio_mapping_missing")
+        first = selected[0]
+        if not first.same_source(source):
+            return result("audio_source_changed")
+        if any(not first.same_source(span) for span in selected[1:]):
+            return result("audio_source_changed")
+        return result("mapped", AudioSpan(
+            first.source, first.generation, first.sample_rate,
+            min(span.start for span in selected), max(span.end for span in selected),
+        ))
+
+    def is_audio_reference_current(
+        self, reference: CandidateAudioReference, *, source: AudioSource,
+    ) -> bool:
+        return reference.span is not None and reference == self.capture_audio_reference(source=source)
 
     @property
     def selected_policy_text(self) -> str:
@@ -365,6 +428,8 @@ class UserTurnCoordinator:
                 continue
             segment.text = ""
             segment.final_text = ""
+            segment.audio_span = None
+            segment.audio_is_final = False
             segment.evidence = evidence.merge(previous)
             changed = True
         if changed:
@@ -405,6 +470,8 @@ class UserTurnCoordinator:
             candidate.segments.append(segment)
             segment_index = len(candidate.segments) - 1
         segment.text = stripped
+        segment.audio_span = evidence.audio_span if evidence is not None else None
+        segment.audio_is_final = is_final
         if evidence is not None:
             segment.evidence = (
                 evidence.merge(segment.evidence) if segment.evidence is not None else evidence

@@ -51,6 +51,12 @@ class ReferenceSpeakerExtractor:
             self._vad = self._vad_factory()
         # Fixed non-personal probe exercises actual inference before reporting ready.
         probe = (np.sin(np.arange(24000) * (2 * np.pi * 220 / 16000)) * 1000).astype('<i2')
+        # PvadProcessor constructs its ONNX session lazily too. Readiness must
+        # cover the quality path, so first enrollment never pays that startup.
+        probability = self._vad(probe[:self._vad.window_size_samples].astype(np.float32) / 32768)
+        if not np.isfinite(probability) or not 0 <= probability <= 1:
+            raise ValueError('invalid_quality_output')
+        self._vad.reset()
         self._provider.extract_embedding(probe.tobytes(), 16000)
 
     def extract(self, pcm: bytes) -> ExtractedSample:

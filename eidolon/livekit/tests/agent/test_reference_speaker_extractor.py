@@ -74,3 +74,15 @@ def test_corrupt_asset_fails_before_loading_model(tmp_path):
     with pytest.raises(ValueError, match='artifact_integrity'):
         extractor.warm_up()
     assert not provider.received
+
+
+def test_lazy_quality_model_failure_prevents_ready(tmp_path):
+    extractor, _ = engine(tmp_path)
+
+    class BrokenVad(Vad):
+        def __call__(self, samples):
+            raise RuntimeError('quality_model_missing')
+
+    extractor._vad_factory = BrokenVad
+    with pytest.raises(RuntimeError, match='quality_model_missing'):
+        extractor.warm_up()

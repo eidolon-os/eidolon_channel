@@ -158,6 +158,8 @@ class FakeAdapter:
         # as the other two.
         self.on_channel: bool | None = None
         self.presence_reads: list[dict[str, Any]] = []
+        self.delivered: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
+        self.delivery_error: Exception | None = None
 
     @property
     def name(self) -> str:
@@ -203,6 +205,14 @@ class FakeAdapter:
     async def device_is_on_channel(self, handle: dict[str, Any]) -> bool | None:
         self.presence_reads.append(handle)
         return self.on_channel
+
+    async def deliver_control(
+        self, handle: dict[str, Any], command: dict[str, Any], *, wait_for_terminal: bool,
+    ) -> str:
+        self.delivered.append((handle, command, wait_for_terminal))
+        if self.delivery_error is not None:
+            raise self.delivery_error
+        return "succeeded"
 
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,

@@ -264,3 +264,109 @@ async def test_http_preserves_domain_error_codes_from_the_adapter(tmp_path) -> N
         "PROVIDER_UNAVAILABLE",
         True,
     )
+
+
+async def test_capability_directory_and_command_require_the_bearer(tmp_path) -> None:
+    adapter = FakeAdapter(name="livekit")
+    adapter.on_channel = True
+    service = ChannelProviderService(
+        store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+        now_ms=lambda: 1_700_000_000_000,
+    )
+    service.initialize()
+    client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
+    headers = {"Authorization": f"Bearer {'s' * 32}"}
+    try:
+        await client.start_server()
+        unauthorized = await client.get("/v1/device-channels/capabilities")
+        assert unauthorized.status == 401
+        assert (await unauthorized.json())["code"] == "UNAUTHENTICATED"
+
+        await client.post(
+            "/v1/device-channels/provision", json=provision_payload(), headers=headers
+        )
+        directory = await client.get("/v1/device-channels/capabilities", headers=headers)
+        assert directory.status == 200
+        body = json.loads(await directory.text())
+        assert body["operation"] == "channel.capabilities"
+        assert len(body["devices"]) == 1
+        assert body["devices"][0]["capabilities"] == []
+
+        rejected = await client.post(
+            "/v1/device-channels/commands",
+            json={
+                "owner_id": "owner_1",
+                "companion_id": "companion_1",
+                "idempotency_key": "http-key-1",
+                "device_id": body["devices"][0]["device_id"],
+                "op": "volume.set",
+                "capability_version": 1,
+                "payload": {"volume": 10},
+            },
+            headers=headers,
+        )
+        assert rejected.status == 409
+        assert (await rejected.json())["code"] == "INVALID_TRANSITION"
+
+        unauthenticated = await client.post(
+            "/v1/device-channels/commands",
+            json={
+                "owner_id": "owner_1",
+                "companion_id": "companion_1",
+                "idempotency_key": "http-key-2",
+                "device_id": body["devices"][0]["device_id"],
+                "op": "volume.set",
+                "capability_version": 1,
+                "payload": {"volume": 10},
+            },
+        )
+        assert unauthenticated.status == 401
+    finally:
+        await client.close()
+
+
+async def test_a_command_may_omit_the_companion_it_did_not_come_from(tmp_path) -> None:
+    """The Owner's own app addresses a body directly, so no Companion is named.
+
+    Only a session-initiated command knows which Companion is answering, and
+    that is the case the "serving someone else" refusal exists for. An absent
+    companion must not be read as a mismatching one.
+    """
+
+    adapter = FakeAdapter(name="livekit")
+    adapter.on_channel = True
+    service = ChannelProviderService(
+        store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+        now_ms=lambda: 1_700_000_000_000,
+    )
+    service.initialize()
+    client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
+    headers = {"Authorization": f"Bearer {'s' * 32}"}
+    try:
+        await client.start_server()
+        await client.post(
+            "/v1/device-channels/provision", json=provision_payload(), headers=headers
+        )
+        directory = await client.get("/v1/device-channels/capabilities", headers=headers)
+        device_id = json.loads(await directory.text())["devices"][0]["device_id"]
+
+        response = await client.post(
+            "/v1/device-channels/commands",
+            json={
+                "owner_id": "owner_1",
+                "idempotency_key": "owner-app-1",
+                "device_id": device_id,
+                "op": "volume.set",
+                "capability_version": 1,
+                "payload": {"volume": 10},
+            },
+            headers=headers,
+        )
+
+        assert response.status != 422, await response.text()
+    finally:
+        await client.close()

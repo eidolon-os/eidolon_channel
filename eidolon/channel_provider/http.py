@@ -24,6 +24,7 @@ from .contracts import (
     SessionRequest,
     Unauthenticated,
 )
+from .device_capabilities import DeviceCommandRequest
 from .service import ChannelProviderService
 from .session_traces import SessionTraceReader, TraceQuery
 from .shared_session_contract import CloseSharedSession, OpenSharedSession
@@ -43,6 +44,19 @@ class _HomeExecute(_HomeScope):
 class _HomeResult(_HomeScope):
     device_ref: str = Field(min_length=1, max_length=128)
     result: VoiceResult
+
+
+class _DeviceCommand(_HomeScope):
+    #: Optional because a command need not come from a Companion's session: the
+    #: Owner's own app addresses a body by device id. An absent value cannot
+    #: match "serving a different Companion", which is the check that matters.
+    companion_id: str = Field(default="", max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    device_id: str = Field(min_length=1, max_length=128)
+    op: str = Field(min_length=3, max_length=128)
+    capability_version: int = Field(ge=1, le=65535)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    ttl_ms: int = Field(default=30_000, ge=1_000, le=600_000)
 
 
 def create_app(
@@ -217,13 +231,56 @@ def create_app(
     app.router.add_get("/v1/session-traces", session_traces)
     app.router.add_get("/v1/session-traces/{session_id}", session_trace)
     app.router.add_get("/v1/device-channels/presence", presence)
+
+    async def capability_directory(request: web.Request) -> web.Response:
+        """What each body on this Host says it can do, for the Agent's tools.
+
+        A read like ``presence``: it acts on nothing and answers only for the
+        channels this Provider still holds.
+        """
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        try:
+            return web.Response(
+                text=await service.capability_directory(), content_type="application/json"
+            )
+        except DomainError as exc:
+            return _problem(exc)
+
+    app.router.add_get("/v1/device-channels/capabilities", capability_directory)
+
+    async def deliver_device_command(request: web.Request) -> web.Response:
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        try:
+            body = _DeviceCommand.model_validate(await request.json())
+        except (ValidationError, ValueError) as exc:
+            return _contract_problem(str(exc), status=422)
+        try:
+            result = await service.deliver_device_command(
+                DeviceCommandRequest(
+                    owner_id=body.owner_id,
+                    companion_id=body.companion_id,
+                    idempotency_key=body.idempotency_key,
+                    device_id=body.device_id,
+                    op=body.op,
+                    capability_version=body.capability_version,
+                    payload=body.payload,
+                    ttl_ms=body.ttl_ms,
+                )
+            )
+        except DomainError as exc:
+            return _problem(exc)
+        return _json_body({"operation": "channel.device-command", **result.to_json()})
+
+    app.router.add_post("/v1/device-channels/commands", deliver_device_command)
     app.router.add_post("/v1/device-channels/provision", provision)
     app.router.add_post("/v1/device-channels/revoke", revoke)
     app.router.add_post("/v1/device-channels/current", current)
 
     async def open_session(request: web.Request) -> web.Response:
         return await session(request, expected=OPEN_SESSION)
-
     async def close_session(request: web.Request) -> web.Response:
         return await session(request, expected=CLOSE_SESSION)
 

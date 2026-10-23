@@ -14,12 +14,15 @@ import hashlib
 import json
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
 from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED, SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
+from eidolon_sdk.biz.body import CapabilityDeclaration, validate_capability_arguments
+from eidolon_sdk.biz.control.protocol import build_command_envelope
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
     SharedSessionSelection,
@@ -43,6 +46,11 @@ from .contracts import (
     request_fingerprint,
 )
 from .personal_sessions import PersonalSessions, device_alone
+from .device_capabilities import (
+    DeviceCommandRequest,
+    DeviceCommandResult,
+    capabilities_from_manifest,
+)
 from .ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
 from .shared_admission import SharedAdmission
@@ -52,6 +60,10 @@ from .store import ChannelProviderStore, StoredProvision
 
 logger = logging.getLogger("eidolon.channel_provider.service")
 PRESENCE_READ_TIMEOUT_SECONDS = 3.0
+#: How many delivered commands this Provider remembers for retries. A retry is
+#: an immediate caller retry, not a long-lived audit log, so the window is
+#: bounded and oldest-first: an unbounded map would grow for the process's life.
+DEVICE_COMMAND_RETRY_WINDOW = 256
 
 
 class _TransportTransitionRequired(InvalidTransition):
@@ -104,6 +116,11 @@ class ChannelProviderService:
         self._device_sessions: dict = {}
         self._team_conversations: dict = {}
         self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
+        self._device_capabilities: dict[str, tuple[CapabilityDeclaration, ...]] = {}
+        self._device_companions: dict[str, str] = {}
+        self._device_commands: OrderedDict[
+            tuple[str, str, str, str], tuple[str, DeviceCommandResult]
+        ] = OrderedDict()
         self._recovery_ready = asyncio.Event()
 
     def initialize(self) -> None:
@@ -319,6 +336,16 @@ class ChannelProviderService:
                 ):
                     await adapter.close(grant.handle)
                 raise
+            try:
+                declared = capabilities_from_manifest(request.device.manifest)
+            except ValueError as exc:
+                logger.warning(
+                    "channel capability declaration is unreadable device=%s: %s",
+                    request.device_id,
+                    exc,
+                )
+                declared = ()
+            self._device_capabilities[request.device_id] = declared
             if replayed:
                 committed_adapter = self._registry.get(committed.adapter_name)
                 committed_handle = json.loads(committed.handle_json)
@@ -1018,6 +1045,125 @@ class ChannelProviderService:
             )
         return canonical_json({"operation": "channel.presence", "bodies": bodies})
 
+    async def capability_directory(self) -> str:
+        """What each body on this Host currently declares it can do.
+
+        Only devices whose channel this Provider still holds appear, and only
+        with the capabilities from the manifest it accepted at provision time.
+        A device whose declaration was unreadable is reported with none rather
+        than guessed at, so the Agent offers no tool for it.
+        """
+
+        async with self._lock:
+            self._store.expire_credentials(self._now_ms())
+            active = self._store.observable_provisions()
+        gate = asyncio.Semaphore(16)
+
+        async def observe(stored):
+            async with gate:
+                present = await self._read_channel_presence(stored)
+                return stored, present
+
+        observations = await asyncio.gather(*(observe(stored) for stored in active))
+        devices = []
+        for stored, on_channel in observations:
+            async with self._lock:
+                if self._store.current_channel(stored.device_ref) != stored:
+                    continue
+                capabilities = self._device_capabilities.get(stored.device_id, ())
+            if on_channel is not True:
+                continue
+            devices.append(
+                {
+                    "device_id": stored.device_id,
+                    "owner_id": stored.owner_id,
+                    "channel_id": stored.channel_id,
+                    "capabilities": [
+                        capability.model_dump(mode="json") for capability in capabilities
+                    ],
+                }
+            )
+        return canonical_json({"operation": "channel.capabilities", "devices": devices})
+
+    async def deliver_device_command(self, request: DeviceCommandRequest) -> DeviceCommandResult:
+        """Deliver one capability command to a body and report its terminal state.
+
+        The capability must be one this device declared, its payload must match
+        that declaration, and the Companion named must be the one currently
+        assigned to this device. A retry of the same idempotency key answers with
+        the outcome already observed instead of acting on the device twice.
+        """
+
+        key = (request.owner_id, request.companion_id, request.device_id, request.idempotency_key)
+        async with self._lock:
+            completed = self._device_commands.get(key)
+            if completed is not None:
+                self._device_commands.move_to_end(key)
+                if completed[0] != _command_fingerprint(request):
+                    raise IdempotencyConflict(
+                        "idempotency_key was reused with different command content"
+                    )
+                return completed[1]
+            self._store.expire_credentials(self._now_ms())
+            active = self._store.observable_provisions()
+            declared = self._device_capabilities.get(request.device_id, ())
+            companion = self._device_companions.get(request.device_id)
+        stored = next((item for item in active if item.device_id == request.device_id), None)
+        if stored is None:
+            raise UnknownChannel("device has no channel on this Host")
+        if stored.owner_id != request.owner_id:
+            raise Forbidden("device belongs to a different owner")
+        if companion is not None and companion != request.companion_id:
+            raise Forbidden("device is serving a different Companion right now")
+        capability = next(
+            (
+                item
+                for item in declared
+                if item.name == request.op and item.version == request.capability_version
+            ),
+            None,
+        )
+        if capability is None:
+            raise InvalidTransition("device did not declare that capability")
+        schema_error = validate_capability_arguments(capability.input_schema, request.payload)
+        if schema_error:
+            raise InvalidTransition(schema_error)
+        adapter = self._registry.get(stored.adapter_name)
+        handle = json.loads(stored.handle_json)
+        command = build_command_envelope(
+            command_id=f"capability:{request.idempotency_key}",
+            device_id=request.device_id,
+            op=request.op,
+            capability_version=request.capability_version,
+            payload=request.payload,
+            ttl_ms=request.ttl_ms,
+            src_type="channel",
+            src_id="eidolon_channel",
+        )
+        try:
+            status = await adapter.deliver_control(handle, command, wait_for_terminal=True)
+        except BackendUnavailable as exc:
+            result = DeviceCommandResult(
+                device_id=request.device_id,
+                op=request.op,
+                capability_version=request.capability_version,
+                status="failed",
+                message=str(exc),
+            )
+        else:
+            result = DeviceCommandResult(
+                device_id=request.device_id,
+                op=request.op,
+                capability_version=request.capability_version,
+                status=status,
+            )
+        async with self._lock:
+            self._device_commands[key] = (_command_fingerprint(request), result)
+            self._device_commands.move_to_end(key)
+            while len(self._device_commands) > DEVICE_COMMAND_RETRY_WINDOW:
+                self._device_commands.popitem(last=False)
+        return result
+
     async def revoke(self, request: RevokeRequest) -> str:
         try:
             return await self._revoke_once(request)
@@ -1095,6 +1241,12 @@ class ChannelProviderService:
             target_companion_id=request.target_companion_id,
             personal_memory=(request.personal_memory.model_dump() if request.personal_memory else None),
         )
+        async with self._lock:
+            device_id = request.device_ref.device_instance_id
+            if serving and request.target_companion_id is not None:
+                self._device_companions[device_id] = request.target_companion_id
+            elif not serving:
+                self._device_companions.pop(device_id, None)
         return canonical_json(
             {
                 "operation": "channel.opened-session" if serving else "channel.closed-session",
@@ -1353,6 +1505,19 @@ class ChannelProviderService:
             or stored.operation_kind != request.operation
         ):
             raise IdempotencyConflict("provision operation_id was reused with different content")
+
+
+def _command_fingerprint(request: DeviceCommandRequest) -> str:
+    payload = {
+        "owner_id": request.owner_id,
+        "companion_id": request.companion_id,
+        "device_id": request.device_id,
+        "op": request.op,
+        "capability_version": request.capability_version,
+        "payload": request.payload,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _channel_kinds(spec: ChannelSpec) -> list[str]:

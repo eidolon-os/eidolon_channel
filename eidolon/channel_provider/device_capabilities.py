@@ -19,6 +19,31 @@ from eidolon_sdk.biz.body import CapabilityDeclaration
 
 CommandOutcome = Literal["succeeded", "failed", "accepted", "running", "rejected"]
 
+#: The subset of JSON Schema an Agent capability may carry. Mirrors the
+#: validator in ``eidolon_sdk.biz.body.manifest``; a key it does not name is not
+#: a description the Agent can act on.
+_ACCEPTED_SCHEMA_KEYS = frozenset({
+    "type",
+    "description",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+    "enum",
+    "const",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "pattern",
+    "format",
+    "default",
+})
+
 #: Bumped when a field changes meaning on this contract. The Agent pins the
 #: version it implements and refuses a Provider that answers a different one,
 #: rather than reading a response shape it did not agree to.
@@ -105,8 +130,55 @@ def capabilities_from_manifest(manifest: dict[str, Any]) -> tuple[CapabilityDecl
                 name=name,
                 version=version,
                 description=str(action.get("description") or name),
-                input_schema=action.get("input_schema") or {"type": "object"},
-                result_schema=action.get("output_schema") or {},
+                input_schema=_declared_schema(
+                    action.get("input_schema"), default={"type": "object"}
+                ),
+                result_schema=_declared_schema(action.get("output_schema"), default={}),
             )
         )
     return tuple(declarations)
+
+
+def _declared_schema(value: object, *, default: dict[str, Any]) -> dict[str, Any]:
+    """Reduce a device's JSON Schema to the vocabulary the Agent accepts.
+
+    Devices author their action schemas with a general JSON Schema producer,
+    which emits ``title`` on every node and ``$defs``/``$ref`` for nested
+    models. The Agent's capability vocabulary is deliberately smaller, and a
+    schema it cannot read would drop the whole capability — hiding a body that
+    really can do the thing.
+
+    Leaving ``$defs`` out while keeping a ``$ref`` to it would produce a schema
+    that passes validation and then describes nothing, so a node that references
+    a definition collapses to an unconstrained object instead of a dangling
+    reference. ``title`` is decorative and is simply dropped.
+    """
+
+    if not isinstance(value, dict) or not value:
+        return dict(default)
+    return _reduce(value)
+
+
+def _reduce(node: object) -> Any:
+    if isinstance(node, list):
+        return [_reduce(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        return {"type": "object"}
+    reduced: dict[str, Any] = {}
+    for key, item in node.items():
+        if key not in _ACCEPTED_SCHEMA_KEYS:
+            continue
+        if key == "properties" and isinstance(item, dict):
+            # Field names are the device's vocabulary, not schema keywords.
+            reduced[key] = {name: _reduce(child) for name, child in item.items()}
+        else:
+            reduced[key] = _reduce(item)
+    if isinstance(reduced.get("required"), list):
+        declared = reduced.get("properties")
+        if isinstance(declared, dict):
+            reduced["required"] = [name for name in reduced["required"] if name in declared]
+        else:
+            reduced.pop("required", None)
+    return reduced

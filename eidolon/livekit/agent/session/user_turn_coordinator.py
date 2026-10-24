@@ -653,6 +653,7 @@ class UserTurnCoordinator:
         if (
             candidate is None
             or candidate.state != "committed"
+            or candidate.commit_reason == "verified_candidate"
             or not stripped
             or not normalized_text_equal(candidate.selected_text, stripped)
         ):
@@ -727,27 +728,50 @@ class UserTurnCoordinator:
                 reason="empty_transcript",
                 now=current_time,
             )
+        return self._commit_candidate(candidate, transcript=canonical, reason=reason,
+            voiceprint_reason=voiceprint_reason, event="framework_completed", now=current_time)
+
+    def commit_verified(
+        self, reference: CandidateAudioReference, *, source: AudioSource,
+    ) -> UserTurnDecision:
+        """Commit only the still-current frozen evidence, after caller authorization.
+
+        No transcript reconciliation here: doing so would extend the permission
+        to words which were never verified. Ordinary framework commits keep
+        their existing reconciliation path.
+        """
+        if not self.is_audio_reference_current(reference, source=source):
+            return UserTurnDecision(action="none", reason="stale_verified_candidate")
+        candidate = self._require_active()
+        self._retire_revisions(candidate)
+        return self._commit_candidate(candidate, transcript=candidate.selected_text,
+            reason="verified_candidate", voiceprint_reason="match",
+            event="verified_candidate", now=self._now(None))
+
+    def _commit_candidate(self, candidate: UserTurnCandidate, *, transcript: str,
+                          reason: str, voiceprint_reason: str, event: str,
+                          now: float) -> UserTurnDecision:
         candidate.state = "committed"
         candidate.commit_reason = reason
         candidate.voiceprint_reason = voiceprint_reason
-        candidate.committed_at = current_time
-        candidate.updated_at = current_time
+        candidate.committed_at = now
+        candidate.updated_at = now
         if candidate.timeline is not None:
-            candidate.timeline.mark_at("turn_committed_at", current_time)
+            candidate.timeline.mark_at("turn_committed_at", now)
         self._record_owner_transition(
             candidate,
             owner="accepted_user_turn",
-            event="framework_completed",
+            event=event,
             reason=reason,
-            now=current_time,
-            transcript=canonical,
+            now=now,
+            transcript=transcript,
         )
-        self._record_attrs(candidate, event="framework_completed", transcript=canonical)
+        self._record_attrs(candidate, event=event, transcript=transcript)
         self._notify_transcript_change()
         return UserTurnDecision(
             action="commit",
             candidate_id=candidate.candidate_id,
-            transcript=canonical,
+            transcript=transcript,
             reason=reason,
         )
 
@@ -1070,13 +1094,7 @@ class UserTurnCoordinator:
             transition.event == "framework_completed" for transition in candidate.owner_transitions
         )
 
-    def _reject_candidate(
-        self,
-        candidate: UserTurnCandidate,
-        *,
-        reason: str,
-        now: float,
-    ) -> UserTurnDecision:
+    def _retire_revisions(self, candidate: UserTurnCandidate) -> None:
         for revision in candidate.revisions:
             evidence = revision.evidence
             if evidence and evidence.stream_key and evidence.revision_key:
@@ -1085,6 +1103,15 @@ class UserTurnCoordinator:
                 self._retired_revisions.move_to_end(key)
         while len(self._retired_revisions) > 128:
             self._retired_revisions.popitem(last=False)
+
+    def _reject_candidate(
+        self,
+        candidate: UserTurnCandidate,
+        *,
+        reason: str,
+        now: float,
+    ) -> UserTurnDecision:
+        self._retire_revisions(candidate)
         candidate.state = "rejected"
         candidate.reject_reason = reason
         candidate.updated_at = now

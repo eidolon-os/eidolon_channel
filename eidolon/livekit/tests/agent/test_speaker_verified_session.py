@@ -36,7 +36,7 @@ class MappedRecognizer(EventRecognizer):
 
 
 @pytest.fixture
-async def assembled(monkeypatch):
+async def assembled(monkeypatch, request):
     transports, commits = [], []
 
     def from_track(*, track, **kwargs):
@@ -114,15 +114,35 @@ async def assembled(monkeypatch):
         aec_warmup_duration=0,
     )
     owner.session.output.audio = RecordingAudioOutput(sample_rate=24000)
-    started = AsyncMock()
     room = Room()
-    await owner.start(
+    initial_input = getattr(request, "param", "available")
+    if initial_input == "muted":
+        room.publication.muted = True
+    elif initial_input == "unpublished":
+        room.participant.track_publications = {}
+
+    async def client_received_session_started():
+        # Mobile deliberately publishes/unmutes only after session_started.
+        if initial_input != "available":
+            assert transports == []
+            assert owner._input.capture is None
+            assert owner._input.state == "waiting"
+            room.publication.muted = False
+            room.participant.track_publications = {"mic-1": room.publication}
+            if initial_input == "muted":
+                room.emit("track_unmuted", room.publication, room.participant)
+            else:
+                room.emit("track_subscribed", room.publication.track, room.publication, room.participant)
+
+    started = AsyncMock(side_effect=client_received_session_started)
+    await asyncio.wait_for(owner.start(
         room=room,
         participant_identity="selected",
         on_started=started,
         options=RoomOptions(audio_input=AudioInputOptions(sample_rate=16000), text_output=False),
-    )
+    ), 2)
     started.assert_awaited_once()
+    await asyncio.wait_for(owner._input.wait_for_ready(), 2)
     transports[0].feed(100)
     await next_audio(stt)
     try:
@@ -429,3 +449,12 @@ async def test_maximum_utterance_survives_final_transcript_delay(assembled):
     capture.append(source, start=16000 * 30, pcm=b'\0\0' * (16000 * 2))
     evidence = capture.snapshot(candidate='long', span=AudioSpan(source.source, 1, 16000, 0, 16000 * 30))
     assert evidence.complete and evidence.pcm == pcm
+
+
+@pytest.mark.parametrize("assembled", ["muted", "unpublished"], indirect=True)
+async def test_mobile_waiting_for_acceptance_can_publish_after_session_started(assembled):
+    r = assembled
+    assert r.owner._input.state == "ready"
+    assert len(r.transports) == 1
+    assert r.owner._input.capture is not None
+    assert r.commits == []  # A ready transport is never an identity grant.

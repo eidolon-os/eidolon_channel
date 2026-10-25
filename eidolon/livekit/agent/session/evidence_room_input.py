@@ -89,6 +89,12 @@ class EvidenceRoomInput:
         return self._capture
 
     async def start(self) -> None:
+        """Install the input owner without requiring the remote microphone.
+
+        A client may publish only after session_started. Waiting for its track
+        here would make acceptance depend on the action acceptance permits.
+        wait_for_ready remains the separate audio-availability boundary.
+        """
         if self._started or self._closed or self._session.input.audio is not None:
             raise RuntimeError("requires one running session with an unowned audio input")
         self._started = True
@@ -109,7 +115,10 @@ class EvidenceRoomInput:
         self._session.on("close", self._on_session_close)
         self._request("input_started")
         try:
-            await asyncio.wait_for(self.wait_for_ready(), 10)
+            assert self._task is not None
+            await asyncio.wait_for(asyncio.shield(self._task), 10)
+            if self.state not in {"waiting", "ready"} or not self._owns_input():
+                raise RuntimeError(f"audio input {self.state}")
         except BaseException:
             await self.aclose()
             raise

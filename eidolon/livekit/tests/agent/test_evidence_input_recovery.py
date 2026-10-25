@@ -238,7 +238,7 @@ async def test_pause_during_old_reader_cleanup_waits_for_resume(running):
     owner, session, room, recognizer, transports, retired, output = running
     old = transports[-1]
     old.allow_close.clear()
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     await asyncio.wait_for(old.close_started.wait(), 2)
     session.input.set_audio_enabled(False)
     old.allow_close.set()
@@ -258,7 +258,7 @@ async def test_close_during_sdk_cleanup_finishes_same_cleanup_once(running):
     owner, session, room, recognizer, transports, retired, output = running
     old = transports[-1]
     old.allow_close.clear()
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     await asyncio.wait_for(old.close_started.wait(), 2)
     closing = asyncio.create_task(owner.aclose())
     await asyncio.sleep(0)
@@ -294,7 +294,7 @@ async def test_external_input_owner_is_not_overwritten_by_recovery(running):
     session.input.audio = replacement
     await wait_state(owner, "replaced")
     assert session.input.audio is replacement and owner.capture is None
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     await asyncio.sleep(0)
     assert session.input.audio is replacement and len(transports) == 1
 
@@ -304,7 +304,7 @@ async def test_external_takeover_during_cleanup_is_not_overwritten(running):
     owner, session, room, recognizer, transports, retired, output = running
     old = transports[-1]
     old.allow_close.clear()
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     await asyncio.wait_for(old.close_started.wait(), 2)
     replacement = ScriptedAudioInput(sample_rate=16000)
     session.input.audio = replacement
@@ -338,7 +338,7 @@ async def test_failed_new_input_is_unavailable_and_does_not_fall_back_to_old_aud
 
     monkeypatch.setattr(RoomIO, "start", fail_after_attach)
     old = owner.capture
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     with pytest.raises(RuntimeError, match="failed"):
         await asyncio.wait_for(owner.wait_for_ready(), 2)
     assert owner.failure == "RuntimeError"
@@ -347,7 +347,7 @@ async def test_failed_new_input_is_unavailable_and_does_not_fall_back_to_old_aud
     assert all(value.closed for value in transports)
     assert session.output.audio is output
     monkeypatch.setattr(RoomIO, "start", original)
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     await asyncio.wait_for(owner.wait_for_ready(), 2)
     assert owner.failure is None
 
@@ -514,6 +514,8 @@ async def test_selected_room_event_invalidates_evidence_synchronously(running, e
     capture, span, pcm = await next_audio(recognizer)
     if event in {"track_subscribed", "track_unsubscribed"}:
         args = (room.publication.track, room.publication, room.participant)
+    elif event in {"track_muted", "track_unmuted"}:
+        args = (room.participant, room.publication)
     elif event.startswith("track_"):
         args = (room.publication, room.participant)
     elif event == "participant_disconnected":
@@ -544,12 +546,12 @@ async def test_failed_old_input_cleanup_cannot_authorize_new_capture(running):
     owner, session, room, recognizer, transports, retired, output = running
     old = owner.capture
     transports[0].fail_close_once = True
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     with pytest.raises(RuntimeError, match="failed"):
         await asyncio.wait_for(owner.wait_for_ready(), 2)
     assert len(transports) == 1 and not transports[0].closed
     assert old.active_source is None
-    room.emit("track_unmuted", room.publication, room.participant)
+    room.emit("track_unmuted", room.participant, room.publication)
     with pytest.raises(RuntimeError, match="failed"):
         await asyncio.wait_for(owner.wait_for_ready(), 2)
     assert len(transports) == 1

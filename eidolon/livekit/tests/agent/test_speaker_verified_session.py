@@ -130,7 +130,7 @@ async def assembled(monkeypatch, request):
             room.publication.muted = False
             room.participant.track_publications = {"mic-1": room.publication}
             if initial_input == "muted":
-                room.emit("track_unmuted", room.publication, room.participant)
+                room.emit("track_unmuted", room.participant, room.publication)
             else:
                 room.emit("track_subscribed", room.publication.track, room.publication, room.participant)
 

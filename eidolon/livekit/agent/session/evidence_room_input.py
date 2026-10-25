@@ -98,14 +98,15 @@ class EvidenceRoomInput:
         if self._started or self._closed or self._session.input.audio is not None:
             raise RuntimeError("requires one running session with an unowned audio input")
         self._started = True
-        for event in (
-            "track_subscribed",
-            "track_unsubscribed",
-            "track_unpublished",
-            "track_muted",
-            "track_unmuted",
-        ):
-            self._listeners.append((event, self._on_track))
+        # RTC mute events use (participant, publication), unlike subscription
+        # events (track, publication, participant). Keep that SDK boundary explicit.
+        self._listeners.extend([
+            ("track_subscribed", self._on_subscription),
+            ("track_unsubscribed", self._on_subscription),
+            ("track_unpublished", self._on_track),
+            ("track_muted", self._on_mute),
+            ("track_unmuted", self._on_mute),
+        ])
         for event in ("participant_connected", "participant_disconnected"):
             self._listeners.append((event, self._on_participant))
         for event in ("reconnecting", "reconnected", "disconnected"):
@@ -128,8 +129,13 @@ class EvidenceRoomInput:
         if self.state != "ready":
             raise RuntimeError(f"audio input {self.state}")
 
-    def _on_track(self, *args: Any) -> None:
-        publication, participant = args[-2:]
+    def _on_subscription(self, track: Any, publication: Any, participant: Any) -> None:
+        self._on_track(publication, participant)
+
+    def _on_mute(self, participant: Any, publication: Any) -> None:
+        self._on_track(publication, participant)
+
+    def _on_track(self, publication: Any, participant: Any) -> None:
         if (
             participant.identity == self._participant
             and publication.source == rtc.TrackSource.SOURCE_MICROPHONE

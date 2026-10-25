@@ -62,6 +62,7 @@ class ProviderConfig:
     # this list and takes the first one that can carry the device's spec.
     adapter_preference: tuple[str, ...] = ("livekit",)
     speaker_calibration_path: str = ""
+    speaker_model_dir: str = ""
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:
@@ -243,6 +244,7 @@ def load_provider_config() -> ProviderConfig:
     ):
         raise ValueError("adapters.preference must be a non-empty list of distinct adapter names")
 
+    voiceprint = load_voiceprint_config()
     return ProviderConfig(
         http=HttpConfig(host=host, port=port),
         storage=StorageConfig(path=state_path),
@@ -273,5 +275,6 @@ def load_provider_config() -> ProviderConfig:
             if "hub_url" in smarthome else None
         ),
         adapter_preference=tuple(name.strip() for name in preference),
-        speaker_calibration_path=load_voiceprint_config().calibration_path,
+        speaker_calibration_path=voiceprint.calibration_path,
+        speaker_model_dir=voiceprint.model_dir,
     )

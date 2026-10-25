@@ -413,3 +413,19 @@ async def test_unconfirmed_session_cannot_release_voice_or_typed_generation(asse
         release.set()
         await asyncio.gather(startup, return_exceptions=True)
         await owner.aclose()
+
+
+async def test_maximum_utterance_survives_final_transcript_delay(assembled):
+    from eidolon.livekit.common.audio_timeline import AudioSource
+    r = assembled
+    capture = r.stt.audio_evidence_capture
+    assert capture.retention_seconds == r.owner.input._timeout
+    assert 30 < capture.retention_seconds <= 60
+    source = AudioSource('long-candidate', 1, 16000)
+    capture.select_stream(source.source)
+    capture.begin_run(source)
+    pcm = b'\1\0' * (16000 * 30)
+    capture.append(source, start=0, pcm=pcm)
+    capture.append(source, start=16000 * 30, pcm=b'\0\0' * (16000 * 2))
+    evidence = capture.snapshot(candidate='long', span=AudioSpan(source.source, 1, 16000, 0, 16000 * 30))
+    assert evidence.complete and evidence.pcm == pcm

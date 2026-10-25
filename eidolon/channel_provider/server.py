@@ -71,11 +71,11 @@ def main() -> None:
     capabilities = {v.strip() for v in os.environ.get('EIDOLON_HOST_CAPABILITIES', '').split(',')}
     if 'local_speaker_verification' in capabilities:
         from eidolon.livekit.plugins.speaker_verification.inference import SpeakerInferenceEngine
-        from eidolon.livekit.plugins.speaker_verification.model_paths import default_campplus_model_dir
+        from eidolon.livekit.plugins.speaker_verification.model_paths import require_speaker_model_dir
         from eidolon.livekit.plugins.speaker_verification.reference_extractor import (
             ReferenceSpeakerExtractor,
         )
-        speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(default_campplus_model_dir()))
+        speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(require_speaker_model_dir(config.speaker_model_dir)))
     from eidolon_sdk.biz.speaker_calibration import load_calibration
     calibration_path = config.speaker_calibration_path
     calibration = load_calibration(calibration_path) if calibration_path else None

@@ -260,3 +260,19 @@ async def test_feedback_distinguishes_identity_quality_and_service_failure(runti
     assert updates == ['checking', status]
     r.session.interrupt.assert_not_called()
     r.session.generate_reply.assert_not_called()
+
+
+def test_overlong_candidate_reports_duration_without_identity_or_playback_effects(runtime):
+    r = runtime
+    feedback = MagicMock()
+    turns = SpeakerVerifiedTurns(
+        coordinator=r.owner, capture=lambda: r.capture, session=r.session,
+        verify=r.verify, authorize=r.authorize, classify=r.intent, is_complete=r.complete,
+        committed=r.record, feedback=feedback, min_audio_ms=1500, max_audio_ms=1500,
+    )
+    assert turns.consider() is None
+    assert r.owner.active.reject_reason == 'audio_too_long'
+    feedback.assert_called_once_with('audio_too_long')
+    r.verify.assert_not_called()
+    r.session.interrupt.assert_not_called()
+    r.session.generate_reply.assert_not_called()

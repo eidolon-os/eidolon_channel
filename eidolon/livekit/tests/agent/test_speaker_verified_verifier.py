@@ -163,6 +163,52 @@ def test_missing_artifact_never_uses_legacy_threshold():
 
 async def test_provider_release_changed_cannot_use_cached_worker_calibration():
     verifier, _, extractor, audio, _, _ = fixture()
-    extractor.readiness.return_value.calibration_digest = 'f'*64
-    assert (await verifier(audio)).status == 'unavailable'
+    extractor.readiness.return_value.calibration_digest = "f" * 64
+    assert (await verifier(audio)).status == "unavailable"
     extractor.extract.assert_not_awaited()
+
+
+@pytest.mark.parametrize("ms", [9000, 20000, 30000])
+async def test_conversation_release_passes_entire_long_candidate_and_multiple_templates(ms):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[5]
+    calibration = load_calibration(
+        str(
+            root
+            / "eidolon_models/speaker_verification/campplus_zh_16k_common/624dcb0f/admission-controlled-trial.json"
+        )
+    )
+    verifier, data, extractor, audio, snapshot, sample = fixture()
+    sample = sample.model_copy(
+        update={
+            "model_id": calibration.model_id,
+            "weights_hash": calibration.weights_hash,
+            "preprocessing_version": calibration.preprocessing_version,
+        }
+    )
+    snapshot.templates = [
+        VoiceTemplate(
+            profile_id=f"voice-{i}",
+            revision=1,
+            sample=sample if i == 4 else sample.model_copy(update={"vector": [0, 1]}),
+        )
+        for i in range(5)
+    ]
+    snapshot.calibration_digest = calibration.digest
+    extractor.extract.return_value = sample
+    extractor.readiness.return_value.calibration_digest = calibration.digest
+    verifier = CalibratedSpeakerVerifier(
+        data=data,
+        extractor=extractor,
+        calibration=calibration,
+        owner_id="owner",
+        companion_id="companion",
+    )
+    audio.pcm = b"\1\0" * (ms * 16)
+    decision = await verifier(audio)
+    assert (decision.status, decision.profile_id) == ("match", "voice-4")
+    extractor.extract.assert_awaited_once_with(audio.pcm)  # no prefix/suffix shortcut
+    audio.pcm += b"\1\0" * (30001 * 16)
+    assert (await verifier(audio)).status == "inconclusive"
+    assert extractor.extract.await_count == 1

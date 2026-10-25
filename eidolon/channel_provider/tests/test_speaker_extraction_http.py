@@ -57,7 +57,7 @@ async def test_warmup_does_not_block_provider_health_and_does_not_enable_admissi
         assert (await client.get("/v1/voiceprints/readiness")).status == 401
         response = await client.get("/v1/voiceprints/readiness", headers=headers)
         assert (await response.json()) == dict(
-            state="loading", extraction_ready=False, admission_ready=False, calibration_digest="", validation_state="unavailable"
+            state="loading", extraction_ready=False, admission_ready=False, calibration_digest="", validation_state="unavailable", limits=None
         )
         pcm = b"\x01\x00" * 480000  # Full 30-second request exceeds ordinary control API limit.
         body = dict(pcm_base64=base64.b64encode(pcm).decode())
@@ -143,6 +143,7 @@ async def test_published_release_is_authenticated_and_matches_loaded_model():
         response = await client.get("/v1/voiceprints/readiness", headers=headers)
         ready = await response.json()
         assert ready["admission_ready"] and ready["calibration_digest"] == calibration.digest
+        assert ready["limits"] == calibration.limits.model_dump()
         body = evidence.model_dump(mode="json")
         assert (await client.post("/v1/voiceprints/approve-policy", json=body)).status == 401
         approved = await client.post("/v1/voiceprints/approve-policy", json=body, headers=headers)
@@ -158,6 +159,7 @@ async def test_published_release_is_authenticated_and_matches_loaded_model():
         engine.model_identity = ("other", "a" * 64, "reference-contiguous-pcm16-v1")
         ready = await (await client.get("/v1/voiceprints/readiness", headers=headers)).json()
         assert not ready["admission_ready"] and ready["extraction_ready"]
+        assert ready["limits"] is None
         assert (
             await client.post("/v1/voiceprints/approve-policy", json=body, headers=headers)
         ).status == 503

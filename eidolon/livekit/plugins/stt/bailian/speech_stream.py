@@ -179,7 +179,10 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         self._preflight_sent_text = None
         self._audio_timeline = ProviderAudioTimeline(
             source=self._stream_id, generation=self._audio_generation,
-            sample_rate=self._sample_rate, max_samples=self._sample_rate * 30,
+            sample_rate=self._sample_rate,
+            max_samples=int(self._sample_rate * (
+                self._audio_capture.retention_seconds if self._audio_capture is not None else 30
+            )),
         )
         # A partial chunk from a failed connection cannot belong to the new run.
         from livekit.agents.utils.audio import AudioByteStream

@@ -26,7 +26,7 @@ class SpeakerVerifiedInput:
             not math.isfinite(settle_sec)
             or not 0 <= settle_sec <= 5
             or not math.isfinite(candidate_timeout_sec)
-            or not settle_sec < candidate_timeout_sec <= 30
+            or not settle_sec < candidate_timeout_sec <= 60
         ):
             raise ValueError("bounded collection and settlement required")
         self._turns, self._owner = turns, coordinator

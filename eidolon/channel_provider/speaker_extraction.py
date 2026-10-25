@@ -55,6 +55,7 @@ def register_speaker_extraction(app, *, engine, authorized, problem, calibration
             admission_ready=ready,
             validation_state=calibration.validation_state if ready else "unavailable",
             calibration_digest=calibration.digest if ready else "",
+            limits=calibration.limits if ready else None,
         )
         return web.json_response(result.model_dump(mode="json"))
 

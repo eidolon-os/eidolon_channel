@@ -114,7 +114,9 @@ class AudioEvidenceCapture:
     """
 
     def __init__(self, *, session_id: str, endpoint_id: str, max_seconds: float = 30):
-        if not session_id or not endpoint_id or not 0 < max_seconds <= 30:
+        # Retention also covers final-transcript latency after speech stops.
+        # This is a memory ceiling, not the admitted utterance duration.
+        if not session_id or not endpoint_id or not 0 < max_seconds <= 60:
             raise ValueError("session, endpoint and bounded duration required")
         self._session_id = session_id
         self._endpoint_id = endpoint_id
@@ -124,6 +126,10 @@ class AudioEvidenceCapture:
         self._active_source: AudioSource | None = None
         self._buffer: AudioEvidenceBuffer | None = None
         self._invalid_reason: str | None = None
+
+    @property
+    def retention_seconds(self) -> float:
+        return self._max_seconds
 
     @property
     def active_source(self) -> AudioSource | None:

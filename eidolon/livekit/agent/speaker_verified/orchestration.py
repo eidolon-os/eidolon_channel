@@ -15,6 +15,7 @@ from ...common.audio_evidence import AudioEvidence, AudioEvidenceCapture
 from ..session.user_turn_coordinator import UserTurnCoordinator, UserTurnDecision
 
 logger = logging.getLogger(__name__)
+VERIFICATION_TIMEOUT_SEC = 8
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,9 @@ class SpeakerVerifiedTurns:
         committed: Callable[[UserTurnDecision], None],
         cancel_output: Callable[[], Awaitable[None]] | None = None,
         feedback: Callable[[str], None] | None = None,
-        timeout_sec: float = 8,
+        timeout_sec: float = VERIFICATION_TIMEOUT_SEC,
+        min_audio_ms: int = 1500,
+        max_audio_ms: int = 30000,
     ):
         if not math.isfinite(timeout_sec) or not 0 < timeout_sec <= 8:
             raise ValueError("bounded candidate verification deadline required")
@@ -50,6 +53,9 @@ class SpeakerVerifiedTurns:
         self._cancel_output = cancel_output
         self._feedback = feedback or (lambda state: None)
         self._timeout = timeout_sec
+        if not 1500 <= min_audio_ms <= max_audio_ms <= 30000:
+            raise ValueError("bounded admitted audio range required")
+        self._min_audio_ms, self._max_audio_ms = min_audio_ms, max_audio_ms
         self._pending: asyncio.Task | None = None
         self._closed = False
         self._epoch = 0
@@ -88,11 +94,13 @@ class SpeakerVerifiedTurns:
         reason = evidence.reason
         if evidence.sample_rate != 16000:
             reason = "unsupported_sample_rate"
-        elif evidence.end - evidence.start < 24000:
+        elif evidence.end - evidence.start < self._min_audio_ms * 16:
             reason = "audio_too_short"
+        elif evidence.end - evidence.start > self._max_audio_ms * 16:
+            reason = "audio_too_long"
         if not evidence.complete or reason:
             self._owner.reject_active(reason or "audio_incomplete")
-            self._feedback("inconclusive")
+            self._feedback("audio_too_long" if reason == "audio_too_long" else "inconclusive")
             return None
         epoch, text, output = self._epoch, candidate.selected_text, self._session.current_speech
 

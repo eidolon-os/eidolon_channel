@@ -77,7 +77,7 @@ voiceprint:
   provider: 3d_speaker
   model: campplus_zh_16k_common
   root: $EIDOLON_STATE_ROOT/voiceprints
-  # Empty uses the Models-owned artifact; local development may set EIDOLON_3DSPEAKER_MODEL_DIR.
+  # Ops derives the absolute Models asset directory; no environment fallback.
   model_dir: ""
   threshold: 0.31
   min_audio_ms: 1500

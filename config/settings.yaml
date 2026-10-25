@@ -103,8 +103,8 @@ voiceprint:
   provider: 3d_speaker
   model: campplus_zh_16k_common
   root: $EIDOLON_STATE_ROOT/voiceprints
-  # Empty means use the bundled model in
-  # eidolon/livekit/plugins/speaker_verification/resources/3dspeaker.
+  # Ops derives this from the Models asset declaration for this Host.
+  # No implicit bundled model or environment fallback.
   model_dir: ""
   threshold: 0.31
   min_audio_ms: 1500

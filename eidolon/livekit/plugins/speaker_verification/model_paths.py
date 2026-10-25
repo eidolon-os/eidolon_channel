@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-import os
 
 
 def default_campplus_model_dir() -> Path:
-    """Use an explicit development path or the checksum-verified Host artifact."""
-    value = os.environ.get("EIDOLON_3DSPEAKER_MODEL_DIR", "").strip()
-    return Path(value).expanduser() if value else Path(
-        "/var/lib/eidolon/models/campplus-zh-16k-624dcb0f"
-    )
+    """Compatibility entry for offline tools, using the shared Host setting."""
+    from ...common.config import load_voiceprint_config
+
+    return require_speaker_model_dir(load_voiceprint_config().model_dir)
+
+
+def require_speaker_model_dir(value: str) -> Path:
+    """Ops selects the version. No environment or packaged-weight fallback."""
+    if not value or not Path(value).expanduser().is_absolute():
+        raise ValueError("voiceprint.model_dir must name the deployed absolute model directory")
+    return Path(value).expanduser()

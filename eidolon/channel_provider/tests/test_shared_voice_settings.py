@@ -67,3 +67,38 @@ def test_provider_reads_shared_voice_section_without_loading_worker_policy(monke
     document.unlink()
     with pytest.raises(FileNotFoundError, match="EIDOLON_CHANNEL_SETTINGS_YAML missing"):
         load_provider_config()
+
+
+@pytest.mark.parametrize("host", ["mac", "pi5"])
+def test_relative_release_criterion_resolves_against_delivered_model(monkeypatch, tmp_path, host):
+    from eidolon.livekit.common.config import load_voiceprint_config
+
+    model = tmp_path / host / "models/new-version"
+    model.mkdir(parents=True)
+    document = tmp_path / "settings.yaml"
+    document.write_text(
+        f"llm:\n  base_url: http://localhost/v1\nvoiceprint:\n  model_dir: {model}\n  calibration_path: admission-controlled-trial.json\n"
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(document))
+    monkeypatch.delenv("EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML", raising=False)
+    monkeypatch.setenv("EIDOLON_3DSPEAKER_MODEL_DIR", "/obsolete-model")
+    expected = str(model / "admission-controlled-trial.json")
+    assert load_voiceprint_config().calibration_path == expected
+    assert load_effective_config().voiceprint.calibration_path == expected
+
+
+@pytest.mark.parametrize(
+    "model,path",
+    [("", "trial.json"), ("relative/model", "trial.json"), ("/host/model", "../trial.json")],
+)
+def test_relative_release_criterion_cannot_guess_or_escape_model_root(
+    monkeypatch, tmp_path, model, path
+):
+    from eidolon.livekit.common.config import load_voiceprint_config
+
+    document = tmp_path / "settings.yaml"
+    document.write_text(f"voiceprint:\n  model_dir: '{model}'\n  calibration_path: '{path}'\n")
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(document))
+    monkeypatch.delenv("EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML", raising=False)
+    with pytest.raises(ValueError, match="model_dir|model root"):
+        load_voiceprint_config()

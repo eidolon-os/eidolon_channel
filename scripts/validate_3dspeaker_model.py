@@ -30,7 +30,7 @@ import yaml
 from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
 
 
-DEFAULT_MODEL_DIR = default_campplus_model_dir()
+
 
 
 class ValidationError(RuntimeError):
@@ -205,7 +205,7 @@ def run_pipeline(model_dir: Path, wav_a: Path, wav_b: Path, wav_c: Path) -> dict
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
+    parser.add_argument("--model-dir", type=Path, default=None)
     parser.add_argument("--run-pipeline", action="store_true")
     parser.add_argument("--wav-a", type=Path, help="Speaker 1 enrollment/reference WAV")
     parser.add_argument("--wav-b", type=Path, help="Speaker 1 comparison WAV")
@@ -215,6 +215,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    args.model_dir = args.model_dir or default_campplus_model_dir()
     model_dir = args.model_dir.resolve()
     try:
         report: dict[str, Any] = {"bundle": validate_bundle(model_dir)}

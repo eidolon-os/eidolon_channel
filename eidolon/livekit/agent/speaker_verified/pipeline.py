@@ -139,6 +139,8 @@ class SpeakerVerifiedPipeline(BasePipeline):
                 ),
                 stop_playback=stop_device_output,
                 feedback=self._feedback.update,
+                min_audio_ms=self._calibration.min_audio_ms,
+                max_audio_ms=self._calibration.max_audio_ms,
             )
             session = self._verified.session
             session.on("close", self._closed)

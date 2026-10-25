@@ -214,10 +214,22 @@ def _load_turn_policy(raw: dict[str, Any]) -> TurnPolicyConfig:
 def load_voiceprint_config() -> VoiceprintConfig:
     """Provider and worker share the Host document, not worker-only policies."""
     _bootstrap_dotenv()
-    config = _merge_dataclass(VoiceprintConfig(), _section(_load_yaml(), "voiceprint"))
+    return _voiceprint_config(_section(_load_yaml(), "voiceprint"))
+
+
+def _voiceprint_config(section) -> VoiceprintConfig:
+    config = _merge_dataclass(VoiceprintConfig(), section)
     errors = voiceprint_config_errors(config)
     if errors:
         raise ValueError("VoiceprintConfig validation failed:\n  - " + "\n  - ".join(errors))
+    if config.calibration_path and not Path(config.calibration_path).is_absolute():
+        if not config.model_dir or not Path(config.model_dir).is_absolute():
+            raise ValueError("relative calibration_path requires an absolute voiceprint.model_dir")
+        root = Path(config.model_dir).resolve()
+        path = (root / config.calibration_path).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("calibration_path must stay inside the model root")
+        config = replace(config, calibration_path=str(path))
     return config
 
 
@@ -367,7 +379,7 @@ def load_effective_config() -> EffectiveAgentConfig:
         ),
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),
-        voiceprint=_merge_dataclass(VoiceprintConfig(), voiceprint_y),
+        voiceprint=_voiceprint_config(voiceprint_y),
         worker=_merge_dataclass(WorkerConfig(), worker_y),
         avatar=_merge_dataclass(AvatarConfig(), avatar_y),
         # Non-secret Bailian STT/TTS config lives in settings.yaml; the API key

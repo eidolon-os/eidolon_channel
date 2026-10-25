@@ -56,12 +56,14 @@ class EvidenceRoomInput:
         bind_capture: Callable[[AudioEvidenceCapture | None], None],
         retire_candidate: Callable[[str], None],
         audio_options: AudioInputOptions | None = None,
+        capture_max_seconds: float = 30,
     ):
         if not participant_identity or not session_id or not endpoint_id:
             raise ValueError("explicit selected input and session scope required")
         self._session, self._room = session, room
         self._participant = participant_identity
         self._session_id, self._endpoint_id = session_id, endpoint_id
+        self._capture_max_seconds = capture_max_seconds
         self._bind_capture, self._retire_candidate = bind_capture, retire_candidate
         # A new queue must not replay a pre-connect recording from an old epoch.
         self._audio_options = replace(audio_options or AudioInputOptions(), pre_connect_audio=False)
@@ -231,7 +233,8 @@ class EvidenceRoomInput:
                     self.state = "waiting"
                     return
                 capture = AudioEvidenceCapture(
-                    session_id=self._session_id, endpoint_id=self._endpoint_id
+                    session_id=self._session_id, endpoint_id=self._endpoint_id,
+                    max_seconds=self._capture_max_seconds,
                 )
                 self._capture = capture
                 self._bind_capture(capture)

@@ -21,7 +21,7 @@ from ...common.welcome import prepare_welcome_audio, welcome_allowed
 from .agent import SpeakerVerifiedAgent, speaker_verified_turn_handling
 from .authority import SpeakerPolicyAuthority
 from .input import SpeakerVerifiedInput
-from .orchestration import SpeakerVerifiedTurns
+from .orchestration import SpeakerVerifiedTurns, VERIFICATION_TIMEOUT_SEC
 from .semantics import CandidateSemantics
 
 
@@ -41,6 +41,8 @@ class SpeakerVerifiedSession:
         aec_warmup_duration=None,
         stop_playback=None,
         feedback=None,
+        min_audio_ms=1500,
+        max_audio_ms=30000,
     ):
         stt = getattr(factory.stt, "stt", None)
         if (
@@ -58,6 +60,9 @@ class SpeakerVerifiedSession:
         if factory.voiceprint_service is not None:
             raise ValueError("SPEAKER_VERIFIED_LEGACY_OWNER_CONFLICT")
         self._factory, self._stt = factory, stt
+        # One complete candidate, plus settlement/provider-result latency.
+        # Never expire/evict a maximum-length utterance before it can be checked.
+        self._candidate_timeout = max_audio_ms / 1000 + settle_sec + VERIFICATION_TIMEOUT_SEC
         self._stop_playback = stop_playback
         self._capture = None
         self._input = self._presentation_io = None
@@ -89,9 +94,12 @@ class SpeakerVerifiedSession:
             committed=committed,
             cancel_output=self._cancel_output,
             feedback=feedback,
+            min_audio_ms=min_audio_ms,
+            max_audio_ms=max_audio_ms,
         )
         self.input = SpeakerVerifiedInput(
-            self.turns, coordinator=self.coordinator, settle_sec=settle_sec
+            self.turns, coordinator=self.coordinator, settle_sec=settle_sec,
+            candidate_timeout_sec=self._candidate_timeout,
         )
         self.session.on("user_state_changed", self._user_state_changed)
         self.session.on("agent_state_changed", self._agent_state_changed)
@@ -210,6 +218,7 @@ class SpeakerVerifiedSession:
                 bind_capture=self._bind_capture,
                 retire_candidate=self.input.invalidate,
                 audio_options=audio_options,
+                capture_max_seconds=self._candidate_timeout,
             )
             await self._input.start()
             await on_started()

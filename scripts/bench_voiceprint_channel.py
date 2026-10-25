@@ -137,7 +137,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tenant-id", default="default")
     parser.add_argument("--user-id", default="manson")
     parser.add_argument("--voiceprint-root", type=Path, default=default_voiceprint_root())
-    parser.add_argument("--model-dir", type=Path, default=default_campplus_model_dir())
+    parser.add_argument("--model-dir", type=Path, default=None)
     parser.add_argument(
         "--sample",
         type=Path,
@@ -155,6 +155,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    args.model_dir = args.model_dir or default_campplus_model_dir()
     result = asyncio.run(_run(args))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

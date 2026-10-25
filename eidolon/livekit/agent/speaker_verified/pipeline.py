@@ -37,8 +37,7 @@ class SpeakerVerifiedPipeline(BasePipeline):
         on_idle_disconnect,
     ):
         super().__init__(factory)
-        if not calibration.supports(policy):
-            raise ValueError("SPEAKER_VERIFIED_CALIBRATION_SCOPE_MISMATCH")
+        calibration.require_supported(policy)
         self._policy, self._calibration, self._cfg = policy, calibration, cfg
         self._intent = session_intent
         self._on_started, self._on_end = on_session_started, on_session_end

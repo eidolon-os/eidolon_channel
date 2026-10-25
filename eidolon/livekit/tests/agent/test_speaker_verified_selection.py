@@ -146,3 +146,55 @@ async def test_server_selects_exactly_one_owner_from_companion_policy(monkeypatc
     assert load.call_count == (1 if mode == "allowlist" else 0)
     # From this point the selected pipeline owns factory cleanup.
     factory.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_changed_release_reports_reconfirmation_before_audio_owner(monkeypatch, tmp_path):
+    import json
+    from dataclasses import replace
+    from unittest.mock import MagicMock
+    from eidolon.livekit.agent import server, full_duplex
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
+    from .test_server_session_metadata import _FakeContext
+    from .test_speaker_verified_verifier import fixture
+
+    verifier, _, _, _, snapshot, _ = fixture()
+    changed = verifier.calibration.model_copy(update={"threshold": 0.4})
+    path = tmp_path / "updated.json"
+    path.write_text(changed.model_dump_json())
+    services = runtime()
+    services.runtime.get_voiceprint_snapshot.return_value = snapshot
+    factory = SimpleNamespace(runtime_services=services, aclose=AsyncMock())
+    monkeypatch.setattr(SharedStageFactory, "from_config", lambda *a, **k: factory)
+    monkeypatch.setattr(server, "_resolve_session_metadata", AsyncMock(return_value=("full_duplex", False)))
+    ordinary = MagicMock()
+    monkeypatch.setattr(full_duplex, "StreamingPipeline", ordinary)
+    ctx = _FakeContext({})
+    ctx.room.name = "protected"
+    ctx.proc = SimpleNamespace(userdata={})
+    ctx.add_shutdown_callback = MagicMock()
+    notices = []
+    async def publish(data, **kwargs):
+        notices.append(json.loads(data))
+    ctx.room.local_participant = SimpleNamespace(publish_data=publish)
+    cfg = EffectiveAgentConfig()
+    cfg = replace(cfg, voiceprint=replace(cfg.voiceprint, calibration_path=str(path)),
+                  turn_policy=replace(cfg.turn_policy, eot=replace(cfg.turn_policy.eot, provider="firered")))
+    await server.run_agent(ctx, cfg)
+    ordinary.assert_not_called()
+    factory.aclose.assert_awaited_once()
+    assert [(n["type"], n["reason"]) for n in notices] == [
+        ("session_end", "voice_policy_confirmation_required")]
+
+    # A fresh explicit approval recovers through the same real constructor.
+    from eidolon.livekit.agent.speaker_verified.pipeline import SpeakerVerifiedPipeline
+    services.runtime.get_voiceprint_snapshot.return_value = snapshot.model_copy(
+        update={"calibration_digest": changed.digest})
+    run = AsyncMock()
+    monkeypatch.setattr(SpeakerVerifiedPipeline, "run", run)
+    factory.aclose.reset_mock()
+    await server.run_agent(ctx, cfg)
+    run.assert_awaited_once_with(ctx.room)
+    factory.aclose.assert_not_awaited()
+    ordinary.assert_not_called()

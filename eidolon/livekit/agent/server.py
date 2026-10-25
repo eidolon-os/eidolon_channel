@@ -687,6 +687,8 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     # let a restored/new allowlist policy silently enter the ordinary pipeline
     # while calibrated admission is unavailable in this release.
     from .speaker_verified.selection import resolve_voice_policy
+    from eidolon_sdk.biz.speaker_calibration import SpeakerPolicyConfirmationRequired
+    from eidolon_sdk.biz.contracts import SESSION_END_VOICE_POLICY_CONFIRMATION_REQUIRED
 
     verified_pipeline = None
     try:
@@ -714,15 +716,21 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
                     on_session_closed=lambda: _end_serving("session closed"),
                     on_idle_disconnect=lambda: _end_serving("idle timeout"),
                 )
-    except BaseException:
+    except BaseException as exc:
         # This is before the pipeline owns factory cleanup. Also notify while
         # the actor is still connected, instead of leaving a listening UI.
+        confirmation_required = isinstance(exc, SpeakerPolicyConfirmationRequired)
         try:
-            await _publish_session_end(SESSION_END_ERROR)
+            await _publish_session_end(
+                SESSION_END_VOICE_POLICY_CONFIRMATION_REQUIRED
+                if confirmation_required else SESSION_END_ERROR
+            )
         finally:
             close = getattr(factory, "aclose", None)
             if close is not None:
                 await close()
+        if confirmation_required:
+            return  # Expected policy hold, not a crashed worker or ordinary fallback.
         raise
 
     # Video avatar is enabled for this session only if globally available AND the

@@ -91,6 +91,8 @@ runtime_authority:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
+  # Explicit model release criterion; empty disables verified admission.
+  calibration_path: ""
   # Finite diagnostics only: exact Companion + absolute Unix deadline; default off.
   observation_companion_id: ""
   observation_until: 0

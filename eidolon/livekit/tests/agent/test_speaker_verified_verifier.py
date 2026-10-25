@@ -212,3 +212,16 @@ async def test_conversation_release_passes_entire_long_candidate_and_multiple_te
     audio.pcm += b"\1\0" * (30001 * 16)
     assert (await verifier(audio)).status == "inconclusive"
     assert extractor.extract.await_count == 1
+
+
+async def test_scoring_trace_contains_only_numerical_result_not_audio_or_templates():
+    verifier, _, extractor, evidence, _, sample = fixture()
+    results = []
+    verifier._observe_result = results.append
+    extractor.extract.return_value = sample.model_copy(update={"vector": [0, 1]})
+    assert (await verifier(evidence)).status == "non_match"
+    result = results.pop()
+    assert set(result) == {"status", "similarity", "threshold", "audio_ms", "elapsed_ms"}
+    assert result["status"] == "non_match" and result["similarity"] == 0
+    assert result["threshold"] == 0.8 and result["audio_ms"] == 2000
+    assert result["elapsed_ms"] >= 0

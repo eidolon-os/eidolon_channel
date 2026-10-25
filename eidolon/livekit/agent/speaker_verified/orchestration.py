@@ -99,6 +99,9 @@ class SpeakerVerifiedTurns:
         elif evidence.end - evidence.start > self._max_audio_ms * 16:
             reason = "audio_too_long"
         if not evidence.complete or reason:
+            logger.info("Verified candidate rejected candidate=%s reason=%s audio_ms=%.1f",
+                        candidate.candidate_id, reason or "audio_incomplete",
+                        (evidence.end - evidence.start) / 16)
             self._owner.reject_active(reason or "audio_incomplete")
             self._feedback("audio_too_long" if reason == "audio_too_long" else "inconclusive")
             return None
@@ -115,6 +118,8 @@ class SpeakerVerifiedTurns:
 
         def reject(reason, state="unavailable"):
             if current():
+                logger.info("Verified candidate rejected candidate=%s reason=%s state=%s",
+                            candidate.candidate_id, reason, state)
                 self._owner.reject_active(reason)
                 self._feedback(state)
 

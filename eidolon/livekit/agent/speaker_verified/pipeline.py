@@ -57,6 +57,10 @@ class SpeakerVerifiedPipeline(BasePipeline):
             self._verified.input.invalidate("room_disconnected")
         self._closed_event.set()
 
+    def _admission_feedback(self, state):
+        self.session_mark("voice_admission", state=state)
+        self._feedback.update(state)
+
     def _committed(self, decision):
         # This callback is reachable only after current Data authorization and
         # the coordinator's once-only commit. Raw ASR never publishes metadata.
@@ -102,6 +106,7 @@ class SpeakerVerifiedPipeline(BasePipeline):
                 calibration=self._calibration,
                 owner_id=self._policy.owner_id,
                 companion_id=self._policy.companion_id,
+                observe_result=lambda fields: self.session_mark("speaker_verified_result", **fields),
             )
             self._eot = create_session_eot_model(self._cfg.turn_policy)
 
@@ -137,7 +142,7 @@ class SpeakerVerifiedPipeline(BasePipeline):
                     else self._cfg.turn_policy.interrupt.aec_warmup_ms / 1000
                 ),
                 stop_playback=stop_device_output,
-                feedback=self._feedback.update,
+                feedback=self._admission_feedback,
                 min_audio_ms=self._calibration.min_audio_ms,
                 max_audio_ms=self._calibration.max_audio_ms,
             )
@@ -165,6 +170,7 @@ class SpeakerVerifiedPipeline(BasePipeline):
             async def started():
                 await self._start_music_runtime(session)
                 await self._on_started()
+                self.session_mark("session_started")
                 self._feedback.start()
                 self._idle.start()
 

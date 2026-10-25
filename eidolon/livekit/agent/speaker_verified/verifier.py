@@ -4,6 +4,8 @@ A calibration describes a model/scoring release, never personal permissions or
 a device binding. Missing/incompatible evidence cannot become permission.
 """
 
+import time
+
 from eidolon_sdk.core.http.errors import ServiceUpstreamError
 from eidolon_sdk.biz.voiceprint import SpeakerComparisonRequest
 from eidolon_sdk.biz.speaker_calibration import SpeakerAdmissionCalibration
@@ -16,15 +18,18 @@ from .orchestration import SpeakerDecision
 
 class CalibratedSpeakerVerifier:
     def __init__(
-        self, *, data, extractor, calibration: SpeakerAdmissionCalibration, owner_id, companion_id
+        self, *, data, extractor, calibration: SpeakerAdmissionCalibration, owner_id, companion_id,
+        observe_result=None,
     ):
         if not owner_id or not companion_id:
             raise ValueError("SPEAKER_VERIFIED_SCOPE_REQUIRED")
         self.calibration = calibration.model_copy(deep=True)
         self._data, self._extractor = data, extractor
         self._owner_id, self._companion_id = owner_id, companion_id
+        self._observe_result = observe_result
 
     async def __call__(self, evidence: AudioEvidence) -> SpeakerDecision:
+        started = time.monotonic()
         if (
             not evidence.complete
             or evidence.reason
@@ -58,7 +63,16 @@ class CalibratedSpeakerVerifier:
         if any(score.status != "scored" for score in result.scores):
             return SpeakerDecision("unavailable")
         best = max(result.scores, key=lambda score: score.similarity)
-        if best.similarity < self.calibration.threshold:
+        matched = best.similarity >= self.calibration.threshold
+        if self._observe_result is not None:
+            self._observe_result({
+                "status": "match" if matched else "non_match",
+                "similarity": best.similarity,
+                "threshold": self.calibration.threshold,
+                "audio_ms": len(evidence.pcm) / 32,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            })
+        if not matched:
             return SpeakerDecision("non_match")
         return SpeakerDecision(
             "match",

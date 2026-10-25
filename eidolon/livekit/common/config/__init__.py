@@ -5,6 +5,7 @@ from .loader import (
     _optional_int,
     load_agent_config,
     load_effective_config,
+    load_voiceprint_config,
 )
 from .schema import (
     AgentBehaviorConfig,
@@ -60,6 +61,7 @@ __all__ = [
     "WorkerConfig",
     "load_agent_config",
     "load_effective_config",
+    "load_voiceprint_config",
     "_optional_float",
     "_optional_int",
 ]

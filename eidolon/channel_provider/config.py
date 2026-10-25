@@ -12,6 +12,7 @@ import yaml
 from dotenv import load_dotenv
 
 from .adapters.livekit import LiveKitConfig
+from eidolon.livekit.common.config import load_voiceprint_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SETTINGS = _REPO_ROOT / "config" / "channel-provider.yaml"
@@ -60,6 +61,7 @@ class ProviderConfig:
     # Adapter names in the order this deployment prefers them. Selection walks
     # this list and takes the first one that can carry the device's spec.
     adapter_preference: tuple[str, ...] = ("livekit",)
+    speaker_calibration_path: str = ""
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:
@@ -271,4 +273,5 @@ def load_provider_config() -> ProviderConfig:
             if "hub_url" in smarthome else None
         ),
         adapter_preference=tuple(name.strip() for name in preference),
+        speaker_calibration_path=load_voiceprint_config().calibration_path,
     )

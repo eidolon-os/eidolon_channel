@@ -683,6 +683,48 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
         target_companion_id=target_companion_id,
     )
 
+    # Lock the orchestration choice before constructing any audio owner. Never
+    # let a restored/new allowlist policy silently enter the ordinary pipeline
+    # while calibrated admission is unavailable in this release.
+    from .speaker_verified.selection import resolve_voice_policy
+
+    verified_pipeline = None
+    try:
+        if output_plan is None or output_plan.inputs.microphone:
+            voice_policy = await resolve_voice_policy(
+                getattr(factory, "runtime_services", None), room,
+            )
+            if voice_policy is not None and voice_policy.mode == "allowlist":
+                if interaction_mode != "full_duplex":
+                    raise ValueError("SPEAKER_VERIFIED_INTERACTION_UNSUPPORTED")
+                from eidolon_sdk.biz.speaker_calibration import load_calibration
+                from .speaker_verified.pipeline import SpeakerVerifiedPipeline
+
+                calibration = load_calibration(cfg.voiceprint.calibration_path)
+                if (session_turn_policy.eot.provider != "firered"
+                        or (cfg.avatar.enabled and avatar_requested)
+                        or session_intent != "user_initiated"):
+                    raise ValueError("SPEAKER_VERIFIED_COMBINATION_UNSUPPORTED")
+                verified_pipeline = SpeakerVerifiedPipeline(
+                    factory, policy=voice_policy, calibration=calibration,
+                    cfg=replace(cfg, turn_policy=session_turn_policy),
+                    session_intent=session_intent,
+                    on_session_started=_publish_session_started,
+                    on_session_end=_publish_session_end,
+                    on_session_closed=lambda: _end_serving("session closed"),
+                    on_idle_disconnect=lambda: _end_serving("idle timeout"),
+                )
+    except BaseException:
+        # This is before the pipeline owns factory cleanup. Also notify while
+        # the actor is still connected, instead of leaving a listening UI.
+        try:
+            await _publish_session_end(SESSION_END_ERROR)
+        finally:
+            close = getattr(factory, "aclose", None)
+            if close is not None:
+                await close()
+        raise
+
     # Video avatar is enabled for this session only if globally available AND the
     # client declared it (full-duplex path for M1). Default off → audio-only.
     avatar_enabled = bool(cfg.avatar.enabled and avatar_requested)
@@ -698,7 +740,9 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     )
     # The existing manually driven pipeline also serves typed/output-only
     # sessions. No audio turn detector is needed when microphone input is off.
-    if _use_ptt_pipeline(interaction_mode) or (output_plan is not None and not output_plan.inputs.microphone):
+    if verified_pipeline is not None:
+        pipeline = verified_pipeline
+    elif _use_ptt_pipeline(interaction_mode) or (output_plan is not None and not output_plan.inputs.microphone):
         pipeline = HalfDuplexPttPipeline(
             factory,
             interaction_mode=interaction_mode,

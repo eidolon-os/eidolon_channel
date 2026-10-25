@@ -33,7 +33,7 @@ from .schema import (
     VoiceprintConfig,
     WorkerConfig,
 )
-from .validators import validate_effective_config
+from .validators import validate_effective_config, voiceprint_config_errors
 
 logger = logging.getLogger("agent.config")
 
@@ -209,6 +209,16 @@ def _load_turn_policy(raw: dict[str, Any]) -> TurnPolicyConfig:
     profile = str(raw.get("profile") or "balanced_semantic").strip() or "balanced_semantic"
     base = profile_defaults(profile)
     return _merge_dataclass(base, raw)
+
+
+def load_voiceprint_config() -> VoiceprintConfig:
+    """Provider and worker share the Host document, not worker-only policies."""
+    _bootstrap_dotenv()
+    config = _merge_dataclass(VoiceprintConfig(), _section(_load_yaml(), "voiceprint"))
+    errors = voiceprint_config_errors(config)
+    if errors:
+        raise ValueError("VoiceprintConfig validation failed:\n  - " + "\n  - ".join(errors))
+    return config
 
 
 def load_effective_config() -> EffectiveAgentConfig:

@@ -40,7 +40,7 @@ async def test_continuation_during_verification_rechecks_complete_candidate_once
         if r.verify.call_count == 1:
             entered.set()
             await release.wait()
-        return SpeakerDecision("match", "profile", 3, "calibration")
+        return SpeakerDecision("match", "profile", 3, "calibration", policy_revision=7)
 
     r.verify.side_effect = verify
     try:
@@ -114,7 +114,7 @@ async def test_rejected_background_does_not_block_next_mapped_turn(runtime):
     try:
         r.verify.return_value = SpeakerDecision("non_match")
         await r.controller.consider()
-        r.verify.return_value = SpeakerDecision("match", "profile", 3, "calibration")
+        r.verify.return_value = SpeakerDecision("match", "profile", 3, "calibration", policy_revision=7)
         routing.observe_speech(transcript("新的真实用户话语"))
         await eventually(lambda: r.owner.active.state == "committed")
         assert r.owner.selected_text == "新的真实用户话语"

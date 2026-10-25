@@ -12,7 +12,7 @@ from eidolon_sdk.biz.contracts.local_tts import (
     LOCAL_TTS_CAPABILITY as LOCAL_TTS_PROVIDER,
 )
 
-from .schema import EffectiveAgentConfig
+from .schema import EffectiveAgentConfig, VoiceprintConfig
 from eidolon.livekit.common.welcome import validate_welcome_message
 
 
@@ -258,7 +258,18 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
     if not 0 <= obs.session_trace_retention_days <= 365:
         errors.append("observability.session_trace_retention_days must be in [0, 365]")
 
-    vp = cfg.voiceprint
+    errors.extend(voiceprint_config_errors(cfg.voiceprint))
+    if errors:
+        raise ValueError("EffectiveAgentConfig validation failed:\n  - " + "\n  - ".join(errors))
+
+
+def voiceprint_config_errors(vp: VoiceprintConfig) -> list[str]:
+    """Shared voice-section validation; independent of the worker's other policies."""
+    errors: list[str] = []
+    if not isinstance(vp.calibration_path, str) or len(vp.calibration_path) > 4096:
+        errors.append("voiceprint.calibration_path must be a bounded path string")
+    if vp.calibration_path and (vp.enabled or vp.observation_until):
+        errors.append("voiceprint calibration cannot coexist with legacy enforcement or observation")
     if (type(vp.observation_until) not in (int, float)
             or not math.isfinite(vp.observation_until) or vp.observation_until < 0):
         errors.append("voiceprint.observation_until must be nonnegative Unix seconds")
@@ -289,5 +300,4 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         if not 0 <= vp.owner_short_audio_bypass_ms <= vp.min_audio_ms:
             errors.append("voiceprint.owner_short_audio_bypass_ms must be in [0, min_audio_ms]")
 
-    if errors:
-        raise ValueError("EffectiveAgentConfig validation failed:\n  - " + "\n  - ".join(errors))
+    return errors

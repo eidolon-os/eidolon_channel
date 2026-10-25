@@ -40,7 +40,7 @@ def runtime():
     session = SimpleNamespace(
         current_speech=speech, interrupt=AsyncMock(), generate_reply=MagicMock()
     )
-    verify = AsyncMock(return_value=SpeakerDecision("match", "profile", 3, "calibration"))
+    verify = AsyncMock(return_value=SpeakerDecision("match", "profile", 3, "calibration", policy_revision=7))
     authorize = AsyncMock(return_value=True)
     intent = AsyncMock(return_value="reply")
     complete = AsyncMock(return_value=True)
@@ -91,7 +91,7 @@ async def test_identity_intent_authorization_precede_cancel_and_commit(runtime):
     async def verify(evidence):
         assert evidence.pcm == b"\x01\x00" * 32000
         order.append("verify")
-        return SpeakerDecision("match", "profile", 3, "calibration")
+        return SpeakerDecision("match", "profile", 3, "calibration", policy_revision=7)
 
     async def intent(text, output):
         order.append("intent")
@@ -126,7 +126,7 @@ async def test_late_match_never_controls_changed_candidate(runtime, change):
     async def verify(evidence):
         entered.set()
         await release.wait()
-        return SpeakerDecision("match", "profile", 3, "calibration")
+        return SpeakerDecision("match", "profile", 3, "calibration", policy_revision=7)
 
     r.verify.side_effect = verify
     task = r.controller.consider()
@@ -203,3 +203,60 @@ async def test_dispatch_failure_after_commit_is_not_reported_as_identity_rejecti
         await r.controller.consider()
     assert r.owner.active.state == "committed"
     assert r.controller.pending is None
+
+
+@pytest.mark.asyncio
+async def test_remote_playback_ack_precedes_commit_and_rechecks_authority(runtime):
+    r = runtime
+    entered, ack = asyncio.Event(), asyncio.Event()
+
+    async def cancel_output():
+        r.authorize.assert_awaited_once()
+        entered.set()
+        await ack.wait()
+        r.session.current_speech = None
+
+    r.controller._cancel_output = cancel_output
+    pending = r.controller.consider()
+    await entered.wait()
+    r.record.assert_not_called()
+    r.session.generate_reply.assert_not_called()
+    ack.set()
+    await pending
+    assert r.authorize.await_count == 2
+    r.record.assert_called_once()
+    r.session.generate_reply.assert_called_once()
+    r.session.interrupt.assert_not_called()  # owned by the supplied shared stop adapter
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [TimeoutError(), RuntimeError("device unavailable")])
+async def test_failed_device_stop_never_commits_or_replies(runtime, failure):
+    r = runtime
+    r.controller._cancel_output = AsyncMock(side_effect=failure)
+    await r.controller.consider()
+    assert r.owner.active.state == "rejected"
+    r.record.assert_not_called()
+    r.session.generate_reply.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rejected_identity_does_not_send_device_stop(runtime):
+    r = runtime
+    r.controller._cancel_output = AsyncMock()
+    r.verify.return_value = SpeakerDecision("non_match")
+    await r.controller.consider()
+    r.controller._cancel_output.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['non_match', 'inconclusive', 'unavailable'])
+async def test_feedback_distinguishes_identity_quality_and_service_failure(runtime, status):
+    r = runtime
+    updates = []
+    r.controller._feedback = updates.append
+    r.verify.return_value = SpeakerDecision(status)
+    await r.controller.consider()
+    assert updates == ['checking', status]
+    r.session.interrupt.assert_not_called()
+    r.session.generate_reply.assert_not_called()

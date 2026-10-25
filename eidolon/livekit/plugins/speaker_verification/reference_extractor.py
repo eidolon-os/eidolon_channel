@@ -30,6 +30,12 @@ class ReferenceSpeakerExtractor:
         self._vad = None
         self._weights_hash = None
 
+    @property
+    def model_identity(self):
+        if self._weights_hash is None:
+            return None
+        return (self._provider.model, self._weights_hash, 'reference-contiguous-pcm16-v1')
+
     def warm_up(self):
         manifest = json.loads((self.model_dir / 'manifest.json').read_text())
         checked = {}

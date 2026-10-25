@@ -297,7 +297,7 @@ class EidolonEOTModel(ABC):
 
         # Use the same learned scorer as the interruption path; only
         # cooldown/similarity (interrupt-specific) live in compute_score.
-        score = self._context_eot.semantic_completeness_score(text)
+        score = self.score_candidate(text)
 
         _eot_log(
             "H2/H5",
@@ -311,6 +311,15 @@ class EidolonEOTModel(ABC):
             score,
         )
         return score
+
+    def score_candidate(self, text: str) -> float:
+        """Shared numerical EOT without recording an unaccepted transcript.
+
+        Manual admission callers must not create chat history or use the
+        framework adapter's transcript diagnostics before authorization.
+        The learned scorer is identical to ordinary endpointing.
+        """
+        return self._context_eot.semantic_completeness_score(text)
 
     def _extract_last_user_text(self, chat_ctx: "llm.ChatContext") -> str:
         """

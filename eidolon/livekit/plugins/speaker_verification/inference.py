@@ -35,6 +35,10 @@ class SpeakerInferenceEngine:
         self._warm = None
         self.state = 'not_started'
 
+    @property
+    def model_identity(self):
+        return self._extractor.model_identity if self.state == 'ready' else None
+
     def _submit(self, operation, *args):
         # Already-completed futures may still have their callbacks queued.
         self._pending = {future for future in self._pending if not future.done()}

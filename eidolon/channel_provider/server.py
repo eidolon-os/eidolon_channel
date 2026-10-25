@@ -76,11 +76,15 @@ def main() -> None:
             ReferenceSpeakerExtractor,
         )
         speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(default_campplus_model_dir()))
+    from eidolon_sdk.biz.speaker_calibration import load_calibration
+    calibration_path = config.speaker_calibration_path
+    calibration = load_calibration(calibration_path) if calibration_path else None
     app = create_app(
         service=service,
         bearer_token=config.bearer_token,
         traces=SessionTraceReader(config.traces.root),
         speaker_engine=speaker_engine,
+        speaker_calibration=calibration,
     )
     if home_client is not None:
         async def close_home_client(_app):

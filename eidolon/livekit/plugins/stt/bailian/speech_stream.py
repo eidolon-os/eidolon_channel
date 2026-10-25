@@ -542,7 +542,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         try:
             event_name, parsed = parse_funasr_message(data)
         except ValueError:
-            logger.debug("Unrecognised FunASR message: %s", data)
+            logger.debug("Unrecognised FunASR message")
             return
 
         if event_name == FunASREventType.RESULT_GENERATED.value:
@@ -557,7 +557,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         ):
             pass
         else:
-            logger.warning("[Bailian STT] unhandled FunASR event: %s", event_name)
+            logger.warning("[Bailian STT] unhandled FunASR event")
 
     async def _handle_result(self, result: FunASRResultGenerated) -> None:
         """Map a FunASR result-generated event to LiveKit SpeechEvent types."""
@@ -588,11 +588,10 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             self._emit_provider_event_once(
                 "stt_provider_final",
                 "_first_final_seen",
-                text_preview=text[:80],
+                text_length=len(text),
             )
             self._parser_confirmed.append(latest)
             confirmed_text = "".join(s.text for s in self._parser_confirmed)
-            logger.debug("[STT-DBG] FINAL confirmed_text=%r", confirmed_text)
             words = self._build_timed_strings(*self._parser_confirmed)
             start_s = (
                 self._parser_confirmed[0].begin_time / 1000.0
@@ -601,8 +600,8 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
             )
             end_s = latest.end_time / 1000.0
             logger.info(
-                "[Bailian STT] FINAL_TRANSCRIPT text=%r start=%.3fs end=%.3fs",
-                confirmed_text,
+                "[Bailian STT] FINAL_TRANSCRIPT chars=%d start=%.3fs end=%.3fs",
+                len(confirmed_text),
                 start_s,
                 end_s,
             )
@@ -632,12 +631,11 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                 self._emit_provider_event_once(
                     "stt_provider_first_partial",
                     "_first_partial_seen",
-                    text_preview=text[:80],
+                    text_length=len(text),
                 )
                 self._last_interim_text = text
-                logger.debug("[STT-DBG] INTERIM text=%r", text)
                 logger.info(
-                    "[Bailian STT] INTERIM_TRANSCRIPT text=%r", text
+                    "[Bailian STT] INTERIM_TRANSCRIPT chars=%d", len(text)
                 )
                 self._push_event(
                     self._SpeechEvent(
@@ -695,7 +693,7 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
         ):
             return
         self._preflight_sent_text = text
-        logger.info("[Bailian STT] PREFLIGHT_TRANSCRIPT text=%r", text)
+        logger.info("[Bailian STT] PREFLIGHT_TRANSCRIPT chars=%d", len(text))
         self._push_event(
             self._SpeechEvent(
                 type=self._SpeechEventType.PREFLIGHT_TRANSCRIPT,

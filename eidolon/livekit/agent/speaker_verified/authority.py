@@ -17,6 +17,7 @@ class SpeakerPolicyAuthority:
             or not decision.profile_id
             or decision.profile_revision < 1
             or not decision.calibration_version
+            or decision.policy_revision < 0
         ):
             return False
         snapshot = await self._client.get_voiceprint_snapshot(self._companion)
@@ -24,6 +25,8 @@ class SpeakerPolicyAuthority:
             snapshot.owner_id != self._owner
             or snapshot.companion_id != self._companion
             or snapshot.mode != "allowlist"
+            or snapshot.revision != decision.policy_revision
+            or snapshot.calibration_digest != decision.calibration_version
         ):
             # Data permits ordinary conversations when off. That is not an
             # identity grant for a session which selected speaker verification.
@@ -37,5 +40,9 @@ class SpeakerPolicyAuthority:
         # Data rechecks revision transactionally. Revocation between snapshot
         # and this request must fail; no read-then-local-allow shortcut.
         return await self._client.admit_voiceprint(
-            self._companion, snapshot.revision, decision.profile_id
+            self._companion,
+            snapshot.revision,
+            decision.profile_id,
+            profile_revision=decision.profile_revision,
+            calibration_digest=decision.calibration_version,
         )

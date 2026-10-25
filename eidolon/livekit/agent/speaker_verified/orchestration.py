@@ -23,6 +23,7 @@ class SpeakerDecision:
     profile_id: str = ""
     profile_revision: int = 0
     calibration_version: str = ""
+    policy_revision: int = -1
 
 
 class SpeakerVerifiedTurns:
@@ -37,6 +38,8 @@ class SpeakerVerifiedTurns:
         classify: Callable[[str, Any], Awaitable[str]],
         authorize: Callable[[SpeakerDecision], Awaitable[bool]],
         committed: Callable[[UserTurnDecision], None],
+        cancel_output: Callable[[], Awaitable[None]] | None = None,
+        feedback: Callable[[str], None] | None = None,
         timeout_sec: float = 8,
     ):
         if not math.isfinite(timeout_sec) or not 0 < timeout_sec <= 8:
@@ -44,6 +47,8 @@ class SpeakerVerifiedTurns:
         self._owner, self._capture, self._session = coordinator, capture, session
         self._verify, self._complete, self._classify = verify, is_complete, classify
         self._authorize, self._committed = authorize, committed
+        self._cancel_output = cancel_output
+        self._feedback = feedback or (lambda state: None)
         self._timeout = timeout_sec
         self._pending: asyncio.Task | None = None
         self._closed = False
@@ -58,6 +63,8 @@ class SpeakerVerifiedTurns:
         self._owner.reject_active(reason)
         if self._pending is not None:
             self._pending.cancel()
+        if not self._closed:
+            self._feedback("inconclusive" if reason == "candidate_timeout" else "ready")
 
     def consider(self) -> asyncio.Task | None:
         """Attempt a complete candidate; never queues PCM or a second inference."""
@@ -70,6 +77,7 @@ class SpeakerVerifiedTurns:
         source = capture.active_source if capture else None
         if source is None:
             self._owner.reject_active("audio_source_unavailable")
+            self._feedback("unavailable")
             return None
         reference = self._owner.capture_audio_reference(source=source)
         if reference.span is None:
@@ -84,6 +92,7 @@ class SpeakerVerifiedTurns:
             reason = "audio_too_short"
         if not evidence.complete or reason:
             self._owner.reject_active(reason or "audio_incomplete")
+            self._feedback("inconclusive")
             return None
         epoch, text, output = self._epoch, candidate.selected_text, self._session.current_speech
 
@@ -96,9 +105,10 @@ class SpeakerVerifiedTurns:
                 and self._owner.is_audio_reference_current(reference, source=source)
             )
 
-        def reject(reason):
+        def reject(reason, state="unavailable"):
             if current():
                 self._owner.reject_active(reason)
+                self._feedback(state)
 
         def output_current():
             actual = self._session.current_speech
@@ -114,6 +124,7 @@ class SpeakerVerifiedTurns:
                         return  # EOT owns completeness; do not invent a terminal utterance.
                     if not current():
                         return
+                    self._feedback("checking")
                     decision = await self._verify(evidence)
                     if not current():
                         return
@@ -122,14 +133,20 @@ class SpeakerVerifiedTurns:
                         or not decision.profile_id
                         or decision.profile_revision < 1
                         or not decision.calibration_version
+                        or decision.policy_revision < 0
                     ):
-                        reject("identity_" + decision.status)
+                        reject(
+                            "identity_" + decision.status,
+                            decision.status
+                            if decision.status in {"non_match", "inconclusive", "unavailable"}
+                            else "unavailable",
+                        )
                         return
                     action = await self._classify(text, output)
                     if not current():
                         return
                     if action not in {"reply", "stop_output"}:
-                        reject("no_authorized_action")
+                        reject("no_authorized_action", "no_action")
                         return
                     allowed = await self._authorize(decision)
                     if not current():
@@ -140,11 +157,14 @@ class SpeakerVerifiedTurns:
                     # No await between scope check and issuing the cancellation.
                     actual = self._session.current_speech
                     if actual is not None and not actual.done():
-                        await self._session.interrupt(force=True)
+                        if self._cancel_output is None:
+                            await self._session.interrupt(force=True)
+                        else:
+                            await self._cancel_output()
                         if not current():
                             return
                     if action == "stop_output":
-                        reject("authorized_stop")
+                        reject("authorized_stop", "accepted")
                         return
                     # Cancellation may drain tools/playout asynchronously. A
                     # revocation or newly scheduled output must still veto reply.
@@ -163,6 +183,7 @@ class SpeakerVerifiedTurns:
                             input_modality="audio",
                             allow_interruptions=False,
                         )
+                        self._feedback("accepted")
             except TimeoutError:
                 reject("verification_timeout")
             except asyncio.CancelledError:

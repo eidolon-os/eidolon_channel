@@ -221,7 +221,7 @@ async def test_streaming_vad_eot_and_verification_release_one_reply(running, mon
         assert evidence.pcm == b"\x88\x13" * 32000
         verifying.set()
         await allow.wait()
-        return SpeakerDecision(outcome, "profile", 1, "test-only")
+        return SpeakerDecision(outcome, "profile", 1, "test-only", policy_revision=1)
 
     owner = UserTurnCoordinator(speech_merge_grace_sec=0.01)
     turns = SpeakerVerifiedTurns(

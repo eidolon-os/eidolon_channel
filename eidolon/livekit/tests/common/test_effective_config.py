@@ -17,6 +17,20 @@ def _write_settings(tmp_path: Path, body: str) -> Path:
     return p
 
 
+@pytest.mark.parametrize("legacy", ["enabled", "observation_until"])
+def test_calibrated_route_cannot_allocate_a_second_voiceprint_owner(legacy):
+    from dataclasses import replace
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
+    from eidolon.livekit.common.config.validators import validate_effective_config
+
+    cfg = EffectiveAgentConfig()
+    voiceprint = replace(cfg.voiceprint, calibration_path="test-only.json",
+        **({"enabled": True} if legacy == "enabled" else
+           {"observation_until": 1, "observation_companion_id": "companion"}))
+    with pytest.raises(ValueError, match="calibration cannot coexist"):
+        validate_effective_config(replace(cfg, voiceprint=voiceprint))
+
+
 def test_balanced_profile_defaults() -> None:
     cfg = profile_defaults("balanced_semantic")
     assert cfg.vad.activation_threshold == 0.50

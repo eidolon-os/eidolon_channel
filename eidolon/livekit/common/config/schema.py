@@ -322,6 +322,8 @@ class ObservabilityConfig:
 
 @dataclass(frozen=True)
 class VoiceprintConfig:
+    # Explicit, scoped calibration artifact; no legacy threshold fallback.
+    calibration_path: str = ""
     # Bounded observation only; zero/empty keeps the normal input unchanged.
     observation_companion_id: str = ""
     observation_until: float = 0.0  # absolute Unix seconds, including current sessions

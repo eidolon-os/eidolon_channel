@@ -362,7 +362,7 @@ class BailianConnectionManager:
                         if asyncio.iscoroutine(result):
                             await result
                     except json.JSONDecodeError:
-                        logger.warning("Received non-JSON text: %s", raw[:200])
+                        logger.warning("Received non-JSON response")
                 elif isinstance(raw, bytes):
                     if binary_cb:
                         result = binary_cb(raw)
@@ -399,7 +399,7 @@ class BailianConnectionManager:
                 return json.loads(raw)
             except json.JSONDecodeError:
                 logger.warning(
-                    "Received non-JSON text in _recv_message: %s", raw[:200]
+                    "Received non-JSON response in _recv_message"
                 )
                 return None
         return None

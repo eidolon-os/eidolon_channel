@@ -10,18 +10,14 @@ from eidolon_sdk.biz.voiceprint import (
     enrollment_evidence_digest,
 )
 
+from .scoring import embedding_identity, cosine
+
 
 def evaluate_enrollment(request: EnrollmentEvaluationRequest) -> EnrollmentEvaluation:
     samples = list(request.samples.values())
 
-    def identity(x):
-        return (x.model_id, x.weights_hash, x.preprocessing_version, len(x.vector))
-
-    if any(identity(s) != identity(request.trial) for s in samples):
+    if any(embedding_identity(s) != embedding_identity(request.trial) for s in samples):
         raise ValueError("incompatible_embedding_versions")
-
-    def cosine(a, b):
-        return max(-1.0, min(1.0, math.fsum(x * y for x, y in zip(a.vector, b.vector))))
 
     mean = [
         math.fsum(s.vector[i] for s in samples) / len(samples)

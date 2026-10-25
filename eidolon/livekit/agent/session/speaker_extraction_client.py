@@ -2,7 +2,11 @@
 
 import base64
 
-from eidolon_sdk.biz.voiceprint import ExtractedSample, VoiceAudioRequest
+from eidolon_sdk.biz.voiceprint import (
+    ExtractedSample,
+    VoiceAudioRequest,
+    SpeakerExtractionReadiness,
+)
 from eidolon_sdk.core.http.client import ServiceHTTPClient, authorization_header
 
 
@@ -16,6 +20,11 @@ class SpeakerExtractionClient(ServiceHTTPClient):
         if not isinstance(pcm, bytes) or len(pcm) % 2 or not 48000 <= len(pcm) <= 960000:
             raise ValueError("bounded mono 16 kHz PCM required")
         request = VoiceAudioRequest(pcm_base64=base64.b64encode(pcm).decode("ascii"))
-        response = await self._request("POST", "/v1/voiceprints/extract",
-            json=request.model_dump(mode="json"), timeout=8)
+        response = await self._request(
+            "POST", "/v1/voiceprints/extract", json=request.model_dump(mode="json"), timeout=8
+        )
         return ExtractedSample.model_validate(response.json())
+
+    async def readiness(self) -> SpeakerExtractionReadiness:
+        response = await self._request("GET", "/v1/voiceprints/readiness", timeout=2)
+        return SpeakerExtractionReadiness.model_validate(response.json())

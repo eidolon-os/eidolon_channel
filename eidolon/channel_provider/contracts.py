@@ -58,6 +58,47 @@ class InvalidTransition(DomainError):
     http_status = 409
 
 
+class CapabilityNotDeclared(DomainError):
+    """This Host holds no declaration for the capability being asked for.
+
+    Its own code rather than ``INVALID_TRANSITION``, which reads as "someone
+    changed this first" and sends a client off to re-read a screen that did not
+    move. What actually happened is that the device's declared actions are not
+    available to this Host right now, so nothing can be validated against them.
+
+    Two ordinary causes, and the sentence must not pick between them: the device
+    never declared it, or this process lost the declaration it had — the
+    declarations live in memory and are re-established when the binding is
+    refreshed.
+    """
+
+    code = "CAPABILITY_NOT_DECLARED"
+    category = "conflict"
+    http_status = 409
+
+
+class DeclarationsLost(DomainError):
+    """This process has no declarations for a device whose binding it still holds.
+
+    The declarations are derived from the Manifest, which arrives only when a
+    binding is provisioned or refreshed. Both live in memory, so a Provider that
+    has just started holds every binding and describes none of them.
+
+    ``retryable`` for a reason that is not politeness: this is the state a
+    restart leaves behind, and it clears the moment the same binding is
+    refreshed. A caller that treats it as final stops asking, and the device
+    then waits for nothing. Saying so lets the caller's ordinary retry reach the
+    refresh that repairs it — including the case where the credential has not
+    yet expired, which is the only window where that refresh is otherwise
+    refused.
+    """
+
+    code = "CAPABILITY_DECLARATIONS_LOST"
+    category = "unavailable"
+    retryable = True
+    http_status = 409
+
+
 class Unauthenticated(DomainError):
     code = "UNAUTHENTICATED"
     category = "auth"

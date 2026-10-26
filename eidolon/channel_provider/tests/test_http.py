@@ -308,7 +308,7 @@ async def test_capability_directory_and_command_require_the_bearer(tmp_path) -> 
             headers=headers,
         )
         assert rejected.status == 409
-        assert (await rejected.json())["code"] == "INVALID_TRANSITION"
+        assert (await rejected.json())["code"] == "CAPABILITY_NOT_DECLARED"
 
         unauthenticated = await client.post(
             "/v1/device-channels/commands",

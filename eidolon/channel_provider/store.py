@@ -385,6 +385,7 @@ class ChannelProviderStore:
     def create_provision(
         self, value: StoredProvision, *, now_ms: int,
         runtime_refresh_of: StoredProvision | None = None,
+        declarations_lost: bool = False,
     ) -> tuple[StoredProvision, bool]:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -432,7 +433,7 @@ class ChannelProviderStore:
                             and row["operation_id"] == runtime_refresh_of.operation_id
                             and row["handle_json"] == runtime_refresh_of.handle_json
                             and row["adapter_name"] == runtime_refresh_of.adapter_name
-                        ))
+                        ) or declarations_lost)
                     ))
                     for row in same_generation
                 ):

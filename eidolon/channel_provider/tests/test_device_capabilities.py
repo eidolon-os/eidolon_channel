@@ -10,6 +10,9 @@ from eidolon.channel_provider.device_capabilities import (
     capabilities_from_manifest,
 )
 from eidolon.channel_provider.contracts import (
+    CapabilityNotDeclared,
+    DeclarationsLost,
+    CurrentRequest,
     BackendUnavailable,
     IdempotencyConflict,
     Forbidden,
@@ -105,7 +108,7 @@ async def test_command_refuses_capability_the_device_did_not_declare(service) ->
     service, _adapter = service
     await service.provision(ProvisionRequest.parse(json.dumps(provision_payload()).encode()))
 
-    with pytest.raises(InvalidTransition, match="did not declare"):
+    with pytest.raises(CapabilityNotDeclared, match="no declaration for volume.set.v1"):
         await service.deliver_device_command(
             DeviceCommandRequest(
                 owner_id="owner_1",
@@ -396,3 +399,127 @@ def test_a_schema_with_an_unresolvable_required_is_still_readable() -> None:
     capabilities = capabilities_from_manifest({"actions": [action]})
 
     assert capabilities[0].input_schema["required"] == ["volume"]
+
+
+async def test_a_restarted_provider_asks_to_be_told_the_declaration_again(
+    tmp_path,
+) -> None:
+    """A binding this process cannot describe is not one it should keep silently.
+
+    The declarations live in memory and are filled only when a binding is
+    provisioned or refreshed, so a restarted Provider holds a live binding whose
+    capabilities it has forgotten. Reporting ``refresh_required`` is how it gets
+    the manifest again — otherwise every device stops answering to its own
+    capabilities until the grant happens to lapse.
+    """
+    adapter = FakeAdapter(name="livekit")
+    adapter.on_channel = True
+    path = tmp_path / "provider.sqlite3"
+    first = ChannelProviderService(
+        store=ChannelProviderStore(path),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+    )
+    first.initialize()
+    payload = provision_payload()
+    payload["device"]["manifest"] = _manifest(_volume_action())
+    await first.provision(ProvisionRequest.parse(json.dumps(payload).encode()))
+    device_ref = first._store.active_provisions()[0].device_ref
+
+    current = json.loads(
+        await first.current(CurrentRequest.parse(json.dumps({
+            "operation": "channel.current-device",
+            "device_ref": device_ref.model_dump(mode="json"),
+        }).encode()))
+    )
+    assert "refresh_required" not in current, "a Provider that knows the declaration asks for nothing"
+
+    restarted = ChannelProviderService(
+        store=ChannelProviderStore(path),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+    )
+    restarted.initialize()
+
+    current = json.loads(
+        await restarted.current(CurrentRequest.parse(json.dumps({
+            "operation": "channel.current-device",
+            "device_ref": device_ref.model_dump(mode="json"),
+        }).encode()))
+    )
+
+    assert current.get("refresh_required") is True
+
+
+async def test_a_restart_rebuilds_the_declarations_it_lost(tmp_path) -> None:
+    """The refresh a restart asks for must be the one the ledger accepts.
+
+    Declarations are derived from the Manifest and live in memory, so a
+    restarted Provider holds the binding and describes none of it. ``current``
+    therefore asks for a refresh — but the ledger only accepts one that is
+    expired, carries a changed Manifest, or reports stale runtime inputs, and a
+    fresh credential is none of those. Refusing it finally leaves the device
+    waiting on a request nobody will make again; refusing it retryably leaves it
+    retrying forever.
+
+    So the one precondition this process lost is a reason the ledger accepts,
+    and the refresh rebuilds exactly what was missing.
+    """
+    adapter = FakeAdapter(name="livekit")
+    adapter.on_channel = True
+    path = tmp_path / "provider.sqlite3"
+    first = ChannelProviderService(
+        store=ChannelProviderStore(path),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+    )
+    first.initialize()
+    payload = provision_payload()
+    payload["device"]["manifest"] = _manifest(_volume_action())
+    await first.provision(ProvisionRequest.parse(json.dumps(payload).encode()))
+    device_id = first._store.active_provisions()[0].device_id
+
+    restarted = ChannelProviderService(
+        store=ChannelProviderStore(path),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+    )
+    restarted.initialize()
+    assert device_id not in restarted._device_capabilities, "a restart must have lost them"
+
+    refresh_payload = dict(payload)
+    refresh_payload["operation"] = "channel.refresh-device"
+    refresh_payload["operation_id"] = "refresh-after-restart"
+    await restarted.provision(ProvisionRequest.parse(json.dumps(refresh_payload).encode()))
+
+    assert device_id in restarted._device_capabilities
+    declared = [item.name for item in restarted._device_capabilities[device_id]]
+    assert declared == ["volume.set"]
+
+
+async def test_a_refresh_of_an_unexpired_binding_still_needs_a_reason(tmp_path) -> None:
+    """The new reason does not make every refresh acceptable.
+
+    A Provider that still holds the declarations has the only reason available,
+    and it is not one: without expiry, a changed Manifest or stale runtime
+    inputs, the ledger keeps refusing — so a caller cannot rotate credentials on
+    a whim.
+    """
+    adapter = FakeAdapter(name="livekit")
+    adapter.on_channel = True
+    service = ChannelProviderService(
+        store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+    )
+    service.initialize()
+    payload = provision_payload()
+    payload["device"]["manifest"] = _manifest(_volume_action())
+    await service.provision(ProvisionRequest.parse(json.dumps(payload).encode()))
+
+    refresh_payload = dict(payload)
+    refresh_payload["operation"] = "channel.refresh-device"
+    refresh_payload["operation_id"] = "refresh-with-declarations-held"
+
+    with pytest.raises(InvalidTransition, match="credential refresh requires expiry"):
+        await service.provision(ProvisionRequest.parse(json.dumps(refresh_payload).encode()))

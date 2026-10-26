@@ -37,6 +37,7 @@ from .contracts import (
     CurrentRequest,
     Forbidden,
     IdempotencyConflict,
+    CapabilityNotDeclared,
     InvalidTransition,
     ProvisionRequest,
     RevokeRequest,
@@ -321,7 +322,20 @@ class ChannelProviderService:
             )
             try:
                 committed, replayed = self._store.create_provision(
-                    value, now_ms=now, runtime_refresh_of=runtime_refresh_of
+                    value,
+                    now_ms=now,
+                    runtime_refresh_of=runtime_refresh_of,
+                    # A restarted process holds the binding and none of the
+                    # declarations derived from its Manifest. The caller asks
+                    # for this refresh only because ``current`` told it to, so
+                    # the ledger must accept the one reason this process has:
+                    # the same state the ledger's other reasons describe, a
+                    # precondition this side lost rather than one the caller
+                    # must prove.
+                    declarations_lost=(
+                        request.operation == "channel.refresh-device"
+                        and request.device_id not in self._device_capabilities
+                    ),
                 )
             except Exception:
                 if not self._same_transport_resource(
@@ -418,9 +432,25 @@ class ChannelProviderService:
             if stored is not None and stored.device_ref != request.device_ref:
                 stored = None
         binding = json.loads(stored.response_json) if stored is not None else None
-        refresh_required = stored is not None and not self._registry.get(
-            stored.adapter_name
-        ).binding_current(json.loads(stored.handle_json))
+        # Whether this process holds the declaration for that binding. The
+        # declarations are derived from the manifest only when a binding is
+        # provisioned or refreshed, so a Provider that has just started knows
+        # none of them while still holding every live binding.
+        capabilities_known = stored is None or stored.device_id in self._device_capabilities
+        # Two reasons to ask for a refresh, both meaning "this process cannot
+        # vouch for the binding it is reporting": the credential may no longer
+        # be current, or the declarations saying what the device can do were
+        # lost with the previous process. Hub answers ``refresh_required`` by
+        # sending the manifest again, and that is what rebuilds the
+        # declarations. Without the second reason, a restart left every device
+        # unable to act on its own capabilities until its grant happened to
+        # lapse — half an hour, reading as a device that declared nothing.
+        refresh_required = stored is not None and (
+            not self._registry.get(stored.adapter_name).binding_current(
+                json.loads(stored.handle_json)
+            )
+            or not capabilities_known
+        )
         return json.dumps(
             {"operation": "channel.current-device", "binding": binding,
              **({"refresh_required": True} if refresh_required else {})},
@@ -1124,7 +1154,10 @@ class ChannelProviderService:
             None,
         )
         if capability is None:
-            raise InvalidTransition("device did not declare that capability")
+            raise CapabilityNotDeclared(
+                f"no declaration for {request.op}.v{request.capability_version} "
+                f"on device {request.device_id}"
+            )
         schema_error = validate_capability_arguments(capability.input_schema, request.payload)
         if schema_error:
             raise InvalidTransition(schema_error)

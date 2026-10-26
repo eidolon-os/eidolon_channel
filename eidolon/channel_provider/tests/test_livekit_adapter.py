@@ -2178,3 +2178,132 @@ async def test_the_dispatch_carries_the_resolved_voice() -> None:
     )
 
     assert json.loads(client.agent_dispatch.created[0][2])["speech_voice"] == voice
+
+
+def _ack(command_id: str, op: str, status: str) -> SimpleNamespace:
+    """One authenticated device receipt, shaped as the firmware sends it."""
+    body = {
+        "v": 1,
+        "kind": "ack",
+        "device_id": _DEVICE_1,
+        "ref": command_id,
+        "op": op,
+        "status": status,
+    }
+    return SimpleNamespace(
+        topic=adapter_mod.CONTROL_TOPIC,
+        participant=SimpleNamespace(identity=_DEVICE_1),
+        data=json.dumps(body).encode(),
+    )
+
+
+async def test_a_second_setting_may_overlap_the_first_but_a_start_may_not():
+    """Two positions of one slider are the newer one, not a conflict.
+
+    Volume and brightness set a bounded value that means the same thing applied
+    twice, so a drag that outruns its receipts must not be refused. Anything
+    that starts something keeps its order and stays serialised.
+    """
+    from eidolon_sdk.biz.control.protocol import build_command_envelope
+
+    adapter, _ = _adapter()
+    published: list[dict] = []
+
+    async def publish(data, **_options):
+        published.append(json.loads(data))
+
+    adapter._listeners["room-1"] = adapter_mod._Listening(
+        device=_DEVICE_1,
+        sink=None,
+        connection=SimpleNamespace(
+            local_participant=SimpleNamespace(publish_data=publish)
+        ),
+    )
+    handle = {"room": "room-1", "device": _DEVICE_1}
+
+    def envelope(op: str, command_id: str) -> dict:
+        return build_command_envelope(
+            command_id=command_id,
+            device_id=_DEVICE_1,
+            op=op,
+            capability_version=1,
+            payload={},
+            ttl_ms=30_000,
+            src_type="channel",
+            src_id="eidolon_channel",
+        )
+
+    volume = asyncio.create_task(
+        adapter.deliver_control(handle, envelope("volume.set", "c1"), wait_for_terminal=True)
+    )
+    await asyncio.sleep(0)
+    brightness = asyncio.create_task(
+        adapter.deliver_control(
+            handle, envelope("display.brightness", "c2"), wait_for_terminal=True
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert not brightness.done(), "a second setting must not be refused while the first awaits"
+    assert len(published) == 2
+
+    adapter._control_receipt(
+        _ack("c1", "volume.set", "completed"), room="room-1", device=_DEVICE_1
+    )
+    adapter._control_receipt(
+        _ack("c2", "display.brightness", "completed"), room="room-1", device=_DEVICE_1
+    )
+    assert await volume == "succeeded"
+    assert await brightness == "succeeded"
+    assert not adapter._control_receipts
+
+
+async def test_a_command_that_starts_something_still_waits_for_the_first():
+    """Serialisation is not lifted for everything, only for settings.
+
+    A start has an order that matters, and two of them overlapping would let a
+    device begin something that the later command never intended to allow.
+    """
+    from eidolon.channel_provider.contracts import InvalidTransition
+    from eidolon_sdk.biz.control.protocol import build_command_envelope
+
+    adapter, _ = _adapter()
+    delivered: list[dict] = []
+
+    async def publish(data, **_options):
+        delivered.append(json.loads(data))
+
+    adapter._listeners["room-1"] = adapter_mod._Listening(
+        device=_DEVICE_1,
+        sink=None,
+        connection=SimpleNamespace(
+            local_participant=SimpleNamespace(publish_data=publish)
+        ),
+    )
+    handle = {"room": "room-1", "device": _DEVICE_1}
+
+    def envelope(op: str, command_id: str) -> dict:
+        return build_command_envelope(
+            command_id=command_id,
+            device_id=_DEVICE_1,
+            op=op,
+            capability_version=1,
+            payload={},
+            ttl_ms=30_000,
+            src_type="channel",
+            src_id="eidolon_channel",
+        )
+
+    first = asyncio.create_task(
+        adapter.deliver_control(handle, envelope("room.join", "c1"), wait_for_terminal=True)
+    )
+    await asyncio.sleep(0)
+
+    with pytest.raises(InvalidTransition, match="already has a control delivery in flight"):
+        await adapter.deliver_control(
+            handle, envelope("room.join", "c2"), wait_for_terminal=True
+        )
+
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+    assert len(delivered) == 1

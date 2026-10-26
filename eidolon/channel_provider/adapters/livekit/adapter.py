@@ -55,6 +55,10 @@ from eidolon_sdk.biz.contracts import (
     WIRE_SCHEMA_VERSION,
     normalize_conversation_id,
 )
+from eidolon_sdk.biz.body.capabilities import (
+    BODY_OP_DISPLAY_BRIGHTNESS,
+    BODY_OP_VOLUME_SET,
+)
 from eidolon_sdk.system import on_product_link
 from livekit import api, rtc
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
@@ -80,6 +84,21 @@ logger = logging.getLogger("eidolon.channel_provider.livekit")
 
 ADAPTER_NAME = "livekit"
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
+
+#: Commands that may overlap another delivery to the same device.
+#:
+#: These set one bounded value and mean the same thing applied twice, so a
+#: second one arriving before the first is acknowledged is not a conflict —
+#: it is the newer position. Refusing it would turn a slider drag into a queue
+#: and reject most of what a person did.
+#:
+#: Correlation is unaffected: receipts are keyed by command id, so two in flight
+#: still answer their own futures. Everything else stays serialised, because a
+#: command that starts something has an order that matters.
+_OVERLAPPING_CONTROL_OPS = frozenset({
+    BODY_OP_VOLUME_SET,
+    BODY_OP_DISPLAY_BRIGHTNESS,
+})
 
 def _client_addresses(
     management_networks: Sequence[ipaddress.IPv4Network | ipaddress.IPv6Network] = (),
@@ -547,8 +566,10 @@ class LiveKitChannelAdapter:
         # Stop playback immediately even when an ordinary command is awaiting
         # its receipt. Keep both exchanges correlated; do not replace or cancel
         # the earlier operation's future.
-        if op != CONTROL_OP_PLAYBACK_STOP and any(
-            pending_room == room for pending_room, _ in self._control_receipts
+        if (
+            op != CONTROL_OP_PLAYBACK_STOP
+            and op not in _OVERLAPPING_CONTROL_OPS
+            and any(pending_room == room for pending_room, _ in self._control_receipts)
         ):
             raise InvalidTransition("device already has a control delivery in flight")
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()

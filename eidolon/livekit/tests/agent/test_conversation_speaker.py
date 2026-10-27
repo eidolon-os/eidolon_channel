@@ -291,3 +291,30 @@ async def test_no_policy_and_short_audio_do_not_call_dependencies():
     assert result.status == "unavailable" and result.person_id is None
     port.candidates.assert_not_awaited()
     port.extract.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_final_transcript_starts_recognition_before_framework_completion():
+    from .test_commit_guard import _make_pipeline_with_session
+    from eidolon.livekit.agent.full_duplex.transcript_event import FullDuplexTranscriptEvent
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    from eidolon.livekit.common.audio_timeline import AudioSource, AudioSpan
+    from eidolon.livekit.common.audio_evidence import AudioEvidenceCapture
+    from eidolon.livekit.agent.observability import TurnTimeline
+    pipeline=_make_pipeline_with_session();pipeline._ensure_runtime_defaults()
+    pipeline._mark_activity=MagicMock()
+    port=client();observer=ConversationSpeaker(recognizer=SpeakerRecognizer(port,POLICY),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    pipeline._speaker_observation=observer
+    capture=AudioEvidenceCapture(session_id='s',endpoint_id='mic')
+    source=AudioSource('mic',1,16000);capture.select_stream('mic');capture.begin_run(source)
+    capture.append(source,start=0,pcm=evidence().pcm);observer.bind_capture(capture)
+    timeline=TurnTimeline('t');pipeline._timeline=timeline
+    pipeline._user_turns.start_speech(timeline=timeline)
+    pipeline._user_turns.note_speech_stopped(eot_score=None)
+    try:
+        pipeline._ensure_transcript_recorder().record(FullDuplexTranscriptEvent(
+            transcript='hello',is_final=True,evidence=TranscriptEvidence(stream_key='asr',revision_key='final',audio_span=AudioSpan('mic',1,16000,0,32000))))
+        assert observer._task is not None
+        result=await observer.result('t')
+        assert result.status=='identified'
+        assert pipeline._user_turns.active.state=='open'
+    finally:await observer.aclose()

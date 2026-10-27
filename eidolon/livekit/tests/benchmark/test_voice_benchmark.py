@@ -31,8 +31,6 @@ from benchmark.report import (
 from benchmark.schema import CaseResult, RunResult, load_suite
 from benchmark.livekit_room_runner import (
     LiveKitRoomOptions,
-    _agent_audio_wait_mode,
-    _agent_audio_wait_timeout_sec,
     _transcription_role,
 )
 from benchmark.device_envelope import (
@@ -546,48 +544,10 @@ async def test_livekit_room_agent_speaking_step_fails_fast_when_no_agent_audio(
     local_participant.publish_data.assert_not_awaited()
 
 
-def test_synthetic_default_voiceprint_suite_declares_room_audio_semantics() -> None:
-    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
-    cases = {case.case_id: case for case in suite.cases}
-
-    assert (
-        cases["synthetic_default_owner_normal_001"].expectations.agent_audio_response
-        == "after_user_done"
-    )
-    assert (
-        cases["synthetic_default_topic_switch_001"].expectations.agent_audio_response
-        == "after_user_done"
-    )
-    assert cases["synthetic_default_backchannel_001"].expectations.brain == "any"
-    assert (
-        cases["synthetic_default_backchannel_001"].expectations.rejected_turn_brain == "forbidden"
-    )
-    assert cases["synthetic_default_backchannel_001"].expectations.action == "any"
-    assert cases["synthetic_default_backchannel_001"].expectations.decision_action == "rollback"
-    assert cases["synthetic_default_backchannel_001"].expectations.decision_intent == "backchannel"
-    assert cases["synthetic_default_backchannel_001"].expectations.agent_audio_response == "first"
-    assert (
-        cases["synthetic_default_non_owner_rejected_001"].expectations.agent_audio_response
-        == "none"
-    )
 
 
-def test_livekit_room_audio_wait_mode_uses_explicit_expectation() -> None:
-    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
-    cases = {case.case_id: case for case in suite.cases}
-
-    assert _agent_audio_wait_mode(cases["synthetic_default_topic_switch_001"]) == "after_user_done"
-    assert _agent_audio_wait_mode(cases["synthetic_default_backchannel_001"]) == "first"
-    assert _agent_audio_wait_mode(cases["synthetic_default_non_owner_rejected_001"]) == "none"
 
 
-def test_livekit_room_audio_wait_timeout_respects_long_case_timeout() -> None:
-    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
-    case = next(
-        case for case in suite.cases if case.case_id == "synthetic_default_topic_switch_001"
-    )
-
-    assert _agent_audio_wait_timeout_sec(case, LiveKitRoomOptions(timeout_sec=45.0)) == 90.0
 
 
 def test_policy_runner_attention_enforced_suite() -> None:
@@ -3161,130 +3121,10 @@ def test_livekit_room_timeline_actions_count_only_resolved_interrupts(
     assert not run.cases[0].errors
 
 
-def test_livekit_room_timeline_rejected_turn_brain_forbidden_allows_setup_brain(
-    tmp_path,
-) -> None:
-    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
-    run = RunResult(
-        run_id="expectation-test",
-        git_sha="abc123",
-        runner="livekit_room",
-        profile="test",
-        cases=[
-            CaseResult(
-                case_id="synthetic_default_backchannel_001",
-                suite="synthetic_default_voiceprint_e2e",
-                runner="livekit_room",
-                passed=True,
-            )
-        ],
-    )
-    timeline_path = tmp_path / "turn_timeline.jsonl"
-    room_name = "voice-bench-synthetic_default_backchannel_001-1234abcd"
-    timeline_path.write_text(
-        (
-            '{"turn_id":"setup","attrs":{"room_name":"'
-            + room_name
-            + '","voiceprint_commit_gate":{"allowed":true}},'
-            '"timestamps":{"brain_request_sent_at":1.0}}\n'
-            '{"turn_id":"backchannel","attrs":{"room_name":"'
-            + room_name
-            + '","interrupt_action":"rollback",'
-            '"decision":{"intent":"backchannel"},'
-            '"voiceprint_commit_gate":{"allowed":true},'
-            '"user_turn_coordinator":{"state":"rejected"}},'
-            '"timestamps":{"interrupt_resolved_at":2.0}}\n'
-        ),
-        encoding="utf-8",
-    )
-
-    apply_timeline_expectations(run, [suite], timeline_path)
-
-    assert run.cases[0].passed is True
-    assert not run.cases[0].errors
 
 
-def test_livekit_room_backchannel_accepts_decision_rollback_without_resolved_interrupt(
-    tmp_path,
-) -> None:
-    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
-    run = RunResult(
-        run_id="expectation-test",
-        git_sha="abc123",
-        runner="livekit_room",
-        profile="test",
-        cases=[
-            CaseResult(
-                case_id="synthetic_default_backchannel_001",
-                suite="synthetic_default_voiceprint_e2e",
-                runner="livekit_room",
-                passed=True,
-            )
-        ],
-    )
-    timeline_path = tmp_path / "turn_timeline.jsonl"
-    room_name = "voice-bench-synthetic_default_backchannel_001-1234abcd"
-    timeline_path.write_text(
-        (
-            '{"turn_id":"setup","attrs":{"room_name":"'
-            + room_name
-            + '","voiceprint_commit_gate":{"allowed":true}},'
-            '"timestamps":{"brain_request_sent_at":1.0}}\n'
-            '{"turn_id":"backchannel","attrs":{"room_name":"'
-            + room_name
-            + '","interrupt_action":"rollback",'
-            '"decision":{"intent":"backchannel"},'
-            '"voiceprint_commit_gate":{"allowed":true},'
-            '"user_turn_coordinator":{"state":"rejected"}},'
-            '"timestamps":{}}\n'
-        ),
-        encoding="utf-8",
-    )
-
-    apply_timeline_expectations(run, [suite], timeline_path)
-
-    assert run.cases[0].metrics["timeline_actions"] == ""
-    assert run.cases[0].metrics["timeline_decision_actions"] == "rollback"
-    assert run.cases[0].passed is True
-    assert not run.cases[0].errors
 
 
-def test_livekit_room_timeline_rejected_turn_brain_forbidden_fails_leak(
-    tmp_path,
-) -> None:
-    suite = load_suite("benchmark/cases/synthetic_default_voiceprint_e2e.yaml")
-    run = RunResult(
-        run_id="expectation-test",
-        git_sha="abc123",
-        runner="livekit_room",
-        profile="test",
-        cases=[
-            CaseResult(
-                case_id="synthetic_default_backchannel_001",
-                suite="synthetic_default_voiceprint_e2e",
-                runner="livekit_room",
-                passed=True,
-            )
-        ],
-    )
-    timeline_path = tmp_path / "turn_timeline.jsonl"
-    timeline_path.write_text(
-        (
-            '{"turn_id":"backchannel","attrs":{"room_name":'
-            '"voice-bench-synthetic_default_backchannel_001-1234abcd",'
-            '"interrupt_action":"rollback",'
-            '"voiceprint_commit_gate":{"allowed":true},'
-            '"user_turn_coordinator":{"state":"rejected"}},'
-            '"timestamps":{"interrupt_resolved_at":2.0,'
-            '"brain_request_sent_at":2.1}}\n'
-        ),
-        encoding="utf-8",
-    )
-
-    apply_timeline_expectations(run, [suite], timeline_path)
-
-    assert run.cases[0].passed is False
-    assert any("rejected turns" in error for error in run.cases[0].errors)
 
 
 def test_livekit_room_timeline_expectations_export_latency_metrics(

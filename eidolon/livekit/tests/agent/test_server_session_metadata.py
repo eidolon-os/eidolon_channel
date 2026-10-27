@@ -412,13 +412,10 @@ async def test_directed_worker_keeps_input_identity_and_starts_output_before_sou
     target_room = SimpleNamespace(local_participant=SimpleNamespace(
         publish_data=AsyncMock(side_effect=target_publish)), disconnect=AsyncMock())
     monkeypatch.setattr(PresentationEndpoint, "connect", AsyncMock(return_value=target_room))
-    from eidolon_sdk.biz.voiceprint import VoicePolicySnapshot
 
     runtime_services = SimpleNamespace(
         resolve_room=AsyncMock(return_value=SimpleNamespace(
             owner_id="owner", companion_id="selected-companion")),
-        runtime=SimpleNamespace(get_voiceprint_snapshot=AsyncMock(return_value=VoicePolicySnapshot(
-            owner_id="owner", companion_id="selected-companion", mode="off", revision=0))),
     )
     build = MagicMock(return_value=SimpleNamespace(runtime_services=runtime_services))
     monkeypatch.setattr(SharedStageFactory, "from_config", build)
@@ -451,4 +448,3 @@ async def test_directed_worker_keeps_input_identity_and_starts_output_before_sou
     assert controls[1][1]["output_plan"] == source_plan.model_dump(mode="json")
     target_room.disconnect.assert_awaited_once()
     assert all(call.args == (ctx.room,) for call in runtime_services.resolve_room.await_args_list)
-    runtime_services.runtime.get_voiceprint_snapshot.assert_awaited_once_with("selected-companion")

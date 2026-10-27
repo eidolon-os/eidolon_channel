@@ -91,32 +91,8 @@ runtime_authority:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
-  # Explicit model release criterion; empty disables verified admission.
-  calibration_path: ""
-  # Finite diagnostics only: exact Companion + absolute Unix deadline; default off.
-  observation_companion_id: ""
-  observation_until: 0
-  # Voiceprint 只负责已选择 Companion 的语音 interaction 内说话人校验/遥测。
-  # Device Mount/Attachment 与无 Device 的虚拟 Companion 入口由 Channel ingress
-  # 在进入 audio pipeline 前解析，不能由 voiceprint 推导。
-  enabled: false
-  provider: 3d_speaker
-  model: campplus_zh_16k_common
-  root: $EIDOLON_STATE_ROOT/voiceprints
-  # Ops derives this from the Models asset declaration for this Host.
-  # No implicit bundled model or environment fallback.
+  # Shared extraction model only; no conversation gate.
   model_dir: ""
-  threshold: 0.31
-  min_audio_ms: 1500
-  prewarm: true
-  # Keep voiceprint as telemetry for explicitly resolved Companion interactions;
-  # it is not Device admission, Mount, Attachment, or Owner authorization.
-  trust_paired_devices: true
-  turn_max_audio_ms: 12000
-  accept_cache_ttl_ms: 180000
-  accept_cache_short_audio_max_ms: 3000
-  owner_commit_threshold: 0.58
-  owner_short_audio_bypass_ms: 1500
 
 turn_policy:
   # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.

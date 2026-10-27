@@ -74,7 +74,6 @@ from eidolon.livekit.agent.runtime.resolver import (
     DeviceTokenResolverError,
     wait_for_runtime_participant_metadata,
 )
-from eidolon.livekit.plugins.speaker_verification import default_campplus_model_dir
 
 logger = logging.getLogger("agent_server")
 
@@ -229,33 +228,6 @@ def _load_prewarm_models(proc) -> None:
     except Exception as e:
         logger.warning("[Agent] prewarm: EOT load failed: %s", e)
 
-    try:
-        from eidolon.livekit.plugins.speaker_verification import (
-            ModelScopeCampPlusSpeakerVerificationProvider,
-        )
-        from eidolon.livekit.common.config import load_effective_config
-
-        cfg = load_effective_config()
-        vp_cfg = cfg.voiceprint
-        if not vp_cfg.enabled or not vp_cfg.prewarm:
-            logger.info("[Agent] prewarm: voiceprint disabled")
-            return
-        model_dir = (
-            Path(vp_cfg.model_dir).expanduser()
-            if vp_cfg.model_dir.strip()
-            else default_campplus_model_dir()
-        )
-        provider = ModelScopeCampPlusSpeakerVerificationProvider(
-            model_dir=model_dir,
-            voiceprint_root=Path(vp_cfg.root).expanduser(),
-            threshold=vp_cfg.threshold,
-            min_audio_ms=vp_cfg.min_audio_ms,
-        )
-        asyncio.run(provider.warm_up())
-        proc.userdata["voiceprint_provider"] = provider
-        logger.info("[Agent] prewarm: voiceprint model loaded")
-    except Exception as e:
-        logger.warning("[Agent] prewarm: voiceprint load failed: %s", e)
 
 
 async def _resolve_session_metadata(ctx) -> tuple[str, bool]:
@@ -414,7 +386,6 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
         return
 
     prebuilt_vad = getattr(ctx.proc, "userdata", {}).get("vad")
-    prebuilt_voiceprint_provider = getattr(ctx.proc, "userdata", {}).get("voiceprint_provider")
     room = ctx.room
     runtime_session_id = _resolve_runtime_session_id(ctx)
     output_plan = _resolve_output_plan(ctx, runtime_session_id)
@@ -675,63 +646,12 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     factory = SharedStageFactory.from_config(
         replace(cfg, turn_policy=session_turn_policy),
         prebuilt_vad=prebuilt_vad,
-        prebuilt_voiceprint_provider=prebuilt_voiceprint_provider,
         livekit_session_key=session_key,
         livekit_room=room,
         runtime_session_id=runtime_session_id,
         output_plan=stage_output_plan,
         target_companion_id=target_companion_id,
     )
-
-    # Lock the orchestration choice before constructing any audio owner. Never
-    # let a restored/new allowlist policy silently enter the ordinary pipeline
-    # while calibrated admission is unavailable in this release.
-    from .speaker_verified.selection import resolve_voice_policy
-    from eidolon_sdk.biz.speaker_calibration import SpeakerPolicyConfirmationRequired
-    from eidolon_sdk.biz.contracts import SESSION_END_VOICE_POLICY_CONFIRMATION_REQUIRED
-
-    verified_pipeline = None
-    try:
-        if output_plan is None or output_plan.inputs.microphone:
-            voice_policy = await resolve_voice_policy(
-                getattr(factory, "runtime_services", None), room,
-            )
-            if voice_policy is not None and voice_policy.mode == "allowlist":
-                if interaction_mode != "full_duplex":
-                    raise ValueError("SPEAKER_VERIFIED_INTERACTION_UNSUPPORTED")
-                from eidolon_sdk.biz.speaker_calibration import load_calibration
-                from .speaker_verified.pipeline import SpeakerVerifiedPipeline
-
-                calibration = load_calibration(cfg.voiceprint.calibration_path)
-                if (session_turn_policy.eot.provider != "firered"
-                        or (cfg.avatar.enabled and avatar_requested)
-                        or session_intent != "user_initiated"):
-                    raise ValueError("SPEAKER_VERIFIED_COMBINATION_UNSUPPORTED")
-                verified_pipeline = SpeakerVerifiedPipeline(
-                    factory, policy=voice_policy, calibration=calibration,
-                    cfg=replace(cfg, turn_policy=session_turn_policy),
-                    session_intent=session_intent,
-                    on_session_started=_publish_session_started,
-                    on_session_end=_publish_session_end,
-                    on_session_closed=lambda: _end_serving("session closed"),
-                    on_idle_disconnect=lambda: _end_serving("idle timeout"),
-                )
-    except BaseException as exc:
-        # This is before the pipeline owns factory cleanup. Also notify while
-        # the actor is still connected, instead of leaving a listening UI.
-        confirmation_required = isinstance(exc, SpeakerPolicyConfirmationRequired)
-        try:
-            await _publish_session_end(
-                SESSION_END_VOICE_POLICY_CONFIRMATION_REQUIRED
-                if confirmation_required else SESSION_END_ERROR
-            )
-        finally:
-            close = getattr(factory, "aclose", None)
-            if close is not None:
-                await close()
-        if confirmation_required:
-            return  # Expected policy hold, not a crashed worker or ordinary fallback.
-        raise
 
     # Video avatar is enabled for this session only if globally available AND the
     # client declared it (full-duplex path for M1). Default off → audio-only.
@@ -748,9 +668,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     )
     # The existing manually driven pipeline also serves typed/output-only
     # sessions. No audio turn detector is needed when microphone input is off.
-    if verified_pipeline is not None:
-        pipeline = verified_pipeline
-    elif _use_ptt_pipeline(interaction_mode) or (output_plan is not None and not output_plan.inputs.microphone):
+    if _use_ptt_pipeline(interaction_mode) or (output_plan is not None and not output_plan.inputs.microphone):
         pipeline = HalfDuplexPttPipeline(
             factory,
             interaction_mode=interaction_mode,
@@ -788,7 +706,6 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             session_intent=session_intent,
             on_session_started=_publish_session_started,
             observability=cfg.observability,
-            voiceprint_config=cfg.voiceprint,
             # Video avatar (per-session; audio routed to the avatar worker when on).
             avatar_enabled=avatar_enabled,
             avatar_config=cfg.avatar,

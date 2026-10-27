@@ -15,7 +15,8 @@ turn_policy:
     soft_duck_on_playback_speech_start: true
 
 voiceprint:
-  enabled: false
+  # Shared extraction model only; no conversation gate.
+  model_dir: ""
 
 observability:
   timeline_debug_path: "$EIDOLON_LOG_ROOT/channel/turn-timeline.jsonl"

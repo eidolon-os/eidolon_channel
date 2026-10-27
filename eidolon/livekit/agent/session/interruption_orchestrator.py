@@ -663,7 +663,7 @@ class InterruptionOrchestrator:
 
         Hard-stop/backchannel/noise are control or false-interruption signals.
         Normal/topic/correction interrupts are user utterances and must be
-        committed after the agent is cancelled, subject to voiceprint gating.
+        committed by the normal framework completion after the agent is cancelled.
         """
 
         candidate = self._candidate

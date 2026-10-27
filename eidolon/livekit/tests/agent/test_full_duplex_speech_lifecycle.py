@@ -15,14 +15,6 @@ def _owner() -> SimpleNamespace:
     # BasePipeline surface the lifecycle reaches for. A double that omits it
     # would only prove this test's stub is incomplete.
     owner.session_mark = MagicMock()
-    turn_completion = SimpleNamespace(
-        cancel_completed_voiceprint_turn=MagicMock(),
-        remember_completed_voiceprint_turn=MagicMock(),
-        reset_candidate_voiceprint_tasks=MagicMock(),
-        remember_candidate_voiceprint_task=MagicMock(),
-    )
-    owner._turn_completion = turn_completion
-    owner._ensure_turn_completion = MagicMock(return_value=turn_completion)
     owner._ensure_user_turn_coordinator = MagicMock()
     owner._user_turns = MagicMock()
     owner._user_turns.can_merge_new_speech.return_value = False
@@ -31,9 +23,6 @@ def _owner() -> SimpleNamespace:
     owner._skip_commit_after_interrupt_cancel = True
     owner._suppress_commit_after_interrupt_until = 123.0
     owner._suppress_transcripts_until_next_speech = True
-    owner._completed_turn_voiceprint_task = object()
-    owner._completed_turn_voiceprint_result = object()
-    owner._completed_turn_voiceprint_timeline = TurnTimeline("old-turn")
     owner._callbacks = MagicMock()
     # The recognizer is told the speaker stopped before any turn bookkeeping
     # runs. False by default: most plugins decide their own boundaries and
@@ -48,7 +37,6 @@ def _owner() -> SimpleNamespace:
     owner._flush_turn_timeline = MagicMock()
     owner._apply_pending_explicit_client_preempt = MagicMock()
     owner._apply_pending_client_control_events = MagicMock()
-    owner._voiceprint_turns = MagicMock()
     owner._ensure_provider_event_observer = MagicMock()
     owner._provider_events = MagicMock()
     owner._latest_asr_text = "stale"
@@ -100,7 +88,6 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     assert owner._skip_commit_after_interrupt_cancel is False
     assert owner._suppress_commit_after_interrupt_until == 0.0
     assert owner._suppress_transcripts_until_next_speech is False
-    owner._turn_completion.cancel_completed_voiceprint_turn.assert_called_once_with()
     assert owner._latest_asr_text == ""
     assert owner._timeline is not None
     assert owner._timeline.attrs["room_name"] == "room-a"
@@ -112,7 +99,6 @@ def test_speech_lifecycle_start_opens_clean_full_duplex_segment() -> None:
     owner._agent_output.link_interruption_candidate.assert_called_once_with(owner._timeline)
     owner._append_turn_timeline_snapshot.assert_not_called()
     owner._attach_transcript_ingress_recent_events.assert_called_once_with("speech_started")
-    owner._voiceprint_turns.start_turn.assert_called_once_with(timeline=owner._timeline)
     owner._ensure_provider_event_observer.assert_called_once_with()
     owner._provider_events.apply_pending_stt_provider_events.assert_called_once_with()
     owner._provider_events.observe_stt_turn_audio.assert_called_once_with()
@@ -221,8 +207,6 @@ def test_speech_lifecycle_keeps_merge_continuation_timeline() -> None:
 def test_speech_lifecycle_stop_defers_when_interruption_owner_waits_for_stt() -> None:
     owner = _owner()
     owner._timeline = TurnTimeline("turn-wait")
-    voiceprint_task = object()
-    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     effects = MagicMock()
     effects.soft_interrupt_active.return_value = False
     owner._ensure_interruption_effects = MagicMock(return_value=effects)
@@ -232,17 +216,12 @@ def test_speech_lifecycle_stop_defers_when_interruption_owner_waits_for_stt() ->
     FullDuplexSpeechLifecycle(owner).handle_stopped()
 
     owner._callbacks.on_user_ended_speaking.assert_called_once_with()
-    owner._turn_completion.remember_candidate_voiceprint_task.assert_called_once_with(
-        voiceprint_task,
-    )
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(False)
 
 
 def test_speech_lifecycle_stop_leaves_confirmed_cancel_for_framework_completion() -> None:
     owner = _owner()
     owner._timeline = TurnTimeline("turn-confirmed-cancel")
-    voiceprint_task = object()
-    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     effects = MagicMock()
     effects.soft_interrupt_active.return_value = False
     owner._ensure_interruption_effects = MagicMock(return_value=effects)
@@ -255,9 +234,6 @@ def test_speech_lifecycle_stop_leaves_confirmed_cancel_for_framework_completion(
     owner._interruption_orchestrator.finish_confirmed_cancel_speech.assert_called_once_with(
         "不是，我刚才说错了"
     )
-    owner._turn_completion.remember_candidate_voiceprint_task.assert_called_once_with(
-        voiceprint_task,
-    )
     owner._user_turns.note_speech_stopped.assert_called_once()
     owner._callbacks.on_user_ended_speaking.assert_called_once_with()
     assert owner._skip_commit_after_interrupt_cancel is False
@@ -267,8 +243,6 @@ def test_speech_lifecycle_stop_leaves_confirmed_cancel_for_framework_completion(
 def test_speech_lifecycle_stop_waits_for_framework_completed_turn() -> None:
     owner = _owner()
     owner._timeline = TurnTimeline("turn-commit")
-    voiceprint_task = object()
-    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     owner._ducking = SimpleNamespace(is_suspended=False)
     effects = MagicMock()
     effects.soft_interrupt_active.return_value = False
@@ -278,9 +252,6 @@ def test_speech_lifecycle_stop_waits_for_framework_completed_turn() -> None:
     owner._user_turns.active = object()
     FullDuplexSpeechLifecycle(owner).handle_stopped()
 
-    owner._turn_completion.remember_candidate_voiceprint_task.assert_called_once_with(
-        voiceprint_task,
-    )
     owner._user_turns.note_speech_stopped.assert_called_once()
     assert owner._record_full_duplex_transition.call_args.args[0].value == ("user_turn_pending")
     assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
@@ -292,8 +263,6 @@ def test_speech_lifecycle_stop_waits_for_framework_completed_turn() -> None:
 def test_speech_lifecycle_stop_does_not_apply_terminal_reject_policy() -> None:
     owner = _owner()
     owner._timeline = TurnTimeline("turn-replacement")
-    voiceprint_task = object()
-    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     owner._ducking = SimpleNamespace(is_suspended=False)
     effects = MagicMock()
     effects.soft_interrupt_active.return_value = False
@@ -309,8 +278,6 @@ def test_speech_lifecycle_stop_leaves_non_semantic_reject_to_completed_turn_gate
     # owns the one terminal non-semantic decision.
     owner = _owner()
     owner._timeline = TurnTimeline("turn-cough")
-    voiceprint_task = object()
-    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     owner._ducking = SimpleNamespace(is_suspended=False)
     effects = MagicMock()
     effects.soft_interrupt_active.return_value = False
@@ -332,8 +299,6 @@ def test_speech_lifecycle_stop_leaves_non_semantic_reject_to_completed_turn_gate
 def test_speech_lifecycle_stop_leaves_attention_reject_to_completed_turn_gate() -> None:
     owner = _owner()
     owner._timeline = TurnTimeline("turn-muted")
-    voiceprint_task = object()
-    owner._voiceprint_turns.finish_turn.return_value = voiceprint_task
     owner._ducking = SimpleNamespace(is_suspended=False)
     effects = MagicMock()
     effects.soft_interrupt_active.return_value = False
@@ -345,9 +310,6 @@ def test_speech_lifecycle_stop_leaves_attention_reject_to_completed_turn_gate() 
     FullDuplexSpeechLifecycle(owner).handle_stopped()
 
     owner._user_turns.reject_active.assert_not_called()
-    owner._turn_completion.remember_candidate_voiceprint_task.assert_called_once_with(
-        voiceprint_task
-    )
     assert owner._record_full_duplex_transition.call_args.args[0].value == ("user_turn_pending")
     assert owner._record_full_duplex_transition.call_args.kwargs["event"] == (
         "speech_stopped_waiting_framework"
@@ -428,7 +390,6 @@ def test_recognized_new_sentence_without_vad_uses_existing_turn_and_interrupt_ow
     owner._interruption_orchestrator.start_candidate.assert_called_once()
     owner._interruption_orchestrator.note_transcript.assert_called_once_with("继续。", is_final=True)
     owner._callbacks.on_user_started_speaking.assert_not_called()
-    owner._voiceprint_turns.start_turn.assert_not_called()
     owner._get_eot_model().update_vad.assert_not_called()
     assert owner._user_speaking_start_time is None
     assert "speech_started_at" not in owner._timeline.timestamps

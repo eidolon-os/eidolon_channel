@@ -119,7 +119,7 @@ async def test_observation_outcome_preserves_session_input_commit_and_playout(mo
             owner.add_transcript("测试完整句子", is_final=True, evidence=TranscriptEvidence(
                 stream_key="asr", revision_key="final", audio_span=full_span))
             owner.note_speech_stopped(eot_score=None)
-            allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
                 turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["测试完整句子"]))
             assert allowed
             pending = observation.pending
@@ -165,7 +165,7 @@ async def test_observation_outcome_preserves_session_input_commit_and_playout(mo
             owner.add_transcript("下一句话", is_final=True, evidence=TranscriptEvidence(
                 stream_key="asr", revision_key="next-final", audio_span=next_span))
             owner.note_speech_stopped(eot_score=None)
-            assert await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            assert await pipeline._ensure_turn_completion().allows_completed_turn(
                 turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["下一句话"]))
             assert len(engine.calls) == 1
             if outcome == "expired":
@@ -195,13 +195,6 @@ async def test_observation_rejects_unmapped_provider_before_media_start(monkeypa
     with pytest.raises(ValueError, match="mapped STT"):
         await FullDuplexSessionLifecycle(pipeline)._prepare_session(options=RoomOptions())
     media.assert_not_called()
-
-
-def test_observation_cannot_start_legacy_independent_recorder():
-    from eidolon.livekit.agent.full_duplex.pipeline import StreamingPipeline
-
-    with pytest.raises(ValueError, match="legacy verification"):
-        StreamingPipeline(SimpleNamespace(voiceprint_service=object()), speaker_observation=object())
 
 
 @pytest.mark.asyncio

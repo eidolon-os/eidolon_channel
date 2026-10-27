@@ -179,24 +179,6 @@ def _expectation_errors(case_id: str, expected: Any, records: list[dict[str, Any
                 f"{decision_intent}, got {decision_intents or ['<none>']}"
             )
 
-    voiceprint_expectation = str(getattr(expected, "voiceprint", "any") or "any")
-    if voiceprint_expectation not in ("", "any"):
-        allowed_values = _voiceprint_allowed_values(records)
-        if voiceprint_expectation == "allowed":
-            if True not in allowed_values:
-                errors.append(
-                    "timeline expected voiceprint allowed, got "
-                    f"{allowed_values or ['<missing>']}"
-                )
-        elif voiceprint_expectation == "blocked":
-            if False not in allowed_values:
-                errors.append(
-                    "timeline expected voiceprint blocked, got "
-                    f"{allowed_values or ['<missing>']}"
-                )
-        else:
-            errors.append(f"unknown voiceprint expectation={voiceprint_expectation!r}")
-
     brain_expectation = str(getattr(expected, "brain", "any") or "any")
     if brain_expectation not in ("", "any"):
         has_brain = _has_brain_request(records)
@@ -569,22 +551,6 @@ def _decision_intents(records: list[dict[str, Any]]) -> list[str]:
         intent = decision.get("intent")
         if isinstance(intent, str) and intent:
             values.append(intent)
-    return values
-
-
-def _voiceprint_allowed_values(records: list[dict[str, Any]]) -> list[bool]:
-    values: list[bool] = []
-    for record in records:
-        attrs = record.get("attrs") if isinstance(record.get("attrs"), dict) else {}
-        gate = attrs.get("voiceprint_commit_gate")
-        if isinstance(gate, dict) and isinstance(gate.get("allowed"), bool):
-            values.append(bool(gate["allowed"]))
-            continue
-        voiceprint = attrs.get("voiceprint")
-        if isinstance(voiceprint, dict) and isinstance(
-            voiceprint.get("commit_allowed"), bool
-        ):
-            values.append(bool(voiceprint["commit_allowed"]))
     return values
 
 

@@ -68,4 +68,4 @@ profile:
       generated_at: '2026-06-11T03:48:01.005452+00:00'
       latency_ms: 251
       sample_count: 3
-cases: benchmark/cases/synthetic_default_voiceprint_e2e.yaml
+# Historical admission suite retired 2026-10-27; audio retained as offline evidence.

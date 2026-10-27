@@ -57,7 +57,7 @@ async def test_warmup_does_not_block_provider_health_and_does_not_enable_admissi
         assert (await client.get("/v1/voiceprints/readiness")).status == 401
         response = await client.get("/v1/voiceprints/readiness", headers=headers)
         assert (await response.json()) == dict(
-            state="loading", extraction_ready=False, admission_ready=False, calibration_digest="", validation_state="unavailable", limits=None
+            state="loading", extraction_ready=False
         )
         pcm = b"\x01\x00" * 480000  # Full 30-second request exceeds ordinary control API limit.
         body = dict(pcm_base64=base64.b64encode(pcm).decode())
@@ -67,7 +67,7 @@ async def test_warmup_does_not_block_provider_health_and_does_not_enable_admissi
         engine.ready.set()
         await asyncio.sleep(0)
         response = await client.get("/v1/voiceprints/readiness", headers=headers)
-        assert (await response.json())["admission_ready"] is False
+        assert "admission_ready" not in (await response.json())
         # A device identifier cannot turn this numerical API into device enrollment.
         assert (
             await client.post(
@@ -82,90 +82,6 @@ async def test_warmup_does_not_block_provider_health_and_does_not_enable_admissi
         await client.close()
 
 
-async def test_published_release_is_authenticated_and_matches_loaded_model():
-    from eidolon_sdk.biz.speaker_calibration import SpeakerAdmissionCalibration
-    from eidolon_sdk.biz.voiceprint import (
-        VoicePolicyEvidence,
-        VoiceProfileEvidence,
-        EnrollmentEvaluation,
-    )
-
-    engine = Engine()
-    calibration = SpeakerAdmissionCalibration(
-        validation_state="calibrated",
-        calibration_id="synthetic-only",
-        model_id="fixture",
-        weights_hash="a" * 64,
-        preprocessing_version="reference-contiguous-pcm16-v1",
-        threshold=0.8,
-        registration_min_similarity=0.7,
-        trial_min_similarity=0.7,
-        max_allowed_speakers=1,
-        min_audio_ms=1500,
-        max_audio_ms=8000,
-        evidence_sha256="b" * 64,
-    )
-    sample = await engine.extract(b"")
-    evidence = VoicePolicyEvidence(
-        owner_id="owner",
-        companion_id="c",
-        revision=1,
-        profiles=[
-            VoiceProfileEvidence(
-                profile_id="p",
-                revision=1,
-                evaluation=EnrollmentEvaluation(
-                    template=sample,
-                    trial=sample,
-                    registration_min_similarity=0.9,
-                    trial_min_similarity=0.9,
-                    evidence_digest="c" * 64,
-                    recording_sha256="d" * 64,
-                ),
-            )
-        ],
-    )
-    engine.ready.set()
-    client = TestClient(
-        TestServer(
-            create_app(
-                service=Service(),
-                bearer_token="test",
-                speaker_engine=engine,
-                speaker_calibration=calibration,
-            )
-        )
-    )
-    headers = {"Authorization": "Bearer test"}
-    try:
-        await client.start_server()
-        await asyncio.sleep(0)
-        response = await client.get("/v1/voiceprints/readiness", headers=headers)
-        ready = await response.json()
-        assert ready["admission_ready"] and ready["calibration_digest"] == calibration.digest
-        assert ready["limits"] == calibration.limits.model_dump()
-        body = evidence.model_dump(mode="json")
-        assert (await client.post("/v1/voiceprints/approve-policy", json=body)).status == 401
-        approved = await client.post("/v1/voiceprints/approve-policy", json=body, headers=headers)
-        assert approved.status == 200
-        assert (await approved.json()) == {
-            "calibration_digest": calibration.digest,
-            "evidence_digest": evidence.digest(),
-        }
-        body["profiles"][0]["evaluation"]["trial_min_similarity"] = 0.1
-        refused = await client.post("/v1/voiceprints/approve-policy", json=body, headers=headers)
-        assert refused.status == 422
-        assert (await refused.json())["code"] == "ENROLLMENT_VALIDATION_REQUIRED"
-        engine.model_identity = ("other", "a" * 64, "reference-contiguous-pcm16-v1")
-        ready = await (await client.get("/v1/voiceprints/readiness", headers=headers)).json()
-        assert not ready["admission_ready"] and ready["extraction_ready"]
-        assert ready["limits"] is None
-        assert (
-            await client.post("/v1/voiceprints/approve-policy", json=body, headers=headers)
-        ).status == 503
-    finally:
-        await client.close()
-    assert engine.state == "closed"
 
 
 async def test_no_selected_engine_is_unavailable_without_affecting_core_health():
@@ -233,5 +149,14 @@ async def test_comparison_requires_auth_and_has_no_identity_or_audio_output():
         assert (
             await client.post(path, headers=headers, json=body | {"device_id": "box"})
         ).status == 422
+    finally:
+        await client.close()
+
+
+async def test_retired_policy_endpoint_is_absent():
+    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    try:
+        await client.start_server()
+        assert (await client.post("/v1/voiceprints/approve-policy", json={})).status == 404
     finally:
         await client.close()

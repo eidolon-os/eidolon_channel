@@ -70,17 +70,6 @@ owner = "eidolon"
 group = "eidolon"
 backup = "sqlite-online"
 
-[[state.authority]]
-path = "/var/lib/eidolon/voiceprints"
-owner = "eidolon"
-group = "eidolon"
-backup = "none"
-uncovered_reason = """\
-voiceprint material has no declared snapshot; carrying it would need a decision \
-about whether enrolled voices may be restored onto a different Host at all, \
-which is a question about consent rather than about file copying\
-"""
-
 [state]
 runtime = ["/run/eidolon/channel", "/run/eidolon/channel-provider"]
 

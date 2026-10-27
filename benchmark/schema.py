@@ -125,7 +125,6 @@ class Expectations:
     intent: str = "uncertain"
     decision_action: str = ""
     decision_intent: str = ""
-    voiceprint: str = "any"
     brain: str = "any"
     rejected_turn_brain: str = "any"
     agent_audio_response: str = "auto"

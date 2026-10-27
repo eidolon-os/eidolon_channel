@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -11,10 +10,6 @@ from eidolon_sdk.biz.dialogue_control import TurnCommitBoundary
 from ..observability import TurnTimeline
 from ..session.committed_turn import publish_committed_turn_decision
 from ..session.messages import message_text
-from ..session.voiceprint_reasons import (
-    voiceprint_blocked_reason,
-    voiceprint_error_reason,
-)
 from .playback_turn_evidence import resolve_playback_turn_decision
 from .state_machine import FullDuplexPhase
 from .transcript_settlement import TranscriptSettlementLease
@@ -48,15 +43,8 @@ class FullDuplexFrameworkCompletedTurnGate:
         new_message: Any,
     ) -> bool:
         owner = self._pipeline
-        completion = self._completion
         owner._ensure_runtime_defaults()
-        _, check_scope = owner._endpointing_scope()
-        voiceprint_turn = completion.completed_voiceprint_turn(
-            fallback_timeline=getattr(owner, "_timeline", None)
-        )
-        task = voiceprint_turn.task
-        result = voiceprint_turn.result
-        timeline = voiceprint_turn.timeline
+        timeline = getattr(owner, "_timeline", None)
         completed_transcript = message_text(new_message)
         if timeline is not None:
             timeline.mark("framework_completed_turn_at")
@@ -74,72 +62,9 @@ class FullDuplexFrameworkCompletedTurnGate:
                 reason="framework_completed_turn",
                 transcript=completed_transcript,
             )
-        if task is None and result is None:
-            return await self._route_allowed_framework_completed_turn(
-                turn_ctx=turn_ctx,
-                completed_transcript=completed_transcript,
-                new_message=new_message,
-                timeline=timeline,
-                voiceprint_reason="",
-            )
-
-        if result is None and task is not None:
-            try:
-                result = await task
-                check_scope()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                check_scope()
-                reject_reason = voiceprint_error_reason(type(exc).__name__)
-                completion._record_voiceprint_commit_gate(
-                    timeline,
-                    allowed=False,
-                    reason=reject_reason,
-                )
-                self._reject_framework_completed_candidate(
-                    reject_reason,
-                    transcript=completed_transcript,
-                    timeline=timeline,
-                    event="voiceprint_gate_error",
-                    flush_reason="voiceprint_commit_blocked",
-                )
-                logger.exception("[StreamingPipeline] voiceprint gate failed in turn hook")
-                return False
-            completion.remember_completed_voiceprint_result(result)
-
-        allowed = bool(getattr(result, "commit_allowed", False))
-        reason = str(getattr(result, "commit_reason", "") or "unknown")
-        completion._record_voiceprint_commit_gate(
-            timeline,
-            allowed=allowed,
-            reason=reason,
-        )
-        if allowed:
-            return await self._route_allowed_framework_completed_turn(
-                turn_ctx=turn_ctx,
-                completed_transcript=completed_transcript,
-                new_message=new_message,
-                timeline=timeline,
-                voiceprint_reason=reason,
-            )
-
-        if "context_error" in reason:
-            self._session_turns.notify_context_error_once(reason)
-        owner._set_suppress_transcripts_until_next_speech(True, reason="voiceprint_commit_blocked")
-        self._reject_framework_completed_candidate(
-            voiceprint_blocked_reason(reason),
-            transcript=completed_transcript,
-            timeline=timeline,
-            event="voiceprint_gate_rejected",
-            flush_reason="voiceprint_commit_blocked",
-        )
-        logger.info(
-            "[StreamingPipeline] voiceprint gate stopped completed turn reason=%s transcript=%r",
-            reason,
-            completed_transcript[:80],
-        )
-        return False
+        return await self._route_allowed_framework_completed_turn(
+            turn_ctx=turn_ctx, completed_transcript=completed_transcript,
+            new_message=new_message, timeline=timeline)
 
     def _reject_framework_completed_candidate(
         self,
@@ -169,7 +94,6 @@ class FullDuplexFrameworkCompletedTurnGate:
         completed_transcript: str,
         new_message: Any,
         timeline: TurnTimeline | None,
-        voiceprint_reason: str,
     ) -> bool:
         owner = self._pipeline
         owner._ensure_user_turn_coordinator()
@@ -271,7 +195,6 @@ class FullDuplexFrameworkCompletedTurnGate:
             completed_transcript=completed_transcript,
             new_message=new_message,
             timeline=timeline,
-            voiceprint_reason=voiceprint_reason,
             completion_reason=(
                 "framework_completed_turn:transcript_settlement_deadline"
                 if settlement.outcome == "deadline"
@@ -351,7 +274,6 @@ class FullDuplexFrameworkCompletedTurnGate:
         turn_ctx: Any,
         new_message: Any,
         timeline: TurnTimeline | None,
-        voiceprint_reason: str,
         completion_reason: str,
     ) -> bool:
         owner = self._pipeline
@@ -360,7 +282,6 @@ class FullDuplexFrameworkCompletedTurnGate:
             transcript=completed_transcript,
             reason=completion_reason,
             timeline=timeline,
-            voiceprint_reason=voiceprint_reason,
         )
         if decision.action == "none":
             if timeline is not None:

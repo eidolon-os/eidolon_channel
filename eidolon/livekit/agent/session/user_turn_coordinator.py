@@ -130,12 +130,13 @@ class UserTurnCandidate:
     segments: list[SpeechSegment] = field(default_factory=list)
     revisions: list[TranscriptRevision] = field(default_factory=list)
     eot_score: float | None = None
-    voiceprint_reason: str = ""
     commit_reason: str = ""
     reject_reason: str = ""
     committed_at: float | None = None
     owner_transitions: list[OwnerTransition] = field(default_factory=list)
     latest_generation_id: int = 0
+    input_audio_owned: bool = False
+    input_audio_span: AudioSpan | None = None
 
     @property
     def selected_text(self) -> str:
@@ -204,6 +205,21 @@ class UserTurnCoordinator:
     def capture_audio_reference(self, *, source: AudioSource) -> CandidateAudioReference:
         return self._capture_audio_reference(source=source)
 
+    def set_input_audio_span(self, span: AudioSpan) -> None:
+        """Bind a complete continuous input candidate, independent of ASR ranges.
+
+        Only an input owner may call this, after acoustic settlement. Renewed
+        speech clears the range and requires the owner to supply full coverage.
+        """
+        candidate = self._require_active()
+        if (candidate.state != "open" or candidate.current_segment is None
+                or candidate.current_segment.ended_at is None
+                or span.start < 0 or span.end <= span.start):
+            raise ValueError("settled input candidate required")
+        candidate.input_audio_owned = True
+        candidate.input_audio_span = span
+        self._notify_transcript_change()
+
     def capture_committed_audio_reference(
         self, *, candidate_id: str, source: AudioSource,
     ) -> CandidateAudioReference:
@@ -236,6 +252,13 @@ class UserTurnCoordinator:
             return result("no_committed_candidate")
         if candidate.current_segment is None or candidate.current_segment.ended_at is None:
             return result("speech_not_ended")
+        if candidate.input_audio_owned:
+            span = candidate.input_audio_span
+            if span is None:
+                return result("input_audio_pending")
+            if not span.same_source(source):
+                return result("audio_source_changed")
+            return result("input_mapped", span)
         selected = []
         for segment in candidate.segments:
             if segment.covered_by_segment_index is not None:
@@ -379,6 +402,7 @@ class UserTurnCoordinator:
                 self._record_attrs(candidate, event="duplicate_speech_started")
                 return candidate
             candidate.updated_at = current_time
+            candidate.input_audio_span = None
             candidate.latest_generation_id = self._next_generation_id()
             candidate.segments.append(
                 SpeechSegment(
@@ -681,7 +705,6 @@ class UserTurnCoordinator:
         transcript: str,
         reason: str,
         timeline: TurnTimeline | None = None,
-        voiceprint_reason: str = "",
         now: float | None = None,
     ) -> UserTurnDecision:
         current_time = self._now(now)
@@ -729,31 +752,13 @@ class UserTurnCoordinator:
                 now=current_time,
             )
         return self._commit_candidate(candidate, transcript=canonical, reason=reason,
-            voiceprint_reason=voiceprint_reason, event="framework_completed", now=current_time)
-
-    def commit_verified(
-        self, reference: CandidateAudioReference, *, source: AudioSource,
-    ) -> UserTurnDecision:
-        """Commit only the still-current frozen evidence, after caller authorization.
-
-        No transcript reconciliation here: doing so would extend the permission
-        to words which were never verified. Ordinary framework commits keep
-        their existing reconciliation path.
-        """
-        if not self.is_audio_reference_current(reference, source=source):
-            return UserTurnDecision(action="none", reason="stale_verified_candidate")
-        candidate = self._require_active()
-        self._retire_revisions(candidate)
-        return self._commit_candidate(candidate, transcript=candidate.selected_text,
-            reason="verified_candidate", voiceprint_reason="match",
-            event="verified_candidate", now=self._now(None))
+            event="framework_completed", now=current_time)
 
     def _commit_candidate(self, candidate: UserTurnCandidate, *, transcript: str,
-                          reason: str, voiceprint_reason: str, event: str,
+                          reason: str, event: str,
                           now: float) -> UserTurnDecision:
         candidate.state = "committed"
         candidate.commit_reason = reason
-        candidate.voiceprint_reason = voiceprint_reason
         candidate.committed_at = now
         candidate.updated_at = now
         if candidate.timeline is not None:
@@ -1216,7 +1221,6 @@ class UserTurnCoordinator:
             ),
             "selected_text_preview": candidate.selected_text[:TIMELINE_TEXT_PREVIEW_MAX_CHARS],
             "eot_score": candidate.eot_score,
-            "voiceprint_reason": candidate.voiceprint_reason,
             "commit_reason": candidate.commit_reason,
             "reject_reason": candidate.reject_reason,
             "owner_transition_count": len(candidate.owner_transitions),

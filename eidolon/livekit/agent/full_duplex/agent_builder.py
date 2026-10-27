@@ -110,7 +110,7 @@ def build_full_duplex_agent(
             turn_ctx: Any,
             new_message: Any,
         ) -> None:
-            allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+            allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
                 turn_ctx=turn_ctx,
                 new_message=new_message,
             )

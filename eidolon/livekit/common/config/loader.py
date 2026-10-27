@@ -222,14 +222,6 @@ def _voiceprint_config(section) -> VoiceprintConfig:
     errors = voiceprint_config_errors(config)
     if errors:
         raise ValueError("VoiceprintConfig validation failed:\n  - " + "\n  - ".join(errors))
-    if config.calibration_path and not Path(config.calibration_path).is_absolute():
-        if not config.model_dir or not Path(config.model_dir).is_absolute():
-            raise ValueError("relative calibration_path requires an absolute voiceprint.model_dir")
-        root = Path(config.model_dir).resolve()
-        path = (root / config.calibration_path).resolve()
-        if not path.is_relative_to(root):
-            raise ValueError("calibration_path must stay inside the model root")
-        config = replace(config, calibration_path=str(path))
     return config
 
 

@@ -24,8 +24,6 @@ from eidolon.livekit.agent.context import InterruptedContextManager
 from eidolon.livekit.agent.full_duplex.context_ledger import FullDuplexContextLedger
 from eidolon.livekit.agent.full_duplex.state_machine import FullDuplexPhase
 from eidolon.livekit.agent.turn_policy import Action, Decision, InterruptIntent
-from eidolon.livekit.agent.session.voiceprint import VoiceprintTurnResult
-from eidolon.livekit.common.speaker_verification import SpeakerSignal
 
 
 def _make_pipeline_with_session(*, latest_asr_text: str = "") -> Any:
@@ -75,22 +73,6 @@ def _transcript_event(text: str, *, is_final: bool) -> SimpleNamespace:
     return SimpleNamespace(transcript=text, is_final=is_final, speaker_id="owner")
 
 
-def _voiceprint_result(*, allowed: bool, reason: str) -> VoiceprintTurnResult:
-    return VoiceprintTurnResult(
-        signal=SpeakerSignal(
-            provider="test",
-            model="test",
-            known=allowed,
-            score=0.9 if allowed else None,
-            audio_ms=1600,
-            latency_ms=1.0,
-            profile_id="owner",
-            error=(reason if reason in {"audio_too_short", "insufficient_audio"} else ""),
-        ),
-        cached=False,
-        commit_allowed=allowed,
-        commit_reason=reason,
-    )
 
 
 @pytest.mark.parametrize("text", ["", "你好世界"])
@@ -115,7 +97,7 @@ async def test_framework_completed_is_the_single_normal_commit_boundary() -> Non
     pipeline._user_turns.add_transcript("你好世界", is_final=True)
 
     message = ChatMessage(role="user", content=["你好世界"])
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message
     )
 
@@ -200,10 +182,10 @@ async def test_cross_vad_repeated_stt_hypothesis_commits_once() -> None:
     assert first_segment.covered_by_generation_id == final_segment.generation_id
 
     message = ChatMessage(role="user", content=["铁锤三二五。"])
-    first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    first = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message
     )
-    duplicate = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    duplicate = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message
     )
 
@@ -230,7 +212,7 @@ async def test_completion_covering_latest_interim_commits_complete_candidate() -
         role="user",
         content=["那你记下来吧，这是我们约定。"],
     )
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message
     )
 
@@ -274,7 +256,7 @@ async def test_framework_gate_waits_for_evidence_without_second_completion() -> 
 
     message = ChatMessage(role="user", content=["好啊。"])
     completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message
         )
     )
@@ -318,7 +300,7 @@ async def test_stale_final_is_released_by_later_final_without_second_completion(
 
     message = ChatMessage(role="user", content=[framework_final])
     completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message
         )
     )
@@ -346,7 +328,7 @@ async def test_correction_multi_final_starts_one_generation_with_complete_canoni
 
     message = ChatMessage(role="user", content=["不是。"])
     completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message
         )
     )
@@ -372,7 +354,7 @@ async def test_orphan_interim_commits_best_known_text_at_hard_deadline() -> None
     pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=False))
 
     message = ChatMessage(role="user", content=["好啊。"])
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(),
         new_message=message,
     )
@@ -405,7 +387,7 @@ async def test_new_candidate_supersedes_turn_waiting_for_provider_evidence() -> 
 
     message = ChatMessage(role="user", content=["好啊。"])
     completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(),
             new_message=message,
         )
@@ -442,7 +424,7 @@ async def test_interim_only_candidate_replaces_empty_framework_message() -> None
     pipeline._on_user_transcribed(_transcript_event("那你记下来吧，这是我们约定。", is_final=False))
 
     message = ChatMessage(role="user", content=[""])
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message
     )
 
@@ -467,7 +449,7 @@ async def test_audio_completion_waits_for_continuation_transcript(interim):
     pipeline._user_turns.note_speech_stopped(eot_score=.9, now=3)
     message = ChatMessage(role='user', content=['嗯，那个。'])
     completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message,
         )
     )
@@ -495,7 +477,7 @@ async def test_resuming_same_candidate_invalidates_waiting_audio_completion():
     pipeline._user_turns.note_speech_stopped(eot_score=.9, now=.2)
     message = ChatMessage(role='user', content=['先说一下。'])
     completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message,
         )
     )
@@ -509,85 +491,10 @@ async def test_resuming_same_candidate_invalidates_waiting_audio_completion():
     assert message.text_content == '先说一下。'
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('verdict', ['allow', 'reject', 'error'])
-async def test_new_speech_invalidates_completion_awaiting_voiceprint(verdict):
-    pipeline = _make_pipeline_with_session()
-    pipeline._ensure_runtime_defaults()
-    timeline = TurnTimeline('voiceprint-scope')
-    pipeline._timeline = timeline
-    candidate = pipeline._user_turns.start_speech(timeline=timeline, now=0)
-    pipeline._user_turns.add_transcript('先说一下。', is_final=True, now=.1)
-    pipeline._user_turns.note_speech_stopped(eot_score=.9, now=.2)
-    result = asyncio.get_running_loop().create_future()
-    pipeline._completed_turn_voiceprint_task = result
-    pipeline._completed_turn_voiceprint_timeline = timeline
-    completion = asyncio.create_task(
-        pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-            turn_ctx=ChatContext.empty(),
-            new_message=ChatMessage(role='user', content=['先说一下。']),
-        )
-    )
-    await asyncio.sleep(0)
-    assert not completion.done()
-    pipeline._user_turns.start_speech(timeline=timeline, now=1.7)
-    if verdict == 'error':
-        result.set_exception(RuntimeError('voiceprint unavailable'))
-    else:
-        result.set_result(_voiceprint_result(allowed=verdict == 'allow', reason=verdict))
-    with pytest.raises(asyncio.CancelledError):
-        await completion
-    assert candidate.state == 'open'
-    assert candidate.current_segment.selected_text == ''
-    pipeline._session.clear_user_turn.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_wrong_speaker_is_explicitly_rejected_without_clearing_next_audio() -> None:
-    pipeline = _make_pipeline_with_session()
-    timeline = TurnTimeline("wrong-speaker")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("视频里的声音", is_final=True)
-    result = _voiceprint_result(allowed=False, reason="speaker_not_owner")
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="视频里的声音")
-    )
-
-    assert allowed is False
-    assert pipeline._user_turns.snapshot()["state"] == "rejected"
-    assert pipeline._user_turns.snapshot()["reject_reason"] == (
-        "voiceprint_blocked:speaker_not_owner"
-    )
-    pipeline._session.clear_user_turn.assert_not_called()
-    assert pipeline._suppress_transcripts_until_next_speech is True
 
 
-@pytest.mark.asyncio
-async def test_framework_respects_observer_inconclusive_voiceprint_decision() -> None:
-    pipeline = _make_pipeline_with_session()
-    timeline = TurnTimeline("short-owner-sample")
-    pipeline._timeline = timeline
-    pipeline._ensure_runtime_defaults()
-    pipeline._user_turns.start_speech(timeline=timeline)
-    pipeline._user_turns.add_transcript("好的", is_final=True)
-    result = _voiceprint_result(allowed=False, reason="audio_too_short")
-    pipeline._completed_turn_voiceprint_task = asyncio.create_task(asyncio.sleep(0, result=result))
-    pipeline._completed_turn_voiceprint_timeline = timeline
-
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
-        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="好的")
-    )
-
-    assert allowed is False
-    assert pipeline._user_turns.snapshot()["state"] == "rejected"
-    assert not hasattr(pipeline, "_deferred_low_eot_commit_task")
-    pipeline._session.commit_user_turn.assert_not_called()
-    pipeline._session.clear_user_turn.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -605,7 +512,7 @@ async def test_framework_terminal_boundary_is_text_agnostic(text: str) -> None:
     )
 
     message = ChatMessage(role="user", content=[text])
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message
     )
 
@@ -636,7 +543,7 @@ async def test_non_semantic_completed_turn_is_rejected_only_at_product_boundary(
     pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._user_turns.add_transcript("咳咳。", is_final=True)
 
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="咳咳。")
     )
 
@@ -676,11 +583,11 @@ async def test_no_transcript_false_interruption_cannot_reject_later_real_speech(
     pipeline._user_turns.add_transcript("你，你好，你好。", is_final=True, now=5.8)
     message = ChatMessage(role="user", content=["你，你好，你好。"])
 
-    first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    first = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(),
         new_message=message,
     )
-    duplicate = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    duplicate = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(),
         new_message=message,
     )
@@ -717,7 +624,7 @@ async def test_recorded_verdict_cannot_cross_generation_on_shared_timeline() -> 
     pipeline._user_turns.add_transcript("新的真实语音", is_final=True, now=0.6)
     message = ChatMessage(role="user", content=["新的真实语音"])
 
-    allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(),
         new_message=message,
     )
@@ -763,7 +670,7 @@ async def test_settled_merged_turn_uses_its_latest_generation_verdict(latest_all
     interruption.resolve(action='cancel' if latest_allows else 'rollback', reason='latest_evidence')
     turns.note_speech_stopped(eot_score=.85, now=.5)
     message = ChatMessage(role='user', content=[prefix])
-    completion = asyncio.create_task(pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    completion = asyncio.create_task(pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=message,
     ))
     try:
@@ -866,7 +773,7 @@ async def test_confirmed_cjk_barge_in_stops_playback_and_reaches_output_once() -
         ChatMessage(role="user", content=[final]),
         ChatMessage(role="user", content=[final]),
     ):
-        allowed = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+        allowed = await pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(),
             new_message=message,
         )
@@ -893,10 +800,10 @@ async def test_duplicate_framework_completion_is_noop_without_audio_clear() -> N
     pipeline._user_turns.start_speech(timeline=timeline)
     pipeline._user_turns.add_transcript("记住了。", is_final=True)
 
-    first = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    first = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="记住了。")
     )
-    second = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    second = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content="记住了。")
     )
 
@@ -968,7 +875,7 @@ async def test_hard_stop_terminal_closes_before_next_turn_consumes_context() -> 
     )
     pipeline._interruption_orchestrator.resolve(action="cancel", reason="eot_cancel")
 
-    rejected = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    rejected = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(),
         new_message=ChatMessage(role="user", content=["停，不要说了。"]),
     )
@@ -991,7 +898,7 @@ async def test_hard_stop_terminal_closes_before_next_turn_consumes_context() -> 
     )
     next_context = ChatContext.empty()
 
-    accepted = await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    accepted = await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=next_context,
         new_message=ChatMessage(role="user", content=["你还能听到我吗。"]),
     )
@@ -1069,7 +976,7 @@ async def test_terminal_interruption_disposes_text_without_framework_callback(ac
     pipeline._user_turns.add_transcript("介绍一下天气", is_final=True,
         evidence=TranscriptEvidence(stream_key="stream", revision_key="2", sequence=2))
     assert pipeline._user_turns.selected_text == "介绍一下天气"
-    assert await pipeline._ensure_turn_completion().voiceprint_allows_completed_turn(
+    assert await pipeline._ensure_turn_completion().allows_completed_turn(
         turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["介绍一下天气"]))
 
 
@@ -1217,3 +1124,17 @@ async def test_withdrawn_followup_restarts_final_intent_without_replaying_user_e
     finally:
         ready.set()
         await semantic.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["好的", "请解释一下"])
+async def test_normal_completion_has_no_identity_task_or_dependency(text):
+    pipeline = _make_pipeline_with_session()
+    pipeline._timeline = TurnTimeline("ordinary")
+    pipeline._ensure_runtime_defaults()
+    assert not hasattr(pipeline, "_voiceprint_turns")
+    assert not hasattr(pipeline, "_completed_turn_voiceprint_task")
+    pipeline._user_turns.start_speech(timeline=pipeline._timeline)
+    pipeline._user_turns.add_transcript(text, is_final=True)
+    assert await pipeline._ensure_turn_completion().allows_completed_turn(
+        turn_ctx=ChatContext.empty(), new_message=SimpleNamespace(text_content=text))

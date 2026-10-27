@@ -9,7 +9,6 @@ from eidolon_sdk.biz.contracts import INTERACTION_MODE_FULL_DUPLEX
 from eidolon.livekit.common.config import (
     ObservabilityConfig,
     TurnPolicyConfig,
-    VoiceprintConfig,
 )
 
 from ..shared.types import PipelineCallbacks, PipelineState
@@ -17,7 +16,6 @@ from ..observability import ChannelTurnEventSink
 from ..session.agent_output_coordinator import AgentOutputCoordinator
 from .transcript_ingress_ledger import FullDuplexTranscriptIngressLedger
 from .transcript_evidence_buffer import TranscriptEvidenceBuffer
-from ..session.voiceprint import VoiceprintTurnObserver
 from ..turn_policy import TurnPolicyRuntime
 
 
@@ -49,8 +47,6 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._turn_events = ChannelTurnEventSink(
             observer=pipeline._observe_channel_event
         )
-    if not hasattr(pipeline, "_voiceprint_config"):
-        pipeline._voiceprint_config = VoiceprintConfig()
     if not hasattr(pipeline, "_timeline"):
         pipeline._timeline = None
     if not hasattr(pipeline, "_timeline_debug_flushed"):
@@ -69,8 +65,6 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._suppress_commit_after_interrupt_until = 0.0
     if not hasattr(pipeline, "_latest_asr_text"):
         pipeline._latest_asr_text = ""
-    if not hasattr(pipeline, "_candidate_voiceprint_tasks"):
-        pipeline._candidate_voiceprint_tasks = []
     pipeline._ensure_full_duplex_state_machine()
     pipeline._ensure_user_turn_coordinator()
     pipeline._ensure_turn_completion()
@@ -83,31 +77,6 @@ def ensure_full_duplex_runtime_defaults(pipeline: Any) -> None:
         pipeline._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
     if not hasattr(pipeline, "_transcript_evidence_buffer"):
         pipeline._transcript_evidence_buffer = TranscriptEvidenceBuffer()
-    if not hasattr(pipeline, "_completed_turn_voiceprint_task"):
-        pipeline._completed_turn_voiceprint_task = None
-    if not hasattr(pipeline, "_completed_turn_voiceprint_result"):
-        pipeline._completed_turn_voiceprint_result = None
-    if not hasattr(pipeline, "_completed_turn_voiceprint_timeline"):
-        pipeline._completed_turn_voiceprint_timeline = None
-    if not hasattr(pipeline, "_voiceprint_turns"):
-        factory = getattr(pipeline, "_factory", None)
-        pipeline._voiceprint_turns = VoiceprintTurnObserver(
-            service=getattr(factory, "voiceprint_service", None),
-            context_resolver=getattr(factory, "runtime_context_resolver", None),
-            sample_rate=getattr(pipeline, "_audio_sample_rate", 16000),
-            max_audio_ms=pipeline._voiceprint_config.turn_max_audio_ms,
-            accept_cache_ttl_sec=(pipeline._voiceprint_config.accept_cache_ttl_ms / 1000.0),
-            accept_cache_short_audio_max_ms=(
-                pipeline._voiceprint_config.accept_cache_short_audio_max_ms
-            ),
-            commit_threshold=pipeline._voiceprint_config.owner_commit_threshold,
-            owner_short_audio_bypass_ms=(pipeline._voiceprint_config.owner_short_audio_bypass_ms),
-            trust_paired_devices=getattr(
-                factory,
-                "voiceprint_trust_paired_devices",
-                True,
-            ),
-        )
     pipeline._ensure_ducking_controller()
     pipeline._ensure_output_flow()
     pipeline._ensure_interruption_effects()

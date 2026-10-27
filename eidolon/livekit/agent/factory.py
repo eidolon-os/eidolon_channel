@@ -20,9 +20,7 @@ Adding a new STT/TTS provider only requires editing the corresponding
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -175,8 +173,6 @@ class SharedStageFactory:
         stt: SttStage | None,
         tts: TtsStage | None,
         vad: "lk_vad.VAD | None" = None,
-        voiceprint_provider: "Any | None" = None,
-        voiceprint_trust_paired_devices: bool = True,
         runtime_context_resolver: "Any | None" = None,
         runtime_services: "Any | None" = None,
         llm_params: LlmParams | None = None,
@@ -213,38 +209,12 @@ class SharedStageFactory:
         # put in the dispatch, and the device hears back as session_started. A
         # session-scoped observer keys its file by it; nothing else here does.
         self.runtime_session_id = str(runtime_session_id or "").strip()
-        self.voiceprint_provider = voiceprint_provider
-        self.voiceprint_trust_paired_devices = voiceprint_trust_paired_devices
-        self.voiceprint_service = None
-        if voiceprint_provider is not None:
-            from eidolon.livekit.agent.speaker_verification import (
-                SpeakerVerificationService,
-                VoiceprintStore,
-            )
-
-            self.voiceprint_service = SpeakerVerificationService(
-                provider=voiceprint_provider,
-                store=VoiceprintStore(
-                    getattr(
-                        voiceprint_provider,
-                        "voiceprint_root",
-                        str(
-                            Path(
-                                os.environ.get("EIDOLON_STATE_ROOT", "~/eidolon/data")
-                            ).expanduser()
-                            / "voiceprints"
-                        ),
-                    )
-                ),
-            )
-
         logger.info(
-            "[SharedStageFactory] initialized stt=%s llm=%s tts=%s vad=%s voiceprint=%s",
+            "[SharedStageFactory] initialized stt=%s llm=%s tts=%s vad=%s",
             type(self.stt).__name__,
             type(self.llm).__name__,
             type(self.tts).__name__,
             type(self.vad).__name__ if self.vad else None,
-            type(self.voiceprint_provider).__name__ if self.voiceprint_provider else None,
         )
 
     async def aclose(self) -> None:
@@ -264,7 +234,6 @@ class SharedStageFactory:
         cfg: "AgentConfig",
         *,
         prebuilt_vad: "lk_vad.VAD | None" = None,
-        prebuilt_voiceprint_provider: "Any | None" = None,
         livekit_session_key: str = "",
         livekit_room: "Any | None" = None,
         runtime_session_id: str = "",
@@ -279,9 +248,7 @@ class SharedStageFactory:
                 instance is used instead of building a fresh one. Useful when
                 a worker process loads the VAD model once at startup and
                 reuses it across jobs.
-            prebuilt_voiceprint_provider: If supplied from worker prewarm,
                 this CAMPPlus provider is reused across jobs instead of
-                cold-loading the voiceprint model per room.
             livekit_session_key: When ``REMOTE_AGENT_RPC_TARGET`` is set and
                 ``livekit_room`` is None, used as the static brain-side
                 ``conversation_id`` as ``<prefix>:<session_key>``. Mainly for
@@ -323,7 +290,6 @@ class SharedStageFactory:
         runtime_services = None
         needs_runtime_context = (
             cfg.providers.brain_provider == "eidolon_agent"
-            or prebuilt_voiceprint_provider is not None
             or cfg.avatar.enabled
         )
         if needs_runtime_context and cfg.runtime_authority.enabled:
@@ -447,8 +413,6 @@ class SharedStageFactory:
             stt=stt,
             tts=tts,
             vad=vad,
-            voiceprint_provider=prebuilt_voiceprint_provider if microphone else None,
-            voiceprint_trust_paired_devices=cfg.voiceprint.trust_paired_devices,
             runtime_context_resolver=(
                 runtime_services.resolve_room if runtime_services is not None else None
             ),

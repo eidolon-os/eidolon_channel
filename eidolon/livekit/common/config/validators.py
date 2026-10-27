@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from urllib.parse import urlsplit
 
 from eidolon_sdk.biz.contracts.local_asr import (
@@ -264,40 +263,6 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
 
 
 def voiceprint_config_errors(vp: VoiceprintConfig) -> list[str]:
-    """Shared voice-section validation; independent of the worker's other policies."""
-    errors: list[str] = []
-    if not isinstance(vp.calibration_path, str) or len(vp.calibration_path) > 4096:
-        errors.append("voiceprint.calibration_path must be a bounded path string")
-    if vp.calibration_path and (vp.enabled or vp.observation_until):
-        errors.append("voiceprint calibration cannot coexist with legacy enforcement or observation")
-    if (type(vp.observation_until) not in (int, float)
-            or not math.isfinite(vp.observation_until) or vp.observation_until < 0):
-        errors.append("voiceprint.observation_until must be nonnegative Unix seconds")
-    if (not isinstance(vp.observation_companion_id, str)
-            or len(vp.observation_companion_id) > 128):
-        errors.append("voiceprint.observation_companion_id must be a bounded string")
-    if bool(vp.observation_companion_id) != bool(vp.observation_until):
-        errors.append("voiceprint observation requires both Companion and deadline")
-    if vp.enabled and vp.observation_until:
-        errors.append("voiceprint observation cannot coexist with legacy enforcement")
-    if vp.enabled:
-        if vp.provider != "3d_speaker":
-            errors.append("voiceprint.provider must be '3d_speaker'")
-        if vp.model != "campplus_zh_16k_common":
-            errors.append("voiceprint.model must be 'campplus_zh_16k_common'")
-        if not 0.0 < vp.threshold < 1.0:
-            errors.append("voiceprint.threshold must be in (0, 1)")
-        if not 500 <= vp.min_audio_ms <= 30_000:
-            errors.append("voiceprint.min_audio_ms must be in [500, 30000]")
-        if not 500 <= vp.turn_max_audio_ms <= 60_000:
-            errors.append("voiceprint.turn_max_audio_ms must be in [500, 60000]")
-        if not 0 <= vp.accept_cache_ttl_ms <= 3_600_000:
-            errors.append("voiceprint.accept_cache_ttl_ms must be in [0, 3600000]")
-        if not 0 <= vp.accept_cache_short_audio_max_ms <= 30_000:
-            errors.append("voiceprint.accept_cache_short_audio_max_ms must be in [0, 30000]")
-        if not 0.0 < vp.owner_commit_threshold < 1.0:
-            errors.append("voiceprint.owner_commit_threshold must be in (0, 1)")
-        if not 0 <= vp.owner_short_audio_bypass_ms <= vp.min_audio_ms:
-            errors.append("voiceprint.owner_short_audio_bypass_ms must be in [0, min_audio_ms]")
-
-    return errors
+    if not isinstance(vp.model_dir, str) or len(vp.model_dir) > 4096:
+        return ["voiceprint.model_dir must be a bounded path string"]
+    return []

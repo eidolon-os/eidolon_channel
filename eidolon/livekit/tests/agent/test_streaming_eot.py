@@ -110,7 +110,6 @@ def test_mini_prewarm_does_not_load_firered(monkeypatch):
     from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
     from livekit import local_inference
     cfg = replace(EffectiveAgentConfig(), turn_policy=mini_policy())
-    cfg = replace(cfg, voiceprint=replace(cfg.voiceprint, enabled=False))
     monkeypatch.setattr(config, 'load_effective_config', lambda: cfg)
     monkeypatch.setattr(FireredPvadVAD, 'load', Mock())
     warm = Mock()

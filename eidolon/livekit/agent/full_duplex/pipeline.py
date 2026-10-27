@@ -70,7 +70,6 @@ from eidolon.livekit.common.config import (
     CoreConfig,
     ObservabilityConfig,
     TurnPolicyConfig,
-    VoiceprintConfig,
 )
 
 from .agent_builder import build_full_duplex_agent
@@ -132,7 +131,6 @@ from ..session.semantic_interrupt import SemanticInterruptHandler
 from ..session.signals import SessionSignalBridge
 from ..session.transcript_echo import TranscriptEchoGate
 from ..session.user_turn_coordinator import UserTurnCoordinator
-from ..session.voiceprint import VoiceprintTurnObserver
 
 logger = logging.getLogger("agent")
 
@@ -169,7 +167,6 @@ class StreamingPipeline(BasePipeline):
         aec_warmup_duration: float | None | object = _UNSET,
         turn_policy: TurnPolicyConfig | None = None,
         observability: ObservabilityConfig | None = None,
-        voiceprint_config: VoiceprintConfig | None = None,
         speaker_observation: SpeakerTurnObservation | None = None,
         on_idle_disconnect: Callable[[], Awaitable[None]] | None = None,
         on_session_started: Callable[[], Awaitable[None]] | None = None,
@@ -211,11 +208,6 @@ class StreamingPipeline(BasePipeline):
         self._turn_runtime = TurnPolicyRuntime(self._turn_policy)
         self._observability = observability or ObservabilityConfig()
         self._turn_events = ChannelTurnEventSink(observer=self._observe_channel_event)
-        self._voiceprint_config = voiceprint_config or VoiceprintConfig()
-        # Explicit experimental composition only. No default enablement and no
-        # parallel legacy recorder/admission path in an observed session.
-        if speaker_observation is not None and getattr(factory, "voiceprint_service", None) is not None:
-            raise ValueError("speaker observation cannot coexist with legacy verification")
         self._speaker_observation = speaker_observation
         self._evidence_input = None
         self._timeline: TurnTimeline | None = None
@@ -247,32 +239,11 @@ class StreamingPipeline(BasePipeline):
         self._agent_state_effects = self._build_agent_state_effect_handler()
         self._semantic_interrupts = self._build_semantic_interrupt_handler()
         self._duck_deadline = self._build_duck_suspend_timeout_handler()
-        self._candidate_voiceprint_tasks: list[asyncio.Task] = []
         self._suppress_transcripts_until_next_speech = False
         self._transcript_admission = self._build_transcript_admission_gate()
         self._transcript_evidence_buffer = TranscriptEvidenceBuffer()
         self._transcript_ingress_ledger = FullDuplexTranscriptIngressLedger()
-        self._completed_turn_voiceprint_task: asyncio.Task | None = None
-        self._completed_turn_voiceprint_result: Any | None = None
-        self._completed_turn_voiceprint_timeline: TurnTimeline | None = None
         self._provider_events = self._build_provider_event_observer()
-        self._voiceprint_turns = VoiceprintTurnObserver(
-            service=getattr(self._factory, "voiceprint_service", None),
-            context_resolver=getattr(self._factory, "runtime_context_resolver", None),
-            sample_rate=audio_sample_rate,
-            max_audio_ms=self._voiceprint_config.turn_max_audio_ms,
-            accept_cache_ttl_sec=(self._voiceprint_config.accept_cache_ttl_ms / 1000.0),
-            accept_cache_short_audio_max_ms=(
-                self._voiceprint_config.accept_cache_short_audio_max_ms
-            ),
-            commit_threshold=self._voiceprint_config.owner_commit_threshold,
-            owner_short_audio_bypass_ms=(self._voiceprint_config.owner_short_audio_bypass_ms),
-            trust_paired_devices=getattr(
-                self._factory,
-                "voiceprint_trust_paired_devices",
-                True,
-            ),
-        )
         self._instructions = instructions
         self._allow_interruptions = allow_interruptions
         # Round 8 R8.9: fixed welcome (instead of LLM-generated). LLM with
@@ -667,9 +638,6 @@ class StreamingPipeline(BasePipeline):
                 timeline=timeline,
                 details={"acoustic_generation": verdict.generation_id},
             )
-        turn_completion = self._ensure_turn_completion()
-        turn_completion.cancel_completed_voiceprint_turn()
-        turn_completion.reset_candidate_voiceprint_tasks()
         self._flush_turn_timeline(
             timeline,
             f"interruption_{verdict.action.value}",

@@ -61,7 +61,6 @@ class ProviderConfig:
     # Adapter names in the order this deployment prefers them. Selection walks
     # this list and takes the first one that can carry the device's spec.
     adapter_preference: tuple[str, ...] = ("livekit",)
-    speaker_calibration_path: str = ""
     speaker_model_dir: str = ""
 
 
@@ -275,6 +274,5 @@ def load_provider_config() -> ProviderConfig:
             if "hub_url" in smarthome else None
         ),
         adapter_preference=tuple(name.strip() for name in preference),
-        speaker_calibration_path=voiceprint.calibration_path,
         speaker_model_dir=voiceprint.model_dir,
     )

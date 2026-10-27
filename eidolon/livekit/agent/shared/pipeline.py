@@ -230,9 +230,6 @@ class BasePipeline(ABC):
         # (e.g. FireredPvadVAD), this is effectively a no-op.
         if self._factory.vad is not None:
             stages.append(self._factory.vad)
-        voiceprint = getattr(self._factory, "voiceprint_provider", None)
-        if voiceprint is not None:
-            stages.append(voiceprint)
         return stages
 
     async def _warmup_stages(self) -> None:

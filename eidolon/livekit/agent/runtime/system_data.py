@@ -41,12 +41,6 @@ class SystemDataRuntimeResolver:
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         return await self._client.get_companion_face(companion_id)
 
-    async def get_voiceprint_snapshot(self, companion_id: str):
-        return await self._client.get_voiceprint_snapshot(companion_id)
-
-    async def admit_voiceprint(self, companion_id: str, revision: int, profile_id: str, **verification):
-        return await self._client.admit_voiceprint(companion_id, revision, profile_id, **verification)
-
     async def aclose(self) -> None:
         if self._http_client is not None:
             await self._http_client.aclose()
@@ -56,7 +50,7 @@ class DeferredSystemDataRuntimeResolver:
     """Lazily open one authenticated System Data client per Channel session.
 
     Direct-LLM audio does not require runtime identity. Deferring construction
-    lets that path start even when optional Voiceprint/Avatar identity is not
+    lets that path start even when optional Avatar identity is not
     used, while every actual identity/face lookup still goes exclusively
     through the versioned System Data authority.
     """
@@ -77,14 +71,6 @@ class DeferredSystemDataRuntimeResolver:
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         resolver = await self._get()
         return await resolver.get_companion_face(companion_id)
-
-    async def get_voiceprint_snapshot(self, companion_id: str):
-        resolver = await self._get()
-        return await resolver.get_voiceprint_snapshot(companion_id)
-
-    async def admit_voiceprint(self, companion_id: str, revision: int, profile_id: str, **verification):
-        resolver = await self._get()
-        return await resolver.admit_voiceprint(companion_id, revision, profile_id, **verification)
 
     async def aclose(self) -> None:
         if self._resolver is not None:

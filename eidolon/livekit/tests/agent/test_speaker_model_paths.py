@@ -15,4 +15,4 @@ def test_explicit_model_path_is_respected(tmp_path):
 
 
 def test_model_installation_does_not_enable_legacy_enforcement():
-    assert VoiceprintConfig().enabled is False
+    assert set(VoiceprintConfig.__dataclass_fields__) == {"model_dir"}

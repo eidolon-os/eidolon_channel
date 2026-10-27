@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Literal
 
 from eidolon.livekit.common.welcome import WelcomeAudio, WelcomeMessage
@@ -301,7 +299,7 @@ class ObservabilityConfig:
     # Logs, not state, and the systemd unit is what settles it. On a product
     # Host ``eidolon-channel.service`` is ``ProtectSystem=strict`` and holds
     # ``eidolon/channel`` under the logs, runtime and cache roots while its
-    # state root is ``eidolon/voiceprints``. A trace path under the state root
+    # user state belongs to Data. A trace path under a separate state root
     # is one this worker cannot create, and the writer degrades silently by
     # design — so the Host would run untraced and read exactly like one with
     # tracing switched off. Being clearable is not a loss either: this writer
@@ -322,31 +320,8 @@ class ObservabilityConfig:
 
 @dataclass(frozen=True)
 class VoiceprintConfig:
-    # Explicit, scoped calibration artifact; no legacy threshold fallback.
-    calibration_path: str = ""
-    # Bounded observation only; zero/empty keeps the normal input unchanged.
-    observation_companion_id: str = ""
-    observation_until: float = 0.0  # absolute Unix seconds, including current sessions
-    # Legacy enforcement is opt-in; model availability is not Companion authorization.
-    enabled: bool = False
-    provider: str = "3d_speaker"
-    model: str = "campplus_zh_16k_common"
-    root: str = field(
-        default_factory=lambda: str(
-            Path(os.environ.get("EIDOLON_STATE_ROOT", "~/eidolon/data")).expanduser()
-            / "voiceprints"
-        )
-    )
+    """Shared Provider model asset location; no conversation policy."""
     model_dir: str = ""
-    threshold: float = 0.31
-    min_audio_ms: int = 1500
-    prewarm: bool = True
-    trust_paired_devices: bool = True
-    turn_max_audio_ms: int = 12_000
-    accept_cache_ttl_ms: int = 180_000
-    accept_cache_short_audio_max_ms: int = 3_000
-    owner_commit_threshold: float = 0.58
-    owner_short_audio_bypass_ms: int = 1_500
 
 
 @dataclass(frozen=True)

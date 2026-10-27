@@ -47,19 +47,9 @@ def test_the_declared_provider_store_is_the_one_it_opens(contract: dict) -> None
     assert _expand(storage) in declared
 
 
-def test_the_voiceprint_root_is_declared_and_declared_uncarried(
-    contract: dict,
-) -> None:
-    root = _expand(_settings("settings.yaml")["voiceprint"]["root"])
-    entry = next(
-        item for item in contract["state"]["authority"] if item["path"] == root
-    )
-
-    # Enrolled voices are the most personal thing this Host holds. Not carrying
-    # them in a backup is defensible; carrying them silently, or omitting them
-    # silently, is not — so the reason is required to be there.
-    assert entry["backup"] == "none"
-    assert "consent" in entry["uncovered_reason"]
+def test_channel_has_no_person_or_voiceprint_file_authority(contract: dict) -> None:
+    assert set(_settings("settings.yaml")["voiceprint"]) == {"model_dir"}
+    assert all("voiceprint" not in entry["path"] for entry in contract["state"]["authority"])
 
 
 def test_the_two_processes_stay_two(contract: dict) -> None:

@@ -46,11 +46,12 @@ async def test_runtime_services_cache_one_context_and_close_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_voice_authority_reuses_one_lazy_session_http_adapter(monkeypatch):
+async def test_runtime_authority_reuses_one_lazy_session_http_adapter(monkeypatch):
     from eidolon.livekit.agent.runtime import system_data
 
-    client = SimpleNamespace(get_voiceprint_snapshot=AsyncMock(return_value='snapshot'),
-        admit_voiceprint=AsyncMock(return_value=True))
+    snapshot = SimpleNamespace(runtime_identity=lambda **kwargs: _context())
+    client = SimpleNamespace(get_companion_runtime=AsyncMock(return_value=snapshot),
+        get_companion_face=AsyncMock(return_value=b'face'))
     http = SimpleNamespace(aclose=AsyncMock())
     adapter = system_data.SystemDataRuntimeResolver(client, http_client=http)
     opened = []
@@ -61,10 +62,10 @@ async def test_voice_authority_reuses_one_lazy_session_http_adapter(monkeypatch)
     settings = object()
     deferred = system_data.DeferredSystemDataRuntimeResolver(settings)
     assert opened == []
-    assert await deferred.get_voiceprint_snapshot('companion') == 'snapshot'
-    assert await deferred.admit_voiceprint('companion', 7, 'profile') is True
-    client.get_voiceprint_snapshot.assert_awaited_once_with('companion')
-    client.admit_voiceprint.assert_awaited_once_with('companion', 7, 'profile')
+    assert await deferred.resolve_companion('companion', device_id=None) == _context()
+    assert await deferred.get_companion_face('companion') == b'face'
+    client.get_companion_runtime.assert_awaited_once_with('companion')
+    client.get_companion_face.assert_awaited_once_with('companion')
     assert opened == [settings]
     await deferred.aclose()
     http.aclose.assert_awaited_once()

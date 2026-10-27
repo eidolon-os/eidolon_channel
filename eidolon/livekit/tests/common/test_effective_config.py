@@ -17,18 +17,13 @@ def _write_settings(tmp_path: Path, body: str) -> Path:
     return p
 
 
-@pytest.mark.parametrize("legacy", ["enabled", "observation_until"])
-def test_calibrated_route_cannot_allocate_a_second_voiceprint_owner(legacy):
-    from dataclasses import replace
-    from eidolon.livekit.common.config.schema import EffectiveAgentConfig
-    from eidolon.livekit.common.config.validators import validate_effective_config
-
-    cfg = EffectiveAgentConfig()
-    voiceprint = replace(cfg.voiceprint, calibration_path="test-only.json",
-        **({"enabled": True} if legacy == "enabled" else
-           {"observation_until": 1, "observation_companion_id": "companion"}))
-    with pytest.raises(ValueError, match="calibration cannot coexist"):
-        validate_effective_config(replace(cfg, voiceprint=voiceprint))
+@pytest.mark.parametrize("legacy", ["enabled", "observation_until", "calibration_path"])
+def test_retired_voiceprint_settings_are_rejected(tmp_path, monkeypatch, legacy):
+    path = _write_settings(tmp_path, f"voiceprint:\n  {legacy}: true\n")
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(path))
+    monkeypatch.delenv("EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML", raising=False)
+    with pytest.raises(ValueError, match="unknown config field VoiceprintConfig"):
+        load_effective_config()
 
 
 def test_balanced_profile_defaults() -> None:
@@ -123,14 +118,7 @@ observability:
   stt_pending_provider_event_preroll_ms: 350
   stt_pending_provider_event_max_count: 48
 voiceprint:
-  enabled: true
-  threshold: 0.42
-  min_audio_ms: 2000
-  turn_max_audio_ms: 9000
-  accept_cache_ttl_ms: 120000
-  accept_cache_short_audio_max_ms: 2400
-  owner_commit_threshold: 0.64
-  owner_short_audio_bypass_ms: 1200
+  model_dir: /models/speaker
 """,
     )
     monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
@@ -167,14 +155,7 @@ voiceprint:
     assert cfg.observability.stt_pending_provider_event_preroll_ms == 350
     assert cfg.observability.stt_pending_provider_event_max_count == 48
     assert cfg.llm.api_key == "test"
-    assert cfg.voiceprint.enabled is True
-    assert cfg.voiceprint.threshold == 0.42
-    assert cfg.voiceprint.min_audio_ms == 2000
-    assert cfg.voiceprint.turn_max_audio_ms == 9000
-    assert cfg.voiceprint.accept_cache_ttl_ms == 120000
-    assert cfg.voiceprint.accept_cache_short_audio_max_ms == 2400
-    assert cfg.voiceprint.owner_commit_threshold == 0.64
-    assert cfg.voiceprint.owner_short_audio_bypass_ms == 1200
+    assert cfg.voiceprint.model_dir == "/models/speaker"
     assert cfg.behavior.instructions == "test instructions"
     assert cfg.worker.num_idle_processes == 1
     assert cfg.runtime_authority.kernel_api_url == "http://kernel.local/api/kernel/v1"
@@ -212,7 +193,7 @@ turn_policy:
     enforce: false
     soft_duck_on_playback_speech_start: false
 voiceprint:
-  enabled: true
+  model_dir: /models/old
 """,
     )
     overlay = tmp_path / "box3_full_duplex.yaml"
@@ -225,7 +206,7 @@ turn_policy:
     enforce: true
     soft_duck_on_playback_speech_start: true
 voiceprint:
-  enabled: false
+  model_dir: /models/current
 """,
         encoding="utf-8",
     )
@@ -239,45 +220,12 @@ voiceprint:
     cfg = load_effective_config()
 
     assert cfg.providers.brain_provider == "direct_llm"
+    assert cfg.voiceprint.model_dir == "/models/current"
     assert cfg.turn_policy.attention.enforce is True
     assert cfg.turn_policy.attention.soft_duck_on_playback_speech_start is True
-    assert cfg.voiceprint.enabled is False
     assert cfg.turn_policy.attention.require_direct_signal_during_playback is True
     assert cfg.turn_policy.attention.echo_min_normalized_chars == 3
     assert cfg.turn_policy.attention.assistant_speech_recent_max_age_ms == 3000
-
-
-def test_invalid_voiceprint_threshold_fails_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings = _write_settings(
-        tmp_path,
-        """
-core:
-  livekit_url: ws://127.0.0.1:7880
-  api_key: LIVEKIT_API_KEY
-  api_secret: LIVEKIT_API_SECRET
-providers:
-  stt_provider: sensetime
-  tts_provider: bailian
-  vad_provider: firered
-  brain_provider: direct_llm
-llm:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-  api_key: OPENAI_LLM_API_KEY
-voiceprint:
-  enabled: true
-  threshold: 1.2
-""",
-    )
-    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
-    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
-    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
-
-    with pytest.raises(ValueError, match="voiceprint.threshold"):
-        load_effective_config()
 
 
 def test_non_positive_runtime_token_ttl_fails_validation(

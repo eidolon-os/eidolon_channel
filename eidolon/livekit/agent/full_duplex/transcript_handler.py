@@ -69,7 +69,7 @@ class FullDuplexTranscriptHandler:
             if admission.reason == "suppressed_until_next_speech":
                 logger.info(
                     "[StreamingPipeline] dropping post-turn transcript after "
-                    "voiceprint ownership gate transcript=%r final=%s",
+                    "completed-turn suppression transcript=%r final=%s",
                     admission.transcript[:80],
                     admission.is_final,
                 )

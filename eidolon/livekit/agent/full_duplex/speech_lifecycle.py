@@ -36,7 +36,6 @@ class FullDuplexSpeechLifecycle:
 
     def _start_candidate(self, *, acoustic: bool) -> None:
         owner = self._owner
-        turn_completion = owner._ensure_turn_completion()
         owner._ensure_user_turn_coordinator()
         interruption_owner = owner._interruption_orchestrator
         continue_pending = (
@@ -53,8 +52,6 @@ class FullDuplexSpeechLifecycle:
         owner._set_suppress_transcripts_until_next_speech(False, reason="new_speech_started")
         if not merge_continuation:
             owner._turn_runtime.reset_interruption_evidence()
-            turn_completion.cancel_completed_voiceprint_turn()
-            turn_completion.reset_candidate_voiceprint_tasks()
         replaced_unmerged_timeline = owner._timeline if not merge_continuation else None
         replaced_candidate = owner._user_turns.active if not merge_continuation else None
         superseding_pending_candidate = (
@@ -120,8 +117,6 @@ class FullDuplexSpeechLifecycle:
         owner._attach_transcript_ingress_recent_events("speech_started")
         owner._apply_pending_explicit_client_preempt(owner._timeline)
         owner._apply_pending_client_control_events(owner._timeline)
-        if acoustic:
-            owner._voiceprint_turns.start_turn(timeline=owner._timeline)
         owner._ensure_provider_event_observer()
         owner._provider_events.apply_pending_stt_provider_events()
         owner._provider_events.observe_stt_turn_audio()
@@ -160,7 +155,6 @@ class FullDuplexSpeechLifecycle:
 
     def handle_stopped(self) -> None:
         owner = self._owner
-        turn_completion = owner._ensure_turn_completion()
         owner._user_speaking_start_time = None
         if owner._timeline is not None:
             owner._timeline.mark_latest("speech_stopped_at")
@@ -170,12 +164,6 @@ class FullDuplexSpeechLifecycle:
         # with a transcript; this is what causes there to be one.
         if owner._close_stt_utterance() and owner._timeline is not None:
             owner._timeline.mark_latest("stt_flush_sent_at")
-        voiceprint_task = owner._voiceprint_turns.finish_turn()
-        turn_completion.remember_completed_voiceprint_turn(
-            voiceprint_task,
-            timeline=owner._timeline,
-        )
-
         eot_model = owner._get_eot_model()
         eot_model.update_vad(False)
         owner._ensure_user_turn_coordinator()
@@ -187,17 +175,11 @@ class FullDuplexSpeechLifecycle:
             )
         )
 
-        confirmed_cancel_stopped = self._finish_confirmed_cancel_on_stop()
-        defer_post_speech_evidence = (
-            False if confirmed_cancel_stopped else self._resolve_interruption_candidate_on_stop()
-        )
+        if not self._finish_confirmed_cancel_on_stop():
+            self._resolve_interruption_candidate_on_stop()
         owner._callbacks.on_user_ended_speaking()
         # Clear only the skip flag; leave the residual-commit-suppress window.
         owner._set_interrupt_cancel_suppression(False, reason="speech_stopped")
-        if defer_post_speech_evidence or confirmed_cancel_stopped:
-            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
-        elif owner._user_turns.selected_text or owner._latest_asr_text:
-            turn_completion.remember_candidate_voiceprint_task(voiceprint_task)
         transcript = owner._user_turns.selected_text or owner._latest_asr_text
         if transcript:
             _record_contract_transition(

@@ -182,7 +182,7 @@ async def test_http_adapter_reuses_contract_and_does_not_send_identity_or_retry(
     assert len(requests) == 1
     request = requests[0]
     import json
-    assert json.loads(request.content) == {"pcm_base64": base64.b64encode(b"\x01\x00" * 24000).decode()}
+    assert json.loads(request.content) == {"pcm_base64": base64.b64encode(b"\x01\x00" * 24000).decode(), "purpose": "enrollment"}
     assert request.url.path == "/v1/voiceprints/extract"
     assert request.headers["authorization"] == "Bearer test-token"
 
@@ -235,11 +235,11 @@ async def test_real_completion_hook_does_not_wait_for_extraction_and_runs_once()
     completion = pipeline._ensure_turn_completion()
     message = ChatMessage(role="user", content=["完整句子"])
     try:
-        assert await asyncio.wait_for(completion.voiceprint_allows_completed_turn(
+        assert await asyncio.wait_for(completion.allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message), 1)
         await asyncio.wait_for(entered.wait(), 1)
         assert not release.is_set()
-        assert not await completion.voiceprint_allows_completed_turn(
+        assert not await completion.allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=message)
         release.set()
         await settle(observer)

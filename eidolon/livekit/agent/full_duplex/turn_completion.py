@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from ..observability import TurnTimeline
 from .framework_completed_turn import FullDuplexFrameworkCompletedTurnGate
 from .session_turn_boundary import FullDuplexSessionTurnBoundary
 from .state_machine import FullDuplexPhase
-from .turn_completion_policy import select_combined_voiceprint_result
-from .voiceprint_commit_state import (
-    CompletedVoiceprintTurnState,
-    FullDuplexVoiceprintCommitState,
-)
 
 if TYPE_CHECKING:
     from .pipeline import StreamingPipeline
@@ -30,7 +24,6 @@ class FullDuplexTurnCompletion:
 
     def __init__(self, pipeline: StreamingPipeline) -> None:
         self._pipeline = pipeline
-        self._voiceprint_state = FullDuplexVoiceprintCommitState(pipeline)
         self._session_turns = FullDuplexSessionTurnBoundary(pipeline)
         self._framework_completed_turn = FullDuplexFrameworkCompletedTurnGate(
             pipeline,
@@ -78,58 +71,12 @@ class FullDuplexTurnCompletion:
             side_effect="irreversible",
             timeline=timeline,
         )
-        self.cancel_completed_voiceprint_turn()
-        self.reset_candidate_voiceprint_tasks()
         # VAD without any transcript is not evidence of a user request or a
         # provider failure. Reject quietly: speaking here turns ambient noise
         # into assistant activity and perpetually renews the room idle window.
         pipeline._flush_turn_timeline(timeline, reason)
         return True
 
-    def reset_candidate_voiceprint_tasks(self) -> None:
-        self._voiceprint_state.reset_candidate_tasks()
-
-    def remember_candidate_voiceprint_task(self, task: asyncio.Task | None) -> None:
-        self._voiceprint_state.remember_candidate_task(task)
-
-    def candidate_voiceprint_gate_task(self) -> asyncio.Task | None:
-        tasks = self._voiceprint_state.pop_candidate_tasks()
-        if not tasks:
-            return None
-        if len(tasks) == 1:
-            return tasks[0]
-        return asyncio.create_task(self._combine_candidate_voiceprint_results(tasks))
-
-    async def _combine_candidate_voiceprint_results(
-        self,
-        tasks: list[asyncio.Task],
-    ) -> Any:
-        results = await asyncio.gather(*tasks)
-        return select_combined_voiceprint_result(results)
-
-    def remember_completed_voiceprint_turn(
-        self,
-        task: asyncio.Task | None,
-        *,
-        timeline: TurnTimeline | None,
-    ) -> None:
-        self._voiceprint_state.remember_completed_turn(task, timeline=timeline)
-
-    def remember_completed_voiceprint_result(self, result: Any) -> None:
-        self._voiceprint_state.remember_completed_result(result)
-
-    def completed_voiceprint_turn(
-        self,
-        *,
-        fallback_timeline: TurnTimeline | None,
-    ) -> CompletedVoiceprintTurnState:
-        return self._voiceprint_state.completed_turn(fallback_timeline=fallback_timeline)
-
-    def clear_completed_voiceprint_turn(self) -> None:
-        self._voiceprint_state.clear_completed_turn()
-
-    def cancel_completed_voiceprint_turn(self) -> None:
-        self._voiceprint_state.cancel_completed_turn()
 
     def notify_silent_output_failure_once(
         self,
@@ -142,7 +89,7 @@ class FullDuplexTurnCompletion:
             error_type=error_type,
         )
 
-    async def voiceprint_allows_completed_turn(
+    async def allows_completed_turn(
         self,
         *,
         turn_ctx: Any,
@@ -151,18 +98,4 @@ class FullDuplexTurnCompletion:
         return await self._framework_completed_turn.allows_completed_turn(
             turn_ctx=turn_ctx,
             new_message=new_message,
-        )
-
-    def _record_voiceprint_commit_gate(
-        self,
-        timeline: TurnTimeline | None,
-        *,
-        allowed: bool,
-        reason: str,
-    ) -> None:
-        if timeline is None:
-            return
-        timeline.set_attr(
-            "voiceprint_commit_gate",
-            {"allowed": allowed, "reason": reason},
         )

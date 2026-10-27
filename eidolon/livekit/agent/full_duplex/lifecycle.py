@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import json
-import os
-import time
-from dataclasses import asdict, replace
+from dataclasses import replace
 from typing import Any, TYPE_CHECKING
 
 from eidolon_sdk.biz.contracts import (
@@ -77,47 +74,7 @@ class FullDuplexSessionLifecycle:
             companion_id=context.companion_id if context else "",
             interaction_mode="full_duplex",
         )
-        self._configure_speaker_observation(context)
 
-    def _configure_speaker_observation(self, context: Any) -> None:
-        """Arm a finite experiment only after resolving the actual Companion."""
-        from eidolon_sdk.core.http import create_async_client
-        from ..session.speaker_extraction_client import SpeakerExtractionClient
-        from ..session.speaker_observation import SpeakerTurnObservation
-
-        pipeline = self._pipeline
-        cfg = getattr(pipeline, "_voiceprint_config", None)
-        if cfg is None or getattr(pipeline, "_speaker_observation", None) is not None:
-            return
-        remaining = cfg.observation_until - time.time()
-        if not (0 < remaining <= 86400 and context and context.owner_id
-                and cfg.observation_companion_id == context.companion_id):
-            return
-        factory = pipeline._factory
-        token = os.environ.get("EIDOLON_CHANNEL_PROVIDER_TOKEN", "").strip()
-        stt = getattr(getattr(factory, "stt", None), "stt", None)
-        if (not token or not factory.runtime_session_id or cfg.enabled
-                or getattr(factory, "voiceprint_service", None) is not None
-                or not hasattr(stt, "audio_evidence_capture")):
-            logger.warning("Speaker observation unavailable; normal conversation retained")
-            return
-        http = create_async_client(trust_env=False, timeout=8)
-        client = SpeakerExtractionClient(http,
-            os.environ.get("EIDOLON_CHANNEL_PROVIDER_URL", "http://127.0.0.1:8767"), token=token)
-
-        def record(result):
-            payload = {**asdict(result), "session_id": factory.runtime_session_id,
-                       "companion_id": context.companion_id, "mode": "observe_only"}
-            trace = getattr(pipeline, "_session_trace", None)
-            if trace is not None:
-                trace.event("speaker_observation", payload)
-            logger.info("speaker_observation %s", json.dumps(payload, ensure_ascii=False))
-
-        pipeline._speaker_observation_http = http
-        pipeline._speaker_observation = SpeakerTurnObservation(
-            extract=client.extract, record=record, lifetime_sec=remaining)
-        logger.info("Speaker observation armed companion=%s until=%.0f; admission remains off",
-                    context.companion_id, cfg.observation_until)
 
     async def _close_speaker_observation(self) -> None:
         observation = getattr(self._pipeline, "_speaker_observation", None)
@@ -181,7 +138,6 @@ class FullDuplexSessionLifecycle:
 
         logger.info("[StreamingPipeline] calling session.start()...")
         pipeline._ensure_room_data_bridge().install(room)
-        pipeline._voiceprint_turns.install(room)
 
         # Digital-human video avatar (per-session). When enabled, start the avatar
         # worker and route TTS audio to it via DataStreamAudioOutput instead of the
@@ -605,8 +561,6 @@ class FullDuplexSessionLifecycle:
         if hasattr(pipeline, "_interruption_effects"):
             pipeline._interruption_effects.cancel_soft_interrupt()
             pipeline._interruption_effects.cancel_stable_signal_timer()
-        pipeline._ensure_turn_completion().reset_candidate_voiceprint_tasks()
-        pipeline._ensure_turn_completion().cancel_completed_voiceprint_turn()
         if hasattr(pipeline, "_provider_events"):
             pipeline._provider_events.cancel_output_watchdog()
         pipeline._ducking.cancel_timeout()
@@ -618,8 +572,6 @@ class FullDuplexSessionLifecycle:
             except Exception:
                 logger.exception("[StreamingPipeline] error closing avatar worker")
             pipeline._avatar_worker = None
-        if hasattr(pipeline, "_voiceprint_turns"):
-            await pipeline._voiceprint_turns.aclose()
         await self._close_speaker_observation()
         evidence_input = getattr(pipeline, "_evidence_input", None)
         if evidence_input is not None:

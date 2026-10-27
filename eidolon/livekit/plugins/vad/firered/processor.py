@@ -28,6 +28,7 @@ import os
 import threading
 from functools import cached_property
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Optional
 
 import numpy as np
@@ -102,11 +103,15 @@ class SpeakerEmbExtractor:
 
         try:
             device_str = "cpu" if self._device == "cpu" else f"cuda:{self._device}"
-            self._classifier = EncoderClassifier.from_hparams(
-                source=str(ckpt_path),
-                savedir=str(ckpt_path),
-                run_opts={"device": device_str},
-            )
+            # SpeechBrain creates links/config files in savedir. Versioned assets
+            # remain read-only, and local checkpoint paths must not depend on cwd.
+            with TemporaryDirectory(prefix="eidolon-ecapa-load-") as savedir:
+                self._classifier = EncoderClassifier.from_hparams(
+                    source=str(ckpt_path),
+                    savedir=savedir,
+                    overrides={"pretrained_path": str(ckpt_path)},
+                    run_opts={"device": device_str},
+                )
             self._loaded = True
             logger.info("SpeakerEmbExtractor: loaded from %s", ckpt_path)
         except Exception as e:
@@ -159,9 +164,8 @@ class PvadProcessor:
     """Streaming pVAD processor backed by the FireRedChat pvad.onnx model.
 
     This class is NOT tied to the livekit.agents.vad interface — it is a standalone
-    inference engine that can be used by any caller. It is safe to share a single
-    instance across multiple concurrent audio streams as long as each stream
-    maintains its own set of state buffers.
+    inference engine that can be used by any caller. Use new_stream() for each
+    input: only inference resources are shared, never mutable stream state.
 
     The ONNX session is loaded lazily on first use to avoid blocking imports.
     """
@@ -188,6 +192,7 @@ class PvadProcessor:
         self._force_cpu = force_cpu
         self._session: Optional[ort.InferenceSession] = None
         self._spk_extractor: Optional[SpeakerEmbExtractor] = None
+        self._resource_owner: Optional[PvadProcessor] = None
 
         self.window_size_samples = WINDOW_SIZE_SAMPLES
         self.sample_rate = 16000
@@ -196,10 +201,21 @@ class PvadProcessor:
         self.mel_buffer: np.ndarray = np.zeros((1, 80, 15), dtype=np.float32)
         self.gru_buffer: np.ndarray = np.zeros((2, 1, 256), dtype=np.float32)
         self.spkemb: np.ndarray = np.zeros((1, 192), dtype=np.float32)
-        # Guards concurrent access to spkemb (the singleton processor is
-        # shared across all VAD streams; speaker updates from one stream
-        # could otherwise tear with reads in another stream's inference).
+        # A speaker update and inference may run on different threads of the
+        # same stream. Histories and conditions are never shared across streams.
         self._spkemb_lock = threading.Lock()
+
+    def new_stream(self) -> PvadProcessor:
+        """Share inference resources, never recurrent history or target identity.
+
+        A new input starts unconditioned even if another stream has adapted to
+        a speaker. Resetting/closing it cannot alter any other live stream.
+        """
+        child = PvadProcessor(model_dir=self._model_dir, force_cpu=self._force_cpu)
+        child._model_dir = self._model_dir
+        child._session = self.onnx_session
+        child._resource_owner = self._resource_owner or self
+        return child
 
     @staticmethod
     def _resolve_model_dir(model_dir: Optional[str | Path]) -> Optional[Path]:
@@ -242,6 +258,8 @@ class PvadProcessor:
     @cached_property
     def onnx_session(self) -> ort.InferenceSession:
         """Lazily create and cache the ONNX Runtime session."""
+        if self._session is not None:
+            return self._session
         if self._model_dir is None:
             raise RuntimeError("PvadProcessor model directory not resolved")
 
@@ -278,6 +296,8 @@ class PvadProcessor:
     @cached_property
     def spk_extractor(self) -> SpeakerEmbExtractor:
         """Lazily create and cache the SpeakerEmbExtractor."""
+        if self._resource_owner is not None:
+            return self._resource_owner.spk_extractor
         if self._model_dir is None:
             raise RuntimeError("PvadProcessor model directory not resolved")
 

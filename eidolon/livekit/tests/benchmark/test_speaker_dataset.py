@@ -1,5 +1,6 @@
 import json
 import wave
+from eidolon_sdk.biz.voiceprint import ExtractedSample
 
 import pytest
 
@@ -18,9 +19,11 @@ class Extractor:
     def __init__(self):
         self.calls = []
 
-    def extract_embedding(self, pcm, sample_rate):
-        self.calls.append((pcm, sample_rate))
-        return [1.0, 0.0]
+    def extract(self, pcm):
+        self.calls.append((pcm, 16000))
+        return ExtractedSample(model_id="test", weights_hash="a" * 64,
+                               preprocessing_version="reference-contiguous-pcm16-v1",
+                               vector=[1., 0.], speech_ms=2000)
 
 
 def manifest():
@@ -82,7 +85,7 @@ def test_path_cannot_escape_dataset_root(tmp_path):
 
 def test_model_errors_are_visible_without_private_exception_text(tmp_path):
     class Broken:
-        def extract_embedding(self, *args):
+        def extract(self, *args):
             raise RuntimeError("secret audio path or data")
 
     write_wav(tmp_path / "e.wav")

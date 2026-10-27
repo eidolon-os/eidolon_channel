@@ -395,17 +395,20 @@ class BailianFunASRSpeechStream(lk_stt.RecognizeStream):
                             data: dict[str, Any] = dict[Any, Any](**json.loads(raw))  # type: ignore[arg-type]
                         except Exception:
                             logger.warning(
-                                "[Bailian STT] recv_loop: ignoring non-dict JSON: %s",
-                                raw[:100],
+                                "[Bailian STT] recv_loop: ignoring malformed JSON",
                             )
                             continue
                         logger.info(
-                            "[Bailian STT] recv_loop: msg #%d event=%s data=%s",
+                            "[Bailian STT] recv_loop: msg #%d event=%s",
                             messages_received,
                             data.get("event", "unknown"),
-                            json.dumps(data)[:200],
                         )
                         await self._handle_message(data)
+                        # Task completion does not require the server to close
+                        # its WebSocket or send another message. Finish this
+                        # iterator now so callers can consume the final result.
+                        if self._finished:
+                            break
             except asyncio.CancelledError:
                 logger.info(
                     "[Bailian STT] recv_loop cancelled (messages=%d)",

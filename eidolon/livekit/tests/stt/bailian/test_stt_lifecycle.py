@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from livekit import rtc
+from livekit.agents import stt
 
 from eidolon.livekit.plugins.stt.bailian.connection_manager import (
     BailianConnectionError,
@@ -96,3 +98,63 @@ async def test_batch_recognize_closes_connection_when_send_fails(monkeypatch) ->
     [conn] = FakeConnection.instances
     assert conn.recv_cancelled is True
     assert conn.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_finishes_on_task_finished_while_websocket_stays_open(monkeypatch):
+    import eidolon.livekit.plugins.stt.bailian.speech_stream as stream_module
+
+    class OpenSocket:
+        def __init__(self):
+            self.messages = asyncio.Queue()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return await self.messages.get()
+
+    class Connection:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self._ws = OpenSocket()
+            self.closed = False
+            self.instances.append(self)
+
+        async def connect(self):
+            pass
+
+        async def send_audio(self, data):
+            pass
+
+        async def finish(self):
+            for event, payload in [
+                ('result-generated', {'output': {'sentence': {
+                    'sentence_id': 1, 'text': '测试完成', 'begin_time': 0,
+                    'end_time': 1000, 'sentence_end': True,
+                }}}),
+                ('task-finished', {'output': {}}),
+            ]:
+                self._ws.messages.put_nowait(json.dumps({
+                    'header': {'event': event, 'task_id': 'test-task'}, 'payload': payload,
+                }))
+            # No more messages and no server-side close after task completion.
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(stream_module, 'BailianConnectionManager', Connection)
+    plugin = BailianFunASRSTT(api_url='ws://example.invalid', api_key='test-key')
+    stream = plugin.stream()
+    try:
+        stream.push_frame(rtc.AudioFrame(bytes(32000), 16000, 1, 16000))
+        stream.end_input()
+        async with asyncio.timeout(1):
+            events = [event async for event in stream]
+        assert [event.alternatives[0].text for event in events
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT] == ['测试完成']
+        assert len(Connection.instances) == 1
+        assert Connection.instances[0].closed
+    finally:
+        await stream.aclose()

@@ -8,14 +8,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import time
 import wave
-
-
-PREPROCESSING = "reference-contiguous-pcm16-v1"
 
 
 def extract_dataset(manifest, *, root, extractor, model):
@@ -47,7 +43,7 @@ def extract_dataset(manifest, *, root, extractor, model):
             "peak": float(np.max(np.abs(values))),
             "dc_offset": float(np.mean(values)),
             "clipping_fraction": float(np.mean(np.abs(values) >= 0.995)),
-            "speech_ms": None,  # This reference path does not estimate speech duration.
+            "speech_ms": None,  # Filled only after the shared quality path succeeds.
         }
         started = time.perf_counter()
         if not np.any(values):
@@ -56,12 +52,17 @@ def extract_dataset(manifest, *, root, extractor, model):
             row.update(status="insufficient", reason="audio_too_short")
         else:
             try:
-                vector = [float(x) for x in extractor.extract_embedding(pcm, 16000)]
-                if not vector or not all(math.isfinite(x) for x in vector) or not math.hypot(*vector):
-                    raise ValueError("invalid embedding")
-                row.update(status="ok", vector=vector)
+                sample = extractor.extract(pcm)
+                row["quality"]["speech_ms"] = sample.speech_ms
+                row.update(status="ok", vector=sample.vector)
             except Exception as exc:
-                row.update(status="unavailable", reason=type(exc).__name__)
+                from eidolon.livekit.plugins.speaker_verification.reference_extractor import (
+                    InvalidSpeakerAudio,
+                )
+                if isinstance(exc, InvalidSpeakerAudio):
+                    row.update(status="insufficient", reason=str(exc))
+                else:
+                    row.update(status="unavailable", reason=type(exc).__name__)
         row["extraction_ms"] = round((time.perf_counter() - started) * 1000, 3)
         rows.append(row)
     return dict(schema_version=1, model=model, samples=rows, trials=manifest["trials"])
@@ -73,20 +74,13 @@ def main():
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    from eidolon.livekit.plugins.speaker_verification.providers.modelscope_campplus import (
-        ModelScopeCampPlusSpeakerVerificationProvider,
+    from eidolon.livekit.plugins.speaker_verification.reference_extractor import (
+        ReferenceSpeakerExtractor,
     )
-    metadata = json.loads((args.model_dir / "manifest.json").read_text())
-    for artifact in metadata["artifacts"]:
-        path = (args.model_dir / artifact["path"]).resolve()
-        if not path.is_relative_to(args.model_dir.resolve()):
-            raise ValueError("artifact path escapes model directory")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != artifact["sha256"]:
-            raise ValueError("model artifact checksum mismatch")
-    weights = args.model_dir / "campplus_cn_common.bin"
-    model = dict(id=metadata["model_id"], weights_sha256=hashlib.sha256(weights.read_bytes()).hexdigest(),
-                 preprocessing=PREPROCESSING)
-    engine = ModelScopeCampPlusSpeakerVerificationProvider(model_dir=args.model_dir)
+    engine = ReferenceSpeakerExtractor(args.model_dir)
+    engine.warm_up()
+    model_id, digest, preprocessing = engine.model_identity
+    model = dict(id=model_id, weights_sha256=digest, preprocessing=preprocessing)
     result = extract_dataset(json.loads(args.manifest.read_text()),
                              root=args.manifest.resolve().parent, extractor=engine, model=model)
     fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -16,7 +16,16 @@ class PlaybackStopError(RuntimeError):
         self.code = code
 
 
-async def stop_playback(room, device: str, session_id: str, policy_revision: int) -> bool:
+async def stop_playback(
+    room, device: str, session_id: str, policy_revision: int,
+    *, sdk_output_stopped: bool = False,
+) -> bool:
+    """Stop device buffering; False means unsupported, not acknowledged stop.
+
+    Same-room SDK output may already be interrupted and drained. Only in that
+    case can an explicit unsupported operation be tolerated. Separate output
+    coordination retains mandatory device acknowledgement.
+    """
     command = build_session_client_control_envelope(op='playback.stop', reason='scene_interrupt',
         payload={'session_id': session_id, 'policy_revision': policy_revision})
     command['id'] = 'stop:' + uuid4().hex
@@ -30,6 +39,8 @@ async def stop_playback(room, device: str, session_id: str, policy_revision: int
         status = command_status_from_ack(body['status'])
         if status == 'succeeded':
             done.set_result(None)
+        elif status == 'failed' and body.get('code') == 'UNSUPPORTED_OPERATION' and sdk_output_stopped:
+            done.set_result('UNSUPPORTED_OPERATION')
         elif status not in ('accepted', 'running'):
             logging.getLogger(__name__).warning(
                 "playback.stop rejected device=%s session=%s command=%s status=%s device_code=%s message=%s",
@@ -42,6 +53,10 @@ async def stop_playback(room, device: str, session_id: str, policy_revision: int
             await room.local_participant.publish_data(json.dumps(command).encode(),
                 reliable=True, topic=CONTROL_TOPIC, destination_identities=[device])
             error = await done
+            if error == 'UNSUPPORTED_OPERATION':
+                logging.getLogger(__name__).info(
+                    'playback.stop unsupported; SDK output already stopped session=%s', session_id)
+                return False
             if error:
                 raise PlaybackStopError(error)
             return True

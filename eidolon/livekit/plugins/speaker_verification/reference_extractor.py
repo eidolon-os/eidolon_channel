@@ -23,9 +23,8 @@ class InvalidSpeakerAudio(ValueError):
 class ReferenceSpeakerExtractor:
     def __init__(self, model_dir, *, provider=None, vad_factory=None):
         self.model_dir = Path(model_dir).resolve()
-        self._provider = provider or ModelScopeCampPlusSpeakerVerificationProvider(
-            model_dir=self.model_dir,
-        )
+        self._provider = provider
+        self._provider_override = provider
         self._vad_factory = vad_factory
         self._vad = None
         self._weights_hash = None
@@ -37,7 +36,17 @@ class ReferenceSpeakerExtractor:
         return (self._provider.model, self._weights_hash, 'reference-contiguous-pcm16-v1')
 
     def warm_up(self):
+        self._weights_hash = None
+        self._vad = None
         manifest = json.loads((self.model_dir / 'manifest.json').read_text())
+        alias = manifest.get('model_alias', 'campplus_zh_16k_common')
+        if alias == 'campplus_zh_16k_common':
+            required = {'campplus_cn_common.bin', 'config.yaml', 'configuration.json'}
+        elif alias == 'ecapa_voxceleb_16k':
+            required = {'embedding_model.ckpt', 'mean_var_norm_emb.ckpt', 'classifier.ckpt',
+                        'label_encoder.txt', 'hyperparams.yaml'}
+        else:
+            raise ValueError('unsupported_speaker_model')
         checked = {}
         for item in manifest['artifacts']:
             path = (self.model_dir / item['path']).resolve()
@@ -47,9 +56,27 @@ class ReferenceSpeakerExtractor:
             if path.stat().st_size != item['size_bytes'] or digest != item['sha256']:
                 raise ValueError('artifact_integrity')
             checked[item['path']] = digest
-        if not {'campplus_cn_common.bin', 'config.yaml', 'configuration.json'} <= checked.keys():
+        if not required <= checked.keys():
             raise ValueError('artifact_integrity')
-        self._weights_hash = checked['campplus_cn_common.bin']
+        # A successful prior warm-up may have cached an older set of weights.
+        # Rechecking files must never relabel that old object with a new digest.
+        self._provider = self._provider_override
+        if self._provider is None:
+            if alias == 'campplus_zh_16k_common':
+                self._provider = ModelScopeCampPlusSpeakerVerificationProvider(
+                    model_dir=self.model_dir,
+                )
+            else:
+                from .providers.speechbrain_ecapa import SpeechBrainEcapaProvider
+                self._provider = SpeechBrainEcapaProvider(model_dir=self.model_dir)
+        if self._provider.model != alias:
+            raise ValueError('speaker_model_mismatch')
+        # ECAPA identity covers all inference assets, including feature configuration.
+        weights_hash = (checked['campplus_cn_common.bin'] if alias == 'campplus_zh_16k_common'
+                        else hashlib.sha256(json.dumps(
+                            {name: checked[name] for name in sorted(required)},
+                            sort_keys=True, separators=(',', ':'),
+                        ).encode()).hexdigest())
         if self._vad_factory is None:
             from eidolon.livekit.plugins.vad.firered.processor import PvadProcessor
             self._vad = PvadProcessor(force_cpu=True)
@@ -64,6 +91,7 @@ class ReferenceSpeakerExtractor:
             raise ValueError('invalid_quality_output')
         self._vad.reset()
         self._provider.extract_embedding(probe.tobytes(), 16000)
+        self._weights_hash = weights_hash
 
     def extract(self, pcm: bytes) -> ExtractedSample:
         if self._vad is None or self._weights_hash is None:

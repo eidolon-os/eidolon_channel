@@ -39,7 +39,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Literal, Optional
 
 import numpy as np
-import numpy.typing as npt
 
 if TYPE_CHECKING:
     pass
@@ -82,8 +81,7 @@ class VAD(agents.vad.VAD):
                     print("user finished:", event.frames)
     """
 
-    # Shared processor — ONNX model is eagerly loaded on first VAD.load() call.
-    # All VADStream instances share the same ONNX model weights (read-only).
+    # Resource owner only. Each stream receives fresh recurrent/identity state.
     _processor: PvadProcessor | None = None
 
     @classmethod
@@ -185,7 +183,7 @@ class VAD(agents.vad.VAD):
 
     def stream(self) -> VADStream:
         """Create a new VADStream for processing audio data."""
-        stream = VADStream(vad=self, processor=self._processor, opts=self._opts)
+        stream = VADStream(vad=self, processor=self._processor.new_stream(), opts=self._opts)
         self._streams.add(stream)
         return stream
 
@@ -225,8 +223,8 @@ class VADStream(agents.vad.VADStream):
 
     Architecture: each stream has its own PvadProcessor state buffers
     (mel_buffer, gru_buffer, spkemb) but shares the ONNX session with all
-    other streams. The SpeakerEmbExtractor is also shared and updated
-    in-place when update_speaker() is called.
+    other streams. The embedding extractor is shared; update_speaker()
+    updates only this stream's conditioning vector.
     """
 
     def __init__(

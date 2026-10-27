@@ -15,6 +15,8 @@ from .scoring import embedding_identity, cosine
 
 def evaluate_enrollment(request: EnrollmentEvaluationRequest) -> EnrollmentEvaluation:
     samples = list(request.samples.values())
+    if any(s.speech_ms < 1500 for s in [*samples, request.trial]):
+        raise ValueError("insufficient_enrollment_speech")
 
     if any(embedding_identity(s) != embedding_identity(request.trial) for s in samples):
         raise ValueError("incompatible_embedding_versions")

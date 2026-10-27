@@ -242,7 +242,7 @@ def test_provision_revalidation_preserves_persisted_fingerprint(policy):
 
 
 @pytest.mark.parametrize("value", [None, {}, {"person_id":"p"},
-    {"person_id":"p", "identity_epoch":True}, {"person_id":"p", "identity_epoch":-1}])
+    {"person_id":"p", "person_revision":1, "identity_epoch":True}, {"person_id":"p", "person_revision":1, "identity_epoch":-1}])
 def test_personal_memory_open_rejects_invalid_selection(value):
     payload = session_payload(operation=OPEN_SESSION)
     payload["personal_memory"] = value
@@ -252,7 +252,7 @@ def test_personal_memory_open_rejects_invalid_selection(value):
 
 def test_personal_memory_is_only_an_authenticated_open_selection():
     payload = session_payload(operation=OPEN_SESSION)
-    payload["personal_memory"] = {"person_id":"p", "identity_epoch":0}
+    payload["personal_memory"] = {"person_id":"p", "person_revision":1, "identity_epoch":0}
     parsed = SessionRequest.parse(encoded(payload), expected=OPEN_SESSION)
     assert parsed.personal_memory.person_id == "p"
     payload["operation"] = CLOSE_SESSION

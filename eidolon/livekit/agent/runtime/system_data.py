@@ -38,8 +38,10 @@ class SystemDataRuntimeResolver:
         snapshot = await self._client.get_companion_runtime(companion_id)
         return snapshot.runtime_identity(device_id=device_id)
 
-    async def resolve_person_memory(self, *, owner_id: str, person_id: str) -> str:
+    async def resolve_person_memory(self, *, owner_id: str, person_id: str, person_revision: int) -> str:
         snapshot = await self._client.get_person_memory_realm(owner_id=owner_id, person_id=person_id)
+        if snapshot.person_revision != person_revision:
+            raise ValueError("person revision changed; start a new session")
         return snapshot.realm_id
 
     async def get_companion_face(self, companion_id: str) -> bytes | None:
@@ -72,9 +74,9 @@ class DeferredSystemDataRuntimeResolver:
         resolver = await self._get()
         return await resolver.resolve_companion(companion_id, device_id=device_id)
 
-    async def resolve_person_memory(self, *, owner_id: str, person_id: str) -> str:
+    async def resolve_person_memory(self, *, owner_id: str, person_id: str, person_revision: int) -> str:
         resolver = await self._get()
-        return await resolver.resolve_person_memory(owner_id=owner_id, person_id=person_id)
+        return await resolver.resolve_person_memory(owner_id=owner_id, person_id=person_id, person_revision=person_revision)
 
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         resolver = await self._get()

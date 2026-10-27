@@ -111,7 +111,8 @@ def test_runtime_token_rejects_missing_dispatch_session(
         )
 
 
-def test_personal_factory_uses_dispatch_history_id(monkeypatch):
+@pytest.mark.parametrize("identified", [True, False])
+def test_personal_factory_uses_dispatch_history_id(monkeypatch, identified):
     from dataclasses import replace
     from unittest.mock import AsyncMock
     from eidolon.interaction_context import PersonalMemorySelection
@@ -131,7 +132,7 @@ def test_personal_factory_uses_dispatch_history_id(monkeypatch):
         return object()
     monkeypatch.setattr("eidolon.livekit.agent.eidolon_agent_rpc.EidolonAgentGrpcLlm", llm)
     cfg = replace(EffectiveAgentConfig(), providers=ProvidersConfig(brain_provider="eidolon_agent"))
-    selected = PersonalMemorySelection(person_id="p", identity_epoch=0)
+    selected = PersonalMemorySelection(person_id="p", person_revision=1, identity_epoch=0) if identified else None
     for session_id in ("session-a", "session-b"):
         SharedStageFactory.from_config(cfg, runtime_session_id=session_id,
             livekit_room=SimpleNamespace(name="same-device-room"), personal_memory=selected)

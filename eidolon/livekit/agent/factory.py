@@ -307,64 +307,12 @@ class SharedStageFactory:
             from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
 
             prefix = cfg.remote_agent_rpc.conversation_id_prefix
-            session_key = livekit_session_key.strip() or "unknown"
-
-            # D1: conversation_id is either lazy (when we hold a room ref —
-            # production path) or static (tests / fallback when called without
-            # a room). The resolver runs once per chat() call; cost is a dict
-            # lookup + a format string, no caching needed.
-            if personal_memory is not None:
-                if not runtime_session_id.strip():
-                    raise ValueError("personal memory requires a dispatch session ID")
-                conversation_id = f"{prefix}:session:{runtime_session_id}"
-                log_cid_descr = conversation_id
-            elif livekit_room is not None:
-                room_ref = livekit_room  # closed over by the resolver
-                room_name_static = getattr(room_ref, "name", None) or session_key
-
-                def _resolve_cid() -> str:
-                    try:
-                        from eidolon.livekit.agent.runtime import resolve_device_id
-
-                        from eidolon.livekit.agent.runtime.resolver import _participant_identity_and_metadata
-
-                        participant = _participant_identity_and_metadata(room_ref)
-                        room_name = getattr(room_ref, "name", None) or room_name_static
-                        if participant:
-                            ident, metadata = participant
-                            # A room name is transport identity, regardless of
-                            # whether a deployment reuses it or rotates it.
-                            # Keying brain history on the room would either split
-                            # context on every JOIN or accidentally conflate it
-                            # with the interaction lifecycle. For
-                            # a device, key on the stable participant identity
-                            # alone (its LiveKit identity is constant across
-                            # reconnects and single-format) so every JOIN from the
-                            # same device continues one conversation. device_id is
-                            # used only to DETECT a device — don't fold it into the
-                            # key too: it can arrive in a different MAC spelling
-                            # than `ident` (colon vs hyphen) and would split one
-                            # device's history across two keys. Web/other
-                            # participants carry no device_id and keep the
-                            # room-scoped id.
-                            is_device = resolve_device_id(metadata) is not None
-                            if is_device:
-                                return f"{prefix}:{ident}"
-                            return f"{prefix}:{ident}:{room_name}"
-                        # Defensive — no participant yet (very early in job
-                        # lifecycle, before user speech). Brain will still
-                        # accept; once the participant connects, subsequent
-                        # turns get the identity-bearing id.
-                        return f"{prefix}:{room_name}"
-                    except Exception:
-                        # Never let a resolver bug block a turn.
-                        return f"{prefix}:{room_name_static}"
-
-                conversation_id: "str | Any" = _resolve_cid
-                log_cid_descr = f"<lazy:participant + {room_name_static}>"
-            else:
-                conversation_id = f"{prefix}:{session_key}"
-                log_cid_descr = conversation_id
+            # All interactive histories belong to a dispatch session. Unknown
+            # speakers must never inherit the device's old default history.
+            if not runtime_session_id.strip():
+                raise ValueError("interactive conversation requires a dispatch session ID")
+            conversation_id = f"{prefix}:session:{runtime_session_id}"
+            log_cid_descr = conversation_id
 
             tls = TlsConfig(
                 mode=cfg.remote_agent_rpc.tls_mode,

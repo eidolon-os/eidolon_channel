@@ -54,7 +54,7 @@ def request(session="private-a", *, person="a", closing=False):
     payload = session_payload(operation=CLOSE_SESSION if closing else OPEN_SESSION)
     payload["conversation_id"] = session
     if not closing and person is not None:
-        payload["personal_memory"] = {"person_id": person, "identity_epoch": 0}
+        payload["personal_memory"] = {"person_id": person, "person_revision":1, "identity_epoch": 0}
     return SessionRequest.parse(
         encoded(payload), expected=CLOSE_SESSION if closing else OPEN_SESSION
     )
@@ -184,7 +184,7 @@ async def test_http_personal_lifecycle_errors_and_retry(tmp_path):
     headers = {"Authorization": "Bearer " + "s" * 32}
     opening = session_payload(operation=OPEN_SESSION)
     opening.update(
-        conversation_id="http-private", personal_memory={"person_id": "p", "identity_epoch": 0}
+        conversation_id="http-private", personal_memory={"person_id": "p", "person_revision":1, "identity_epoch": 0}
     )
     closing = session_payload(operation=CLOSE_SESSION)
     closing["conversation_id"] = "http-private"
@@ -197,7 +197,7 @@ async def test_http_personal_lifecycle_errors_and_retry(tmp_path):
             "/v1/device-channels/provision", json=provision_payload(), headers=headers
         )
         assert provisioned.status == 200
-        bad = {**opening, "personal_memory": {"person_id": "p", "identity_epoch": True}}
+        bad = {**opening, "personal_memory": {"person_id": "p", "person_revision":1, "identity_epoch": True}}
         assert (
             await client.post("/v1/device-channels/sessions/open", json=bad, headers=headers)
         ).status == 422
@@ -289,7 +289,7 @@ async def test_credential_refresh_preserves_same_personal_claim(tmp_path):
     record = service._personal_sessions.claim(
         refreshed,
         "private-a",
-        personal_memory={"person_id": "a", "identity_epoch": 0},
+        personal_memory={"person_id": "a", "person_revision":1, "identity_epoch": 0},
         target_companion_id=None,
         session_intent="user_initiated",
     )

@@ -129,6 +129,7 @@ class PersonalMemorySelection(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     person_id: str = Field(min_length=1, max_length=64)
+    person_revision: int = Field(ge=1)
     identity_epoch: int = Field(ge=0)
 
     @field_validator("person_id")

@@ -56,7 +56,8 @@ class ChannelRuntimeServices:
             )
             if self.personal_memory is not None:
                 realm = await self.runtime.resolve_person_memory(
-                    owner_id=context.owner_id, person_id=self.personal_memory.person_id)
+                    owner_id=context.owner_id, person_id=self.personal_memory.person_id,
+                    person_revision=self.personal_memory.person_revision)
                 if not isinstance(realm, str) or not realm.strip():
                     raise DeviceTokenResolverError("personal memory realm is unavailable")
                 context = context.model_copy(update={"memory_realm_id": realm})

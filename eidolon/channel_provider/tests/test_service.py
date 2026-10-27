@@ -804,7 +804,7 @@ async def test_personal_selection_flows_only_from_control_request(tmp_path):
     backend.end_prepared_session = AsyncMock()
     backend.resume_prepared_channels = AsyncMock()
     payload = session_payload(operation=OPEN_SESSION)
-    payload["personal_memory"] = {"person_id": "p", "identity_epoch": 0}
+    payload["personal_memory"] = {"person_id": "p", "person_revision":1, "identity_epoch": 0}
     await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION))
     assert backend.open_session.await_args.kwargs["personal_memory"] == payload["personal_memory"]
     assert backend.open_session.await_args.kwargs["device_requested"] is False

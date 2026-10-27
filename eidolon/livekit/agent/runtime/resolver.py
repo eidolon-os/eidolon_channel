@@ -232,6 +232,7 @@ def make_device_token_resolver(
     jwt_secret: str,
     jwt_algorithm: str = "HS256",
     ttl_seconds: int = 24 * 3600,
+    personal_memory=None,
 ) -> DeviceTokenResolver:
     """Build the zero-arg async callable the gRPC LLM invokes lazily.
 
@@ -244,6 +245,11 @@ def make_device_token_resolver(
     changes require a new LiveKit session so conversation history and memory
     stay inside one companion boundary.
     """
+    if personal_memory is not None:
+        from eidolon.interaction_context import PersonalMemorySelection
+        personal_memory = PersonalMemorySelection.model_validate(personal_memory)
+        if context_resolver is None:
+            raise ValueError("personal memory requires an authoritative session context resolver")
     bound_session_id = session_id.strip()
     if not bound_session_id:
         raise ValueError("make_device_token_resolver: session_id is required")
@@ -291,6 +297,7 @@ def make_device_token_resolver(
                 companion_id=ctx.companion_id,
                 session_id=bound_session_id,
                 ttl_seconds=ttl_seconds,
+                **(personal_memory.model_dump() if personal_memory is not None else {}),
             )
         except ValueError as exc:
             raise DeviceTokenResolverError(str(exc)) from exc
@@ -307,6 +314,9 @@ def make_device_token_resolver(
         return token
 
     async def _resolve() -> str:
+        # Session context is cached locally; this also refuses use after close.
+        if personal_memory is not None:
+            await context_resolver(room)
         token = cache.get("token")
         if token is not None:
             return token

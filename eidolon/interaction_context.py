@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity
 from eidolon_sdk.device_foundation.v1 import DeviceRef
 
@@ -120,3 +122,18 @@ async def resolve_interaction_context(
     ):
         raise InteractionContextError("Companion runtime owner/target/device mismatch")
     return CompanionInteractionContext(context, connection.mount_revision if connection else None)
+
+
+class PersonalMemorySelection(BaseModel):
+    """Explicit Owner-authorized selection on a Provider dispatch, never speaker evidence."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    person_id: str = Field(min_length=1, max_length=64)
+    identity_epoch: int = Field(ge=0)
+
+    @field_validator("person_id")
+    @classmethod
+    def canonical_person(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("person_id must be canonical")
+        return value

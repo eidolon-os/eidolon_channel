@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from eidolon_sdk.biz.persona import ResolvedRuntimeIdentity
+from eidolon.interaction_context import PersonalMemorySelection
 
 from .resolver import (
     DeviceTokenResolverError,
@@ -23,7 +24,10 @@ class ChannelRuntimeServices:
     cannot leak across rooms.
     """
 
-    def __init__(self, *, runtime: Any, mounts: Any, target_companion_id: str | None = None) -> None:
+    def __init__(self, *, runtime: Any, mounts: Any, target_companion_id: str | None = None,
+                 personal_memory: PersonalMemorySelection | None = None) -> None:
+        self.personal_memory = (PersonalMemorySelection.model_validate(personal_memory)
+                                if personal_memory is not None else None)
         self.target_companion_id = target_companion_id
         self.runtime = runtime
         self.mounts = mounts
@@ -32,6 +36,8 @@ class ChannelRuntimeServices:
         self._closed = False
 
     async def resolve_room(self, room: Any) -> ResolvedRuntimeIdentity:
+        if self._closed:
+            raise DeviceTokenResolverError("runtime session is closed")
         if self._context is not None:
             return self._context
         async with self._lock:
@@ -41,14 +47,23 @@ class ChannelRuntimeServices:
             if peek is None:
                 raise DeviceTokenResolverError("remote runtime participant missing")
             identity, metadata = peek
-            self._context = await _resolve_context(
+            context = await _resolve_context(
                 runtime=self.runtime,
                 mounts=self.mounts,
                 identity=identity,
                 metadata=metadata,
                 target_companion_id=self.target_companion_id,
             )
-            return self._context
+            if self.personal_memory is not None:
+                realm = await self.runtime.resolve_person_memory(
+                    owner_id=context.owner_id, person_id=self.personal_memory.person_id)
+                if not isinstance(realm, str) or not realm.strip():
+                    raise DeviceTokenResolverError("personal memory realm is unavailable")
+                context = context.model_copy(update={"memory_realm_id": realm})
+            if self._closed:
+                raise DeviceTokenResolverError("runtime session is closed")
+            self._context = context
+            return context
 
     async def aclose(self) -> None:
         if self._closed:

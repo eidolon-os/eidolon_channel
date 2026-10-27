@@ -298,6 +298,20 @@ def _resolve_session_target(ctx) -> str | None:
     return validate_companion_target(metadata["target_companion_id"])
 
 
+def _resolve_personal_memory(ctx):
+    from eidolon.interaction_context import PersonalMemorySelection
+    from eidolon_sdk.biz.contracts import SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
+
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    if "personal_memory" not in metadata:
+        return None
+    if (metadata.get("team_dispatch") is not None
+            or metadata.get("presentation_endpoint") is not None
+            or metadata.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION) != SESSION_APPLICATION_COMPANION):
+        raise ValueError("personal memory requires an ordinary Companion session")
+    return PersonalMemorySelection.model_validate(metadata["personal_memory"])
+
+
 def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
     # Only the Provider's authenticated job dispatch supplies the policy.
     # Participant metadata, speech and LLM output cannot grant output rights.
@@ -373,6 +387,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     )
 
     metadata = json.loads(ctx.job.metadata or '{}')
+    personal_memory = _resolve_personal_memory(ctx)
     if 'team_dispatch' in metadata:
         from eidolon.livekit.common.team_dispatch import TeamDispatch
         from eidolon.livekit.agent.coordination.entrypoint import run_team_dispatch
@@ -651,6 +666,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
         runtime_session_id=runtime_session_id,
         output_plan=stage_output_plan,
         target_companion_id=target_companion_id,
+        personal_memory=personal_memory,
     )
 
     # Video avatar is enabled for this session only if globally available AND the

@@ -476,6 +476,9 @@ class FullDuplexSessionLifecycle:
     def _start_proactive_consumer(self) -> None:
         """Spawn the background proactive-report stream (best-effort)."""
         pipeline = self._pipeline
+        services = getattr(pipeline._factory, "runtime_services", None)
+        if getattr(services, "personal_memory", None) is not None:
+            return  # Companion-wide reports are not scoped to this Person.
         if pipeline._proactive_task is not None and not pipeline._proactive_task.done():
             return
         pipeline._proactive_task = asyncio.create_task(

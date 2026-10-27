@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from dataclasses import replace
 
 import pytest
@@ -1963,3 +1964,76 @@ async def test_presence_distinguishes_missing_room_from_failed_observation(code,
         raise TwirpError(code=code, msg="unavailable", status=404 if code == "not_found" else 503)
     client.room.list_participants = failed
     assert await adapter.device_is_on_channel(grant.handle) is expected
+
+
+async def test_personal_selection_is_immutable_and_never_a_device_credential():
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    selected = {"person_id":"a", "identity_epoch":0}
+    await adapter.open_session(grant.handle, "person-a-session",
+        session_intent=SESSION_INTENT_USER_INITIATED, personal_memory=selected)
+    metadata = json.loads(client.agent_dispatch.created[-1][2])
+    assert metadata["personal_memory"] == selected
+    assert "personal_memory" not in grant.handle
+    for changed in (None, {"person_id":"b", "identity_epoch":0},
+                    {"person_id":"a", "identity_epoch":1}):
+        with pytest.raises(InvalidTransition):
+            await adapter.open_session(grant.handle, "person-a-session",
+                session_intent=SESSION_INTENT_USER_INITIATED, personal_memory=changed)
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(grant.handle, "person-b-session",
+            session_intent=SESSION_INTENT_USER_INITIATED,
+            personal_memory={"person_id":"b", "identity_epoch":0})
+    assert client.agent_dispatch.deleted == []
+    adapter.end_prepared_session = AsyncMock()
+    await adapter.close_session(grant.handle, "person-a-session")
+    adapter.end_prepared_session.assert_not_awaited()
+    await adapter.open_session(grant.handle, "person-b-session",
+        session_intent=SESSION_INTENT_USER_INITIATED,
+        personal_memory={"person_id":"b", "identity_epoch":0})
+    assert json.loads(client.agent_dispatch.created[-1][2])["personal_memory"]["person_id"] == "b"
+
+
+async def test_device_cannot_request_personal_memory():
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    with pytest.raises(InvalidTransition):
+        await adapter.open_session(grant.handle, "device-session",
+            session_intent=SESSION_INTENT_USER_INITIATED, device_requested=True,
+            personal_memory={"person_id":"a", "identity_epoch":0})
+    assert client.agent_dispatch.created == []
+
+
+async def test_finished_private_dispatch_still_requires_acknowledged_close():
+    from eidolon.channel_provider.contracts import InvalidTransition
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.agent_dispatch.dispatches[grant.handle["room"]] = [FakeDispatch(
+        "private-old", "eidolon", jobs=[FakeJob(JobStatus.JS_FAILED)],
+        metadata=json.dumps({"conversation_id":"private-old",
+                             "personal_memory":{"person_id":"a", "identity_epoch":0}}))]
+    with pytest.raises(InvalidTransition, match="acknowledged cleanup"):
+        await adapter.open_session(grant.handle, "new",
+            session_intent=SESSION_INTENT_USER_INITIATED)
+    assert client.agent_dispatch.deleted == []
+
+
+async def test_unserved_private_worker_requests_authoritative_cleanup(monkeypatch):
+    monkeypatch.setattr(adapter_mod, "_SERVING_CONFIRM_DELAY", 0.0)
+    monkeypatch.setattr(adapter_mod, "_UNSERVED_RECLAIM_AFTER", 0.0)
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    client.room.participants = [_device_participant()]
+    reasons = []
+    remove = adapter.observe_session_end(grant.handle, "private-start", lambda reason: reasons.append(reason))
+    try:
+        await adapter.open_session(grant.handle, "private-start",
+            session_intent=SESSION_INTENT_USER_INITIATED,
+            personal_memory={"person_id":"a", "identity_epoch":0})
+        await _settle(adapter)
+        assert reasons == ["PERSONAL_WORKER_UNSERVED"]
+        assert client.agent_dispatch.deleted == []
+    finally:
+        remove()

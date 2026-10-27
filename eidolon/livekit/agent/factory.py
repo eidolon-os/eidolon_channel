@@ -132,6 +132,7 @@ def _build_device_token_source(
         runtime=runtime_services.runtime,
         mounts=runtime_services.mounts,
         context_resolver=runtime_services.resolve_room,
+        personal_memory=getattr(runtime_services, "personal_memory", None),
         session_id=session_id,
         jwt_secret=secret,
         jwt_algorithm=rt.jwt_algorithm,
@@ -146,7 +147,7 @@ def _build_runtime_resolve_client(rt: "Any") -> "Any":
     return build_system_data_runtime(rt)
 
 
-def _build_runtime_services(rt: "Any", *, target_companion_id: str | None = None) -> "Any":
+def _build_runtime_services(rt: "Any", *, target_companion_id: str | None = None, personal_memory=None) -> "Any":
     """Compose the two authoritative runtime consumers for one room."""
     from eidolon.livekit.agent.runtime.kernel_bodies import KernelBodyHttpClient
     from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
@@ -156,7 +157,7 @@ def _build_runtime_services(rt: "Any", *, target_companion_id: str | None = None
         base_url=str(getattr(rt, "kernel_api_url", "") or "").strip(),
         timeout_sec=float(getattr(rt, "http_timeout_sec", 5.0)),
     )
-    return ChannelRuntimeServices(runtime=runtime, mounts=mounts, target_companion_id=target_companion_id)
+    return ChannelRuntimeServices(runtime=runtime, mounts=mounts, target_companion_id=target_companion_id, personal_memory=personal_memory)
 
 
 class SharedStageFactory:
@@ -239,6 +240,7 @@ class SharedStageFactory:
         runtime_session_id: str = "",
         output_plan: SessionOutputPlan | None = None,
         target_companion_id: str | None = None,
+        personal_memory=None,
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -285,7 +287,7 @@ class SharedStageFactory:
         """
         if output_plan is not None and (output_plan.outputs.expression or output_plan.outputs.motion or not output_plan.outputs.can_respond) and cfg.providers.brain_provider != "eidolon_agent":
             raise ValueError("EXPRESSION_REQUIRES_EIDOLON_AGENT")
-        if target_companion_id is not None and cfg.providers.brain_provider != "eidolon_agent":
+        if (target_companion_id is not None or personal_memory is not None) and cfg.providers.brain_provider != "eidolon_agent":
             raise ValueError("SESSION_TARGET_REQUIRES_EIDOLON_AGENT")
         runtime_services = None
         needs_runtime_context = (
@@ -296,6 +298,7 @@ class SharedStageFactory:
             runtime_services = _build_runtime_services(
                 cfg.runtime_authority,
                 target_companion_id=target_companion_id,
+                personal_memory=personal_memory,
             )
         if cfg.providers.brain_provider == "eidolon_agent":
             from eidolon.livekit.agent.eidolon_agent_rpc import (
@@ -310,7 +313,12 @@ class SharedStageFactory:
             # production path) or static (tests / fallback when called without
             # a room). The resolver runs once per chat() call; cost is a dict
             # lookup + a format string, no caching needed.
-            if livekit_room is not None:
+            if personal_memory is not None:
+                if not runtime_session_id.strip():
+                    raise ValueError("personal memory requires a dispatch session ID")
+                conversation_id = f"{prefix}:session:{runtime_session_id}"
+                log_cid_descr = conversation_id
+            elif livekit_room is not None:
                 room_ref = livekit_room  # closed over by the resolver
                 room_name_static = getattr(room_ref, "name", None) or session_key
 

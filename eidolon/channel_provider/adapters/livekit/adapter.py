@@ -957,6 +957,12 @@ class LiveKitChannelAdapter:
             dispatch = await _unserved()
             if dispatch is None:
                 return
+            if self._dispatch_metadata(dispatch).get("personal_memory") is not None:
+                logger.warning("private dispatch=%s requires acknowledged cleanup; not reclaiming", dispatch.id)
+                observer = self._session_end_observers.get(room)
+                if observer is not None and observer[0] == conversation_id:
+                    observer[1]("PERSONAL_WORKER_UNSERVED")
+                return
             try:
                 await self._client().agent_dispatch.delete_dispatch(
                     dispatch_id=dispatch.id, room_name=room
@@ -1246,6 +1252,7 @@ class LiveKitChannelAdapter:
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, presentation_endpoint: dict | None = None,
         team_dispatch: dict | None = None, device_requested: bool = False,
+        personal_memory: dict | None = None,
     ) -> None:
         """Place the standing order, and say on it why this session exists.
 
@@ -1270,6 +1277,13 @@ class LiveKitChannelAdapter:
         if target_companion_id is not None:
             from eidolon.interaction_context import validate_companion_target
             validate_companion_target(target_companion_id)
+        if personal_memory is not None:
+            from eidolon.interaction_context import PersonalMemorySelection
+            personal_memory = PersonalMemorySelection.model_validate(personal_memory).model_dump()
+            if (device_requested or team_dispatch is not None or presentation_endpoint is not None
+                    or handle.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION)
+                    != SESSION_APPLICATION_COMPANION):
+                raise InvalidTransition("personal memory requires an authenticated ordinary Companion session")
         application = handle.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION)
         if application not in VALID_SESSION_APPLICATIONS:
             raise InvalidTransition("unsupported voice session application")
@@ -1309,12 +1323,17 @@ class LiveKitChannelAdapter:
             for dispatch in dispatches:
                 metadata = self._dispatch_metadata(dispatch)
                 same_conversation = metadata.get(SESSION_CONVERSATION_ID_FIELD) == conversation_id
+                if same_conversation and metadata.get("personal_memory") != personal_memory:
+                    raise InvalidTransition("changing personal memory requires a new conversation_id")
                 if same_conversation and metadata.get("target_companion_id") != target_companion_id:
                     raise InvalidTransition("changing a Companion target requires a new conversation_id")
+                if not same_conversation and metadata.get("personal_memory") is not None:
+                    raise InvalidTransition("close the personal session with acknowledged cleanup first")
                 if _is_spent(dispatch):
                     continue
                 if not same_conversation:
-                    if device_requested and metadata.get(_REQUESTED_BY_FIELD) == _REQUESTED_BY_DEVICE:
+                    if (device_requested and metadata.get(_REQUESTED_BY_FIELD) == _REQUESTED_BY_DEVICE
+                            and metadata.get("personal_memory") is None):
                         superseded.append(dispatch)
                         continue
                     raise InvalidTransition("device is serving another conversation; close it explicitly first")
@@ -1374,6 +1393,7 @@ class LiveKitChannelAdapter:
                             **({"smarthome_owner": handle["smarthome_owner"],
                                 "smarthome_device": handle["device"]}
                                if application == SESSION_APPLICATION_HOME_COMMAND else {}),
+                            **({"personal_memory": personal_memory} if personal_memory is not None else {}),
                             **({"target_companion_id": target_companion_id}
                                if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
@@ -1609,8 +1629,9 @@ class LiveKitChannelAdapter:
 
         Deleting the dispatch — rather than deleting the room — is what keeps
         the device's channel intact across the end of a conversation. LiveKit
-        removes the agent from the room promptly, so the room is clean for the
-        next session even while the old job is still draining.
+        removes the agent from the room promptly. This is only producer
+        withdrawal: Provider's personal lifecycle separately waits for the
+        Body cleanup receipt before releasing its durable reservation.
 
         Matches on the agent name rather than a remembered dispatch id: LiveKit
         also keeps dispatch records of its own, and a session that a previous

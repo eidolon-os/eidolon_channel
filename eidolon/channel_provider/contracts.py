@@ -21,6 +21,7 @@ from eidolon_sdk.biz.contracts import (
     normalize_conversation_id,
 )
 from pydantic import ValidationError
+from eidolon.interaction_context import PersonalMemorySelection
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
 MAX_REQUEST_BYTES = 256 * 1024
@@ -370,6 +371,11 @@ class SessionRequest:
     the device's standing credential. The worker checks the runtime authority
     before signing its narrow token. A target change requires a new session ID.
 
+    `personal_memory` is an explicit Person/epoch selection on this same
+    authenticated open path. Provider persists its lifecycle independently of
+    the dispatch; another session cannot start until Body cleanup is confirmed.
+    Device-originated requests have no such selection field.
+
     An unknown value is rejected, not degraded. `normalize_session_intent`
     exists for untrusted wire values that must fail safe; here the caller is
     authenticated, and silently turning a misspelt presence wake into an
@@ -382,6 +388,7 @@ class SessionRequest:
     conversation_id: str | None
     session_intent: str = SESSION_INTENT_USER_INITIATED
     target_companion_id: str | None = None
+    personal_memory: PersonalMemorySelection | None = None
 
     @classmethod
     def parse(cls, raw: bytes, *, expected: str) -> SessionRequest:
@@ -397,7 +404,7 @@ class SessionRequest:
             # A close may leave the conversation unnamed and mean "whatever this
             # device is being served": the one party that knew the id may be a
             # device run that no longer exists.
-            optional={SESSION_INTENT_FIELD, "target_companion_id"} if opening
+            optional={SESSION_INTENT_FIELD, "target_companion_id", "personal_memory"} if opening
             else {"conversation_id"},
         )
         if root["operation"] != expected:
@@ -422,12 +429,19 @@ class SessionRequest:
                 target = validate_companion_target(root["target_companion_id"])
             except InteractionContextError as exc:
                 raise ContractError(str(exc)) from exc
+        personal = None
+        if "personal_memory" in root:
+            try:
+                personal = PersonalMemorySelection.model_validate(root["personal_memory"])
+            except ValidationError as exc:
+                raise ContractError("personal_memory is invalid") from exc
         return cls(
             operation=expected,
             device_ref=device_ref,
             conversation_id=conversation_id,
             session_intent=session_intent,
             target_companion_id=target,
+            personal_memory=personal,
         )
 
     @property

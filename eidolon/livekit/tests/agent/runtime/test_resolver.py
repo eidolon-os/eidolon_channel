@@ -133,7 +133,7 @@ async def test_resolver_dispatches_to_device_for_kind_device():
     assert "memory_realm_id" not in payload
     assert "genome_id" not in payload
     assert payload["device_id"] == _ESP32_007
-    assert payload["runtime_token_version"] == 5
+    assert payload["runtime_token_version"] == 6
     assert "actor_kind" not in payload
     assert "actor_id" not in payload
     assert identity.owner_id == "owner-1"

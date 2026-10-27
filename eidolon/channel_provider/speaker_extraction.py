@@ -28,10 +28,11 @@ def register_speaker_extraction(app, *, engine, authorized, problem):
     warm_task = None
 
 
-    def error(code, status, retryable=False):
+    def error(code, status, retryable=False, quality=None):
         category = "auth" if status == 401 else ("unavailable" if retryable else "invalid")
         return problem(
-            code=code, category=category, retryable=retryable, status=status, detail=code.lower()
+            code=code, category=category, retryable=retryable, status=status, detail=code.lower(),
+            audio_quality=quality.model_dump(exclude_none=True) if quality is not None else None,
         )
 
     async def readiness(request):
@@ -57,10 +58,15 @@ def register_speaker_extraction(app, *, engine, authorized, problem):
             # ValidationError strings can include the entire supplied recording.
             return error("INVALID_AUDIO_REQUEST", 422)
         try:
-            result = await engine.extract(pcm)
+            result = await engine.extract(pcm, min_speech_ms=body.min_speech_ms)
             return web.json_response(result.model_dump(mode="json"))
         except InvalidSpeakerAudio as exc:
-            return error(str(exc).upper(), 422)
+            logging.getLogger(__name__).info(
+                "Speaker extraction rejected reason=%s purpose=%s quality=%s",
+                str(exc), body.purpose,
+                exc.quality.model_dump(exclude_none=True) if exc.quality is not None else None,
+            )
+            return error(str(exc).upper(), 422, quality=exc.quality)
         except InferenceBusy:
             return error("INFERENCE_BUSY", 429, True)
         except InferenceTimeout:

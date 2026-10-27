@@ -55,8 +55,8 @@ async def test_observation_outcome_preserves_session_input_commit_and_playout(mo
     extraction_started, release_extraction = asyncio.Event(), asyncio.Event()
     original_extract = engine.extract
 
-    async def extract(pcm):
-        sample = await original_extract(pcm)
+    async def extract(pcm, min_speech_ms=1500):
+        sample = await original_extract(pcm, min_speech_ms=min_speech_ms)
         extraction_started.set()
         if outcome == "provider_busy":
             raise InferenceBusy()

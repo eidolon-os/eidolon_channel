@@ -17,7 +17,7 @@ class Extractor:
     def warm_up(self):
         self.warms += 1
 
-    def extract(self, pcm):
+    def extract(self, pcm, min_speech_ms=1500):
         self.entered.set()
         assert self.release.wait(2)
         return pcm

@@ -414,7 +414,8 @@ def _problem(error: DomainError) -> web.Response:
 
 
 def _problem_body(
-    *, code: str, category: str, retryable: bool, status: int, detail: str
+    *, code: str, category: str, retryable: bool, status: int, detail: str,
+    audio_quality: dict | None = None,
 ) -> web.Response:
     value = {
         "type": f"https://problems.eidolon.live/channel/{code.lower()}",
@@ -426,6 +427,8 @@ def _problem_body(
         "retryable": retryable,
         "authority": "eidolon-channel-provider",
     }
+    if audio_quality is not None:
+        value["audio_quality"] = audio_quality
     return web.Response(
         text=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
         status=status,

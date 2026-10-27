@@ -34,7 +34,7 @@ class Engine:
     async def close(self):
         self.state = "closed"
 
-    async def extract(self, pcm):
+    async def extract(self, pcm, min_speech_ms=1500):
         self.calls.append(pcm)
         return ExtractedSample(
             model_id="fixture",
@@ -160,3 +160,36 @@ async def test_retired_policy_endpoint_is_absent():
         assert (await client.post("/v1/voiceprints/approve-policy", json={})).status == 404
     finally:
         await client.close()
+
+
+async def test_quality_rejection_roundtrips_from_provider_to_conversation(tmp_path):
+    import httpx
+    from eidolon.livekit.tests.agent.test_reference_speaker_extractor import engine as make_extractor
+    from eidolon.livekit.plugins.speaker_verification.inference import SpeakerInferenceEngine
+    from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognitionClient, SpeakerRecognizer
+    from eidolon.livekit.tests.agent.test_conversation_speaker import client as candidates, POLICY
+    from eidolon.livekit.common.audio_evidence import AudioEvidence
+    extractor, model = make_extractor(tmp_path)
+    engine = SpeakerInferenceEngine(extractor)
+    await engine.start()
+    server = TestServer(create_app(service=Service(), bearer_token='test', speaker_engine=engine))
+    await server.start_server()
+    try:
+        async with httpx.AsyncClient(trust_env=False) as http:
+            port = SpeakerRecognitionClient(http, data_url='http://unused', data_token='test',
+                provider_url=str(server.make_url('')).rstrip('/'), provider_token='test')
+            port.candidates = candidates().candidates
+            pcm = b'\x01\x00' * 8000 + b'\x00\x00' * 24000
+            evidence = AudioEvidence(source='mic', generation=1, candidate='c', sample_rate=16000,
+                start=0, end=len(pcm)//2, complete=True, reason=None, pcm=pcm)
+            value = await SpeakerRecognizer(port, POLICY.model_copy(update={'min_speech_ms':600})).recognize(
+                evidence, owner_id='o', session_id='s', turn_id='t')
+            assert value.status == 'uncertain' and value.person_id is None
+            assert value.reason == 'speech_too_short'
+            assert value.audio_quality.speech_ms == 500
+            assert value.audio_quality.audio_ms == 2000
+            assert value.audio_quality.required_speech_ms == 600
+            # Warmup only: no rejected audio reaches the embedding model.
+            assert len(model.received) == 1
+    finally:
+        await server.close()

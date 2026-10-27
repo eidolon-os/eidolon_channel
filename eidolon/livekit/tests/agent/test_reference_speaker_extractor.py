@@ -86,3 +86,28 @@ def test_lazy_quality_model_failure_prevents_ready(tmp_path):
     extractor._vad_factory = BrokenVad
     with pytest.raises(RuntimeError, match='quality_model_missing'):
         extractor.warm_up()
+
+
+def test_short_conversation_probe_uses_policy_without_weakening_enrollment(tmp_path):
+    extractor, provider = engine(tmp_path)
+    extractor.warm_up()
+    pcm = b'\x01\x00' * 16000
+    with pytest.raises(InvalidSpeakerAudio, match='audio_too_short'):
+        extractor.extract(pcm)
+    sample = extractor.extract(pcm, min_speech_ms=600)
+    assert sample.speech_ms == 1000
+    assert provider.received[-1] == pcm
+    assert sample.quality['required_speech_ms'] == 600
+
+
+def test_padding_does_not_turn_insufficient_speech_into_identity_evidence(tmp_path):
+    extractor, provider = engine(tmp_path)
+    extractor.warm_up()
+    pcm = b'\x01\x00' * 8000 + b'\x00\x00' * 24000
+    count = len(provider.received)
+    with pytest.raises(InvalidSpeakerAudio, match='speech_too_short') as caught:
+        extractor.extract(pcm, min_speech_ms=600)
+    assert caught.value.quality.audio_ms == 2000
+    assert caught.value.quality.speech_ms == 500
+    assert caught.value.quality.required_speech_ms == 600
+    assert len(provider.received) == count

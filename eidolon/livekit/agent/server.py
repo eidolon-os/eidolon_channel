@@ -669,6 +669,15 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
         personal_memory=personal_memory,
     )
 
+    speaker_observer = speaker_http = None
+    if factory.runtime_services is not None:
+        from .session.conversation_speaker import create_conversation_speaker
+        try:
+            speaker_observer, speaker_http = await create_conversation_speaker(
+                factory, cfg, room)
+        except Exception:
+            logger.warning("Conversation speaker initialization unavailable")
+
     # Video avatar is enabled for this session only if globally available AND the
     # client declared it (full-duplex path for M1). Default off → audio-only.
     avatar_enabled = bool(cfg.avatar.enabled and avatar_requested)
@@ -702,6 +711,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     else:
         pipeline = StreamingPipeline(
             factory,
+            speaker_observation=speaker_observer,
             instructions=cfg.behavior.instructions,
             allow_interruptions=allow_interruptions,
             welcome_message=(None if presentation_endpoint is not None else cfg.behavior.welcome_message),
@@ -743,6 +753,9 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             # (real-device confirmed).
             on_session_closed=lambda: _end_serving("session closed"),
         )
+
+    pipeline._speaker_observation = speaker_observer
+    pipeline._speaker_observation_http = speaker_http
 
     async def _end_serving_cb(reason: str) -> None:
         # The job is shutting down (user left, or an error tore the session down).

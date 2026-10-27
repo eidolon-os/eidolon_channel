@@ -229,15 +229,16 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         observation = getattr(pipeline, "_speaker_observation", None)
         if observation is not None:
-            # The recovery owner must be the only RoomIO microphone reader.
-            # Reject unsupported providers before starting any media.
+            # Use one microphone reader only when STT exposes sample mapping.
+            # Unsupported providers retain their normal audio path; each turn
+            # receives an unavailable observation instead of failing the call.
             stt = getattr(getattr(pipeline._factory, "stt", None), "stt", None)
-            if not hasattr(stt, "audio_evidence_capture") or not pipeline._factory.runtime_session_id:
-                raise ValueError("speaker observation requires mapped STT and runtime session scope")
             audio_options = room_session_options["options"].get_audio_input_options()
-            if audio_options is None:
-                raise ValueError("speaker observation requires microphone input")
-            room_session_options["options"] = replace(room_session_options["options"], audio_input=False)
+            if (hasattr(stt, "audio_evidence_capture") and pipeline._factory.runtime_session_id
+                    and audio_options is not None):
+                room_session_options["options"] = replace(room_session_options["options"], audio_input=False)
+            else:
+                observation = None
 
         async def warmup() -> None:
             await pipeline._warmup_stages()

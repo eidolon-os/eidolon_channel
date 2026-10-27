@@ -177,6 +177,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._tls = tls
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
+        self._pending_speaker_observation: str | None = None
         self._pending_turn_decision_metadata: dict[str, Any] | None = None
         self._pending_trace_id: str | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
@@ -250,6 +251,13 @@ class EidolonAgentGrpcLlm(llm.LLM):
             await self._session.close_channel_tools()
         self.clear_channel_tools()
 
+    def set_speaker_observation(self, token: str) -> None:
+        self._pending_speaker_observation = token
+
+    def pop_speaker_observation(self) -> str | None:
+        token, self._pending_speaker_observation = self._pending_speaker_observation, None
+        return token
+
     def set_turn_decision_metadata(self, metadata: dict[str, Any]) -> None:
         """Attach a committed Channel decision to the next StartTurn."""
         self._pending_turn_decision_metadata = dict(metadata)
@@ -262,6 +270,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
     def set_turn_trace_id(self, trace_id: str) -> None:
         """Use the Channel turn id as the next brain turn's cross-hop trace."""
 
+        self._pending_speaker_observation = None
         self._pending_trace_id = trace_id.strip() or None
 
     def pop_turn_trace_id(self) -> str | None:
@@ -304,6 +313,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            speaker_observation=self.pop_speaker_observation(),
             turn_decision_metadata=self.pop_turn_decision_metadata(),
             trace_id=self.pop_turn_trace_id(),
             user_text=user_text,
@@ -385,7 +395,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         trace_id: str | None,
         user_text: str,
         conversation_id: str,
+        speaker_observation: str | None = None,
     ) -> None:
+        self._speaker_observation = speaker_observation
         self._turn_decision_metadata = turn_decision_metadata
         self._trace_id = trace_id
         self._user_text = user_text
@@ -433,6 +445,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     conversation_id=conversation_id,
                     metadata=(
                         {
+                            **({"speaker_observation_token": self._speaker_observation} if self._speaker_observation else {}),
                             **(
                                 {"turn_decision": self._turn_decision_metadata}
                                 if self._turn_decision_metadata

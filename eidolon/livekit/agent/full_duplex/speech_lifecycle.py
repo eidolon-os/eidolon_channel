@@ -175,6 +175,11 @@ class FullDuplexSpeechLifecycle:
             )
         )
 
+        observer = getattr(owner, "_speaker_observation", None)
+        begin = getattr(observer, "begin", None)
+        if callable(begin) and owner._timeline is not None:
+            begin(owner._user_turns, owner._timeline.turn_id)
+
         if not self._finish_confirmed_cancel_on_stop():
             self._resolve_interruption_candidate_on_stop()
         owner._callbacks.on_user_ended_speaking()

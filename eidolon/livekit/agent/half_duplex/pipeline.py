@@ -360,6 +360,12 @@ class HalfDuplexPttPipeline(BasePipeline):
         if presentation_io is not None:
             await presentation_io.aclose()
             self._presentation_io = None
+        observer = getattr(self, "_speaker_observation", None)
+        if observer is not None:
+            await observer.aclose()
+        http = getattr(self, "_speaker_observation_http", None)
+        if http is not None:
+            await http.aclose()
         await self._shutdown_stages()
         close_factory = getattr(self._factory, "aclose", None)
         if callable(close_factory):
@@ -588,6 +594,20 @@ class HalfDuplexPttPipeline(BasePipeline):
             self._publish_ptt_turn_status(PTT_OUTCOME_FINALIZING, "released")
             # Seal the segment in the release callback, before another packet or
             # audio frame can run. Keep the generation across the ASR await.
+            observer = getattr(self, "_speaker_observation", None)
+            if observer is not None:
+                def sealed(segment, generation):
+                    from eidolon.livekit.common.audio_evidence import AudioEvidence
+                    if self._timeline is None:
+                        return
+                    evidence = AudioEvidence(source="ptt", generation=generation,
+                        candidate=self._timeline.turn_id, sample_rate=segment.sample_rate,
+                        start=0, end=len(segment.audio)//2,
+                        complete=not segment.truncated and segment.num_channels == 1,
+                        reason="truncated" if segment.truncated else None,
+                        pcm=segment.audio, session_id=self._factory.runtime_session_id)
+                    observer.begin_evidence(evidence, self._timeline.turn_id)
+                self._ptt_controller.on_segment_sealed = sealed
             transcription = self._ptt_controller.release()
             if self._destination is not None:
                 try:
@@ -668,6 +688,13 @@ class HalfDuplexPttPipeline(BasePipeline):
             decision=committed_turn_decision,
             timeline=self._timeline,
         )
+        observer = getattr(self, "_speaker_observation", None)
+        if observer is not None and self._timeline is not None:
+            timeline = self._timeline
+            value = await observer.result(timeline.turn_id)
+            if generation != self._ptt_controller.generation or self._timeline is not timeline:
+                return
+            observer.deliver(value, text=result.transcript, llm=self._factory.llm.llm, timeline=timeline)
         self._record_ptt_result(result)
         try:
             session.generate_reply(user_input=result.transcript, input_modality="audio")
@@ -737,6 +764,9 @@ class HalfDuplexPttPipeline(BasePipeline):
     def _start_ptt_timeline(self, result: PttSegmentTurnResult) -> None:
         timeline = TurnTimeline(generate_turn_id())
         self._timeline = timeline
+        setter = getattr(self._factory.llm.llm, "set_turn_trace_id", None)
+        if callable(setter):
+            setter(timeline.turn_id)
         self.session_mark("first_turn")
         now = time.monotonic()
         room = getattr(self, "_room", None)

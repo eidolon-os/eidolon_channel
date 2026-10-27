@@ -318,3 +318,15 @@ async def test_final_transcript_starts_recognition_before_framework_completion()
         assert result.status=='identified'
         assert pipeline._user_turns.active.state=='open'
     finally:await observer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_long_asr_tail_expires_identity_without_aborting_delivery():
+    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(client(),POLICY),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    value=await observer.recognizer.recognize(evidence(),owner_id='o',session_id='s',turn_id='t')
+    expired=value.model_copy(update={'issued_at':time.time()-20,'expires_at':time.time()-10})
+    llm=MagicMock();observer.deliver(expired,text='hello',llm=llm,timeline=None)
+    accepted=verify_observation(llm.set_speaker_observation.call_args.args[0],secret='x'*32,owner_id='o',session_id='s',turn_id='t',text='hello')
+    assert accepted.person_id is None and accepted.reason=='observation_expired'
+    assert observer.publish.call_args.args[0].status=='unavailable'
+    await observer.aclose()

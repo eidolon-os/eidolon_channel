@@ -140,6 +140,10 @@ class ConversationSpeaker:
         return task.result()
 
     def deliver(self, value, *, text, llm, timeline):
+        # A long ASR tail may outlive an otherwise completed recognition task.
+        # Expiry clears the identity; it must never abort the spoken request.
+        if value.expires_at <= time.time():
+            value = self.fallback(value.turn_id, "observation_expired")
         setter = getattr(llm, "set_speaker_observation", None)
         if callable(setter):
             setter(sign_observation(value, secret=self.secret, text=text))

@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from eidolon_sdk.biz.candidate_evidence import CANDIDATE_MIN_SPEECH_MS
 from eidolon_sdk.biz.speaker_identity import (
+    MAX_RECOGNITION_PERSONS,
     SpeakerCandidates,
     SpeakerEvidenceSource,
     SpeakerIdentityObservation,
@@ -39,6 +40,16 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
         if result.owner_id != owner_id:
             raise ValueError("candidate owner mismatch")
         return result
+
+    async def discover_candidate(self, request):
+        from eidolon_sdk.biz.person import PersonView
+        response = await self._request("POST", "/api/companion-authority/v1/owners/"
+            + quote(request.observation.owner_id, safe="") + "/voiceprints/candidate-discovery",
+            json=request.model_dump(mode="json"), timeout=1)
+        person = PersonView.model_validate(response.json())
+        if person.owner_id != request.observation.owner_id:
+            raise ValueError("discovery owner mismatch")
+        return person
 
     async def record_candidate_evidence(self, request):
         await self._request("POST", "/api/companion-authority/v1/owners/"
@@ -98,7 +109,7 @@ class SpeakerRecognizer:
         self._busy = True
         try:
             snapshot = await self.client.candidates(owner_id)
-            if not snapshot.persons:
+            if not snapshot.persons and snapshot.discovery_policy is None:
                 return outcome("uncertain", "no_enrolled_voices")
             probe = await self.client.extract(evidence.pcm, min_speech_ms=self.policy.min_speech_ms)
             base["audio_quality"] = SpeakerAudioQuality(
@@ -138,7 +149,7 @@ class SpeakerRecognizer:
             if current.revision != snapshot.revision:
                 return outcome("uncertain", "candidates_changed")
             per_person.sort(key=lambda row: row[0], reverse=True)
-            similarity, person, best = per_person[0]
+            similarity = per_person[0][0] if per_person else None
             version = dict(
                 model_id=probe.model_id,
                 weights_hash=probe.weights_hash,
@@ -148,10 +159,19 @@ class SpeakerRecognizer:
                 confidence=self.policy.confidence,
                 cosine_similarity=similarity,
             )
+            if not per_person:
+                if probe.speech_ms < self.policy.min_unknown_speech_ms:
+                    return outcome("uncertain", "short_speech_inconclusive", **version)
+                unknown = outcome("unknown", "no_enrolled_voices", **version)
+                await self._discover(snapshot, probe, unknown, evidence)
+                return unknown
+            similarity, person, best = per_person[0]
             if similarity < self.policy.threshold:
                 if probe.speech_ms < self.policy.min_unknown_speech_ms:
                     return outcome("uncertain", "short_speech_inconclusive", **version)
-                return outcome("unknown", "no_match", **version)
+                unknown = outcome("unknown", "no_match", **version)
+                await self._discover(snapshot, probe, unknown, evidence)
+                return unknown
             if (
                 len(per_person) > 1
                 and similarity - per_person[1][0] < self.policy.min_person_margin
@@ -194,3 +214,23 @@ class SpeakerRecognizer:
             return outcome("unavailable", "invalid_dependency_result")
         finally:
             self._busy = False
+
+    async def _discover(self, snapshot, probe, observation, evidence):
+        from eidolon_sdk.biz.candidate_evidence import CandidateDiscovery
+        policy = snapshot.discovery_policy
+        if (policy is None or policy.recognition != self.policy
+                or len(snapshot.persons) >= MAX_RECOGNITION_PERSONS):
+            return
+        if (probe.speech_ms < self.policy.min_unknown_speech_ms
+                or (observation.cosine_similarity is not None
+                    and observation.cosine_similarity > policy.max_existing_similarity)):
+            return
+        try:
+            request = CandidateDiscovery(policy_version=policy.version,
+                snapshot_revision=snapshot.revision,
+                audio_sha256=hashlib.sha256(evidence.pcm).hexdigest(), observation=observation, sample=probe)
+            await self.client.discover_candidate(request)
+        except (ServiceUpstreamError, ValueError, OSError):
+            # Missing single-speaker quality, conflict, timeout or full pool
+            # cannot turn an unknown observation into an identified speaker.
+            return

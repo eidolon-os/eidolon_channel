@@ -464,3 +464,36 @@ async def test_full_shared_pool_extracts_once_and_matches_the_last_person():
     assert result.person_id == f'p{MAX_RECOGNITION_PERSONS - 1}'
     assert port.extract.await_count == 1 and port.candidates.await_count == 2
     assert port.compare.await_count == MAX_RECOGNITION_PERSONS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('people,overlap,score,expected', [(0, 0, .1, True), (1, 0, .1, True),
+    (0, None, .1, False), (0, 1, .1, False), (1, 0, .35, False), (1, 0, .9, False), (25, 0, .1, False)])
+async def test_discovery_uses_same_extraction_and_never_changes_current_unknown(people, overlap, score, expected):
+    from eidolon_sdk.biz.speaker_identity import CandidateDiscoveryPolicy
+    port = client(people=people, score=score)
+    port.discover_candidate = AsyncMock()
+    port.candidates.return_value.discovery_policy = CandidateDiscoveryPolicy(
+        version='discovery', recognition=POLICY, max_existing_similarity=.2)
+    quality = {} if overlap is None else {'overlap_detected': overlap}
+    port.extract.return_value = SAMPLE.model_copy(update={'quality': quality})
+    result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert port.extract.await_count == 1
+    assert port.discover_candidate.await_count == int(expected)
+    if expected:
+        assert result.status == 'unknown' and result.person_id is None
+        request = port.discover_candidate.call_args.args[0]
+        assert request.observation == result and request.sample == port.extract.return_value
+
+
+@pytest.mark.asyncio
+async def test_discovery_policy_mismatch_never_posts_a_proposal():
+    from eidolon_sdk.biz.speaker_identity import CandidateDiscoveryPolicy
+    port = client(people=0)
+    port.discover_candidate = AsyncMock()
+    port.candidates.return_value.discovery_policy = CandidateDiscoveryPolicy(
+        version='discovery', recognition=POLICY.model_copy(update={'version': 'other'}), max_existing_similarity=.2)
+    port.extract.return_value = SAMPLE.model_copy(update={'quality': {'overlap_detected': 0}})
+    result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'unknown'
+    port.discover_candidate.assert_not_awaited()

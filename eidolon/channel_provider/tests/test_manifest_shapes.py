@@ -3,10 +3,9 @@
 This module exists because the Manifest is the only document in the system whose
 *content* this Provider reads — `media[].kind/direction` becomes the channel's
 media capability and the device's LiveKit publish grants, and the
-`interaction_mode` property becomes the serving spec's turn-taking. Everything
-upstream of here moves the Manifest by digest and never looks inside it: Hub
-Admission checks only that the digest matches the bytes, the Kernel carries a
-`manifest_revision` string, and the phone shows a `manifest_ref`.
+`interaction_mode` property becomes the serving spec's turn-taking. Hub Admission validates the SDK vocabulary and digest; Hub output-policy
+negotiation also reads capability properties. This Provider owns the transport
+and serving interpretation, while Kernel carries a `manifest_revision` string.
 
 So this file is where a shape either becomes a working channel or does not, and
 the cases below name the shapes that have to keep working and the two that fail
@@ -410,3 +409,17 @@ def test_data_only_deployment_cannot_carry_a_speaking_device() -> None:
 
     with pytest.raises(NoAdapterAvailable):
         registry.select(spec)
+
+
+@pytest.mark.parametrize("name", ["recognition.voiceprint", "recognition.face"])
+def test_recognition_declaration_does_not_grant_media_or_change_serving(name):
+    for base in (BOX3_MANIFEST, {
+        "schema_version": 1, "title": "Offline recognizer", "properties": [],
+        "actions": [], "events": [], "media": [],
+    }):
+        manifest = deepcopy(base)
+        manifest["properties"].append({
+            "name": name, "observable": False, "writable": False,
+            "schema": {"type": "boolean", "const": True},
+        })
+        assert _spec(manifest) == _spec(base)

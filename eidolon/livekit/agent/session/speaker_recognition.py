@@ -156,6 +156,8 @@ class SpeakerRecognizer:
                 **version,
                 person_id=person.person_id,
                 person_revision=person.person_revision,
+                maturity=person.maturity,
+                is_named=person.is_named,
                 profile_id=best.profile_id,
                 profile_revision=best.revision,
                 display_name=person.profile.preferred_name or person.display_name,

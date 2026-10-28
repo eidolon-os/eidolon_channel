@@ -414,3 +414,21 @@ async def test_replaced_evidence_cannot_publish_old_late_result():
         assert (await observer.result("new")).reason == "audio_evidence_unavailable"
     finally:
         await observer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_candidate_lifecycle_survives_signed_turn_without_becoming_a_grant():
+    from eidolon_sdk.biz.speaker_attestation import sign_observation
+    port = client()
+    person = port.candidates.return_value.persons[0]
+    person.maturity = 'candidate'
+    person.is_named = False
+    result = await SpeakerRecognizer(port, POLICY).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'identified' and result.subject_role == 'speaker'
+    assert result.modalities == ['voice'] and result.maturity == 'candidate'
+    token = sign_observation(result, secret='x' * 32, text='hello')
+    verified = verify_observation(token, secret='x' * 32, owner_id='o', session_id='s',
+                                  turn_id='t', text='hello')
+    assert verified.maturity == 'candidate' and verified.is_named is False
+    assert 'memory_enabled' not in verified.model_dump()

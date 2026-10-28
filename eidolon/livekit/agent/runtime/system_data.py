@@ -44,6 +44,15 @@ class SystemDataRuntimeResolver:
             raise ValueError("person revision changed; start a new session")
         return snapshot.realm_id
 
+    async def resolve_provisional_memory(self, *, owner_id: str, person_id: str,
+                                         person_revision: int, session_id: str) -> str:
+        snapshot = await self._client.get_person_provisional_memory_access(
+            owner_id=owner_id, person_id=person_id, person_revision=person_revision,
+            session_id=session_id)
+        if not snapshot.policy.save_allowed:
+            raise ValueError("provisional memory save is not permitted")
+        return snapshot.realm_id
+
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         return await self._client.get_companion_face(companion_id)
 
@@ -77,6 +86,13 @@ class DeferredSystemDataRuntimeResolver:
     async def resolve_person_memory(self, *, owner_id: str, person_id: str, person_revision: int) -> str:
         resolver = await self._get()
         return await resolver.resolve_person_memory(owner_id=owner_id, person_id=person_id, person_revision=person_revision)
+
+    async def resolve_provisional_memory(self, *, owner_id: str, person_id: str,
+                                         person_revision: int, session_id: str) -> str:
+        resolver = await self._get()
+        return await resolver.resolve_provisional_memory(
+            owner_id=owner_id, person_id=person_id, person_revision=person_revision,
+            session_id=session_id)
 
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         resolver = await self._get()

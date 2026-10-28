@@ -19,6 +19,7 @@ class AutomaticMemorySession:
         self._notices = set()
         self._lock = asyncio.Lock()
         self._person = None
+        self._memory_mode = "personal"
         self._epoch = 0
         self._blocked = getattr(services, "personal_memory", None) is not None
         self._closed = False
@@ -56,12 +57,12 @@ class AutomaticMemorySession:
                     context = await self.services.resolve_room(self.room)
                     if context.owner_id != observation.owner_id:
                         return None
-                    realm = await self.services.runtime.resolve_person_memory(
-                        owner_id=context.owner_id, person_id=observation.person_id,
-                        person_revision=observation.person_revision)
+                    mode = "provisional" if observation.maturity == "candidate" else "personal"
+                    realm = await self._resolve_memory(context, (
+                        observation.person_id, observation.person_revision), mode)
                     if not realm or observation.expires_at <= time.time():
                         return None
-                    return (observation.person_id, observation.person_revision)
+                    return ((observation.person_id, observation.person_revision), mode)
             except Exception:
                 return None
 
@@ -75,6 +76,7 @@ class AutomaticMemorySession:
             context = await self.services.resolve_room(self.room)
             self._context = context
             person = None
+            mode = "personal"
             observation = None
             if observation_token and trace_id:
                 try:
@@ -85,14 +87,17 @@ class AutomaticMemorySession:
                     if (observation.status == "identified"
                             and observation == self._admission_observation
                             and task is not None and task.done() and not task.cancelled()):
-                        person = task.result()
+                        admission = task.result()
+                        if admission is not None:
+                            person, mode = admission
                 except Exception:
                     # Unbound/disabled/missing/stale/failed recognition all keep
                     # conversation available without any default-Realm access.
                     person = None
-            if self._blocked or person != self._person or time.time() >= self._renew_at:
-                await self._bind_turn(context, person)
-            await self._publish_state("active" if person else "disabled")
+            if (self._blocked or person != self._person or mode != self._memory_mode
+                    or time.time() >= self._renew_at):
+                await self._bind_turn(context, person, mode)
+            await self._publish_state("active" if person and mode == "personal" else "disabled")
             self._prepared = (trace_id, text)
             if self._watcher is None:
                 self._watcher = asyncio.create_task(self._watch(), name="automatic-memory-authority")
@@ -103,7 +108,7 @@ class AutomaticMemorySession:
             raise RuntimeError("turn has no current memory admission")
         self._prepared = None
 
-    async def _bind_turn(self, context, person):
+    async def _bind_turn(self, context, person, mode="personal"):
         self._blocked = True
         self._prepared = None
         # Replace the authenticated RPC at the committed turn boundary. Normal
@@ -111,16 +116,17 @@ class AutomaticMemorySession:
         # playback, public history, or the interrupted-conversation ledger.
         await self.llm.close_runtime()
         self._epoch += 1
-        self._install(context, person)
+        self._install(context, person, mode)
         self._person = person
+        self._memory_mode = mode
         self._blocked = False
 
-    def _install(self, context, person):
+    def _install(self, context, person, mode):
         session_id = self._session_id
         token, exp = sign_runtime_token(secret=self.secret, owner_id=context.owner_id,
             companion_id=context.companion_id, device_id=context.device_id,
             session_id=session_id, source_session_id=self.source_session_id,
-            ttl_seconds=self.ttl_seconds,
+            ttl_seconds=self.ttl_seconds, memory_mode=mode,
             **({"person_id": person[0], "person_revision": person[1], "identity_epoch": self._epoch}
                if person else {}))
         self.llm.install_runtime(token, f"room-session:{session_id}")
@@ -145,6 +151,14 @@ class AutomaticMemorySession:
         self._notices.add(task)
         task.add_done_callback(self._notices.discard)
 
+    async def _resolve_memory(self, context, person, mode):
+        if mode == "provisional":
+            return await self.services.runtime.resolve_provisional_memory(
+                owner_id=context.owner_id, person_id=person[0], person_revision=person[1],
+                session_id=self.source_session_id)
+        return await self.services.runtime.resolve_person_memory(
+            owner_id=context.owner_id, person_id=person[0], person_revision=person[1])
+
     async def _watch(self):
         while True:
             await asyncio.sleep(1.0)
@@ -157,18 +171,18 @@ class AutomaticMemorySession:
             if self._closed or (self._person is None and not self._blocked):
                 return
             context, person, epoch = self._context, self._person, self._epoch
+            mode = self._memory_mode
             blocked = self._blocked
         try:
             if blocked:
                 raise RuntimeError("cleanup pending")
             async with asyncio.timeout(2.0):
-                await self.services.runtime.resolve_person_memory(
-                    owner_id=context.owner_id,
-                    person_id=person[0], person_revision=person[1])
+                await self._resolve_memory(context, person, mode)
         except Exception:
             async with self._lock:
                 if (self._closed or self._context is not context
-                        or self._person != person or self._epoch != epoch):
+                        or self._person != person or self._epoch != epoch
+                        or self._memory_mode != mode):
                     return
                 try:
                     self._blocked = True

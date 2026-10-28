@@ -12,12 +12,12 @@ from eidolon.livekit.agent.runtime.automatic_memory import AutomaticMemorySessio
 SECRET = "test-secret-with-enough-entropy-32b"
 
 
-def observation(person="a", *, confidence="validated", trace="t", status="identified"):
+def observation(person="a", *, confidence="validated", trace="t", status="identified", maturity=None):
     now = time.time()
     return sign_observation(SpeakerIdentityObservation(
         owner_id="owner", session_id="transport", turn_id=trace,
         status=status, confidence=confidence, reason="voice_match",
-        **(dict(person_id=person, person_revision=1, profile_id="profile", profile_revision=1)
+        **(dict(person_id=person, person_revision=1, profile_id="profile", profile_revision=1, maturity=maturity)
            if status == "identified" else {}),
         model_id="model", weights_hash="a"*64, preprocessing_version="v1", scoring_version="v1",
         decision_version="v1", issued_at=now, expires_at=now+10,
@@ -77,8 +77,10 @@ async def test_a_b_unknown_keep_room_history_without_default_memory():
 async def test_ineligible_evidence_never_grants_memory(mode):
     c, services, llm, stop = coordinator()
     token = observation()
-    if mode == "forged": token = "invalid"
-    if mode == "unbound": services.runtime.resolve_person_memory.side_effect = LookupError("disabled")
+    if mode == "forged":
+        token = "invalid"
+    if mode == "unbound":
+        services.runtime.resolve_person_memory.side_effect = LookupError("disabled")
     try:
         await prepared(c, observation_token=token, trace_id="other" if mode == "wrong-turn" else "t", text="hello")
         c.consume(trace_id="other" if mode == "wrong-turn" else "t", text="hello")
@@ -253,4 +255,57 @@ async def test_slow_revocation_check_cannot_block_or_revoke_new_turn():
         stop.assert_not_awaited()
     finally:
         release.set()
+        await c.aclose()
+
+
+async def test_candidate_signs_scoped_v8_without_enabling_broad_memory_and_revokes():
+    c, services, llm, stop = coordinator()
+    services.runtime.resolve_provisional_memory = AsyncMock(return_value="candidate-realm")
+    c.publish = AsyncMock()
+    try:
+        await prepared(c, observation_token=observation(maturity="candidate"), trace_id="t", text="hello")
+        identity = await RuntimeTokenVerifier(secret=SECRET, allow_provisional=True).verify(
+            llm.install_runtime.call_args.args[0])
+        assert identity.memory_mode == "provisional" and identity.person_id == "a"
+        assert identity.session_id == identity.source_session_id == "transport"
+        services.runtime.resolve_person_memory.assert_not_awaited()
+        services.runtime.resolve_provisional_memory.assert_awaited_once_with(
+            owner_id="owner", person_id="a", person_revision=1, session_id="transport")
+        await asyncio.gather(*tuple(c._notices))
+        assert c.publish.call_args.args[0]["state"] == "disabled"
+        services.runtime.resolve_provisional_memory.side_effect = ValueError("policy revoked")
+        await c._check_authority()
+        assert c._person is None
+        stop.assert_awaited_once()
+        cleared = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
+        assert cleared.person_id is None
+    finally:
+        await c.aclose()
+
+
+@pytest.mark.parametrize("denied", [True, False])
+async def test_candidate_pending_or_denied_policy_never_falls_back(denied):
+    c, services, llm, _ = coordinator()
+    release = asyncio.Event()
+    async def resolve(**kwargs):
+        if denied:
+            raise ValueError("not permitted")
+        await release.wait()
+        return "candidate"
+    services.runtime.resolve_provisional_memory = AsyncMock(side_effect=resolve)
+    token = observation(maturity="candidate")
+    try:
+        c.observe(verify_observation(token, secret=SECRET, owner_id="owner", session_id="transport",
+                                    turn_id="t", text="hello"))
+        await asyncio.sleep(0)
+        await c.prepare(observation_token=token, trace_id="t", text="hello")
+        c.consume(trace_id="t", text="hello")
+        assert c._person is None
+        release.set()
+        await c._admission_task
+        assert c._person is None  # late completion cannot rewrite the consumed turn
+        services.runtime.resolve_person_memory.assert_not_awaited()
+        identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
+        assert identity.person_id is None
+    finally:
         await c.aclose()

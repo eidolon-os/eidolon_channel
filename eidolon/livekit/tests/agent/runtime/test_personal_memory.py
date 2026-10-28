@@ -119,12 +119,12 @@ async def test_channel_rejects_observation_revision_after_person_lifecycle_chang
         owner_id="owner-a", person_id="person-a", person_revision=4) == "private-a"
 
 
-async def test_channel_provisional_resolver_requires_save_policy():
+async def test_channel_provisional_resolver_requires_either_policy():
     from eidolon_sdk.biz.system_data.models import ProvisionalMemoryAccessSnapshot, ProvisionalMemoryPolicy
     from eidolon.livekit.agent.runtime.system_data import SystemDataRuntimeResolver
 
     binding = ProvisionalMemoryAccessSnapshot(owner_id="owner", person_id="p", person_revision=2,
-        realm_id="r", session_id="s", policy=ProvisionalMemoryPolicy(session_recall_allowed=True))
+        realm_id="r", session_id="s", policy=ProvisionalMemoryPolicy())
     client = SimpleNamespace(get_person_provisional_memory_access=AsyncMock(return_value=binding))
     resolver = SystemDataRuntimeResolver(client)
     args = dict(owner_id="owner", person_id="p", person_revision=2, session_id="s")
@@ -134,3 +134,7 @@ async def test_channel_provisional_resolver_requires_save_policy():
         update={"policy": ProvisionalMemoryPolicy(save_allowed=True)})
     assert await resolver.resolve_provisional_memory(**args) == "r"
     client.get_person_provisional_memory_access.assert_awaited_with(**args)
+
+    client.get_person_provisional_memory_access.return_value = binding.model_copy(
+        update={"policy": ProvisionalMemoryPolicy(session_recall_allowed=True)})
+    assert await resolver.resolve_provisional_memory(**args) == "r"

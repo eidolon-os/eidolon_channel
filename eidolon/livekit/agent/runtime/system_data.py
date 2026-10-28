@@ -49,7 +49,7 @@ class SystemDataRuntimeResolver:
         snapshot = await self._client.get_person_provisional_memory_access(
             owner_id=owner_id, person_id=person_id, person_revision=person_revision,
             session_id=session_id)
-        if not snapshot.policy.save_allowed:
+        if not (snapshot.policy.save_allowed or snapshot.policy.session_recall_allowed):
             raise ValueError("provisional memory save is not permitted")
         return snapshot.realm_id
 

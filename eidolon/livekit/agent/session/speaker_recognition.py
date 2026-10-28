@@ -79,16 +79,6 @@ class SpeakerRecognizer:
             expires_at=now + 10,
             confidence="none",
         )
-        if evidence is not None and evidence.end > evidence.start:
-            base["source"] = SpeakerEvidenceSource(
-                request_id=turn_id,
-                session_id=session_id,
-                input_id=evidence.source,
-                generation=evidence.generation,
-                sample_rate=evidence.sample_rate,
-                start_sample=evidence.start,
-                end_sample=evidence.end,
-            )
 
         def outcome(status, reason, **extra):
             return SpeakerIdentityObservation(**(base | extra), status=status, reason=reason)
@@ -99,6 +89,18 @@ class SpeakerRecognizer:
             return outcome("unavailable", "recognition_policy_missing")
         if evidence.sample_rate != 16000 or len(evidence.pcm) % 2 or len(evidence.pcm) > 960000:
             return outcome("unavailable", "invalid_audio_format")
+        if (evidence.start < 0 or evidence.end <= evidence.start
+                or (evidence.end - evidence.start) * 2 != len(evidence.pcm)
+                or (evidence.session_id and evidence.session_id != session_id)):
+            return outcome("unavailable", "invalid_audio_evidence")
+        try:
+            base["source"] = SpeakerEvidenceSource(
+                request_id=turn_id, session_id=session_id, input_id=evidence.source,
+                generation=evidence.generation, sample_rate=evidence.sample_rate,
+                start_sample=evidence.start, end_sample=evidence.end,
+            )
+        except ValueError:
+            return outcome("unavailable", "invalid_audio_evidence")
         base["audio_quality"] = SpeakerAudioQuality(
             audio_ms=len(evidence.pcm) // 32, required_speech_ms=self.policy.min_speech_ms,
         )
@@ -112,6 +114,8 @@ class SpeakerRecognizer:
             if not snapshot.persons and snapshot.discovery_policy is None:
                 return outcome("uncertain", "no_enrolled_voices")
             probe = await self.client.extract(evidence.pcm, min_speech_ms=self.policy.min_speech_ms)
+            if probe.speech_ms > len(evidence.pcm) // 32:
+                return outcome("unavailable", "invalid_extraction_response")
             base["audio_quality"] = SpeakerAudioQuality(
                 audio_ms=len(evidence.pcm) // 32, required_speech_ms=self.policy.min_speech_ms,
                 speech_ms=probe.speech_ms,

@@ -509,3 +509,51 @@ async def test_candidate_match_without_single_speaker_quality_never_accumulates(
         evidence(), owner_id='o', session_id='s', turn_id='t')
     assert result.status == ('identified' if not quality else 'uncertain')
     port.record_candidate_evidence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('changes', [
+    {'start': -1}, {'end': 0}, {'end': 32001}, {'start': 1},
+    {'source': ''}, {'generation': -1}, {'session_id': 'different-session'},
+])
+async def test_malformed_audio_span_never_reaches_dependencies(changes):
+    from dataclasses import replace
+    port = client()
+    result = await SpeakerRecognizer(port, POLICY).recognize(
+        replace(evidence(), **changes), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'unavailable'
+    assert result.reason == 'invalid_audio_evidence'
+    assert result.source is None and result.person_id is None
+    port.candidates.assert_not_awaited()
+    port.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_impossible_extracted_speech_cannot_identify_or_accumulate():
+    port = client()
+    port.discover_candidate = AsyncMock()
+    port.extract.return_value = SAMPLE.model_copy(update={'speech_ms': 2001})
+    result = await SpeakerRecognizer(port, POLICY).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'unavailable' and result.reason == 'invalid_extraction_response'
+    assert result.person_id is None
+    port.record_candidate_evidence.assert_not_awaited()
+    port.discover_candidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_buffer_snapshot_preserves_exact_nonzero_source_interval():
+    from dataclasses import replace
+    from eidolon.livekit.common.audio_evidence import AudioEvidenceBuffer
+
+    buffer = AudioEvidenceBuffer(source='mic', generation=2, sample_rate=16000, max_samples=48000)
+    buffer.append(start=1600, pcm=b'\x01\x00' * 16000)
+    buffer.append(start=17600, pcm=b'\x02\x00' * 16000)
+    captured = replace(buffer.snapshot(candidate='c', start=1600, end=33600, generation=2),
+                       session_id='s')
+    port = client()
+    result = await SpeakerRecognizer(port, POLICY).recognize(
+        captured, owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'identified'
+    assert (result.source.start_sample, result.source.end_sample, result.source.generation) == (1600, 33600, 2)
+    port.extract.assert_awaited_once_with(captured.pcm, min_speech_ms=POLICY.min_speech_ms)

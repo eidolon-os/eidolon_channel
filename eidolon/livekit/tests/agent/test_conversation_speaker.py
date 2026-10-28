@@ -21,7 +21,7 @@ from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognizer
 from eidolon.livekit.agent.session.conversation_speaker import ConversationSpeaker
 
 SAMPLE = ExtractedSample(
-    model_id="m", weights_hash="a" * 64, preprocessing_version="v", vector=[1, 0], speech_ms=2000
+    model_id="m", weights_hash="a" * 64, preprocessing_version="v", vector=[1, 0], speech_ms=2000, quality={"overlap_detected": 0}
 )
 POLICY = SpeakerRecognitionPolicy(
     version="trial",
@@ -497,3 +497,15 @@ async def test_discovery_policy_mismatch_never_posts_a_proposal():
     result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
     assert result.status == 'unknown'
     port.discover_candidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('quality', [{}, {'overlap_detected': 1}, {'overlap_detected': .5}])
+async def test_candidate_match_without_single_speaker_quality_never_accumulates(quality):
+    port = client()
+    port.candidates.return_value.persons[0].maturity = 'candidate'
+    port.extract.return_value = SAMPLE.model_copy(update={'quality': quality})
+    result = await SpeakerRecognizer(port, POLICY).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == ('identified' if not quality else 'uncertain')
+    port.record_candidate_evidence.assert_not_awaited()

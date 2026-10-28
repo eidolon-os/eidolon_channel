@@ -116,7 +116,11 @@ class SpeakerRecognizer:
                 audio_ms=len(evidence.pcm) // 32, required_speech_ms=self.policy.min_speech_ms,
                 speech_ms=probe.speech_ms,
                 clipping=probe.quality.get("clipping"), rms=probe.quality.get("rms"),
+                overlap_detected=probe.quality.get("overlap_detected"),
             )
+            if (base["audio_quality"].overlap_detected is not None
+                    and base["audio_quality"].overlap_detected > 0):
+                return outcome("uncertain", "overlapping_speech")
             if (probe.model_id, probe.weights_hash, probe.preprocessing_version) != (
                 self.policy.model_id,
                 self.policy.weights_hash,

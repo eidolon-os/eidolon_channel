@@ -59,11 +59,15 @@ def main() -> None:
             backend=home_client,
             panels=ChannelPanelSink(store, registry),
         )
+    from eidolon.livekit.common.config import load_effective_config
+    from eidolon.livekit.agent.runtime.system_data import build_system_data_runtime
+    personal_authority = build_system_data_runtime(load_effective_config().runtime_authority)
     service = ChannelProviderService(
         store=store,
         registry=registry,
         agent_name=config.livekit.agent_name,
         smarthome=smarthome,
+        personal_authority=personal_authority.resolve_person_memory,
     )
     service.initialize()
     speaker_engine = None
@@ -82,6 +86,9 @@ def main() -> None:
         traces=SessionTraceReader(config.traces.root),
         speaker_engine=speaker_engine,
     )
+    async def close_personal_authority(_app):
+        await personal_authority.aclose()
+    app.on_cleanup.append(close_personal_authority)
     if home_client is not None:
         async def close_home_client(_app):
             if smarthome is not None:

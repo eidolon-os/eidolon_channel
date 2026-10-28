@@ -793,3 +793,18 @@ async def test_only_the_device_road_is_marked_as_the_devices_own(tmp_path) -> No
         )
     )
     assert backend.last_device_requested is False
+
+
+async def test_personal_selection_flows_only_from_control_request(tmp_path):
+    from unittest.mock import AsyncMock
+    service, _store, backend = _service(tmp_path, [1_700_000_000_000])
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    backend.open_session = AsyncMock()
+    backend.observe_session_end = lambda *args: lambda: None
+    backend.end_prepared_session = AsyncMock()
+    backend.resume_prepared_channels = AsyncMock()
+    payload = session_payload(operation=OPEN_SESSION)
+    payload["personal_memory"] = {"person_id": "p", "person_revision":1, "identity_epoch": 0}
+    await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION))
+    assert backend.open_session.await_args.kwargs["personal_memory"] == payload["personal_memory"]
+    assert backend.open_session.await_args.kwargs["device_requested"] is False

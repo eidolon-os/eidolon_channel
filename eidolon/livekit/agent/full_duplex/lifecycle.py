@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import asyncio
 import logging
 from dataclasses import replace
@@ -161,7 +163,8 @@ class FullDuplexSessionLifecycle:
             output_room=output_room, output_participant_identity=output_participant_identity,
             options=RoomOptions(
                 audio_output=room_audio_output,
-                text_input=TextInputOptions(text_input_cb=accept_text_input),
+                text_input=TextInputOptions(text_input_cb=partial(accept_text_input,
+                    prepare=getattr(pipeline, "_prepare_memory_turn", None))),
                 text_output=pipeline._factory.outputs.dialogue_text,
                 participant_identity=participant_identity,
             ),
@@ -229,15 +232,16 @@ class FullDuplexSessionLifecycle:
         pipeline = self._pipeline
         observation = getattr(pipeline, "_speaker_observation", None)
         if observation is not None:
-            # The recovery owner must be the only RoomIO microphone reader.
-            # Reject unsupported providers before starting any media.
+            # Use one microphone reader only when STT exposes sample mapping.
+            # Unsupported providers retain their normal audio path; each turn
+            # receives an unavailable observation instead of failing the call.
             stt = getattr(getattr(pipeline._factory, "stt", None), "stt", None)
-            if not hasattr(stt, "audio_evidence_capture") or not pipeline._factory.runtime_session_id:
-                raise ValueError("speaker observation requires mapped STT and runtime session scope")
             audio_options = room_session_options["options"].get_audio_input_options()
-            if audio_options is None:
-                raise ValueError("speaker observation requires microphone input")
-            room_session_options["options"] = replace(room_session_options["options"], audio_input=False)
+            if (hasattr(stt, "audio_evidence_capture") and pipeline._factory.runtime_session_id
+                    and audio_options is not None):
+                room_session_options["options"] = replace(room_session_options["options"], audio_input=False)
+            else:
+                observation = None
 
         async def warmup() -> None:
             await pipeline._warmup_stages()
@@ -476,6 +480,9 @@ class FullDuplexSessionLifecycle:
     def _start_proactive_consumer(self) -> None:
         """Spawn the background proactive-report stream (best-effort)."""
         pipeline = self._pipeline
+        services = getattr(pipeline._factory, "runtime_services", None)
+        if getattr(services, "personal_memory", None) is not None:
+            return  # Companion-wide reports are not scoped to this Person.
         if pipeline._proactive_task is not None and not pipeline._proactive_task.done():
             return
         pipeline._proactive_task = asyncio.create_task(

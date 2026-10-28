@@ -77,6 +77,14 @@ class FullDuplexTranscriptRecorder:
                         else "provider_final_equivalent_hypothesis"
                     ),
                 )
+        # Final ASR evidence can precede framework completion/EOT settlement.
+        # Start only the exact ended candidate here, so inference overlaps that
+        # existing wait without guessing an unfinished audio range.
+        observer = getattr(pipeline, "_speaker_observation", None)
+        begin = getattr(observer, "begin", None)
+        if receipt is not None and transcript_event.is_final and pipeline._timeline is not None and callable(begin):
+            begin(pipeline._user_turns, pipeline._timeline.turn_id)
+
         selected_policy_text = (
             getattr(pipeline._user_turns, "selected_policy_text", "")
             if receipt is not None

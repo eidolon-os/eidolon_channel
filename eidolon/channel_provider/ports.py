@@ -162,6 +162,7 @@ class ChannelAdapter(Protocol):
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, device_requested: bool = False,
+        personal_memory: dict | None = None,
     ) -> None:
         """Bring this channel's agent to it, so a conversation can happen.
 

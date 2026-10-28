@@ -116,6 +116,18 @@ def build_full_duplex_agent(
             )
             if not allowed:
                 raise StopResponse()
+            observer = getattr(pipeline, "_speaker_observation", None)
+            finish = getattr(observer, "finish", None)
+            timeline = pipeline._timeline
+            if callable(finish) and timeline is not None:
+                from ..session.messages import message_text
+                await finish(pipeline._user_turns, turn_id=timeline.turn_id,
+                    text=message_text(new_message), llm=pipeline._factory.llm.llm, timeline=timeline)
+            prepare = getattr(pipeline, "_prepare_memory_turn", None)
+            if callable(prepare):
+                from ..session.messages import message_text
+                await prepare(text=message_text(new_message))
+
 
     # Session-wide interruption/preemptive settings remain on AgentSession.
     # LiveKit 1.7 prefers the structured ``turn_handling`` option over the

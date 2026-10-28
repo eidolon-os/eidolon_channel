@@ -68,8 +68,10 @@ runtime_authority:
   http_connect_timeout_sec: 3.0
 
 voiceprint:
-  # Shared extraction model only; no conversation gate.
+  # Shared extraction model; advisory policy is a versioned Models asset.
+  # Missing recognition-controlled-trial.json yields unavailable, never a gate.
   model_dir: ""
+  recognition_wait_ms: 300
 
 turn_policy:
   profile: balanced_semantic

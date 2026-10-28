@@ -177,6 +177,9 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._tls = tls
         self._session: EidolonAgentSession | None = None
         self._session_lock = asyncio.Lock()
+        self.memory_session = None
+        self._runtime_generation = 0
+        self._pending_speaker_observation: str | None = None
         self._pending_turn_decision_metadata: dict[str, Any] | None = None
         self._pending_trace_id: str | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
@@ -250,6 +253,39 @@ class EidolonAgentGrpcLlm(llm.LLM):
             await self._session.close_channel_tools()
         self.clear_channel_tools()
 
+    async def prepare_memory_turn(self, *, text: str, trace_id=None, voice=True) -> bool:
+        if self.memory_session is not None:
+            if not voice:
+                from uuid import uuid4
+                self.set_turn_trace_id(uuid4().hex)
+            return await self.memory_session.prepare(
+                observation_token=self._pending_speaker_observation if voice else None,
+                trace_id=trace_id if trace_id is not None else self._pending_trace_id,
+                text=text)
+        return False
+
+    async def close_runtime(self) -> None:
+        self._runtime_generation += 1
+        await self.discard_warm()
+        self._warmer = None
+        self.cancel_response_outputs()
+        async with self._session_lock:
+            if self._session is not None:
+                await self._session.aclose()
+                self._session = None
+            self._device_token = None
+
+    def install_runtime(self, token: str, conversation_id: str) -> None:
+        self._device_token = token
+        self._conversation_id = conversation_id
+
+    def set_speaker_observation(self, token: str) -> None:
+        self._pending_speaker_observation = token
+
+    def pop_speaker_observation(self) -> str | None:
+        token, self._pending_speaker_observation = self._pending_speaker_observation, None
+        return token
+
     def set_turn_decision_metadata(self, metadata: dict[str, Any]) -> None:
         """Attach a committed Channel decision to the next StartTurn."""
         self._pending_turn_decision_metadata = dict(metadata)
@@ -262,6 +298,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
     def set_turn_trace_id(self, trace_id: str) -> None:
         """Use the Channel turn id as the next brain turn's cross-hop trace."""
 
+        self._pending_speaker_observation = None
         self._pending_trace_id = trace_id.strip() or None
 
     def pop_turn_trace_id(self) -> str | None:
@@ -299,11 +336,14 @@ class EidolonAgentGrpcLlm(llm.LLM):
         if tools:
             logger.debug("[EidolonAgentGrpcLlm] tools are not forwarded over eidolon.agent.v1")
         user_text = _last_user_text(chat_ctx)
+        if self.memory_session is not None:
+            self.memory_session.consume(trace_id=self._pending_trace_id, text=user_text)
         return EidolonAgentGrpcLlmStream(
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            speaker_observation=self.pop_speaker_observation(),
             turn_decision_metadata=self.pop_turn_decision_metadata(),
             trace_id=self.pop_turn_trace_id(),
             user_text=user_text,
@@ -341,6 +381,8 @@ class EidolonAgentGrpcLlm(llm.LLM):
         fires one ephemeral speculative turn so the real turn's first response
         lands sooner. Superseded (discarded) when the real turn starts.
         """
+        if self.memory_session is not None:
+            return  # Partial speech has no current speaker evidence.
         try:
             session = await self._get_session()
         except Exception:  # noqa: BLE001 — warming must never break the turn
@@ -363,6 +405,8 @@ class EidolonAgentGrpcLlm(llm.LLM):
             self.presentation_transport.interrupt(turn_id)
 
     async def aclose(self) -> None:
+        if self.memory_session is not None:
+            await self.memory_session.aclose()
         if self.presentation_transport is not None:
             await self.presentation_transport.close()
         if self._warmer is not None:
@@ -385,7 +429,10 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         trace_id: str | None,
         user_text: str,
         conversation_id: str,
+        speaker_observation: str | None = None,
     ) -> None:
+        self._runtime_generation = llm._runtime_generation
+        self._speaker_observation = speaker_observation
         self._turn_decision_metadata = turn_decision_metadata
         self._trace_id = trace_id
         self._user_text = user_text
@@ -400,6 +447,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
 
     async def _run(self) -> None:
         llm_v: EidolonAgentGrpcLlm = self._llm  # type: ignore[assignment]
+        if self._runtime_generation != llm_v._runtime_generation:
+            raise APIConnectionError("memory session changed", retryable=False)
         self._attempt_index += 1
         attempt = self._attempt_index
         user_text = self._user_text
@@ -422,6 +471,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 f"eidolon_agent session open timed out after {timeout:.1f}s",
                 retryable=True,
             ) from exc
+        if self._runtime_generation != llm_v._runtime_generation:
+            raise APIConnectionError("memory session changed", retryable=False)
         conversation_id = self._conversation_id
         # The real turn supersedes any preemptive warm-up for this session.
         await llm_v.discard_warm()
@@ -433,6 +484,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     conversation_id=conversation_id,
                     metadata=(
                         {
+                            **({"speaker_observation_token": self._speaker_observation} if self._speaker_observation else {}),
                             **(
                                 {"turn_decision": self._turn_decision_metadata}
                                 if self._turn_decision_metadata
@@ -492,6 +544,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                 asyncio.get_running_loop().time() + first_delta_timeout
             )
             while True:
+                if self._runtime_generation != llm_v._runtime_generation:
+                    raise APIConnectionError("memory session changed", retryable=False)
                 try:
                     if first_model_activity_seen:
                         payload = await payload_iter.__anext__()
@@ -533,6 +587,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     # that never produces a usable delta is terminal here.
                     raise APIConnectionError(message, retryable=False) from exc
 
+                if self._runtime_generation != llm_v._runtime_generation:
+                    raise APIConnectionError("memory session changed", retryable=False)
                 # Dispatch by payload type. Adding a new brain event kind only
                 # needs an elif here + a payload dataclass in session.py.
                 if isinstance(payload, DeltaPayload):

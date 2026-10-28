@@ -1,0 +1,153 @@
+"""Per-turn memory authority within a continuous room conversation."""
+from __future__ import annotations
+
+import asyncio
+import time
+
+from eidolon_sdk.biz.runtime import sign_runtime_token
+from eidolon_sdk.biz.speaker_attestation import verify_observation
+
+
+class AutomaticMemorySession:
+    def __init__(self, *, services, room, source_session_id, secret, llm, stop_outputs,
+                 ttl_seconds=600, publish=None):
+        self.services, self.room = services, room
+        self.source_session_id, self.secret = source_session_id, secret
+        self.llm, self.stop_outputs, self.ttl_seconds = llm, stop_outputs, ttl_seconds
+        self.publish = publish
+        self._sequence = 0
+        self._notices = set()
+        self._lock = asyncio.Lock()
+        self._person = None
+        self._epoch = 0
+        self._blocked = getattr(services, "personal_memory", None) is not None
+        self._closed = False
+        self._watcher = None
+        self._prepared = None
+        self._context = None
+        self._session_id = source_session_id
+        self._renew_at = 0.0
+
+    async def prepare(self, *, observation_token=None, trace_id=None, text=""):
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("memory session closed")
+            self._prepared = None
+            context = await self.services.resolve_room(self.room)
+            self._context = context
+            person = None
+            observation = None
+            if observation_token and trace_id:
+                try:
+                    observation = verify_observation(observation_token, secret=self.secret,
+                        owner_id=context.owner_id, session_id=self.source_session_id,
+                        turn_id=trace_id, text=text)
+                    if observation.status == "identified":
+                        async with asyncio.timeout(2.0):
+                            realm = await self.services.runtime.resolve_person_memory(owner_id=context.owner_id,
+                                person_id=observation.person_id, person_revision=observation.person_revision)
+                        if not realm:
+                            raise ValueError("personal memory realm unavailable")
+                        # Authority IO must not extend the evidence lease.
+                        verify_observation(observation_token, secret=self.secret,
+                            owner_id=context.owner_id, session_id=self.source_session_id,
+                            turn_id=trace_id, text=text)
+                        person = (observation.person_id, observation.person_revision)
+                except Exception:
+                    # Unbound/disabled/missing/stale/failed recognition all keep
+                    # conversation available without any default-Realm access.
+                    person = None
+            if self._blocked or person != self._person or time.time() >= self._renew_at:
+                await self._bind_turn(context, person)
+            await self._publish_state("active" if person else "disabled")
+            self._prepared = (trace_id, text)
+            if self._watcher is None:
+                self._watcher = asyncio.create_task(self._watch(), name="automatic-memory-authority")
+            return False  # A speaker change never resets the room conversation.
+
+    def consume(self, *, trace_id, text):
+        if self._blocked or self._closed or self._prepared != (trace_id, text):
+            raise RuntimeError("turn has no current memory admission")
+        self._prepared = None
+
+    async def _bind_turn(self, context, person):
+        self._blocked = True
+        self._prepared = None
+        # Replace the authenticated RPC at the committed turn boundary. Normal
+        # turn scheduling owns interruptions; identity changes do not flush Body
+        # playback, public history, or the interrupted-conversation ledger.
+        await self.llm.close_runtime()
+        self._epoch += 1
+        self._install(context, person)
+        self._person = person
+        self._blocked = False
+
+    def _install(self, context, person):
+        session_id = self._session_id
+        token, exp = sign_runtime_token(secret=self.secret, owner_id=context.owner_id,
+            companion_id=context.companion_id, device_id=context.device_id,
+            session_id=session_id, source_session_id=self.source_session_id,
+            ttl_seconds=self.ttl_seconds,
+            **({"person_id": person[0], "person_revision": person[1], "identity_epoch": self._epoch}
+               if person else {}))
+        self.llm.install_runtime(token, f"room-session:{session_id}")
+        self._renew_at = exp.timestamp() - min(30, self.ttl_seconds / 2)
+
+    async def _publish_state(self, state):
+        if self.publish is None:
+            return
+        self._sequence += 1
+        now = time.time()
+        payload = {"schema_version": 1, "session_id": self.source_session_id,
+            "sequence": self._sequence, "state": state,
+            "person_id": self._person[0] if state == "active" and self._person else None,
+            "issued_at": now, "expires_at": now + 10}
+        async def send():
+            try:
+                async with asyncio.timeout(1.0):
+                    await self.publish(payload)
+            except Exception:
+                pass  # Display delivery cannot grant or retain a runtime scope.
+        task = asyncio.create_task(send())
+        self._notices.add(task)
+        task.add_done_callback(self._notices.discard)
+
+    async def _watch(self):
+        while True:
+            await asyncio.sleep(1.0)
+            async with self._lock:
+                if self._closed:
+                    return
+                if self._person is None and not self._blocked:
+                    continue
+                context = self._context
+                try:
+                    if self._blocked:
+                        raise RuntimeError("cleanup pending")
+                    async with asyncio.timeout(2.0):
+                        await self.services.runtime.resolve_person_memory(owner_id=context.owner_id,
+                            person_id=self._person[0], person_revision=self._person[1])
+                except Exception:
+                    try:
+                        # Explicit authority revocation can stop an in-flight private
+                        # response, but must retain the already spoken dialogue.
+                        self._blocked = True
+                        self._prepared = None
+                        await self.llm.close_runtime()
+                        await self.stop_outputs()
+                        await self._bind_turn(context, None)
+                        await self._publish_state("disabled")
+                    except Exception:
+                        # Keep retrying the same blocked cleanup obligation.
+                        self._blocked = True
+
+    async def aclose(self):
+        self._closed = True
+        self._prepared = None
+        for task in tuple(self._notices):
+            task.cancel()
+        await asyncio.gather(*tuple(self._notices), return_exceptions=True)
+        if self._watcher is not None:
+            self._watcher.cancel()
+            await asyncio.gather(self._watcher, return_exceptions=True)
+            self._watcher = None

@@ -14,7 +14,7 @@ from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
 from .contracts import IdempotencyConflict, InvalidTransition, StaleGeneration
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 PROVISION = "channel.provision-device"
 REFRESH = "channel.refresh-device"
 REVOKE = "channel.revoke-device"
@@ -89,7 +89,7 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, 3, 4, 5, SCHEMA_VERSION}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
                 )
@@ -101,6 +101,12 @@ class ChannelProviderStore:
                 connection.execute("""CREATE TABLE IF NOT EXISTS prepared_scenes (
                     owner_id TEXT NOT NULL, session_id TEXT NOT NULL, scenario TEXT NOT NULL,
                     value_json TEXT NOT NULL, PRIMARY KEY(owner_id, session_id, scenario))""")
+                connection.execute("""CREATE TABLE IF NOT EXISTS personal_sessions (
+                    session_id TEXT PRIMARY KEY, device_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('open','closing','closed')),
+                    binding_json TEXT NOT NULL)""")
+                connection.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_personal_session_device
+                    ON personal_sessions(device_id) WHERE state != 'closed'""")
                 self._validate_schema(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()
@@ -229,6 +235,53 @@ class ChannelProviderStore:
         with self._connect() as connection:
             return [(r[0], r[1], r[2], json.loads(r[3])) for r in connection.execute(
                 "SELECT owner_id, session_id, scenario, value_json FROM prepared_scenes")]
+
+    def claim_personal_session(self, session_id: str, device_id: str, binding: dict) -> dict:
+        encoded = json.dumps(binding, sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            old = connection.execute("SELECT * FROM personal_sessions WHERE session_id=?", (session_id,)).fetchone()
+            if old is not None:
+                if old["binding_json"] != encoded or old["device_id"] != device_id:
+                    raise IdempotencyConflict("personal session identity cannot change")
+                if old["state"] != "open":
+                    raise InvalidTransition("personal session is closing or closed; use a new session after cleanup")
+            else:
+                if connection.execute("SELECT 1 FROM personal_sessions WHERE device_id=? AND state!='closed'",
+                                      (device_id,)).fetchone():
+                    raise InvalidTransition("device has pending personal session cleanup")
+                connection.execute("INSERT INTO personal_sessions VALUES (?,?,'open',?)",
+                                   (session_id, device_id, encoded))
+            connection.commit()
+        return self.personal_session(session_id)
+
+    def personal_session(self, session_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM personal_sessions WHERE session_id=?", (session_id,)).fetchone()
+        return self._personal_session(row)
+
+    def pending_personal_sessions(self, device_id: str | None = None) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM personal_sessions WHERE state!='closed'"
+                + (" AND device_id=?" if device_id is not None else ""),
+                (device_id,) if device_id is not None else ()).fetchall()
+        return [self._personal_session(row) for row in rows]
+
+    def transition_personal_session(self, session_id: str, *, expected: str, state: str) -> None:
+        if (expected, state) not in {("open", "closing"), ("closing", "closed")}:
+            raise InvalidTransition("invalid personal session lifecycle transition")
+        with self._connect() as connection:
+            changed = connection.execute("UPDATE personal_sessions SET state=? WHERE session_id=? AND state=?",
+                                         (state, session_id, expected)).rowcount
+            if changed != 1:
+                raise InvalidTransition("personal session state changed")
+
+    @staticmethod
+    def _personal_session(row) -> dict | None:
+        if row is None:
+            return None
+        return {"session_id": row["session_id"], "device_id": row["device_id"],
+                "state": row["state"], "binding": json.loads(row["binding_json"])}
 
     def healthcheck(self) -> None:
         with self._connect() as connection:

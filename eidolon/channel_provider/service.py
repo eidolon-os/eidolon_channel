@@ -41,6 +41,7 @@ from .contracts import (
     canonical_json,
     request_fingerprint,
 )
+from .personal_sessions import PersonalSessions
 from .ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
 from .shared_admission import SharedAdmission
@@ -80,14 +81,17 @@ class ChannelProviderService:
         agent_name: str,
         now_ms: Callable[[], int] | None = None,
         smarthome: SmartHomeRuntime | None = None,
+        personal_authority=None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._agent_name = agent_name
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
         self._smarthome = smarthome
+        self._personal_authority = personal_authority
         self._smarthome_poller: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
+        self._personal_sessions = PersonalSessions(store, registry, self._lock)
         self._transport_scopes: dict[str, _TransportScope] = {}
         self._device_conversations: dict = {}
         self._team_conversations: dict = {}
@@ -133,7 +137,10 @@ class ChannelProviderService:
                     except Exception:
                         logger.exception("scene recovery control unavailable session=%s",
                                          visit.selection.session_id)
+        await self._personal_sessions.recover()
         self._recovery_ready.set()
+        if self._personal_authority is not None:
+            self._personal_sessions.watch_authority(self._personal_authority)
         if self._smarthome is not None:
             self._smarthome_poller = asyncio.create_task(self._poll_smarthome())
 
@@ -165,6 +172,7 @@ class ChannelProviderService:
             await self.close_shared_session(session_id, authenticated_owner_id=owner)
         for device_id in tuple(self._transport_scopes):
             await self._retire_transport_scope(device_id)
+        await self._personal_sessions.shutdown()
         await self._registry.shutdown()
 
     async def provision(self, request: ProvisionRequest) -> str:
@@ -427,6 +435,7 @@ class ChannelProviderService:
                 return previous.snapshot()
             records = []
             for ref in selection.devices:
+                self._personal_sessions.require_available(ref.device_instance_id)
                 record = self._store.active_device(ref)
                 if record is None or record.expires_at_ms <= self._now_ms():
                     raise UnknownChannel("selected device has no current channel")
@@ -718,6 +727,7 @@ class ChannelProviderService:
         def current_records():
             records = []
             for ref in selection.devices:
+                self._personal_sessions.require_available(ref.device_instance_id)
                 stored = self._store.active_device(ref)
                 if stored is None or stored.expires_at_ms <= self._now_ms():
                     raise UnknownChannel("selected device has no current channel")
@@ -983,6 +993,7 @@ class ChannelProviderService:
             conversation_id=request.conversation_id,
             session_intent=request.session_intent,
             target_companion_id=request.target_companion_id,
+            personal_memory=(request.personal_memory.model_dump() if request.personal_memory else None),
         )
         return canonical_json(
             {
@@ -1007,6 +1018,7 @@ class ChannelProviderService:
     async def _converge_serving(
         self, device_ref, *, serving: bool, conversation_id: str | None, session_intent: str,
         target_companion_id: str | None = None, device_requested: bool = False,
+        personal_memory: dict | None = None,
     ) -> tuple[StoredProvision, list[str]]:
         """Converge one device's channel onto served or unserved.
 
@@ -1022,8 +1034,9 @@ class ChannelProviderService:
         Takes the same lock as provision and revocation so that reading the
         channel and acting on it cannot straddle a revocation — otherwise a
         device could be granted a conversation on a channel that was withdrawn
-        a moment earlier. Nothing is written: this is a statement of desired
-        state the adapter converges onto, not an event to record.
+        a moment earlier. Default sessions converge through the adapter.
+        Personal sessions additionally retain an immutable durable reservation
+        until producer withdrawal and Body cleanup have both completed.
 
         A credential gates starting, never stopping. Ending a conversation only
         takes a privilege away, and the conversation it ends outlives the
@@ -1039,6 +1052,25 @@ class ChannelProviderService:
         ended.
         """
         async with self._lock:
+            pending = self._store.pending_personal_sessions(device_ref.device_instance_id)
+            record = (self._store.personal_session(conversation_id) if conversation_id is not None
+                      else (pending[0] if pending else None))
+            if not serving and record is not None:
+                if record["binding"]["device_ref"] != device_ref.model_dump(mode="json"):
+                    raise InvalidTransition("personal session belongs to another DeviceRef")
+                provision = self._store.operation(device_ref, record["binding"]["operation_kind"],
+                                                   record["binding"]["operation_id"])
+                if provision is None:
+                    raise UnknownChannel("personal session provision is unavailable")
+                await self._personal_sessions.close(record["session_id"])
+                return provision, [record["session_id"]]
+            if serving:
+                if personal_memory is None:
+                    self._personal_sessions.require_available(device_ref.device_instance_id)
+                    if record is not None:
+                        raise InvalidTransition("personal session ID cannot become a default session")
+                elif pending and pending[0]["session_id"] != conversation_id:
+                    raise InvalidTransition("close the previous personal session first")
             self._store.expire_credentials(self._now_ms())
             active = self._store.active_device(device_ref)
             if active is None and not serving:
@@ -1050,11 +1082,27 @@ class ChannelProviderService:
             adapter = self._registry.get(active.adapter_name)
             handle = json.loads(active.handle_json)
             if serving:
-                await adapter.open_session(
-                    handle, conversation_id, session_intent=session_intent,
-                    target_companion_id=target_companion_id,
-                    device_requested=device_requested,
-                )
+                if personal_memory is not None:
+                    if device_requested:
+                        raise InvalidTransition("device cannot select personal memory")
+                    self._personal_sessions.claim(active, conversation_id,
+                        personal_memory=personal_memory, target_companion_id=target_companion_id,
+                        session_intent=session_intent)
+                try:
+                    await adapter.open_session(
+                        handle, conversation_id, session_intent=session_intent,
+                        target_companion_id=target_companion_id,
+                        device_requested=device_requested,
+                        **({"personal_memory": personal_memory} if personal_memory is not None else {}),
+                    )
+                except BaseException:
+                    if personal_memory is not None:
+                        record = self._store.personal_session(conversation_id)
+                        if record["state"] == "open":
+                            self._store.transition_personal_session(conversation_id,
+                                expected="open", state="closing")
+                        self._personal_sessions.request_close(conversation_id)
+                    raise
                 return active, []
             logger.info(
                 "session close requested source=%s device=%s conversation_id=%s",

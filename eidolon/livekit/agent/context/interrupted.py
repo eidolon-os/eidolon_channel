@@ -113,6 +113,9 @@ class InterruptedContextManager:
             )
         return None
 
+    def clear(self) -> None:
+        self.last_context = None
+
     def consume_into(
         self,
         *,

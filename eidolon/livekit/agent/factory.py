@@ -132,6 +132,7 @@ def _build_device_token_source(
         runtime=runtime_services.runtime,
         mounts=runtime_services.mounts,
         context_resolver=runtime_services.resolve_room,
+        personal_memory=getattr(runtime_services, "personal_memory", None),
         session_id=session_id,
         jwt_secret=secret,
         jwt_algorithm=rt.jwt_algorithm,
@@ -146,7 +147,7 @@ def _build_runtime_resolve_client(rt: "Any") -> "Any":
     return build_system_data_runtime(rt)
 
 
-def _build_runtime_services(rt: "Any", *, target_companion_id: str | None = None) -> "Any":
+def _build_runtime_services(rt: "Any", *, target_companion_id: str | None = None, personal_memory=None) -> "Any":
     """Compose the two authoritative runtime consumers for one room."""
     from eidolon.livekit.agent.runtime.kernel_bodies import KernelBodyHttpClient
     from eidolon.livekit.agent.runtime.services import ChannelRuntimeServices
@@ -156,7 +157,7 @@ def _build_runtime_services(rt: "Any", *, target_companion_id: str | None = None
         base_url=str(getattr(rt, "kernel_api_url", "") or "").strip(),
         timeout_sec=float(getattr(rt, "http_timeout_sec", 5.0)),
     )
-    return ChannelRuntimeServices(runtime=runtime, mounts=mounts, target_companion_id=target_companion_id)
+    return ChannelRuntimeServices(runtime=runtime, mounts=mounts, target_companion_id=target_companion_id, personal_memory=personal_memory)
 
 
 class SharedStageFactory:
@@ -239,6 +240,7 @@ class SharedStageFactory:
         runtime_session_id: str = "",
         output_plan: SessionOutputPlan | None = None,
         target_companion_id: str | None = None,
+        personal_memory=None,
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -285,7 +287,7 @@ class SharedStageFactory:
         """
         if output_plan is not None and (output_plan.outputs.expression or output_plan.outputs.motion or not output_plan.outputs.can_respond) and cfg.providers.brain_provider != "eidolon_agent":
             raise ValueError("EXPRESSION_REQUIRES_EIDOLON_AGENT")
-        if target_companion_id is not None and cfg.providers.brain_provider != "eidolon_agent":
+        if (target_companion_id is not None or personal_memory is not None) and cfg.providers.brain_provider != "eidolon_agent":
             raise ValueError("SESSION_TARGET_REQUIRES_EIDOLON_AGENT")
         runtime_services = None
         needs_runtime_context = (
@@ -296,6 +298,7 @@ class SharedStageFactory:
             runtime_services = _build_runtime_services(
                 cfg.runtime_authority,
                 target_companion_id=target_companion_id,
+                personal_memory=personal_memory,
             )
         if cfg.providers.brain_provider == "eidolon_agent":
             from eidolon.livekit.agent.eidolon_agent_rpc import (
@@ -304,59 +307,12 @@ class SharedStageFactory:
             from eidolon.livekit.agent.eidolon_agent_rpc.session import TlsConfig
 
             prefix = cfg.remote_agent_rpc.conversation_id_prefix
-            session_key = livekit_session_key.strip() or "unknown"
-
-            # D1: conversation_id is either lazy (when we hold a room ref —
-            # production path) or static (tests / fallback when called without
-            # a room). The resolver runs once per chat() call; cost is a dict
-            # lookup + a format string, no caching needed.
-            if livekit_room is not None:
-                room_ref = livekit_room  # closed over by the resolver
-                room_name_static = getattr(room_ref, "name", None) or session_key
-
-                def _resolve_cid() -> str:
-                    try:
-                        from eidolon.livekit.agent.runtime import resolve_device_id
-
-                        from eidolon.livekit.agent.runtime.resolver import _participant_identity_and_metadata
-
-                        participant = _participant_identity_and_metadata(room_ref)
-                        room_name = getattr(room_ref, "name", None) or room_name_static
-                        if participant:
-                            ident, metadata = participant
-                            # A room name is transport identity, regardless of
-                            # whether a deployment reuses it or rotates it.
-                            # Keying brain history on the room would either split
-                            # context on every JOIN or accidentally conflate it
-                            # with the interaction lifecycle. For
-                            # a device, key on the stable participant identity
-                            # alone (its LiveKit identity is constant across
-                            # reconnects and single-format) so every JOIN from the
-                            # same device continues one conversation. device_id is
-                            # used only to DETECT a device — don't fold it into the
-                            # key too: it can arrive in a different MAC spelling
-                            # than `ident` (colon vs hyphen) and would split one
-                            # device's history across two keys. Web/other
-                            # participants carry no device_id and keep the
-                            # room-scoped id.
-                            is_device = resolve_device_id(metadata) is not None
-                            if is_device:
-                                return f"{prefix}:{ident}"
-                            return f"{prefix}:{ident}:{room_name}"
-                        # Defensive — no participant yet (very early in job
-                        # lifecycle, before user speech). Brain will still
-                        # accept; once the participant connects, subsequent
-                        # turns get the identity-bearing id.
-                        return f"{prefix}:{room_name}"
-                    except Exception:
-                        # Never let a resolver bug block a turn.
-                        return f"{prefix}:{room_name_static}"
-
-                conversation_id: "str | Any" = _resolve_cid
-                log_cid_descr = f"<lazy:participant + {room_name_static}>"
-            else:
-                conversation_id = f"{prefix}:{session_key}"
-                log_cid_descr = conversation_id
+            # All interactive histories belong to a dispatch session. Unknown
+            # speakers must never inherit the device's old default history.
+            if not runtime_session_id.strip():
+                raise ValueError("interactive conversation requires a dispatch session ID")
+            conversation_id = f"{prefix}:session:{runtime_session_id}"
+            log_cid_descr = conversation_id
 
             tls = TlsConfig(
                 mode=cfg.remote_agent_rpc.tls_mode,

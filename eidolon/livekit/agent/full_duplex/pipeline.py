@@ -1415,12 +1415,17 @@ class StreamingPipeline(BasePipeline):
         its ephemeral result is discarded, not reused as the accepted reply.
         Neither mechanism owns the product turn's commit decision.
         """
-        return build_full_duplex_turn_handling(
+        options = build_full_duplex_turn_handling(
             turn_policy=self._turn_policy,
             allow_interruptions=self._allow_interruptions,
             false_interruption_timeout=self._false_interruption_timeout,
             avatar_mode=self._avatar_enabled,
         )
+        if getattr(self, "_prepare_memory_turn", None) is not None:
+            # Partial speech has no committed speaker evidence; it must not
+            # reuse the preceding person's runtime credential.
+            options["preemptive_generation"] = {"enabled": False, "preemptive_tts": False}
+        return options
 
     @property
     def _barge_in_enabled(self) -> bool:

@@ -62,6 +62,9 @@ class FullDuplexContextLedger:
                 },
             )
 
+    def clear(self) -> None:
+        self._manager.clear()
+
     def consume_for_turn(
         self,
         *,

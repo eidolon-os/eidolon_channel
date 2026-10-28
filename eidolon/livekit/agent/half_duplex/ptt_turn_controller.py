@@ -52,6 +52,7 @@ class HalfDuplexPttTurnController:
         preempt_agent_output: Callable[[], None] | None = None,
         tap_to_stop_max_audio_sec: float = 0.9,
     ) -> None:
+        self.on_segment_sealed: Callable | None = None
         self._recorder = recorder
         self._transcriber = transcriber
         self._agent_output_active = agent_output_active or (lambda: False)
@@ -126,6 +127,14 @@ class HalfDuplexPttTurnController:
         self._state = "transcribing"
         self._recording_since = None
         segment = self._recorder.stop()
+        if self.on_segment_sealed is not None:
+            try:
+                self.on_segment_sealed(segment, self._generation)
+            except Exception:
+                # Optional evidence collection never cancels the spoken input.
+                import logging
+                logging.getLogger(__name__).warning("speaker evidence unavailable")
+
         return self._transcribe(segment, self._generation, self._preempted_agent_output)
 
     async def _release_without_hold(self) -> PttSegmentTurnResult:

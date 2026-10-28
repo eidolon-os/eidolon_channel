@@ -213,3 +213,20 @@ def test_streaming_pipeline_accepts_half_duplex_rejects_ptt() -> None:
         assert "HalfDuplexPttPipeline" not in str(exc)
     except Exception:
         pass
+
+
+async def test_completed_turn_admits_memory_without_erasing_public_context():
+    prepare = AsyncMock(return_value=True)
+    pipeline = SimpleNamespace(
+        _instructions="test", _timeline=None,
+        _factory=SimpleNamespace(outputs=OutputSelection(speech=True, dialogue_text=True),
+            stt=SimpleNamespace(stt=None), llm=SimpleNamespace(llm=None),
+            tts=SimpleNamespace(tts=None), vad=None),
+        _turn_detection=lambda: "vad", _prepare_memory_turn=prepare,
+        _ensure_turn_completion=lambda: SimpleNamespace(allows_completed_turn=AsyncMock(return_value=True)))
+    agent = build_full_duplex_agent(pipeline)
+    context = SimpleNamespace(items=["already spoken in the room"])
+    from livekit.agents.llm import ChatMessage
+    await agent.on_user_turn_completed(context, ChatMessage(role="user", content=["hello"]))
+    prepare.assert_awaited_once_with(text="hello")
+    assert context.items == ["already spoken in the room"]

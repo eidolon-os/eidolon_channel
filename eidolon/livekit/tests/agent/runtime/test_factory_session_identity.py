@@ -109,3 +109,34 @@ def test_runtime_token_rejects_missing_dispatch_session(
             runtime_services=_services(),
             runtime_session_id="",
         )
+
+
+@pytest.mark.parametrize("identified", [True, False])
+def test_personal_factory_uses_dispatch_history_id(monkeypatch, identified):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+    from eidolon.interaction_context import PersonalMemorySelection
+    from eidolon.livekit.agent.factory import SharedStageFactory
+    from eidolon.livekit.common.config.schema import EffectiveAgentConfig, ProvidersConfig
+
+    for method in ("_build_stt", "_build_tts", "_build_vad", "build_interrupt_classifier"):
+        monkeypatch.setattr(SharedStageFactory, method, lambda _: object())
+    services_args, llm_args = [], []
+    def services(_, **kwargs):
+        services_args.append(kwargs)
+        return SimpleNamespace(resolve_room=AsyncMock())
+    monkeypatch.setattr("eidolon.livekit.agent.factory._build_runtime_services", services)
+    monkeypatch.setattr("eidolon.livekit.agent.factory._build_device_token_source", lambda **_: object())
+    def llm(**kwargs):
+        llm_args.append(kwargs)
+        return object()
+    monkeypatch.setattr("eidolon.livekit.agent.eidolon_agent_rpc.EidolonAgentGrpcLlm", llm)
+    cfg = replace(EffectiveAgentConfig(), providers=ProvidersConfig(brain_provider="eidolon_agent"))
+    selected = PersonalMemorySelection(person_id="p", person_revision=1, identity_epoch=0) if identified else None
+    for session_id in ("session-a", "session-b"):
+        SharedStageFactory.from_config(cfg, runtime_session_id=session_id,
+            livekit_room=SimpleNamespace(name="same-device-room"), personal_memory=selected)
+    assert [a["conversation_id"] for a in llm_args] == [
+        f"{cfg.remote_agent_rpc.conversation_id_prefix}:session:session-a",
+        f"{cfg.remote_agent_rpc.conversation_id_prefix}:session:session-b"]
+    assert all(a["personal_memory"] == selected for a in services_args)

@@ -322,6 +322,7 @@ class ObservabilityConfig:
 class VoiceprintConfig:
     """Shared Provider model asset location; no conversation policy."""
     model_dir: str = ""
+    recognition_wait_ms: int = 300
 
 
 @dataclass(frozen=True)

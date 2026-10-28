@@ -46,6 +46,11 @@ class FullDuplexFrameworkCompletedTurnGate:
         owner._ensure_runtime_defaults()
         timeline = getattr(owner, "_timeline", None)
         completed_transcript = message_text(new_message)
+        observer = getattr(owner, "_speaker_observation", None)
+        begin = getattr(observer, "begin", None)
+        if callable(begin) and timeline is not None:
+            begin(owner._user_turns, timeline.turn_id)
+
         if timeline is not None:
             timeline.mark("framework_completed_turn_at")
             timeline.set_attr(

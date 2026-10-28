@@ -298,6 +298,20 @@ def _resolve_session_target(ctx) -> str | None:
     return validate_companion_target(metadata["target_companion_id"])
 
 
+def _resolve_personal_memory(ctx):
+    from eidolon.interaction_context import PersonalMemorySelection
+    from eidolon_sdk.biz.contracts import SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
+
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    if "personal_memory" not in metadata:
+        return None
+    if (metadata.get("team_dispatch") is not None
+            or metadata.get("presentation_endpoint") is not None
+            or metadata.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION) != SESSION_APPLICATION_COMPANION):
+        raise ValueError("personal memory requires an ordinary Companion session")
+    return PersonalMemorySelection.model_validate(metadata["personal_memory"])
+
+
 def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
     # Only the Provider's authenticated job dispatch supplies the policy.
     # Participant metadata, speech and LLM output cannot grant output rights.
@@ -373,6 +387,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     )
 
     metadata = json.loads(ctx.job.metadata or '{}')
+    personal_memory = _resolve_personal_memory(ctx)
     if 'team_dispatch' in metadata:
         from eidolon.livekit.common.team_dispatch import TeamDispatch
         from eidolon.livekit.agent.coordination.entrypoint import run_team_dispatch
@@ -651,7 +666,17 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
         runtime_session_id=runtime_session_id,
         output_plan=stage_output_plan,
         target_companion_id=target_companion_id,
+        personal_memory=personal_memory,
     )
+
+    speaker_observer = speaker_http = None
+    if getattr(factory, "runtime_services", None) is not None:
+        from .session.conversation_speaker import create_conversation_speaker
+        try:
+            speaker_observer, speaker_http = await create_conversation_speaker(
+                factory, cfg, room)
+        except Exception:
+            logger.warning("Conversation speaker initialization unavailable")
 
     # Video avatar is enabled for this session only if globally available AND the
     # client declared it (full-duplex path for M1). Default off → audio-only.
@@ -686,6 +711,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     else:
         pipeline = StreamingPipeline(
             factory,
+            speaker_observation=speaker_observer,
             instructions=cfg.behavior.instructions,
             allow_interruptions=allow_interruptions,
             welcome_message=(None if presentation_endpoint is not None else cfg.behavior.welcome_message),
@@ -727,6 +753,45 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             # (real-device confirmed).
             on_session_closed=lambda: _end_serving("session closed"),
         )
+
+    runtime_llm = getattr(getattr(factory, "llm", None), "llm", None)
+    if getattr(factory, "runtime_services", None) is not None and hasattr(runtime_llm, "prepare_memory_turn"):
+        from .runtime.automatic_memory import AutomaticMemorySession
+        from .runtime.resolver import _participant_identity_and_metadata
+        from .session.playback_stop import stop_playback
+        from eidolon_sdk.biz.runtime import resolve_shared_secret
+
+        async def stop_revoked_memory_outputs():
+            session = pipeline._session
+            if session is None:
+                raise RuntimeError("output session is unavailable")
+            await session.interrupt(force=True)
+            if presentation_endpoint is not None:
+                if presentation_room is None:
+                    raise RuntimeError("presentation room is unavailable")
+                await stop_playback(presentation_room, presentation_endpoint.participant_identity,
+                    presentation_endpoint.plan.session_id, presentation_endpoint.plan.policy_revision)
+            else:
+                participant = _participant_identity_and_metadata(room)
+                if participant is None:
+                    raise RuntimeError("output participant is unavailable")
+                await stop_playback(room, participant[0], runtime_session_id, 0,
+                                    sdk_output_stopped=True)
+
+        async def publish_memory_state(payload):
+            await room.local_participant.publish_data(json.dumps(payload).encode(),
+                topic="eidolon.memory_scope", reliable=True)
+
+        pipeline._prepare_memory_turn = runtime_llm.prepare_memory_turn
+        runtime_llm.memory_session = AutomaticMemorySession(
+            services=factory.runtime_services, room=room,
+            source_session_id=runtime_session_id,
+            secret=resolve_shared_secret(cfg.runtime_authority.jwt_secret),
+            llm=runtime_llm, stop_outputs=stop_revoked_memory_outputs, publish=publish_memory_state,
+            ttl_seconds=cfg.runtime_authority.device_token_ttl_seconds)
+
+    pipeline._speaker_observation = speaker_observer
+    pipeline._speaker_observation_http = speaker_http
 
     async def _end_serving_cb(reason: str) -> None:
         # The job is shutting down (user left, or an error tore the session down).

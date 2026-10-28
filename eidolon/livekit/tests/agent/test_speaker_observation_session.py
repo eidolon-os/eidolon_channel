@@ -185,26 +185,16 @@ async def test_observation_outcome_preserves_session_input_commit_and_playout(mo
 
 
 @pytest.mark.asyncio
-async def test_observation_rejects_unmapped_provider_before_media_start(monkeypatch):
+@pytest.mark.parametrize("mapped,microphone", [(False, True), (True, False)])
+async def test_optional_observation_preserves_unsupported_audio_paths(monkeypatch, mapped, microphone):
     from eidolon.livekit.agent.session import room_io
 
     media = AsyncMock()
     monkeypatch.setattr(room_io, "start_room_session", media)
     pipeline = SimpleNamespace(_speaker_observation=object(), _factory=SimpleNamespace(
-        stt=SimpleNamespace(stt=object()), runtime_session_id="session"))
-    with pytest.raises(ValueError, match="mapped STT"):
-        await FullDuplexSessionLifecycle(pipeline)._prepare_session(options=RoomOptions())
-    media.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_observation_does_not_turn_on_explicitly_disabled_microphone(monkeypatch):
-    from eidolon.livekit.agent.session import room_io
-
-    media = AsyncMock()
-    monkeypatch.setattr(room_io, "start_room_session", media)
-    pipeline = SimpleNamespace(_speaker_observation=object(), _factory=SimpleNamespace(
-        stt=SimpleNamespace(stt=MappedRecognizer()), runtime_session_id="session"))
-    with pytest.raises(ValueError, match="microphone input"):
-        await FullDuplexSessionLifecycle(pipeline)._prepare_session(options=RoomOptions(audio_input=False))
-    media.assert_not_called()
+        stt=SimpleNamespace(stt=MappedRecognizer() if mapped else object()), runtime_session_id="session"),
+        _warmup_stages=AsyncMock(), _filler=None, session_mark=MagicMock())
+    options = RoomOptions(audio_input=microphone)
+    await FullDuplexSessionLifecycle(pipeline)._prepare_session(options=options)
+    assert media.call_args.kwargs["options"] is options
+    assert not hasattr(pipeline, "_evidence_input")

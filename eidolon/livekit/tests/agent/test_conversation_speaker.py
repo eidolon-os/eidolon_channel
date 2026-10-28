@@ -86,6 +86,7 @@ def client(people=1, profiles=1, score=0.8):
         candidates=AsyncMock(return_value=snapshot(people, profiles)),
         extract=AsyncMock(return_value=SAMPLE),
         compare=AsyncMock(side_effect=compare),
+        record_candidate_evidence=AsyncMock(),
     )
 
 
@@ -431,4 +432,17 @@ async def test_candidate_lifecycle_survives_signed_turn_without_becoming_a_grant
     verified = verify_observation(token, secret='x' * 32, owner_id='o', session_id='s',
                                   turn_id='t', text='hello')
     assert verified.maturity == 'candidate' and verified.is_named is False
+    port.record_candidate_evidence.assert_awaited_once()
+    assert port.record_candidate_evidence.call_args.args[0].observation == result
     assert 'memory_enabled' not in verified.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_receipt_failure_never_changes_a_candidate_identity_match():
+    port = client()
+    port.candidates.return_value.persons[0].maturity = 'candidate'
+    port.record_candidate_evidence.side_effect = OSError('receipt unavailable')
+    result = await SpeakerRecognizer(port, POLICY).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'identified' and result.maturity == 'candidate'
+    port.record_candidate_evidence.assert_awaited_once()

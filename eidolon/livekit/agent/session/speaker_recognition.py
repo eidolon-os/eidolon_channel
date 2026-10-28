@@ -5,8 +5,10 @@ selection. The returned identity is valid for exactly one audio evidence span.
 """
 
 import time
+import hashlib
 from urllib.parse import quote
 
+from eidolon_sdk.biz.candidate_evidence import CANDIDATE_MIN_SPEECH_MS
 from eidolon_sdk.biz.speaker_identity import (
     SpeakerCandidates,
     SpeakerEvidenceSource,
@@ -37,6 +39,11 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
         if result.owner_id != owner_id:
             raise ValueError("candidate owner mismatch")
         return result
+
+    async def record_candidate_evidence(self, request):
+        await self._request("POST", "/api/companion-authority/v1/owners/"
+            + quote(request.observation.owner_id, safe="") + "/voiceprints/candidate-evidence",
+            json=request.model_dump(mode="json"), timeout=1)
 
     async def extract(self, pcm, *, min_speech_ms):
         return await self._provider.extract(pcm, purpose="recognition", min_speech_ms=min_speech_ms)
@@ -150,7 +157,7 @@ class SpeakerRecognizer:
                 and similarity - per_person[1][0] < self.policy.min_person_margin
             ):
                 return outcome("uncertain", "ambiguous_candidates")
-            return outcome(
+            identified = outcome(
                 "identified",
                 "voice_match",
                 **version,
@@ -163,6 +170,17 @@ class SpeakerRecognizer:
                 display_name=person.profile.preferred_name or person.display_name,
                 profile=person.profile,
             )
+            if person.maturity == "candidate" and probe.speech_ms >= CANDIDATE_MIN_SPEECH_MS:
+                from eidolon_sdk.biz.candidate_evidence import CandidateEvidence
+                try:
+                    await self.client.record_candidate_evidence(CandidateEvidence(
+                        snapshot_revision=snapshot.revision,
+                        audio_sha256=hashlib.sha256(evidence.pcm).hexdigest(), observation=identified))
+                except (ServiceUpstreamError, ValueError, OSError):
+                    # Receipt persistence never manufactures an identity or permission.
+                    # A rejected/expired receipt leaves the existing match unchanged.
+                    pass
+            return identified
         except SpeakerExtractionRejected as exc:
             if exc.quality is not None:
                 base["audio_quality"] = exc.quality

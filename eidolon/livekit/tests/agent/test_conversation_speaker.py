@@ -446,3 +446,21 @@ async def test_receipt_failure_never_changes_a_candidate_identity_match():
         evidence(), owner_id='o', session_id='s', turn_id='t')
     assert result.status == 'identified' and result.maturity == 'candidate'
     port.record_candidate_evidence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_full_shared_pool_extracts_once_and_matches_the_last_person():
+    from eidolon_sdk.biz.speaker_identity import MAX_RECOGNITION_PERSONS
+    port = client(people=MAX_RECOGNITION_PERSONS)
+
+    async def compare(probe, templates):
+        return SpeakerComparisonResult(model_id=probe.model_id, weights_hash=probe.weights_hash,
+            preprocessing_version=probe.preprocessing_version, scores=[SpeakerSimilarity(
+                profile_id=t.profile_id, revision=t.revision, status='scored',
+                similarity=0.9 if t.profile_id.startswith(f'v{MAX_RECOGNITION_PERSONS - 1}-') else 0.1)
+                for t in templates])
+    port.compare.side_effect = compare
+    result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.person_id == f'p{MAX_RECOGNITION_PERSONS - 1}'
+    assert port.extract.await_count == 1 and port.candidates.await_count == 2
+    assert port.compare.await_count == MAX_RECOGNITION_PERSONS

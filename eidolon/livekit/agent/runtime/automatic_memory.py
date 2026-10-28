@@ -27,6 +27,45 @@ class AutomaticMemorySession:
         self._context = None
         self._session_id = source_session_id
         self._renew_at = 0.0
+        self._admission_task = None
+        self._admission_observation = None
+
+    def observe(self, observation):
+        """Prepare authority from trusted Channel evidence, never grant it here.
+
+        Consumption still requires the signed, text-bound observation for this
+        exact turn. A completed lookup is not reusable for another observation.
+        """
+        if self._closed:
+            return
+        if self._admission_observation == observation:
+            return
+        if self._admission_task is not None:
+            self._admission_task.cancel()
+        self._admission_task = None
+        observation = observation.model_copy(deep=True)
+        self._admission_observation = observation
+        if (observation.status != "identified"
+                or observation.session_id != self.source_session_id
+                or observation.expires_at <= time.time()):
+            return
+
+        async def resolve():
+            try:
+                async with asyncio.timeout(2.0):
+                    context = await self.services.resolve_room(self.room)
+                    if context.owner_id != observation.owner_id:
+                        return None
+                    realm = await self.services.runtime.resolve_person_memory(
+                        owner_id=context.owner_id, person_id=observation.person_id,
+                        person_revision=observation.person_revision)
+                    if not realm or observation.expires_at <= time.time():
+                        return None
+                    return (observation.person_id, observation.person_revision)
+            except Exception:
+                return None
+
+        self._admission_task = asyncio.create_task(resolve(), name="person-memory-admission")
 
     async def prepare(self, *, observation_token=None, trace_id=None, text=""):
         async with self._lock:
@@ -42,17 +81,11 @@ class AutomaticMemorySession:
                     observation = verify_observation(observation_token, secret=self.secret,
                         owner_id=context.owner_id, session_id=self.source_session_id,
                         turn_id=trace_id, text=text)
-                    if observation.status == "identified":
-                        async with asyncio.timeout(2.0):
-                            realm = await self.services.runtime.resolve_person_memory(owner_id=context.owner_id,
-                                person_id=observation.person_id, person_revision=observation.person_revision)
-                        if not realm:
-                            raise ValueError("personal memory realm unavailable")
-                        # Authority IO must not extend the evidence lease.
-                        verify_observation(observation_token, secret=self.secret,
-                            owner_id=context.owner_id, session_id=self.source_session_id,
-                            turn_id=trace_id, text=text)
-                        person = (observation.person_id, observation.person_revision)
+                    task = self._admission_task
+                    if (observation.status == "identified"
+                            and observation == self._admission_observation
+                            and task is not None and task.done() and not task.cancelled()):
+                        person = task.result()
                 except Exception:
                     # Unbound/disabled/missing/stale/failed recognition all keep
                     # conversation available without any default-Realm access.
@@ -133,6 +166,10 @@ class AutomaticMemorySession:
                         # response, but must retain the already spoken dialogue.
                         self._blocked = True
                         self._prepared = None
+                        if self._admission_task is not None:
+                            self._admission_task.cancel()
+                        self._admission_task = None
+                        self._admission_observation = None
                         await self.llm.close_runtime()
                         await self.stop_outputs()
                         await self._bind_turn(context, None)
@@ -144,6 +181,12 @@ class AutomaticMemorySession:
     async def aclose(self):
         self._closed = True
         self._prepared = None
+        admission = self._admission_task
+        self._admission_task = None
+        self._admission_observation = None
+        if admission is not None:
+            admission.cancel()
+            await asyncio.gather(admission, return_exceptions=True)
         for task in tuple(self._notices):
             task.cancel()
         await asyncio.gather(*tuple(self._notices), return_exceptions=True)

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from eidolon_sdk.biz.runtime import RuntimeTokenVerifier
 from eidolon_sdk.biz.speaker_identity import SpeakerEvidenceSource, SpeakerIdentityObservation
-from eidolon_sdk.biz.speaker_attestation import sign_observation
+from eidolon_sdk.biz.speaker_attestation import sign_observation, verify_observation
 from eidolon.livekit.agent.runtime.automatic_memory import AutomaticMemorySession
 
 SECRET = "test-secret-with-enough-entropy-32b"
@@ -36,19 +36,35 @@ def coordinator():
     return controller, services, llm, stop
 
 
+async def prepared(controller, **kwargs):
+    """An observation whose background authority lookup already finished."""
+    token = kwargs.get("observation_token")
+    if token:
+        try:
+            value = verify_observation(token, secret=SECRET, owner_id="owner",
+                session_id="transport", turn_id=kwargs.get("trace_id"), text=kwargs.get("text", ""))
+        except ValueError:
+            pass
+        else:
+            controller.observe(value)
+            if controller._admission_task is not None:
+                await controller._admission_task
+    return await controller.prepare(**kwargs)
+
+
 async def test_a_b_unknown_keep_room_history_without_default_memory():
     c, services, llm, stop = coordinator()
     try:
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         c.consume(trace_id="t", text="hello")
         first = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
         assert first.person_id == "a" and first.source_session_id == "transport"
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         assert stop.await_count == 0
-        await c.prepare(observation_token=observation("b"), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation("b"), trace_id="t", text="hello")
         second = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
         assert second.person_id == "b" and second.session_id == first.session_id
-        await c.prepare(text="typed input")
+        await prepared(c, text="typed input")
         unknown = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
         assert unknown.person_id is None and unknown.session_id == second.session_id
         assert unknown.source_session_id == "transport"
@@ -64,7 +80,7 @@ async def test_ineligible_evidence_never_grants_memory(mode):
     if mode == "forged": token = "invalid"
     if mode == "unbound": services.runtime.resolve_person_memory.side_effect = LookupError("disabled")
     try:
-        await c.prepare(observation_token=token, trace_id="other" if mode == "wrong-turn" else "t", text="hello")
+        await prepared(c, observation_token=token, trace_id="other" if mode == "wrong-turn" else "t", text="hello")
         c.consume(trace_id="other" if mode == "wrong-turn" else "t", text="hello")
         assert c._person is None
         identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
@@ -76,15 +92,15 @@ async def test_ineligible_evidence_never_grants_memory(mode):
 async def test_failed_credential_transition_blocks_turn_until_retry():
     c, services, llm, stop = coordinator()
     try:
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         llm.close_runtime.side_effect = TimeoutError("RPC close failed")
         with pytest.raises(TimeoutError):
-            await c.prepare(observation_token=observation("b"), trace_id="t", text="hello")
+            await prepared(c, observation_token=observation("b"), trace_id="t", text="hello")
         with pytest.raises(RuntimeError, match="admission"):
             c.consume(trace_id="t", text="hello")
         assert llm.install_runtime.call_count == 1
         llm.close_runtime.side_effect = None
-        await c.prepare(observation_token=observation("b"), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation("b"), trace_id="t", text="hello")
         assert c._person == ("b", 1)
     finally:
         await c.aclose()
@@ -93,10 +109,10 @@ async def test_failed_credential_transition_blocks_turn_until_retry():
 async def test_credential_refresh_preserves_identity_session_and_conversation():
     c, services, llm, stop = coordinator()
     try:
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         original = llm.install_runtime.call_args.args
         c._renew_at = 0
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         refreshed = llm.install_runtime.call_args.args
         assert original[1] == refreshed[1]
         assert original[0] != refreshed[0]
@@ -108,7 +124,7 @@ async def test_credential_refresh_preserves_identity_session_and_conversation():
 async def test_idle_person_revocation_stops_outputs_without_waiting_for_next_turn():
     c, services, llm, stop = coordinator()
     try:
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         cleared = asyncio.Event()
         async def clear(**kwargs):
             cleared.set()
@@ -127,7 +143,7 @@ async def test_idle_person_revocation_stops_outputs_without_waiting_for_next_tur
 async def test_recognition_policy_is_not_a_second_memory_gate(confidence):
     c, services, llm, stop = coordinator()
     try:
-        changed = await c.prepare(observation_token=observation(confidence=confidence), trace_id="t", text="hello")
+        changed = await prepared(c, observation_token=observation(confidence=confidence), trace_id="t", text="hello")
         assert not changed
         c.consume(trace_id="t", text="hello")
         identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
@@ -142,9 +158,9 @@ async def test_recognition_policy_is_not_a_second_memory_gate(confidence):
 async def test_nonidentified_turn_drops_previous_memory_without_dropping_dialogue(status):
     c, services, llm, stop = coordinator()
     try:
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         original_conversation = llm.install_runtime.call_args.args[1]
-        await c.prepare(observation_token=observation(status=status), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(status=status), trace_id="t", text="hello")
         c.consume(trace_id="t", text="hello")
         identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
         assert identity.person_id is None
@@ -158,13 +174,56 @@ async def test_nonidentified_turn_drops_previous_memory_without_dropping_dialogu
 async def test_failed_authority_never_keeps_previous_person(failure):
     c, services, llm, stop = coordinator()
     try:
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         services.runtime.resolve_person_memory.side_effect = failure
         services.runtime.resolve_person_memory.return_value = None
-        await c.prepare(observation_token=observation(), trace_id="t", text="hello")
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         c.consume(trace_id="t", text="hello")
         identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
         assert identity.person_id is None
         stop.assert_not_awaited()
     finally:
         await c.aclose()
+
+
+async def test_pending_authority_does_not_delay_turn_or_late_grant():
+    c, services, llm, stop = coordinator()
+    gate, started = asyncio.Event(), asyncio.Event()
+    async def resolve(**kwargs):
+        started.set()
+        await gate.wait()
+        return "private"
+    services.runtime.resolve_person_memory.side_effect = resolve
+    token = observation()
+    value = verify_observation(token, secret=SECRET, owner_id="owner",
+        session_id="transport", turn_id="t", text="hello")
+    try:
+        c.observe(value)
+        await started.wait()
+        await asyncio.wait_for(c.prepare(observation_token=token, trace_id="t", text="hello"), .2)
+        c.consume(trace_id="t", text="hello")
+        assert c._person is None
+        gate.set()
+        await c._admission_task
+        assert c._person is None
+        await c.prepare(observation_token=observation(trace="next"), trace_id="next", text="hello")
+        assert c._person is None
+    finally:
+        await c.aclose()
+
+
+async def test_close_cancels_background_admission():
+    c, services, llm, stop = coordinator()
+    started, cancelled = asyncio.Event(), asyncio.Event()
+    async def resolve(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    services.runtime.resolve_person_memory.side_effect = resolve
+    c.observe(verify_observation(observation(), secret=SECRET, owner_id="owner",
+        session_id="transport", turn_id="t", text="hello"))
+    await started.wait()
+    await c.aclose()
+    assert cancelled.is_set()

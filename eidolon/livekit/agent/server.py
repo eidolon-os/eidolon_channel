@@ -790,6 +790,9 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             llm=runtime_llm, stop_outputs=stop_revoked_memory_outputs, publish=publish_memory_state,
             ttl_seconds=cfg.runtime_authority.device_token_ttl_seconds)
 
+    if speaker_observer is not None and getattr(runtime_llm, "memory_session", None) is not None:
+        speaker_observer.on_observation = runtime_llm.memory_session.observe
+
     pipeline._speaker_observation = speaker_observer
     pipeline._speaker_observation_http = speaker_http
 

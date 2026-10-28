@@ -31,6 +31,7 @@ class ConversationSpeaker:
         self._key = None
         self._closed = False
         self._publish_tasks = set()
+        self.on_observation = None
 
     def bind_capture(self, capture):
         if capture is not self._capture:
@@ -92,6 +93,17 @@ class ConversationSpeaker:
                 return self.fallback(turn_id, "dependency_unavailable")
 
         self._task = asyncio.create_task(run())
+
+        def completed(task):
+            if self._closed or self._task is not task or task.cancelled():
+                return
+            if self.on_observation is not None:
+                try:
+                    self.on_observation(task.result())
+                except Exception:
+                    logging.getLogger(__name__).warning("Person admission preparation unavailable")
+
+        self._task.add_done_callback(completed)
 
     def fallback(self, turn_id, reason):
         now = time.time()

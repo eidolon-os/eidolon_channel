@@ -362,3 +362,23 @@ async def test_unknown_upstream_validation_failure_is_not_a_voice_mismatch():
     value = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
     assert value.status == 'unavailable' and value.reason == 'invalid_extraction_response'
     assert 'private' not in value.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_completed_observation_prepares_authority_before_turn_delivery():
+    observer = ConversationSpeaker(recognizer=SpeakerRecognizer(client(), POLICY),
+        owner_id="o", session_id="s", secret="x" * 32, publish=MagicMock())
+    prepared = asyncio.Event()
+    values = []
+    def observe(value):
+        values.append(value)
+        prepared.set()
+    observer.on_observation = observe
+    try:
+        observer.begin_evidence(evidence(), "t")
+        await asyncio.wait_for(prepared.wait(), .2)
+        assert values[0].person_id == "p0"
+        observer.publish.assert_not_called()
+        assert await observer.result("t") == values[0]
+    finally:
+        await observer.aclose()

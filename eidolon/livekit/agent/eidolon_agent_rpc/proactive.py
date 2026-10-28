@@ -91,6 +91,17 @@ class ProactiveSubscriber:
             except asyncio.CancelledError:
                 raise
             except grpc.aio.AioRpcError as exc:
+                if exc.code() in {
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    grpc.StatusCode.PERMISSION_DENIED,
+                    grpc.StatusCode.UNAUTHENTICATED,
+                    grpc.StatusCode.UNIMPLEMENTED,
+                }:
+                    # A fixed session credential cannot gain scope by retrying.
+                    # A new authorized session creates its own subscriber.
+                    logger.info("[ProactiveSubscriber] subscription unavailable for this session code=%s", exc.code())
+                    await self.aclose()
+                    return
                 logger.warning(
                     "[ProactiveSubscriber] stream ended code=%s; reconnecting in %.1fs",
                     exc.code(),

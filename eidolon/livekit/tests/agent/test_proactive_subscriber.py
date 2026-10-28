@@ -129,3 +129,26 @@ async def test_subscriber_handler_error_does_not_break_stream() -> None:
 
     # First handler raised; the stream survived and delivered the second event.
     assert received == ["ok"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('code', [grpc.StatusCode.FAILED_PRECONDITION,
+    grpc.StatusCode.UNAUTHENTICATED, grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.UNIMPLEMENTED])
+async def test_session_scope_refusal_stops_retrying(code):
+    class Refused(_ProactiveServicer):
+        async def SubscribeProactive(self, request, context):
+            self.requests.append(request)
+            await context.abort(code, 'not available for this session')
+            if False:
+                yield
+    servicer = Refused(events=[])
+    server, target = await _serve(servicer)
+    subscriber = ProactiveSubscriber(target=target, device_token='test', on_event=lambda _: None)
+    try:
+        await asyncio.wait_for(subscriber.run(), timeout=2)
+        assert len(servicer.requests) == 1
+        assert subscriber._channel is None
+    finally:
+        await subscriber.aclose()
+        await server.stop(grace=.5)

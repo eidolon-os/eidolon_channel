@@ -11,13 +11,17 @@ import json
 from pathlib import Path
 
 import numpy as np
-from eidolon_sdk.biz.voiceprint import ExtractedSample
+from eidolon_sdk.biz.voiceprint import ExtractedSample, SpeakerAudioQuality
 
 from .providers.modelscope_campplus import ModelScopeCampPlusSpeakerVerificationProvider
 
 
 class InvalidSpeakerAudio(ValueError):
     """A machine-readable signal-quality failure, never an identity rejection."""
+
+    def __init__(self, reason, quality=None):
+        super().__init__(reason)
+        self.quality = quality
 
 
 class ReferenceSpeakerExtractor:
@@ -93,19 +97,27 @@ class ReferenceSpeakerExtractor:
         self._provider.extract_embedding(probe.tobytes(), 16000)
         self._weights_hash = weights_hash
 
-    def extract(self, pcm: bytes) -> ExtractedSample:
+    def extract(self, pcm: bytes, min_speech_ms: int = 1500) -> ExtractedSample:
         if self._vad is None or self._weights_hash is None:
             raise RuntimeError('model_not_ready')
         if not isinstance(pcm, bytes) or len(pcm) % 2 or len(pcm) > 960000:
             raise InvalidSpeakerAudio('invalid_pcm')
-        if len(pcm) < 48000:
-            raise InvalidSpeakerAudio('audio_too_short')
+        if not 300 <= min_speech_ms <= 30000:
+            raise ValueError('invalid_speech_floor')
+        quality = SpeakerAudioQuality(
+            audio_ms=len(pcm) // 32, required_speech_ms=min_speech_ms,
+        )
+        if len(pcm) < min_speech_ms * 32:
+            raise InvalidSpeakerAudio('audio_too_short', quality)
         samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
+        quality.rms = float(np.sqrt(np.mean(samples*samples)))
         if not np.any(samples):
-            raise InvalidSpeakerAudio('digital_silence')
+            quality.speech_ms = 0
+            raise InvalidSpeakerAudio('digital_silence', quality)
         clipping = float(np.mean(np.abs(samples) >= .995))
+        quality.clipping = clipping
         if clipping > .02:
-            raise InvalidSpeakerAudio('audio_clipped')
+            raise InvalidSpeakerAudio('audio_clipped', quality)
         self._vad.reset()
         size = self._vad.window_size_samples
         speech_samples = sum(
@@ -113,8 +125,9 @@ class ReferenceSpeakerExtractor:
             if self._vad(samples[i:i + size]) >= .5
         )
         speech_ms = speech_samples * 1000 // 16000
-        if speech_ms < 1500:
-            raise InvalidSpeakerAudio('speech_too_short')
+        quality.speech_ms = speech_ms
+        if speech_ms < min_speech_ms:
+            raise InvalidSpeakerAudio('speech_too_short', quality)
         # VAD measures quality only. Never delete gaps, split the embedding into
         # 2-second chunks, or compare a quality score with an identity threshold.
         vector = self._provider.extract_embedding(pcm, 16000)
@@ -124,5 +137,5 @@ class ReferenceSpeakerExtractor:
             preprocessing_version='reference-contiguous-pcm16-v1',
             vector=vector.tolist(),
             speech_ms=speech_ms,
-            quality=dict(clipping=clipping, rms=float(np.sqrt(np.mean(samples*samples)))),
+            quality=quality.model_dump(exclude_none=True),
         )

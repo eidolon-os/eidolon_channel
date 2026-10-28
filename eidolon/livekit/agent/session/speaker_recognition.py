@@ -13,8 +13,8 @@ from eidolon_sdk.biz.speaker_identity import (
     SpeakerIdentityObservation,
     SpeakerRecognitionPolicy,
 )
-from eidolon_sdk.biz.voiceprint import SpeakerComparisonRequest
-from .speaker_extraction_client import SpeakerExtractionClient
+from eidolon_sdk.biz.voiceprint import SpeakerComparisonRequest, SpeakerAudioQuality
+from .speaker_extraction_client import SpeakerExtractionClient, SpeakerExtractionRejected
 from eidolon.livekit.plugins.speaker_verification.scoring import compare_speakers
 from eidolon_sdk.core.http.errors import ServiceUpstreamError
 from eidolon_sdk.core.http.client import ServiceHTTPClient, authorization_header
@@ -38,8 +38,8 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
             raise ValueError("candidate owner mismatch")
         return result
 
-    async def extract(self, pcm):
-        return await self._provider.extract(pcm)
+    async def extract(self, pcm, *, min_speech_ms):
+        return await self._provider.extract(pcm, purpose="recognition", min_speech_ms=min_speech_ms)
 
     async def compare(self, probe, templates):
         # Reuse the Provider's pure cosine scorer; no RPC/model per candidate.
@@ -77,10 +77,15 @@ class SpeakerRecognizer:
 
         if evidence is None or not evidence.complete:
             return outcome("uncertain", "audio_evidence_unavailable")
-        if evidence.sample_rate != 16000 or len(evidence.pcm) < 48000:
-            return outcome("uncertain", "speech_too_short")
         if self.policy is None:
             return outcome("unavailable", "recognition_policy_missing")
+        if evidence.sample_rate != 16000 or len(evidence.pcm) % 2 or len(evidence.pcm) > 960000:
+            return outcome("unavailable", "invalid_audio_format")
+        base["audio_quality"] = SpeakerAudioQuality(
+            audio_ms=len(evidence.pcm) // 32, required_speech_ms=self.policy.min_speech_ms,
+        )
+        if len(evidence.pcm) < self.policy.min_speech_ms * 32:
+            return outcome("uncertain", "audio_too_short")
         if self._busy:
             return outcome("unavailable", "recognizer_busy")
         self._busy = True
@@ -88,7 +93,12 @@ class SpeakerRecognizer:
             snapshot = await self.client.candidates(owner_id)
             if not snapshot.persons:
                 return outcome("uncertain", "no_enrolled_voices")
-            probe = await self.client.extract(evidence.pcm)
+            probe = await self.client.extract(evidence.pcm, min_speech_ms=self.policy.min_speech_ms)
+            base["audio_quality"] = SpeakerAudioQuality(
+                audio_ms=len(evidence.pcm) // 32, required_speech_ms=self.policy.min_speech_ms,
+                speech_ms=probe.speech_ms,
+                clipping=probe.quality.get("clipping"), rms=probe.quality.get("rms"),
+            )
             if (probe.model_id, probe.weights_hash, probe.preprocessing_version) != (
                 self.policy.model_id,
                 self.policy.weights_hash,
@@ -132,6 +142,8 @@ class SpeakerRecognizer:
                 cosine_similarity=similarity,
             )
             if similarity < self.policy.threshold:
+                if probe.speech_ms < self.policy.min_unknown_speech_ms:
+                    return outcome("uncertain", "short_speech_inconclusive", **version)
                 return outcome("unknown", "no_match", **version)
             if (
                 len(per_person) > 1
@@ -149,10 +161,14 @@ class SpeakerRecognizer:
                 display_name=person.profile.preferred_name or person.display_name,
                 profile=person.profile,
             )
+        except SpeakerExtractionRejected as exc:
+            if exc.quality is not None:
+                base["audio_quality"] = exc.quality
+            return outcome("uncertain" if exc.audio_quality_failure else "unavailable", exc.reason)
         except ServiceUpstreamError as exc:
             return outcome(
-                "uncertain" if exc.status_code == 422 else "unavailable",
-                "audio_rejected" if exc.status_code == 422 else "dependency_unavailable",
+                "unavailable",
+                "invalid_extraction_response" if exc.status_code == 422 else "dependency_unavailable",
             )
         except (ValueError, OSError):
             return outcome("unavailable", "invalid_dependency_result")

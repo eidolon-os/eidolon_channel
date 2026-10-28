@@ -129,7 +129,7 @@ async def test_deadline_is_bounded_and_does_not_leak_into_next_turn():
     port = client()
     cancelled = asyncio.Event()
 
-    async def slow(_):
+    async def slow(_, **kwargs):
         try:
             await asyncio.sleep(10)
         finally:
@@ -239,7 +239,7 @@ async def test_product_completed_turn_delivers_exact_audio_and_signed_context(sc
             owner, turn_id="t", text="hello", llm=pipeline._factory.llm.llm, timeline=timeline
         )
         assert len(published) == 1 and published[0].status == expected
-        port.extract.assert_awaited_once_with(evidence().pcm)
+        port.extract.assert_awaited_once_with(evidence().pcm, min_speech_ms=1500)
         token = pipeline._factory.llm.llm.set_speaker_observation.call_args.args[0]
         assert (
             verify_observation(
@@ -272,7 +272,7 @@ async def test_existing_provider_http_and_pure_scorer_are_reused():
                 provider_url=str(server.make_url("")).rstrip("/"),
                 provider_token="test",
             )
-            sample = await port.extract(evidence().pcm)
+            sample = await port.extract(evidence().pcm, min_speech_ms=1500)
             compared = await port.compare(
                 sample, [VoiceTemplate(profile_id="p", revision=1, sample=sample)]
             )
@@ -318,3 +318,47 @@ async def test_final_transcript_starts_recognition_before_framework_completion()
         assert result.status=='identified'
         assert pipeline._user_turns.active.state=='open'
     finally:await observer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_long_asr_tail_expires_identity_without_aborting_delivery():
+    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(client(),POLICY),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    value=await observer.recognizer.recognize(evidence(),owner_id='o',session_id='s',turn_id='t')
+    expired=value.model_copy(update={'issued_at':time.time()-20,'expires_at':time.time()-10})
+    llm=MagicMock();observer.deliver(expired,text='hello',llm=llm,timeline=None)
+    accepted=verify_observation(llm.set_speaker_observation.call_args.args[0],secret='x'*32,owner_id='o',session_id='s',turn_id='t',text='hello')
+    assert accepted.person_id is None and accepted.reason=='observation_expired'
+    assert observer.publish.call_args.args[0].status=='unavailable'
+    await observer.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("score,status,reason", [(0.1,"uncertain","short_speech_inconclusive"),(0.8,"identified","voice_match")])
+async def test_policy_controls_short_probe_and_unknown_requires_completed_comparison(score,status,reason):
+    from dataclasses import replace
+    policy = POLICY.model_copy(update={'min_speech_ms': 600})
+    port = client(score=score)
+    port.extract.return_value = SAMPLE.model_copy(update={'speech_ms':800})
+    short = replace(evidence(), end=16000, pcm=evidence().pcm[:32000])
+    value = await SpeakerRecognizer(port, policy).recognize(short, owner_id='o', session_id='s', turn_id='t')
+    assert value.status == status and value.reason == reason
+    assert value.audio_quality.speech_ms == 800
+    port.extract.assert_awaited_once_with(short.pcm, min_speech_ms=600)
+    port.compare.assert_awaited_once()
+    port = client()
+    too_short = replace(short, end=4800, pcm=short.pcm[:9600])
+    value = await SpeakerRecognizer(port, policy).recognize(too_short, owner_id='o', session_id='s', turn_id='t')
+    assert value.reason == 'audio_too_short' and value.person_id is None
+    assert value.audio_quality.audio_ms == 300
+    port.extract.assert_not_awaited()
+    port.compare.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_upstream_validation_failure_is_not_a_voice_mismatch():
+    from eidolon_sdk.core.http.errors import ServiceUpstreamError
+    port = client()
+    port.extract.side_effect = ServiceUpstreamError(422, 'private unexpected validation body')
+    value = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert value.status == 'unavailable' and value.reason == 'invalid_extraction_response'
+    assert 'private' not in value.model_dump_json()

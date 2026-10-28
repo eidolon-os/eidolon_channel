@@ -182,7 +182,7 @@ async def test_http_adapter_reuses_contract_and_does_not_send_identity_or_retry(
     assert len(requests) == 1
     request = requests[0]
     import json
-    assert json.loads(request.content) == {"pcm_base64": base64.b64encode(b"\x01\x00" * 24000).decode(), "purpose": "enrollment"}
+    assert json.loads(request.content) == {"pcm_base64": base64.b64encode(b"\x01\x00" * 24000).decode(), "purpose": "enrollment", "min_speech_ms": 1500}
     assert request.url.path == "/v1/voiceprints/extract"
     assert request.headers["authorization"] == "Bearer test-token"
 

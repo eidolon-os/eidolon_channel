@@ -76,10 +76,10 @@ class SpeakerInferenceEngine:
         if self.state != 'closed':
             self.state = 'ready'
 
-    async def extract(self, pcm):
+    async def extract(self, pcm, min_speech_ms=1500):
         if self.state != 'ready':
             raise ModelUnavailable('model_' + self.state)
-        future = self._submit(self._extractor.extract, pcm)
+        future = self._submit(self._extractor.extract, pcm, min_speech_ms)
         try:
             async with asyncio.timeout(self._timeout):
                 return await asyncio.shield(future)

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import time
 from eidolon_sdk.biz.speaker_attestation import sign_observation
 from eidolon_sdk.biz.speaker_identity import SpeakerIdentityObservation
@@ -140,6 +141,10 @@ class ConversationSpeaker:
         return task.result()
 
     def deliver(self, value, *, text, llm, timeline):
+        # A long ASR tail may outlive an otherwise completed recognition task.
+        # Expiry clears the identity; it must never abort the spoken request.
+        if value.expires_at <= time.time():
+            value = self.fallback(value.turn_id, "observation_expired")
         setter = getattr(llm, "set_speaker_observation", None)
         if callable(setter):
             setter(sign_observation(value, secret=self.secret, text=text))
@@ -153,6 +158,8 @@ class ConversationSpeaker:
                     "person_id": value.person_id,
                     "confidence": value.confidence,
                     "decision_version": value.decision_version,
+                    "audio_quality": value.audio_quality.model_dump(exclude_none=True)
+                        if value.audio_quality is not None else None,
                     "delivered_to_agent": callable(setter),
                 },
             )
@@ -229,8 +236,15 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
                     ),
                     1,
                 )
+                logging.getLogger(__name__).info(
+                    "Speaker feedback published turn_id=%s status=%s",
+                    value.turn_id, value.status,
+                )
             except Exception:
-                pass
+                logging.getLogger(__name__).warning(
+                    "Speaker feedback publish failed turn_id=%s status=%s",
+                    value.turn_id, value.status,
+                )
 
         task = asyncio.create_task(send())
         tasks.add(task)

@@ -93,7 +93,6 @@ runtime_authority:
 voiceprint:
   # Shared model and advisory policy delivered as one versioned Models asset.
   model_dir: ""
-  recognition_wait_ms: 300
 
 turn_policy:
   # Options: balanced_semantic, fast_e2e_like, patient_companion, custom.

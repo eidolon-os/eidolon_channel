@@ -125,35 +125,35 @@ async def test_revision_change_discards_identity():
 
 
 @pytest.mark.asyncio
-async def test_deadline_is_bounded_and_does_not_leak_into_next_turn():
+async def test_pending_result_is_frozen_and_late_feedback_never_changes_llm():
     port = client()
-    cancelled = asyncio.Event()
-
+    gate = asyncio.Event()
     async def slow(_, **kwargs):
-        try:
-            await asyncio.sleep(10)
-        finally:
-            cancelled.set()
-
+        await gate.wait()
+        return SAMPLE
     port.extract.side_effect = slow
-    observer = ConversationSpeaker(
-        recognizer=SpeakerRecognizer(port, POLICY),
-        owner_id="o",
-        session_id="s",
-        secret="x" * 32,
-        publish=MagicMock(),
-        wait_ms=10,
-    )
-    observer.begin_evidence(evidence(), "t")
-    start = time.monotonic()
-    result = await observer.result("t")
-    assert (
-        time.monotonic() - start < 0.2
-        and result.reason == "reply_deadline"
-        and result.person_id is None
-    )
-    await asyncio.wait_for(cancelled.wait(), 0.2)
-    await observer.aclose()
+    published = []
+    observer = ConversationSpeaker(recognizer=SpeakerRecognizer(port, POLICY),
+        owner_id="o", session_id="s", secret="x" * 32, publish=published.append)
+    try:
+        observer.begin_evidence(evidence(), "t")
+        task = observer._task
+        result = await observer.result("t")
+        assert result.reason == "recognition_pending" and not task.done()
+        llm = MagicMock()
+        observer.deliver(result, text="hello", llm=llm, timeline=None)
+        gate.set()
+        await task
+        await asyncio.sleep(0)
+        assert published[-1].status == "identified"
+        assert await observer.result("t") == result
+        observer.deliver(result, text="hello", llm=llm, timeline=None)
+        assert published[-1].status == "identified"
+        assert llm.set_speaker_observation.call_count == 1
+        wrong = await observer.result("next")
+        assert wrong.person_id is None
+    finally:
+        await observer.aclose()
 
 
 @pytest.mark.asyncio
@@ -164,9 +164,9 @@ async def test_signed_delivery_bound_to_exact_turn_and_text():
         session_id="s",
         secret="x" * 32,
         publish=MagicMock(),
-        wait_ms=100,
     )
     observer.begin_evidence(evidence(), "t")
+    await observer._task
     result = await observer.result("t")
     llm = MagicMock()
     observer.deliver(result, text="hello", llm=llm, timeline=None)
@@ -207,7 +207,6 @@ async def test_product_completed_turn_delivers_exact_audio_and_signed_context(sc
         session_id="s",
         secret="x" * 32,
         publish=published.append,
-        wait_ms=100,
     )
     capture = AudioEvidenceCapture(session_id="s", endpoint_id="mic")
     source = AudioSource("mic", 1, 16000)
@@ -235,6 +234,8 @@ async def test_product_completed_turn_delivers_exact_audio_and_signed_context(sc
         assert await pipeline._ensure_turn_completion().allows_completed_turn(
             turn_ctx=ChatContext.empty(), new_message=ChatMessage(role="user", content=["hello"])
         )
+        observer.begin(owner, "t")
+        await observer._task
         await observer.finish(
             owner, turn_id="t", text="hello", llm=pipeline._factory.llm.llm, timeline=timeline
         )
@@ -314,6 +315,7 @@ async def test_final_transcript_starts_recognition_before_framework_completion()
         pipeline._ensure_transcript_recorder().record(FullDuplexTranscriptEvent(
             transcript='hello',is_final=True,evidence=TranscriptEvidence(stream_key='asr',revision_key='final',audio_span=AudioSpan('mic',1,16000,0,32000))))
         assert observer._task is not None
+        await observer._task
         result=await observer.result('t')
         assert result.status=='identified'
         assert pipeline._user_turns.active.state=='open'
@@ -380,5 +382,35 @@ async def test_completed_observation_prepares_authority_before_turn_delivery():
         assert values[0].person_id == "p0"
         observer.publish.assert_not_called()
         assert await observer.result("t") == values[0]
+    finally:
+        await observer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_replaced_evidence_cannot_publish_old_late_result():
+    port = client()
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+    async def slow(_, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    port.extract.side_effect = slow
+    published = []
+    observer = ConversationSpeaker(recognizer=SpeakerRecognizer(port, POLICY),
+        owner_id="o", session_id="s", secret="x" * 32, publish=published.append)
+    try:
+        observer.begin_evidence(evidence(), "old")
+        await entered.wait()
+        initial = await observer.result("old")
+        observer.deliver(initial, text="hello", llm=MagicMock(), timeline=None)
+        observer.begin_evidence(None, "new")
+        await asyncio.wait_for(cancelled.wait(), .2)
+        await observer._task
+        await asyncio.sleep(0)
+        assert published == [initial]
+        assert (await observer.result("old")).person_id is None
+        assert (await observer.result("new")).reason == "audio_evidence_unavailable"
     finally:
         await observer.aclose()

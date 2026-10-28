@@ -20,18 +20,19 @@ class ConversationSpeaker:
         session_id: str,
         secret: str,
         publish,
-        wait_ms: int = 300,
         lifetime_ms: int = 2000,
     ):
         self.recognizer, self.owner_id, self.session_id = recognizer, owner_id, session_id
         self.secret, self.publish = secret, publish
-        self.wait_ms, self.lifetime_ms = wait_ms, lifetime_ms
+        self.lifetime_ms = lifetime_ms
         self._capture = None
         self._task = None
         self._key = None
         self._closed = False
         self._publish_tasks = set()
         self.on_observation = None
+        self._frozen = None
+        self._delivered = False
 
     def bind_capture(self, capture):
         if capture is not self._capture:
@@ -43,6 +44,8 @@ class ConversationSpeaker:
             self._task.cancel()
         self._task = None
         self._key = None
+        self._frozen = None
+        self._delivered = False
 
     def _evidence(self, coordinator):
         capture = self._capture
@@ -97,9 +100,13 @@ class ConversationSpeaker:
         def completed(task):
             if self._closed or self._task is not task or task.cancelled():
                 return
+            value = task.result()
+            if self._delivered and self._frozen != value and value.expires_at > time.time():
+                # Feedback only. Never sign or install a late result in the LLM.
+                self.publish(value)
             if self.on_observation is not None:
                 try:
-                    self.on_observation(task.result())
+                    self.on_observation(value)
                 except Exception:
                     logging.getLogger(__name__).warning("Person admission preparation unavailable")
 
@@ -139,20 +146,26 @@ class ConversationSpeaker:
         self.deliver(value, text=text, llm=llm, timeline=timeline)
 
     async def result(self, turn_id):
+        """Freeze the already available observation; never yield for inference."""
+        if self._closed or self._key is None or self._key[0] != turn_id:
+            return self.fallback(turn_id, "audio_evidence_unavailable")
+        if self._frozen is not None:
+            return self._frozen
         task = self._task
         if task is None:
-            return self.fallback(turn_id, "audio_evidence_unavailable")
-        done, _ = await asyncio.wait({task}, timeout=self.wait_ms / 1000)
-        if not done:
-            # Cancel instead of queuing or attaching a late result to a new turn.
-            task.cancel()
-            self._task = None
-            return self.fallback(turn_id, "reply_deadline")
-        if task.cancelled():
-            return self.fallback(turn_id, "recognition_cancelled")
-        return task.result()
+            value = self.fallback(turn_id, "audio_evidence_unavailable")
+        elif task.cancelled():
+            value = self.fallback(turn_id, "recognition_cancelled")
+        elif not task.done():
+            value = self.fallback(turn_id, "recognition_pending")
+        else:
+            value = task.result()
+        self._frozen = value
+        return value
 
     def deliver(self, value, *, text, llm, timeline):
+        if self._delivered:
+            return
         # A long ASR tail may outlive an otherwise completed recognition task.
         # Expiry clears the identity; it must never abort the spoken request.
         if value.expires_at <= time.time():
@@ -176,6 +189,7 @@ class ConversationSpeaker:
                 },
             )
         self.publish(value)
+        self._delivered = True
 
     def submit(self, *_):
         # The framework hook awaits finish; diagnostic-only submit is retired.
@@ -224,10 +238,14 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
     )
     target = publish_room or room
     tasks = set()
+    sequence = 0
 
     def publish(value):
+        nonlocal sequence
+        sequence += 1
         payload = {
             "schema_version": 1,
+            "sequence": sequence,
             "session_id": factory.runtime_session_id,
             "conversation_id": factory.runtime_session_id,
             "turn_id": value.turn_id,
@@ -268,7 +286,6 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
         session_id=factory.runtime_session_id,
         secret=secret,
         publish=publish,
-        wait_ms=cfg.voiceprint.recognition_wait_ms,
     )
     observer._publish_tasks = tasks
     return observer, http

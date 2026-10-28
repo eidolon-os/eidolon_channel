@@ -263,8 +263,6 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
 
 
 def voiceprint_config_errors(vp: VoiceprintConfig) -> list[str]:
-    if type(vp.recognition_wait_ms) is not int or not 0 <= vp.recognition_wait_ms <= 800:
-        return ["voiceprint.recognition_wait_ms must be in 0..800"]
     if not isinstance(vp.model_dir, str) or len(vp.model_dir) > 4096:
         return ["voiceprint.model_dir must be a bounded path string"]
     return []

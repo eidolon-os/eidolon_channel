@@ -227,3 +227,30 @@ async def test_close_cancels_background_admission():
     await started.wait()
     await c.aclose()
     assert cancelled.is_set()
+
+
+async def test_slow_revocation_check_cannot_block_or_revoke_new_turn():
+    c, services, llm, stop = coordinator()
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def slow(**kwargs):
+        entered.set()
+        await release.wait()
+        raise LookupError("old Person revoked")
+    try:
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
+        c._watcher.cancel()
+        await asyncio.gather(c._watcher, return_exceptions=True)
+        c._watcher = None
+        services.runtime.resolve_person_memory.side_effect = slow
+        check = asyncio.create_task(c._check_authority())
+        await entered.wait()
+        # The old authority request must not serialize a new unknown speaker.
+        await asyncio.wait_for(c.prepare(trace_id="new", text="new person"), .2)
+        c.consume(trace_id="new", text="new person")
+        release.set()
+        await check
+        assert c._person is None and not c._blocked
+        stop.assert_not_awaited()
+    finally:
+        release.set()
+        await c.aclose()

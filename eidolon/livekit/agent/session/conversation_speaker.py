@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from eidolon_sdk.biz.speaker_attestation import sign_observation
+from eidolon_sdk.biz.person_observation import PersonObservationFeedback
 from eidolon_sdk.biz.speaker_identity import SpeakerIdentityObservation
 from .speaker_recognition import SpeakerRecognizer
 
@@ -243,20 +244,19 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
     def publish(value):
         nonlocal sequence
         sequence += 1
-        payload = {
-            "schema_version": 1,
-            "sequence": sequence,
-            "session_id": factory.runtime_session_id,
-            "conversation_id": factory.runtime_session_id,
-            "turn_id": value.turn_id,
-            "status": value.status,
-            "reason": value.reason,
-            "person_id": value.person_id,
-            "display_name": value.display_name,
-            "confidence": value.confidence,
-            "issued_at": value.issued_at,
-            "expires_at": value.expires_at,
-        }
+        payload = PersonObservationFeedback(
+            sequence=sequence,
+            session_id=factory.runtime_session_id,
+            conversation_id=factory.runtime_session_id,
+            turn_id=value.turn_id,
+            status=value.status,
+            reason=value.reason,
+            person_id=value.person_id,
+            display_name=value.display_name,
+            confidence=value.confidence,
+            issued_at=value.issued_at,
+            expires_at=value.expires_at,
+        ).model_dump(mode="json")
 
         async def send():
             try:

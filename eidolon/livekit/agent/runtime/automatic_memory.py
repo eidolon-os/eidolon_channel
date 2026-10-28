@@ -148,35 +148,41 @@ class AutomaticMemorySession:
     async def _watch(self):
         while True:
             await asyncio.sleep(1.0)
+            await self._check_authority()
+
+    async def _check_authority(self):
+        # Do not hold the turn-transition lock across network IO. A stale
+        # response may only revoke the exact binding it checked.
+        async with self._lock:
+            if self._closed or (self._person is None and not self._blocked):
+                return
+            context, person, epoch = self._context, self._person, self._epoch
+            blocked = self._blocked
+        try:
+            if blocked:
+                raise RuntimeError("cleanup pending")
+            async with asyncio.timeout(2.0):
+                await self.services.runtime.resolve_person_memory(
+                    owner_id=context.owner_id,
+                    person_id=person[0], person_revision=person[1])
+        except Exception:
             async with self._lock:
-                if self._closed:
+                if (self._closed or self._context is not context
+                        or self._person != person or self._epoch != epoch):
                     return
-                if self._person is None and not self._blocked:
-                    continue
-                context = self._context
                 try:
-                    if self._blocked:
-                        raise RuntimeError("cleanup pending")
-                    async with asyncio.timeout(2.0):
-                        await self.services.runtime.resolve_person_memory(owner_id=context.owner_id,
-                            person_id=self._person[0], person_revision=self._person[1])
+                    self._blocked = True
+                    self._prepared = None
+                    if self._admission_task is not None:
+                        self._admission_task.cancel()
+                    self._admission_task = None
+                    self._admission_observation = None
+                    await self.llm.close_runtime()
+                    await self.stop_outputs()
+                    await self._bind_turn(context, None)
+                    await self._publish_state("disabled")
                 except Exception:
-                    try:
-                        # Explicit authority revocation can stop an in-flight private
-                        # response, but must retain the already spoken dialogue.
-                        self._blocked = True
-                        self._prepared = None
-                        if self._admission_task is not None:
-                            self._admission_task.cancel()
-                        self._admission_task = None
-                        self._admission_observation = None
-                        await self.llm.close_runtime()
-                        await self.stop_outputs()
-                        await self._bind_turn(context, None)
-                        await self._publish_state("disabled")
-                    except Exception:
-                        # Keep retrying the same blocked cleanup obligation.
-                        self._blocked = True
+                    self._blocked = True
 
     async def aclose(self):
         self._closed = True

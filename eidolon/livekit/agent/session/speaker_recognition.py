@@ -5,6 +5,7 @@ selection. The returned identity is valid for exactly one audio evidence span.
 """
 
 import time
+import logging
 import hashlib
 from urllib.parse import quote
 
@@ -158,6 +159,14 @@ class SpeakerRecognizer:
                 return outcome("uncertain", "candidates_changed")
             per_person.sort(key=lambda row: row[0], reverse=True)
             similarity = per_person[0][0] if per_person else None
+            logging.getLogger(__name__).info(
+                "Speaker comparison turn_id=%s candidates=%d top_score=%s margin=%s "
+                "threshold=%s min_margin=%s speech_ms=%d policy=%s",
+                turn_id, len(per_person), similarity,
+                per_person[0][0] - per_person[1][0] if len(per_person) > 1 else None,
+                self.policy.threshold, self.policy.min_person_margin,
+                probe.speech_ms, self.policy.version,
+            )
             version = dict(
                 model_id=probe.model_id,
                 weights_hash=probe.weights_hash,

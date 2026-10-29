@@ -60,9 +60,22 @@ class ConversationSpeaker:
             if candidate.state == "committed"
             else coordinator.capture_audio_reference(source=capture.active_source)
         )
+        if candidate.timeline is not None:
+            candidate.timeline.set_attr("speaker_audio_reference", {
+                "reason": reference.reason,
+                "generation": reference.acoustic_generation,
+                "segment_count": len(candidate.segments),
+            })
         if reference.span is None:
             return None
-        return capture.snapshot(candidate=candidate.candidate_id, span=reference.span)
+        evidence = capture.snapshot(candidate=candidate.candidate_id, span=reference.span)
+        if candidate.timeline is not None:
+            candidate.timeline.set_attr("speaker_audio_capture", {
+                "complete": evidence.complete, "reason": evidence.reason,
+                "start_sample": evidence.start, "end_sample": evidence.end,
+                "sample_rate": evidence.sample_rate,
+            })
+        return evidence
 
     def begin(self, coordinator, turn_id):
         self.begin_evidence(self._evidence(coordinator), turn_id)
@@ -184,6 +197,7 @@ class ConversationSpeaker:
                     "person_id": value.person_id,
                     "confidence": value.confidence,
                     "decision_version": value.decision_version,
+                    "cosine_similarity": value.cosine_similarity,
                     "audio_quality": value.audio_quality.model_dump(exclude_none=True)
                         if value.audio_quality is not None else None,
                     "delivered_to_agent": callable(setter),

@@ -501,8 +501,18 @@ class UserTurnCoordinator:
         if segment is None:
             if candidate.latest_generation_id == 0:
                 candidate.latest_generation_id = self._next_generation_id()
+            # ASR sentence boundaries do not start a new acoustic generation.
+            # A delayed suffix inherits that generation's VAD interval; only
+            # start_speech may reopen it. Otherwise a post-stop final leaves
+            # ended_at=None forever and suppresses complete speaker evidence.
+            acoustic = candidate.current_segment
+            same_generation = (
+                acoustic is not None
+                and acoustic.generation_id == candidate.latest_generation_id
+            )
             segment = SpeechSegment(
-                started_at=current_time,
+                started_at=acoustic.started_at if same_generation else current_time,
+                ended_at=acoustic.ended_at if same_generation else None,
                 generation_id=candidate.latest_generation_id,
                 evidence=evidence,
             )

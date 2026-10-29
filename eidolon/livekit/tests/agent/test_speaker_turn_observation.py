@@ -288,3 +288,42 @@ async def test_reporter_failure_does_not_escape_commit_or_background_task():
     assert commit(observer, turn("next")).action == "commit"
     await settle(observer)
     await observer.aclose()
+
+
+@pytest.mark.parametrize('suffix_final,mapped,reason', [
+    (True, True, 'mapped'),
+    (False, True, 'transcript_not_final'),
+    (True, False, 'audio_mapping_missing'),
+])
+def test_post_vad_asr_suffix_preserves_acoustic_end(suffix_final, mapped, reason):
+    owner = turn()
+    source = AudioSource('stream', 1, 16000)
+    generation = owner.active.latest_generation_id
+    stopped_at = owner.active.current_segment.ended_at
+    owner.add_transcript('尾句', is_final=suffix_final, evidence=TranscriptEvidence(
+        stream_key='stream', revision_key='suffix',
+        audio_span=AudioSpan('stream', 1, 16000, 24000, 32000) if mapped else None))
+    assert owner.active.latest_generation_id == generation
+    assert owner.active.current_segment.ended_at == stopped_at
+    decision = owner.mark_framework_completed(
+        transcript=owner.selected_text, reason='framework_completed_turn')
+    reference = owner.capture_committed_audio_reference(
+        candidate_id=decision.candidate_id, source=source)
+    assert reference.reason == reason
+    if reason == 'mapped':
+        assert (reference.span.start, reference.span.end) == (0, 32000)
+    else:
+        assert reference.span is None
+
+
+def test_real_speech_after_delayed_suffix_reopens_acoustic_generation():
+    owner = turn()
+    source = AudioSource('stream', 1, 16000)
+    generation = owner.active.latest_generation_id
+    owner.add_transcript('尾句', is_final=True, evidence=TranscriptEvidence(
+        stream_key='stream', revision_key='suffix',
+        audio_span=AudioSpan('stream', 1, 16000, 24000, 32000)))
+    owner.start_speech(timeline=TurnTimeline('continued'), continue_pending=True)
+    assert owner.active.latest_generation_id > generation
+    assert owner.active.current_segment.ended_at is None
+    assert owner.capture_audio_reference(source=source).reason == 'speech_not_ended'

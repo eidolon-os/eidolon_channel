@@ -137,6 +137,9 @@ class UserTurnCandidate:
     latest_generation_id: int = 0
     input_audio_owned: bool = False
     input_audio_span: AudioSpan | None = None
+    # Evidence-only boundary, written by acoustic callbacks, never ASR revisions.
+    # Text segment timestamps continue to serve the existing turn policy.
+    audio_settled_at: float | None = None
 
     @property
     def selected_text(self) -> str:
@@ -213,7 +216,7 @@ class UserTurnCoordinator:
         """
         candidate = self._require_active()
         if (candidate.state != "open" or candidate.current_segment is None
-                or candidate.current_segment.ended_at is None
+                or candidate.audio_settled_at is None
                 or span.start < 0 or span.end <= span.start):
             raise ValueError("settled input candidate required")
         candidate.input_audio_owned = True
@@ -250,7 +253,7 @@ class UserTurnCoordinator:
         elif (candidate is None or candidate.state != "committed"
               or candidate.candidate_id != completed_candidate_id):
             return result("no_committed_candidate")
-        if candidate.current_segment is None or candidate.current_segment.ended_at is None:
+        if candidate.audio_settled_at is None:
             return result("speech_not_ended")
         if candidate.input_audio_owned:
             span = candidate.input_audio_span
@@ -389,6 +392,8 @@ class UserTurnCoordinator:
         current_time = self._now(now)
         if self.can_merge_new_speech(now=current_time, continue_pending=continue_pending):
             candidate = self._require_active()
+            candidate.audio_settled_at = None
+            candidate.input_audio_span = None
             current_segment = candidate.current_segment
             if current_segment is not None and current_segment.ended_at is None:
                 self._record_owner_transition(
@@ -402,7 +407,6 @@ class UserTurnCoordinator:
                 self._record_attrs(candidate, event="duplicate_speech_started")
                 return candidate
             candidate.updated_at = current_time
-            candidate.input_audio_span = None
             candidate.latest_generation_id = self._next_generation_id()
             candidate.segments.append(
                 SpeechSegment(
@@ -501,18 +505,8 @@ class UserTurnCoordinator:
         if segment is None:
             if candidate.latest_generation_id == 0:
                 candidate.latest_generation_id = self._next_generation_id()
-            # ASR sentence boundaries do not start a new acoustic generation.
-            # A delayed suffix inherits that generation's VAD interval; only
-            # start_speech may reopen it. Otherwise a post-stop final leaves
-            # ended_at=None forever and suppresses complete speaker evidence.
-            acoustic = candidate.current_segment
-            same_generation = (
-                acoustic is not None
-                and acoustic.generation_id == candidate.latest_generation_id
-            )
             segment = SpeechSegment(
-                started_at=acoustic.started_at if same_generation else current_time,
-                ended_at=acoustic.ended_at if same_generation else None,
+                started_at=current_time,
                 generation_id=candidate.latest_generation_id,
                 evidence=evidence,
             )
@@ -624,6 +618,7 @@ class UserTurnCoordinator:
         if candidate is None or candidate.state != "open":
             return
         current_time = self._now(now)
+        candidate.audio_settled_at = current_time
         segment = candidate.current_segment
         if segment is not None:
             segment.ended_at = current_time

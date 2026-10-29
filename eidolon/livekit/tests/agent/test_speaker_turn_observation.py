@@ -304,7 +304,9 @@ def test_post_vad_asr_suffix_preserves_acoustic_end(suffix_final, mapped, reason
         stream_key='stream', revision_key='suffix',
         audio_span=AudioSpan('stream', 1, 16000, 24000, 32000) if mapped else None))
     assert owner.active.latest_generation_id == generation
-    assert owner.active.current_segment.ended_at == stopped_at
+    # ASR segment keeps its original timestamps; only evidence sees VAD stop.
+    assert owner.active.current_segment.ended_at is None
+    assert owner.active.audio_settled_at == stopped_at
     decision = owner.mark_framework_completed(
         transcript=owner.selected_text, reason='framework_completed_turn')
     reference = owner.capture_committed_audio_reference(
@@ -316,14 +318,26 @@ def test_post_vad_asr_suffix_preserves_acoustic_end(suffix_final, mapped, reason
         assert reference.span is None
 
 
-def test_real_speech_after_delayed_suffix_reopens_acoustic_generation():
+def test_real_speech_after_delayed_suffix_invalidates_audio_settlement():
     owner = turn()
     source = AudioSource('stream', 1, 16000)
-    generation = owner.active.latest_generation_id
     owner.add_transcript('尾句', is_final=True, evidence=TranscriptEvidence(
         stream_key='stream', revision_key='suffix',
         audio_span=AudioSpan('stream', 1, 16000, 24000, 32000)))
     owner.start_speech(timeline=TurnTimeline('continued'), continue_pending=True)
-    assert owner.active.latest_generation_id > generation
+    assert owner.active.audio_settled_at is None
     assert owner.active.current_segment.ended_at is None
     assert owner.capture_audio_reference(source=source).reason == 'speech_not_ended'
+
+
+def test_framework_completion_does_not_manufacture_acoustic_settlement():
+    owner = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    owner.start_speech(timeline=TurnTimeline('still-speaking'))
+    owner.add_transcript('一句话', is_final=True, evidence=TranscriptEvidence(
+        stream_key='stream', revision_key='first',
+        audio_span=AudioSpan('stream', 1, 16000, 0, 24000)))
+    decision = owner.mark_framework_completed(
+        transcript=owner.selected_text, reason='framework_completed_turn')
+    assert owner.capture_committed_audio_reference(
+        candidate_id=decision.candidate_id,
+        source=AudioSource('stream', 1, 16000)).reason == 'speech_not_ended'

@@ -254,6 +254,12 @@ class FullDuplexSessionLifecycle:
             if observation is not None:
                 from ..session.evidence_room_input import EvidenceRoomInput
 
+                vad = getattr(getattr(pipeline._factory, "vad", None), "vad", None)
+                stream_factory = getattr(vad, "evidence_stream", None)
+                if callable(stream_factory):
+                    observation.configure_prefetch(coordinator=pipeline._user_turns,
+                                                   stream_factory=stream_factory)
+
                 def bind(capture):
                     stt.audio_evidence_capture = capture
                     observation.bind_capture(capture)

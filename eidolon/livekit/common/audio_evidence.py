@@ -4,6 +4,7 @@ The existing input owner supplies offsets after resampling. This object never
 subscribes to a room or infers candidate boundaries from wall-clock events.
 """
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field, replace
 
@@ -126,6 +127,7 @@ class AudioEvidenceCapture:
         self._active_source: AudioSource | None = None
         self._buffer: AudioEvidenceBuffer | None = None
         self._invalid_reason: str | None = None
+        self.listener = None
 
     @property
     def retention_seconds(self) -> float:
@@ -139,7 +141,23 @@ class AudioEvidenceCapture:
     def retained_samples(self) -> int:
         return self._buffer.retained_samples if self._buffer else 0
 
+    def _notify(self, method, *args, **kwargs):
+        listener = self.listener
+        if listener is None:
+            return
+        try:
+            getattr(listener, method)(*args, **kwargs)
+        except Exception:
+            # Optional inference must never fail the STT/media owner.
+            self.listener = None
+            logging.getLogger(__name__).warning("Audio evidence listener unavailable")
+            try:
+                listener.source_ended()
+            except Exception:
+                pass
+
     def _clear(self) -> None:
+        self._notify("source_ended")
         if self._buffer is not None:
             self._buffer.clear()
         self._buffer = None
@@ -169,12 +187,14 @@ class AudioEvidenceCapture:
             max_samples=max(1, int(source.sample_rate * self._max_seconds)),
         )
         self._active_source = source
+        self._notify("source_started", source)
 
     def append(self, source: AudioSource, *, start: int, pcm: bytes) -> None:
         if source != self._active_source or self._buffer is None:
             return
         try:
             self._buffer.append(start=start, pcm=pcm)
+            self._notify("append", source, start=start, pcm=pcm)
         except ValueError:
             # Evidence faults must not break normal media delivery. Fail closed
             # for this input instead of silently returning a later valid suffix.

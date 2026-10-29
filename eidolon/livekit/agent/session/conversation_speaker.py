@@ -34,11 +34,33 @@ class ConversationSpeaker:
         self.on_observation = None
         self._frozen = None
         self._delivered = False
+        self._last_delivered_turn = None
+        self._prefetch = None
+        self._prefetch_config = None
+        self._prefetch_closing = set()
+
+    def configure_prefetch(self, *, coordinator, stream_factory):
+        self._prefetch_config = (coordinator, stream_factory)
 
     def bind_capture(self, capture):
-        if capture is not self._capture:
-            self.cancel()
+        if capture is self._capture:
+            return
+        self.cancel()
+        if self._prefetch is not None:
+            if self._capture is not None:
+                self._capture.listener = None
+            self._prefetch.source_ended()
+            task = asyncio.create_task(self._prefetch.aclose())
+            self._prefetch_closing.add(task)
+            task.add_done_callback(self._prefetch_closing.discard)
+            self._prefetch = None
         self._capture = capture
+        if capture is not None and self._prefetch_config is not None:
+            from .speaker_audio_prefetch import SpeakerAudioPrefetch
+            coordinator, stream_factory = self._prefetch_config
+            self._prefetch = SpeakerAudioPrefetch(capture=capture, observer=self,
+                coordinator=coordinator, stream_factory=stream_factory)
+            capture.listener = self._prefetch
 
     def cancel(self):
         if self._task is not None:
@@ -68,7 +90,12 @@ class ConversationSpeaker:
             })
         if reference.span is None:
             return None
-        evidence = capture.snapshot(candidate=candidate.candidate_id, span=reference.span)
+        evidence = (self._prefetch.resolve(candidate, reference.span)
+                    if self._prefetch is not None else None)
+        if candidate.timeline is not None:
+            candidate.timeline.set_attr("speaker_audio_prefetched", evidence is not None)
+        if evidence is None:
+            evidence = capture.snapshot(candidate=candidate.candidate_id, span=reference.span)
         if candidate.timeline is not None:
             candidate.timeline.set_attr("speaker_audio_capture", {
                 "complete": evidence.complete, "reason": evidence.reason,
@@ -78,7 +105,14 @@ class ConversationSpeaker:
         return evidence
 
     def begin(self, coordinator, turn_id):
-        self.begin_evidence(self._evidence(coordinator), turn_id)
+        evidence = self._evidence(coordinator)
+        candidate = coordinator.active
+        if (evidence is None and candidate is not None and candidate.state == "open"
+                and self._prefetch is not None and self._prefetch.record is not None
+                and self._prefetch.record.candidate_id == candidate.candidate_id):
+            # Still speculative: finish() requires the committed ASR mapping.
+            return
+        self.begin_evidence(evidence, turn_id)
 
     def begin_evidence(self, evidence, turn_id):
         if self._closed:
@@ -140,6 +174,8 @@ class ConversationSpeaker:
         )
 
     async def finish(self, coordinator, *, turn_id, text, llm, timeline):
+        if self._last_delivered_turn == turn_id:
+            return
         self.begin(coordinator, turn_id)
         key = self._key
         candidate = coordinator.active
@@ -178,7 +214,7 @@ class ConversationSpeaker:
         return value
 
     def deliver(self, value, *, text, llm, timeline):
-        if self._delivered:
+        if self._delivered or self._last_delivered_turn == value.turn_id:
             return
         # A long ASR tail may outlive an otherwise completed recognition task.
         # Expiry clears the identity; it must never abort the spoken request.
@@ -205,6 +241,7 @@ class ConversationSpeaker:
             )
         self.publish(value)
         self._delivered = True
+        self._last_delivered_turn = value.turn_id
 
     def submit(self, *_):
         # The framework hook awaits finish; diagnostic-only submit is retired.
@@ -212,6 +249,12 @@ class ConversationSpeaker:
 
     async def aclose(self):
         self._closed = True
+        if self._prefetch is not None:
+            await self._prefetch.aclose()
+            self._prefetch = None
+        if self._capture is not None:
+            self._capture.listener = None
+        await asyncio.gather(*self._prefetch_closing, return_exceptions=True)
         task = self._task
         self.cancel()
         pending = list(self._publish_tasks)

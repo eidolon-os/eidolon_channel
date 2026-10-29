@@ -56,3 +56,21 @@ async def test_sdk_streams_do_not_inherit_other_speaker_or_history():
     finally:
         await first.aclose()
         await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_evidence_stream_shares_weights_but_never_calls_semantic_callback():
+    vad = VAD(processor=PvadProcessor(), opts=FireredPvadConfig())
+    callbacks=[]
+    vad.register_inference_callback(lambda *args: callbacks.append(args))
+    evidence=vad.evidence_stream()
+    try:
+        evidence.push_frame(rtc.AudioFrame(data=bytes(3200),sample_rate=16000,
+                                          num_channels=1,samples_per_channel=1600))
+        evidence.end_input()
+        events=[e async for e in evidence]
+        assert len(events)==10
+        assert not callbacks
+        assert evidence._processor.onnx_session is vad._processor.onnx_session
+    finally:
+        await evidence.aclose()

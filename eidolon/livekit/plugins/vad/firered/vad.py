@@ -187,6 +187,11 @@ class VAD(agents.vad.VAD):
         self._streams.add(stream)
         return stream
 
+    def evidence_stream(self) -> VADStream:
+        """Reuse weights with independent sample state and no pipeline callbacks."""
+        return VADStream(vad=self, processor=self._processor.new_stream(),
+                         opts=self._opts, notify_pipeline=False)
+
     def update_options(
         self,
         *,
@@ -232,9 +237,11 @@ class VADStream(agents.vad.VADStream):
         vad: VAD,
         processor: PvadProcessor,
         opts: FireredPvadConfig,
+        notify_pipeline: bool = True,
     ) -> None:
         super().__init__(vad)
         self._opts = opts
+        self._notify_pipeline = notify_pipeline
         self._processor = processor
         self._loop = asyncio.get_event_loop()
 
@@ -491,7 +498,7 @@ class VADStream(agents.vad.VADStream):
                 # internal VADStream consumption doesn't expose probability
                 # to AgentSession listeners, so this is the pipeline's only
                 # access point.
-                if self._vad._inference_callback is not None:
+                if self._notify_pipeline and self._vad._inference_callback is not None:
                     try:
                         self._vad._inference_callback(p, pub_speaking)
                     except Exception:

@@ -14,7 +14,7 @@ from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 
 from .contracts import IdempotencyConflict, InvalidTransition, StaleGeneration
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 PROVISION = "channel.provision-device"
 REFRESH = "channel.refresh-device"
 REVOKE = "channel.revoke-device"
@@ -89,7 +89,7 @@ class ChannelProviderStore:
             pass
         with self._connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1, 2, 3, 4, 5, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, SCHEMA_VERSION}:
                 raise RuntimeError(
                     f"unsupported Channel Provider database schema version: {version}"
                 )
@@ -107,6 +107,14 @@ class ChannelProviderStore:
                     binding_json TEXT NOT NULL)""")
                 connection.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_personal_session_device
                     ON personal_sessions(device_id) WHERE state != 'closed'""")
+                connection.execute("""CREATE TABLE IF NOT EXISTS cancelled_scenes (
+                    owner_id TEXT NOT NULL, session_id TEXT NOT NULL, scenario TEXT NOT NULL,
+                    PRIMARY KEY(owner_id, session_id, scenario))""")
+                connection.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_session_companion
+                    ON personal_sessions(json_extract(binding_json, '$.owner_id'),
+                                         json_extract(binding_json, '$.target_companion_id'))
+                    WHERE state != 'closed'
+                      AND json_extract(binding_json, '$.target_companion_id') IS NOT NULL""")
                 self._validate_schema(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()
@@ -236,6 +244,21 @@ class ChannelProviderStore:
             return [(r[0], r[1], r[2], json.loads(r[3])) for r in connection.execute(
                 "SELECT owner_id, session_id, scenario, value_json FROM prepared_scenes")]
 
+    def cancel_scene(self, owner: str, session: str, scenario: str) -> None:
+        """Fence a close-before-open forever; a missing scene alone proves nothing."""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO cancelled_scenes VALUES (?, ?, ?)",
+                (owner, session, scenario),
+            )
+
+    def scene_cancelled(self, owner: str, session: str, scenario: str) -> bool:
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT 1 FROM cancelled_scenes WHERE owner_id=? AND session_id=? AND scenario=?",
+                (owner, session, scenario),
+            ).fetchone() is not None
+
     def claim_personal_session(self, session_id: str, device_id: str, binding: dict) -> dict:
         encoded = json.dumps(binding, sort_keys=True, separators=(",", ":"))
         with self._connect() as connection:
@@ -250,8 +273,11 @@ class ChannelProviderStore:
                 if connection.execute("SELECT 1 FROM personal_sessions WHERE device_id=? AND state!='closed'",
                                       (device_id,)).fetchone():
                     raise InvalidTransition("device has pending personal session cleanup")
-                connection.execute("INSERT INTO personal_sessions VALUES (?,?,'open',?)",
-                                   (session_id, device_id, encoded))
+                try:
+                    connection.execute("INSERT INTO personal_sessions VALUES (?,?,'open',?)",
+                                       (session_id, device_id, encoded))
+                except sqlite3.IntegrityError as exc:
+                    raise InvalidTransition("Companion has pending session cleanup") from exc
             connection.commit()
         return self.personal_session(session_id)
 

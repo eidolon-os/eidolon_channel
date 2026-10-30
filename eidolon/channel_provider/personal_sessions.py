@@ -37,6 +37,8 @@ class PersonalSessions:
             if not invalid:
                 binding = record["binding"]
                 person = binding["personal_memory"]
+                if person is None:
+                    return  # Ordinary sessions have no private-memory grant to monitor.
                 try:
                     async with asyncio.timeout(2.0):
                         realm = await resolve(owner_id=binding["owner_id"],
@@ -55,7 +57,7 @@ class PersonalSessions:
         if self.store.pending_personal_sessions(device_id):
             raise InvalidTransition("device has pending personal session cleanup")
 
-    def claim(self, provision, session_id, *, personal_memory, target_companion_id, session_intent):
+    def claim(self, provision, session_id, *, personal_memory, target_companion_id, session_intent, device_requested=False):
         adapter = self.registry.get(provision.adapter_name)
         if not all(
             callable(getattr(adapter, name, None))
@@ -78,6 +80,8 @@ class PersonalSessions:
             "target_companion_id": target_companion_id,
             "session_intent": session_intent,
         }
+        if personal_memory is None:
+            binding["device_requested"] = device_requested
         previous = self.store.personal_session(session_id)
         if previous is not None:
             # Credential refresh alone does not change this session's identity

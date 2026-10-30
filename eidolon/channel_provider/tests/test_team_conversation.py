@@ -9,6 +9,10 @@ from .test_service import _service
 
 
 class TeamAdapter(Adapter):
+    def observe_team_state(self, handle, conversation_id, session_id, callback):
+        self.report_round = callback
+        return lambda: None
+
     async def require_team_input(self, handle):
         pass
 
@@ -185,3 +189,122 @@ async def test_legacy_order_checkpoint_recovers_closure_only(tmp_path):
     await restored.shutdown()
     backend.end_prepared_session.side_effect = None
     await service.shutdown()
+
+
+async def test_distinct_devices_cannot_run_same_companion_twice(tmp_path):
+    from eidolon.channel_provider.contracts import InvalidTransition
+    backend = TeamAdapter()
+    service, _, _ = _service(tmp_path, [1700000000000], backend)
+    refs = []
+    for name in ('input-1', 'output-1', 'input-2', 'output-2'):
+        request = ProvisionRequest.parse(encoded(provision_payload(
+            device_id=named_device_instance_id(name))))
+        await service.provision(request)
+        refs.append(request.device_ref)
+    def opened(session, index):
+        return OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(
+            scenario='ip_role_group', session_id=session, input_device=refs[index],
+            members=[dict(companion_id='same-partner', output_device=refs[index + 1])])) )
+    first, second = opened('first', 0), opened('second', 2)
+    await service.open_team_conversation(first, authenticated_owner_id='owner_1')
+    visit = service._team_conversations[('owner_1', 'first')]
+    try:
+        with pytest.raises(InvalidTransition, match='first'):
+            await service.open_team_conversation(second, authenticated_owner_id='owner_1')
+        await wait_for(lambda: visit.state == 'ready')
+        with pytest.raises(InvalidTransition, match='first'):
+            await service.open_team_conversation(second, authenticated_owner_id='owner_1')
+        await service.device_conversation('first', authenticated_owner_id='owner_1', close=True, team=True)
+        await wait_for(lambda: visit.closure_complete)
+        backend.launched.clear()
+        await service.open_team_conversation(second, authenticated_owner_id='owner_1')
+        next_visit = service._team_conversations[('owner_1', 'second')]
+        await wait_for(lambda: next_visit.state == 'ready')
+        await service.device_conversation('second', authenticated_owner_id='owner_1', close=True, team=True)
+        await wait_for(lambda: next_visit.closure_complete)
+    finally:
+        for current in service._team_conversations.values():
+            if not current.closure_complete:
+                current.stopped.set()
+                await current.task
+
+
+async def test_close_before_delayed_open_is_durable_and_owner_scoped(tmp_path):
+    from eidolon.channel_provider.contracts import InvalidTransition, UnknownChannel
+    backend = TeamAdapter()
+    service, store, _ = _service(tmp_path, [1700000000000], backend)
+    refs = []
+    for name in ('cancel-input', 'cancel-output'):
+        request = ProvisionRequest.parse(encoded(provision_payload(device_id=named_device_instance_id(name))))
+        await service.provision(request)
+        refs.append(request.device_ref)
+    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(
+        scenario='ip_role_group', session_id='delayed', input_device=refs[0],
+        members=[dict(companion_id='a', output_device=refs[1])])) )
+    # Missing status alone is not closure evidence.
+    with pytest.raises(UnknownChannel):
+        await service.device_conversation('delayed', authenticated_owner_id='owner_1', team=True)
+    closed = await service.device_conversation('delayed', authenticated_owner_id='owner_1', close=True, team=True)
+    assert closed['state'] == 'closed'
+    assert store.scene_cancelled('owner_1', 'delayed', 'ip_role_group')
+    assert not store.scene_cancelled('other', 'delayed', 'ip_role_group')
+    with pytest.raises(InvalidTransition, match='cancelled'):
+        await service.open_team_conversation(opened, authenticated_owner_id='owner_1')
+    restored, _, _ = _service(tmp_path, [1700000000000], TeamAdapter())
+    assert (await restored.device_conversation('delayed', authenticated_owner_id='owner_1', team=True)) == closed
+    with pytest.raises(InvalidTransition, match='cancelled'):
+        await restored.open_team_conversation(opened, authenticated_owner_id='owner_1')
+    assert not service._transport_scopes and not backend.sent
+
+
+async def test_unknown_team_close_and_status_satisfy_hub_response_contract(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+    from eidolon.channel_provider.http import create_app
+    from eidolon_sdk.biz.control.coordination import RoleGroupStatus
+    service, _, _ = _service(tmp_path, [1700000000000], TeamAdapter())
+    token = 'test-team-service-token-at-least-32-bytes'
+    async with TestClient(TestServer(create_app(service=service, bearer_token=token))) as client:
+        for action in ('close', 'status', 'close'):
+            response = await client.post('/v1/role-groups/' + action,
+                json={'owner_id': 'owner_1', 'session_id': 'refused-before-dispatch'},
+                headers={'Authorization': 'Bearer ' + token})
+            assert response.status == 200
+            result = RoleGroupStatus.model_validate(await response.json())
+            assert result.state == 'closed'
+            assert result.error == ''
+            assert result.session_id == 'refused-before-dispatch'
+
+
+async def test_round_status_is_scoped_to_owned_worker_and_monotonic():
+    import json
+    from types import SimpleNamespace
+    from livekit import rtc
+    from eidolon_sdk.biz.contracts import SESSION_CONTROL_TOPIC
+    from eidolon_sdk.biz.control.coordination import TeamRoundStatus
+    from eidolon.channel_provider.team_conversation import TeamConversation
+    from .test_livekit_adapter import _adapter
+    adapter, _ = _adapter()
+    visit = TeamConversation(SimpleNamespace(selection=SimpleNamespace(session_id='team')),
+                             adapter, ({'device': 'input', 'room': 'room'},))
+    visit.state = 'ready'
+    remove = adapter.observe_team_state(visit.handles[0], 'native', 'team', visit._round_state)
+    def send(session='team', conversation='native', epoch=1, error='', agent=True):
+        status = TeamRoundStatus(session_id=session, conversation_id=conversation,
+                                 epoch=epoch, error=error)
+        packet = SimpleNamespace(topic=SESSION_CONTROL_TOPIC, data=status.model_dump_json().encode(),
+            participant=SimpleNamespace(identity='agent-job' if agent else 'input',
+                kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if agent else 0))
+        adapter._observe_team_state(packet, room='room')
+    send(error='DECISION_TRANSPORT_ERROR', agent=False)
+    send(session='other', error='DECISION_TRANSPORT_ERROR')
+    send(conversation='old', error='DECISION_TRANSPORT_ERROR')
+    assert visit.round_epoch == 0
+    send(error='DECISION_TRANSPORT_ERROR')
+    assert visit.snapshot()['round_error'] == 'DECISION_TRANSPORT_ERROR'
+    send(epoch=2)
+    send(epoch=1, error='DECISION_TRANSPORT_ERROR')
+    assert visit.round_epoch == 2 and not visit.round_error
+    remove()
+    send(epoch=3, error='DECISION_TRANSPORT_ERROR')
+    assert visit.round_epoch == 2
+    await adapter.shutdown()

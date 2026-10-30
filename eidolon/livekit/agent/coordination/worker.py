@@ -13,7 +13,8 @@ from dataclasses import dataclass, replace
 from livekit.agents.voice import AgentSession
 from livekit.agents.voice.room_io import RoomOptions
 from eidolon_sdk.biz.control.coordination_stream import OpenScene, ReplyStart
-from eidolon_sdk.biz.contracts import COMPANION_UI_STATE_TOPIC
+from eidolon_sdk.biz.contracts import COMPANION_UI_STATE_TOPIC, SESSION_CONTROL_TOPIC
+from eidolon_sdk.biz.control.coordination import TeamRoundStatus
 from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
 from eidolon.livekit.common.config.schema import ObservabilityConfig, TurnPolicyConfig
 from ..half_duplex.pipeline import HalfDuplexPttPipeline
@@ -99,6 +100,14 @@ class TeamWorker:
             logging.getLogger(__name__).info(
                 'team round outcome=%s error=%s capture=%s',
                 frame.outcome, frame.error_code, frame.capture_id)
+            report = TeamRoundStatus(session_id=self.opened.selection.session_id,
+                conversation_id=self.input_factory.runtime_session_id,
+                epoch=frame.epoch, error=frame.error_code)
+            try:
+                await self.input_room.local_participant.publish_data(
+                    report.model_dump_json().encode(), topic=SESSION_CONTROL_TOPIC, reliable=True)
+            except Exception:
+                logging.getLogger(__name__).warning("team round status delivery failed", exc_info=True)
             await ui(self.input_room, source, 'waiting', 'team:' + frame.outcome)
 
         try:

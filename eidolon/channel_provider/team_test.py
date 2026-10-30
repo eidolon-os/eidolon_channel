@@ -1,15 +1,17 @@
-"""Operator test client for the production team API, using normal service config.
+"""Read-only inventory and saved-Team diagnostics through Owner Management.
 
-Run with the installed Channel environment. Inventory is read-only; start/close
-use Provider APIs. No credentials, room tokens or opaque handles are printed.
+Runtime commands require EIDOLON_CONTROLLER_ACCESS_TOKEN and --url pointing to
+that Controller's Host. They use the same saved revision and admission path as
+Mobile. Provider service credentials are used only for read-only inventory.
 """
 import argparse
 import asyncio
 import json
-from uuid import uuid4
+import os
+from urllib.parse import quote
 import aiohttp
 from livekit import api
-from eidolon_sdk.biz.control.coordination_stream import OpenScene
+from eidolon_sdk.biz.control.coordination import RoleGroupStatus
 from .config import load_provider_config
 from .store import ChannelProviderStore
 from eidolon.livekit.common.config import load_agent_config
@@ -42,51 +44,53 @@ async def inventory(config):
 
 
 async def run(args):
-    config = load_provider_config()
     if args.action == 'inventory':
-        return {'devices': await inventory(config)}
+        return {'devices': await inventory(load_provider_config())}
+    token = os.environ.get('EIDOLON_CONTROLLER_ACCESS_TOKEN', '').strip()
+    if not token:
+        raise ValueError('EIDOLON_CONTROLLER_ACCESS_TOKEN is required')
+    team = quote(args.team, safe='')
+    session_id = args.session
+    path = f'/api/management/v1/teams/{team}/runs'
+    body = None
+    method = 'POST'
     if args.action == 'start':
-        rows = {row['device_id']: row for row in await inventory(config)}
-        source = rows[args.input]
-        selected = [rows[device] for device in args.output]
-        if source['interaction_mode'] != 'ptt':
-            raise ValueError('input is not a PTT device')
-        if any(row['owner_id'] != source['owner_id'] or not row['companion_id'] for row in selected):
-            raise ValueError('outputs require same-Owner Companion bindings')
-        opened = OpenScene.model_validate(dict(type='open', owner_id=source['owner_id'],
-            selection=dict(
-                scenario='ip_role_group', session_id=args.session or 'team-' + uuid4().hex,
-                input_device=source['device_ref'], goal=args.goal,
-                reply_budget=args.budget, members=[dict(companion_id=row['companion_id'],
-                    output_device=row['device_ref']) for row in selected])))
-        body = opened.model_dump(mode='json')
-        action = 'open'
+        body = dict(expected_revision=args.revision, session_id=session_id)
     else:
-        body = dict(owner_id=args.owner, session_id=args.session)
-        action = args.action
-    async with aiohttp.ClientSession(headers={'Authorization': 'Bearer ' + config.bearer_token}) as http:
-        async with http.post(f'http://127.0.0.1:{config.http.port}/v1/role-groups/{action}', json=body) as response:
-            result = await response.json()
+        path += '/' + quote(session_id, safe='')
+        if args.action == 'close':
+            path += '/close'
+        else:
+            method = 'GET'
+    async with aiohttp.ClientSession(headers={'Authorization': 'Bearer ' + token},
+                                    timeout=aiohttp.ClientTimeout(total=60)) as http:
+        async with http.request(method, args.url.rstrip('/') + path, json=body,
+                                allow_redirects=False) as response:
             if response.status != 200:
-                raise RuntimeError(f'team API rejected request: HTTP {response.status}')
-            return result
+                raise RuntimeError(f'saved Team API refused: HTTP {response.status}; '
+                                   f'session={session_id}; query this identity before retrying')
+            result = RoleGroupStatus.model_validate(await response.json())
+            if result.session_id != session_id or result.scenario != 'ip_role_group':
+                raise ValueError('Team API returned a different run')
+            return result.model_dump(mode='json')
+
+
+def parser():
+    result = argparse.ArgumentParser(description=__doc__)
+    commands = result.add_subparsers(dest='action', required=True)
+    commands.add_parser('inventory')
+    for name in ('start', 'status', 'close'):
+        command = commands.add_parser(name)
+        command.add_argument('--url', required=True, help='Authenticated Host Management URL')
+        command.add_argument('--team', required=True, help='Saved Team ID')
+        command.add_argument('--session', required=True, help='Stable run ID, also used after an uncertain response')
+        if name == 'start':
+            command.add_argument('--revision', required=True, type=int)
+    return result
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest='action', required=True)
-    commands.add_parser('inventory')
-    start = commands.add_parser('start')
-    start.add_argument('--input', required=True)
-    start.add_argument('--output', action='append', required=True)
-    start.add_argument('--goal', default='')
-    start.add_argument('--budget', type=int, default=4)
-    start.add_argument('--session')
-    for name in ('status', 'close'):
-        command = commands.add_parser(name)
-        command.add_argument('--owner', required=True)
-        command.add_argument('--session', required=True)
-    print(json.dumps(asyncio.run(run(parser.parse_args())), ensure_ascii=False, indent=2))
+    print(json.dumps(asyncio.run(run(parser().parse_args())), ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

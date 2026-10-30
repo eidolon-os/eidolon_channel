@@ -170,7 +170,7 @@ def test_v5_database_upgrades_with_personal_reservation_constraints(tmp_path):
         store.claim_personal_session("s1", "device", {"person": "b"})
     assert ChannelProviderStore(path).pending_personal_sessions()[0]["session_id"] == "s1"
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 async def test_http_personal_lifecycle_errors_and_retry(tmp_path):
@@ -317,3 +317,82 @@ async def test_authority_loss_closes_idle_personal_session_and_retries_body_clea
     assert store.personal_session("private-a")["state"] == "closed"
     assert adapter.events[-2:] == [("stop", "private-a"), ("clear", "private-a")]
     assert resolver.await_count == 2  # closing retry does not need Data availability
+
+
+async def test_default_and_device_sessions_hold_companion_until_acknowledged_close(tmp_path):
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    service, store, adapter = await ready(tmp_path)
+    service._companion_authority = AsyncMock(return_value='partner')
+    ordinary = request('ordinary', person=None)
+    await service.open_session(ordinary)
+    assert store.personal_session('ordinary')['binding']['target_companion_id'] == 'partner'
+    # Replayed open uses the pinned target and does not change its identity.
+    await service.open_session(ordinary)
+    assert service._companion_authority.call_args.kwargs['target_companion_id'] == 'partner'
+    with pytest.raises(InvalidTransition, match='ordinary'):
+        service._require_scene_companions_available('owner_1', ['partner'])
+    adapter.cleanup_error = True
+    with pytest.raises(BackendUnavailable):
+        await service.close_session(request('ordinary', person=None, closing=True))
+    with pytest.raises(InvalidTransition, match='ordinary'):
+        service._require_scene_companions_available('owner_1', ['partner'])
+    adapter.cleanup_error = False
+    await service.close_session(request('ordinary', person=None, closing=True))
+    service._require_scene_companions_available('owner_1', ['partner'])
+    # Scene reservations also stop ordinary/device starts before dispatch.
+    service._team_conversations[('owner_1', 'team')] = SimpleNamespace(
+        closure_complete=False, selection=SimpleNamespace(members=[SimpleNamespace(companion_id='partner')]))
+    for device_requested in (False, True):
+        with pytest.raises(InvalidTransition, match='team'):
+            await service._converge_serving(ordinary.device_ref, serving=True,
+                conversation_id='next', session_intent='user_initiated', device_requested=device_requested)
+    assert store.personal_session('next') is None
+    service._team_conversations.clear()
+    for session in ('device-first', 'device-restarted'):
+        await service._converge_serving(ordinary.device_ref, serving=True,
+            conversation_id=session, session_intent='user_initiated', device_requested=True)
+    assert store.personal_session('device-first')['state'] == 'closed'
+    assert store.personal_session('device-restarted')['state'] == 'open'
+    # Restart recovers by cleaning; it does not start another dialogue.
+    await service._personal_sessions.recover()
+    assert store.personal_session('device-restarted')['state'] == 'closed'
+    assert [e for e in adapter.events if e[0] == 'open'] == [
+        ('open', 'ordinary'), ('open', 'ordinary'), ('open', 'device-first'), ('open', 'device-restarted')]
+
+
+async def test_companion_admission_requires_current_body_and_owned_target():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from .helpers import device_ref
+    from eidolon.channel_provider.companion_admission import CompanionAdmission
+    from eidolon.channel_provider.contracts import Forbidden
+    from eidolon_sdk.device_foundation.v1 import DeviceRef
+    ref = DeviceRef.model_validate(device_ref())
+    bodies = SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
+        owner_id='owner', device_ref=ref, answering_companion_id='partner')))
+    runtime = SimpleNamespace(resolve_companion=AsyncMock(return_value=SimpleNamespace(
+        owner_id='owner', companion_id='partner', device_id=ref.device_instance_id)))
+    admission = CompanionAdmission(bodies, runtime)
+    assert await admission.resolve(owner_id='owner', device_ref=ref, target_companion_id=None) == 'partner'
+    runtime.resolve_companion.return_value.owner_id = 'other'
+    with pytest.raises(Forbidden):
+        await admission.resolve(owner_id='owner', device_ref=ref, target_companion_id=None)
+    bodies.resolve.return_value.device_ref = ref.model_copy(update={'trust_epoch': ref.trust_epoch + 1})
+    with pytest.raises(Forbidden):
+        await admission.resolve(owner_id='owner', device_ref=ref, target_companion_id=None)
+
+
+def test_store_companion_reservation_is_owner_scoped_and_retained_while_closing(tmp_path):
+    store = ChannelProviderStore(tmp_path / 'reservations.db')
+    store.initialize()
+    binding = {'owner_id': 'owner', 'target_companion_id': 'partner'}
+    store.claim_personal_session('one', 'device-one', binding)
+    store.claim_personal_session('other-owner', 'device-other', binding | {'owner_id': 'other'})
+    with pytest.raises(InvalidTransition):
+        store.claim_personal_session('two', 'device-two', binding)
+    store.transition_personal_session('one', expected='open', state='closing')
+    with pytest.raises(InvalidTransition):
+        store.claim_personal_session('two', 'device-two', binding)
+    store.transition_personal_session('one', expected='closing', state='closed')
+    store.claim_personal_session('two', 'device-two', binding)

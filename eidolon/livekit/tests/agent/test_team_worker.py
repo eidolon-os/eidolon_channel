@@ -26,7 +26,7 @@ def arguments():
             outputs=OutputSelection(speech=True))), room(member.output_device.device_instance_id),
         object(), AsyncMock(return_value=True)) for member in opened.selection.members)
     return opened, dict(input_room=room(opened.selection.input_device.device_instance_id),
-        input_factory=SimpleNamespace(outputs=OutputSelection(), stt=object()),
+        input_factory=SimpleNamespace(outputs=OutputSelection(), stt=object(), runtime_session_id="native-input"),
         outputs=outputs, stop=AsyncMock(return_value=True), on_ready=AsyncMock())
 
 
@@ -157,13 +157,30 @@ async def test_team_maps_real_playback_and_round_completion_to_device_ui(runtime
         assert await clients[0].kwargs['present'](SimpleNamespace(device_id=device), None, lambda: None)
         def states(room):
             return [json.loads(c.args[0])['state']
-                    for c in room.local_participant.publish_data.await_args_list]
+                    for c in room.local_participant.publish_data.await_args_list
+                    if 'state' in json.loads(c.args[0])]
         assert states(kwargs['input_room']) == ['thinking', 'speaking']
         assert states(kwargs['outputs'][0].room) == ['thinking', 'speaking', 'listening']
         assert states(kwargs['outputs'][1].room) == []
         await clients[0].kwargs['on_state'](SimpleNamespace(
-            outcome='finished', error_code='', capture_id='one'))
+            outcome='finished', error_code='', capture_id='one', epoch=1))
         assert states(kwargs['input_room'])[-1] == 'waiting'
+        from eidolon_sdk.biz.control.coordination import TeamRoundStatus
+        reports = [TeamRoundStatus.model_validate_json(c.args[0])
+                   for c in kwargs['input_room'].local_participant.publish_data.await_args_list
+                   if json.loads(c.args[0]).get('type') == 'team_round_status']
+        assert reports[0].session_id == opened.selection.session_id
+        assert reports[0].conversation_id == 'native-input'
+        assert reports[0].epoch == 1
+        # Losing the management update must not prevent the device UI returning to waiting.
+        async def fail_status(payload, **options):
+            if json.loads(payload).get('type') == 'team_round_status':
+                raise ConnectionError('control transport unavailable')
+        kwargs['input_room'].local_participant.publish_data.side_effect = fail_status
+        await clients[0].kwargs['on_state'](SimpleNamespace(
+            outcome='failed', error_code='DECISION_TIMEOUT', capture_id='two', epoch=2))
+        assert states(kwargs['input_room'])[-1] == 'waiting'
+
     finally:
         finish.set()
         await task

@@ -61,13 +61,19 @@ def main() -> None:
         )
     from eidolon.livekit.common.config import load_effective_config
     from eidolon.livekit.agent.runtime.system_data import build_system_data_runtime
-    personal_authority = build_system_data_runtime(load_effective_config().runtime_authority)
+    runtime_settings = load_effective_config().runtime_authority
+    personal_authority = build_system_data_runtime(runtime_settings)
+    from .companion_admission import CompanionAdmission
+    from eidolon.livekit.agent.runtime.kernel_bodies import KernelBodyHttpClient
+    companion_authority = CompanionAdmission(
+        KernelBodyHttpClient(base_url=runtime_settings.kernel_api_url), personal_authority)
     service = ChannelProviderService(
         store=store,
         registry=registry,
         agent_name=config.livekit.agent_name,
         smarthome=smarthome,
         personal_authority=personal_authority.resolve_person_memory,
+        companion_authority=companion_authority.resolve,
     )
     service.initialize()
     speaker_engine = None
@@ -80,11 +86,17 @@ def main() -> None:
             ReferenceSpeakerExtractor,
         )
         speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(require_speaker_model_dir(config.speaker_model_dir)))
+    from .voice_preview import ConfiguredVoicePreview, VoicePreviewCache
+    preview_synthesis = ConfiguredVoicePreview(load_effective_config())
+    preview_cache = VoicePreviewCache(config.storage.path.parent / "voice-preview",
+        profile=preview_synthesis.profile, synthesize=preview_synthesis.synthesize,
+        max_bytes=int(os.environ.get("EIDOLON_VOICE_PREVIEW_CACHE_BYTES", str(64 * 1024 * 1024))))
     app = create_app(
         service=service,
         bearer_token=config.bearer_token,
         traces=SessionTraceReader(config.traces.root),
         speaker_engine=speaker_engine,
+        voice_preview=preview_cache,
     )
     async def close_personal_authority(_app):
         await personal_authority.aclose()

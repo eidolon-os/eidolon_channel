@@ -265,6 +265,7 @@ class LiveKitChannelAdapter:
         self._input_revisions: dict[str, int] = {}
         self._input_applied: dict[str, int] = {}
         self._session_end_observers: dict[str, tuple[str, Any]] = {}
+        self._team_state_observers: dict[str, tuple[str, str, Any]] = {}
         self._control_receipts: dict[tuple[str, str], _ControlReceipt] = {}
 
     @property
@@ -753,6 +754,8 @@ class LiveKitChannelAdapter:
                 self._control_receipt(packet, room=room, device=watch.device)
             self._note_serving_failure(packet, device=watch.device, room=room)
             self._observe_session_end(packet, room=room)
+            if self._listeners.get(room) is watch and watch.connection is connection:
+                self._observe_team_state(packet, room=room)
             request = self._requested(packet, device=watch.device, room=room)
             if request is not None:
                 self._dispatch_request(watch.sink, request, room=room)
@@ -1412,6 +1415,33 @@ class LiveKitChannelAdapter:
             "opened session on room=%s agent=%s intent=%s", room, agent, session_intent
         )
         self._confirm_serving_later(room, agent=agent, conversation_id=conversation_id)
+
+    def observe_team_state(self, handle, conversation_id, session_id, callback):
+        room = handle["room"]
+        if room in self._team_state_observers:
+            raise InvalidTransition("team state already observed")
+        observer = (conversation_id, session_id, callback)
+        self._team_state_observers[room] = observer
+        def remove():
+            if self._team_state_observers.get(room) is observer:
+                self._team_state_observers.pop(room)
+        return remove
+
+    def _observe_team_state(self, packet, *, room):
+        from eidolon_sdk.biz.control.coordination import TeamRoundStatus
+        observer = self._team_state_observers.get(room)
+        if observer is None or getattr(packet, "topic", None) != SESSION_CONTROL_TOPIC:
+            return
+        participant = getattr(packet, "participant", None)
+        if (getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+                or not str(getattr(participant, "identity", "")).startswith("agent-")):
+            return
+        try:
+            status = TeamRoundStatus.model_validate_json(bytes(packet.data))
+        except (ValueError, TypeError):
+            return
+        if (status.conversation_id, status.session_id) == observer[:2]:
+            observer[2](status)
 
     def observe_session_end(self, handle: dict, session_id: str, callback):
         room = str(handle["room"])

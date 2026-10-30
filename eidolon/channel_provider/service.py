@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
-from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED
+from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED, SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
     SharedSessionSelection,
@@ -82,6 +82,7 @@ class ChannelProviderService:
         now_ms: Callable[[], int] | None = None,
         smarthome: SmartHomeRuntime | None = None,
         personal_authority=None,
+        companion_authority=None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -89,6 +90,7 @@ class ChannelProviderService:
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
         self._smarthome = smarthome
         self._personal_authority = personal_authority
+        self._companion_authority = companion_authority
         self._smarthome_poller: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._personal_sessions = PersonalSessions(store, registry, self._lock)
@@ -421,18 +423,59 @@ class ChannelProviderService:
             self._team_conversations, "open_team_session",
             lambda adapter, handles: TeamConversation(opened, adapter, handles), identity=opened)
 
+    def _require_scene_companions_available(self, owner_id, companion_ids, *, personal_session_id=None):
+        """Caller holds the Provider lifecycle lock; checkpoints remain authoritative.
+
+        Preparing and failed cleanup retain ownership. Waiting for user input
+        never releases it. Restored scenes enter these same catalogs before use.
+        """
+        requested = set(companion_ids)
+        for catalog in (self._team_conversations, self._device_conversations):
+            for (owner, session_id), visit in catalog.items():
+                if owner != owner_id or visit.closure_complete:
+                    continue
+                selection = visit.selection
+                held = ({m.companion_id for m in selection.members}
+                        if catalog is self._team_conversations
+                        else {selection.target_companion_id})
+                if requested & held:
+                    raise InvalidTransition(f"Companion is occupied by session {session_id}")
+        for record in self._store.pending_personal_sessions():
+            binding = record["binding"]
+            if (record["session_id"] != personal_session_id and
+                    binding["owner_id"] == owner_id and
+                    binding.get("target_companion_id") in requested):
+                raise InvalidTransition(
+                    f"Companion is occupied by session {record['session_id']}")
+
     async def _open_prepared_scene(self, selection, authenticated_owner_id, catalog,
                                    capability, create, identity=None):
         if not authenticated_owner_id:
             raise Forbidden("authenticated Owner is required")
         key = (authenticated_owner_id, selection.session_id)
         async with self._lock:
+            scenario = "ip_role_group" if catalog is self._team_conversations else "device_conversation"
+            if self._store.scene_cancelled(*key, scenario):
+                raise InvalidTransition("conversation was cancelled; use a new session_id")
             previous = catalog.get(key)
             if previous is not None:
                 if (previous.selection != selection
                         or (identity is not None and previous.opened != identity)):
                     raise IdempotencyConflict("conversation selection cannot change")
                 return previous.snapshot()
+            companions = ([m.companion_id for m in selection.members]
+                          if catalog is self._team_conversations
+                          else [selection.target_companion_id])
+            if self._companion_authority is not None:
+                selected = ([(m.output_device, m.companion_id) for m in selection.members]
+                            if catalog is self._team_conversations
+                            else [(selection.output_device, selection.target_companion_id)])
+                for ref, companion in selected:
+                    async with asyncio.timeout(5):
+                        await self._companion_authority(owner_id=authenticated_owner_id,
+                            device_ref=ref, target_companion_id=companion,
+                            require_attachment=catalog is self._team_conversations)
+            self._require_scene_companions_available(authenticated_owner_id, companions)
             records = []
             for ref in selection.devices:
                 self._personal_sessions.require_available(ref.device_instance_id)
@@ -540,9 +583,21 @@ class ChannelProviderService:
     async def device_conversation(self, session_id: str, *, authenticated_owner_id: str,
                                   close: bool = False, team: bool = False) -> dict:
         catalog = self._team_conversations if team else self._device_conversations
-        visit = catalog.get((authenticated_owner_id, session_id))
-        if visit is None:
-            raise UnknownChannel("device conversation is not known on this Provider")
+        if not authenticated_owner_id:
+            raise Forbidden("authenticated Owner is required")
+        scenario = "ip_role_group" if team else "device_conversation"
+        async with self._lock:
+            visit = catalog.get((authenticated_owner_id, session_id))
+            if visit is None:
+                if close:
+                    # Same lock as admission: a delayed open either already owns
+                    # a checkpoint or will see this durable cancellation fence.
+                    self._store.cancel_scene(authenticated_owner_id, session_id, scenario)
+                if self._store.scene_cancelled(authenticated_owner_id, session_id, scenario):
+                    return dict(session_id=session_id, state="closed", error="" if team else None,
+                                **({"scenario": scenario, "completion_basis": "native_playout"}
+                                   if team else {}))
+                raise UnknownChannel("device conversation is not known on this Provider")
         if not close and visit.state == "ready":
             try:
                 present = await visit.adapter.prepared_endpoints_present(visit.handles)
@@ -1065,12 +1120,19 @@ class ChannelProviderService:
                 await self._personal_sessions.close(record["session_id"])
                 return provision, [record["session_id"]]
             if serving:
-                if personal_memory is None:
-                    self._personal_sessions.require_available(device_ref.device_instance_id)
-                    if record is not None:
+                if pending and pending[0]["session_id"] != conversation_id:
+                    previous = pending[0]
+                    if (device_requested and previous["binding"].get("device_requested") is True
+                            and previous["binding"]["personal_memory"] is None):
+                        # A device restart may replace its own session, but only
+                        # after acknowledged cleanup has released its resources.
+                        await self._personal_sessions.close(previous["session_id"])
+                    else:
+                        raise InvalidTransition("close the previous session first")
+                if record is not None and record["binding"]["personal_memory"] != personal_memory:
+                    if personal_memory is None:
                         raise InvalidTransition("personal session ID cannot become a default session")
-                elif pending and pending[0]["session_id"] != conversation_id:
-                    raise InvalidTransition("close the previous personal session first")
+                    raise IdempotencyConflict("session memory selection cannot change")
             self._store.expire_credentials(self._now_ms())
             active = self._store.active_device(device_ref)
             if active is None and not serving:
@@ -1082,12 +1144,25 @@ class ChannelProviderService:
             adapter = self._registry.get(active.adapter_name)
             handle = json.loads(active.handle_json)
             if serving:
-                if personal_memory is not None:
-                    if device_requested:
+                if self._companion_authority is not None and handle.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION) == SESSION_APPLICATION_COMPANION:
+                    # Pin the effective default once. Replays keep that identity
+                    # even after the persistent Body assignment changes.
+                    selected = target_companion_id
+                    if record is not None and selected is None:
+                        selected = record["binding"]["target_companion_id"]
+                    target_companion_id = await self._companion_authority(
+                        owner_id=active.owner_id, device_ref=device_ref, target_companion_id=selected)
+                if target_companion_id is not None:
+                    self._require_scene_companions_available(active.owner_id,
+                        [target_companion_id], personal_session_id=conversation_id)
+                durable = personal_memory is not None or (
+                    self._companion_authority is not None and target_companion_id is not None)
+                if durable:
+                    if device_requested and personal_memory is not None:
                         raise InvalidTransition("device cannot select personal memory")
                     self._personal_sessions.claim(active, conversation_id,
                         personal_memory=personal_memory, target_companion_id=target_companion_id,
-                        session_intent=session_intent)
+                        session_intent=session_intent, device_requested=device_requested)
                 try:
                     await adapter.open_session(
                         handle, conversation_id, session_intent=session_intent,
@@ -1096,7 +1171,7 @@ class ChannelProviderService:
                         **({"personal_memory": personal_memory} if personal_memory is not None else {}),
                     )
                 except BaseException:
-                    if personal_memory is not None:
+                    if durable:
                         record = self._store.personal_session(conversation_id)
                         if record["state"] == "open":
                             self._store.transition_personal_session(conversation_id,

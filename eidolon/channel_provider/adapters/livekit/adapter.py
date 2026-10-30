@@ -333,6 +333,10 @@ class LiveKitChannelAdapter:
         return [urlunparse((parsed.scheme, f"{address}:{parsed.port}", "", "", "", ""))
                 for address in addresses]
 
+    def voice_capture(self):
+        from ...voice_capture import VoiceCapture
+        return VoiceCapture(self._config, self._client_urls)
+
     def binding_current(self, handle: dict[str, Any]) -> bool:
         return (handle.get("server_urls") == self._client_urls()
                 and ("input_revision" not in handle or

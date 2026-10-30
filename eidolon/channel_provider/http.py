@@ -51,6 +51,7 @@ def create_app(
     bearer_token: str,
     traces: SessionTraceReader | None = None,
     speaker_engine=None,
+    voice_capture=None,
     voice_preview=None,
 ) -> web.Application:
     app = web.Application(client_max_size=256 * 1024)
@@ -58,6 +59,9 @@ def create_app(
     register_speaker_extraction(app, engine=speaker_engine,
                                authorized=lambda request: _authorized(request, bearer_token),
                                problem=_problem_body)
+    from .voice_capture import register_voice_capture
+    register_voice_capture(app, capture=voice_capture,
+                           authorized=lambda request: _authorized(request, bearer_token))
     from .voice_preview import register_voice_preview
     register_voice_preview(app, cache=voice_preview,
                            authorized=lambda request: _authorized(request, bearer_token))

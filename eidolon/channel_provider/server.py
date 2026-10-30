@@ -41,13 +41,14 @@ def main() -> None:
     # rather than hand out room contracts nothing can serve.
     require_locked_environment(logger=logger)
     config = load_provider_config()
+    livekit_adapter = LiveKitChannelAdapter(config.livekit, declared_management_networks())
     registry = AdapterRegistry(
         # Which links this Host's devices can actually reach it on. Read here,
         # at the one place that composes the process, rather than inside the
         # adapter: it is a declaration Ops delivered in the sealed Host profile
         # this unit already reads, and an adapter that reached for it would be
         # answering from ambient state its caller cannot see.
-        [LiveKitChannelAdapter(config.livekit, declared_management_networks())],
+        [livekit_adapter],
         preference=config.adapter_preference,
     )
     store = ChannelProviderStore(config.storage.path)
@@ -97,6 +98,7 @@ def main() -> None:
         traces=SessionTraceReader(config.traces.root),
         speaker_engine=speaker_engine,
         voice_preview=preview_cache,
+        voice_capture=livekit_adapter.voice_capture() if speaker_engine is not None else None,
     )
     async def close_personal_authority(_app):
         await personal_authority.aclose()

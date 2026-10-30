@@ -27,6 +27,10 @@ from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.control.shared_session import SharedSessionInvitation
 from eidolon_sdk.biz.smarthome import PANEL_REQUEST_TOPIC
+from eidolon_sdk.biz.body import (
+    device_state_changed_from_event,
+    read_device_event,
+)
 from eidolon_sdk.biz.control.protocol import command_status_from_ack
 from eidolon.livekit.control_receipts import read_control_receipt
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
@@ -300,6 +304,15 @@ class LiveKitChannelAdapter:
         self._session_end_observers: dict[str, tuple[str, Any]] = {}
         self._team_state_observers: dict[str, tuple[str, str, Any]] = {}
         self._control_receipts: dict[tuple[str, str], _ControlReceipt] = {}
+        #: Last locally-reported value per device and key, from the device's own
+        #: ``body.state.changed`` events. Deliberately not persisted: it is an
+        #: observation of a running device, and a restart has no basis for
+        #: claiming what a device is set to now.
+        self._device_states: dict[str, dict[str, int]] = {}
+        #: Called with (key, value) after every accepted state event for the
+        #: device that subscribed, so a reader is told rather than made to ask
+        #: again.
+        self._state_observers: dict[str, list[Any]] = {}
 
     @property
     def name(self) -> str:
@@ -652,6 +665,44 @@ class LiveKitChannelAdapter:
                     room, device, pending.op, body["ref"], status, code)
         pending.future.set_result(ControlReceipt(status=status, result=body.get("result")))
 
+    def _device_state(self, packet: Any, *, device: str, room: str) -> None:
+        body = read_device_event(packet, device=device)
+        if body is None:
+            return
+        event = device_state_changed_from_event(body)
+        if event is None:
+            return
+        self._device_states.setdefault(device, {})[event.key] = event.value
+        logger.info(
+            "device state room=%s device=%s key=%s value=%s event=%s",
+            room, device, event.key, event.value, event.event_id,
+        )
+        for observer in tuple(self._state_observers.get(device, ())):
+            try:
+                observer(event.key, event.value)
+            except Exception:
+                logger.warning("device state observer failed device=%s", device, exc_info=True)
+
+    def watch_device_state(self, device: str, observer: Any) -> Any:
+        """Call ``observer(key, value)`` on every change that device reports.
+
+        Returns a function that stops the subscription, so a reader that went
+        away does not keep being called.
+        """
+
+        self._state_observers.setdefault(device, []).append(observer)
+
+        def _stop() -> None:
+            watchers = self._state_observers.get(device, [])
+            if observer in watchers:
+                watchers.remove(observer)
+
+        return _stop
+
+    def latest_device_state(self, device: str) -> dict[str, int]:
+        """What this device last reported about itself, keyed by capability value."""
+        return dict(self._device_states.get(device, {}))
+
     def _fail_control_delivery(self, room: str) -> None:
         for (pending_room, _), pending in self._control_receipts.items():
             if pending_room == room and not pending.future.done():
@@ -801,6 +852,7 @@ class LiveKitChannelAdapter:
         def _received(packet: Any) -> None:
             if self._listeners.get(room) is watch and watch.connection is connection:
                 self._control_receipt(packet, room=room, device=watch.device)
+                self._device_state(packet, device=watch.device, room=room)
             self._note_serving_failure(packet, device=watch.device, room=room)
             self._observe_session_end(packet, room=room)
             if self._listeners.get(room) is watch and watch.connection is connection:

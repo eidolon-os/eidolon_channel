@@ -1115,6 +1115,66 @@ class ChannelProviderService:
             )
         return canonical_json({"operation": "channel.capabilities", "devices": devices})
 
+    async def watch_device_state(self, device_id: str, observer) -> Callable[[], None]:
+        """Tell ``observer(device, key, value)`` about this device's changes.
+
+        Returns the function that stops it. A device with no channel here is an
+        ordinary refusal rather than an empty subscription: a reader told
+        "nothing will ever arrive" cannot tell that from a device that is merely
+        quiet, and will wait forever.
+        """
+
+        async with self._lock:
+            self._store.expire_credentials(self._now_ms())
+            stored = next(
+                (
+                    item
+                    for item in self._store.observable_provisions()
+                    if item.device_id == device_id
+                ),
+                None,
+            )
+        if stored is None:
+            raise UnknownChannel("device has no channel on this Host")
+        adapter = self._registry.get(stored.adapter_name)
+        watch = getattr(adapter, "watch_device_state", None)
+        if watch is None:
+            return lambda: None
+        return watch(device_id, observer)
+
+    async def device_state_snapshot(self, device_id: str) -> str:
+        """The values this device last reported changing on its own.
+
+        Absent is not zero. A device that has not reported a key since this
+        process started has an unknown value, and saying ``0`` would be a claim
+        nobody made — a caller wanting a value it can trust still asks the
+        device through the read capabilities, which is why this is a hint about
+        what moved and not a replacement for reading.
+        """
+
+        async with self._lock:
+            self._store.expire_credentials(self._now_ms())
+            stored = next(
+                (
+                    item
+                    for item in self._store.observable_provisions()
+                    if item.device_id == device_id
+                ),
+                None,
+            )
+        if stored is None:
+            raise UnknownChannel("device has no channel on this Host")
+        adapter = self._registry.get(stored.adapter_name)
+        read = getattr(adapter, "latest_device_state", None)
+        values = dict(read(device_id)) if read is not None else {}
+        return canonical_json(
+            {
+                "operation": "channel.device-state",
+                "device_id": device_id,
+                "values": values,
+            }
+        )
+
     async def deliver_device_command(self, request: DeviceCommandRequest) -> DeviceCommandResult:
         """Deliver one capability command to a body and report its terminal state.
 

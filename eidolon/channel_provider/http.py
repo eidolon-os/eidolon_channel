@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -30,6 +31,14 @@ from .session_traces import SessionTraceReader, TraceQuery
 from .shared_session_contract import CloseSharedSession, OpenSharedSession
 
 logger = logging.getLogger("eidolon.channel_provider.http")
+
+#: How long a state stream may stay silent before a comment line is written.
+#: Proxies and mobile radios drop an idle connection; a change minutes later
+#: would then have nowhere to go, and the client would look merely stale.
+#: Kept well below the shortest idle timeout any client is likely to impose —
+#: Dart's HttpClient defaults to 15s, and a heartbeat at exactly that interval
+#: races it, losing the stream every time the device stays quiet.
+_SSE_HEARTBEAT_SECONDS = 5.0
 
 
 class _HomeScope(BaseModel):
@@ -249,6 +258,78 @@ def create_app(
             return _problem(exc)
 
     app.router.add_get("/v1/device-channels/capabilities", capability_directory)
+
+    async def device_state(request: web.Request) -> web.Response:
+        """What a device last reported changing without being asked.
+
+        A read with no side effect, and only a hint: a key it has never reported
+        is absent rather than zero.
+        """
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        try:
+            return web.Response(
+                text=await service.device_state_snapshot(request.match_info["device_id"]),
+                content_type="application/json",
+            )
+        except DomainError as exc:
+            return _problem(exc)
+
+    app.router.add_get("/v1/device-channels/{device_id}/state", device_state)
+
+    async def device_state_stream(request: web.Request) -> web.StreamResponse:
+        """Long-lived stream of a device's own state changes.
+
+        The subscriber is registered before the response headers go out, so a
+        change landing between "connected" and "listening" is not lost. Events
+        carry only what moved; a reader that needs a value it never saw must
+        still ask for it.
+        """
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        device_id = request.match_info["device_id"]
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+
+        def _observe(key: str, value: int) -> None:
+            try:
+                queue.put_nowait({"key": key, "value": value})
+            except asyncio.QueueFull:
+                logger.warning("device state stream dropped an event device=%s", device_id)
+
+        try:
+            stop = await service.watch_device_state(device_id, _observe)
+        except DomainError as exc:
+            return _problem(exc)
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        try:
+            await response.prepare(request)
+            await response.write(b"event: ready\ndata: {}\n\n")
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    await response.write(b": keep-alive\n\n")
+                    continue
+                body = json.dumps(payload, separators=(",", ":"))
+                await response.write(f"event: state\ndata: {body}\n\n".encode())
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            stop()
+        return response
+
+    app.router.add_get("/v1/device-channels/{device_id}/state/stream", device_state_stream)
 
     async def deliver_device_command(request: web.Request) -> web.Response:
         if not _authorized(request, bearer_token):

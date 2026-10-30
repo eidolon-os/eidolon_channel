@@ -370,3 +370,58 @@ async def test_a_command_may_omit_the_companion_it_did_not_come_from(tmp_path) -
         assert response.status != 422, await response.text()
     finally:
         await client.close()
+
+
+async def test_device_state_endpoint_requires_the_bearer_and_names_the_device(tmp_path) -> None:
+    adapter = FakeAdapter(name="livekit")
+    adapter.on_channel = True
+    service = ChannelProviderService(
+        store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
+        registry=AdapterRegistry([adapter], preference=("livekit",)),
+        agent_name="eidolon",
+        now_ms=lambda: 1_700_000_000_000,
+    )
+    service.initialize()
+    client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
+    headers = {"Authorization": f"Bearer {'s' * 32}"}
+    try:
+        await client.start_server()
+        await client.post(
+            "/v1/device-channels/provision", json=provision_payload(), headers=headers
+        )
+        device_id = service._store.active_provisions()[0].device_id
+
+        assert (await client.get(f"/v1/device-channels/{device_id}/state")).status == 401
+
+        response = await client.get(
+            f"/v1/device-channels/{device_id}/state", headers=headers
+        )
+
+        assert response.status == 200
+        body = await response.json()
+        assert body["operation"] == "channel.device-state"
+        assert body["device_id"] == device_id
+        assert body["values"] == {}
+    finally:
+        await client.close()
+
+
+async def test_device_state_endpoint_is_not_found_for_an_unknown_device(tmp_path) -> None:
+    service = ChannelProviderService(
+        store=ChannelProviderStore(tmp_path / "provider.sqlite3"),
+        registry=AdapterRegistry([FakeAdapter(name="livekit")], preference=("livekit",)),
+        agent_name="eidolon",
+        now_ms=lambda: 1_700_000_000_000,
+    )
+    service.initialize()
+    client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
+    headers = {"Authorization": f"Bearer {'s' * 32}"}
+    try:
+        await client.start_server()
+        response = await client.get(
+            "/v1/device-channels/device-instance-absent/state", headers=headers
+        )
+
+        assert response.status == 404
+    finally:
+        await client.close()

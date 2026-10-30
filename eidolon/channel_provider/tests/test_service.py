@@ -857,3 +857,56 @@ async def test_personal_selection_flows_only_from_control_request(tmp_path):
     await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION))
     assert backend.open_session.await_args.kwargs["personal_memory"] == payload["personal_memory"]
     assert backend.open_session.await_args.kwargs["device_requested"] is False
+class _StatefulAdapter(FakeAdapter):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.states: dict[str, dict[str, int]] = {}
+
+    def latest_device_state(self, device: str) -> dict[str, int]:
+        return dict(self.states.get(device, {}))
+
+
+async def test_device_state_snapshot_reports_only_reported_keys(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    backend = _StatefulAdapter(name="livekit")
+    service, _store, _backend = _service(tmp_path, clock, backend)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    device_id = service._store.active_provisions()[0].device_id
+    backend.states[device_id] = {"brightness": 90}
+
+    snapshot = json.loads(await service.device_state_snapshot(device_id))
+
+    assert snapshot["operation"] == "channel.device-state"
+    assert snapshot["device_id"] == device_id
+    assert snapshot["values"] == {"brightness": 90}
+    assert "volume" not in snapshot["values"]
+
+
+async def test_device_state_snapshot_is_empty_for_a_device_that_never_reported(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    device_id = service._store.active_provisions()[0].device_id
+
+    snapshot = json.loads(await service.device_state_snapshot(device_id))
+
+    assert snapshot["values"] == {}
+
+
+async def test_device_state_snapshot_refuses_an_unknown_device(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+
+    with pytest.raises(UnknownChannel):
+        await service.device_state_snapshot(_UNKNOWN)
+
+
+async def test_an_adapter_without_state_still_answers_an_empty_snapshot(tmp_path) -> None:
+    clock = [1_700_000_000_000]
+    service, _store, _backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    device_id = service._store.active_provisions()[0].device_id
+
+    snapshot = json.loads(await service.device_state_snapshot(device_id))
+
+    assert snapshot["values"] == {}

@@ -80,6 +80,18 @@ def test_wav_round_trip_and_the_aigc_chunk() -> None:
         assert parsed.getframerate() == 16000 and parsed.readframes(2) == b"\x01\x00\x02\x00"
 
 
+@pytest.mark.parametrize("producer", ["eidolon/odd", "eidolon/even"])
+def test_every_chunk_is_found_by_a_reader_that_ignores_padding(producer) -> None:
+    """Android's WAV extractor steps by each chunk's declared size alone."""
+    data = wav_bytes(b"\x01\x00" * 8, 16000, aigc={"ContentProducer": producer})
+    offset, seen = 12, []
+    while offset + 8 <= len(data):
+        seen.append(data[offset:offset + 4])
+        offset += 8 + int.from_bytes(data[offset + 4:offset + 8], "little")
+    assert seen == [b"fmt ", b"AIGC", b"data"]
+    assert offset == len(data)
+
+
 async def test_previews_are_made_once_marked_as_ai_and_bounded(tmp_path) -> None:
     calls = []
 

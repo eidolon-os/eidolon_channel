@@ -17,7 +17,11 @@ def wav_bytes(pcm: bytes, sample_rate: int, *, aigc: dict[str, str] | None = Non
     chunks = [b"fmt " + struct.pack("<I", len(fmt)) + fmt]
     if aigc is not None:
         body = json.dumps({"Label": "1", **aigc}, ensure_ascii=False, separators=(",", ":")).encode()
-        chunks.append(b"AIGC" + struct.pack("<I", len(body)) + body + (b"\x00" if len(body) % 2 else b""))
+        # Even, so no pad byte follows: Android's WAV extractor steps by the
+        # declared size alone and would read every later chunk one byte off.
+        # Trailing whitespace keeps it the same JSON.
+        body += b" " * (len(body) % 2)
+        chunks.append(b"AIGC" + struct.pack("<I", len(body)) + body)
     chunks.append(b"data" + struct.pack("<I", len(pcm)) + pcm)
     body = b"WAVE" + b"".join(chunks)
     return b"RIFF" + struct.pack("<I", len(body)) + body

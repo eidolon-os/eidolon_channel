@@ -29,7 +29,10 @@ RENDITION_TEXT = (
     "今天下班的路上，我顺手买了一束向日葵，放在窗台上，整个房间都亮了起来。"
     "晚饭想做个番茄炒蛋，再煮一锅玉米排骨汤。你要是饿了，就早点回来吧。"
 )
-TEXT_REVISION = 1
+#: Part of every cached preview's name: bump when what a cached file holds changes
+#: — its sentences or its layout — so no older file is served again.
+#: 2: the AIGC chunk is written at an even length (Android reads it).
+PREVIEW_REVISION = 2
 SYNTHESIS_TIMEOUT_S = 60
 
 Synthesize = Callable[[VoiceRef, str], Awaitable[tuple[bytes, int]]]
@@ -51,7 +54,7 @@ class VoicePreviews:
 
     async def wav(self, ref: VoiceRef, text: str, *, keep: bool = True) -> bytes:
         key = hashlib.sha256(json.dumps(
-            [ref.provider, ref.model, ref.voice_id, text, TEXT_REVISION], ensure_ascii=False
+            [ref.provider, ref.model, ref.voice_id, text, PREVIEW_REVISION], ensure_ascii=False
         ).encode()).hexdigest()
         path = self._root / f"{key}.wav"
         if keep and (cached := self._read(path)) is not None:

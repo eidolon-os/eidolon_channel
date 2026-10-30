@@ -61,6 +61,7 @@ RECORD_EVENT = "event"
 SESSION_MARKS: tuple[str, ...] = (
     "room_joined",
     "runtime_participant_resolved",
+    "speech_voice",
     "warmup_done",
     "avatar_ready",
     "session_started",

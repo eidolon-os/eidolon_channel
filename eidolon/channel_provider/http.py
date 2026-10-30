@@ -52,7 +52,7 @@ def create_app(
     traces: SessionTraceReader | None = None,
     speaker_engine=None,
     voice_capture=None,
-    voice_preview=None,
+    speech_voices=None,
 ) -> web.Application:
     app = web.Application(client_max_size=256 * 1024)
     from .speaker_extraction import register_speaker_extraction
@@ -62,9 +62,12 @@ def create_app(
     from .voice_capture import register_voice_capture
     register_voice_capture(app, capture=voice_capture,
                            authorized=lambda request: _authorized(request, bearer_token))
-    from .voice_preview import register_voice_preview
-    register_voice_preview(app, cache=voice_preview,
-                           authorized=lambda request: _authorized(request, bearer_token))
+    if speech_voices is not None:
+        from .speech_voices import register_speech_voices
+        catalog, previews = speech_voices
+        register_speech_voices(app, catalog=catalog, previews=previews,
+                               authorized=lambda request: _authorized(request, bearer_token),
+                               problem=_problem_body)
     trace_reader = traces if traces is not None else SessionTraceReader(None)
 
     async def health(_request: web.Request) -> web.Response:

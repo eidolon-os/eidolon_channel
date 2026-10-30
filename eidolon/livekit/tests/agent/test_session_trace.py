@@ -291,6 +291,7 @@ def test_marks_taken_before_the_writer_exists_are_replayed_with_their_own_time(
     assert ordered == ["room_joined", "warmup_done", "session_started"]
     assert closing["missing_session_marks"] == [
         "runtime_participant_resolved",
+        "speech_voice",
         "avatar_ready",
         "first_turn",
     ]

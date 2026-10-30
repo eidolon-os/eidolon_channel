@@ -658,16 +658,33 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             policy_revision=presentation_endpoint.plan.policy_revision,
             inputs=output_plan.inputs, outputs=presentation_endpoint.plan.outputs,
         )
-    factory = SharedStageFactory.from_config(
-        replace(cfg, turn_policy=session_turn_policy),
-        prebuilt_vad=prebuilt_vad,
-        livekit_session_key=session_key,
-        livekit_room=room,
-        runtime_session_id=runtime_session_id,
-        output_plan=stage_output_plan,
-        target_companion_id=target_companion_id,
-        personal_memory=personal_memory,
+    runtime_services = SharedStageFactory.runtime_services_for(
+        cfg, target_companion_id=target_companion_id, personal_memory=personal_memory
     )
+    session_voice = None
+    if runtime_services is not None and (stage_output_plan is None or stage_output_plan.outputs.speech):
+        from .session.speech_voice import resolve_session_voice, shielded_companion_id
+        session_voice = await resolve_session_voice(
+            cfg, companion_id=lambda: shielded_companion_id(runtime_services.resolve_room(room)),
+            authority=runtime_services.runtime,
+        )
+    try:
+        factory = SharedStageFactory.from_config(
+            replace(cfg, turn_policy=session_turn_policy),
+            prebuilt_vad=prebuilt_vad,
+            livekit_session_key=session_key,
+            livekit_room=room,
+            runtime_session_id=runtime_session_id,
+            output_plan=stage_output_plan,
+            target_companion_id=target_companion_id,
+            personal_memory=personal_memory,
+            runtime_services=runtime_services,
+            speech_voice=session_voice.resolved.ref if session_voice else None,
+        )
+    except BaseException:
+        if runtime_services is not None:
+            await runtime_services.aclose()
+        raise
 
     speaker_observer = speaker_http = None
     if getattr(factory, "runtime_services", None) is not None:
@@ -753,6 +770,8 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             # (real-device confirmed).
             on_session_closed=lambda: _end_serving("session closed"),
         )
+    if session_voice is not None:
+        pipeline.session_mark("speech_voice", **session_voice.trace_fields())
 
     runtime_llm = getattr(getattr(factory, "llm", None), "llm", None)
     if getattr(factory, "runtime_services", None) is not None and hasattr(runtime_llm, "prepare_memory_turn"):

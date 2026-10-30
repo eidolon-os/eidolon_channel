@@ -56,6 +56,9 @@ class SystemDataRuntimeResolver:
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         return await self._client.get_companion_face(companion_id)
 
+    async def get_companion_speech_voice(self, companion_id: str):
+        return await self._client.get_companion_speech_voice(companion_id)
+
     async def aclose(self) -> None:
         if self._http_client is not None:
             await self._http_client.aclose()
@@ -97,6 +100,10 @@ class DeferredSystemDataRuntimeResolver:
     async def get_companion_face(self, companion_id: str) -> bytes | None:
         resolver = await self._get()
         return await resolver.get_companion_face(companion_id)
+
+    async def get_companion_speech_voice(self, companion_id: str):
+        resolver = await self._get()
+        return await resolver.get_companion_speech_voice(companion_id)
 
     async def aclose(self) -> None:
         if self._resolver is not None:

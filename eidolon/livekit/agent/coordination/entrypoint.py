@@ -24,6 +24,8 @@ async def run_team_dispatch(ctx, cfg, raw):
     rooms, factories, outputs = [], [], []
     worker = None
     source = team.opened.selection.input_device.device_instance_id
+    # Each member speaks with its own voice: that is how one hears who is talking.
+    voices = await _member_voices(cfg, [m.companion_id for m in team.opened.selection.members])
     try:
         for member, endpoint in zip(team.opened.selection.members, team.endpoints):
             async with asyncio.timeout(10):
@@ -32,7 +34,8 @@ async def run_team_dispatch(ctx, cfg, raw):
             rooms.append(room)
             factory = SharedStageFactory.from_config(cfg, livekit_room=room,
                 livekit_session_key=room.name, runtime_session_id=endpoint.plan.session_id,
-                output_plan=endpoint.plan, target_companion_id=member.companion_id)
+                output_plan=endpoint.plan, target_companion_id=member.companion_id,
+                speech_voice=voices.get(member.companion_id))
             factories.append(factory)
             outputs.append(TeamOutput(member.companion_id, endpoint, room, factory.tts.tts))
         source_factory = SharedStageFactory.from_config(cfg, livekit_room=ctx.room,
@@ -69,3 +72,21 @@ async def run_team_dispatch(ctx, cfg, raw):
     finally:
         await asyncio.gather(*(f.aclose() for f in factories), return_exceptions=True)
         await asyncio.gather(*(room.disconnect() for room in rooms), return_exceptions=True)
+
+
+async def _member_voices(cfg, companion_ids):
+    """Resolve every member's voice at once, under the same session-start deadline."""
+    if not cfg.runtime_authority.enabled:
+        return {}
+    from ..runtime.system_data import build_system_data_runtime
+    from ..session.speech_voice import resolve_session_voice
+
+    authority = build_system_data_runtime(cfg.runtime_authority)
+    try:
+        results = await asyncio.gather(*(
+            resolve_session_voice(cfg, companion_id=lambda c=companion_id: asyncio.sleep(0, result=c),
+                                  authority=authority)
+            for companion_id in companion_ids))
+    finally:
+        await authority.aclose()
+    return {companion_id: result.resolved.ref for companion_id, result in zip(companion_ids, results)}

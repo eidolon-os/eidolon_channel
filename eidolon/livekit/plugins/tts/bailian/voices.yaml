@@ -5,7 +5,7 @@
 #   docs/跨系统/Companion音色选择设计.md §4.3。
 # 来源：官方「CosyVoice音色列表」页（source.url），2026-10-30 抓取。
 #   顺序与官方页一致，便于对照增删。
-# 收录范围：cosyvoice-v3-flash（当前配置）、cosyvoice-v3-plus。
+# 收录范围：cosyvoice-v3-flash（当前配置）、cosyvoice-v3-plus，以及 qwen-audio-3.1-tts-flash/-plus（见下）。
 #   cosyvoice-v2 未收录：没有主机配置它；需要时按同一契约补。
 #
 # 公共字段怎么从官方信息得来（规则写死，不靠感觉）：
@@ -18,6 +18,17 @@
 #   rank        官方「适用场景」按陪伴产品的相关度排优先级 ×100，再加该场景内的官方顺序
 #   lineage     只在官方明确标出同一说话人的另一版本时填写；缺省等于 voice_id
 #
+# Qwen-Audio-TTS 3.1 一段（文件末尾）另按官方「Qwen-Audio-TTS 音色列表」整理，2026-10-30：
+#   收录旗舰、多语种与方言、精品中文、其他系统音色；英文、小语种音色不会说普通话，未收录
+#   gender      取官方「性别」列；「儿童」记 unspecified，age_band 记 child
+#   age_band    官方没有年龄：与 v3 同一说话人的沿用 v3 条目，其余记 unspecified（不参与映射）
+#   languages   精品中文为普通话；多语种与方言音色另列本词表认识的方言和语种；
+#               「其他系统音色」官方未写语言，均为中文场景的 v3 音色新版，记普通话
+#   lineage     官方名称去掉 _v3.1 后与 v3 条目同名、且特质相同（或官方未给特质）时，沿用其说话人
+#   styles      同下方关键词表，按官方「声线特质」，没有时用同一说话人 v3 条目的特质
+#   ext.section 官方分组；ext.trait_source 标明 summary 出自官方（official）还是 v3 条目（v3）
+#   这一段同时修正了两个 v3 条目的性别：官方 3.1 表写明龙闪闪为男、龙泡泡为女
+#
 # ext（百炼专有，通用层不读）：
 #   scene / age  官方「适用场景」「年龄」原文，留作出处
 #   regions      官方「支持地域」：cn-beijing = 华北2（北京），ap-southeast-1 = 新加坡
@@ -29,7 +40,7 @@ source:
   title: CosyVoice音色列表
   url: https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list
   retrieved_on: "2026-10-30"
-models: [cosyvoice-v3-flash, cosyvoice-v3-plus]
+models: [cosyvoice-v3-flash, cosyvoice-v3-plus, qwen-audio-3.1-tts-flash, qwen-audio-3.1-tts-plus]
 
 voices:
 
@@ -82,7 +93,7 @@ voices:
   - voice_id: longpaopao_v3
     display_name: 龙泡泡
     summary: 飞天泡泡音
-    gender: unspecified
+    gender: female
     age_band: child
     languages: [zh-CN, en]
     styles: [character]
@@ -124,7 +135,7 @@ voices:
   - voice_id: longshanshan_v3
     display_name: 龙闪闪
     summary: 戏剧化童声
-    gender: unspecified
+    gender: male
     age_band: child
     languages: [zh-CN, en]
     styles: [expressive]
@@ -943,3 +954,789 @@ voices:
     rank: 703
     models: [cosyvoice-v3-flash]
     ext: {scene: 新闻播报, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+
+  # ======== Qwen-Audio-TTS 3.1（官方「Qwen-Audio-TTS 音色列表」，2026-10-30） ========
+
+  # —— 旗舰音色 ——
+  - voice_id: longanlingxin_v3.1
+    display_name: 龙安灵心
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: []
+    rank: 101
+    models: [qwen-audio-3.1-tts-plus, qwen-audio-3.1-tts-flash]
+    ext: {section: 旗舰音色, scene: 旗舰, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xunanchuan_v3.1
+    display_name: 许南川
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: []
+    rank: 102
+    models: [qwen-audio-3.1-tts-plus, qwen-audio-3.1-tts-flash]
+    ext: {section: 旗舰音色, scene: 旗舰, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanhuan_v3.1
+    display_name: 龙安欢
+    summary: 欢脱元气女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [lively]
+    lineage: longanhuan
+    rank: 103
+    models: [qwen-audio-3.1-tts-plus, qwen-audio-3.1-tts-flash]
+    ext: {section: 旗舰音色, scene: 旗舰, trait_source: v3, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanfengyue_v3.1
+    display_name: 龙安风悦
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: []
+    rank: 104
+    models: [qwen-audio-3.1-tts-plus, qwen-audio-3.1-tts-flash]
+    ext: {section: 旗舰音色, scene: 旗舰, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longanyang_v3.1
+    display_name: 龙安洋
+    summary: 阳光大男孩
+    gender: male
+    age_band: youth
+    languages: [zh-CN]
+    styles: [bright]
+    lineage: longanyang
+    rank: 201
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴（标杆音色）, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: longfeifei_v3.1
+    display_name: 龙菲菲
+    summary: 甜妹
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [sweet]
+    rank: 301
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longqiang_v3.1
+    display_name: 龙嫱
+    summary: 浪漫、风情
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [romantic]
+    rank: 302
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longyan_v3.1
+    display_name: 龙颜
+    summary: 温暖、自然、亲切
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [warm]
+    rank: 303
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longcheng_v3.1
+    display_name: 龙橙
+    summary: 智慧、磁性
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [intellectual, magnetic]
+    rank: 304
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longshao_v3.1
+    display_name: 龙邵
+    summary: 积极、元气
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [bright, lively]
+    rank: 305
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longze_v3.1
+    display_name: 龙泽
+    summary: 温暖、元气、自然
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [lively, warm]
+    rank: 306
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longhao_v3.1
+    display_name: 龙浩
+    summary: 多情、忧郁
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [romantic]
+    rank: 307
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longtian_v3.1
+    display_name: 龙天
+    summary: 磁性、理智
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [intellectual, magnetic]
+    rank: 308
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longxiaocheng_v3.1
+    display_name: 龙小诚
+    summary: 磁性、低音
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [magnetic]
+    rank: 309
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longanyuanfei_v3.1
+    display_name: 龙安元妃
+    summary: 高傲妃子音
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [character]
+    rank: 310
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanlingxi_v3.1
+    display_name: 龙安灵希
+    summary: 可爱甜美音
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [sweet, cute]
+    rank: 311
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴（精品中文）, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanya_v3.1
+    display_name: 龙安雅
+    summary: 高雅气质女
+    gender: female
+    age_band: adult
+    languages: [zh-CN]
+    styles: [elegant]
+    lineage: longanya_v3
+    rank: 312
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longwan_v3.1
+    display_name: 龙婉
+    summary: 细腻柔声女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [gentle]
+    lineage: longwan_v3
+    rank: 313
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longxing_v3.1
+    display_name: 龙星
+    summary: 温婉邻家女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [gentle]
+    lineage: longxing_v3
+    rank: 314
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longhua_v3.1
+    display_name: 龙华
+    summary: 元气甜美女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [lively, sweet]
+    lineage: longhua_v3
+    rank: 315
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longhan_v3.1
+    display_name: 龙寒
+    summary: 温暖痴情男
+    gender: male
+    age_band: adult
+    languages: [zh-CN]
+    styles: [warm, romantic]
+    lineage: longhan_v3
+    rank: 316
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanzhi_v3.1
+    display_name: 龙安智
+    summary: 睿智轻熟男
+    gender: male
+    age_band: adult
+    languages: [zh-CN]
+    styles: [intellectual, mature]
+    lineage: longanzhi_v3
+    rank: 317
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longzhe_v3.1
+    display_name: 龙哲
+    summary: 呆板大暖男
+    gender: male
+    age_band: youth
+    languages: [zh-CN]
+    styles: [warm, playful]
+    lineage: longzhe_v3
+    rank: 318
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 社交陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: baiqinglan_v3.1
+    display_name: 白清岚
+    summary: 明亮、清纯
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [bright]
+    rank: 401
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 语音助手、客服助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: anruorou_v3.1
+    display_name: 安若柔
+    summary: 气声、知性
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [intellectual]
+    rank: 402
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 旁白、语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: yezhiqing_v3.1
+    display_name: 叶知晴
+    summary: 轻快、自然
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [lively]
+    rank: 403
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 儿童故事、客服助手、语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: andi_v3.1
+    display_name: 安迪
+    summary: ABC口音
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: []
+    rank: 404
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: anyuqing_v3.1
+    display_name: 安语晴
+    summary: 甜妹
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [sweet]
+    rank: 405
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 语音助手、旁白、新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: linxiaoling_v3.1
+    display_name: 林小灵
+    summary: 甜妹
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [sweet]
+    rank: 406
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longanli_v3.1
+    display_name: 龙安莉
+    summary: 利落从容女
+    gender: female
+    age_band: adult
+    languages: [zh-CN]
+    styles: [calm, crisp]
+    lineage: longanli_v3
+    rank: 407
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanwen_v3.1
+    display_name: 龙安温
+    summary: 优雅知性女
+    gender: female
+    age_band: adult
+    languages: [zh-CN]
+    styles: [intellectual, elegant]
+    lineage: longanwen_v3
+    rank: 408
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanlang_v3.1
+    display_name: 龙安朗
+    summary: 清爽利落男
+    gender: male
+    age_band: youth
+    languages: [zh-CN]
+    styles: [crisp]
+    lineage: longanlang_v3
+    rank: 409
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longxiaoxia_v3.1
+    display_name: 龙小夏
+    summary: 沉稳权威女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [calm, crisp]
+    lineage: longxiaoxia_v3
+    rank: 410
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 语音助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: qiaoxiaojiao_v3.1
+    display_name: 乔小娇
+    summary: 俏丽、可爱
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [cute]
+    rank: 501
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 广告营销、客服助手、有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xiaxiaochen_v3.1
+    display_name: 夏小晨
+    summary: 元气、明亮
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [bright, lively]
+    rank: 502
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 广告营销、有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: anmingyuan_v3.1
+    display_name: 安明远
+    summary: 清亮、自然
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [bright]
+    rank: 503
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 广告营销、有声书、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: anxiaolan_v3.1
+    display_name: 安小岚
+    summary: 清甜、纯净
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [sweet]
+    rank: 504
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、客服助手、旁白、新闻播报、广告营销, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xieshurou_v3.1
+    display_name: 谢舒柔
+    summary: 柔和、自然、知性
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [gentle, intellectual]
+    rank: 505
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、客服助手、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xuyuyuan_v3.1
+    display_name: 许玉远
+    summary: 知性、成熟、质感
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [intellectual, mature]
+    rank: 506
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 广告营销、新闻播报、旁白、客服助手、有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: wenhuaizhi_v3.1
+    display_name: 闻怀之
+    summary: 稳重、成熟
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [calm, mature]
+    rank: 507
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、新闻播报、广告营销、客服助手、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xiaoxingzhi_v3.1
+    display_name: 萧行之
+    summary: 端庄、贵气
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [elegant]
+    rank: 508
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 新闻播报、有声书、旁白、客服助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: guyunshu_v3.1
+    display_name: 顾云舒
+    summary: 成熟、稳重
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [calm, mature]
+    rank: 509
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 音乐电台、客服助手、有声书、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: huozhuoshi_v3.1
+    display_name: 霍拙石
+    summary: 清亮
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [bright]
+    rank: 510
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、广告营销、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: yeqinghe_v3.1
+    display_name: 叶清禾
+    summary: 亲切、温柔
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [gentle, warm]
+    rank: 511
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、广告营销、旁白、客服助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: yunhuanhuan_v3.1
+    display_name: 云欢欢
+    summary: 高亢、热情
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [lively, expressive]
+    rank: 512
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、旁白、客服助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xuxiaoqiao_v3.1
+    display_name: 徐小俏
+    summary: 自然、俏皮
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [playful]
+    rank: 513
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书、旁白、客服助手, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: baianran_v3.1
+    display_name: 白安然
+    summary: 低沉、浑厚、气声
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [magnetic]
+    rank: 514
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 配音讲解、有声书、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: xuyanchu_v3.1
+    display_name: 许言初
+    summary: 沉稳、磁性
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [calm, magnetic]
+    rank: 515
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 新闻播报、有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longyue_v3.1
+    display_name: 龙悦
+    summary: 温暖、磁性
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [warm, magnetic]
+    rank: 516
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longnan_v3.1
+    display_name: 龙楠
+    summary: 睿智
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [intellectual]
+    rank: 517
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longniuniu_v3.1
+    display_name: 龙牛牛
+    summary: 阳光男童声
+    gender: male
+    age_band: child
+    languages: [zh-CN]
+    styles: [bright]
+    lineage: longniuniu_v3
+    rank: 518
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 消费电子-儿童有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longshanshan_v3.1
+    display_name: 龙闪闪
+    summary: 戏剧化童声
+    gender: male
+    age_band: child
+    languages: [zh-CN]
+    styles: [expressive]
+    lineage: longshanshan_v3
+    rank: 519
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 消费电子-儿童有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longyuan_v3.1
+    display_name: 龙媛
+    summary: 温暖治愈女
+    gender: female
+    age_band: adult
+    languages: [zh-CN]
+    styles: [warm]
+    lineage: longyuan_v3
+    rank: 520
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longmiao_v3.1
+    display_name: 龙妙
+    summary: 抑扬顿挫女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [expressive]
+    lineage: longmiao_v3
+    rank: 521
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longsanshu_v3.1
+    display_name: 龙三叔
+    summary: 沉稳质感男
+    gender: male
+    age_band: adult
+    languages: [zh-CN]
+    styles: [calm, mature]
+    lineage: longsanshu_v3
+    rank: 522
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 有声书, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: yuxiaoyun_v3.1
+    display_name: 于小云
+    summary: 元气、亲切、自然
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [lively, warm]
+    rank: 601
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 广告营销、广播、客服助手、旁白, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: wenhuaiqing_v3.1
+    display_name: 温怀清
+    summary: 清亮、柔和
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [bright, gentle]
+    rank: 602
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 儿童故事、客服助手、广告营销、新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longyingtao_v3.1
+    display_name: 龙应桃
+    summary: 温柔淡定女
+    gender: female
+    age_band: youth
+    languages: [zh-CN]
+    styles: [gentle, calm]
+    lineage: longyingtao_v3
+    rank: 603
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 客服, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: longjin_v3.1
+    display_name: 龙津
+    summary: 优雅、温润
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [gentle, elegant]
+    rank: 701
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 诗词朗诵, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: libai_v3.1
+    display_name: 李白
+    summary: 古代诗仙男
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [character]
+    rank: 702
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 诗词朗诵, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: longjing_v3.1
+    display_name: 龙婧
+    summary: 质感、沉稳
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [calm, mature]
+    rank: 801
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longxiaobai_v3.1
+    display_name: 龙小白
+    summary: 磁性、质感
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [magnetic, mature]
+    rank: 802
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longshu_v3.1
+    display_name: 龙书
+    summary: 沉稳、磁性
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [calm, magnetic]
+    rank: 803
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longshuo_v3.1
+    display_name: 龙硕
+    summary: 博才、干练
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [intellectual, crisp]
+    rank: 804
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: loongbella_v3.1
+    display_name: Bella
+    summary: 干练、磁性、知性
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN, en]
+    styles: [intellectual, magnetic, crisp]
+    rank: 805
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 英文、新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: loongstella_v3.1
+    display_name: loongstella
+    summary: 飒爽利落女
+    gender: female
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [crisp]
+    rank: 806
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 新闻播报, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanchong_v3.1
+    display_name: 龙安冲
+    summary: 激情推销男
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [expressive]
+    rank: 1001
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 直播带货, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: longke_v3.1
+    display_name: 龙可
+    summary: 懵懂
+    gender: unspecified
+    age_band: child
+    languages: [zh-CN]
+    styles: [cute]
+    rank: 1201
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 童声, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longling_v3.1
+    display_name: 龙铃
+    summary: 稚气呆板女
+    gender: female
+    age_band: child
+    languages: [zh-CN]
+    styles: [cute, playful]
+    lineage: longling_v3
+    rank: 1202
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 童声, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longjielidou_v3.1
+    display_name: 龙杰力豆
+    summary: 天真男童音
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [cute]
+    rank: 1301
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 儿童陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longpaopao_v3.1
+    display_name: 龙泡泡
+    summary: 飞天泡泡音
+    gender: female
+    age_band: child
+    languages: [zh-CN]
+    styles: [character]
+    lineage: longpaopao_v3
+    rank: 1302
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 消费电子-儿童陪伴, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 精品中文音色 ——
+  - voice_id: longlaotie_v3.1
+    display_name: 龙老铁
+    summary: 东北、直率
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [frank]
+    rank: 1601
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 精品中文音色, scene: 方言, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 其他系统音色 ——
+  - voice_id: longhuohuo_v3.1
+    display_name: 龙火火
+    summary: 顽皮少年音
+    gender: male
+    age_band: unspecified
+    languages: [zh-CN]
+    styles: [playful]
+    rank: 1801
+    models: [qwen-audio-3.1-tts-flash]
+    ext: {section: 其他系统音色, scene: 角色音, trait_source: official, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}

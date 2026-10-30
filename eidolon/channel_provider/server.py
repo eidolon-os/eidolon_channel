@@ -87,17 +87,23 @@ def main() -> None:
             ReferenceSpeakerExtractor,
         )
         speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(require_speaker_model_dir(config.speaker_model_dir)))
-    from .voice_preview import ConfiguredVoicePreview, VoicePreviewCache
-    preview_synthesis = ConfiguredVoicePreview(load_effective_config())
-    preview_cache = VoicePreviewCache(config.storage.path.parent / "voice-preview",
-        profile=preview_synthesis.profile, synthesize=preview_synthesis.synthesize,
+    from eidolon.livekit.plugins.tts.voice_catalogs import all_adapter_classes, current_adapter
+    from eidolon.speech_voice.catalog import HostVoiceCatalogService
+    from eidolon.speech_voice.preview import VoicePreviews
+    from .speech_voices import ConfiguredSynthesis, host_propagator
+    agent_config = load_effective_config()
+    voice_root = config.storage.path.parent / "speech-voices"
+    voice_catalog = HostVoiceCatalogService(
+        current_adapter(agent_config), all_adapter_classes(), voice_root / "catalog_snapshot.json")
+    voice_previews = VoicePreviews(voice_root / "previews", synthesize=ConfiguredSynthesis(agent_config),
+        propagator=host_propagator(),
         max_bytes=int(os.environ.get("EIDOLON_VOICE_PREVIEW_CACHE_BYTES", str(64 * 1024 * 1024))))
     app = create_app(
         service=service,
         bearer_token=config.bearer_token,
         traces=SessionTraceReader(config.traces.root),
         speaker_engine=speaker_engine,
-        voice_preview=preview_cache,
+        speech_voices=(voice_catalog, voice_previews),
         voice_capture=livekit_adapter.voice_capture() if speaker_engine is not None else None,
     )
     async def close_personal_authority(_app):

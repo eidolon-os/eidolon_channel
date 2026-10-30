@@ -43,6 +43,7 @@ from eidolon.livekit.common.config.validators import (
 )
 
 from eidolon_sdk.biz.presentation import OutputSelection, SessionOutputPlan
+from eidolon_sdk.biz.speech_voice import VoiceRef
 
 from .providers.llm import LlmParams, LivekitLlmStage
 from .providers.stt import SttParams, SttStage
@@ -229,6 +230,22 @@ class SharedStageFactory:
     # Production path: build everything from AgentConfig
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def runtime_services_for(cfg: "AgentConfig", *, target_companion_id: str | None = None,
+                             personal_memory=None):
+        """The session's runtime identity services, or ``None`` when nothing needs them."""
+        needs_runtime_context = (
+            cfg.providers.brain_provider == "eidolon_agent"
+            or cfg.avatar.enabled
+        )
+        if needs_runtime_context and cfg.runtime_authority.enabled:
+            return _build_runtime_services(
+                cfg.runtime_authority,
+                target_companion_id=target_companion_id,
+                personal_memory=personal_memory,
+            )
+        return None
+
     @classmethod
     def from_config(
         cls,
@@ -241,6 +258,8 @@ class SharedStageFactory:
         output_plan: SessionOutputPlan | None = None,
         target_companion_id: str | None = None,
         personal_memory=None,
+        runtime_services=None,
+        speech_voice: VoiceRef | None = None,
     ) -> "SharedStageFactory":
         """Build all stages from the agent's configuration.
 
@@ -267,6 +286,11 @@ class SharedStageFactory:
                 user. Falls back to ``<prefix>:<room.name>`` when no
                 participant is connected yet (defensive — shouldn't happen at
                 chat() time since the user has already spoken).
+            runtime_services: Built by the caller with :meth:`runtime_services_for`
+                when it needs the session's identity before the stages exist
+                (to choose the voice). Built here otherwise.
+            speech_voice: The voice this session speaks with, resolved at
+                session start. ``None`` keeps the configured voice.
             target_companion_id: Optional same-Owner target from the Provider's
                 trusted dispatch. Bound to this session's runtime resolver;
                 never inferred from user text or persisted as a device assignment.
@@ -289,16 +313,9 @@ class SharedStageFactory:
             raise ValueError("EXPRESSION_REQUIRES_EIDOLON_AGENT")
         if (target_companion_id is not None or personal_memory is not None) and cfg.providers.brain_provider != "eidolon_agent":
             raise ValueError("SESSION_TARGET_REQUIRES_EIDOLON_AGENT")
-        runtime_services = None
-        needs_runtime_context = (
-            cfg.providers.brain_provider == "eidolon_agent"
-            or cfg.avatar.enabled
-        )
-        if needs_runtime_context and cfg.runtime_authority.enabled:
-            runtime_services = _build_runtime_services(
-                cfg.runtime_authority,
-                target_companion_id=target_companion_id,
-                personal_memory=personal_memory,
+        if runtime_services is None:
+            runtime_services = cls.runtime_services_for(
+                cfg, target_companion_id=target_companion_id, personal_memory=personal_memory
             )
         if cfg.providers.brain_provider == "eidolon_agent":
             from eidolon.livekit.agent.eidolon_agent_rpc import (
@@ -361,7 +378,11 @@ class SharedStageFactory:
 
         microphone = output_plan is None or output_plan.inputs.microphone
         stt = cls._build_stt(cfg) if microphone else None
-        tts = cls._build_tts(cfg) if output_plan is None or output_plan.outputs.speech else None
+        tts = None
+        if output_plan is None or output_plan.outputs.speech:
+            from eidolon.livekit.plugins.tts.voice_catalogs import config_speaking
+
+            tts = cls._build_tts(config_speaking(cfg, speech_voice) if speech_voice else cfg)
         vad = (prebuilt_vad if prebuilt_vad is not None else cls._build_vad(cfg)) if microphone else None
 
         return cls(

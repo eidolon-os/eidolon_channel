@@ -1,0 +1,945 @@
+# 百炼 CosyVoice 系统音色 —— 音色目录文件（契约 speech_voice_catalog/v1）
+#
+# 谁读：只有 Channel。通用加载器校验信封和公共字段；`ext` 由百炼适配器
+#   （voice_catalog.py）解析成它自己的类型。契约见
+#   docs/跨系统/Companion音色选择设计.md §4.3。
+# 来源：官方「CosyVoice音色列表」页（source.url），2026-10-30 抓取。
+#   顺序与官方页一致，便于对照增删。
+# 收录范围：cosyvoice-v3-flash（当前配置）、cosyvoice-v3-plus。
+#   cosyvoice-v2 未收录：没有主机配置它；需要时按同一契约补。
+#
+# 公共字段怎么从官方信息得来（规则写死，不靠感觉）：
+#   display_name / summary  官方「名称」「特质」原文
+#   gender      读「特质」：含「女」或「姨」为 female，含「男」「爷」「猴哥」为 male，
+#               其余为 unspecified（不参与映射）。不从 voice_id 推断
+#   age_band    取官方年龄区间中点：<13 child，<28 youth，<55 adult；「60岁以上」senior
+#   languages   官方「语言」逐项转成语言键，顺序照抄（第一项是映射用的主语言）
+#   styles      「特质」关键词对照表，见设计文档附录 A
+#   rank        官方「适用场景」按陪伴产品的相关度排优先级 ×100，再加该场景内的官方顺序
+#   lineage     只在官方明确标出同一说话人的另一版本时填写；缺省等于 voice_id
+#
+# ext（百炼专有，通用层不读）：
+#   scene / age  官方「适用场景」「年龄」原文，留作出处
+#   regions      官方「支持地域」：cn-beijing = 华北2（北京），ap-southeast-1 = 新加坡
+#   ssml / instruct / word_timestamp  官方「特性支持」
+
+schema: speech_voice_catalog/v1
+provider: bailian
+source:
+  title: CosyVoice音色列表
+  url: https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list
+  retrieved_on: "2026-10-30"
+models: [cosyvoice-v3-flash, cosyvoice-v3-plus]
+
+voices:
+
+  # —— 社交陪伴（标杆音色） ——
+  - voice_id: longanyang
+    display_name: 龙安洋
+    summary: 阳光大男孩
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [bright]
+    rank: 101
+    models: [cosyvoice-v3-flash, cosyvoice-v3-plus]
+    ext: {scene: 社交陪伴（标杆音色）, age: 20~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanhuan_v3
+    display_name: 龙安欢（V3）
+    summary: 欢脱元气女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, yue, zh-dongbei, zh-henan, zh-hunan, zh-shaanxi, zh-shandong, zh-sichuan, zh-anhui, en]
+    styles: [lively]
+    lineage: longanhuan
+    rank: 102
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴（标杆音色）, age: 20~30岁, regions: [cn-beijing], ssml: true, instruct: true, word_timestamp: true}
+  - voice_id: longanhuan
+    display_name: 龙安欢
+    summary: 欢脱元气女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [lively]
+    rank: 103
+    models: [cosyvoice-v3-flash, cosyvoice-v3-plus]
+    ext: {scene: 社交陪伴（标杆音色）, age: 20~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 童声（标杆音色） ——
+  - voice_id: longhuhu_v3
+    display_name: 龙呼呼
+    summary: 天真烂漫女童
+    gender: female
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [cute]
+    rank: 1101
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 童声（标杆音色）, age: 6~10岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: true, word_timestamp: true}
+
+  # —— 智能玩具/儿童故事机 ——
+  - voice_id: longpaopao_v3
+    display_name: 龙泡泡
+    summary: 飞天泡泡音
+    gender: unspecified
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [character]
+    rank: 1201
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 智能玩具/儿童故事机, age: 6~15岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longjielidou_v3
+    display_name: 龙杰力豆
+    summary: 阳光顽皮男
+    gender: male
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [bright, playful]
+    rank: 1202
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 智能玩具/儿童故事机, age: 10岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longxian_v3
+    display_name: 龙仙
+    summary: 豪放可爱女
+    gender: female
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [cute, expressive]
+    rank: 1203
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 智能玩具/儿童故事机, age: 12岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longling_v3
+    display_name: 龙铃
+    summary: 稚气呆板女
+    gender: female
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [cute, playful]
+    rank: 1204
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 智能玩具/儿童故事机, age: 10岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 消费电子-儿童有声书 ——
+  - voice_id: longshanshan_v3
+    display_name: 龙闪闪
+    summary: 戏剧化童声
+    gender: unspecified
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [expressive]
+    rank: 1301
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 消费电子-儿童有声书, age: 6~15岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longniuniu_v3
+    display_name: 龙牛牛
+    summary: 阳光男童声
+    gender: male
+    age_band: child
+    languages: [zh-CN, en]
+    styles: [bright]
+    rank: 1302
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 消费电子-儿童有声书, age: 6~15岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 方言 ——
+  - voice_id: longjiaxin_v3
+    display_name: 龙嘉欣
+    summary: 优雅粤语女
+    gender: female
+    age_band: adult
+    languages: [yue, en]
+    styles: [elegant]
+    rank: 1401
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 方言, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longjiayi_v3
+    display_name: 龙嘉怡
+    summary: 知性粤语女
+    gender: female
+    age_band: youth
+    languages: [yue, en]
+    styles: [intellectual]
+    rank: 1402
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 方言, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanyue_v3
+    display_name: 龙安粤
+    summary: 欢脱粤语男
+    gender: male
+    age_band: adult
+    languages: [yue, en]
+    styles: [lively]
+    rank: 1403
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 方言, age: 25~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longlaotie_v3
+    display_name: 龙老铁
+    summary: 东北直率男
+    gender: male
+    age_band: youth
+    languages: [zh-dongbei, en]
+    styles: [frank]
+    rank: 1404
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 方言, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longshange_v3
+    display_name: 龙陕哥
+    summary: 原味陕北男
+    gender: male
+    age_band: adult
+    languages: [zh-shaanxi, en]
+    styles: [frank]
+    rank: 1405
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 方言, age: 25~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanmin_v3
+    display_name: 龙安闽
+    summary: 清纯萝莉女
+    gender: female
+    age_band: youth
+    languages: [nan, en]
+    styles: [cute]
+    rank: 1406
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 方言, age: 18~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 出海营销 ——
+  - voice_id: loongkyong_v3
+    display_name: loongkyong
+    summary: 韩语女
+    gender: female
+    age_band: youth
+    languages: [ko]
+    styles: []
+    rank: 1501
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 25~30岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongriko_v3
+    display_name: Riko
+    summary: 二次元霓虹女
+    gender: female
+    age_band: youth
+    languages: [ja]
+    styles: [character]
+    rank: 1502
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 18~25岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongtomoka_v3
+    display_name: loongtomoka
+    summary: 日语女
+    gender: female
+    age_band: adult
+    languages: [ja]
+    styles: []
+    rank: 1503
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 30~35岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongabby_v3
+    display_name: loongabby
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1504
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 30~35岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongandy_v3
+    display_name: loongandy
+    summary: 美式英文男
+    gender: male
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1505
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 30~35岁, regions: [cn-beijing, ap-southeast-1], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongannie_v3
+    display_name: loongannie
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1506
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 30~35岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongava_v3
+    display_name: loongava
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1507
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongbeth_v3
+    display_name: loongbeth
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1508
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongbetty_v3
+    display_name: loongbetty
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1509
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongcally_v3
+    display_name: loongcally
+    summary: 美式英文女
+    gender: female
+    age_band: youth
+    languages: [en-US]
+    styles: []
+    rank: 1510
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 25~30岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongcindy_v3
+    display_name: loongcindy
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1511
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 30~35岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongdavid_v3
+    display_name: loongdavid
+    summary: 美式英文男
+    gender: male
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1512
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongdonna_v3
+    display_name: loongdonna
+    summary: 美式英文女
+    gender: female
+    age_band: adult
+    languages: [en-US]
+    styles: []
+    rank: 1513
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongemily_v3
+    display_name: loongemily
+    summary: 英式英文女
+    gender: female
+    age_band: adult
+    languages: [en-GB]
+    styles: []
+    rank: 1514
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongeric_v3
+    display_name: loongeric
+    summary: 英式英文男
+    gender: male
+    age_band: adult
+    languages: [en-GB]
+    styles: []
+    rank: 1515
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongluna_v3
+    display_name: loongluna
+    summary: 英式英文女
+    gender: female
+    age_band: adult
+    languages: [en-GB]
+    styles: []
+    rank: 1516
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 35~40岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongluca_v3
+    display_name: loongluca
+    summary: 英式英文男
+    gender: male
+    age_band: youth
+    languages: [en-GB]
+    styles: []
+    rank: 1517
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 25~30岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongtomoya_v3
+    display_name: loongtomoya
+    summary: 日语男
+    gender: male
+    age_band: adult
+    languages: [ja]
+    styles: []
+    rank: 1518
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 30~35岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongyuuna_v3
+    display_name: Yuuna
+    summary: 日语女
+    gender: female
+    age_band: youth
+    languages: [ja]
+    styles: []
+    rank: 1519
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 18~25岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongyuuma_v3
+    display_name: Yuuma
+    summary: 日语男
+    gender: male
+    age_band: youth
+    languages: [ja]
+    styles: []
+    rank: 1520
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 20~25岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongjihun_v3
+    display_name: Jihun
+    summary: 韩语男
+    gender: male
+    age_band: youth
+    languages: [ko]
+    styles: []
+    rank: 1521
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 25~30岁, regions: [cn-beijing], ssml: false, instruct: false, word_timestamp: false}
+  - voice_id: loongindah_v3
+    display_name: loongindah
+    summary: 印尼女
+    gender: female
+    age_band: youth
+    languages: [id]
+    styles: []
+    rank: 1522
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 出海营销, age: 22~27岁, regions: [cn-beijing, ap-southeast-1], ssml: false, instruct: false, word_timestamp: false}
+
+  # —— 诗词朗诵 ——
+  - voice_id: longfei_v3
+    display_name: 龙飞
+    summary: 热血磁性男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [magnetic, expressive]
+    rank: 601
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 诗词朗诵, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 电话销售 ——
+  - voice_id: longyingxiao_v3
+    display_name: 龙应笑
+    summary: 清甜推销女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [sweet]
+    rank: 801
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 电话销售, age: 20~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 客服 ——
+  - voice_id: longyingxun_v3
+    display_name: 龙应询
+    summary: 年轻青涩男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: []
+    rank: 501
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 客服, age: 20~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyingjing_v3
+    display_name: 龙应静
+    summary: 低调冷静女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [calm]
+    rank: 502
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 客服, age: 25~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyingling_v3
+    display_name: 龙应聆
+    summary: 温和共情女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [gentle, warm]
+    rank: 503
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 客服, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyingtao_v3
+    display_name: 龙应桃
+    summary: 温柔淡定女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [gentle, calm]
+    rank: 504
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 客服, age: 25~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 语音助手 ——
+  - voice_id: longxiaochun_v3
+    display_name: 龙小淳
+    summary: 知性积极女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [intellectual]
+    rank: 301
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longxiaoxia_v3
+    display_name: 龙小夏
+    summary: 沉稳权威女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [calm, crisp]
+    rank: 302
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyumi_v3
+    display_name: YUMI
+    summary: 正经青年女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [calm]
+    rank: 303
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 20~25岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanyun_v3
+    display_name: 龙安昀
+    summary: 居家暖男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [warm]
+    rank: 304
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 30~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanwen_v3
+    display_name: 龙安温
+    summary: 优雅知性女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [intellectual, elegant]
+    rank: 305
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 25~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanli_v3
+    display_name: 龙安莉
+    summary: 利落从容女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [calm, crisp]
+    rank: 306
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 25~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanlang_v3
+    display_name: 龙安朗
+    summary: 清爽利落男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [crisp]
+    rank: 307
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 20~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyingmu_v3
+    display_name: 龙应沐
+    summary: 优雅知性女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [intellectual, elegant]
+    rank: 308
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 语音助手, age: 25~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 社交陪伴 ——
+  - voice_id: longantai_v3
+    display_name: 龙安台
+    summary: 嗲甜台湾女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [sweet]
+    rank: 201
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~25岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longhua_v3
+    display_name: 龙华
+    summary: 元气甜美女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [lively, sweet]
+    rank: 202
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longcheng_v3
+    display_name: 龙橙
+    summary: 智慧青年男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [intellectual]
+    rank: 203
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~25岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longze_v3
+    display_name: 龙泽
+    summary: 温暖元气男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [lively, warm]
+    rank: 204
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longzhe_v3
+    display_name: 龙哲
+    summary: 呆板大暖男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [warm, playful]
+    rank: 205
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyan_v3
+    display_name: 龙颜
+    summary: 温暖春风女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [warm]
+    rank: 206
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longxing_v3
+    display_name: 龙星
+    summary: 温婉邻家女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [gentle]
+    rank: 207
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~25岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longtian_v3
+    display_name: 龙天
+    summary: 磁性理智男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [intellectual, magnetic]
+    rank: 208
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longwan_v3
+    display_name: 龙婉
+    summary: 细腻柔声女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [gentle]
+    rank: 209
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longqiang_v3
+    display_name: 龙嫱
+    summary: 浪漫风情女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [romantic]
+    rank: 210
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longfeifei_v3
+    display_name: 龙菲菲
+    summary: 甜美娇气女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [sweet, cute]
+    rank: 211
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~25岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longhao_v3
+    display_name: 龙浩
+    summary: 多情忧郁男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [romantic]
+    rank: 212
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanrou_v3
+    display_name: 龙安柔
+    summary: 温柔闺蜜女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [gentle]
+    rank: 213
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longhan_v3
+    display_name: 龙寒
+    summary: 温暖痴情男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [warm, romantic]
+    rank: 214
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanzhi_v3
+    display_name: 龙安智
+    summary: 睿智轻熟男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [intellectual, mature]
+    rank: 215
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 25~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanling_v3
+    display_name: 龙安灵
+    summary: 思维灵动女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [lively]
+    rank: 216
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanya_v3
+    display_name: 龙安雅
+    summary: 高雅气质女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [elegant]
+    rank: 217
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 25~35岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanqin_v3
+    display_name: 龙安亲
+    summary: 亲和活泼女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [lively]
+    rank: 218
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 社交陪伴, age: 20~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 有声书 ——
+  - voice_id: longmiao_v3
+    display_name: 龙妙
+    summary: 抑扬顿挫女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [expressive]
+    rank: 401
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longsanshu_v3
+    display_name: 龙三叔
+    summary: 沉稳质感男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [calm, mature]
+    rank: 402
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 25~45岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyuan_v3
+    display_name: 龙媛
+    summary: 温暖治愈女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [warm]
+    rank: 403
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 35~40岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyue_v3
+    display_name: 龙悦
+    summary: 温暖磁性女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [warm, magnetic]
+    rank: 404
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 30~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longxiu_v3
+    display_name: 龙修
+    summary: 博才说书男
+    gender: male
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [intellectual, expressive]
+    rank: 405
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 25~35岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longnan_v3
+    display_name: 龙楠
+    summary: 睿智青年男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [intellectual]
+    rank: 406
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longwanjun_v3
+    display_name: 龙婉君
+    summary: 细腻柔声女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [gentle]
+    rank: 407
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 20~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longyichen_v3
+    display_name: 龙逸尘
+    summary: 洒脱活力男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [lively]
+    rank: 408
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 20~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longlaobo_v3
+    display_name: 龙老伯
+    summary: 沧桑岁月爷
+    gender: male
+    age_band: senior
+    languages: [zh-CN, en]
+    styles: [mature]
+    rank: 409
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 60岁以上, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longlaoyi_v3
+    display_name: 龙老姨
+    summary: 烟火从容阿姨
+    gender: female
+    age_band: senior
+    languages: [zh-CN, en]
+    styles: [calm, mature]
+    rank: 410
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 有声书, age: 60岁以上, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 短视频配音 ——
+  - voice_id: longjiqi_v3
+    display_name: 龙机器
+    summary: 呆萌机器人
+    gender: unspecified
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [cute, playful, character]
+    rank: 1001
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 短视频配音, age: 20~30岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longhouge_v3
+    display_name: 龙猴哥
+    summary: 经典猴哥
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [character]
+    rank: 1002
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 短视频配音, age: 20~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longdaiyu_v3
+    display_name: 龙黛玉
+    summary: 娇率才女音
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [intellectual, cute]
+    rank: 1003
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 短视频配音, age: 15~25岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 直播带货 ——
+  - voice_id: longanran_v3
+    display_name: 龙安燃
+    summary: 活泼质感女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [lively, mature]
+    rank: 901
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 直播带货, age: 30~40岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longanxuan_v3
+    display_name: 龙安宣
+    summary: 经典直播女
+    gender: female
+    age_band: adult
+    languages: [zh-CN, en]
+    styles: [expressive]
+    rank: 902
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 直播带货, age: 30~40岁, regions: [cn-beijing, ap-southeast-1], ssml: true, instruct: false, word_timestamp: true}
+
+  # —— 新闻播报 ——
+  - voice_id: longshuo_v3
+    display_name: 龙硕
+    summary: 博才干练男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [intellectual, crisp]
+    rank: 701
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 新闻播报, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: longshu_v3
+    display_name: 龙书
+    summary: 沉稳青年男
+    gender: male
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [calm]
+    rank: 702
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 新闻播报, age: 20~25岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}
+  - voice_id: loongbella_v3
+    display_name: Bella3.0
+    summary: 精准干练女
+    gender: female
+    age_band: youth
+    languages: [zh-CN, en]
+    styles: [crisp]
+    rank: 703
+    models: [cosyvoice-v3-flash]
+    ext: {scene: 新闻播报, age: 25~30岁, regions: [cn-beijing], ssml: true, instruct: false, word_timestamp: true}

@@ -72,6 +72,7 @@ from ...contracts import BackendUnavailable, ChannelNotServable, InvalidTransiti
 from ...ports import (
     SESSION_END_DEVICE_LEFT,
     ChannelGrant,
+    ControlReceipt,
     PanelRequestSink,
     ServingAction,
     ServingRequest,
@@ -270,7 +271,7 @@ def _why_unserved(dispatch: Any) -> str:
 @dataclass
 class _ControlReceipt:
     op: str
-    future: asyncio.Future[str]
+    future: asyncio.Future[ControlReceipt]
     terminal: bool = False
 
 
@@ -524,13 +525,14 @@ class LiveKitChannelAdapter:
         now_ms = int(time.time() * 1000)
         if invitation.deadline_ms <= now_ms or invitation.channel.issued_at_ms > now_ms:
             raise InvalidTransition("invitation is outside its delivery window")
-        return await self.deliver_control(
+        receipt = await self.deliver_control(
             handle, invitation.command(command_id=command_id), wait_for_terminal=False,
         )
+        return receipt.status
 
     async def deliver_control(
         self, handle: dict[str, Any], command: dict, *, wait_for_terminal: bool,
-    ) -> str:
+    ) -> ControlReceipt:
         """Use the standing listener for one bounded, correlated control exchange.
 
         Preparation needs the completed room.join receipt; a shared invitation
@@ -572,7 +574,7 @@ class LiveKitChannelAdapter:
             and any(pending_room == room for pending_room, _ in self._control_receipts)
         ):
             raise InvalidTransition("device already has a control delivery in flight")
-        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[ControlReceipt] = asyncio.get_running_loop().create_future()
         self._control_receipts[key] = _ControlReceipt(op, future, wait_for_terminal)
         logger.info("control send room=%s device=%s op=%s command=%s", room, device, op, command_id)
         try:
@@ -648,7 +650,7 @@ class LiveKitChannelAdapter:
             code = "UNSPECIFIED"
         logger.info("control receipt room=%s device=%s op=%s command=%s status=%s code=%s",
                     room, device, pending.op, body["ref"], status, code)
-        pending.future.set_result(status)
+        pending.future.set_result(ControlReceipt(status=status, result=body.get("result")))
 
     def _fail_control_delivery(self, room: str) -> None:
         for (pending_room, _), pending in self._control_receipts.items():
@@ -1658,9 +1660,11 @@ class LiveKitChannelAdapter:
             device_id=handle['device'], op=BODY_OP_ROOM_LEAVE, payload=payload,
             capability_version=1, src_type='channel', src_id='channel-provider',
             priority='urgent', ttl_ms=10_000)
-        result = await self.deliver_control(handle, command, wait_for_terminal=True)
-        if result != 'succeeded':
-            raise BackendUnavailable(f"device did not confirm conversation cleanup: {result}")
+        receipt = await self.deliver_control(handle, command, wait_for_terminal=True)
+        if receipt.status != 'succeeded':
+            raise BackendUnavailable(
+                f"device did not confirm conversation cleanup: {receipt.status}"
+            )
 
     async def open_team_session(self, opened, handles, sessions):
         from eidolon_sdk.biz.presentation import InputSelection, OutputSelection

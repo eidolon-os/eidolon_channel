@@ -38,6 +38,14 @@ class ServingAction(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ControlReceipt:
+    """Terminal device-control acknowledgement correlated to one command."""
+
+    status: str
+    result: object = None
+
+
+@dataclass(frozen=True, slots=True)
 class ServingRequest:
     """What a device asked of its own channel.
 

@@ -11,7 +11,6 @@ from eidolon.channel_provider.device_capabilities import (
 )
 from eidolon.channel_provider.contracts import (
     CapabilityNotDeclared,
-    DeclarationsLost,
     CurrentRequest,
     BackendUnavailable,
     IdempotencyConflict,
@@ -21,6 +20,7 @@ from eidolon.channel_provider.contracts import (
     UnknownChannel,
 )
 from eidolon.channel_provider.selection import AdapterRegistry
+from eidolon.channel_provider.ports import ControlReceipt
 from eidolon.channel_provider.service import (
     DEVICE_COMMAND_RETRY_WINDOW,
     ChannelProviderService,
@@ -219,6 +219,35 @@ async def test_command_delivers_a_bounded_envelope_to_the_device(service) -> Non
     assert command["payload"] == {"volume": 42}
     assert command["dst"] == {"type": "device", "id": device_id}
     assert command["src"]["type"] == "channel"
+
+
+@pytest.mark.asyncio
+async def test_command_keeps_the_result_from_a_device_receipt(service) -> None:
+    service, adapter = service
+    payload = provision_payload()
+    payload["device"]["manifest"] = _manifest(_volume_action())
+    await service.provision(ProvisionRequest.parse(json.dumps(payload).encode()))
+    device_id = service._store.active_provisions()[0].device_id
+
+    async def deliver(*_args, **_kwargs):
+        return ControlReceipt(status="succeeded", result={"volume": 42})
+
+    adapter.deliver_control = deliver
+    result = await service.deliver_device_command(
+        DeviceCommandRequest(
+            owner_id="owner_1",
+            companion_id="companion_1",
+            idempotency_key=f"key-{uuid4().hex}",
+            device_id=device_id,
+            op="volume.set",
+            capability_version=1,
+            payload={"volume": 42},
+            ttl_ms=5_000,
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.result == {"volume": 42}
 
 
 @pytest.mark.asyncio

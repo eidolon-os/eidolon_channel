@@ -39,7 +39,7 @@ from livekit.protocol.models import ParticipantInfo
 from eidolon.channel_provider.adapters.livekit import LiveKitChannelAdapter
 from eidolon.channel_provider.adapters.livekit import adapter as adapter_mod
 from eidolon.channel_provider.contracts import ChannelNotServable, ProvisionRequest
-from eidolon.channel_provider.ports import ServingAction, ServingRequest
+from eidolon.channel_provider.ports import ControlReceipt, ServingAction, ServingRequest
 from eidolon.channel_provider.spec import derive_spec
 
 from .helpers import audio_manifest, encoded, livekit_config, provision_payload
@@ -1709,7 +1709,7 @@ async def test_prepared_cleanup_waits_for_correlated_device_receipt(session_id):
         assert command['payload'].get('conversation_id') == session_id
         assert kwargs == {'wait_for_terminal': True}
         await receipt.wait()
-        return 'succeeded'
+        return ControlReceipt(status='succeeded')
     adapter.deliver_control = AsyncMock(side_effect=deliver)
     adapter.close_session = AsyncMock()
     task = asyncio.create_task(adapter.end_prepared_session(handle, session_id,
@@ -1728,7 +1728,7 @@ async def test_failed_device_cleanup_does_not_release_native_dispatch(result):
     from unittest.mock import AsyncMock
     from eidolon.channel_provider.contracts import BackendUnavailable
     adapter, _ = _adapter()
-    adapter.deliver_control = AsyncMock(return_value=result)
+    adapter.deliver_control = AsyncMock(return_value=ControlReceipt(status=result))
     adapter.close_session = AsyncMock()
     with pytest.raises(BackendUnavailable, match='did not confirm'):
         await adapter.end_prepared_session({'device': _DEVICE_1}, 'native-session')
@@ -2180,7 +2180,7 @@ async def test_the_dispatch_carries_the_resolved_voice() -> None:
     assert json.loads(client.agent_dispatch.created[0][2])["speech_voice"] == voice
 
 
-def _ack(command_id: str, op: str, status: str) -> SimpleNamespace:
+def _ack(command_id: str, op: str, status: str, result: object = None) -> SimpleNamespace:
     """One authenticated device receipt, shaped as the firmware sends it."""
     body = {
         "v": 1,
@@ -2190,6 +2190,9 @@ def _ack(command_id: str, op: str, status: str) -> SimpleNamespace:
         "op": op,
         "status": status,
     }
+    if result is not None:
+        body["kind"] = "result"
+        body["result"] = result
     return SimpleNamespace(
         topic=adapter_mod.CONTROL_TOPIC,
         participant=SimpleNamespace(identity=_DEVICE_1),
@@ -2253,9 +2256,51 @@ async def test_a_second_setting_may_overlap_the_first_but_a_start_may_not():
     adapter._control_receipt(
         _ack("c2", "display.brightness", "completed"), room="room-1", device=_DEVICE_1
     )
-    assert await volume == "succeeded"
-    assert await brightness == "succeeded"
+    assert (await volume).status == "succeeded"
+    assert (await brightness).status == "succeeded"
     assert not adapter._control_receipts
+
+
+async def test_control_result_receipt_keeps_the_device_value():
+    from eidolon_sdk.biz.control.protocol import build_command_envelope
+
+    adapter, _ = _adapter()
+    published = asyncio.Event()
+
+    async def publish(*_args, **_kwargs):
+        published.set()
+
+    adapter._listeners["room-1"] = adapter_mod._Listening(
+        device=_DEVICE_1,
+        sink=None,
+        connection=SimpleNamespace(
+            local_participant=SimpleNamespace(publish_data=publish)
+        ),
+    )
+    command = build_command_envelope(
+        command_id="volume-read",
+        device_id=_DEVICE_1,
+        op="volume.get",
+        capability_version=1,
+        payload={},
+        ttl_ms=30_000,
+        src_type="channel",
+        src_id="eidolon_channel",
+    )
+
+    task = asyncio.create_task(
+        adapter.deliver_control(
+            {"room": "room-1", "device": _DEVICE_1}, command, wait_for_terminal=True
+        )
+    )
+    await asyncio.wait_for(published.wait(), 1)
+    adapter._control_receipt(
+        _ack("volume-read", "volume.get", "completed", {"volume": 42}),
+        room="room-1",
+        device=_DEVICE_1,
+    )
+
+    assert await task == ControlReceipt(status="succeeded", result={"volume": 42})
 
 
 async def test_a_command_that_starts_something_still_waits_for_the_first():

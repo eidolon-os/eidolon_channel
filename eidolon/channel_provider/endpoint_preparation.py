@@ -152,16 +152,18 @@ class EndpointPreparation:
                         if wake in done:
                             # No device may complete room.join before the
                             # authorized worker starts the selected endpoint plans.
-                            result = await wake
-                            raise BackendUnavailable(f"device preparation ended early: {result}")
+                            receipt = await wake
+                            raise BackendUnavailable(
+                                f"device preparation ended early: {receipt.status}"
+                            )
                     for handle in self.handles:
                         self.remove_observers.append(self.adapter.observe_session_end(
                             handle, self.sessions[handle["device"]], self.session_ended))
                     if self.stopped.is_set():
                         raise InvalidTransition("preparation was stopped")
                     await self.activate(dict(self.sessions))
-                    results = await asyncio.gather(*wakes)
-                    if any(result != "succeeded" for result in results):
+                    receipts = await asyncio.gather(*wakes)
+                    if any(receipt.status != "succeeded" for receipt in receipts):
                         raise BackendUnavailable("device did not confirm its session plan")
                 finally:
                     for waiter in (prepared, stopped):

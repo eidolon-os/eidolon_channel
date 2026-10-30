@@ -1174,7 +1174,7 @@ class ChannelProviderService:
             src_id="eidolon_channel",
         )
         try:
-            status = await adapter.deliver_control(handle, command, wait_for_terminal=True)
+            receipt = await adapter.deliver_control(handle, command, wait_for_terminal=True)
         except BackendUnavailable as exc:
             result = DeviceCommandResult(
                 device_id=request.device_id,
@@ -1188,7 +1188,8 @@ class ChannelProviderService:
                 device_id=request.device_id,
                 op=request.op,
                 capability_version=request.capability_version,
-                status=status,
+                status=receipt.status,
+                result=receipt.result,
             )
         async with self._lock:
             self._device_commands[key] = (_command_fingerprint(request), result)

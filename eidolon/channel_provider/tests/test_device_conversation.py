@@ -37,7 +37,8 @@ class Adapter(FakeAdapter):
         await self.watched[handle["resource"]](ServingRequest(ServingAction.START,
             f"native-{len(self.sent)}", command["id"]))
         await self.launched.wait()
-        return "succeeded"
+        from eidolon.channel_provider.ports import ControlReceipt
+        return ControlReceipt(status="succeeded")
 
     async def open_directed_session(self, source, target, **kwargs):
         self.directed.append((source, target, kwargs))

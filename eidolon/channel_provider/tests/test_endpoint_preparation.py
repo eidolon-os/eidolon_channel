@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from eidolon.channel_provider.contracts import BackendUnavailable, InvalidTransition
 from eidolon.channel_provider.endpoint_preparation import EndpointPreparation
-from eidolon.channel_provider.ports import ServingAction, ServingRequest
+from eidolon.channel_provider.ports import ControlReceipt, ServingAction, ServingRequest
 
 
 class Adapter:
@@ -22,7 +22,7 @@ class Adapter:
         self.visit.request(handle['device'], ServingRequest(
             ServingAction.START, 'native-' + handle['device'], command['id']))
         await self.launched.wait()
-        return 'succeeded'
+        return ControlReceipt(status='succeeded')
 
     def observe_session_end(self, handle, session_id, callback):
         return lambda: self.removed.append(handle['device'])
@@ -96,7 +96,7 @@ def test_foreign_device_and_duplicate_endpoints_are_rejected():
 
 async def test_early_join_receipt_cleans_every_invited_device_without_session_request():
     adapter = Adapter()
-    adapter.deliver_control = AsyncMock(return_value='succeeded')
+    adapter.deliver_control = AsyncMock(return_value=ControlReceipt(status='succeeded'))
     activate = AsyncMock()
     visit = EndpointPreparation(adapter, ({'device': 'a'}, {'device': 'b'}), activate)
     await visit.run()

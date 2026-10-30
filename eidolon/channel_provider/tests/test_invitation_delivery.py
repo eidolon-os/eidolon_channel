@@ -191,10 +191,10 @@ async def test_playback_stop_bypasses_pending_control_without_losing_correlation
         await asyncio.sleep(0)
         assert not any(task.done() for task in tasks)
         receipt(connection, device, ref="stop", op="playback.stop", status="completed")
-        assert await tasks[1] == "succeeded"
+        assert (await tasks[1]).status == "succeeded"
         assert not tasks[0].done()
         receipt(connection, device, ref="join", op="room.join", status="completed")
-        assert await tasks[0] == "succeeded"
+        assert (await tasks[0]).status == "succeeded"
         assert not adapter._control_receipts
     finally:
         for task in tasks:
@@ -228,7 +228,7 @@ async def test_slow_stop_receipt_does_not_block_another_device(monkeypatch):
         await asyncio.wait_for(asyncio.gather(published.wait(), other_published.wait()), 1)
         receipt(other_connection, second.handle["device"], ref="stop",
                 op="playback.stop", status="completed")
-        assert await asyncio.wait_for(tasks[1], 1) == "succeeded"
+        assert (await asyncio.wait_for(tasks[1], 1)).status == "succeeded"
         assert not tasks[0].done()
         connection.drop()
         with pytest.raises(BackendUnavailable):
@@ -355,6 +355,6 @@ async def test_room_join_waits_for_completion_and_ignores_other_operation(monkey
     await asyncio.sleep(0)
     assert not task.done()
     receipt(connection, device, ref="join", op="room.join", status="completed")
-    assert await task == "succeeded"
+    assert (await task).status == "succeeded"
     assert not adapter._control_receipts
     await adapter.shutdown()

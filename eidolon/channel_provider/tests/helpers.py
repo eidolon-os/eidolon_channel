@@ -208,11 +208,13 @@ class FakeAdapter:
 
     async def deliver_control(
         self, handle: dict[str, Any], command: dict[str, Any], *, wait_for_terminal: bool,
-    ) -> str:
+    ):
+        from eidolon.channel_provider.ports import ControlReceipt
+
         self.delivered.append((handle, command, wait_for_terminal))
         if self.delivery_error is not None:
             raise self.delivery_error
-        return "succeeded"
+        return ControlReceipt(status="succeeded")
 
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,

@@ -71,6 +71,7 @@ class ConversationSpeaker:
         self._delivered = False
 
     def _evidence(self, coordinator):
+        self._evidence_failure_reason = "audio_evidence_unavailable"
         capture = self._capture
         candidate = coordinator.active
         if capture is None or capture.active_source is None or candidate is None:
@@ -89,6 +90,7 @@ class ConversationSpeaker:
                 "segment_count": len(candidate.segments),
             })
         if reference.span is None:
+            self._evidence_failure_reason = reference.reason
             return None
         evidence = (self._prefetch.resolve(candidate, reference.span)
                     if self._prefetch is not None else None)
@@ -112,9 +114,9 @@ class ConversationSpeaker:
                 and self._prefetch.record.candidate_id == candidate.candidate_id):
             # Still speculative: finish() requires the committed ASR mapping.
             return
-        self.begin_evidence(evidence, turn_id)
+        self.begin_evidence(evidence, turn_id, failure_reason=self._evidence_failure_reason)
 
-    def begin_evidence(self, evidence, turn_id):
+    def begin_evidence(self, evidence, turn_id, *, failure_reason="audio_evidence_unavailable"):
         if self._closed:
             return
         key = (
@@ -126,6 +128,9 @@ class ConversationSpeaker:
             return
         self.cancel()
         self._key = key
+        if evidence is None or not evidence.complete:
+            self._frozen = self.fallback(turn_id, failure_reason)
+            return
 
         async def run():
             try:

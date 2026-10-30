@@ -408,7 +408,7 @@ async def test_replaced_evidence_cannot_publish_old_late_result():
         observer.deliver(initial, text="hello", llm=MagicMock(), timeline=None)
         observer.begin_evidence(None, "new")
         await asyncio.wait_for(cancelled.wait(), .2)
-        await observer._task
+        assert observer._task is None
         await asyncio.sleep(0)
         assert published == [initial]
         assert (await observer.result("old")).person_id is None
@@ -557,3 +557,53 @@ async def test_buffer_snapshot_preserves_exact_nonzero_source_interval():
     assert result.status == 'identified'
     assert (result.source.start_sample, result.source.end_sample, result.source.generation) == (1600, 33600, 2)
     port.extract.assert_awaited_once_with(captured.pcm, min_speech_ms=POLICY.min_speech_ms)
+
+
+@pytest.mark.asyncio
+async def test_absent_audio_never_looks_like_pending_inference():
+    port=client()
+    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(port,POLICY),
+        owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    try:
+        observer.begin_evidence(None,'t')
+        assert observer._task is None
+        value=await observer.result('t')
+        assert value.reason == 'audio_evidence_unavailable'
+        port.candidates.assert_not_awaited()
+        port.extract.assert_not_awaited()
+    finally:
+        await observer.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('extra', [False, True])
+async def test_eot_text_projection_reuses_only_proven_audio(extra):
+    from .test_user_turn_coordinator import _mapped_pair
+    from eidolon.livekit.common.audio_evidence import AudioEvidenceCapture
+    coordinator, source = _mapped_pair()
+    capture = AudioEvidenceCapture(session_id='s',endpoint_id='mic')
+    capture.select_stream('mic')
+    capture.begin_run(source)
+    capture.append(source,start=0,pcm=evidence().pcm)
+    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(client(),POLICY),
+        owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    observer.bind_capture(capture)
+    try:
+        observer.begin(coordinator,'mapped')
+        original=observer._task
+        await original
+        text=('另外一句。'+coordinator.selected_text if extra else '你是？ 你知道我喜欢穿什么吗。')
+        coordinator.mark_framework_completed(transcript=text,reason='framework_completed_turn')
+        llm=MagicMock()
+        await observer.finish(coordinator,turn_id='mapped',text=text,llm=llm,timeline=None)
+        value=verify_observation(llm.set_speaker_observation.call_args.args[0],
+            secret='x'*32,owner_id='o',session_id='s',turn_id='mapped',text=coordinator.selected_text)
+        if extra:
+            assert value.person_id is None
+            assert value.reason == 'framework_audio_coverage_unproven'
+            assert observer._task is None
+        else:
+            assert value.person_id == 'p0'
+            assert observer._task is original
+    finally:
+        await observer.aclose()

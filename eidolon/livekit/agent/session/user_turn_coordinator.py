@@ -140,9 +140,14 @@ class UserTurnCandidate:
     # Evidence-only boundary, written by acoustic callbacks, never ASR revisions.
     # Text segment timestamps continue to serve the existing turn policy.
     audio_settled_at: float | None = None
+    framework_text: str | None = None
 
     @property
     def selected_text(self) -> str:
+        return self.framework_text if self.framework_text is not None else self.provider_text
+
+    @property
+    def provider_text(self) -> str:
         text = ""
         for segment in self.segments:
             if segment.covered_by_generation_id is not None:
@@ -154,6 +159,8 @@ class UserTurnCandidate:
     def selected_policy_text(self) -> str:
         """Return canonical text with provider segment-boundary punctuation folded."""
 
+        if self.framework_text is not None:
+            return self.framework_text
         text = ""
         for segment in self.segments:
             if segment.covered_by_generation_id is not None:
@@ -255,6 +262,9 @@ class UserTurnCoordinator:
             return result("no_committed_candidate")
         if candidate.audio_settled_at is None:
             return result("speech_not_ended")
+        if (candidate.framework_text is not None
+                and not normalized_text_equal(candidate.framework_text, candidate.provider_text)):
+            return result("framework_audio_coverage_unproven")
         if candidate.input_audio_owned:
             span = candidate.input_audio_span
             if span is None:
@@ -495,6 +505,7 @@ class UserTurnCoordinator:
         if not stripped or self.is_retired_revision(evidence):
             return None
         current_time = self._now(now)
+        candidate.framework_text = None
         segment_index, segment = self._select_segment_for_revision(
             candidate,
             stripped,
@@ -1047,30 +1058,17 @@ class UserTurnCoordinator:
             # An identical framework completion confirms the assembled text;
             # replacing its segments would destroy the provider audio ranges.
             return
+        if normalized_text_equal(selected, transcript):
+            candidate.framework_text = transcript
+            return
         if selected and selected in transcript:
-            candidate.segments = [
-                SpeechSegment(
-                    started_at=candidate.created_at,
-                    generation_id=self._framework_segment_generation(candidate),
-                    ended_at=now,
-                    text=transcript,
-                    final_text=transcript,
-                )
-            ]
+            candidate.framework_text = transcript
             return
         if selected and transcript in selected:
             return
         if selected and self._text_matches_revision(selected, transcript):
             return
-        candidate.segments.append(
-            SpeechSegment(
-                started_at=now,
-                generation_id=self._framework_segment_generation(candidate),
-                ended_at=now,
-                text=transcript,
-                final_text=transcript,
-            )
-        )
+        candidate.framework_text = _merge_text(selected, transcript)
 
     def _replace_committed_text(
         self,
@@ -1079,20 +1077,8 @@ class UserTurnCoordinator:
         *,
         now: float,
     ) -> None:
-        candidate.segments = [
-            SpeechSegment(
-                started_at=candidate.created_at,
-                generation_id=self._framework_segment_generation(candidate),
-                ended_at=now,
-                text=transcript,
-                final_text=transcript,
-            )
-        ]
-
-    def _framework_segment_generation(self, candidate: UserTurnCandidate) -> int:
-        if candidate.latest_generation_id == 0:
-            candidate.latest_generation_id = self._next_generation_id()
-        return candidate.latest_generation_id
+        # Framework text is presentation, never a new acoustic/provider segment.
+        candidate.framework_text = transcript
 
     def _next_generation_id(self) -> int:
         self._acoustic_generation_counter += 1

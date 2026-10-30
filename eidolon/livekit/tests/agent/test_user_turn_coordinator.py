@@ -502,3 +502,69 @@ def test_provider_evidence_does_not_split_pending_turn():
     coordinator.start_speech(timeline=TurnTimeline("pending"))
     assert not coordinator.transcript_starts_new_turn(TranscriptEvidence(
         stream_key="stream", revision_key="two", source_span=TranscriptSourceSpan(3, 4)))
+
+
+def _mapped_pair():
+    from eidolon.livekit.common.audio_timeline import AudioSource, AudioSpan
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    c = UserTurnCoordinator(speech_merge_grace_sec=.5)
+    timeline = TurnTimeline('mapped')
+    source = AudioSource('mic', 1, 16000)
+    for i, text in enumerate(('你是？', '你知道我喜欢穿什么吗。')):
+        c.start_speech(timeline=timeline)
+        c.add_transcript(text, is_final=True, evidence=TranscriptEvidence(
+            stream_key='asr', revision_key=str(i),
+            audio_span=AudioSpan('mic', 1, 16000, i*16000, (i+1)*16000)))
+        c.note_speech_stopped(eot_score=None)
+    return c, source
+
+
+def test_framework_spacing_preserves_provider_ranges_through_commit():
+    c, source = _mapped_pair()
+    before = c.capture_audio_reference(source=source)
+    assert before.span is not None
+    segments = tuple(c.active.segments)
+    final = '你是？ 你知道我喜欢穿什么吗。'
+    c.mark_framework_completed(transcript=final, reason='framework_completed_turn')
+    after = c.capture_committed_audio_reference(candidate_id=c.active.candidate_id, source=source)
+    assert after.span == before.span
+    assert tuple(c.active.segments) == segments
+    assert c.active.selected_text == final
+    assert c.active.selected_policy_text == final
+
+
+def test_framework_additional_words_do_not_manufacture_audio_coverage():
+    c, source = _mapped_pair()
+    original = tuple(c.active.segments)
+    c.mark_framework_completed(transcript='新的说话人。'+c.selected_text, reason='framework_completed_turn')
+    reference = c.capture_committed_audio_reference(candidate_id=c.active.candidate_id, source=source)
+    assert reference.span is None
+    assert reference.reason == 'framework_audio_coverage_unproven'
+    assert tuple(c.active.segments) == original
+
+
+def test_framework_text_cannot_promote_partial_audio_to_final():
+    from eidolon.livekit.common.audio_timeline import AudioSource, AudioSpan
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    c = UserTurnCoordinator(speech_merge_grace_sec=.5)
+    c.start_speech(timeline=TurnTimeline('partial'))
+    c.add_transcript('我喜欢红色', is_final=False, evidence=TranscriptEvidence(
+        stream_key='asr', revision_key='1', audio_span=AudioSpan('mic',1,16000,0,16000)))
+    c.note_speech_stopped(eot_score=None)
+    c.mark_framework_completed(transcript='我喜欢红色。', reason='framework_completed_turn')
+    reference=c.capture_committed_audio_reference(candidate_id=c.active.candidate_id,source=AudioSource('mic',1,16000))
+    assert reference.span is None and reference.reason == 'transcript_not_final'
+
+
+def test_new_provider_revision_replaces_presentation_without_stale_audio():
+    from eidolon.livekit.common.audio_timeline import AudioSpan
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
+    c, source = _mapped_pair()
+    c.prepare_framework_completed(transcript='你是？ 你知道我喜欢穿什么吗。')
+    c.start_speech(timeline=c.active.timeline)
+    c.add_transcript('还有蓝色。',is_final=True,evidence=TranscriptEvidence(
+        stream_key='asr',revision_key='new',audio_span=AudioSpan('mic',1,16000,32000,48000)))
+    assert c.active.framework_text is None
+    assert c.capture_audio_reference(source=source).span is None
+    c.note_speech_stopped(eot_score=None)
+    assert c.capture_audio_reference(source=source).span.end == 48000

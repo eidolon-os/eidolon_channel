@@ -41,7 +41,7 @@ from .contracts import (
     canonical_json,
     request_fingerprint,
 )
-from .personal_sessions import PersonalSessions
+from .personal_sessions import PersonalSessions, device_alone
 from .ports import ChannelGrant, ServingAction, ServingRequest, ServingRequestSink
 from .selection import AdapterRegistry
 from .shared_admission import SharedAdmission
@@ -1129,8 +1129,7 @@ class ChannelProviderService:
             if serving:
                 if pending and pending[0]["session_id"] != conversation_id:
                     previous = pending[0]
-                    if (device_requested and previous["binding"].get("device_requested") is True
-                            and previous["binding"]["personal_memory"] is None):
+                    if device_requested and device_alone(previous["binding"]):
                         # A device asking on its own channel for a new
                         # conversation is running no other: a Body holds one at
                         # a time, so the one it abandoned has no IO left — what

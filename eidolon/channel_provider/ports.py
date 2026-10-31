@@ -23,6 +23,12 @@ from typing import Any, Protocol
 
 from .spec import ChannelSpec
 
+# What a transport tells a session-end observer when it saw the device itself
+# leave the channel. Named because the Provider acts on it: a Body no longer on
+# its channel has no IO left in a conversation it was alone in. The value is
+# the one team clients already show.
+SESSION_END_DEVICE_LEFT = "TEAM_DEVICE_DISCONNECTED"
+
 
 class ServingAction(Enum):
     """The desired serving direction for a device channel."""

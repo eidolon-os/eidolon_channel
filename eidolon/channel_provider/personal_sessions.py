@@ -7,8 +7,18 @@ import json
 import logging
 
 from .contracts import BackendUnavailable, InvalidTransition
+from .ports import SESSION_END_DEVICE_LEFT
 
 _log = logging.getLogger(__name__)
+
+
+def device_alone(binding):
+    """A conversation the device asked for on its own channel, carrying no private memory.
+
+    Nothing but that device was ever in it, so what the device does — starting
+    another, or leaving its channel — is enough to say its Body has no IO left there.
+    """
+    return binding.get("device_requested") is True and binding["personal_memory"] is None
 
 
 class PersonalSessions:
@@ -27,6 +37,10 @@ class PersonalSessions:
         # closing session can never be claimed again, so nothing can bring its
         # producers back: once is enough, and a retry is only about the Body.
         self._withdrawn = set()
+        # Sessions whose device the transport saw leave a conversation it was
+        # alone in. Kept until settled, because the departure is said once while
+        # the attempt it should complete may already be in flight or failed.
+        self._departed = set()
 
     def watch_authority(self, resolve):
         """Recheck open bindings independently of speech; retry durable cleanup."""
@@ -100,9 +114,16 @@ class PersonalSessions:
                 binding = previous["binding"]
         record = self.store.claim_personal_session(session_id, provision.device_id, binding)
         if session_id not in self._observers:
+            alone = device_alone(binding)
+
+            def ended(*reason):
+                if alone and reason == (SESSION_END_DEVICE_LEFT,):
+                    self._departed.add(session_id)
+                self.request_close(session_id)
+
             try:
                 self._observers[session_id] = adapter.observe_session_end(
-                    binding["handle"], session_id, lambda *_reason: self.request_close(session_id)
+                    binding["handle"], session_id, ended
                 )
             except BaseException:
                 self.store.transition_personal_session(session_id, expected="open", state="closing")
@@ -134,6 +155,11 @@ class PersonalSessions:
         phone's both do — which is everything a room.leave receipt would
         confirm. Asking it again would wait on a Body that may already be gone:
         a phone drops its channel the moment it has said so.
+
+        The transport seeing the device leave a conversation it was alone in
+        confirms the same thing, and is the only word there will be when what
+        the Body said went down with its channel (2026-10-31: a phone's
+        session_close was lost that way, and its Companion stayed reserved).
         """
         record = self.store.personal_session(session_id)
         if record is None:
@@ -142,9 +168,7 @@ class PersonalSessions:
             return
         if record["state"] == "open":
             self.store.transition_personal_session(session_id, expected="open", state="closing")
-        remove = self._observers.pop(session_id, None)
-        if remove is not None:
-            remove()
+        body_confirmed = body_confirmed or session_id in self._departed
         binding = record["binding"]
         adapter = self.registry.get(binding["adapter"])
         # Stop producers first, then clear the Body. Missing dispatch is normal
@@ -159,7 +183,13 @@ class PersonalSessions:
         self._forget(session_id)
 
     def _forget(self, session_id):
+        # The end observer stays until now: a departure seen while cleanup waits
+        # on the Body is what completes it.
+        remove = self._observers.pop(session_id, None)
+        if remove is not None:
+            remove()
         self._withdrawn.discard(session_id)
+        self._departed.discard(session_id)
         self._pending_reasons.pop(session_id, None)
 
     def settle_revoked(self, device_id):
@@ -171,9 +201,6 @@ class PersonalSessions:
         """
         for record in self.store.pending_personal_sessions(device_id):
             session_id = record["session_id"]
-            remove = self._observers.pop(session_id, None)
-            if remove is not None:
-                remove()
             if record["state"] == "open":
                 self.store.transition_personal_session(session_id, expected="open", state="closing")
             self.store.transition_personal_session(session_id, expected="closing", state="closed")

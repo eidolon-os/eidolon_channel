@@ -60,7 +60,14 @@ from livekit.protocol.agent import JobStatus
 from livekit.protocol.models import ParticipantInfo
 
 from ...contracts import BackendUnavailable, ChannelNotServable, InvalidTransition, canonical_json
-from ...ports import ChannelGrant, PanelRequestSink, ServingAction, ServingRequest, ServingRequestSink
+from ...ports import (
+    SESSION_END_DEVICE_LEFT,
+    ChannelGrant,
+    PanelRequestSink,
+    ServingAction,
+    ServingRequest,
+    ServingRequestSink,
+)
 from ...spec import ChannelSpec, MediaFlow
 from .config import LiveKitConfig
 
@@ -801,7 +808,7 @@ class LiveKitChannelAdapter:
                 participant.identity == watch.device
                 or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
             ):
-                observer[1]("TEAM_DEVICE_DISCONNECTED" if participant.identity == watch.device
+                observer[1](SESSION_END_DEVICE_LEFT if participant.identity == watch.device
                             else "TEAM_WORKER_DISCONNECTED")
 
         @connection.on("disconnected")

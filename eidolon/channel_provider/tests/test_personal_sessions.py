@@ -15,6 +15,7 @@ from eidolon.channel_provider.contracts import (
     SessionRequest,
 )
 from eidolon.channel_provider.store import ChannelProviderStore
+from eidolon.channel_provider.ports import SESSION_END_DEVICE_LEFT
 from .helpers import FakeAdapter, encoded, provision_payload, session_payload
 from .test_service import _service
 
@@ -410,6 +411,46 @@ async def test_a_stop_the_body_did_not_ask_for_still_waits_for_its_receipt(tmp_p
     assert store.personal_session('device-a')['state'] == 'closing'
     with pytest.raises(InvalidTransition, match='device-a'):
         service._require_scene_companions_available('owner_1', ['partner'])
+
+
+async def test_a_device_that_left_has_ended_its_own_conversation(tmp_path):
+    """2026-10-31 16:50: a phone ended a conversation, its session_close went down with its
+    channel, and the Companion stayed reserved until that phone came back to talk."""
+    service, store, adapter = await ready(tmp_path)
+    await _device_session(service, adapter)
+    adapter.cleanup_error = True  # Nobody is left to answer room.leave.
+    adapter.observers['device-a'](SESSION_END_DEVICE_LEFT)
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('device-a')['state'] == 'closed'
+    assert ('stop', 'device-a') in adapter.events
+    assert ('clear', 'device-a') not in adapter.events
+    service._require_scene_companions_available('owner_1', ['partner'])
+
+
+async def test_leaving_settles_a_cleanup_already_waiting_on_the_body(tmp_path):
+    """The agent ends first and the Body is asked; its answer can go down with its channel too."""
+    service, store, adapter = await ready(tmp_path)
+    await _device_session(service, adapter)
+    adapter.cleanup_error = True
+    adapter.observers['device-a']()  # the agent's own end
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('device-a')['state'] == 'closing'
+    adapter.observers['device-a'](SESSION_END_DEVICE_LEFT)
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('device-a')['state'] == 'closed'
+    assert adapter.events.count(('clear', 'device-a')) == 1  # asked once, before it left
+    assert 'device-a' not in adapter.observers
+
+
+async def test_leaving_does_not_end_a_conversation_the_device_was_not_alone_in(tmp_path):
+    """A conversation carrying private memory, or prepared for the device, still waits for its receipt."""
+    service, store, adapter = await ready(tmp_path)
+    await service.open_session(request())
+    adapter.cleanup_error = True
+    adapter.observers['private-a'](SESSION_END_DEVICE_LEFT)
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('private-a')['state'] == 'closing'
+    assert ('clear', 'private-a') in adapter.events
 
 
 @pytest.mark.parametrize('lapsed', [False, True])

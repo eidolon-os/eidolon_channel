@@ -193,3 +193,58 @@ async def test_quality_rejection_roundtrips_from_provider_to_conversation(tmp_pa
             assert len(model.received) == 1
     finally:
         await server.close()
+
+
+def _recognition_policy(**overrides):
+    import json
+    return json.dumps({
+        "version": "fixture-recognition-v1", "model_id": "fixture", "weights_hash": "a" * 64,
+        "preprocessing_version": "reference-contiguous-pcm16-v1", "threshold": 0.55,
+        "min_person_margin": 0.1, "min_speech_ms": 600, "min_unknown_speech_ms": 1500,
+    } | overrides)
+
+
+async def test_health_publishes_recognition_state_without_failing_the_provider(tmp_path):
+    # 10-30: the policy was absent from model_dir, the worker turned recognition
+    # off silently, and the Host still reported ready. Health now says which.
+    engine = Engine()
+    engine.model_dir = tmp_path
+    client = TestClient(
+        TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+    )
+
+    async def recognition():
+        response = await client.get("/health")
+        assert response.status == 200
+        return (await response.json())["speaker_recognition"]
+
+    try:
+        await client.start_server()
+        assert await recognition() == {"state": "model_loading"}
+        engine.ready.set()
+        await asyncio.sleep(0)
+        assert await recognition() == {"state": "policy_missing"}
+        (tmp_path / "recognition-controlled-trial.json").write_text("{")
+        assert await recognition() == {"state": "policy_invalid"}
+        (tmp_path / "recognition-controlled-trial.json").write_text(
+            _recognition_policy(weights_hash="b" * 64)
+        )
+        assert await recognition() == {
+            "state": "policy_model_mismatch", "policy_version": "fixture-recognition-v1",
+        }
+        (tmp_path / "recognition-controlled-trial.json").write_text(_recognition_policy())
+        assert await recognition() == {
+            "state": "ready", "model_id": "fixture", "policy_version": "fixture-recognition-v1",
+        }
+    finally:
+        await client.close()
+
+
+async def test_health_reports_recognition_disabled_when_capability_not_selected():
+    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    try:
+        await client.start_server()
+        body = await (await client.get("/health")).json()
+        assert body["speaker_recognition"] == {"state": "disabled"}
+    finally:
+        await client.close()

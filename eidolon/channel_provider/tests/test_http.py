@@ -100,6 +100,7 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
             "status": "ok",
             "service": "eidolon-channel-provider",
             "contract_version": "v1",
+            "speaker_recognition": {"state": "disabled"},
         }
         assert adapter.health_calls == 1
 

@@ -55,7 +55,7 @@ def create_app(
     speech_voices=None,
 ) -> web.Application:
     app = web.Application(client_max_size=256 * 1024)
-    from .speaker_extraction import register_speaker_extraction
+    from .speaker_extraction import register_speaker_extraction, speaker_recognition_status
     register_speaker_extraction(app, engine=speaker_engine,
                                authorized=lambda request: _authorized(request, bearer_token),
                                problem=_problem_body)
@@ -81,6 +81,9 @@ def create_app(
                 "status": "ok",
                 "service": "eidolon-channel-provider",
                 "contract_version": "v1",
+                # A capability's own state, beside the service's: recognition
+                # being off never makes the Provider unhealthy.
+                "speaker_recognition": speaker_recognition_status(speaker_engine),
             }
         )
 

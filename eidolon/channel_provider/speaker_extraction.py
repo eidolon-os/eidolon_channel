@@ -6,6 +6,7 @@ import binascii
 import logging
 
 from aiohttp import web
+from eidolon_sdk.biz.speaker_identity import SpeakerRecognitionPolicy
 from eidolon_sdk.biz.voiceprint import (
     SpeakerExtractionReadiness,
     SpeakerExtractionRequest,
@@ -22,6 +23,36 @@ from eidolon.livekit.plugins.speaker_verification.inference import (
 from eidolon.livekit.plugins.speaker_verification.reference_extractor import InvalidSpeakerAudio
 from eidolon.livekit.plugins.speaker_verification.enrollment import evaluate_enrollment
 from eidolon.livekit.plugins.speaker_verification.scoring import compare_speakers
+
+
+RECOGNITION_POLICY_FILE = "recognition-controlled-trial.json"
+
+
+def speaker_recognition_status(engine):
+    """Whether conversation recognition can identify anyone on this Host now.
+
+    The worker reads the same policy from the same model_dir and turns
+    recognition off when it is missing, without failing the conversation. This
+    is where that state is published, so a Host that selected the capability
+    cannot report ready while recognition is off. Versions only; unauthenticated.
+    """
+    if engine is None:
+        return {"state": "disabled"}
+    if engine.state != "ready":
+        return {"state": "model_" + engine.state}
+    identity = engine.model_identity
+    try:
+        policy = SpeakerRecognitionPolicy.model_validate_json(
+            (engine.model_dir / RECOGNITION_POLICY_FILE).read_text()
+        )
+    except OSError:
+        return {"state": "policy_missing"}
+    except ValueError:
+        return {"state": "policy_invalid"}
+    # The worker refuses every probe on this same comparison (policy_model_mismatch).
+    if (policy.model_id, policy.weights_hash, policy.preprocessing_version) != tuple(identity):
+        return {"state": "policy_model_mismatch", "policy_version": policy.version}
+    return {"state": "ready", "model_id": policy.model_id, "policy_version": policy.version}
 
 
 def register_speaker_extraction(app, *, engine, authorized, problem):

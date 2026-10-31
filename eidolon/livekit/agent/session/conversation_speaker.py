@@ -286,8 +286,12 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
         policy = SpeakerRecognitionPolicy.model_validate_json(
             (Path(cfg.voiceprint.model_dir) / "recognition-controlled-trial.json").read_text()
         )
-    except (ValueError, OSError):
-        pass
+    except (ValueError, OSError) as exc:
+        # The Provider's health publishes the same state for Host readiness.
+        logging.getLogger(__name__).error(
+            "Conversation recognition off: policy unreadable in %s (%s)",
+            cfg.voiceprint.model_dir, type(exc).__name__,
+        )
     context = await factory.runtime_services.resolve_room(room)
     provider = load_provider_config()
     secret = resolve_shared_secret(cfg.runtime_authority.jwt_secret)

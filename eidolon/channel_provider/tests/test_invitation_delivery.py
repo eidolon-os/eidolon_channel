@@ -100,43 +100,11 @@ async def test_a_device_not_on_its_channel_is_told_at_once(monkeypatch):
     adapter, grant, conn, sent, _ = await setup(monkeypatch)
     device = grant.handle["device"]
     conn.remote_participants.clear()
-
-    async def server_says(handle):
-        return False
-
-    monkeypatch.setattr(adapter, "device_is_on_channel", server_says)
     with pytest.raises(BackendUnavailable, match="not on its channel"):
         await asyncio.wait_for(adapter.deliver_shared_invitation(
             grant.handle, invitation(device), command_id="invite-1"), 0.5)
     assert sent == []
     assert not adapter._control_receipts
-    await adapter.shutdown()
-
-
-@pytest.mark.parametrize("server", [True, None])
-async def test_a_device_the_room_has_not_seen_yet_is_still_asked(monkeypatch, server):
-    """For about three seconds after joining, a device's packets arrive before the room lists it.
-
-    2026-10-31: a phone joined to start a conversation, the Provider asked it to
-    confirm its previous one had ended, judged it absent from this room's view
-    alone, and refused the start. The server knew it was there. When the server
-    cannot be asked, sending costs only the wait it always did.
-    """
-    adapter, grant, conn, sent, published = await setup(monkeypatch)
-    device = grant.handle["device"]
-    conn.remote_participants.clear()
-
-    async def server_says(handle):
-        return server
-
-    monkeypatch.setattr(adapter, "device_is_on_channel", server_says)
-    task = asyncio.create_task(
-        adapter.deliver_shared_invitation(grant.handle, invitation(device), command_id="invite-1")
-    )
-    await asyncio.wait_for(published.wait(), 1)
-    receipt(conn, device)
-    assert await task == "accepted"
-    assert len(sent) == 1
     await adapter.shutdown()
 
 

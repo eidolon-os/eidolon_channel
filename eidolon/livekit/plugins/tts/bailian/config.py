@@ -27,13 +27,13 @@ class BailianTTSConfig:
     model: str = field(
         default_factory=lambda: os.environ.get(
             "BAILIAN_TTS_MODEL",
-            "cosyvoice-v3-flash",
+            "qwen-audio-3.1-tts-flash",
         )
     )
     voice: str = field(
         default_factory=lambda: os.environ.get(
             "BAILIAN_TTS_VOICE",
-            "longanyang",
+            "longanyang_v3.1",
         )
     )
     sample_rate: int = field(

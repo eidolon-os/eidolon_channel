@@ -194,6 +194,30 @@ def test_resolution_order(ready, record, reason, voice) -> None:
     assert (result.reason, result.ref.voice_id) == (reason, voice)
 
 
+async def test_a_bailian_choice_follows_its_speaker_across_the_model_switch_and_back(tmp_path: Path) -> None:
+    """Hosts moved from cosyvoice-v3-flash to qwen-audio-3.1-tts-flash; a rollback moves them back."""
+    from eidolon.livekit.plugins.tts.bailian.config import BailianTTSConfig
+
+    async def host(model: str, default: str) -> HostVoiceCatalogService:
+        cfg = BailianTTSConfig(api_url="wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+                               api_key="k", model=model, voice=default)
+        svc = HostVoiceCatalogService(BailianVoiceCatalogAdapter(cfg), [BailianVoiceCatalogAdapter],
+                                      tmp_path / f"{model}.json")
+        await svc.refresh()
+        return svc
+
+    def chose(model: str, voice: str) -> CompanionSpeechVoice:
+        return _record(CatalogVoiceSelection(provider="bailian", model=model, voice_id=voice, display_name="龙婉"))
+
+    qwen = await host("qwen-audio-3.1-tts-flash", "longanyang_v3.1")
+    cosy = await host("cosyvoice-v3-flash", "longanyang")
+    forward = resolve(chose("cosyvoice-v3-flash", "longwan_v3"), qwen.catalog(), qwen.overlay)
+    back = resolve(chose("qwen-audio-3.1-tts-flash", "longwan_v3.1"), cosy.catalog(), cosy.overlay)
+    assert (forward.reason, forward.ref.voice_id) == ("same_voice_other_model", "longwan_v3.1")
+    assert (back.reason, back.ref.voice_id) == ("same_voice_other_model", "longwan_v3")
+    assert resolve(None, qwen.catalog(), qwen.overlay).ref.voice_id == "longanyang_v3.1"
+
+
 async def test_a_voice_of_unknown_gender_is_never_mapped(tmp_path: Path) -> None:
     ghost = {"voice_id": "ghost", "display_name": "影影", "gender": "unspecified", "age_band": "youth",
              "languages": ["zh-CN"], "styles": ["warm"], "rank": 200, "models": ["m2"]}

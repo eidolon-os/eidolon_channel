@@ -210,13 +210,14 @@ class SpeakerRecognizer:
         if ranked:
             leader = ranked[0]
             for use in PERSON_USES:
-                if post[leader] < getattr(policy, use):
+                threshold = getattr(policy, use)
+                if threshold is None or post[leader] < threshold:
                     continue
                 if use == "candidate_evidence" and best[leader][1].maturity != "candidate":
                     continue
                 decisions[use] = leader
         # A weak short probe is not evidence of someone new.
-        decisions["discovery"] = (unknown >= policy.discovery
+        decisions["discovery"] = (policy.discovery is not None and unknown >= policy.discovery
                                   and speech_ms >= policy.min_unknown_speech_ms)
         named = {}
         if "addressing" in decisions:

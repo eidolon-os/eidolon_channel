@@ -846,3 +846,14 @@ async def test_feedback_passes_unresolved_outcomes_through():
         packet = _feedback(value)
         assert (packet.status, packet.reason, packet.person_id, packet.display_name, packet.confidence) == (
             status, reason, None, None, 'none')
+
+
+
+@pytest.mark.asyncio
+async def test_a_use_switched_off_in_the_policy_is_never_decided():
+    off = POLICY.model_copy(update={"personal_memory": None, "candidate_evidence": None, "discovery": None})
+    port = client(llr=MATCH)
+    result = await recognizer(port, off).recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert result.status == "compared"
+    assert result.decisions.personal_memory is None and not result.decisions.discovery
+    assert result.decisions.addressing == result.decisions.speaker_label == "p0"

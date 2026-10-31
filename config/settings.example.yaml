@@ -69,7 +69,7 @@ runtime_authority:
 
 voiceprint:
   # Shared extraction model; advisory policy is a versioned Models asset.
-  # Missing recognition-controlled-trial.json yields unavailable, never a gate.
+  # Missing identity-policy.json or identity-backend.json yields unavailable, never a gate.
   model_dir: ""
 
 turn_policy:

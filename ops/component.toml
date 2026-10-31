@@ -88,7 +88,9 @@ files = [
   "campplus_cn_common.bin",
   "config.yaml",
   "configuration.json",
-  "recognition-controlled-trial.json",
-  # The calibrated policy decides only with the impostor cohort it names.
-  "impostor-cohort.npz",
+  # Identity evidence (design §3.3): per-use thresholds, and the calibration
+  # with the cohort it was trained on.
+  "identity-policy.json",
+  "identity-backend.json",
+  "identity-cohort.npz",
 ]

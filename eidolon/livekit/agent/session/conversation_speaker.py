@@ -10,6 +10,21 @@ from eidolon_sdk.biz.speaker_identity import SpeakerIdentityObservation
 from .speaker_recognition import SpeakerRecognizer
 
 TOPIC = "eidolon.speaker_observation"
+POLICY_FILE = "identity-policy.json"
+
+
+def feedback_view(value: SpeakerIdentityObservation) -> dict:
+    """What the phone may show: a name only when the addressing use is met."""
+    person = value.decided("addressing")
+    if person is not None:
+        return dict(status="identified", reason="voice_match", person_id=person.person_id,
+                    display_name=value.display_name, confidence="controlled_trial")
+    if value.status == "compared":
+        status, reason = (("unknown", "no_match") if value.decisions.discovery
+                          else ("uncertain", "identity_not_confirmed"))
+    else:
+        status, reason = value.status, value.reason
+    return dict(status=status, reason=reason, person_id=None, display_name=None, confidence="none")
 
 
 class ConversationSpeaker:
@@ -169,7 +184,6 @@ class ConversationSpeaker:
         now = time.time()
         return SpeakerIdentityObservation(
             status="unavailable",
-            confidence="none",
             reason=reason,
             owner_id=self.owner_id,
             session_id=self.session_id,
@@ -235,10 +249,12 @@ class ConversationSpeaker:
                 {
                     "status": value.status,
                     "reason": value.reason,
-                    "person_id": value.person_id,
-                    "confidence": value.confidence,
-                    "decision_version": value.decision_version,
-                    "cosine_similarity": value.cosine_similarity,
+                    "decisions": value.decisions.model_dump(exclude_defaults=True),
+                    "posterior_unknown": value.posterior_unknown,
+                    "evidence": [{"person_id": e.person_id, "llr": round(e.llr, 3),
+                                  "posterior": round(e.posterior, 4)} for e in value.evidence],
+                    "policy_version": value.policy_version,
+                    "channel": value.source.channel if value.source is not None else None,
                     "audio_quality": value.audio_quality.model_dump(exclude_none=True)
                         if value.audio_quality is not None else None,
                     "delivered_to_agent": callable(setter),
@@ -274,29 +290,33 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
     """Reuse authoritative runtime identity and the Provider's actual endpoint."""
     import os
     from eidolon_sdk.biz.runtime import resolve_shared_secret
-    from eidolon_sdk.biz.speaker_identity import SpeakerRecognitionPolicy
+    from eidolon_sdk.biz.speaker_identity import IdentityPolicy, channel_class
     from eidolon_sdk.core.http import create_async_client
     from eidolon.channel_provider.config import load_provider_config
     from .speaker_recognition import SpeakerRecognitionClient
-    from eidolon.livekit.plugins.speaker_verification.calibration import load_cohort
+    from eidolon.livekit.plugins.speaker_verification.evidence import load_backend
+    from ..runtime.resolver import _participant_identity_and_metadata
     from pathlib import Path
 
-    # Missing or invalid trial policy degrades identification, never conversation.
-    policy = cohort = None
+    # Missing or invalid policy or calibration degrades identification, never conversation.
+    policy = backend = None
     try:
-        policy = SpeakerRecognitionPolicy.model_validate_json(
-            (Path(cfg.voiceprint.model_dir) / "recognition-controlled-trial.json").read_text()
+        policy = IdentityPolicy.model_validate_json(
+            (Path(cfg.voiceprint.model_dir) / POLICY_FILE).read_text()
         )
-        if policy.calibration is not None:
-            cohort = load_cohort(cfg.voiceprint.model_dir, policy)
+        backend = load_backend(cfg.voiceprint.model_dir)
     except (ValueError, OSError) as exc:
         # The Provider's health publishes the same state for Host readiness.
         logging.getLogger(__name__).error(
-            "Conversation recognition off: policy unreadable in %s (%s: %s)",
+            "Conversation recognition off: identity files unreadable in %s (%s: %s)",
             cfg.voiceprint.model_dir, type(exc).__name__, exc,
         )
-        policy = cohort = None
+        policy = backend = None
     context = await factory.runtime_services.resolve_room(room)
+    # The trusted admission metadata names the device kind; calibration
+    # distinguishes the channel a probe comes through (design §3.3).
+    participant = _participant_identity_and_metadata(room)
+    channel = channel_class((participant[1] if participant else {}).get("manifest_id"))
     provider = load_provider_config()
     secret = resolve_shared_secret(cfg.runtime_authority.jwt_secret)
     http = create_async_client(timeout=2)
@@ -319,11 +339,7 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
             session_id=factory.runtime_session_id,
             conversation_id=factory.runtime_session_id,
             turn_id=value.turn_id,
-            status=value.status,
-            reason=value.reason,
-            person_id=value.person_id,
-            display_name=value.display_name,
-            confidence=value.confidence,
+            **feedback_view(value),
             issued_at=value.issued_at,
             expires_at=value.expires_at,
         ).model_dump(mode="json")
@@ -338,12 +354,12 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
                 )
                 logging.getLogger(__name__).info(
                     "Speaker feedback published turn_id=%s status=%s",
-                    value.turn_id, value.status,
+                    value.turn_id, payload["status"],
                 )
             except Exception:
                 logging.getLogger(__name__).warning(
                     "Speaker feedback publish failed turn_id=%s status=%s",
-                    value.turn_id, value.status,
+                    value.turn_id, payload["status"],
                 )
 
         task = asyncio.create_task(send())
@@ -351,7 +367,7 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
         task.add_done_callback(tasks.discard)
 
     observer = ConversationSpeaker(
-        recognizer=SpeakerRecognizer(client, policy, cohort),
+        recognizer=SpeakerRecognizer(client, policy, backend, channel=channel),
         owner_id=context.owner_id,
         session_id=factory.runtime_session_id,
         secret=secret,

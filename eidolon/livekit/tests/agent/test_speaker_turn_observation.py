@@ -4,7 +4,7 @@ from dataclasses import asdict
 
 import httpx
 import pytest
-from eidolon_sdk.biz.voiceprint import ExtractedSample
+from eidolon_sdk.biz.voiceprint import EnrollmentSample, ExtractedSample
 
 from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.speaker_observation import SpeakerTurnObservation
@@ -178,7 +178,10 @@ async def test_http_adapter_reuses_contract_and_does_not_send_identity_or_retry(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = SpeakerExtractionClient(http, "http://provider", token="test-token")
-        assert await client.extract(b"\x01\x00" * 24000) == sample()
+        extracted = await client.extract(b"\x01\x00" * 24000)
+        # The default (registration) purpose returns the sample with its windows, here none.
+        assert isinstance(extracted, EnrollmentSample) and extracted.crops == []
+        assert extracted.sample() == sample()
     assert len(requests) == 1
     request = requests[0]
     import json

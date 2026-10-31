@@ -1,37 +1,66 @@
 import asyncio
+import math
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from eidolon_sdk.biz.person import PersonProfile
+from eidolon_sdk.biz.person_observation import PersonObservationFeedback
 from eidolon_sdk.biz.speaker_identity import (
+    CandidateDiscoveryPolicy,
+    IdentityDecisions,
+    IdentityPolicy,
     SpeakerCandidates,
     SpeakerCandidate,
-    SpeakerRecognitionPolicy,
 )
-from eidolon_sdk.biz.voiceprint import (
-    ExtractedSample,
-    VoiceTemplate,
-    SpeakerComparisonResult,
-    SpeakerSimilarity,
-)
+from eidolon_sdk.biz.voiceprint import ExtractedSample, VoiceTemplate
 from eidolon_sdk.biz.speaker_attestation import verify_observation
 from eidolon.livekit.common.audio_evidence import AudioEvidence
 from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognizer
-from eidolon.livekit.agent.session.conversation_speaker import ConversationSpeaker
+from eidolon.livekit.agent.session.conversation_speaker import ConversationSpeaker, feedback_view
 
 SAMPLE = ExtractedSample(
     model_id="m", weights_hash="a" * 64, preprocessing_version="v", vector=[1, 0], speech_ms=2000, quality={"overlap_detected": 0}
 )
-POLICY = SpeakerRecognitionPolicy(
-    version="trial",
+IDENTITY = (SAMPLE.model_id, SAMPLE.weights_hash, SAMPLE.preprocessing_version)
+CHANNEL = "mobile"
+POLICY = IdentityPolicy(
+    version="identity-test",
     model_id="m",
     weights_hash="a" * 64,
     preprocessing_version="v",
-    threshold=0.4,
-    min_person_margin=0.1,
+    backend_version="backend-test",
     min_speech_ms=1500,
+    min_unknown_speech_ms=1500,
+    prior_unknown=0.5,
+    personal_memory=0.99,
+    addressing=0.9,
+    speaker_label=0.9,
+    candidate_evidence=0.95,
+    discovery=0.99,
 )
+# One Person alone at this prior has posterior e^llr / (1 + e^llr): MATCH meets
+# every use (0.99995), NO_MATCH leaves 0.99995 to someone not enrolled.
+MATCH, NO_MATCH = 10.0, -10.0
+ALL_USES = dict(personal_memory="p0", addressing="p0", speaker_label="p0")
+
+
+class Backend:
+    """A deterministic calibration: each template's LLR is set by the test, keyed by its vector."""
+
+    def __init__(self, llrs, *, version=POLICY.backend_version, identity=IDENTITY):
+        self.llrs, self.version, self.identity = llrs, version, identity
+        self.sides = []
+        self.trials = 0
+
+    def side(self, vector, speech_ms, channel):
+        self.sides.append((tuple(vector), speech_ms, channel))
+        return tuple(vector)
+
+    def llr(self, enroll, probe):
+        assert probe == tuple(SAMPLE.vector)
+        self.trials += 1
+        return self.llrs[enroll]
 
 
 def evidence():
@@ -48,6 +77,12 @@ def evidence():
     )
 
 
+def template_vector(person, profile):
+    # A distinct unit direction per template, never the probe's.
+    angle = 0.01 * (1 + 5 * person + profile)
+    return [math.cos(angle), math.sin(angle)]
+
+
 def snapshot(people=1, profiles=1):
     return SpeakerCandidates(
         owner_id="o",
@@ -59,7 +94,8 @@ def snapshot(people=1, profiles=1):
                 display_name=f"Person {i}",
                 profile=PersonProfile(),
                 templates=[
-                    VoiceTemplate(profile_id=f"v{i}-{j}", revision=1, sample=SAMPLE)
+                    VoiceTemplate(profile_id=f"v{i}-{j}", revision=1,
+                                  sample=ExtractedSample(**SAMPLE.model_dump() | {"vector": template_vector(i, j)}))
                     for j in range(profiles)
                 ],
             )
@@ -68,61 +104,89 @@ def snapshot(people=1, profiles=1):
     )
 
 
-def client(people=1, profiles=1, score=0.8):
-    async def compare(probe, templates):
-        return SpeakerComparisonResult(
-            model_id=probe.model_id,
-            weights_hash=probe.weights_hash,
-            preprocessing_version=probe.preprocessing_version,
-            scores=[
-                SpeakerSimilarity(
-                    profile_id=t.profile_id, revision=t.revision, status="scored", similarity=score
-                )
-                for t in templates
-            ],
-        )
+def client(people=1, profiles=1, llr=MATCH):
+    """Data and the Provider as the recognizer sees them, with the calibration in ``backend``.
 
+    ``llr`` is one LLR for every template, or ``f(person_index, profile_index)``.
+    """
+    value = snapshot(people, profiles)
+    score = llr if callable(llr) else (lambda i, j: llr)
+    llrs = {
+        tuple(template.sample.vector): score(i, j)
+        for i, person in enumerate(value.persons)
+        for j, template in enumerate(person.templates)
+    }
     return SimpleNamespace(
-        candidates=AsyncMock(return_value=snapshot(people, profiles)),
+        candidates=AsyncMock(return_value=value),
         extract=AsyncMock(return_value=SAMPLE),
-        compare=AsyncMock(side_effect=compare),
         record_candidate_evidence=AsyncMock(),
+        discover_candidate=AsyncMock(),
+        backend=Backend(llrs),
     )
+
+
+def recognizer(port, policy=POLICY, *, channel=CHANNEL):
+    return SpeakerRecognizer(port, policy, port.backend, channel=channel)
 
 
 @pytest.mark.asyncio
 async def test_identification_uses_authority_and_aggregates_same_person_profiles():
-    port = client(profiles=2)
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    port = client(profiles=2, llr=lambda i, j: MATCH if j == 1 else NO_MATCH)
+    result = await recognizer(port).recognize(
         evidence(), owner_id="o", session_id="s", turn_id="t"
     )
-    assert result.status == "identified" and result.person_id == "p0"
-    assert result.confidence == "controlled_trial"
+    assert result.status == "compared" and result.reason == "compared"
+    assert result.decisions == IdentityDecisions(**ALL_USES)
+    # One entry per Person, from its best-matching profile.
+    assert [(e.person_id, e.profile_id, e.llr) for e in result.evidence] == [("p0", "v0-1", MATCH)]
+    assert result.evidence[0].posterior + result.posterior_unknown == pytest.approx(1)
+    assert result.policy_version == POLICY.version and result.backend_version == POLICY.backend_version
     assert port.extract.await_count == 1 and port.candidates.await_count == 2
+    assert port.backend.trials == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "people,score,status", [(2, 0.8, "uncertain"), (1, 0.1, "unknown"), (0, 0.8, "uncertain")]
+    "people,llr,discovery", [(2, MATCH, False), (1, NO_MATCH, True), (0, MATCH, None)]
 )
-async def test_no_guess_for_ambiguity_unknown_or_empty(people, score, status):
-    port = client(people=people, score=score)
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+async def test_no_guess_for_ambiguity_unknown_or_empty(people, llr, discovery):
+    port = client(people=people, llr=llr)
+    result = await recognizer(port).recognize(
         evidence(), owner_id="o", session_id="s", turn_id="t"
     )
-    assert result.status == status and result.person_id is None
+    assert result.decisions.persons() == set() and result.display_name is None
     if people == 0:
+        assert (result.status, result.reason) == ("uncertain", "no_enrolled_voices")
         port.extract.assert_not_awaited()
+        return
+    assert result.status == "compared" and result.decisions.discovery is discovery
+    if people == 2:
+        # Two Persons equally likely: each near one half, neither meets a use.
+        assert [e.posterior for e in result.evidence] == pytest.approx([0.5, 0.5], abs=1e-3)
 
 
 @pytest.mark.asyncio
 async def test_revision_change_discards_identity():
     port = client()
     port.candidates.side_effect = [snapshot(), snapshot().model_copy(update={"revision": "c" * 64})]
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         evidence(), owner_id="o", session_id="s", turn_id="t"
     )
-    assert result.person_id is None and result.reason == "candidates_changed"
+    assert result.reason == "candidates_changed" and result.status == "uncertain"
+    assert result.evidence == [] and result.decisions == IdentityDecisions()
+
+
+@pytest.mark.asyncio
+async def test_template_sides_are_prepared_once_per_household_revision():
+    port = client(profiles=2)
+    value = recognizer(port)
+    templates = lambda: [s for s in port.backend.sides if s[0] != tuple(SAMPLE.vector)]
+    for turn in ("t1", "t2"):
+        await value.recognize(evidence(), owner_id="o", session_id="s", turn_id=turn)
+    assert len(templates()) == 2
+    port.candidates.return_value = port.candidates.return_value.model_copy(update={"revision": "c" * 64})
+    await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t3")
+    assert len(templates()) == 4
 
 
 @pytest.mark.asyncio
@@ -134,7 +198,7 @@ async def test_pending_result_is_frozen_and_late_feedback_never_changes_llm():
         return SAMPLE
     port.extract.side_effect = slow
     published = []
-    observer = ConversationSpeaker(recognizer=SpeakerRecognizer(port, POLICY),
+    observer = ConversationSpeaker(recognizer=recognizer(port),
         owner_id="o", session_id="s", secret="x" * 32, publish=published.append)
     try:
         observer.begin_evidence(evidence(), "t")
@@ -146,13 +210,13 @@ async def test_pending_result_is_frozen_and_late_feedback_never_changes_llm():
         gate.set()
         await task
         await asyncio.sleep(0)
-        assert published[-1].status == "identified"
+        assert published[-1].decisions.addressing == "p0"
         assert await observer.result("t") == result
         observer.deliver(result, text="hello", llm=llm, timeline=None)
-        assert published[-1].status == "identified"
+        assert published[-1].decisions.addressing == "p0"
         assert llm.set_speaker_observation.call_count == 1
         wrong = await observer.result("next")
-        assert wrong.person_id is None
+        assert wrong.decisions == IdentityDecisions() and wrong.evidence == []
     finally:
         await observer.aclose()
 
@@ -160,7 +224,7 @@ async def test_pending_result_is_frozen_and_late_feedback_never_changes_llm():
 @pytest.mark.asyncio
 async def test_signed_delivery_bound_to_exact_turn_and_text():
     observer = ConversationSpeaker(
-        recognizer=SpeakerRecognizer(client(), POLICY),
+        recognizer=recognizer(client()),
         owner_id="o",
         session_id="s",
         secret="x" * 32,
@@ -175,7 +239,8 @@ async def test_signed_delivery_bound_to_exact_turn_and_text():
     accepted = verify_observation(
         token, secret="x" * 32, owner_id="o", session_id="s", turn_id="t", text="hello"
     )
-    assert accepted.person_id == "p0"
+    assert accepted.decided("personal_memory").person_id == "p0"
+    assert accepted.source.channel == CHANNEL
     for changed in (
         {"text": "another"},
         {"turn_id": "next"},
@@ -191,8 +256,8 @@ async def test_signed_delivery_bound_to_exact_turn_and_text():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("score,expected", [(0.8, "identified"), (0.1, "unknown")])
-async def test_product_completed_turn_delivers_exact_audio_and_signed_context(score, expected):
+@pytest.mark.parametrize("llr,addressing,discovery", [(MATCH, "p0", False), (NO_MATCH, None, True)])
+async def test_product_completed_turn_delivers_exact_audio_and_signed_context(llr, addressing, discovery):
     from livekit.agents.llm import ChatContext, ChatMessage
     from eidolon.livekit.common.audio_evidence import AudioEvidenceCapture
     from eidolon.livekit.common.audio_timeline import AudioSource, AudioSpan
@@ -200,10 +265,10 @@ async def test_product_completed_turn_delivers_exact_audio_and_signed_context(sc
     from eidolon.livekit.agent.observability import TurnTimeline
     from .test_commit_guard import _make_pipeline_with_session
 
-    port = client(score=score)
+    port = client(llr=llr)
     published = []
     observer = ConversationSpeaker(
-        recognizer=SpeakerRecognizer(port, POLICY),
+        recognizer=recognizer(port),
         owner_id="o",
         session_id="s",
         secret="x" * 32,
@@ -240,7 +305,9 @@ async def test_product_completed_turn_delivers_exact_audio_and_signed_context(sc
         await observer.finish(
             owner, turn_id="t", text="hello", llm=pipeline._factory.llm.llm, timeline=timeline
         )
-        assert len(published) == 1 and published[0].status == expected
+        assert len(published) == 1 and published[0].status == "compared"
+        assert published[0].decisions.addressing == addressing
+        assert published[0].decisions.discovery is discovery
         port.extract.assert_awaited_once_with(evidence().pcm, min_speech_ms=1500)
         token = pipeline._factory.llm.llm.set_speaker_observation.call_args.args[0]
         assert (
@@ -249,12 +316,18 @@ async def test_product_completed_turn_delivers_exact_audio_and_signed_context(sc
             )
             == published[0]
         )
+        # The trace carries evidence and decisions, never a name or profile.
+        trace = timeline.attrs["speaker_observation"]
+        assert trace["channel"] == CHANNEL and trace["policy_version"] == POLICY.version
+        assert trace["decisions"].get("addressing") == addressing
+        assert trace["evidence"][0]["person_id"] == "p0"
+        assert "Person 0" not in str(trace)
     finally:
         await observer.aclose()
 
 
 @pytest.mark.asyncio
-async def test_existing_provider_http_and_pure_scorer_are_reused():
+async def test_existing_provider_http_extraction_is_reused():
     import httpx
     from aiohttp.test_utils import TestServer
     from eidolon.channel_provider.http import create_app
@@ -275,11 +348,10 @@ async def test_existing_provider_http_and_pure_scorer_are_reused():
                 provider_token="test",
             )
             sample = await port.extract(evidence().pcm, min_speech_ms=1500)
-            compared = await port.compare(
-                sample, [VoiceTemplate(profile_id="p", revision=1, sample=sample)]
-            )
-            assert compared.scores[0].similarity == pytest.approx(1)
+            assert type(sample) is ExtractedSample and sample.vector == [1.0, 0.0]
             assert engine.calls == [evidence().pcm]
+            # Recognition is calibrated here, not by the Provider's cosine comparison.
+            assert not hasattr(port, "compare")
     finally:
         await server.close()
 
@@ -287,12 +359,31 @@ async def test_existing_provider_http_and_pure_scorer_are_reused():
 @pytest.mark.asyncio
 async def test_no_policy_and_short_audio_do_not_call_dependencies():
     port = client()
-    result = await SpeakerRecognizer(port, None).recognize(
+    result = await SpeakerRecognizer(port, None, port.backend, channel=CHANNEL).recognize(
         evidence(), owner_id="o", session_id="s", turn_id="t"
     )
-    assert result.status == "unavailable" and result.person_id is None
+    assert (result.status, result.reason) == ("unavailable", "recognition_policy_missing")
+    assert result.decisions == IdentityDecisions() and result.evidence == []
     port.candidates.assert_not_awaited()
     port.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("calibration", ["missing", "other_version", "other_model"])
+async def test_a_policy_without_its_own_calibration_turns_recognition_off(calibration):
+    port = client()
+    backend = {
+        "missing": None,
+        "other_version": Backend({}, version="backend-other"),
+        "other_model": Backend({}, identity=("m", "c" * 64, "v")),
+    }[calibration]
+    value = SpeakerRecognizer(port, POLICY, backend, channel=CHANNEL)
+    assert value.policy is None and value.backend is None
+    result = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert (result.status, result.reason) == ("unavailable", "recognition_policy_missing")
+    port.candidates.assert_not_awaited()
+    port.extract.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_final_transcript_starts_recognition_before_framework_completion():
@@ -304,7 +395,7 @@ async def test_final_transcript_starts_recognition_before_framework_completion()
     from eidolon.livekit.agent.observability import TurnTimeline
     pipeline=_make_pipeline_with_session();pipeline._ensure_runtime_defaults()
     pipeline._mark_activity=MagicMock()
-    port=client();observer=ConversationSpeaker(recognizer=SpeakerRecognizer(port,POLICY),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    port=client();observer=ConversationSpeaker(recognizer=recognizer(port),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
     pipeline._speaker_observation=observer
     capture=AudioEvidenceCapture(session_id='s',endpoint_id='mic')
     source=AudioSource('mic',1,16000);capture.select_stream('mic');capture.begin_run(source)
@@ -318,43 +409,57 @@ async def test_final_transcript_starts_recognition_before_framework_completion()
         assert observer._task is not None
         await observer._task
         result=await observer.result('t')
-        assert result.status=='identified'
+        assert result.decisions.addressing=='p0'
         assert pipeline._user_turns.active.state=='open'
     finally:await observer.aclose()
 
 
 @pytest.mark.asyncio
 async def test_long_asr_tail_expires_identity_without_aborting_delivery():
-    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(client(),POLICY),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
+    observer=ConversationSpeaker(recognizer=recognizer(client()),owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
     value=await observer.recognizer.recognize(evidence(),owner_id='o',session_id='s',turn_id='t')
+    assert value.decisions.addressing=='p0'
     expired=value.model_copy(update={'issued_at':time.time()-20,'expires_at':time.time()-10})
     llm=MagicMock();observer.deliver(expired,text='hello',llm=llm,timeline=None)
     accepted=verify_observation(llm.set_speaker_observation.call_args.args[0],secret='x'*32,owner_id='o',session_id='s',turn_id='t',text='hello')
-    assert accepted.person_id is None and accepted.reason=='observation_expired'
+    assert accepted.decisions==IdentityDecisions() and accepted.evidence==[]
+    assert accepted.reason=='observation_expired'
     assert observer.publish.call_args.args[0].status=='unavailable'
     await observer.aclose()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("score,status,reason", [(0.1,"uncertain","short_speech_inconclusive"),(0.8,"identified","voice_match")])
-async def test_policy_controls_short_probe_and_unknown_requires_completed_comparison(score,status,reason):
+@pytest.mark.parametrize("llr,addressing,unknown", [(NO_MATCH, None, True), (MATCH, "p0", False)])
+async def test_policy_controls_short_probe_and_unknown_requires_sufficient_speech(llr, addressing, unknown):
     from dataclasses import replace
     policy = POLICY.model_copy(update={'min_speech_ms': 600})
-    port = client(score=score)
+    port = client(llr=llr)
     port.extract.return_value = SAMPLE.model_copy(update={'speech_ms':800})
     short = replace(evidence(), end=16000, pcm=evidence().pcm[:32000])
-    value = await SpeakerRecognizer(port, policy).recognize(short, owner_id='o', session_id='s', turn_id='t')
-    assert value.status == status and value.reason == reason
+    value = await recognizer(port, policy).recognize(short, owner_id='o', session_id='s', turn_id='t')
+    assert value.status == 'compared' and value.decisions.addressing == addressing
+    # A short probe is compared, but failing to match it is not evidence of someone new.
+    assert (value.posterior_unknown > policy.discovery) is unknown
+    assert value.decisions.discovery is False
     assert value.audio_quality.speech_ms == 800
     port.extract.assert_awaited_once_with(short.pcm, min_speech_ms=600)
-    port.compare.assert_awaited_once()
+    assert (tuple(SAMPLE.vector), 800, CHANNEL) in port.backend.sides and port.backend.trials == 1
     port = client()
     too_short = replace(short, end=4800, pcm=short.pcm[:9600])
-    value = await SpeakerRecognizer(port, policy).recognize(too_short, owner_id='o', session_id='s', turn_id='t')
-    assert value.reason == 'audio_too_short' and value.person_id is None
+    value = await recognizer(port, policy).recognize(too_short, owner_id='o', session_id='s', turn_id='t')
+    assert value.reason == 'audio_too_short' and value.decisions == IdentityDecisions()
     assert value.audio_quality.audio_ms == 300
     port.extract.assert_not_awaited()
-    port.compare.assert_not_awaited()
+    assert port.backend.sides == [] and port.backend.trials == 0
+
+
+@pytest.mark.asyncio
+async def test_extraction_below_policy_floor_is_not_compared():
+    port = client()
+    port.extract.return_value = SAMPLE.model_copy(update={'speech_ms': 1499})
+    value = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert (value.status, value.reason) == ('uncertain', 'speech_too_short')
+    assert value.evidence == [] and port.backend.trials == 0
 
 
 @pytest.mark.asyncio
@@ -362,14 +467,33 @@ async def test_unknown_upstream_validation_failure_is_not_a_voice_mismatch():
     from eidolon_sdk.core.http.errors import ServiceUpstreamError
     port = client()
     port.extract.side_effect = ServiceUpstreamError(422, 'private unexpected validation body')
-    value = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    value = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
     assert value.status == 'unavailable' and value.reason == 'invalid_extraction_response'
     assert 'private' not in value.model_dump_json()
 
 
 @pytest.mark.asyncio
+async def test_a_probe_from_another_model_is_never_compared():
+    port = client()
+    port.extract.return_value = SAMPLE.model_copy(update={'weights_hash': 'c' * 64})
+    value = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert (value.status, value.reason) == ('unavailable', 'policy_model_mismatch')
+    assert value.evidence == [] and port.backend.trials == 0
+
+
+@pytest.mark.asyncio
+async def test_a_template_from_another_model_is_never_compared():
+    port = client()
+    template = port.candidates.return_value.persons[0].templates[0]
+    template.sample = template.sample.model_copy(update={'preprocessing_version': 'other'})
+    value = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert (value.status, value.reason) == ('unavailable', 'model_version_mismatch')
+    assert value.evidence == [] and port.backend.trials == 0
+
+
+@pytest.mark.asyncio
 async def test_completed_observation_prepares_authority_before_turn_delivery():
-    observer = ConversationSpeaker(recognizer=SpeakerRecognizer(client(), POLICY),
+    observer = ConversationSpeaker(recognizer=recognizer(client()),
         owner_id="o", session_id="s", secret="x" * 32, publish=MagicMock())
     prepared = asyncio.Event()
     values = []
@@ -380,7 +504,7 @@ async def test_completed_observation_prepares_authority_before_turn_delivery():
     try:
         observer.begin_evidence(evidence(), "t")
         await asyncio.wait_for(prepared.wait(), .2)
-        assert values[0].person_id == "p0"
+        assert values[0].decided("personal_memory").person_id == "p0"
         observer.publish.assert_not_called()
         assert await observer.result("t") == values[0]
     finally:
@@ -399,7 +523,7 @@ async def test_replaced_evidence_cannot_publish_old_late_result():
             cancelled.set()
     port.extract.side_effect = slow
     published = []
-    observer = ConversationSpeaker(recognizer=SpeakerRecognizer(port, POLICY),
+    observer = ConversationSpeaker(recognizer=recognizer(port),
         owner_id="o", session_id="s", secret="x" * 32, publish=published.append)
     try:
         observer.begin_evidence(evidence(), "old")
@@ -411,7 +535,8 @@ async def test_replaced_evidence_cannot_publish_old_late_result():
         assert observer._task is None
         await asyncio.sleep(0)
         assert published == [initial]
-        assert (await observer.result("old")).person_id is None
+        old = await observer.result("old")
+        assert old.status == "unavailable" and old.decisions == IdentityDecisions()
         assert (await observer.result("new")).reason == "audio_evidence_unavailable"
     finally:
         await observer.aclose()
@@ -424,16 +549,18 @@ async def test_candidate_lifecycle_survives_signed_turn_without_becoming_a_grant
     person = port.candidates.return_value.persons[0]
     person.maturity = 'candidate'
     person.is_named = False
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         evidence(), owner_id='o', session_id='s', turn_id='t')
-    assert result.status == 'identified' and result.subject_role == 'speaker'
-    assert result.modalities == ['voice'] and result.maturity == 'candidate'
+    assert result.status == 'compared' and result.subject_role == 'speaker'
+    assert result.modalities == ['voice'] and result.decisions.candidate_evidence == 'p0'
+    assert result.decided('candidate_evidence').maturity == 'candidate'
     token = sign_observation(result, secret='x' * 32, text='hello')
     verified = verify_observation(token, secret='x' * 32, owner_id='o', session_id='s',
                                   turn_id='t', text='hello')
-    assert verified.maturity == 'candidate' and verified.is_named is False
+    assert verified.evidence[0].maturity == 'candidate' and verified.evidence[0].is_named is False
     port.record_candidate_evidence.assert_awaited_once()
-    assert port.record_candidate_evidence.call_args.args[0].observation == result
+    receipt = port.record_candidate_evidence.call_args.args[0]
+    assert receipt.observation == result and receipt.snapshot_revision == 'b' * 64
     assert 'memory_enabled' not in verified.model_dump()
 
 
@@ -442,60 +569,131 @@ async def test_receipt_failure_never_changes_a_candidate_identity_match():
     port = client()
     port.candidates.return_value.persons[0].maturity = 'candidate'
     port.record_candidate_evidence.side_effect = OSError('receipt unavailable')
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         evidence(), owner_id='o', session_id='s', turn_id='t')
-    assert result.status == 'identified' and result.maturity == 'candidate'
+    assert result.status == 'compared' and result.decisions.candidate_evidence == 'p0'
     port.record_candidate_evidence.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_full_shared_pool_extracts_once_and_matches_the_last_person():
-    from eidolon_sdk.biz.speaker_identity import MAX_RECOGNITION_PERSONS
-    port = client(people=MAX_RECOGNITION_PERSONS)
-
-    async def compare(probe, templates):
-        return SpeakerComparisonResult(model_id=probe.model_id, weights_hash=probe.weights_hash,
-            preprocessing_version=probe.preprocessing_version, scores=[SpeakerSimilarity(
-                profile_id=t.profile_id, revision=t.revision, status='scored',
-                similarity=0.9 if t.profile_id.startswith(f'v{MAX_RECOGNITION_PERSONS - 1}-') else 0.1)
-                for t in templates])
-    port.compare.side_effect = compare
-    result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
-    assert result.person_id == f'p{MAX_RECOGNITION_PERSONS - 1}'
-    assert port.extract.await_count == 1 and port.candidates.await_count == 2
-    assert port.compare.await_count == MAX_RECOGNITION_PERSONS
+@pytest.mark.parametrize('maturity,llr,chosen', [
+    ('candidate', MATCH, 'p0'),
+    ('established', MATCH, None),  # an established Person is never candidate evidence
+    ('candidate', 2.5, None),      # posterior 0.924: addressed, below the candidate threshold
+])
+async def test_candidate_evidence_names_only_a_candidate_over_its_own_threshold(maturity, llr, chosen):
+    port = client(llr=llr)
+    port.candidates.return_value.persons[0].maturity = maturity
+    result = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.decisions.addressing == 'p0'
+    assert result.decisions.candidate_evidence == chosen
+    assert port.record_candidate_evidence.await_count == int(chosen is not None)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('people,overlap,score,expected', [(0, 0, .1, True), (1, 0, .1, True),
-    (0, None, .1, False), (0, 1, .1, False), (1, 0, .35, False), (1, 0, .9, False), (25, 0, .1, False)])
-async def test_discovery_uses_same_extraction_and_never_changes_current_unknown(people, overlap, score, expected):
-    from eidolon_sdk.biz.speaker_identity import CandidateDiscoveryPolicy
-    port = client(people=people, score=score)
-    port.discover_candidate = AsyncMock()
+async def test_a_short_candidate_match_is_not_a_receipt():
+    port = client()
+    port.candidates.return_value.persons[0].maturity = 'candidate'
+    port.extract.return_value = SAMPLE.model_copy(update={'speech_ms': 800})
+    result = await recognizer(port, POLICY.model_copy(update={'min_speech_ms': 600})).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.decisions.candidate_evidence == 'p0'
+    port.record_candidate_evidence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('llr,uses', [
+    (MATCH, {'personal_memory', 'addressing', 'speaker_label'}),
+    (3.0, {'addressing', 'speaker_label'}),  # posterior 0.953: below personal memory
+    (1.0, set()),                            # posterior 0.731: no use met
+])
+async def test_each_use_reads_its_own_threshold_and_names_only_when_addressed(llr, uses):
+    port = client(llr=llr)
+    person = port.candidates.return_value.persons[0]
+    person.profile = PersonProfile(preferred_name='Ada')
+    result = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    decided = {use for use, value in result.decisions.model_dump().items() if value == 'p0'}
+    assert result.status == 'compared' and decided == uses
+    assert result.decisions.discovery is False
+    if 'addressing' in uses:
+        assert result.display_name == 'Ada' and result.profile == person.profile
+    else:
+        assert result.display_name is None and result.profile is None
+
+
+@pytest.mark.asyncio
+async def test_evidence_source_and_probe_carry_the_recognizer_channel():
+    port = client()
+    template = port.candidates.return_value.persons[0].templates[0]
+    result = await recognizer(port, channel='esp32-s3-box-3').recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.source.channel == 'esp32-s3-box-3'
+    # The probe is a different condition from the registration template.
+    assert (tuple(SAMPLE.vector), SAMPLE.speech_ms, 'esp32-s3-box-3') in port.backend.sides
+    assert (tuple(template.sample.vector), template.sample.speech_ms, 'mobile') in port.backend.sides
+
+
+@pytest.mark.asyncio
+async def test_a_busy_recognizer_refuses_a_second_utterance_without_dependencies():
+    port = client()
+    entered, gate = asyncio.Event(), asyncio.Event()
+    async def slow(_, **kwargs):
+        entered.set()
+        await gate.wait()
+        return SAMPLE
+    port.extract.side_effect = slow
+    value = recognizer(port)
+    first = asyncio.create_task(value.recognize(evidence(), owner_id='o', session_id='s', turn_id='t1'))
+    await entered.wait()
+    busy = await value.recognize(evidence(), owner_id='o', session_id='s', turn_id='t2')
+    assert (busy.status, busy.reason) == ('unavailable', 'recognizer_busy')
+    assert port.extract.await_count == 1 and port.candidates.await_count == 1
+    gate.set()
+    assert (await first).decisions.addressing == 'p0'
+    port.extract.side_effect = None
+    assert (await value.recognize(evidence(), owner_id='o', session_id='s', turn_id='t3')).status == 'compared'
+
+
+@pytest.mark.asyncio
+async def test_full_shared_pool_extracts_once_and_matches_the_last_person():
+    from eidolon_sdk.biz.speaker_identity import MAX_EVIDENCE, MAX_RECOGNITION_PERSONS
+    last = MAX_RECOGNITION_PERSONS - 1
+    port = client(people=MAX_RECOGNITION_PERSONS, llr=lambda i, j: MATCH if i == last else NO_MATCH)
+    result = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.decisions.addressing == f'p{last}' and result.evidence[0].person_id == f'p{last}'
+    assert len(result.evidence) == MAX_EVIDENCE
+    assert port.extract.await_count == 1 and port.candidates.await_count == 2
+    assert port.backend.trials == MAX_RECOGNITION_PERSONS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('people,overlap,llr,expected', [(0, 0, NO_MATCH, True), (1, 0, NO_MATCH, True),
+    (0, None, NO_MATCH, False), (0, 1, NO_MATCH, False), (1, 0, 0.0, False), (1, 0, MATCH, False),
+    (25, 0, NO_MATCH, False)])
+async def test_discovery_uses_same_extraction_and_never_changes_current_unknown(people, overlap, llr, expected):
+    port = client(people=people, llr=llr)
     port.candidates.return_value.discovery_policy = CandidateDiscoveryPolicy(
-        version='discovery', recognition=POLICY, max_existing_similarity=.2)
+        version='discovery', identity_policy_version=POLICY.version)
     quality = {} if overlap is None else {'overlap_detected': overlap}
     port.extract.return_value = SAMPLE.model_copy(update={'quality': quality})
-    result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    result = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
     assert port.extract.await_count == 1
     assert port.discover_candidate.await_count == int(expected)
     if expected:
-        assert result.status == 'unknown' and result.person_id is None
+        assert result.status == 'compared' and result.decisions.discovery
+        assert result.decisions.persons() == set()
         request = port.discover_candidate.call_args.args[0]
         assert request.observation == result and request.sample == port.extract.return_value
+        assert request.policy_version == 'discovery'
 
 
 @pytest.mark.asyncio
 async def test_discovery_policy_mismatch_never_posts_a_proposal():
-    from eidolon_sdk.biz.speaker_identity import CandidateDiscoveryPolicy
     port = client(people=0)
-    port.discover_candidate = AsyncMock()
     port.candidates.return_value.discovery_policy = CandidateDiscoveryPolicy(
-        version='discovery', recognition=POLICY.model_copy(update={'version': 'other'}), max_existing_similarity=.2)
-    port.extract.return_value = SAMPLE.model_copy(update={'quality': {'overlap_detected': 0}})
-    result = await SpeakerRecognizer(port, POLICY).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
-    assert result.status == 'unknown'
+        version='discovery', identity_policy_version='other')
+    result = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert result.status == 'compared' and result.decisions.discovery
     port.discover_candidate.assert_not_awaited()
 
 
@@ -505,9 +703,11 @@ async def test_candidate_match_without_single_speaker_quality_never_accumulates(
     port = client()
     port.candidates.return_value.persons[0].maturity = 'candidate'
     port.extract.return_value = SAMPLE.model_copy(update={'quality': quality})
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         evidence(), owner_id='o', session_id='s', turn_id='t')
-    assert result.status == ('identified' if not quality else 'uncertain')
+    assert result.status == ('compared' if not quality else 'uncertain')
+    if quality:
+        assert result.reason == 'overlapping_speech' and result.decisions == IdentityDecisions()
     port.record_candidate_evidence.assert_not_awaited()
 
 
@@ -519,11 +719,11 @@ async def test_candidate_match_without_single_speaker_quality_never_accumulates(
 async def test_malformed_audio_span_never_reaches_dependencies(changes):
     from dataclasses import replace
     port = client()
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         replace(evidence(), **changes), owner_id='o', session_id='s', turn_id='t')
     assert result.status == 'unavailable'
     assert result.reason == 'invalid_audio_evidence'
-    assert result.source is None and result.person_id is None
+    assert result.source is None and result.decisions == IdentityDecisions()
     port.candidates.assert_not_awaited()
     port.extract.assert_not_awaited()
 
@@ -531,12 +731,11 @@ async def test_malformed_audio_span_never_reaches_dependencies(changes):
 @pytest.mark.asyncio
 async def test_impossible_extracted_speech_cannot_identify_or_accumulate():
     port = client()
-    port.discover_candidate = AsyncMock()
     port.extract.return_value = SAMPLE.model_copy(update={'speech_ms': 2001})
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         evidence(), owner_id='o', session_id='s', turn_id='t')
     assert result.status == 'unavailable' and result.reason == 'invalid_extraction_response'
-    assert result.person_id is None
+    assert result.decisions == IdentityDecisions() and result.evidence == []
     port.record_candidate_evidence.assert_not_awaited()
     port.discover_candidate.assert_not_awaited()
 
@@ -552,9 +751,9 @@ async def test_buffer_snapshot_preserves_exact_nonzero_source_interval():
     captured = replace(buffer.snapshot(candidate='c', start=1600, end=33600, generation=2),
                        session_id='s')
     port = client()
-    result = await SpeakerRecognizer(port, POLICY).recognize(
+    result = await recognizer(port).recognize(
         captured, owner_id='o', session_id='s', turn_id='t')
-    assert result.status == 'identified'
+    assert result.decisions.addressing == 'p0'
     assert (result.source.start_sample, result.source.end_sample, result.source.generation) == (1600, 33600, 2)
     port.extract.assert_awaited_once_with(captured.pcm, min_speech_ms=POLICY.min_speech_ms)
 
@@ -562,7 +761,7 @@ async def test_buffer_snapshot_preserves_exact_nonzero_source_interval():
 @pytest.mark.asyncio
 async def test_absent_audio_never_looks_like_pending_inference():
     port=client()
-    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(port,POLICY),
+    observer=ConversationSpeaker(recognizer=recognizer(port),
         owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
     try:
         observer.begin_evidence(None,'t')
@@ -585,7 +784,7 @@ async def test_eot_text_projection_reuses_only_proven_audio(extra):
     capture.select_stream('mic')
     capture.begin_run(source)
     capture.append(source,start=0,pcm=evidence().pcm)
-    observer=ConversationSpeaker(recognizer=SpeakerRecognizer(client(),POLICY),
+    observer=ConversationSpeaker(recognizer=recognizer(client()),
         owner_id='o',session_id='s',secret='x'*32,publish=MagicMock())
     observer.bind_capture(capture)
     try:
@@ -599,11 +798,51 @@ async def test_eot_text_projection_reuses_only_proven_audio(extra):
         value=verify_observation(llm.set_speaker_observation.call_args.args[0],
             secret='x'*32,owner_id='o',session_id='s',turn_id='mapped',text=coordinator.selected_text)
         if extra:
-            assert value.person_id is None
+            assert value.decisions == IdentityDecisions()
             assert value.reason == 'framework_audio_coverage_unproven'
             assert observer._task is None
         else:
-            assert value.person_id == 'p0'
+            assert value.decisions.addressing == 'p0'
             assert observer._task is original
     finally:
         await observer.aclose()
+
+
+# ---------------------------------------------------------------- phone feedback
+
+
+def _feedback(value):
+    """The phone packet, validated by its own contract."""
+    return PersonObservationFeedback(sequence=1, session_id='s', conversation_id='s', turn_id=value.turn_id,
+        **feedback_view(value), issued_at=value.issued_at, expires_at=value.expires_at)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('people,llr,expected', [
+    (1, MATCH, ('identified', 'voice_match', 'p0', 'Person 0', 'controlled_trial')),
+    (1, 3.0, ('identified', 'voice_match', 'p0', 'Person 0', 'controlled_trial')),  # addressed, no memory
+    (1, NO_MATCH, ('unknown', 'no_match', None, None, 'none')),
+    (2, MATCH, ('uncertain', 'identity_not_confirmed', None, None, 'none')),
+    (1, 1.0, ('uncertain', 'identity_not_confirmed', None, None, 'none')),
+])
+async def test_feedback_names_a_person_only_when_addressing_is_met(people, llr, expected):
+    value = await recognizer(client(people=people, llr=llr)).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    assert value.status == 'compared'
+    packet = _feedback(value)
+    assert (packet.status, packet.reason, packet.person_id, packet.display_name, packet.confidence) == expected
+
+
+@pytest.mark.asyncio
+async def test_feedback_passes_unresolved_outcomes_through():
+    from dataclasses import replace
+    port = client()
+    short = await recognizer(port).recognize(replace(evidence(), end=4800, pcm=evidence().pcm[:9600]),
+        owner_id='o', session_id='s', turn_id='t')
+    off = await SpeakerRecognizer(port, None, None, channel=CHANNEL).recognize(
+        evidence(), owner_id='o', session_id='s', turn_id='t')
+    for value, status, reason in ((short, 'uncertain', 'audio_too_short'),
+                                  (off, 'unavailable', 'recognition_policy_missing')):
+        packet = _feedback(value)
+        assert (packet.status, packet.reason, packet.person_id, packet.display_name, packet.confidence) == (
+            status, reason, None, None, 'none')

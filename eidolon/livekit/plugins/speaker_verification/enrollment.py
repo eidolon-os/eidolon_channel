@@ -1,7 +1,6 @@
 """Prepare versioned enrollment evidence and the Person's free same-person scores."""
 
 import math
-from itertools import combinations
 
 from eidolon_sdk.biz.voiceprint import (
     EnrollmentEvaluation,
@@ -11,7 +10,7 @@ from eidolon_sdk.biz.voiceprint import (
 )
 
 from .calibration import enrollment_calibration
-from .scoring import embedding_identity, cosine
+from .scoring import embedding_identity
 
 
 def evaluate_enrollment(request: EnrollmentEvaluationRequest) -> EnrollmentEvaluation:
@@ -26,14 +25,15 @@ def evaluate_enrollment(request: EnrollmentEvaluationRequest) -> EnrollmentEvalu
         math.fsum(s.vector[i] for s in samples) / len(samples)
         for i in range(len(request.trial.vector))
     ]
-    template = ExtractedSample(**{**samples[0].sample().model_dump(), "vector": mean})
+    # The template stands for all registration speech: the calibration weighs it so.
+    speech_ms = min(sum(s.speech_ms for s in samples), 30000)
+    template = ExtractedSample(**{**samples[0].sample().model_dump(), "vector": mean,
+                                  "speech_ms": speech_ms})
     trial = request.trial.sample()
     return EnrollmentEvaluation(
         evidence_digest=enrollment_evidence_digest(request.samples),
         recording_sha256=request.recording_sha256,
         template=template,
         trial=trial,
-        registration_min_similarity=min(cosine(a, b) for a, b in combinations(samples, 2)),
-        trial_min_similarity=min(cosine(s, trial) for s in samples),
         calibration=enrollment_calibration(samples, request.trial, template),
     )

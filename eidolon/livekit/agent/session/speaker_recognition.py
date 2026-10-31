@@ -1,7 +1,9 @@
-"""Bounded Person recognition over existing Data and shared extraction ports.
+"""Calibrated identity evidence for one utterance over Data's Persons (design §3.3).
 
 No file database, worker model, identity cache, admission decision or Realm
-selection. The returned identity is valid for exactly one audio evidence span.
+selection. Each compared Person gets a calibrated log-likelihood ratio and an
+open-set posterior; each use's decision records who, if anyone, meets that
+use's threshold. The observation is valid for exactly one audio evidence span.
 """
 
 import time
@@ -11,16 +13,19 @@ from urllib.parse import quote
 
 from eidolon_sdk.biz.candidate_evidence import CANDIDATE_MIN_SPEECH_MS
 from eidolon_sdk.biz.speaker_identity import (
+    MAX_EVIDENCE,
     MAX_RECOGNITION_PERSONS,
+    PERSON_USES,
+    IdentityDecisions,
+    IdentityPolicy,
+    PersonEvidence,
     SpeakerCandidates,
     SpeakerEvidenceSource,
     SpeakerIdentityObservation,
-    SpeakerRecognitionPolicy,
 )
-from eidolon_sdk.biz.voiceprint import SpeakerComparisonRequest, SpeakerAudioQuality
+from eidolon_sdk.biz.voiceprint import SpeakerAudioQuality
 from .speaker_extraction_client import SpeakerExtractionClient, SpeakerExtractionRejected
-from eidolon.livekit.plugins.speaker_verification.scoring import compare_speakers
-from eidolon.livekit.plugins.speaker_verification.calibration import decide, household_tables
+from eidolon.livekit.plugins.speaker_verification.evidence import posteriors
 from eidolon_sdk.core.http.errors import ServiceUpstreamError
 from eidolon_sdk.core.http.client import ServiceHTTPClient, authorization_header
 
@@ -61,37 +66,30 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
     async def extract(self, pcm, *, min_speech_ms):
         return await self._provider.extract(pcm, purpose="recognition", min_speech_ms=min_speech_ms)
 
-    async def compare(self, probe, templates):
-        # Reuse the Provider's pure cosine scorer; no RPC/model per candidate.
-        return compare_speakers(SpeakerComparisonRequest(probe=probe, templates=templates))
-
 
 class SpeakerRecognizer:
-    def __init__(self, client, policy: SpeakerRecognitionPolicy | None, cohort=None):
-        # A calibrated policy decides only with its cohort; without one it is off.
-        if policy is not None and policy.calibration is not None and cohort is None:
-            policy = None
-        self.client, self.policy, self.cohort = client, policy, cohort
+    def __init__(self, client, policy: IdentityPolicy | None, backend=None, *, channel: str):
+        # The policy's thresholds were set for exactly this calibration.
+        if (policy is None or backend is None or backend.version != policy.backend_version
+                or backend.identity != (policy.model_id, policy.weights_hash,
+                                        policy.preprocessing_version)):
+            policy = backend = None
+        self.client, self.policy, self.backend, self.channel = client, policy, backend, channel
         self._busy = False
-        self._tables = (None, None)
+        self._templates = (None, None)
 
-    def _household_tables(self, snapshot):
+    def _template_sides(self, snapshot):
         # Deterministic in the snapshot, so its revision is the cache key.
-        if self._tables[0] != snapshot.revision:
-            self._tables = (snapshot.revision,
-                            household_tables(self.policy, self.cohort, snapshot.persons))
-            # Self-check (§3.3): what each Person can be recognised at, per band.
-            for person_id, table in self._tables[1].items():
-                logging.getLogger(__name__).info(
-                    "Speaker thresholds person_id=%s policy=%s %s", person_id, self.policy.version,
-                    " ".join(
-                        f"{e.band}={e.threshold:.3f}/{'direct' if e.direct else 'track'}"
-                        f"/own={'-' if e.genuine_acceptance is None else f'{e.genuine_acceptance:.2f}'}"
-                        f"/far={e.estimated_false_accept:.4f}"
-                        for e in table.values()
-                    ),
-                )
-        return self._tables[1]
+        if self._templates[0] != snapshot.revision:
+            self._templates = (snapshot.revision, {
+                person.person_id: [
+                    (template, self.backend.side(template.sample.vector, template.sample.speech_ms,
+                                                 template.channel))
+                    for template in person.templates
+                ]
+                for person in snapshot.persons
+            })
+        return self._templates[1]
 
     async def recognize(self, evidence, *, owner_id, session_id, turn_id):
         now = time.time()
@@ -101,11 +99,10 @@ class SpeakerRecognizer:
             turn_id=turn_id,
             issued_at=now,
             expires_at=now + 10,
-            confidence="none",
         )
 
-        def outcome(status, reason, **extra):
-            return SpeakerIdentityObservation(**(base | extra), status=status, reason=reason)
+        def outcome(status, reason):
+            return SpeakerIdentityObservation(**base, status=status, reason=reason)
 
         if evidence is None or not evidence.complete:
             return outcome("uncertain", "audio_evidence_unavailable")
@@ -121,7 +118,7 @@ class SpeakerRecognizer:
             base["source"] = SpeakerEvidenceSource(
                 request_id=turn_id, session_id=session_id, input_id=evidence.source,
                 generation=evidence.generation, sample_rate=evidence.sample_rate,
-                start_sample=evidence.start, end_sample=evidence.end,
+                start_sample=evidence.start, end_sample=evidence.end, channel=self.channel,
             )
         except ValueError:
             return outcome("unavailable", "invalid_audio_evidence")
@@ -149,100 +146,37 @@ class SpeakerRecognizer:
             if (base["audio_quality"].overlap_detected is not None
                     and base["audio_quality"].overlap_detected > 0):
                 return outcome("uncertain", "overlapping_speech")
-            if (probe.model_id, probe.weights_hash, probe.preprocessing_version) != (
-                self.policy.model_id,
-                self.policy.weights_hash,
-                self.policy.preprocessing_version,
-            ):
+            identity = (probe.model_id, probe.weights_hash, probe.preprocessing_version)
+            if identity != self.backend.identity:
                 return outcome("unavailable", "policy_model_mismatch")
             if probe.speech_ms < self.policy.min_speech_ms:
                 return outcome("uncertain", "speech_too_short")
-            per_person = []
+            if any((t.sample.model_id, t.sample.weights_hash, t.sample.preprocessing_version) != identity
+                   for person in snapshot.persons for t in person.templates):
+                return outcome("unavailable", "model_version_mismatch")
+            probe_side = self.backend.side(probe.vector, probe.speech_ms, self.channel)
+            best = {}
             for person in snapshot.persons:
-                scored = await self.client.compare(probe, person.templates)
-                if (scored.model_id, scored.weights_hash, scored.preprocessing_version) != (
-                    probe.model_id,
-                    probe.weights_hash,
-                    probe.preprocessing_version,
-                ):
-                    return outcome("unavailable", "invalid_comparison")
-                expected = {(t.profile_id, t.revision) for t in person.templates}
-                if (
-                    len(scored.scores) != len(expected)
-                    or {(s.profile_id, s.revision) for s in scored.scores} != expected
-                ):
-                    return outcome("unavailable", "invalid_comparison")
-                if any(s.status != "scored" for s in scored.scores):
-                    return outcome("unavailable", "model_version_mismatch")
-                best = max(scored.scores, key=lambda s: s.similarity)
-                per_person.append((best.similarity, person, best))
+                for template, side in self._template_sides(snapshot)[person.person_id]:
+                    llr = self.backend.llr(side, probe_side)
+                    if person.person_id not in best or llr > best[person.person_id][0]:
+                        best[person.person_id] = (llr, person, template)
             # Re-read authority after inference: changes never inherit a cached match.
             current = await self.client.candidates(owner_id)
             if current.revision != snapshot.revision:
                 return outcome("uncertain", "candidates_changed")
-            per_person.sort(key=lambda row: row[0], reverse=True)
-            similarity = per_person[0][0] if per_person else None
-            verdict, band = self._decide(per_person, snapshot, probe)
+            observation = self._decide(base, best, probe.speech_ms)
+            top = observation.evidence[0] if observation.evidence else None
             logging.getLogger(__name__).info(
-                "Speaker comparison turn_id=%s candidates=%d top_score=%s margin=%s "
-                "threshold=%s band=%s verdict=%s speech_ms=%d policy=%s",
-                turn_id, len(per_person), similarity, verdict["margin"],
-                verdict["threshold"], band, verdict["outcome"],
-                probe.speech_ms, self.policy.version,
+                "Speaker evidence turn_id=%s persons=%d top=%s llr=%s posterior=%s unknown=%.4f "
+                "decisions=%s channel=%s speech_ms=%d policy=%s",
+                turn_id, len(best), top.person_id if top else None,
+                round(top.llr, 3) if top else None, round(top.posterior, 4) if top else None,
+                observation.posterior_unknown, observation.decisions.model_dump(exclude_defaults=True),
+                self.channel, probe.speech_ms, self.policy.version,
             )
-            version = dict(
-                model_id=probe.model_id,
-                weights_hash=probe.weights_hash,
-                preprocessing_version=probe.preprocessing_version,
-                scoring_version="normalized-template-cosine-v1",
-                decision_version=self.policy.version,
-                confidence=self.policy.confidence,
-                cosine_similarity=similarity,
-            )
-            if not per_person:
-                if probe.speech_ms < self.policy.min_unknown_speech_ms:
-                    return outcome("uncertain", "short_speech_inconclusive", **version)
-                unknown = outcome("unknown", "no_enrolled_voices", **version)
-                await self._discover(snapshot, probe, unknown, evidence)
-                return unknown
-            if verdict["outcome"] == "below":
-                if probe.speech_ms < self.policy.min_unknown_speech_ms:
-                    return outcome("uncertain", "short_speech_inconclusive", **version)
-                unknown = outcome("unknown", "no_match", **version)
-                await self._discover(snapshot, probe, unknown, evidence)
-                return unknown
-            if verdict["outcome"] == "ambiguous":
-                return outcome("uncertain", "ambiguous_candidates")
-            if verdict["outcome"] == "not_direct":
-                # This band only extends a track already bound (§3.3).
-                return outcome("uncertain", "duration_band_not_decisive")
-            similarity, person, best = next(
-                row for row in per_person if row[1].person_id == verdict["person_id"])
-            version["cosine_similarity"] = similarity
-            identified = outcome(
-                "identified",
-                "voice_match",
-                **version,
-                person_id=person.person_id,
-                person_revision=person.person_revision,
-                maturity=person.maturity,
-                is_named=person.is_named,
-                profile_id=best.profile_id,
-                profile_revision=best.revision,
-                display_name=person.profile.preferred_name or person.display_name,
-                profile=person.profile,
-            )
-            if person.maturity == "candidate" and probe.speech_ms >= CANDIDATE_MIN_SPEECH_MS:
-                from eidolon_sdk.biz.candidate_evidence import CandidateEvidence
-                try:
-                    await self.client.record_candidate_evidence(CandidateEvidence(
-                        snapshot_revision=snapshot.revision,
-                        audio_sha256=hashlib.sha256(evidence.pcm).hexdigest(), observation=identified))
-                except (ServiceUpstreamError, ValueError, OSError):
-                    # Receipt persistence never manufactures an identity or permission.
-                    # A rejected/expired receipt leaves the existing match unchanged.
-                    pass
-            return identified
+            await self._record(snapshot, observation, probe, evidence)
+            return observation
         except SpeakerExtractionRejected as exc:
             if exc.quality is not None:
                 base["audio_quality"] = exc.quality
@@ -257,44 +191,65 @@ class SpeakerRecognizer:
         finally:
             self._busy = False
 
-    def _decide(self, per_person, snapshot, probe):
-        """outcome: identified | below | ambiguous | not_direct; plus the band decided in."""
-        calibration = self.policy.calibration
-        if not per_person:
-            return dict(outcome="below", threshold=None, margin=None, person_id=None), None
-        if calibration is None:
-            similarity, person, _ = per_person[0]
-            margin = similarity - per_person[1][0] if len(per_person) > 1 else None
-            if similarity < self.policy.threshold:
-                result = "below"
-            elif margin is not None and margin < self.policy.min_person_margin:
-                result = "ambiguous"
-            else:
-                result = "identified"
-            return dict(outcome=result, threshold=self.policy.threshold, margin=margin,
-                        person_id=person.person_id if result == "identified" else None), None
-        band = calibration.band(probe.speech_ms)
-        decision = decide({p.person_id: s for s, p, _ in per_person},
-                          self._household_tables(snapshot), band)
-        return dict(outcome=decision.outcome, threshold=decision.threshold,
-                    margin=decision.margin, person_id=decision.person_id), band.name
+    def _decide(self, base, best, speech_ms):
+        policy = self.policy
+        priors = {pid: (1 - policy.prior_unknown) / len(best) for pid in best}
+        post, unknown = posteriors({pid: row[0] for pid, row in best.items()}, priors,
+                                   policy.prior_unknown)
+        ranked = sorted(best, key=post.get, reverse=True)
+        evidence = [
+            PersonEvidence(
+                person_id=pid, person_revision=best[pid][1].person_revision,
+                maturity=best[pid][1].maturity, is_named=best[pid][1].is_named,
+                profile_id=best[pid][2].profile_id, profile_revision=best[pid][2].revision,
+                llr=best[pid][0], posterior=post[pid],
+            )
+            for pid in ranked[:MAX_EVIDENCE]
+        ]
+        decisions = {}
+        if ranked:
+            leader = ranked[0]
+            for use in PERSON_USES:
+                if post[leader] < getattr(policy, use):
+                    continue
+                if use == "candidate_evidence" and best[leader][1].maturity != "candidate":
+                    continue
+                decisions[use] = leader
+        # A weak short probe is not evidence of someone new.
+        decisions["discovery"] = (unknown >= policy.discovery
+                                  and speech_ms >= policy.min_unknown_speech_ms)
+        named = {}
+        if "addressing" in decisions:
+            person = best[decisions["addressing"]][1]
+            named = dict(display_name=person.profile.preferred_name or person.display_name,
+                         profile=person.profile)
+        return SpeakerIdentityObservation(
+            **base, **named, status="compared", reason="compared",
+            model_id=self.backend.identity[0], weights_hash=self.backend.identity[1],
+            preprocessing_version=self.backend.identity[2],
+            backend_version=self.backend.version, policy_version=policy.version,
+            evidence=evidence, posterior_unknown=unknown,
+            decisions=IdentityDecisions(**decisions),
+        )
 
-    async def _discover(self, snapshot, probe, observation, evidence):
-        from eidolon_sdk.biz.candidate_evidence import CandidateDiscovery
-        policy = snapshot.discovery_policy
-        if (policy is None or policy.recognition != self.policy
-                or len(snapshot.persons) >= MAX_RECOGNITION_PERSONS):
-            return
-        if (probe.speech_ms < self.policy.min_unknown_speech_ms
-                or (observation.cosine_similarity is not None
-                    and observation.cosine_similarity > policy.max_existing_similarity)):
-            return
+    async def _record(self, snapshot, observation, probe, evidence):
+        """Candidate evidence and discovery: Data decides; failures change nothing here."""
+        from eidolon_sdk.biz.candidate_evidence import CandidateDiscovery, CandidateEvidence
+        audio_sha256 = hashlib.sha256(evidence.pcm).hexdigest()
         try:
-            request = CandidateDiscovery(policy_version=policy.version,
-                snapshot_revision=snapshot.revision,
-                audio_sha256=hashlib.sha256(evidence.pcm).hexdigest(), observation=observation, sample=probe)
-            await self.client.discover_candidate(request)
+            if (observation.decisions.candidate_evidence is not None
+                    and probe.speech_ms >= CANDIDATE_MIN_SPEECH_MS):
+                await self.client.record_candidate_evidence(CandidateEvidence(
+                    snapshot_revision=snapshot.revision, audio_sha256=audio_sha256,
+                    observation=observation))
+            policy = snapshot.discovery_policy
+            if (observation.decisions.discovery and policy is not None
+                    and policy.identity_policy_version == self.policy.version
+                    and len(snapshot.persons) < MAX_RECOGNITION_PERSONS):
+                await self.client.discover_candidate(CandidateDiscovery(
+                    policy_version=policy.version, snapshot_revision=snapshot.revision,
+                    audio_sha256=audio_sha256, observation=observation, sample=probe))
         except (ServiceUpstreamError, ValueError, OSError):
-            # Missing single-speaker quality, conflict, timeout or full pool
-            # cannot turn an unknown observation into an identified speaker.
+            # A rejected receipt or proposal (missing single-speaker quality,
+            # conflict, full pool) never changes the observation already made.
             return

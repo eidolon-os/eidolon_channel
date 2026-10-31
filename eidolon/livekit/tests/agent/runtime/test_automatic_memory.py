@@ -5,24 +5,42 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from eidolon_sdk.biz.runtime import RuntimeTokenVerifier
-from eidolon_sdk.biz.speaker_identity import SpeakerEvidenceSource, SpeakerIdentityObservation
+from eidolon_sdk.biz.speaker_identity import (
+    IdentityDecisions,
+    PersonEvidence,
+    SpeakerEvidenceSource,
+    SpeakerIdentityObservation,
+)
 from eidolon_sdk.biz.speaker_attestation import sign_observation, verify_observation
 from eidolon.livekit.agent.runtime.automatic_memory import AutomaticMemorySession
 
 SECRET = "test-secret-with-enough-entropy-32b"
+MEMORY_USES = ("personal_memory", "addressing", "speaker_label")
+UNRESOLVED = {"uncertain": "speech_too_short", "unavailable": "dependency_unavailable"}
 
 
-def observation(person="a", *, confidence="validated", trace="t", status="identified", maturity=None):
+def observation(person="a", *, trace="t", status="compared", maturity="established",
+                uses=MEMORY_USES, discovery=False):
+    """A signed v2 observation; ``uses`` are the decisions naming ``person``."""
     now = time.time()
+    compared = {}
+    if status == "compared":
+        posterior = 0.9999 if "personal_memory" in uses else (0.95 if uses else 0.0001)
+        compared = dict(
+            model_id="model", weights_hash="a" * 64, preprocessing_version="v1",
+            backend_version="b1", policy_version="p1",
+            evidence=[PersonEvidence(person_id=person, person_revision=1, maturity=maturity,
+                is_named=maturity == "established", profile_id="profile", profile_revision=1,
+                llr=10.0 if uses else -10.0, posterior=posterior)],
+            posterior_unknown=1 - posterior,
+            decisions=IdentityDecisions(**{use: person for use in uses}, discovery=discovery))
     return sign_observation(SpeakerIdentityObservation(
         owner_id="owner", session_id="transport", turn_id=trace,
-        status=status, confidence=confidence, reason="voice_match",
-        **(dict(person_id=person, person_revision=1, profile_id="profile", profile_revision=1, maturity=maturity)
-           if status == "identified" else {}),
-        model_id="model", weights_hash="a"*64, preprocessing_version="v1", scoring_version="v1",
-        decision_version="v1", issued_at=now, expires_at=now+10,
+        status=status, reason="compared" if compared else UNRESOLVED[status], **compared,
+        issued_at=now, expires_at=now+10,
         source=SpeakerEvidenceSource(request_id=trace, session_id="transport", input_id="mic",
-            generation=1, sample_rate=16000, start_sample=0, end_sample=16000)), secret=SECRET, text="hello")
+            generation=1, sample_rate=16000, start_sample=0, end_sample=16000, channel="mobile")),
+        secret=SECRET, text="hello")
 
 
 def coordinator():
@@ -141,11 +159,11 @@ async def test_idle_person_revocation_stops_outputs_without_waiting_for_next_tur
         await c.aclose()
 
 
-@pytest.mark.parametrize("confidence", ["controlled_trial", "validated"])
-async def test_recognition_policy_is_not_a_second_memory_gate(confidence):
+@pytest.mark.parametrize("uses", [MEMORY_USES, ("personal_memory",)])
+async def test_only_the_personal_memory_decision_gates_memory(uses):
     c, services, llm, stop = coordinator()
     try:
-        changed = await prepared(c, observation_token=observation(confidence=confidence), trace_id="t", text="hello")
+        changed = await prepared(c, observation_token=observation(uses=uses), trace_id="t", text="hello")
         assert not changed
         c.consume(trace_id="t", text="hello")
         identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
@@ -156,13 +174,22 @@ async def test_recognition_policy_is_not_a_second_memory_gate(confidence):
         await c.aclose()
 
 
-@pytest.mark.parametrize("status", ["unknown", "uncertain", "unavailable"])
-async def test_nonidentified_turn_drops_previous_memory_without_dropping_dialogue(status):
+@pytest.mark.parametrize("outcome", [
+    dict(uses=(), discovery=True),             # someone not enrolled
+    dict(uses=("addressing", "speaker_label")),  # addressed, below the memory threshold
+    dict(uses=()),                             # compared, no use met
+    dict(status="uncertain"),
+    dict(status="unavailable"),
+])
+async def test_turn_without_memory_decision_drops_previous_memory_without_dropping_dialogue(outcome):
     c, services, llm, stop = coordinator()
     try:
         await prepared(c, observation_token=observation(), trace_id="t", text="hello")
         original_conversation = llm.install_runtime.call_args.args[1]
-        await prepared(c, observation_token=observation(status=status), trace_id="t", text="hello")
+        services.runtime.resolve_person_memory.reset_mock()
+        await prepared(c, observation_token=observation(**outcome), trace_id="t", text="hello")
+        # Another use's decision never even prepares a memory lookup.
+        services.runtime.resolve_person_memory.assert_not_awaited()
         c.consume(trace_id="t", text="hello")
         identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
         assert identity.person_id is None

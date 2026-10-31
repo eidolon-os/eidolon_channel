@@ -6,7 +6,7 @@ import binascii
 import logging
 
 from aiohttp import web
-from eidolon_sdk.biz.speaker_identity import SpeakerRecognitionPolicy
+from eidolon_sdk.biz.speaker_identity import IdentityPolicy
 from eidolon_sdk.biz.voiceprint import (
     SpeakerExtractionReadiness,
     SpeakerExtractionRequest,
@@ -21,12 +21,12 @@ from eidolon.livekit.plugins.speaker_verification.inference import (
     ModelUnavailable,
 )
 from eidolon.livekit.plugins.speaker_verification.reference_extractor import InvalidSpeakerAudio
-from eidolon.livekit.plugins.speaker_verification.calibration import CohortUnavailable, load_cohort
+from eidolon.livekit.plugins.speaker_verification.evidence import BackendUnavailable, load_backend
 from eidolon.livekit.plugins.speaker_verification.enrollment import evaluate_enrollment
 from eidolon.livekit.plugins.speaker_verification.scoring import compare_speakers
 
 
-RECOGNITION_POLICY_FILE = "recognition-controlled-trial.json"
+RECOGNITION_POLICY_FILE = "identity-policy.json"
 
 
 def speaker_recognition_status(engine):
@@ -43,7 +43,7 @@ def speaker_recognition_status(engine):
         return {"state": "model_" + engine.state}
     identity = engine.model_identity
     try:
-        policy = SpeakerRecognitionPolicy.model_validate_json(
+        policy = IdentityPolicy.model_validate_json(
             (engine.model_dir / RECOGNITION_POLICY_FILE).read_text()
         )
     except OSError:
@@ -53,12 +53,13 @@ def speaker_recognition_status(engine):
     # The worker refuses every probe on this same comparison (policy_model_mismatch).
     if (policy.model_id, policy.weights_hash, policy.preprocessing_version) != tuple(identity):
         return {"state": "policy_model_mismatch", "policy_version": policy.version}
-    if policy.calibration is not None:
-        # The worker decides with the same cohort; without it, recognition is off.
-        try:
-            load_cohort(engine.model_dir, policy)
-        except CohortUnavailable as exc:
-            return {"state": str(exc), "policy_version": policy.version}
+    # The worker decides with the same calibration; without it, recognition is off.
+    try:
+        backend = load_backend(engine.model_dir)
+    except BackendUnavailable as exc:
+        return {"state": str(exc), "policy_version": policy.version}
+    if backend.version != policy.backend_version or backend.identity != tuple(identity):
+        return {"state": "backend_mismatch", "policy_version": policy.version}
     return {"state": "ready", "model_id": policy.model_id, "policy_version": policy.version}
 
 

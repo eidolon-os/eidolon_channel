@@ -46,7 +46,9 @@ class AutomaticMemorySession:
         self._admission_task = None
         observation = observation.model_copy(deep=True)
         self._admission_observation = observation
-        if (observation.status != "identified"
+        # Personal memory follows only its own use's decision (design §3.3).
+        person = observation.decided("personal_memory")
+        if (person is None
                 or observation.session_id != self.source_session_id
                 or observation.expires_at <= time.time()):
             return
@@ -57,12 +59,12 @@ class AutomaticMemorySession:
                     context = await self.services.resolve_room(self.room)
                     if context.owner_id != observation.owner_id:
                         return None
-                    mode = "provisional" if observation.maturity == "candidate" else "personal"
+                    mode = "provisional" if person.maturity == "candidate" else "personal"
                     realm = await self._resolve_memory(context, (
-                        observation.person_id, observation.person_revision), mode)
+                        person.person_id, person.person_revision), mode)
                     if not realm or observation.expires_at <= time.time():
                         return None
-                    return ((observation.person_id, observation.person_revision), mode)
+                    return ((person.person_id, person.person_revision), mode)
             except Exception:
                 return None
 
@@ -84,7 +86,7 @@ class AutomaticMemorySession:
                         owner_id=context.owner_id, session_id=self.source_session_id,
                         turn_id=trace_id, text=text)
                     task = self._admission_task
-                    if (observation.status == "identified"
+                    if (observation.decided("personal_memory") is not None
                             and observation == self._admission_observation
                             and task is not None and task.done() and not task.cancelled()):
                         admission = task.result()

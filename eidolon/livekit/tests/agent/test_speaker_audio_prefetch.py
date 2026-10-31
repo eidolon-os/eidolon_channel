@@ -12,7 +12,7 @@ from eidolon.livekit.agent.observability import TurnTimeline
 from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
 from eidolon.livekit.common.transcript_evidence import TranscriptEvidence
 from eidolon.livekit.agent.session.conversation_speaker import ConversationSpeaker
-from .test_conversation_speaker import client, POLICY
+from .test_conversation_speaker import CHANNEL, POLICY, client
 from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognizer
 
 
@@ -42,8 +42,9 @@ def setup():
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.5)
     coordinator.start_speech(timeline=TurnTimeline("t"))
     capture = AudioEvidenceCapture(session_id="s", endpoint_id="mic")
+    port = client()
     observer = ConversationSpeaker(
-        recognizer=SpeakerRecognizer(client(), POLICY),
+        recognizer=SpeakerRecognizer(port, POLICY, port.backend, channel=CHANNEL),
         owner_id="o",
         session_id="s",
         secret="x" * 32,
@@ -86,7 +87,7 @@ async def test_early_inference_survives_asr_pending_and_is_reused_after_final():
         )
         o.begin(c, "t")
         assert o._task is original
-        assert (await o.result("t")).person_id == "p0"
+        assert (await o.result("t")).decisions.addressing == "p0"
         assert o.recognizer.client.extract.await_count == 1
     finally:
         await o.aclose()
@@ -111,7 +112,7 @@ async def test_new_voice_invalidates_prefix_before_rate_limiter_permits_recomput
         cap.append(src, start=33600, pcm=b"\x01\0" * 800)
         p.consume(event(E.INFERENCE_DONE, 34400, 1))
         assert p.record is None and o._task is None
-        assert (await o.result("t")).person_id is None
+        assert (await o.result("t")).decisions.persons() == set()
         cap.append(src, start=34400, pcm=b"\0" * 3200)
         p.consume(event(E.INFERENCE_DONE, 36000, 0))
         assert o._task is None  # bound frequency, do not reuse the preceding person.
@@ -142,7 +143,7 @@ async def test_new_candidate_never_inherits_previous_audio_or_identity():
         c.start_speech(timeline=TurnTimeline("next"))
         assert c.active.candidate_id != old
         assert p.resolve(c.active, AudioSpan("mic", 1, 16000, 0, 33600)) is None
-        assert (await o.result("next")).person_id is None
+        assert (await o.result("next")).decisions.persons() == set()
     finally:
         await o.aclose()
 
@@ -162,7 +163,7 @@ async def test_input_retirement_cancels_all_adoption(operation):
         else:
             cap.append(src, start=35000, pcm=b"\0" * 1000)
         assert p.record is None and o._task is None
-        assert (await o.result("t")).person_id is None
+        assert (await o.result("t")).decisions.persons() == set()
     finally:
         await o.aclose()
 
@@ -175,7 +176,7 @@ async def test_completed_speculation_is_not_adopted_without_committed_audio_mapp
         c.active.state = "committed"
         llm = MagicMock()
         await o.finish(c, turn_id="t", text="hello", llm=llm, timeline=None)
-        assert o._frozen.person_id is None
+        assert o._frozen.decisions.persons() == set()
     finally:
         await o.aclose()
 
@@ -238,7 +239,7 @@ async def test_rebinding_same_capture_preserves_work_and_replacing_it_cannot_can
         await asyncio.sleep(0)
         assert o._task is new_task
         await new_task
-        assert (await o.result("new-turn")).person_id == "p0"
+        assert (await o.result("new-turn")).decisions.addressing == "p0"
     finally:
         await o.aclose()
 

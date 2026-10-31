@@ -49,6 +49,7 @@ from eidolon_sdk.biz.contracts import (
     SESSION_OPEN_TYPE,
     SESSION_REJECTED_TYPE,
     SESSION_REJECTION_CONFLICT,
+    SESSION_REJECTION_UNAVAILABLE,
     WIRE_SCHEMA_VERSION,
     normalize_conversation_id,
 )
@@ -1162,28 +1163,35 @@ class LiveKitChannelAdapter:
 
         watch = self._listeners.get(room)
 
+        async def _refuse(reason: str) -> None:
+            # Every refused start is answered: a device told nothing waits out
+            # its own timeout, and the person watches a conversation not come.
+            if (request.action is not ServingAction.START or watch is None
+                    or self._listeners.get(room) is not watch or watch.connection is None):
+                return
+            try:
+                await watch.connection.local_participant.publish_data(
+                    canonical_json({
+                        "schema_v": WIRE_SCHEMA_VERSION,
+                        "type": SESSION_REJECTED_TYPE,
+                        SESSION_CONVERSATION_ID_FIELD: request.conversation_id,
+                        "reason": reason,
+                    }),
+                    reliable=True, topic=SESSION_CONTROL_TOPIC,
+                    destination_identities=[watch.device],
+                )
+            except Exception:
+                logger.exception("room=%s could not deliver session rejection", room)
+
         async def _carry() -> None:
             try:
                 await sink(request)
             except InvalidTransition:
                 logger.info("room=%s rejected %s due to session conflict", room, request.action.value)
-                if (request.action is ServingAction.START and watch is not None
-                        and self._listeners.get(room) is watch and watch.connection is not None):
-                    try:
-                        await watch.connection.local_participant.publish_data(
-                            canonical_json({
-                                "schema_v": WIRE_SCHEMA_VERSION,
-                                "type": SESSION_REJECTED_TYPE,
-                                SESSION_CONVERSATION_ID_FIELD: request.conversation_id,
-                                "reason": SESSION_REJECTION_CONFLICT,
-                            }),
-                            reliable=True, topic=SESSION_CONTROL_TOPIC,
-                            destination_identities=[watch.device],
-                        )
-                    except Exception:
-                        logger.exception("room=%s could not deliver session rejection", room)
+                await _refuse(SESSION_REJECTION_CONFLICT)
             except Exception:
                 logger.exception("room=%s could not act on %s", room, request.action.value)
+                await _refuse(SESSION_REJECTION_UNAVAILABLE)
 
         task = asyncio.create_task(_carry())
         self._requests.add(task)

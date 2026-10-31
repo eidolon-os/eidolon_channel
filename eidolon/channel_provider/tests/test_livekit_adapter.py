@@ -1437,6 +1437,36 @@ async def test_start_conflict_sends_targeted_rejection_without_closing_any_sessi
     adapter._listeners.clear()
 
 
+@pytest.mark.parametrize("failure", [
+    "backend", "forbidden", "unexpected",
+])
+async def test_a_start_that_could_not_be_served_is_answered_not_left_to_time_out(failure):
+    """2026-10-31: a start refused for anything but a conflict reached the phone as
+    silence, and it waited twenty seconds for a conversation that was not coming."""
+    from eidolon.channel_provider.contracts import BackendUnavailable, Forbidden
+    adapter, client = _adapter()
+    sent = []
+    async def publish(data, **kwargs):
+        sent.append((json.loads(data), kwargs))
+    async def fail(request):
+        raise {"backend": BackendUnavailable("device is not on its channel"),
+               "forbidden": Forbidden("not this Body's Companion"),
+               "unexpected": RuntimeError("bug")}[failure]
+    watch = adapter_mod._Listening(device=_DEVICE_1, sink=fail,
+        connection=SimpleNamespace(local_participant=SimpleNamespace(publish_data=publish)))
+    adapter._listeners['room'] = watch
+    adapter._dispatch_request(fail, ServingRequest(action=ServingAction.START, conversation_id='incoming'), room='room')
+    adapter._dispatch_request(fail, ServingRequest(action=ServingAction.STOP, conversation_id='other'), room='room')
+    await asyncio.gather(*adapter._requests)
+    from pathlib import Path
+    vector = json.loads((Path(__file__).resolve().parents[4]
+                         / "eidolon_sdk/contracts/control/v1/golden/session-rejected-unavailable.json").read_text())
+    assert sent == [({**vector["payload"], "conversation_id": "incoming"},
+                    {'reliable': True, 'topic': SESSION_CONTROL_TOPIC, 'destination_identities': [_DEVICE_1]})]
+    assert client.agent_dispatch.deleted == []
+    adapter._listeners.clear()
+
+
 @pytest.mark.parametrize("case", ["stop", "replaced", "delivery_failure"])
 async def test_rejection_does_not_leak_to_a_new_listener_or_fail_dispatch(case):
     from eidolon.channel_provider.contracts import InvalidTransition

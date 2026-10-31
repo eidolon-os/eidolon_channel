@@ -7,19 +7,18 @@ The back-end follows WeSpeaker (Apache-2.0, wenet-e2e/wespeaker):
   standard deviation of each side's top-N cohort scores;
 - ``wespeaker/bin/score_calibration.py``: an affine quality-measure function
   (QMF) over the normalised score and min / max / difference / ratio of each
-  quality measure, trained offline with a Cllr objective.
+  quality measure (duration, magnitude after mean subtraction, cohort mean),
+  exactly as its ``gather_calibration_factors`` lays them out.
 
-Only the fixed arithmetic runs here; the mean, the cohort and the weights
-are delivered with the model artifact. Two deliberate differences: the
-extractor returns unit vectors, so the embedding-magnitude measure is not
-available; and cohort means can be near zero or negative, so they enter as
-min / max / difference without a ratio.
-
-The calibration is condition-aware (Ferrer & McLaren's discriminative
-condition-aware back-end): whether the probe comes through a different
-channel from the one the template was built on enters as an indicator and
-as its product with the score. A single global calibration over-trusts
-same-channel strangers and under-trusts cross-channel owners.
+The weights are trained offline with WeSpeaker's own
+``train_calibration_model`` (``evals/speaker-verification/cohort-20261031``);
+only the fixed arithmetic runs here, and the evaluation checks it against
+WeSpeaker's own output. Two columns are appended to WeSpeaker's: the
+calibration is condition-aware (Ferrer & McLaren's discriminative
+condition-aware back-end) — whether the probe comes through a different
+channel from the template's, as an indicator and its product with the
+score. A single global calibration over-trusts same-channel strangers and
+under-trusts cross-channel owners. Durations are voiced speech.
 
 Enrollment and probe are symmetric: an enrollment is a Person's template
 with the voiced speech it was built from, a probe is a segment or a track.
@@ -37,8 +36,9 @@ import numpy as np
 
 FEATURES = (
     "asnorm_score",
-    "speech_min_s", "speech_max_s", "speech_diff_s", "speech_ratio",
-    "cohort_mean_min", "cohort_mean_max", "cohort_mean_diff",
+    "duration_min_s", "duration_max_s", "duration_diff_s", "duration_ratio",
+    "magnitude_min", "magnitude_max", "magnitude_diff", "magnitude_ratio",
+    "cohort_mean_min", "cohort_mean_max", "cohort_mean_diff", "cohort_mean_ratio",
     "cross_channel", "cross_channel_x_asnorm_score",
 )
 
@@ -61,6 +61,7 @@ class Side:
 
     vector: np.ndarray
     speech_ms: int
+    magnitude: float
     cohort_mean: float
     cohort_std: float
     channel: str
@@ -78,10 +79,12 @@ class Backend:
     bias: float
 
     def side(self, vector, speech_ms: int, channel: str) -> Side:
-        prepared = unit(np.asarray(vector, dtype=np.float64) - self.mean)[0]
+        centred = np.asarray(vector, dtype=np.float64) - self.mean
+        magnitude = float(np.linalg.norm(centred))
+        prepared = centred / magnitude
         scores = np.sort(self.cohort @ prepared)[::-1][: self.top_n]
-        return Side(prepared, int(speech_ms), float(scores.mean()), float(max(scores.std(), 1e-6)),
-                    channel)
+        return Side(prepared, int(speech_ms), magnitude, float(scores.mean()),
+                    float(scores.std()), channel)
 
     def features(self, enroll: Side, probe: Side) -> np.ndarray:
         return trial_features(enroll, probe, self.max_speech_ms)
@@ -90,17 +93,22 @@ class Backend:
         return float(self.features(enroll, probe) @ self.weights + self.bias)
 
 
+def _reorder(a: float, b: float) -> list[float]:
+    """WeSpeaker's reorder_values: min, max, max - min, max / min."""
+    low, high = min(a, b), max(a, b)
+    return [low, high, high - low, high / low]
+
+
 def trial_features(enroll: Side, probe: Side, max_speech_ms: int) -> np.ndarray:
     raw = float(enroll.vector @ probe.vector)
     asnorm = 0.5 * ((raw - enroll.cohort_mean) / enroll.cohort_std
                     + (raw - probe.cohort_mean) / probe.cohort_std)
-    durations = sorted(min(s.speech_ms, max_speech_ms) / 1000 for s in (enroll, probe))
-    means = sorted((enroll.cohort_mean, probe.cohort_mean))
     cross = float(enroll.channel != probe.channel)
     return np.array([
         asnorm,
-        durations[0], durations[1], durations[1] - durations[0], durations[1] / max(durations[0], 1e-3),
-        means[0], means[1], means[1] - means[0],
+        *_reorder(min(enroll.speech_ms, max_speech_ms) / 1000, min(probe.speech_ms, max_speech_ms) / 1000),
+        *_reorder(enroll.magnitude, probe.magnitude),
+        *_reorder(enroll.cohort_mean, probe.cohort_mean),
         cross, cross * asnorm,
     ])
 

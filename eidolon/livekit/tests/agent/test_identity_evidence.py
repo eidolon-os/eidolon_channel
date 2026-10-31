@@ -16,7 +16,9 @@ def unit(*v):
 
 
 def write_backend(root, *, weights=None, cohort=None, features=None, sha=None):
-    cohort = np.asarray(cohort if cohort is not None else [unit(0, 1, 0), unit(0, 0, 1), unit(0, 1, 1)])
+    # Distinct cohort scores for every probe below (WeSpeaker divides by their spread).
+    cohort = np.asarray(cohort if cohort is not None else
+                        [unit(0.2, 1, 0), unit(0.5, 0, 1), unit(0.1, 1, 1), unit(0.7, 0.3, 0.2)])
     with open(root / "identity-cohort.npz", "wb") as f:
         np.savez(f, mean=np.zeros(3, np.float32), cohort=cohort.astype(np.float32))
     spec = {
@@ -47,7 +49,9 @@ def test_trial_features_are_symmetric_except_for_the_condition(tmp_path):
     b = backend.side(unit(1, 0, 0.3), 1200, "phone")
     assert np.allclose(ev.trial_features(a, b, 20000), ev.trial_features(b, a, 20000))
     names = dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))
-    assert names["speech_min_s"] == 1.2 and names["speech_max_s"] == 15.0
+    assert names["duration_min_s"] == 1.2 and names["duration_max_s"] == 15.0
+    assert names["duration_ratio"] == 15.0 / 1.2
+    assert names["magnitude_min"] == pytest.approx(min(a.magnitude, b.magnitude))
     assert names["cross_channel"] == 0.0
 
 
@@ -68,7 +72,7 @@ def test_durations_are_clipped_at_the_calibrated_maximum(tmp_path):
     backend = write_backend(tmp_path)
     a = backend.side(unit(1, 0, 0), 30000, "phone")
     b = backend.side(unit(1, 0, 0), 900, "phone")
-    assert dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))["speech_max_s"] == 20.0
+    assert dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))["duration_max_s"] == 20.0
 
 
 def test_open_set_posteriors_include_someone_not_enrolled():
@@ -101,3 +105,23 @@ def test_the_domain_mean_is_removed_before_scoring(tmp_path):
     shifted = ev.Backend(**{**backend.__dict__, "mean": np.array([0.5, 0.0, 0.0])})
     side = shifted.side(unit(1, 0.1, 0), 2000, "phone")
     assert side.vector == pytest.approx(ev.unit(unit(1, 0.1, 0) - np.array([0.5, 0, 0]))[0])
+
+
+
+def test_features_follow_wespeakers_gather_calibration_factors_layout(tmp_path):
+    """score, then min / max / max-min / max/min of duration, magnitude, cohort mean."""
+    backend = write_backend(tmp_path)
+    a = backend.side(unit(1, 0.2, 0), 15000, "phone")
+    b = backend.side(unit(1, 0, 0.3), 1200, "box3")
+    f = dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))
+    groups = {("duration_min_s", "duration_max_s", "duration_diff_s", "duration_ratio"): (15.0, 1.2),
+              ("magnitude_min", "magnitude_max", "magnitude_diff", "magnitude_ratio"): (a.magnitude, b.magnitude),
+              ("cohort_mean_min", "cohort_mean_max", "cohort_mean_diff", "cohort_mean_ratio"):
+                  (a.cohort_mean, b.cohort_mean)}
+    for names, (x, y) in groups.items():
+        low, high = min(x, y), max(x, y)
+        assert [f[n] for n in names] == pytest.approx([low, high, high - low, high / low])
+    assert (f["cross_channel"], f["cross_channel_x_asnorm_score"]) == (1.0, pytest.approx(f["asnorm_score"]))
+    # The magnitude is the embedding's norm after the domain mean is removed.
+    shifted = ev.Backend(**{**backend.__dict__, "mean": np.array([0.5, 0.0, 0.0])})
+    assert shifted.side(unit(1, 0, 0), 900, "phone").magnitude == pytest.approx(0.5)

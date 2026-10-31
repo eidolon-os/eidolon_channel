@@ -75,3 +75,18 @@ runtime = ["/run/eidolon/channel", "/run/eidolon/channel-provider"]
 
 [reset]
 factory = ["/var/lib/eidolon/channel", "/var/lib/eidolon/voiceprints"]
+
+# Files the worker and the Provider open by name in voiceprint.model_dir, which
+# Ops points at the Models artifact for this capability. Ops refuses a release
+# whose artifact does not carry them; on 2026-10-30 one did not (the recognition
+# policy), and conversation recognition was off for a day with nothing red.
+[[consumes]]
+capability = "local_speaker_verification"
+component = "eidolon_models"
+files = [
+  "manifest.json",
+  "campplus_cn_common.bin",
+  "config.yaml",
+  "configuration.json",
+  "recognition-controlled-trial.json",
+]

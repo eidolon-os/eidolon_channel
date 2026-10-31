@@ -103,8 +103,9 @@ def test_opt_in_yaml_uses_existing_config_loader():
     assert TurnPolicyConfig().eot.provider == 'firered'
 
 
-def test_mini_prewarm_does_not_load_firered(monkeypatch):
+def test_mini_prewarm_does_not_load_firered(monkeypatch, tmp_path):
     from eidolon.livekit.agent.server import _load_prewarm_models
+    monkeypatch.setenv('EIDOLON_RUNTIME_ROOT', str(tmp_path))
     from eidolon.livekit.common import config
     from eidolon.livekit.plugins import eot
     from eidolon.livekit.plugins.vad.firered import FireredPvadVAD

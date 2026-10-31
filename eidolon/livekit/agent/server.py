@@ -193,7 +193,41 @@ def _prewarm(proc) -> None:
         logger.info("[Agent] prewarm: finished in %.1fs", time.monotonic() - started)
 
 
+#: Where the worker publishes what its job processes could load, beside its
+#: other runtime state. livekit's own ``/`` cannot say it: on 2026-10-31 the
+#: VAD and end-of-turn ONNX were LFS pointers, prewarm logged two warnings,
+#: and the worker answered healthy while no session could take turns.
+TURN_MODELS_STATUS = "channel/turn-models.json"
+
+
+def _turn_models_status_file() -> Path:
+    root = Path(os.getenv("EIDOLON_RUNTIME_ROOT", "~/eidolon/run")).expanduser()
+    return root / TURN_MODELS_STATUS
+
+
+def _publish_turn_models(status: dict) -> None:
+    """Replace the published status atomically; never fail the caller."""
+
+    path = _turn_models_status_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staged = path.with_name(f".{path.name}.{os.getpid()}")
+        staged.write_text(json.dumps({**status, "pid": os.getpid()}), encoding="utf-8")
+        os.replace(staged, path)
+    except OSError:
+        logger.warning("[Agent] cannot publish turn model status at %s", path)
+
+
 def _load_prewarm_models(proc) -> None:
+    loaded = {"vad": {"state": "failed"}, "eot": {"state": "failed"}}
+    try:
+        _load_turn_models(proc, loaded)
+    finally:
+        both = all(part["state"] == "loaded" for part in loaded.values())
+        _publish_turn_models({"state": "loaded" if both else "failed", **loaded})
+
+
+def _load_turn_models(proc, loaded: dict) -> None:
     try:
         from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
         from eidolon.livekit.common.config import load_effective_config
@@ -209,8 +243,10 @@ def _load_prewarm_models(proc) -> None:
             activation_threshold=vad_cfg.activation_threshold,
         )
         logger.info("[Agent] prewarm: FireRed pVAD loaded")
+        loaded["vad"] = {"state": "loaded", "provider": "firered_pvad"}
     except Exception as e:
         logger.warning("[Agent] prewarm: VAD load failed: %s", e)
+        loaded["vad"] = {"state": "failed", "provider": "firered_pvad", "error": str(e)[:200]}
 
     try:
         from eidolon.livekit.common.config import load_effective_config
@@ -225,8 +261,10 @@ def _load_prewarm_models(proc) -> None:
 
             proc.userdata["eot_model"] = ChineseModel()
         logger.info("[Agent] prewarm: EOT provider=%s loaded", eot_policy.provider)
+        loaded["eot"] = {"state": "loaded", "provider": eot_policy.provider}
     except Exception as e:
         logger.warning("[Agent] prewarm: EOT load failed: %s", e)
+        loaded["eot"] = {"state": "failed", "error": str(e)[:200]}
 
 
 
@@ -1025,6 +1063,9 @@ async def _serve(
         _resolve_num_idle_processes(cfg),
     )
 
+    # Until a job process has loaded them, nobody knows; a file from the last
+    # run must not answer for this one.
+    _publish_turn_models({"state": "pending"})
     server = _build_server(cfg)
     if on_server_ready is not None:
         on_server_ready(server)

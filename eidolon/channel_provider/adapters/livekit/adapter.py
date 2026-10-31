@@ -522,6 +522,9 @@ class LiveKitChannelAdapter:
         # LiveKit does not hold data for a participant who is not there, so a
         # command to an absent device can only time out — while its caller
         # holds the Provider lock. Say so now; the caller retries when it can.
+        # A device that joined in the last few seconds is not listed yet either,
+        # and rightly so: until it is, its receipt would arrive attributed to
+        # nobody and be refused, so the exchange could not complete anyway.
         if device not in getattr(watch.connection, "remote_participants", {}):
             raise BackendUnavailable("device is not on its channel")
         key = (room, command_id)

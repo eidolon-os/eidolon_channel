@@ -1131,9 +1131,14 @@ class ChannelProviderService:
                     previous = pending[0]
                     if (device_requested and previous["binding"].get("device_requested") is True
                             and previous["binding"]["personal_memory"] is None):
-                        # A device restart may replace its own session, but only
-                        # after acknowledged cleanup has released its resources.
-                        await self._personal_sessions.close(previous["session_id"])
+                        # A device asking on its own channel for a new
+                        # conversation is running no other: a Body holds one at
+                        # a time, so the one it abandoned has no IO left — what
+                        # room.leave would only confirm. Asking would also fail:
+                        # a device that has just joined cannot be heard
+                        # answering for its first seconds (adapter `_requested`).
+                        await self._personal_sessions.close(previous["session_id"],
+                                                            body_confirmed=True)
                     else:
                         raise InvalidTransition("close the previous session first")
                 if record is not None and record["binding"]["personal_memory"] != personal_memory:

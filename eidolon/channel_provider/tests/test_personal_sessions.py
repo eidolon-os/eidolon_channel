@@ -385,6 +385,22 @@ async def test_the_body_saying_it_ended_is_its_own_cleanup_receipt(tmp_path):
     service._require_scene_companions_available('owner_1', ['partner'])
 
 
+async def test_a_device_starting_anew_has_ended_the_conversation_it_abandoned(tmp_path):
+    """2026-10-31: a phone's session_close was lost as it disconnected; when it came back
+    to talk, the start waited on a receipt a just-joined device cannot yet be heard giving."""
+    service, store, adapter = await ready(tmp_path)
+    ref = await _device_session(service, adapter, 'abandoned')
+    adapter.cleanup_error = True
+    service._personal_sessions.request_close('abandoned')  # the disconnect the Provider saw
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('abandoned')['state'] == 'closing'
+    await service._converge_serving(ref, serving=True, conversation_id='next',
+        session_intent='user_initiated', device_requested=True)
+    assert store.personal_session('abandoned')['state'] == 'closed'
+    assert store.personal_session('next')['state'] == 'open'
+    assert adapter.events.count(('clear', 'abandoned')) == 1  # only the attempt at disconnect
+
+
 async def test_a_stop_the_body_did_not_ask_for_still_waits_for_its_receipt(tmp_path):
     service, store, adapter = await ready(tmp_path)
     await _device_session(service, adapter)

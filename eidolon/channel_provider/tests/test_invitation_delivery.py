@@ -144,6 +144,23 @@ async def test_disconnection_fails_pending_delivery_and_releases_slot(monkeypatc
     await adapter.shutdown()
 
 
+async def test_a_device_leaving_fails_what_it_was_asked_at_once(monkeypatch):
+    """2026-10-31: a room.leave sent as a phone dropped its channel waited out ten seconds."""
+    adapter, grant, conn, _, published = await setup(monkeypatch)
+    device = grant.handle["device"]
+    task = asyncio.create_task(
+        adapter.deliver_shared_invitation(grant.handle, invitation(device), command_id="invite-1")
+    )
+    await asyncio.wait_for(published.wait(), 1)
+    conn.handlers["participant_disconnected"](SimpleNamespace(identity="agent-1"))
+    assert not task.done()  # Someone else leaving says nothing about the device.
+    conn.handlers["participant_disconnected"](SimpleNamespace(identity=device))
+    with pytest.raises(BackendUnavailable):
+        await asyncio.wait_for(task, 0.5)
+    assert not adapter._control_receipts
+    await adapter.shutdown()
+
+
 async def test_playback_stop_bypasses_pending_control_without_losing_correlation(monkeypatch):
     from eidolon_sdk.biz.control.protocol import build_command_envelope
 

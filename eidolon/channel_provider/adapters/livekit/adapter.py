@@ -790,6 +790,11 @@ class LiveKitChannelAdapter:
         def _participant_disconnected(participant: Any) -> None:
             if self._listeners.get(room) is not watch or watch.connection is not connection:
                 return
+            if participant.identity == watch.device:
+                # A device that left will not answer: a phone says session_close
+                # and drops its channel, while a room.leave sent in that instant
+                # would hold its caller — and the Provider lock — to the deadline.
+                self._fail_control_delivery(room)
             observer = self._session_end_observers.get(room)
             if observer is not None and (
                 participant.identity == watch.device

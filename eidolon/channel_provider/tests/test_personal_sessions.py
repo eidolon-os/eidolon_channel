@@ -315,7 +315,9 @@ async def test_authority_loss_closes_idle_personal_session_and_retries_body_clea
     await service._personal_sessions.reconcile_authority(resolver)
     await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
     assert store.personal_session("private-a")["state"] == "closed"
-    assert adapter.events[-2:] == [("stop", "private-a"), ("clear", "private-a")]
+    # Producers went on the first attempt; the retry is only about the Body.
+    assert adapter.events.count(("stop", "private-a")) == 1
+    assert adapter.events[-2:] == [("clear", "private-a"), ("clear", "private-a")]
     assert resolver.await_count == 2  # closing retry does not need Data availability
 
 
@@ -426,6 +428,8 @@ async def test_a_body_that_stays_away_is_reported_once(tmp_path, caplog):
     pending = [r for r in caplog.records if 'personal cleanup pending' in r.getMessage()]
     assert len(pending) == 1
     assert not pending[0].exc_info  # An absent Body is not a crash.
+    # Nor does waiting for it keep asking LiveKit to withdraw the same producers.
+    assert adapter.events.count(('stop', 'device-a')) == 1
     adapter.cleanup_error = False
     service._personal_sessions.request_close('device-a')
     await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))

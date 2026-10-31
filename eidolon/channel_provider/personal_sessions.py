@@ -23,6 +23,10 @@ class PersonalSessions:
         # Why each pending cleanup last failed. Retries run every second while
         # a Body is away; the log says each reason once, not once a second.
         self._pending_reasons = {}
+        # Closing sessions whose producers this process already withdrew. A
+        # closing session can never be claimed again, so nothing can bring its
+        # producers back: once is enough, and a retry is only about the Body.
+        self._withdrawn = set()
 
     def watch_authority(self, resolve):
         """Recheck open bindings independently of speech; retry durable cleanup."""
@@ -115,11 +119,7 @@ class PersonalSessions:
                 async with self.lock:
                     await self.close(session_id)
             except Exception as exc:
-                reason = f"{type(exc).__name__}: {exc}"
-                if self._pending_reasons.get(session_id) != reason:
-                    self._pending_reasons[session_id] = reason
-                    _log.warning("personal cleanup pending session=%s reason=%s",
-                                 session_id, reason, exc_info=not isinstance(exc, BackendUnavailable))
+                self._report_pending(session_id, exc)
 
         task = asyncio.create_task(run(), name=f"personal-close:{session_id}")
         self._tasks[session_id] = task
@@ -149,11 +149,17 @@ class PersonalSessions:
         adapter = self.registry.get(binding["adapter"])
         # Stop producers first, then clear the Body. Missing dispatch is normal
         # after worker idle/shutdown; it never substitutes for the second step.
-        await adapter.close_session(binding["handle"], session_id)
+        if session_id not in self._withdrawn:
+            await adapter.close_session(binding["handle"], session_id)
+            self._withdrawn.add(session_id)
         if not body_confirmed:
             await adapter.resume_prepared_channels((binding["handle"],))
             await adapter.end_prepared_session(binding["handle"], session_id)
         self.store.transition_personal_session(session_id, expected="closing", state="closed")
+        self._forget(session_id)
+
+    def _forget(self, session_id):
+        self._withdrawn.discard(session_id)
         self._pending_reasons.pop(session_id, None)
 
     def settle_revoked(self, device_id):
@@ -171,15 +177,23 @@ class PersonalSessions:
             if record["state"] == "open":
                 self.store.transition_personal_session(session_id, expected="open", state="closing")
             self.store.transition_personal_session(session_id, expected="closing", state="closed")
-            self._pending_reasons.pop(session_id, None)
+            self._forget(session_id)
+
+    def _report_pending(self, session_id, exc):
+        reason = f"{type(exc).__name__}: {exc}"
+        if self._pending_reasons.get(session_id) != reason:
+            self._pending_reasons[session_id] = reason
+            # An unreachable Body is the expected way to be pending, not a fault.
+            _log.warning("personal cleanup pending session=%s reason=%s", session_id, reason,
+                         exc_info=not isinstance(exc, BackendUnavailable))
 
     async def recover(self):
         for record in self.store.pending_personal_sessions():
             try:
                 async with self.lock:
                     await self.close(record["session_id"])
-            except Exception:
-                _log.exception("personal recovery cleanup pending session=%s", record["session_id"])
+            except Exception as exc:
+                self._report_pending(record["session_id"], exc)
 
     async def shutdown(self):
         self._stopping = True

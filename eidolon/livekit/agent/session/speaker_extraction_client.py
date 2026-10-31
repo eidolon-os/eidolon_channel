@@ -4,6 +4,7 @@ import base64
 import json
 
 from eidolon_sdk.biz.voiceprint import (
+    EnrollmentSample,
     ExtractedSample,
     SpeakerExtractionRequest,
     SpeakerExtractionReadiness,
@@ -59,7 +60,9 @@ class SpeakerExtractionClient(ServiceHTTPClient):
                 except (ValueError, TypeError, AttributeError):
                     pass
             raise
-        return ExtractedSample.model_validate(response.json())
+        # A registration-purpose reply also carries windows of the sample.
+        model = EnrollmentSample if purpose == "enrollment" else ExtractedSample
+        return model.model_validate(response.json())
 
     async def readiness(self) -> SpeakerExtractionReadiness:
         response = await self._request("GET", "/v1/voiceprints/readiness", timeout=2)

@@ -1,4 +1,4 @@
-"""Prepare versioned enrollment evidence; no calibrated identity decisions yet."""
+"""Prepare versioned enrollment evidence and the Person's free same-person scores."""
 
 import math
 from itertools import combinations
@@ -10,6 +10,7 @@ from eidolon_sdk.biz.voiceprint import (
     enrollment_evidence_digest,
 )
 
+from .calibration import enrollment_calibration
 from .scoring import embedding_identity, cosine
 
 
@@ -25,12 +26,14 @@ def evaluate_enrollment(request: EnrollmentEvaluationRequest) -> EnrollmentEvalu
         math.fsum(s.vector[i] for s in samples) / len(samples)
         for i in range(len(request.trial.vector))
     ]
-    template = ExtractedSample(**{**samples[0].model_dump(), "vector": mean})
+    template = ExtractedSample(**{**samples[0].sample().model_dump(), "vector": mean})
+    trial = request.trial.sample()
     return EnrollmentEvaluation(
         evidence_digest=enrollment_evidence_digest(request.samples),
         recording_sha256=request.recording_sha256,
         template=template,
-        trial=request.trial,
+        trial=trial,
         registration_min_similarity=min(cosine(a, b) for a, b in combinations(samples, 2)),
-        trial_min_similarity=min(cosine(s, request.trial) for s in samples),
+        trial_min_similarity=min(cosine(s, trial) for s in samples),
+        calibration=enrollment_calibration(samples, request.trial, template),
     )

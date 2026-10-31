@@ -95,3 +95,24 @@ async def test_successful_request_releases_capacity_without_blocking_event_loop(
         assert await engine.extract(b'two') == b'two'
     finally:
         await engine.close()
+
+
+async def test_registration_gets_twice_the_probe_budget():
+    """Registration embeds every window too; a probe's budget stays as it was."""
+
+    class Slow(Extractor):
+        def extract(self, pcm, min_speech_ms=1500):
+            threading.Event().wait(.15)
+            return pcm
+
+        def extract_enrollment(self, pcm, min_speech_ms=1500):
+            return self.extract(pcm, min_speech_ms)
+
+    engine = SpeakerInferenceEngine(Slow(), max_pending=2, timeout_seconds=.1)
+    await engine.start()
+    try:
+        assert await engine.extract_enrollment(b'registration') == b'registration'
+        with pytest.raises(InferenceTimeout):
+            await engine.extract(b'probe')
+    finally:
+        await engine.close()

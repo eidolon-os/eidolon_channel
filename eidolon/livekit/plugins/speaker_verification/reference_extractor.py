@@ -11,8 +11,9 @@ import json
 from pathlib import Path
 
 import numpy as np
-from eidolon_sdk.biz.voiceprint import ExtractedSample, SpeakerAudioQuality
+from eidolon_sdk.biz.voiceprint import EnrollmentSample, ExtractedSample, SpeakerAudioQuality
 
+from .calibration import CROP_MIN_SPEECH_MS, calibration_windows, crop
 from .providers.modelscope_campplus import ModelScopeCampPlusSpeakerVerificationProvider
 
 
@@ -98,6 +99,30 @@ class ReferenceSpeakerExtractor:
         self._weights_hash = weights_hash
 
     def extract(self, pcm: bytes, min_speech_ms: int = 1500) -> ExtractedSample:
+        return self._extract(pcm, min_speech_ms)[0]
+
+    def extract_enrollment(self, pcm: bytes, min_speech_ms: int = 1500) -> EnrollmentSample:
+        """The registration sample plus windows of it, embedded like probes.
+
+        A window's voiced length comes from the recording's own voice-activity
+        pass (re-running it per window would more than double registration
+        time); its embedding is of exactly the window's PCM, as for a turn.
+        """
+        sample, voiced = self._extract(pcm, min_speech_ms)
+        size = self._vad.window_size_samples
+        frames = [i for i, speech in enumerate(voiced) if speech]
+        span = (frames[0] * size, (frames[-1] + 1) * size) if frames else None
+        crops = []
+        for start, end in calibration_windows(len(pcm) // 2, span):
+            inside = range(-(-start // size), end // size)
+            speech_ms = sum(voiced[i] for i in inside if i < len(voiced)) * size * 1000 // 16000
+            if speech_ms < CROP_MIN_SPEECH_MS:
+                continue
+            vector = self._provider.extract_embedding(pcm[start * 2:end * 2], 16000)
+            crops.append(crop(speech_ms, vector))
+        return EnrollmentSample(**sample.model_dump(), crops=crops)
+
+    def _extract(self, pcm, min_speech_ms):
         if self._vad is None or self._weights_hash is None:
             raise RuntimeError('model_not_ready')
         if not isinstance(pcm, bytes) or len(pcm) % 2 or len(pcm) > 960000:
@@ -120,11 +145,11 @@ class ReferenceSpeakerExtractor:
             raise InvalidSpeakerAudio('audio_clipped', quality)
         self._vad.reset()
         size = self._vad.window_size_samples
-        speech_samples = sum(
-            size for i in range(0, len(samples) - size + 1, size)
-            if self._vad(samples[i:i + size]) >= .5
-        )
-        speech_ms = speech_samples * 1000 // 16000
+        voiced = [
+            self._vad(samples[i:i + size]) >= .5
+            for i in range(0, len(samples) - size + 1, size)
+        ]
+        speech_ms = sum(voiced) * size * 1000 // 16000
         quality.speech_ms = speech_ms
         if speech_ms < min_speech_ms:
             raise InvalidSpeakerAudio('speech_too_short', quality)
@@ -138,4 +163,4 @@ class ReferenceSpeakerExtractor:
             vector=vector.tolist(),
             speech_ms=speech_ms,
             quality=quality.model_dump(exclude_none=True),
-        )
+        ), voiced

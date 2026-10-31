@@ -20,6 +20,7 @@ from eidolon_sdk.biz.speaker_identity import (
 from eidolon_sdk.biz.voiceprint import SpeakerComparisonRequest, SpeakerAudioQuality
 from .speaker_extraction_client import SpeakerExtractionClient, SpeakerExtractionRejected
 from eidolon.livekit.plugins.speaker_verification.scoring import compare_speakers
+from eidolon.livekit.plugins.speaker_verification.calibration import decide, household_tables
 from eidolon_sdk.core.http.errors import ServiceUpstreamError
 from eidolon_sdk.core.http.client import ServiceHTTPClient, authorization_header
 
@@ -66,9 +67,31 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
 
 
 class SpeakerRecognizer:
-    def __init__(self, client, policy: SpeakerRecognitionPolicy | None):
-        self.client, self.policy = client, policy
+    def __init__(self, client, policy: SpeakerRecognitionPolicy | None, cohort=None):
+        # A calibrated policy decides only with its cohort; without one it is off.
+        if policy is not None and policy.calibration is not None and cohort is None:
+            policy = None
+        self.client, self.policy, self.cohort = client, policy, cohort
         self._busy = False
+        self._tables = (None, None)
+
+    def _household_tables(self, snapshot):
+        # Deterministic in the snapshot, so its revision is the cache key.
+        if self._tables[0] != snapshot.revision:
+            self._tables = (snapshot.revision,
+                            household_tables(self.policy, self.cohort, snapshot.persons))
+            # Self-check (§3.3): what each Person can be recognised at, per band.
+            for person_id, table in self._tables[1].items():
+                logging.getLogger(__name__).info(
+                    "Speaker thresholds person_id=%s policy=%s %s", person_id, self.policy.version,
+                    " ".join(
+                        f"{e.band}={e.threshold:.3f}/{'direct' if e.direct else 'track'}"
+                        f"/own={'-' if e.genuine_acceptance is None else f'{e.genuine_acceptance:.2f}'}"
+                        f"/far={e.estimated_false_accept:.4f}"
+                        for e in table.values()
+                    ),
+                )
+        return self._tables[1]
 
     async def recognize(self, evidence, *, owner_id, session_id, turn_id):
         now = time.time()
@@ -159,12 +182,12 @@ class SpeakerRecognizer:
                 return outcome("uncertain", "candidates_changed")
             per_person.sort(key=lambda row: row[0], reverse=True)
             similarity = per_person[0][0] if per_person else None
+            verdict, band = self._decide(per_person, snapshot, probe)
             logging.getLogger(__name__).info(
                 "Speaker comparison turn_id=%s candidates=%d top_score=%s margin=%s "
-                "threshold=%s min_margin=%s speech_ms=%d policy=%s",
-                turn_id, len(per_person), similarity,
-                per_person[0][0] - per_person[1][0] if len(per_person) > 1 else None,
-                self.policy.threshold, self.policy.min_person_margin,
+                "threshold=%s band=%s verdict=%s speech_ms=%d policy=%s",
+                turn_id, len(per_person), similarity, verdict["margin"],
+                verdict["threshold"], band, verdict["outcome"],
                 probe.speech_ms, self.policy.version,
             )
             version = dict(
@@ -182,18 +205,20 @@ class SpeakerRecognizer:
                 unknown = outcome("unknown", "no_enrolled_voices", **version)
                 await self._discover(snapshot, probe, unknown, evidence)
                 return unknown
-            similarity, person, best = per_person[0]
-            if similarity < self.policy.threshold:
+            if verdict["outcome"] == "below":
                 if probe.speech_ms < self.policy.min_unknown_speech_ms:
                     return outcome("uncertain", "short_speech_inconclusive", **version)
                 unknown = outcome("unknown", "no_match", **version)
                 await self._discover(snapshot, probe, unknown, evidence)
                 return unknown
-            if (
-                len(per_person) > 1
-                and similarity - per_person[1][0] < self.policy.min_person_margin
-            ):
+            if verdict["outcome"] == "ambiguous":
                 return outcome("uncertain", "ambiguous_candidates")
+            if verdict["outcome"] == "not_direct":
+                # This band only extends a track already bound (§3.3).
+                return outcome("uncertain", "duration_band_not_decisive")
+            similarity, person, best = next(
+                row for row in per_person if row[1].person_id == verdict["person_id"])
+            version["cosine_similarity"] = similarity
             identified = outcome(
                 "identified",
                 "voice_match",
@@ -231,6 +256,28 @@ class SpeakerRecognizer:
             return outcome("unavailable", "invalid_dependency_result")
         finally:
             self._busy = False
+
+    def _decide(self, per_person, snapshot, probe):
+        """outcome: identified | below | ambiguous | not_direct; plus the band decided in."""
+        calibration = self.policy.calibration
+        if not per_person:
+            return dict(outcome="below", threshold=None, margin=None, person_id=None), None
+        if calibration is None:
+            similarity, person, _ = per_person[0]
+            margin = similarity - per_person[1][0] if len(per_person) > 1 else None
+            if similarity < self.policy.threshold:
+                result = "below"
+            elif margin is not None and margin < self.policy.min_person_margin:
+                result = "ambiguous"
+            else:
+                result = "identified"
+            return dict(outcome=result, threshold=self.policy.threshold, margin=margin,
+                        person_id=person.person_id if result == "identified" else None), None
+        band = calibration.band(probe.speech_ms)
+        decision = decide({p.person_id: s for s, p, _ in per_person},
+                          self._household_tables(snapshot), band)
+        return dict(outcome=decision.outcome, threshold=decision.threshold,
+                    margin=decision.margin, person_id=decision.person_id), band.name
 
     async def _discover(self, snapshot, probe, observation, evidence):
         from eidolon_sdk.biz.candidate_evidence import CandidateDiscovery

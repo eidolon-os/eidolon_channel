@@ -89,4 +89,6 @@ files = [
   "config.yaml",
   "configuration.json",
   "recognition-controlled-trial.json",
+  # The calibrated policy decides only with the impostor cohort it names.
+  "impostor-cohort.npz",
 ]

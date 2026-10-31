@@ -81,11 +81,20 @@ class SpeakerInferenceEngine:
             self.state = 'ready'
 
     async def extract(self, pcm, min_speech_ms=1500):
+        return await self._run(self._extractor.extract, pcm, min_speech_ms, self._timeout)
+
+    async def extract_enrollment(self, pcm, min_speech_ms=1500):
+        # Registration adds one embedding per window and nobody is waiting on
+        # a reply in conversation, so it gets twice the probe budget.
+        return await self._run(self._extractor.extract_enrollment, pcm, min_speech_ms,
+                               2 * self._timeout)
+
+    async def _run(self, operation, pcm, min_speech_ms, timeout):
         if self.state != 'ready':
             raise ModelUnavailable('model_' + self.state)
-        future = self._submit(self._extractor.extract, pcm, min_speech_ms)
+        future = self._submit(operation, pcm, min_speech_ms)
         try:
-            async with asyncio.timeout(self._timeout):
+            async with asyncio.timeout(timeout):
                 return await asyncio.shield(future)
         except TimeoutError:
             raise InferenceTimeout('inference_timeout') from None

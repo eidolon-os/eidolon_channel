@@ -278,20 +278,24 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
     from eidolon_sdk.core.http import create_async_client
     from eidolon.channel_provider.config import load_provider_config
     from .speaker_recognition import SpeakerRecognitionClient
+    from eidolon.livekit.plugins.speaker_verification.calibration import load_cohort
     from pathlib import Path
 
     # Missing or invalid trial policy degrades identification, never conversation.
-    policy = None
+    policy = cohort = None
     try:
         policy = SpeakerRecognitionPolicy.model_validate_json(
             (Path(cfg.voiceprint.model_dir) / "recognition-controlled-trial.json").read_text()
         )
+        if policy.calibration is not None:
+            cohort = load_cohort(cfg.voiceprint.model_dir, policy)
     except (ValueError, OSError) as exc:
         # The Provider's health publishes the same state for Host readiness.
         logging.getLogger(__name__).error(
-            "Conversation recognition off: policy unreadable in %s (%s)",
-            cfg.voiceprint.model_dir, type(exc).__name__,
+            "Conversation recognition off: policy unreadable in %s (%s: %s)",
+            cfg.voiceprint.model_dir, type(exc).__name__, exc,
         )
+        policy = cohort = None
     context = await factory.runtime_services.resolve_room(room)
     provider = load_provider_config()
     secret = resolve_shared_secret(cfg.runtime_authority.jwt_secret)
@@ -347,7 +351,7 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
         task.add_done_callback(tasks.discard)
 
     observer = ConversationSpeaker(
-        recognizer=SpeakerRecognizer(client, policy),
+        recognizer=SpeakerRecognizer(client, policy, cohort),
         owner_id=context.owner_id,
         session_id=factory.runtime_session_id,
         secret=secret,

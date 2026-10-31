@@ -21,6 +21,7 @@ from eidolon.livekit.plugins.speaker_verification.inference import (
     ModelUnavailable,
 )
 from eidolon.livekit.plugins.speaker_verification.reference_extractor import InvalidSpeakerAudio
+from eidolon.livekit.plugins.speaker_verification.calibration import CohortUnavailable, load_cohort
 from eidolon.livekit.plugins.speaker_verification.enrollment import evaluate_enrollment
 from eidolon.livekit.plugins.speaker_verification.scoring import compare_speakers
 
@@ -52,6 +53,12 @@ def speaker_recognition_status(engine):
     # The worker refuses every probe on this same comparison (policy_model_mismatch).
     if (policy.model_id, policy.weights_hash, policy.preprocessing_version) != tuple(identity):
         return {"state": "policy_model_mismatch", "policy_version": policy.version}
+    if policy.calibration is not None:
+        # The worker decides with the same cohort; without it, recognition is off.
+        try:
+            load_cohort(engine.model_dir, policy)
+        except CohortUnavailable as exc:
+            return {"state": str(exc), "policy_version": policy.version}
     return {"state": "ready", "model_id": policy.model_id, "policy_version": policy.version}
 
 
@@ -89,7 +96,9 @@ def register_speaker_extraction(app, *, engine, authorized, problem):
             # ValidationError strings can include the entire supplied recording.
             return error("INVALID_AUDIO_REQUEST", 422)
         try:
-            result = await engine.extract(pcm, min_speech_ms=body.min_speech_ms)
+            # Registration samples also carry windows of themselves (calibration).
+            run = engine.extract_enrollment if body.purpose == "enrollment" else engine.extract
+            result = await run(pcm, min_speech_ms=body.min_speech_ms)
             return web.json_response(result.model_dump(mode="json"))
         except InvalidSpeakerAudio as exc:
             logging.getLogger(__name__).info(

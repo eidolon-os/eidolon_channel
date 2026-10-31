@@ -4,7 +4,7 @@ import base64
 from aiohttp.test_utils import TestClient, TestServer
 
 from eidolon.channel_provider.http import create_app
-from eidolon_sdk.biz.voiceprint import ExtractedSample
+from eidolon_sdk.biz.voiceprint import CalibrationCrop, EnrollmentSample, ExtractedSample
 
 
 class Service:
@@ -25,6 +25,7 @@ class Engine:
     def __init__(self):
         self.ready = asyncio.Event()
         self.calls = []
+        self.enrollments = []
 
     async def start(self):
         self.state = "loading"
@@ -43,6 +44,38 @@ class Engine:
             vector=[1.0, 0.0],
             speech_ms=1500,
         )
+
+    async def extract_enrollment(self, pcm, min_speech_ms=1500):
+        self.enrollments.append(pcm)
+        sample = await self.extract(pcm, min_speech_ms)
+        window = CalibrationCrop(speech_ms=900, vector=[0.0, 1.0])
+        return EnrollmentSample(**sample.model_dump(), crops=[window])
+
+
+async def test_registration_samples_carry_windows_and_probes_do_not():
+    engine = Engine()
+    engine.ready.set()
+    client = TestClient(
+        TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+    )
+    headers = {"Authorization": "Bearer test"}
+    pcm = base64.b64encode(b"\x01\x00" * 32000).decode()
+    try:
+        await client.start_server()
+        while engine.state != "ready":
+            await asyncio.sleep(0)
+        enrolled = await client.post("/v1/voiceprints/extract", headers=headers,
+                                     json=dict(pcm_base64=pcm))
+        assert enrolled.status == 200
+        assert EnrollmentSample.model_validate(await enrolled.json()).crops[0].speech_ms == 900
+        probe = await client.post("/v1/voiceprints/extract", headers=headers,
+                                  json=dict(pcm_base64=pcm, purpose="recognition",
+                                            min_speech_ms=600))
+        assert probe.status == 200
+        assert "crops" not in await probe.json()
+        assert len(engine.enrollments) == 1
+    finally:
+        await client.close()
 
 
 async def test_warmup_does_not_block_provider_health_and_does_not_enable_admission():
@@ -235,6 +268,28 @@ async def test_health_publishes_recognition_state_without_failing_the_provider(t
         (tmp_path / "recognition-controlled-trial.json").write_text(_recognition_policy())
         assert await recognition() == {
             "state": "ready", "model_id": "fixture", "policy_version": "fixture-recognition-v1",
+        }
+        # A calibrated policy decides with its cohort; the worker turns
+        # recognition off without it, so health must not say ready.
+        import hashlib
+        import numpy as np
+        calibrated = {"version": "fixture-recognition-v3", "calibration": {
+            "version": "c", "max_false_accept": 0.005, "min_genuine_acceptance": 0.8,
+            "min_genuine_scores": 4,
+            "bands": [{"name": "short", "min_speech_ms": 600, "floor": 0.3, "margin": 0.1}],
+            "cohort": {"path": "cohort.npz", "sha256": "c" * 64, "speakers": 1}}}
+        (tmp_path / "recognition-controlled-trial.json").write_text(_recognition_policy(**calibrated))
+        assert await recognition() == {"state": "cohort_missing", "policy_version": "fixture-recognition-v3"}
+        with open(tmp_path / "cohort.npz", "wb") as f:
+            np.savez(f, vectors=np.ones((1, 2), np.float32), speech_ms=[900], speakers=[0],
+                     model_id=np.array("fixture"), weights_hash=np.array("a" * 64),
+                     preprocessing_version=np.array("reference-contiguous-pcm16-v1"))
+        assert await recognition() == {"state": "cohort_invalid", "policy_version": "fixture-recognition-v3"}
+        calibrated["calibration"]["cohort"]["sha256"] = hashlib.sha256(
+            (tmp_path / "cohort.npz").read_bytes()).hexdigest()
+        (tmp_path / "recognition-controlled-trial.json").write_text(_recognition_policy(**calibrated))
+        assert await recognition() == {
+            "state": "ready", "model_id": "fixture", "policy_version": "fixture-recognition-v3",
         }
     finally:
         await client.close()

@@ -473,6 +473,8 @@ class FakeRoom:
         self.handlers: dict[str, object] = {}
         self.connected = False
         self.disconnect_calls = 0
+        # Keyed by identity, as LiveKit's own room is.
+        self.remote_participants: dict[str, object] = {}
         FakeRoom.instances.append(self)
 
     def on(self, event: str):

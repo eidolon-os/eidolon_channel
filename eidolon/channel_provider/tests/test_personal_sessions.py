@@ -361,6 +361,77 @@ async def test_default_and_device_sessions_hold_companion_until_acknowledged_clo
         ('open', 'ordinary'), ('open', 'ordinary'), ('open', 'device-first'), ('open', 'device-restarted')]
 
 
+async def _device_session(service, adapter, session='device-a'):
+    from unittest.mock import AsyncMock
+    service._companion_authority = AsyncMock(return_value='partner')
+    ref = request().device_ref
+    await service._converge_serving(ref, serving=True, conversation_id=session,
+        session_intent='user_initiated', device_requested=True)
+    return ref
+
+
+async def test_the_body_saying_it_ended_is_its_own_cleanup_receipt(tmp_path):
+    """A phone drops its channel as soon as it has said so; nobody is left to answer room.leave."""
+    service, store, adapter = await ready(tmp_path)
+    ref = await _device_session(service, adapter)
+    adapter.cleanup_error = True  # Asking the Body again would go unanswered.
+    await service._converge_serving(ref, serving=False, conversation_id='device-a',
+        session_intent=None, device_requested=True)
+    assert store.personal_session('device-a')['state'] == 'closed'
+    assert ('stop', 'device-a') in adapter.events
+    assert ('clear', 'device-a') not in adapter.events
+    service._require_scene_companions_available('owner_1', ['partner'])
+
+
+async def test_a_stop_the_body_did_not_ask_for_still_waits_for_its_receipt(tmp_path):
+    service, store, adapter = await ready(tmp_path)
+    await _device_session(service, adapter)
+    adapter.cleanup_error = True
+    with pytest.raises(BackendUnavailable):
+        await service.close_session(request('device-a', person=None, closing=True))
+    assert store.personal_session('device-a')['state'] == 'closing'
+    with pytest.raises(InvalidTransition, match='device-a'):
+        service._require_scene_companions_available('owner_1', ['partner'])
+
+
+@pytest.mark.parametrize('lapsed', [False, True])
+async def test_revoking_a_device_releases_what_it_held(tmp_path, lapsed):
+    """A removed Body can never answer, so its reservation must not outlive it."""
+    from eidolon.channel_provider.contracts import RevokeRequest
+    from .helpers import revoke_payload
+    adapter = PersonalAdapter()
+    clock = [1_700_000_000_000]
+    service, store, _ = _service(tmp_path, clock, adapter)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    await _device_session(service, adapter)
+    adapter.cleanup_error = True
+    service._personal_sessions.request_close('device-a')
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('device-a')['state'] == 'closing'
+    if lapsed:
+        clock[0] += 3_600_000  # The credential lapsed; the room did not.
+    await service.revoke(RevokeRequest.parse(encoded(revoke_payload())))
+    assert len(adapter.closed) == 1  # The room goes either way.
+    assert store.personal_session('device-a')['state'] == 'closed'
+    service._require_scene_companions_available('owner_1', ['partner'])
+
+
+async def test_a_body_that_stays_away_is_reported_once(tmp_path, caplog):
+    service, store, adapter = await ready(tmp_path)
+    await _device_session(service, adapter)
+    adapter.cleanup_error = True
+    for _ in range(3):
+        service._personal_sessions.request_close('device-a')
+        await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    pending = [r for r in caplog.records if 'personal cleanup pending' in r.getMessage()]
+    assert len(pending) == 1
+    assert not pending[0].exc_info  # An absent Body is not a crash.
+    adapter.cleanup_error = False
+    service._personal_sessions.request_close('device-a')
+    await asyncio.gather(*tuple(service._personal_sessions._tasks.values()))
+    assert store.personal_session('device-a')['state'] == 'closed'
+
+
 async def test_companion_admission_requires_current_body_and_owned_target():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock

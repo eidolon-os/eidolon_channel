@@ -57,10 +57,16 @@ def receipt(connection, device, *, ref="invite-1", status="accepted", sender=Non
     )
 
 
+def on_channel(connection, device):
+    """Put the device in its room: every delivery here is to a device that is there."""
+    connection.remote_participants[device] = SimpleNamespace(identity=device)
+
+
 async def setup(monkeypatch):
     adapter, _ = _adapter()
     grant = await adapter.open(_spec(), issued_at_ms=1000)
     connection = await _listening(monkeypatch, adapter, grant)
+    on_channel(connection, grant.handle["device"])
     sent = []
     published = asyncio.Event()
 
@@ -86,6 +92,19 @@ async def test_delivery_uses_existing_listener_and_targeted_reliable_packet(monk
     assert not task.done()
     receipt(conn, device)
     assert await task == "accepted"
+    await adapter.shutdown()
+
+
+async def test_a_device_not_on_its_channel_is_told_at_once(monkeypatch):
+    """LiveKit drops data for an absent participant; waiting for a receipt would only time out."""
+    adapter, grant, conn, sent, _ = await setup(monkeypatch)
+    device = grant.handle["device"]
+    conn.remote_participants.clear()
+    with pytest.raises(BackendUnavailable, match="not on its channel"):
+        await asyncio.wait_for(adapter.deliver_shared_invitation(
+            grant.handle, invitation(device), command_id="invite-1"), 0.5)
+    assert sent == []
+    assert not adapter._control_receipts
     await adapter.shutdown()
 
 
@@ -173,6 +192,7 @@ async def test_slow_stop_receipt_does_not_block_another_device(monkeypatch):
     adapter, first, connection, sent, published = await setup(monkeypatch)
     second = await adapter.open(replace(_spec(), device_id="second-device"), issued_at_ms=1000)
     other_connection = await _listening(monkeypatch, adapter, second)
+    on_channel(other_connection, second.handle["device"])
     other_published = asyncio.Event()
 
     async def publish(data, **kwargs):

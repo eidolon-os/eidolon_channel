@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 
-from .contracts import InvalidTransition
+from .contracts import BackendUnavailable, InvalidTransition
 
 _log = logging.getLogger(__name__)
 
@@ -20,6 +20,9 @@ class PersonalSessions:
         self._tasks = {}
         self._stopping = False
         self._authority_task = None
+        # Why each pending cleanup last failed. Retries run every second while
+        # a Body is away; the log says each reason once, not once a second.
+        self._pending_reasons = {}
 
     def watch_authority(self, resolve):
         """Recheck open bindings independently of speech; retry durable cleanup."""
@@ -111,15 +114,27 @@ class PersonalSessions:
             try:
                 async with self.lock:
                     await self.close(session_id)
-            except Exception:
-                _log.exception("personal cleanup pending session=%s", session_id)
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                if self._pending_reasons.get(session_id) != reason:
+                    self._pending_reasons[session_id] = reason
+                    _log.warning("personal cleanup pending session=%s reason=%s",
+                                 session_id, reason, exc_info=not isinstance(exc, BackendUnavailable))
 
         task = asyncio.create_task(run(), name=f"personal-close:{session_id}")
         self._tasks[session_id] = task
         task.add_done_callback(lambda _: self._tasks.pop(session_id, None))
 
-    async def close(self, session_id):
-        """Caller holds the Provider lock. Every failure keeps the durable reservation."""
+    async def close(self, session_id, *, body_confirmed=False):
+        """Caller holds the Provider lock. Every failure keeps the durable reservation.
+
+        ``body_confirmed`` is the Body itself having said, on its own channel and
+        for this conversation, that it ended it. A Body says that only after
+        closing its own microphone and playback — the firmware's leave and this
+        phone's both do — which is everything a room.leave receipt would
+        confirm. Asking it again would wait on a Body that may already be gone:
+        a phone drops its channel the moment it has said so.
+        """
         record = self.store.personal_session(session_id)
         if record is None:
             raise InvalidTransition("unknown personal session")
@@ -135,9 +150,28 @@ class PersonalSessions:
         # Stop producers first, then clear the Body. Missing dispatch is normal
         # after worker idle/shutdown; it never substitutes for the second step.
         await adapter.close_session(binding["handle"], session_id)
-        await adapter.resume_prepared_channels((binding["handle"],))
-        await adapter.end_prepared_session(binding["handle"], session_id)
+        if not body_confirmed:
+            await adapter.resume_prepared_channels((binding["handle"],))
+            await adapter.end_prepared_session(binding["handle"], session_id)
         self.store.transition_personal_session(session_id, expected="closing", state="closed")
+        self._pending_reasons.pop(session_id, None)
+
+    def settle_revoked(self, device_id):
+        """Caller holds the Provider lock, after the device's channel was deleted.
+
+        Revocation deleted the room, so the Body has no IO left in it and no
+        channel to confirm anything on; waiting for its receipt would hold the
+        reservation — and the Companion it names — forever.
+        """
+        for record in self.store.pending_personal_sessions(device_id):
+            session_id = record["session_id"]
+            remove = self._observers.pop(session_id, None)
+            if remove is not None:
+                remove()
+            if record["state"] == "open":
+                self.store.transition_personal_session(session_id, expected="open", state="closing")
+            self.store.transition_personal_session(session_id, expected="closing", state="closed")
+            self._pending_reasons.pop(session_id, None)
 
     async def recover(self):
         for record in self.store.pending_personal_sessions():

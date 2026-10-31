@@ -1002,7 +1002,10 @@ class ChannelProviderService:
 
             if request.device_id in self._transport_scopes:
                 raise _TransportTransitionRequired("selected device is being revoked")
-            active = self._store.active_device(request.device_ref)
+            # A lapsed credential still leaves the room, the device that may be
+            # in it, and this Provider listening there; revoking removes them.
+            active = (self._store.active_device(request.device_ref)
+                      or self._lapsed_channel(request.device_ref))
             if active is not None:
                 if self._smarthome is not None:
                     self._smarthome.detach_panel(active.owner_id, active.device_id)
@@ -1012,6 +1015,7 @@ class ChannelProviderService:
                 # no standing to ask for anything, least of all on the way out.
                 await adapter.stop_accepting(handle)
                 await adapter.close(handle)
+            self._personal_sessions.settle_revoked(request.device_ref.device_instance_id)
             response = canonical_json(
                 {
                     "operation": "channel.revoked-device",
@@ -1117,7 +1121,10 @@ class ChannelProviderService:
                                                    record["binding"]["operation_id"])
                 if provision is None:
                     raise UnknownChannel("personal session provision is unavailable")
-                await self._personal_sessions.close(record["session_id"])
+                # A stop on the device's own channel is the Body saying it has
+                # ended the conversation; only producers are left to withdraw.
+                await self._personal_sessions.close(record["session_id"],
+                                                    body_confirmed=device_requested)
                 return provision, [record["session_id"]]
             if serving:
                 if pending and pending[0]["session_id"] != conversation_id:

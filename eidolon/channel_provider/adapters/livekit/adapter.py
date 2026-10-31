@@ -519,6 +519,11 @@ class LiveKitChannelAdapter:
         watch = self._listeners.get(room)
         if watch is None or watch.device != device or watch.connection is None:
             raise BackendUnavailable("device control channel is not connected")
+        # LiveKit does not hold data for a participant who is not there, so a
+        # command to an absent device can only time out — while its caller
+        # holds the Provider lock. Say so now; the caller retries when it can.
+        if device not in getattr(watch.connection, "remote_participants", {}):
+            raise BackendUnavailable("device is not on its channel")
         key = (room, command_id)
         if key in self._control_receipts:
             raise InvalidTransition("control command is already in flight")

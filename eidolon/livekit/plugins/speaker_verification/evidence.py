@@ -19,7 +19,11 @@ runs here. No AS-norm: a cohort recorded elsewhere inflated scores on every
 real channel it met, and on live speech no cohort helped across devices.
 
 Enrollment and probe are symmetric: an enrollment is a Person's template
-with the voiced speech it was built from, a probe is a segment or a track.
+with the voiced speech it was built from, a probe is a segment or a track of
+segments (design §3.2). Each condition was calibrated on tracks up to a
+length, and a longer track is scored on its latest segments within it:
+beyond it the duration factors extrapolate and wrongly penalise accumulated
+speech.
 """
 
 from __future__ import annotations
@@ -69,6 +73,8 @@ class Backend:
     max_speech_ms: int
     # condition -> (weights over FEATURES, bias)
     calibrations: dict[str, tuple[np.ndarray, float]]
+    # condition -> the longest track (in segments) its calibration was trained on
+    max_track_segments: dict[str, int]
 
     def side(self, vector, speech_ms: int, channel: str) -> Side:
         centred = np.asarray(vector, dtype=np.float64) - self.mean
@@ -137,15 +143,18 @@ def load_backend(model_dir) -> Backend:
             c: (np.asarray(v["weights"], dtype=np.float64), float(v["bias"]))
             for c, v in spec["conditions"].items()
         }
+        max_track = {c: int(v["max_track_segments"]) for c, v in spec["conditions"].items()}
         with np.load(root / spec["arrays"]["path"], allow_pickle=False) as npz:
             mean = np.asarray(npz["mean"], dtype=np.float64)
             projection = np.asarray(npz["projection"], dtype=np.float64)
     except (KeyError, ValueError, TypeError, OSError):
         raise BackendUnavailable("backend_invalid") from None
     if (not valid or mean.ndim != 1 or projection.ndim != 2 or projection.shape[0] != mean.shape[0]
-            or any(w.shape != (len(FEATURES),) for w, _ in calibrations.values())):
+            or any(w.shape != (len(FEATURES),) for w, _ in calibrations.values())
+            or any(n < 1 for n in max_track.values())):
         raise BackendUnavailable("backend_invalid")
     return Backend(
         version=spec["version"], identity=tuple(spec["identity"]), mean=mean, projection=projection,
         max_speech_ms=int(spec["max_speech_ms"]), calibrations=calibrations,
+        max_track_segments=max_track,
     )

@@ -36,6 +36,7 @@ POLICY = IdentityPolicy(
     min_unknown_speech_ms=1500,
     prior_unknown=0.5,
     household_margin_llr=1.0,
+    track_continuation_llr=3.0,
     conditions={c: UseThresholds(personal_memory=0.99, addressing=0.9, speaker_label=0.9,
                                  candidate_evidence=0.95, discovery=0.99)
                 for c in ("near_same", "far_same", "far_cross")},
@@ -50,7 +51,8 @@ class Backend:
     """A deterministic calibration: each template's LLR is set by the test, keyed by its vector.
 
     A probe other than the conversation sample (a registration window) scores
-    ``window_llrs[(template, window)]``, NO_MATCH when unset.
+    ``window_llrs[(template, window)]``, NO_MATCH when unset. A track of the
+    sample against the next segment scores ``continuation``.
     """
 
     def __init__(self, llrs, *, version=POLICY.backend_version, identity=IDENTITY):
@@ -58,6 +60,8 @@ class Backend:
         self.window_llrs = {}
         self.sides = []
         self.trials = 0
+        self.continuation = MATCH
+        self.max_track_segments = {c: 5 for c in ("near_same", "far_same", "far_cross")}
 
     def side(self, vector, speech_ms, channel):
         self.sides.append((tuple(vector), speech_ms, channel))
@@ -69,6 +73,8 @@ class Backend:
     def llr(self, enroll, probe):
         if probe.key != tuple(SAMPLE.vector):
             return self.window_llrs.get((enroll.key, probe.key), NO_MATCH)
+        if enroll.key == tuple(SAMPLE.vector):
+            return self.continuation
         self.trials += 1
         return self.llrs[enroll.key]
 
@@ -922,3 +928,53 @@ async def test_the_household_guard_leaves_other_conditions_alone():
         evidence(), owner_id="o", session_id="s", turn_id="t")
     assert result.condition == "far_cross" and result.decisions.personal_memory == "p0"
 
+
+
+def longest_track(port):
+    """Voiced speech of every probe the conversation sample's tracks were scored as."""
+    return [ms for vector, ms, _ in port.backend.sides if vector == tuple(SAMPLE.vector)]
+
+
+@pytest.mark.asyncio
+async def test_the_same_voice_continues_its_track_and_is_scored_as_one_probe():
+    port = client()
+    value = recognizer(port)
+    first = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t1")
+    second = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2")
+    assert first.track_id is not None and second.track_id == first.track_id
+    assert second.voice_ref().track_id == first.track_id
+    # The second turn's evidence is the track's: both segments, speech summed.
+    assert max(longest_track(port)) == 2 * SAMPLE.speech_ms
+
+
+@pytest.mark.asyncio
+async def test_a_segment_unlike_every_track_opens_its_own():
+    port = client()
+    value = recognizer(port)
+    first = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t1")
+    port.backend.continuation = POLICY.track_continuation_llr - 0.01
+    second = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2")
+    assert second.track_id != first.track_id and max(longest_track(port)) == SAMPLE.speech_ms
+
+
+@pytest.mark.asyncio
+async def test_a_track_is_scored_on_no_more_segments_than_calibrated():
+    port = client()
+    port.backend.max_track_segments = {c: 2 for c in port.backend.max_track_segments}
+    value = recognizer(port)
+    for turn in ("t1", "t2", "t3", "t4"):
+        await value.recognize(evidence(), owner_id="o", session_id="s", turn_id=turn)
+    assert max(longest_track(port)) == 2 * SAMPLE.speech_ms
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_usable_speech_continues_no_track():
+    from dataclasses import replace
+    port = client()
+    value = recognizer(port)
+    port.extract.return_value = SAMPLE.model_copy(update={"speech_ms": 900})
+    short = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t1")
+    assert short.reason == "speech_too_short" and short.track_id is None
+    port.extract.return_value = SAMPLE
+    later = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2")
+    assert later.track_id is not None and max(longest_track(port)) == SAMPLE.speech_ms

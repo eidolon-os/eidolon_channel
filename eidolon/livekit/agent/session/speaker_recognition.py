@@ -7,6 +7,10 @@ use's threshold in the condition of the leading comparison (phone template
 against the phone, a device's own template against it, or across devices).
 The observation is valid for exactly one audio evidence span.
 
+The utterance's segment continues the conversation track of its own voice,
+or opens one (design §3.2), and the evidence is the track's: one utterance
+across devices is weak, several of the same voice are not.
+
 The household guard (design §3.3 L7): members' registration windows, scored
 against each other's phone templates, are the only live different-speaker
 evidence on this household's channel. When one of them would already meet a
@@ -36,6 +40,7 @@ from eidolon_sdk.biz.speaker_identity import (
 from eidolon_sdk.biz.voiceprint import SpeakerAudioQuality
 from .speaker_extraction_client import SpeakerExtractionClient, SpeakerExtractionRejected
 from eidolon.livekit.plugins.speaker_verification.evidence import posteriors
+from eidolon.livekit.plugins.speaker_verification.tracks import Tracks
 from eidolon_sdk.core.http.errors import ServiceUpstreamError
 from eidolon_sdk.core.http.client import ServiceHTTPClient, authorization_header
 
@@ -87,6 +92,12 @@ class SpeakerRecognizer:
         self.client, self.policy, self.backend, self.channel = client, policy, backend, channel
         self._busy = False
         self._templates = (None, None, {})
+        self._tracks = Tracks()
+
+    def _track_side(self, track, condition):
+        """The track as a probe, over at most the segments ``condition`` was calibrated on."""
+        vector, speech_ms, _ = track.probe(self.backend.max_track_segments[condition])
+        return self.backend.side(vector, speech_ms, self.channel)
 
     def _template_sides(self, snapshot):
         # Deterministic in the snapshot, so its revision is the cache key.
@@ -194,14 +205,23 @@ class SpeakerRecognizer:
             if any((t.sample.model_id, t.sample.weights_hash, t.sample.preprocessing_version) != identity
                    for person in snapshot.persons for t in person.templates):
                 return outcome("unavailable", "model_version_mismatch")
-            probe_side = self.backend.side(probe.vector, probe.speech_ms, self.channel)
-            best = {}
+            segment = self.backend.side(probe.vector, probe.speech_ms, self.channel)
+            same_device = comparison_condition(self.channel, self.channel)
+            track = self._tracks.assign(
+                probe.vector, probe.speech_ms,
+                lambda t: self.backend.llr(self._track_side(t, same_device), segment),
+                self.policy.track_continuation_llr,
+            )
+            base["track_id"] = track.track_id
+            probes, best = {}, {}
             for person in snapshot.persons:
                 for template, side in self._template_sides(snapshot)[person.person_id]:
-                    llr = self.backend.llr(side, probe_side)
+                    condition = self.backend.condition(side, segment)
+                    if condition not in probes:
+                        probes[condition] = self._track_side(track, condition)
+                    llr = self.backend.llr(side, probes[condition])
                     if person.person_id not in best or llr > best[person.person_id][0]:
-                        best[person.person_id] = (llr, person, template,
-                                                  self.backend.condition(side, probe_side))
+                        best[person.person_id] = (llr, person, template, condition)
             # Re-read authority after inference: changes never inherit a cached match.
             current = await self.client.candidates(owner_id)
             if current.revision != snapshot.revision:
@@ -210,11 +230,12 @@ class SpeakerRecognizer:
             top = observation.evidence[0] if observation.evidence else None
             logging.getLogger(__name__).info(
                 "Speaker evidence turn_id=%s persons=%d top=%s llr=%s posterior=%s unknown=%.4f "
-                "decisions=%s channel=%s condition=%s speech_ms=%d policy=%s",
+                "decisions=%s channel=%s condition=%s speech_ms=%d track=%s segments=%d policy=%s",
                 turn_id, len(best), top.person_id if top else None,
                 round(top.llr, 3) if top else None, round(top.posterior, 4) if top else None,
                 observation.posterior_unknown, observation.decisions.model_dump(exclude_defaults=True),
-                self.channel, observation.condition, probe.speech_ms, self.policy.version,
+                self.channel, observation.condition, probe.speech_ms, track.track_id,
+                len(track.segments), self.policy.version,
             )
             await self._record(snapshot, observation, probe, evidence)
             return observation

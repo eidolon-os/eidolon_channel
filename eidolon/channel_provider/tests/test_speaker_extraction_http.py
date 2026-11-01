@@ -238,7 +238,7 @@ def _identity_policy(**overrides):
         "version": "fixture-identity-v1", "model_id": "fixture", "weights_hash": "a" * 64,
         "preprocessing_version": "reference-contiguous-pcm16-v1",
         "backend_version": "fixture-backend-v1", "min_speech_ms": 600, "min_unknown_speech_ms": 1500,
-        "prior_unknown": 0.5, "household_margin_llr": 1.0,
+        "prior_unknown": 0.5, "household_margin_llr": 1.0, "track_continuation_llr": 3.0,
         "conditions": {c: {"personal_memory": 0.99, "addressing": 0.9, "speaker_label": 0.9,
                            "candidate_evidence": 0.95, "discovery": 0.99}
                        for c in ("near_same", "far_same", "far_cross")},
@@ -256,7 +256,8 @@ def _write_backend(root, **overrides):
     spec = {
         "version": "fixture-backend-v1", "identity": list(Engine.model_identity),
         "max_speech_ms": 20000, "features": list(evidence.FEATURES),
-        "conditions": {c: {"weights": [1.0] + [0.0] * (len(evidence.FEATURES) - 1), "bias": 0.0}
+        "conditions": {c: {"weights": [1.0] + [0.0] * (len(evidence.FEATURES) - 1), "bias": 0.0,
+                           "max_track_segments": 5}
                        for c in ("near_same", "far_same", "far_cross")},
         "arrays": {"path": "identity-backend.npz",
                    "sha256": hashlib.sha256((root / "identity-backend.npz").read_bytes()).hexdigest()},

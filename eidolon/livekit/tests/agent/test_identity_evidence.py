@@ -25,7 +25,8 @@ def write_backend(root, *, conditions=None, projection=None, mean=None, features
     spec = {
         "version": "v", "identity": ["m", "a" * 64, "p"], "max_speech_ms": 20000,
         "features": list(features or ev.FEATURES),
-        "conditions": conditions or {c: {"weights": [1.0, 0, 0, 0, 0], "bias": 0.0} for c in CONDITIONS},
+        "conditions": {c: {"max_track_segments": 5, **v} for c, v in (conditions or {
+            c: {"weights": [1.0, 0, 0, 0, 0], "bias": 0.0} for c in CONDITIONS}).items()},
         "arrays": {"path": "identity-backend.npz",
                    "sha256": sha or hashlib.sha256((root / "identity-backend.npz").read_bytes()).hexdigest()},
     }
@@ -39,6 +40,7 @@ def test_same_device_comparisons_score_the_plain_cosine(tmp_path):
     probe = backend.side(unit(1, 0.5, 0), 2000, "mobile")
     assert backend.condition(enroll, probe) == "near_same"
     assert backend.llr(enroll, probe) == pytest.approx(float(unit(1, 0, 0) @ unit(1, 0.5, 0)))
+    assert backend.max_track_segments == {c: 5 for c in CONDITIONS}
 
 
 def test_cross_device_comparisons_score_after_channel_compensation(tmp_path):
@@ -112,6 +114,8 @@ def test_the_backend_is_exactly_the_arrays_it_names(tmp_path):
     {"conditions": {c: {"weights": [1.0, 0, 0, 0, 0], "bias": 0.0} for c in CONDITIONS[:2]}},
     {"conditions": {c: {"weights": [1.0, 0, 0], "bias": 0.0} for c in CONDITIONS}},
     {"projection": [[1.0, 0.0], [0.0, 1.0]]},
+    {"conditions": {c: {"weights": [1.0, 0, 0, 0, 0], "bias": 0.0, "max_track_segments": 0}
+                    for c in CONDITIONS}},
 ])
 def test_a_backend_that_does_not_fit_the_runtime_is_refused(tmp_path, change):
     with pytest.raises(ev.BackendUnavailable, match="backend_invalid"):

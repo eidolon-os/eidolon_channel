@@ -104,20 +104,27 @@ class OnnxEotBackend(EotBackend):
                 "Install it with: pip install onnxruntime"
             ) from e
 
-        try:
-            from transformers import AutoTokenizer
+        # The fast tokenizer file alone, not transformers: importing transformers
+        # pulls in torch, and every job process paid that (2.5 s with bytecode,
+        # 7 s without; ~0.6 GB) before it could serve a conversation. Same
+        # tokenizer.json, so the ids are identical — 615 real transcripts matched
+        # AutoTokenizer exactly, ids, mask and model output, on 2026-11-01.
+        from tokenizers import Tokenizer
 
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                str(tokenizer_path),
-                local_files_only=True,
-                truncation_side="left",
-            )
-            logger.info(f"OnnxEotBackend: loaded tokenizer from {tokenizer_path}")
-        except ImportError as e:
-            raise ImportError(
-                "transformers is required for OnnxEotBackend. "
-                "Install it with: pip install transformers"
-            ) from e
+        tokenizer = Tokenizer.from_file(str(tokenizer_path / "tokenizer.json"))
+        tokenizer.no_padding()
+        # Keep the latest tokens: the end of what was said decides the turn.
+        tokenizer.enable_truncation(max_length=MAX_HISTORY_TOKENS, direction="left")
+        self._tokenizer = tokenizer
+        logger.info(f"OnnxEotBackend: loaded tokenizer from {tokenizer_path}")
+
+    def _encode(self, text: str) -> tuple[np.ndarray, np.ndarray]:
+        """Token ids and attention mask, as the ONNX graph takes them: (1, n) int64."""
+        encoding = self._tokenizer.encode(text, add_special_tokens=True)
+        return (
+            np.array([encoding.ids], dtype=np.int64),
+            np.array([encoding.attention_mask], dtype=np.int64),
+        )
 
     def score(self, text: str) -> float:
         """
@@ -137,16 +144,7 @@ class OnnxEotBackend(EotBackend):
             cleaned = re.sub(r"[，。？！,. ?!「」『』（）【】\/\\\]\[\{\}\"']", "", text)
 
             # Step 2: Tokenize (truncate from left, keep latest tokens)
-            inputs = self._tokenizer(
-                cleaned,
-                return_tensors="np",
-                truncation=True,
-                max_length=MAX_HISTORY_TOKENS,
-                add_special_tokens=True,
-            )
-
-            input_ids = inputs["input_ids"]
-            attention_mask = inputs["attention_mask"]
+            input_ids, attention_mask = self._encode(cleaned)
 
             # Step 3: ONNX inference
             logits = self._session.run(

@@ -12,8 +12,10 @@ from eidolon_sdk.biz.speaker_identity import (
     IdentityPolicy,
     SpeakerCandidates,
     SpeakerCandidate,
+    UseThresholds,
+    comparison_condition,
 )
-from eidolon_sdk.biz.voiceprint import ExtractedSample, VoiceTemplate
+from eidolon_sdk.biz.voiceprint import CalibrationCrop, ExtractedSample, TemplateCalibration, VoiceTemplate
 from eidolon_sdk.biz.speaker_attestation import verify_observation
 from eidolon.livekit.common.audio_evidence import AudioEvidence
 from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognizer
@@ -33,11 +35,10 @@ POLICY = IdentityPolicy(
     min_speech_ms=1500,
     min_unknown_speech_ms=1500,
     prior_unknown=0.5,
-    personal_memory=0.99,
-    addressing=0.9,
-    speaker_label=0.9,
-    candidate_evidence=0.95,
-    discovery=0.99,
+    household_margin_llr=1.0,
+    conditions={c: UseThresholds(personal_memory=0.99, addressing=0.9, speaker_label=0.9,
+                                 candidate_evidence=0.95, discovery=0.99)
+                for c in ("near_same", "far_same", "far_cross")},
 )
 # One Person alone at this prior has posterior e^llr / (1 + e^llr): MATCH meets
 # every use (0.99995), NO_MATCH leaves 0.99995 to someone not enrolled.
@@ -46,21 +47,30 @@ ALL_USES = dict(personal_memory="p0", addressing="p0", speaker_label="p0")
 
 
 class Backend:
-    """A deterministic calibration: each template's LLR is set by the test, keyed by its vector."""
+    """A deterministic calibration: each template's LLR is set by the test, keyed by its vector.
+
+    A probe other than the conversation sample (a registration window) scores
+    ``window_llrs[(template, window)]``, NO_MATCH when unset.
+    """
 
     def __init__(self, llrs, *, version=POLICY.backend_version, identity=IDENTITY):
         self.llrs, self.version, self.identity = llrs, version, identity
+        self.window_llrs = {}
         self.sides = []
         self.trials = 0
 
     def side(self, vector, speech_ms, channel):
         self.sides.append((tuple(vector), speech_ms, channel))
-        return tuple(vector)
+        return SimpleNamespace(key=tuple(vector), channel=channel)
+
+    def condition(self, enroll, probe):
+        return comparison_condition(enroll.channel, probe.channel)
 
     def llr(self, enroll, probe):
-        assert probe == tuple(SAMPLE.vector)
+        if probe.key != tuple(SAMPLE.vector):
+            return self.window_llrs.get((enroll.key, probe.key), NO_MATCH)
         self.trials += 1
-        return self.llrs[enroll]
+        return self.llrs[enroll.key]
 
 
 def evidence():
@@ -439,7 +449,7 @@ async def test_policy_controls_short_probe_and_unknown_requires_sufficient_speec
     value = await recognizer(port, policy).recognize(short, owner_id='o', session_id='s', turn_id='t')
     assert value.status == 'compared' and value.decisions.addressing == addressing
     # A short probe is compared, but failing to match it is not evidence of someone new.
-    assert (value.posterior_unknown > policy.discovery) is unknown
+    assert (value.posterior_unknown > policy.thresholds("near_same").discovery) is unknown
     assert value.decisions.discovery is False
     assert value.audio_quality.speech_ms == 800
     port.extract.assert_awaited_once_with(short.pcm, min_speech_ms=600)
@@ -851,9 +861,64 @@ async def test_feedback_passes_unresolved_outcomes_through():
 
 @pytest.mark.asyncio
 async def test_a_use_switched_off_in_the_policy_is_never_decided():
-    off = POLICY.model_copy(update={"personal_memory": None, "candidate_evidence": None, "discovery": None})
+    off = POLICY.model_copy(update={"conditions": {
+        c: t.model_copy(update={"personal_memory": None, "candidate_evidence": None, "discovery": None})
+        for c, t in POLICY.conditions.items()}})
     port = client(llr=MATCH)
     result = await recognizer(port, off).recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
     assert result.status == "compared"
     assert result.decisions.personal_memory is None and not result.decisions.discovery
     assert result.decisions.addressing == result.decisions.speaker_label == "p0"
+
+
+@pytest.mark.asyncio
+async def test_the_leading_comparison_condition_chooses_the_thresholds():
+    # Phone registration, probe on a board: far_cross, where personal memory is off.
+    cross_off = POLICY.model_copy(update={"conditions": {
+        **POLICY.conditions,
+        "far_cross": POLICY.conditions["far_cross"].model_copy(update={"personal_memory": None})}})
+    port = client(llr=MATCH)
+    far = await recognizer(port, cross_off, channel="esp-box-3").recognize(
+        evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert far.condition == "far_cross"
+    assert far.decisions.personal_memory is None and far.decisions.addressing == "p0"
+    near = await recognizer(client(llr=MATCH), cross_off).recognize(
+        evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert near.condition == "near_same" and near.decisions.personal_memory == "p0"
+
+
+def _with_windows(port, window_llr):
+    """Each member's template carries a registration window; p1's window scores ``window_llr`` on p0."""
+    persons = port.candidates.return_value.persons
+    for i, person in enumerate(persons):
+        window = [math.cos(1 + i), math.sin(1 + i)]
+        person.templates[0].calibration = TemplateCalibration(crops=[CalibrationCrop(speech_ms=1200, vector=window)])
+    p0 = tuple(persons[0].templates[0].sample.vector)
+    p1_window = tuple(persons[1].templates[0].calibration.crops[0].vector)
+    port.backend.window_llrs[(p0, p1_window)] = window_llr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window_llr,leader_llr,personal", [
+    (NO_MATCH, 8.0, True),   # members far apart: the guard stays off
+    (6.0, 6.5, False),       # a member's window already meets 0.99: the leader needs 7.0
+    (6.0, 8.0, True),
+])
+async def test_the_household_guard_only_makes_personal_memory_stricter(window_llr, leader_llr, personal):
+    port = client(people=2, llr=lambda i, j: leader_llr if i == 0 else NO_MATCH)
+    _with_windows(port, window_llr)
+    result = await recognizer(port).recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert result.condition == "near_same"
+    assert (result.decisions.personal_memory == "p0") is personal
+    # 0.9 is met by the window too (posterior of 6.0 alone: 0.9975), so the guard covers addressing.
+    assert (result.decisions.addressing == "p0") is (personal or window_llr == NO_MATCH)
+
+
+@pytest.mark.asyncio
+async def test_the_household_guard_leaves_other_conditions_alone():
+    port = client(people=2, llr=lambda i, j: 6.5 if i == 0 else NO_MATCH)
+    _with_windows(port, 6.0)
+    result = await recognizer(port, channel="esp-box-3").recognize(
+        evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert result.condition == "far_cross" and result.decisions.personal_memory == "p0"
+

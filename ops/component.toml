@@ -88,9 +88,9 @@ files = [
   "campplus_cn_common.bin",
   "config.yaml",
   "configuration.json",
-  # Identity evidence (design §3.3): per-use thresholds, and the calibration
-  # with the cohort it was trained on.
+  # Identity evidence (design §3.3): per-use thresholds by condition, and the
+  # calibration with the mean and channel projection it was trained with.
   "identity-policy.json",
   "identity-backend.json",
-  "identity-cohort.npz",
+  "identity-backend.npz",
 ]

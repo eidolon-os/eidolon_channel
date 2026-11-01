@@ -3,10 +3,19 @@
 No file database, worker model, identity cache, admission decision or Realm
 selection. Each compared Person gets a calibrated log-likelihood ratio and an
 open-set posterior; each use's decision records who, if anyone, meets that
-use's threshold. The observation is valid for exactly one audio evidence span.
+use's threshold in the condition of the leading comparison (phone template
+against the phone, a device's own template against it, or across devices).
+The observation is valid for exactly one audio evidence span.
+
+The household guard (design §3.3 L7): members' registration windows, scored
+against each other's phone templates, are the only live different-speaker
+evidence on this household's channel. When one of them would already meet a
+use's threshold, that use in ``near_same`` also needs an LLR above the
+highest of them plus the policy's margin. It only ever makes a use stricter.
 """
 
 import time
+import math
 import logging
 import hashlib
 from urllib.parse import quote
@@ -22,6 +31,7 @@ from eidolon_sdk.biz.speaker_identity import (
     SpeakerCandidates,
     SpeakerEvidenceSource,
     SpeakerIdentityObservation,
+    comparison_condition,
 )
 from eidolon_sdk.biz.voiceprint import SpeakerAudioQuality
 from .speaker_extraction_client import SpeakerExtractionClient, SpeakerExtractionRejected
@@ -76,20 +86,50 @@ class SpeakerRecognizer:
             policy = backend = None
         self.client, self.policy, self.backend, self.channel = client, policy, backend, channel
         self._busy = False
-        self._templates = (None, None)
+        self._templates = (None, None, {})
 
     def _template_sides(self, snapshot):
         # Deterministic in the snapshot, so its revision is the cache key.
         if self._templates[0] != snapshot.revision:
-            self._templates = (snapshot.revision, {
+            sides = {
                 person.person_id: [
                     (template, self.backend.side(template.sample.vector, template.sample.speech_ms,
                                                  template.channel))
                     for template in person.templates
                 ]
                 for person in snapshot.persons
-            })
+            }
+            self._templates = (snapshot.revision, sides, self._household_floors(snapshot, sides))
         return self._templates[1]
+
+    def _household_floors(self, snapshot, sides):
+        """Per use, the LLR a near_same leader must exceed in this household (design §3.3 L7)."""
+        worst = None
+        for person in snapshot.persons:
+            for other in snapshot.persons:
+                if other.person_id == person.person_id:
+                    continue
+                for template in other.templates:
+                    for crop in (template.calibration.crops if template.calibration else []):
+                        probe = self.backend.side(crop.vector, crop.speech_ms, template.channel)
+                        for _, side in sides[person.person_id]:
+                            if self.backend.condition(side, probe) == "near_same":
+                                llr = self.backend.llr(side, probe)
+                                worst = llr if worst is None else max(worst, llr)
+        floors = {}
+        if worst is not None:
+            # Posterior of the other member, were they the only one enrolled.
+            prior = self.policy.prior_unknown
+            alone = 1 / (1 + prior / ((1 - prior) * math.exp(min(worst, 700))))
+            thresholds = self.policy.thresholds("near_same")
+            floors = {use: worst + self.policy.household_margin_llr for use in PERSON_USES
+                      if getattr(thresholds, use) is not None and alone >= getattr(thresholds, use)}
+        logging.getLogger(__name__).info(
+            "Household guard revision=%s persons=%d worst_member_llr=%s raised=%s",
+            snapshot.revision[:12], len(snapshot.persons),
+            None if worst is None else round(worst, 3), sorted(floors) or None,
+        )
+        return floors
 
     async def recognize(self, evidence, *, owner_id, session_id, turn_id):
         now = time.time()
@@ -160,7 +200,8 @@ class SpeakerRecognizer:
                 for template, side in self._template_sides(snapshot)[person.person_id]:
                     llr = self.backend.llr(side, probe_side)
                     if person.person_id not in best or llr > best[person.person_id][0]:
-                        best[person.person_id] = (llr, person, template)
+                        best[person.person_id] = (llr, person, template,
+                                                  self.backend.condition(side, probe_side))
             # Re-read authority after inference: changes never inherit a cached match.
             current = await self.client.candidates(owner_id)
             if current.revision != snapshot.revision:
@@ -169,11 +210,11 @@ class SpeakerRecognizer:
             top = observation.evidence[0] if observation.evidence else None
             logging.getLogger(__name__).info(
                 "Speaker evidence turn_id=%s persons=%d top=%s llr=%s posterior=%s unknown=%.4f "
-                "decisions=%s channel=%s speech_ms=%d policy=%s",
+                "decisions=%s channel=%s condition=%s speech_ms=%d policy=%s",
                 turn_id, len(best), top.person_id if top else None,
                 round(top.llr, 3) if top else None, round(top.posterior, 4) if top else None,
                 observation.posterior_unknown, observation.decisions.model_dump(exclude_defaults=True),
-                self.channel, probe.speech_ms, self.policy.version,
+                self.channel, observation.condition, probe.speech_ms, self.policy.version,
             )
             await self._record(snapshot, observation, probe, evidence)
             return observation
@@ -206,18 +247,26 @@ class SpeakerRecognizer:
             )
             for pid in ranked[:MAX_EVIDENCE]
         ]
+        # The leading comparison's condition decides; with nobody to compare,
+        # the probe's own channel does.
+        condition = (best[ranked[0]][3] if ranked
+                     else comparison_condition(self.channel, self.channel))
+        thresholds = policy.thresholds(condition)
+        floors = self._templates[2] if condition == "near_same" else {}
         decisions = {}
         if ranked:
             leader = ranked[0]
             for use in PERSON_USES:
-                threshold = getattr(policy, use)
+                threshold = getattr(thresholds, use)
                 if threshold is None or post[leader] < threshold:
+                    continue
+                if use in floors and best[leader][0] < floors[use]:
                     continue
                 if use == "candidate_evidence" and best[leader][1].maturity != "candidate":
                     continue
                 decisions[use] = leader
         # A weak short probe is not evidence of someone new.
-        decisions["discovery"] = (policy.discovery is not None and unknown >= policy.discovery
+        decisions["discovery"] = (thresholds.discovery is not None and unknown >= thresholds.discovery
                                   and speech_ms >= policy.min_unknown_speech_ms)
         named = {}
         if "addressing" in decisions:
@@ -229,7 +278,7 @@ class SpeakerRecognizer:
             model_id=self.backend.identity[0], weights_hash=self.backend.identity[1],
             preprocessing_version=self.backend.identity[2],
             backend_version=self.backend.version, policy_version=policy.version,
-            evidence=evidence, posterior_unknown=unknown,
+            evidence=evidence, posterior_unknown=unknown, condition=condition,
             decisions=IdentityDecisions(**decisions),
         )
 

@@ -238,25 +238,28 @@ def _identity_policy(**overrides):
         "version": "fixture-identity-v1", "model_id": "fixture", "weights_hash": "a" * 64,
         "preprocessing_version": "reference-contiguous-pcm16-v1",
         "backend_version": "fixture-backend-v1", "min_speech_ms": 600, "min_unknown_speech_ms": 1500,
-        "prior_unknown": 0.5, "personal_memory": 0.99, "addressing": 0.9, "speaker_label": 0.9,
-        "candidate_evidence": 0.95, "discovery": 0.99,
+        "prior_unknown": 0.5, "household_margin_llr": 1.0,
+        "conditions": {c: {"personal_memory": 0.99, "addressing": 0.9, "speaker_label": 0.9,
+                           "candidate_evidence": 0.95, "discovery": 0.99}
+                       for c in ("near_same", "far_same", "far_cross")},
     } | overrides)
 
 
 def _write_backend(root, **overrides):
-    """A tiny valid calibration and the cohort it names, as the Models artifact delivers them."""
+    """A tiny valid calibration and the arrays it names, as the Models artifact delivers them."""
     import hashlib
     import json
     import numpy as np
     from eidolon.livekit.plugins.speaker_verification import evidence
-    with open(root / "identity-cohort.npz", "wb") as f:
-        np.savez(f, mean=np.zeros(2, np.float32), cohort=np.eye(2, dtype=np.float32))
+    with open(root / "identity-backend.npz", "wb") as f:
+        np.savez(f, mean=np.zeros(2, np.float32), projection=np.eye(2, dtype=np.float32))
     spec = {
-        "version": "fixture-backend-v1", "identity": list(Engine.model_identity), "top_n": 2,
+        "version": "fixture-backend-v1", "identity": list(Engine.model_identity),
         "max_speech_ms": 20000, "features": list(evidence.FEATURES),
-        "weights": [1.0] + [0.0] * (len(evidence.FEATURES) - 1), "bias": 0.0,
-        "cohort": {"path": "identity-cohort.npz",
-                   "sha256": hashlib.sha256((root / "identity-cohort.npz").read_bytes()).hexdigest()},
+        "conditions": {c: {"weights": [1.0] + [0.0] * (len(evidence.FEATURES) - 1), "bias": 0.0}
+                       for c in ("near_same", "far_same", "far_cross")},
+        "arrays": {"path": "identity-backend.npz",
+                   "sha256": hashlib.sha256((root / "identity-backend.npz").read_bytes()).hexdigest()},
     } | overrides
     (root / evidence.BACKEND_FILE).write_text(json.dumps(spec))
 
@@ -297,9 +300,9 @@ async def test_health_publishes_recognition_state_without_failing_the_provider(t
         policy_file.write_text(_identity_policy())
         # The worker decides with the policy's calibration; without it, recognition is off.
         assert await recognition() == off("backend_missing")
-        _write_backend(tmp_path, cohort={"path": "identity-cohort.npz", "sha256": "c" * 64})
+        _write_backend(tmp_path, arrays={"path": "identity-backend.npz", "sha256": "c" * 64})
         assert await recognition() == off("backend_invalid")
-        _write_backend(tmp_path, features=["asnorm_score"])
+        _write_backend(tmp_path, features=["score"])
         assert await recognition() == off("backend_invalid")
         _write_backend(tmp_path, version="fixture-backend-v2")
         assert await recognition() == off("backend_mismatch")
@@ -309,7 +312,7 @@ async def test_health_publishes_recognition_state_without_failing_the_provider(t
         assert await recognition() == {
             "state": "ready", "model_id": "fixture", "policy_version": "fixture-identity-v1",
         }
-        (tmp_path / "identity-cohort.npz").unlink()
+        (tmp_path / "identity-backend.npz").unlink()
         assert await recognition() == off("backend_missing")
     finally:
         await client.close()

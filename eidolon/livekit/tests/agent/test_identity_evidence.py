@@ -9,70 +9,83 @@ import pytest
 
 from eidolon.livekit.plugins.speaker_verification import evidence as ev
 
+CONDITIONS = ("near_same", "far_same", "far_cross")
+
 
 def unit(*v):
     v = np.asarray(v, dtype=float)
     return v / np.linalg.norm(v)
 
 
-def write_backend(root, *, weights=None, cohort=None, features=None, sha=None):
-    # Distinct cohort scores for every probe below (WeSpeaker divides by their spread).
-    cohort = np.asarray(cohort if cohort is not None else
-                        [unit(0.2, 1, 0), unit(0.5, 0, 1), unit(0.1, 1, 1), unit(0.7, 0.3, 0.2)])
-    with open(root / "identity-cohort.npz", "wb") as f:
-        np.savez(f, mean=np.zeros(3, np.float32), cohort=cohort.astype(np.float32))
+def write_backend(root, *, conditions=None, projection=None, mean=None, features=None, sha=None):
+    projection = np.asarray(projection if projection is not None else [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0]])
+    with open(root / "identity-backend.npz", "wb") as f:
+        np.savez(f, mean=np.asarray(mean if mean is not None else np.zeros(3), np.float32),
+                 projection=projection.astype(np.float32))
     spec = {
-        "version": "v", "identity": ["m", "a" * 64, "p"], "top_n": 2, "max_speech_ms": 20000,
+        "version": "v", "identity": ["m", "a" * 64, "p"], "max_speech_ms": 20000,
         "features": list(features or ev.FEATURES),
-        "weights": list(weights if weights is not None else [1.0] + [0.0] * (len(ev.FEATURES) - 1)),
-        "bias": 0.0,
-        "cohort": {"path": "identity-cohort.npz",
-                   "sha256": sha or hashlib.sha256((root / "identity-cohort.npz").read_bytes()).hexdigest()},
+        "conditions": conditions or {c: {"weights": [1.0, 0, 0, 0, 0], "bias": 0.0} for c in CONDITIONS},
+        "arrays": {"path": "identity-backend.npz",
+                   "sha256": sha or hashlib.sha256((root / "identity-backend.npz").read_bytes()).hexdigest()},
     }
     (root / ev.BACKEND_FILE).write_text(json.dumps(spec))
     return ev.load_backend(root)
 
 
-def test_the_llr_is_the_affine_qmf_of_the_asnorm_score(tmp_path):
+def test_same_device_comparisons_score_the_plain_cosine(tmp_path):
     backend = write_backend(tmp_path)
-    enroll = backend.side(unit(1, 0, 0), 15000, "phone")
-    probe = backend.side(unit(1, 0.1, 0), 2000, "phone")
-    raw = float(enroll.vector @ probe.vector)
-    expected = 0.5 * ((raw - enroll.cohort_mean) / enroll.cohort_std
-                      + (raw - probe.cohort_mean) / probe.cohort_std)
-    assert backend.llr(enroll, probe) == pytest.approx(expected)
+    enroll = backend.side(unit(1, 0, 0), 15000, "mobile")
+    probe = backend.side(unit(1, 0.5, 0), 2000, "mobile")
+    assert backend.condition(enroll, probe) == "near_same"
+    assert backend.llr(enroll, probe) == pytest.approx(float(unit(1, 0, 0) @ unit(1, 0.5, 0)))
 
 
-def test_trial_features_are_symmetric_except_for_the_condition(tmp_path):
+def test_cross_device_comparisons_score_after_channel_compensation(tmp_path):
+    # The projection drops the second axis: a difference only there is channel, not speaker.
     backend = write_backend(tmp_path)
-    a = backend.side(unit(1, 0.2, 0), 15000, "phone")
-    b = backend.side(unit(1, 0, 0.3), 1200, "phone")
-    assert np.allclose(ev.trial_features(a, b, 20000), ev.trial_features(b, a, 20000))
-    names = dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))
-    assert names["duration_min_s"] == 1.2 and names["duration_max_s"] == 15.0
-    assert names["duration_ratio"] == 15.0 / 1.2
-    assert names["magnitude_min"] == pytest.approx(min(a.magnitude, b.magnitude))
-    assert names["cross_channel"] == 0.0
+    enroll = backend.side(unit(1, 0, 0), 15000, "mobile")
+    probe = backend.side(unit(1, 0.5, 0), 2000, "esp-box-3")
+    assert backend.condition(enroll, probe) == "far_cross"
+    assert backend.llr(enroll, probe) == pytest.approx(1.0)
 
 
-def test_a_probe_from_another_channel_is_a_different_condition(tmp_path):
-    weights = [1.0] + [0.0] * (len(ev.FEATURES) - 3) + [-2.0, 0.5]
-    backend = write_backend(tmp_path, weights=weights)
-    enroll = backend.side(unit(1, 0, 0), 15000, "phone")
-    same = backend.side(unit(1, 0.1, 0), 2000, "phone")
-    other = backend.side(unit(1, 0.1, 0), 2000, "box3")
-    names = dict(zip(ev.FEATURES, ev.trial_features(enroll, other, 20000)))
-    assert names["cross_channel"] == 1.0
-    assert names["cross_channel_x_asnorm_score"] == pytest.approx(names["asnorm_score"])
-    assert backend.llr(enroll, other) == pytest.approx(
-        backend.llr(enroll, same) * 1.5 - 2.0)
-
-
-def test_durations_are_clipped_at_the_calibrated_maximum(tmp_path):
+def test_a_device_against_its_own_observation_template_is_far_same(tmp_path):
     backend = write_backend(tmp_path)
-    a = backend.side(unit(1, 0, 0), 30000, "phone")
-    b = backend.side(unit(1, 0, 0), 900, "phone")
-    assert dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))["duration_max_s"] == 20.0
+    a = backend.side(unit(1, 0, 0), 3000, "esp-box-3")
+    b = backend.side(unit(1, 0.5, 0), 1200, "esp-box-3")
+    assert backend.condition(a, b) == "far_same"
+
+
+def test_each_condition_has_its_own_calibration(tmp_path):
+    conditions = {"near_same": {"weights": [2.0, 0, 0, 0, 0], "bias": 1.0},
+                  "far_same": {"weights": [3.0, 0, 0, 0, 0], "bias": 0.0},
+                  "far_cross": {"weights": [4.0, 0, 0, 0, 0], "bias": -1.0}}
+    backend = write_backend(tmp_path, conditions=conditions)
+    v = unit(1, 0.2, 0.1)
+    enroll = backend.side(unit(1, 0, 0), 15000, "mobile")
+    near = backend.llr(enroll, backend.side(v, 2000, "mobile"))
+    cross = backend.llr(enroll, backend.side(v, 2000, "esp-box-3"))
+    plain = float(unit(1, 0, 0) @ v)
+    compensated = float(unit(1, 0) @ unit(v[0], v[2]))
+    assert near == pytest.approx(2 * plain + 1) and cross == pytest.approx(4 * compensated - 1)
+
+
+def test_duration_factors_follow_wespeakers_layout_and_cap(tmp_path):
+    backend = write_backend(tmp_path)
+    a = backend.side(unit(1, 0.2, 0), 30000, "mobile")
+    b = backend.side(unit(1, 0, 0.3), 1200, "mobile")
+    names = dict(zip(ev.FEATURES, ev.trial_features(a, b, "near_same", 20000)))
+    assert (names["duration_min_s"], names["duration_max_s"]) == (1.2, 20.0)
+    assert names["duration_diff_s"] == pytest.approx(18.8)
+    assert names["duration_ratio"] == pytest.approx(20.0 / 1.2)
+    assert np.allclose(ev.trial_features(a, b, "near_same", 20000), ev.trial_features(b, a, "near_same", 20000))
+
+
+def test_the_mean_of_live_speech_is_removed_before_scoring(tmp_path):
+    backend = write_backend(tmp_path, mean=[0.5, 0.0, 0.0])
+    side = backend.side(unit(1, 0.1, 0), 2000, "mobile")
+    assert side.vector == pytest.approx(ev.unit(unit(1, 0.1, 0) - np.array([0.5, 0, 0]))[0])
 
 
 def test_open_set_posteriors_include_someone_not_enrolled():
@@ -81,47 +94,25 @@ def test_open_set_posteriors_include_someone_not_enrolled():
     persons, unknown = ev.posteriors({"a": math.log(99), "b": -50}, {"a": 0.25, "b": 0.25}, 0.5)
     assert persons["a"] == pytest.approx(99 * 0.25 / (0.5 + 99 * 0.25), rel=1e-9)
     assert sum(persons.values()) + unknown == pytest.approx(1)
-    # Huge LLRs do not overflow.
     persons, unknown = ev.posteriors({"a": 900.0}, {"a": 0.5}, 0.5)
     assert persons["a"] == pytest.approx(1) and unknown >= 0
 
 
-def test_the_backend_is_exactly_the_cohort_it_names(tmp_path):
+def test_the_backend_is_exactly_the_arrays_it_names(tmp_path):
     write_backend(tmp_path)
-    (tmp_path / "identity-cohort.npz").write_bytes(b"changed")
+    (tmp_path / "identity-backend.npz").write_bytes(b"changed")
     with pytest.raises(ev.BackendUnavailable, match="backend_invalid"):
         ev.load_backend(tmp_path)
     with pytest.raises(ev.BackendUnavailable, match="backend_missing"):
         ev.load_backend(tmp_path / "elsewhere")
 
 
-def test_weights_for_other_features_are_refused(tmp_path):
+@pytest.mark.parametrize("change", [
+    {"features": list(ev.FEATURES[:-1])},
+    {"conditions": {c: {"weights": [1.0, 0, 0, 0, 0], "bias": 0.0} for c in CONDITIONS[:2]}},
+    {"conditions": {c: {"weights": [1.0, 0, 0], "bias": 0.0} for c in CONDITIONS}},
+    {"projection": [[1.0, 0.0], [0.0, 1.0]]},
+])
+def test_a_backend_that_does_not_fit_the_runtime_is_refused(tmp_path, change):
     with pytest.raises(ev.BackendUnavailable, match="backend_invalid"):
-        write_backend(tmp_path, features=list(ev.FEATURES[:-1]))
-
-
-def test_the_domain_mean_is_removed_before_scoring(tmp_path):
-    backend = write_backend(tmp_path)
-    shifted = ev.Backend(**{**backend.__dict__, "mean": np.array([0.5, 0.0, 0.0])})
-    side = shifted.side(unit(1, 0.1, 0), 2000, "phone")
-    assert side.vector == pytest.approx(ev.unit(unit(1, 0.1, 0) - np.array([0.5, 0, 0]))[0])
-
-
-
-def test_features_follow_wespeakers_gather_calibration_factors_layout(tmp_path):
-    """score, then min / max / max-min / max/min of duration, magnitude, cohort mean."""
-    backend = write_backend(tmp_path)
-    a = backend.side(unit(1, 0.2, 0), 15000, "phone")
-    b = backend.side(unit(1, 0, 0.3), 1200, "box3")
-    f = dict(zip(ev.FEATURES, ev.trial_features(a, b, 20000)))
-    groups = {("duration_min_s", "duration_max_s", "duration_diff_s", "duration_ratio"): (15.0, 1.2),
-              ("magnitude_min", "magnitude_max", "magnitude_diff", "magnitude_ratio"): (a.magnitude, b.magnitude),
-              ("cohort_mean_min", "cohort_mean_max", "cohort_mean_diff", "cohort_mean_ratio"):
-                  (a.cohort_mean, b.cohort_mean)}
-    for names, (x, y) in groups.items():
-        low, high = min(x, y), max(x, y)
-        assert [f[n] for n in names] == pytest.approx([low, high, high - low, high / low])
-    assert (f["cross_channel"], f["cross_channel_x_asnorm_score"]) == (1.0, pytest.approx(f["asnorm_score"]))
-    # The magnitude is the embedding's norm after the domain mean is removed.
-    shifted = ev.Backend(**{**backend.__dict__, "mean": np.array([0.5, 0.0, 0.0])})
-    assert shifted.side(unit(1, 0, 0), 900, "phone").magnitude == pytest.approx(0.5)
+        write_backend(tmp_path, **change)

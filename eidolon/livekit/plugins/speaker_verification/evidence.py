@@ -1,24 +1,22 @@
 """Calibrated identity evidence: scores become log-likelihood ratios (design §3.3).
 
-The back-end follows WeSpeaker (Apache-2.0, wenet-e2e/wespeaker):
+Registration happens on the phone; speech arrives on every device. How well
+the embedding separates speakers depends on the comparison (live
+multi-device speech, design §3.3 ①a): a phone template against the phone
+(``near_same``) or a device's own observation template against that device
+(``far_same``) separates speakers well with a plain cosine; a template
+against another device (``far_cross``) does not, and is scored after a
+channel-compensating LDA projection trained on live multi-device speech.
+Compensation only loses within one device, so same-device comparisons skip it.
 
-- ``wespeaker/bin/score_norm.py``: subtract a domain mean from every
-  embedding, then adaptive score normalisation (AS-norm) with the mean and
-  standard deviation of each side's top-N cohort scores;
-- ``wespeaker/bin/score_calibration.py``: an affine quality-measure function
-  (QMF) over the normalised score and min / max / difference / ratio of each
-  quality measure (duration, magnitude after mean subtraction, cohort mean),
-  exactly as its ``gather_calibration_factors`` lays them out.
-
-The weights are trained offline with WeSpeaker's own
-``train_calibration_model`` (``evals/speaker-verification/cohort-20261031``);
-only the fixed arithmetic runs here, and the evaluation checks it against
-WeSpeaker's own output. Two columns are appended to WeSpeaker's: the
-calibration is condition-aware (Ferrer & McLaren's discriminative
-condition-aware back-end) — whether the probe comes through a different
-channel from the template's, as an indicator and its product with the
-score. A single global calibration over-trusts same-channel strangers and
-under-trusts cross-channel owners. Durations are voiced speech.
+Every condition has its own affine quality-measure function (QMF) over the
+score and WeSpeaker's min / max / difference / ratio of the two sides' voiced
+durations (``wespeaker/bin/score_calibration.py``, Apache-2.0,
+wenet-e2e/wespeaker). The weights are trained offline with WeSpeaker's own
+``train_calibration_model`` on live multi-device recordings
+(``evals/speaker-verification/identity-20261101``); only the fixed arithmetic
+runs here. No AS-norm: a cohort recorded elsewhere inflated scores on every
+real channel it met, and on live speech no cohort helped across devices.
 
 Enrollment and probe are symmetric: an enrollment is a Person's template
 with the voiced speech it was built from, a probe is a segment or a track.
@@ -33,14 +31,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from eidolon_sdk.biz.speaker_identity import IDENTITY_CONDITIONS, comparison_condition
 
-FEATURES = (
-    "asnorm_score",
-    "duration_min_s", "duration_max_s", "duration_diff_s", "duration_ratio",
-    "magnitude_min", "magnitude_max", "magnitude_diff", "magnitude_ratio",
-    "cohort_mean_min", "cohort_mean_max", "cohort_mean_diff", "cohort_mean_ratio",
-    "cross_channel", "cross_channel_x_asnorm_score",
-)
+FEATURES = ("score", "duration_min_s", "duration_max_s", "duration_diff_s", "duration_ratio")
+# The conditions scored in the compensated space.
+COMPENSATED = frozenset({"far_cross"})
 
 
 class BackendUnavailable(ValueError):
@@ -57,13 +52,11 @@ def unit(rows) -> np.ndarray:
 
 @dataclass(frozen=True)
 class Side:
-    """One side of a trial after mean subtraction, with its cohort statistics."""
+    """One side of a trial: mean removed, plain and channel-compensated."""
 
     vector: np.ndarray
+    compensated: np.ndarray
     speech_ms: int
-    magnitude: float
-    cohort_mean: float
-    cohort_std: float
     channel: str
 
 
@@ -72,25 +65,31 @@ class Backend:
     version: str
     identity: tuple[str, str, str]
     mean: np.ndarray
-    cohort: np.ndarray
-    top_n: int
+    projection: np.ndarray
     max_speech_ms: int
-    weights: np.ndarray
-    bias: float
+    # condition -> (weights over FEATURES, bias)
+    calibrations: dict[str, tuple[np.ndarray, float]]
 
     def side(self, vector, speech_ms: int, channel: str) -> Side:
         centred = np.asarray(vector, dtype=np.float64) - self.mean
-        magnitude = float(np.linalg.norm(centred))
-        prepared = centred / magnitude
-        scores = np.sort(self.cohort @ prepared)[::-1][: self.top_n]
-        return Side(prepared, int(speech_ms), magnitude, float(scores.mean()),
-                    float(scores.std()), channel)
+        return Side(unit(centred)[0], unit(centred @ self.projection)[0], int(speech_ms), channel)
 
-    def features(self, enroll: Side, probe: Side) -> np.ndarray:
-        return trial_features(enroll, probe, self.max_speech_ms)
+    def condition(self, enroll: Side, probe: Side) -> str:
+        return comparison_condition(enroll.channel, probe.channel)
+
+    def features(self, enroll: Side, probe: Side, condition: str) -> np.ndarray:
+        return trial_features(enroll, probe, condition, self.max_speech_ms)
 
     def llr(self, enroll: Side, probe: Side) -> float:
-        return float(self.features(enroll, probe) @ self.weights + self.bias)
+        condition = self.condition(enroll, probe)
+        weights, bias = self.calibrations[condition]
+        return float(self.features(enroll, probe, condition) @ weights + bias)
+
+
+def score(enroll: Side, probe: Side, condition: str) -> float:
+    if condition in COMPENSATED:
+        return float(enroll.compensated @ probe.compensated)
+    return float(enroll.vector @ probe.vector)
 
 
 def _reorder(a: float, b: float) -> list[float]:
@@ -99,17 +98,10 @@ def _reorder(a: float, b: float) -> list[float]:
     return [low, high, high - low, high / low]
 
 
-def trial_features(enroll: Side, probe: Side, max_speech_ms: int) -> np.ndarray:
-    raw = float(enroll.vector @ probe.vector)
-    asnorm = 0.5 * ((raw - enroll.cohort_mean) / enroll.cohort_std
-                    + (raw - probe.cohort_mean) / probe.cohort_std)
-    cross = float(enroll.channel != probe.channel)
+def trial_features(enroll: Side, probe: Side, condition: str, max_speech_ms: int) -> np.ndarray:
     return np.array([
-        asnorm,
+        score(enroll, probe, condition),
         *_reorder(min(enroll.speech_ms, max_speech_ms) / 1000, min(probe.speech_ms, max_speech_ms) / 1000),
-        *_reorder(enroll.magnitude, probe.magnitude),
-        *_reorder(enroll.cohort_mean, probe.cohort_mean),
-        cross, cross * asnorm,
     ])
 
 
@@ -130,23 +122,30 @@ BACKEND_FILE = "identity-backend.json"
 
 
 def load_backend(model_dir) -> Backend:
-    """The calibration and the cohort it was trained with, checked by digest."""
+    """The calibration and the arrays it was trained with, checked by digest."""
     root = Path(model_dir)
     try:
         spec = json.loads((root / BACKEND_FILE).read_text())
-        data = (root / spec["cohort"]["path"]).read_bytes()
+        data = (root / spec["arrays"]["path"]).read_bytes()
     except (OSError, ValueError, KeyError):
         raise BackendUnavailable("backend_missing") from None
-    if hashlib.sha256(data).hexdigest() != spec["cohort"]["sha256"] or spec["features"] != list(FEATURES):
-        raise BackendUnavailable("backend_invalid")
     try:
-        with np.load(root / spec["cohort"]["path"], allow_pickle=False) as npz:
+        valid = (hashlib.sha256(data).hexdigest() == spec["arrays"]["sha256"]
+                 and spec["features"] == list(FEATURES)
+                 and set(spec["conditions"]) == set(IDENTITY_CONDITIONS))
+        calibrations = {
+            c: (np.asarray(v["weights"], dtype=np.float64), float(v["bias"]))
+            for c, v in spec["conditions"].items()
+        }
+        with np.load(root / spec["arrays"]["path"], allow_pickle=False) as npz:
             mean = np.asarray(npz["mean"], dtype=np.float64)
-            cohort = unit(np.asarray(npz["cohort"], dtype=np.float64) - mean)
-    except (KeyError, ValueError, OSError):
+            projection = np.asarray(npz["projection"], dtype=np.float64)
+    except (KeyError, ValueError, TypeError, OSError):
         raise BackendUnavailable("backend_invalid") from None
+    if (not valid or mean.ndim != 1 or projection.ndim != 2 or projection.shape[0] != mean.shape[0]
+            or any(w.shape != (len(FEATURES),) for w, _ in calibrations.values())):
+        raise BackendUnavailable("backend_invalid")
     return Backend(
-        version=spec["version"], identity=tuple(spec["identity"]), mean=mean, cohort=cohort,
-        top_n=int(spec["top_n"]), max_speech_ms=int(spec["max_speech_ms"]),
-        weights=np.asarray(spec["weights"], dtype=np.float64), bias=float(spec["bias"]),
+        version=spec["version"], identity=tuple(spec["identity"]), mean=mean, projection=projection,
+        max_speech_ms=int(spec["max_speech_ms"]), calibrations=calibrations,
     )

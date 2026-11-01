@@ -17,6 +17,24 @@ from .calibration import CROP_MIN_SPEECH_MS, calibration_windows, crop
 from .providers.modelscope_campplus import ModelScopeCampPlusSpeakerVerificationProvider
 
 
+# Voiced speech is measured at the level the phone app delivers. Far-field
+# boards run no automatic gain (BOX-3 and StackChan arrive at RMS 0.01-0.03)
+# and the VAD counts a third or less of quiet speech, so their turns never
+# reached scoring (design §8.2 1c-1). The embedding is level-invariant and
+# always uses the PCM as captured; only the measurement is levelled.
+MEASUREMENT_RMS = 0.06
+MEASUREMENT_PEAK = 0.9
+
+
+def measurement_level(samples: np.ndarray) -> np.ndarray:
+    """``samples`` scaled to MEASUREMENT_RMS, never past MEASUREMENT_PEAK of full scale."""
+    rms = float(np.sqrt(np.mean(samples * samples)))
+    peak = float(np.max(np.abs(samples)))
+    if rms <= 0 or peak <= 0:
+        return samples
+    return samples * min(MEASUREMENT_RMS / rms, MEASUREMENT_PEAK / peak)
+
+
 class InvalidSpeakerAudio(ValueError):
     """A machine-readable signal-quality failure, never an identity rejection."""
 
@@ -145,8 +163,9 @@ class ReferenceSpeakerExtractor:
             raise InvalidSpeakerAudio('audio_clipped', quality)
         self._vad.reset()
         size = self._vad.window_size_samples
+        levelled = measurement_level(samples)
         voiced = [
-            self._vad(samples[i:i + size]) >= .5
+            self._vad(levelled[i:i + size]) >= .5
             for i in range(0, len(samples) - size + 1, size)
         ]
         speech_ms = sum(voiced) * size * 1000 // 16000

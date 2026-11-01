@@ -111,3 +111,29 @@ def test_padding_does_not_turn_insufficient_speech_into_identity_evidence(tmp_pa
     assert caught.value.quality.speech_ms == 500
     assert caught.value.quality.required_speech_ms == 600
     assert len(provider.received) == count
+
+
+class LevelVad(Vad):
+    """Counts a window as speech only above a loudness, like a VAD on quiet far-field audio."""
+
+    def __call__(self, samples):
+        return float(np.sqrt(np.mean(samples * samples)) > 0.03)
+
+
+def test_voiced_speech_is_measured_at_the_phone_level_but_embedded_as_captured(tmp_path):
+    extractor, provider = engine(tmp_path)
+    extractor._vad_factory = LevelVad
+    extractor.warm_up()
+    rng = np.random.default_rng(0)
+    quiet = (rng.standard_normal(32000) * 0.015 * 32768).astype('<i2')  # a board without AGC
+    sample = extractor.extract(quiet.tobytes(), 600)
+    assert sample.speech_ms >= 1900  # measured as if at RMS 0.06, not rejected as too short
+    assert provider.received[-1] == quiet.tobytes()
+
+
+def test_levelling_never_drives_a_peak_into_clipping():
+    from eidolon.livekit.plugins.speaker_verification.reference_extractor import measurement_level
+    x = np.zeros(16000)
+    x[100] = 0.5  # a click in near silence
+    assert np.max(np.abs(measurement_level(x))) == pytest.approx(0.9)
+    assert np.array_equal(measurement_level(np.zeros(10)), np.zeros(10))

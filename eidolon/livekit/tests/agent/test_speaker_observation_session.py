@@ -193,7 +193,8 @@ async def test_optional_observation_preserves_unsupported_audio_paths(monkeypatc
     monkeypatch.setattr(room_io, "start_room_session", media)
     pipeline = SimpleNamespace(_speaker_observation=object(), _factory=SimpleNamespace(
         stt=SimpleNamespace(stt=MappedRecognizer() if mapped else object()), runtime_session_id="session"),
-        _warmup_stages=AsyncMock(), _filler=None, session_mark=MagicMock())
+        _warmup_stages=AsyncMock(), _filler=None, session_mark=MagicMock(),
+        _begin_stage_warmup=MagicMock(), _end_stage_warmup=AsyncMock())
     options = RoomOptions(audio_input=microphone)
     await FullDuplexSessionLifecycle(pipeline)._prepare_session(options=options)
     assert media.call_args.kwargs["options"] is options

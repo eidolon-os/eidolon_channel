@@ -281,8 +281,8 @@ class HalfDuplexPttPipeline(BasePipeline):
         participant_identity = await wait_for_runtime_participant_identity(room)
         await self._open_ptt_session_trace(room)
         self._install_room_observers(room)
-        await self._warmup_stages()
-        self.session_mark("warmup_done")
+        # Beside the session, not before it (BasePipeline._begin_stage_warmup).
+        self._begin_stage_warmup()
         self._provider_events.install_all()
 
         # Closing ends input admission; do not wait for another final transcript.
@@ -291,12 +291,17 @@ class HalfDuplexPttPipeline(BasePipeline):
         self._bind_session(session)
 
         from ..session.room_io import start_room_session
-        self._presentation_io = await start_room_session(
-            session=session, agent=self._build_agent(), input_room=room,
-            options=self._build_room_options(participant_identity),
-            output_room=output_room, output_participant_identity=output_participant_identity,
-        )
-        await self._start_music_runtime(session)
+        try:
+            self._presentation_io = await start_room_session(
+                session=session, agent=self._build_agent(), input_room=room,
+                options=self._build_room_options(participant_identity),
+                output_room=output_room, output_participant_identity=output_participant_identity,
+            )
+            await self._start_music_runtime(session)
+        except BaseException:
+            # A start that failed takes its warmup with it, as full duplex does.
+            await self._end_stage_warmup()
+            raise
         self.session_mark("session_started")
         if self._on_session_started is not None:
             await self._on_session_started()

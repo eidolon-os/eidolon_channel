@@ -17,8 +17,12 @@ like boilerplate, but the framework doesn't manage warmup itself:
     latency is unacceptable.
   * Our FireRed VAD has an ONNX session that must be loaded once.
 
-Stage wrappers give us a uniform place to call ``warmup()`` BEFORE
-``session.start()`` and ``shutdown()`` AFTER ``session.aclose()``.
+Stage wrappers give us a uniform place to call ``warmup()`` as the session
+starts and ``shutdown()`` AFTER ``session.aclose()``. Warmup runs beside the
+media setup and does not hold ``session_started`` back: the pools accept use
+while warming and STT queues audio until its stream connects, so waiting for
+the slowest connection only delayed every conversation's start
+(:meth:`BasePipeline._begin_stage_warmup`).
 
 The wrappers are thin (mostly delegation + lifecycle hooks). If
 livekit-agents adds an official prewarm hook, the wrappers should be
@@ -28,9 +32,11 @@ collapsed to a single ``LifecycleStage`` helper.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from eidolon.livekit.common.config import ObservabilityConfig
@@ -41,6 +47,13 @@ from .types import PipelineCallbacks, PipelineState
 from ..session.music import SessionMusicRuntime
 
 logger = logging.getLogger("agent")
+
+
+def _report_warmup_failure(task: asyncio.Task[None]) -> None:
+    """A background warmup that fails is logged; it never ends the conversation."""
+
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("[BasePipeline] stage warmup failed", exc_info=task.exception())
 
 
 class BasePipeline(ABC):
@@ -72,6 +85,7 @@ class BasePipeline(ABC):
         self._session_trace: SessionTraceWriter | None = None
         self._pending_session_marks: list[tuple[str, float, dict[str, Any]]] = []
         self._music_runtime: SessionMusicRuntime | None = None
+        self._warmup_task: asyncio.Task[None] | None = None
 
     async def _start_music_runtime(self, session: Any) -> None:
         from ..eidolon_agent_rpc.grpc_llm import EidolonAgentGrpcLlm
@@ -200,6 +214,7 @@ class BasePipeline(ABC):
     async def shutdown(self) -> None:
         """Shared graceful shutdown — resets state and marks pipeline as stopped."""
         logger.info("[BasePipeline] shutting down")
+        await self._end_stage_warmup()
         await self._close_music_runtime()
         self.close_session_trace(getattr(self, "_session_trace_close_reason", "session_ended"))
         self._state = PipelineState.IDLE
@@ -260,11 +275,43 @@ class BasePipeline(ABC):
                     type(stage).__name__,
                 )
 
+    def _begin_stage_warmup(self, *after: Callable[[], Awaitable[Any]]) -> None:
+        """Warm the stages beside the conversation, not in front of it.
+
+        ``session_started`` used to wait for every warmup: the STT and TTS
+        connections and then the interrupt classifier, a request to a remote
+        decider, so a conversation started only after its slowest network round
+        trip (11-01: ~0.4 s median, and as long as the uplink makes it). Starting
+        needs none of them -- the cue is local audio, the pools take lazy use
+        while warming, STT queues audio until its stream connects. ``after``
+        runs once the stages are warm. The task is the pipeline's: stage
+        shutdown stops it before shutting the stages down.
+        """
+
+        async def warm() -> None:
+            await self._warmup_stages()
+            for step in after:
+                await step()
+            self.session_mark("warmup_done")
+
+        task = asyncio.create_task(warm(), name="pipeline-stage-warmup")
+        task.add_done_callback(_report_warmup_failure)
+        self._warmup_task = task
+
+    async def _end_stage_warmup(self) -> None:
+        """Stop a warmup still running; idempotent, never raises its failure."""
+
+        task, self._warmup_task = self._warmup_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait({task})
+
     async def _shutdown_stages(self) -> None:
         """Call ``shutdown()`` on each lifecycle stage that supports it.
 
         Continues on error so one stage's misbehaviour can't strand others.
         """
+        await self._end_stage_warmup()
         for stage in self._lifecycle_stages():
             if not hasattr(stage, "shutdown"):
                 continue

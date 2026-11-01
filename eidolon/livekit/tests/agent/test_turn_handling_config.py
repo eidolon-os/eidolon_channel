@@ -118,6 +118,8 @@ async def test_session_uses_livekit_transcription_timeout_event(
         _on_session_error=MagicMock(),
         _session_signals=SimpleNamespace(register_vad_inference_callback=MagicMock()),
         _warmup_stages=AsyncMock(),
+        _begin_stage_warmup=MagicMock(),
+        _end_stage_warmup=AsyncMock(),
         _filler=None,
         _ensure_room_data_bridge=lambda: SimpleNamespace(install=MagicMock()),
         _voiceprint_turns=SimpleNamespace(install=MagicMock()),
@@ -126,9 +128,9 @@ async def test_session_uses_livekit_transcription_timeout_event(
     )
     room = SimpleNamespace(name="room-1", on=MagicMock())
 
-    with pytest.raises(ExceptionGroup) as startup_error:
+    # Media setup is the only startup barrier now; warmup runs beside it.
+    with pytest.raises(SessionStarted):
         await FullDuplexSessionLifecycle(pipeline).run(room)
-    assert isinstance(startup_error.value.exceptions[0], SessionStarted)
 
     assert captured["options"] == {
         "turn_handling": {"interruption": {"enabled": False}},

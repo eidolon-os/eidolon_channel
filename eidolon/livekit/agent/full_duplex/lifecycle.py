@@ -221,11 +221,12 @@ class FullDuplexSessionLifecycle:
             await self.shutdown()
 
     async def _prepare_session(self, **room_session_options: Any) -> None:
-        """Overlap provider prewarm with media setup; own both until completion.
+        """Set up media; provider warmup runs beside it and beyond it.
 
-        The existing provider pools support lazy use during warmup. Keep the
-        session confirmation after this barrier, and cancel the sibling on
-        failure or job cancellation so no startup task survives teardown.
+        Only the media path is a barrier for the session confirmation: the
+        provider pools support lazy use during warmup, so waiting for it put the
+        slowest connection in front of every conversation. A media failure or
+        job cancellation stops the warmup too, so no startup task outlives it.
         """
         from ..session.room_io import start_room_session
 
@@ -242,12 +243,6 @@ class FullDuplexSessionLifecycle:
                 room_session_options["options"] = replace(room_session_options["options"], audio_input=False)
             else:
                 observation = None
-
-        async def warmup() -> None:
-            await pipeline._warmup_stages()
-            if pipeline._filler is not None:
-                await pipeline._filler.warmup()
-            pipeline.session_mark("warmup_done")
 
         async def start_media() -> None:
             pipeline._presentation_io = await start_room_session(**room_session_options)
@@ -275,11 +270,13 @@ class FullDuplexSessionLifecycle:
                 await pipeline._evidence_input.start()
             pipeline.session_mark("media_started")
 
+        pipeline._begin_stage_warmup(
+            *((pipeline._filler.warmup,) if pipeline._filler is not None else ())
+        )
         try:
-            async with asyncio.TaskGroup() as startup:
-                startup.create_task(warmup())
-                startup.create_task(start_media())
+            await start_media()
         except BaseException:
+            await pipeline._end_stage_warmup()
             await self._close_speaker_observation()
             evidence_input = getattr(pipeline, "_evidence_input", None)
             if evidence_input is not None:

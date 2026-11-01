@@ -144,6 +144,8 @@ class FakeAdapter:
         self.sessions_closed: list[tuple[dict[str, Any], str | None]] = []
         # Whether the last open arrived on the device's own channel.
         self.last_device_requested = False
+        self.last_entry: dict | None = None
+        self.last_speech_voice: dict | None = None
         # Channels currently listened to, keyed the way a real adapter would
         # have to key them, so re-stating one cannot leave two behind.
         self.watched: dict[str, ServingRequestSink] = {}
@@ -205,8 +207,11 @@ class FakeAdapter:
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, device_requested: bool = False,
+        entry: dict | None = None, speech_voice: dict | None = None,
     ) -> None:
         self.sessions_opened.append((handle, conversation_id, session_intent))
+        self.last_entry = entry
+        self.last_speech_voice = speech_voice
         self.last_target_companion_id = target_companion_id
         self.last_device_requested = device_requested
 

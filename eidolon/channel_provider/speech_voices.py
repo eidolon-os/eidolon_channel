@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import hashlib
 import os
 import socket
@@ -28,6 +29,8 @@ from eidolon.speech_voice.preview import PREVIEW_TEXTS, RENDITION_TEXT, PreviewB
 from eidolon.speech_voice.reference_audio import check_reference
 from eidolon.speech_voice.resolve import resolve
 from eidolon.speech_voice.wav import wav_bytes
+
+logger = logging.getLogger(__name__)
 
 MAX_UPLOAD = 12 * 1024 * 1024
 _REFRESH = web.AppKey("speech_voice_refresh", asyncio.Task)
@@ -62,6 +65,33 @@ class ConfiguredSynthesis:
             await stage.shutdown()
             await stage.tts.aclose()
         return b"".join(chunks), rate or 16000
+
+
+class SessionVoiceResolver:
+    """The voice a session will speak with, resolved as its job is dispatched.
+
+    The same decision ``/resolve`` serves the worker and Admin, made here once
+    with the Companion the Provider has just admitted (speech_voice.dispatch).
+    A voice is experience, not function: anything going wrong is ``None``, and
+    the job then resolves the voice itself, exactly as before.
+    """
+
+    def __init__(self, authority, catalog: HostVoiceCatalogService, *, deadline_s: float = 0.3) -> None:
+        self._authority, self._catalog, self._deadline_s = authority, catalog, deadline_s
+
+    async def __call__(self, companion_id: str) -> dict | None:
+        from eidolon_sdk.biz.system_data import SystemDataNotFound
+
+        try:
+            async with asyncio.timeout(self._deadline_s):
+                try:
+                    record = await self._authority.get_companion_speech_voice(companion_id)
+                except SystemDataNotFound:
+                    record = None  # an authority that predates voice choices
+            return resolve(record, self._catalog.catalog(), self._catalog.overlay).model_dump(mode="json")
+        except Exception:
+            logger.warning("session voice not resolved at dispatch; the job resolves it", exc_info=True)
+            return None
 
 
 def host_propagator() -> str:

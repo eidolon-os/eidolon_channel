@@ -58,6 +58,7 @@ from eidolon_sdk.biz.contracts import (
     normalize_conversation_id,
 )
 from eidolon.livekit.common.config import AgentConfig, load_agent_config
+from eidolon.livekit.common.entry_timing import entry_record, format_entry
 from eidolon.locked_environment import require_locked_environment
 
 # Load the session-contract resolver with the worker, not lazily per job.
@@ -218,13 +219,42 @@ def _publish_turn_models(status: dict) -> None:
         logger.warning("[Agent] cannot publish turn model status at %s", path)
 
 
+def _job_process_cost() -> dict:
+    """What building this job process cost, from its creation until now.
+
+    Every conversation takes a warm process and starts building the next, so
+    this is how long the next conversation would wait were none left. CPU time
+    is the budgeted figure: wall time also counts everything else starting with
+    it (a whole Host booting), CPU time only the work this process did --
+    which is where compiling imports from source or loading torch shows up.
+    """
+
+    import psutil
+
+    process = psutil.Process()
+    times = process.cpu_times()
+    return {
+        "ready_seconds": round(time.time() - process.create_time(), 2),
+        "ready_cpu_seconds": round(times.user + times.system, 2),
+    }
+
+
 def _load_prewarm_models(proc) -> None:
     loaded = {"vad": {"state": "failed"}, "eot": {"state": "failed"}}
     try:
         _load_turn_models(proc, loaded)
     finally:
         both = all(part["state"] == "loaded" for part in loaded.values())
-        _publish_turn_models({"state": "loaded" if both else "failed", **loaded})
+        proc.userdata["warmed_at"] = time.time()
+        try:
+            from eidolon.livekit.common.config import load_effective_config
+
+            warm = {"warm_processes": _resolve_num_idle_processes(load_effective_config())}
+        except Exception:
+            warm = {}
+        _publish_turn_models({
+            "state": "loaded" if both else "failed", **loaded, **_job_process_cost(), **warm,
+        })
 
 
 def _load_turn_models(proc, loaded: dict) -> None:
@@ -416,6 +446,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     from eidolon.livekit.agent.half_duplex.pipeline import HalfDuplexPttPipeline
     from eidolon.livekit.agent.full_duplex import StreamingPipeline
 
+    job_started_at = time.time()
     logger.info(
         "[Agent] starting room=%s stt=%s tts=%s vad=%s",
         ctx.room.name,
@@ -484,6 +515,17 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             "[lifecycle] session_started conversation_id=%s room=%s sent",
             runtime_session_id,
             room.name,
+        )
+        # One line per way in: request to start, where it went, and whether a
+        # warm process was waiting (common.entry_timing).
+        logger.info(
+            "[entry] conversation_id=%s room=%s %s",
+            runtime_session_id,
+            room.name,
+            format_entry(entry_record(
+                metadata, job_started_at=job_started_at, now=time.time(),
+                warmed_at=getattr(ctx.proc, "userdata", {}).get("warmed_at"),
+            )),
         )
         if started is not None:
             started.set()
@@ -701,10 +743,11 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     )
     session_voice = None
     if runtime_services is not None and (stage_output_plan is None or stage_output_plan.outputs.speech):
+        from eidolon.speech_voice.dispatch import dispatched_voice
         from .session.speech_voice import resolve_session_voice, shielded_companion_id
         session_voice = await resolve_session_voice(
             cfg, companion_id=lambda: shielded_companion_id(runtime_services.resolve_room(room)),
-            authority=runtime_services.runtime,
+            authority=runtime_services.runtime, dispatched=dispatched_voice(metadata),
         )
     try:
         factory = SharedStageFactory.from_config(
@@ -980,11 +1023,36 @@ def _validate_config(cfg: AgentConfig) -> None:
         raise ValueError("AgentConfig validation failed:\n  - " + "\n  - ".join(errors))
 
 
+#: Every conversation takes a warm job process, and its replacement starts only
+#: then, so this many conversations can start together before one waits for a
+#: process to be built. A household Host has a few voice bodies.
+WARM_PROCESS_CEILING = 3
+#: A warmed job process, measured 11-01 once it no longer imported torch:
+#: ~0.65 GB resident (1.03 GB before).
+WARM_PROCESS_BYTES = 700 * 1024 * 1024
+#: Idle warm processes may hold at most this much of the Host's memory.
+WARM_PROCESS_MEMORY_SHARE = 0.25
+
+
+def host_warm_processes(*, cpu_count: int, memory_bytes: int) -> int:
+    """How many job processes this Host keeps warm when nobody says otherwise.
+
+    One for every conversation that may start at once, as far as the Host can
+    afford: idle processes keep to a quarter of memory and one per two cores,
+    because building one competes with the conversation already running. Never
+    none — the first conversation would then wait for a process.
+    """
+
+    by_memory = int(memory_bytes * WARM_PROCESS_MEMORY_SHARE) // WARM_PROCESS_BYTES
+    return max(1, min(WARM_PROCESS_CEILING, cpu_count // 2, by_memory))
+
+
 def _resolve_num_idle_processes(
     cfg: AgentConfig,
     *,
     env: str | None = None,
     cpu_count: int | None = None,
+    memory_bytes: int | None = None,
 ) -> int:
     raw_env = os.getenv("EIDOLON_CHANNEL_NUM_IDLE_PROCESSES", "").strip()
     if raw_env:
@@ -998,8 +1066,16 @@ def _resolve_num_idle_processes(
         return configured
 
     runtime_env = env or os.getenv("EIDOLON_ENV", "prod")
-    runtime_cpu_count = cpu_count if cpu_count is not None else multiprocessing.cpu_count()
-    return 0 if runtime_env == "dev" else min(runtime_cpu_count, 4)
+    if runtime_env == "dev":
+        return 1
+    if memory_bytes is None:
+        import psutil
+
+        memory_bytes = psutil.virtual_memory().total
+    return host_warm_processes(
+        cpu_count=cpu_count if cpu_count is not None else multiprocessing.cpu_count(),
+        memory_bytes=memory_bytes,
+    )
 
 
 def _build_server(cfg: AgentConfig) -> "AgentServer":

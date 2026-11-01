@@ -26,9 +26,11 @@ core:
   port: 8766
 
 worker:
-  # Keep one idle worker process warm in dev so VAD/EOT/voiceprint models load
-  # at channel startup instead of on the first room job.
-  num_idle_processes: 1
+  # num_idle_processes is left to the Host: one warm job process per
+  # conversation that may start at once, within a quarter of memory and one per
+  # two cores, up to 3 (server.host_warm_processes). Pinning 1 here made a
+  # second conversation starting within a refill wait for a new process.
+  # Set it (or EIDOLON_CHANNEL_NUM_IDLE_PROCESSES) only to override that.
 
 behavior:
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.

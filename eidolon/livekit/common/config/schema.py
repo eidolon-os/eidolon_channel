@@ -329,8 +329,8 @@ class WorkerConfig:
     # LiveKit explicit dispatch target. Keep the product default stable while
     # allowing isolated test workers to share one LiveKit deployment safely.
     agent_name: str = "eidolon"
-    # None preserves the historical runtime default:
-    # dev=0, prod=min(cpu_count, 4). Set 1+ to force startup prewarm workers.
+    # None lets the Host decide (agent.server.host_warm_processes; 1 in dev).
+    # Set a number to pin how many prewarmed job processes stay idle.
     num_idle_processes: int | None = None
     # How long a worker process may spend in setup (model loading) before the
     # framework kills it. The framework's own default is 10s, which assumes

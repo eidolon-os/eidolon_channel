@@ -647,6 +647,34 @@ async def test_service_forwards_session_target_without_changing_channel(tmp_path
     assert backend.closed == []
 
 
+async def test_the_sessions_voice_is_resolved_once_and_dispatched(tmp_path):
+    """The job need not resolve it in front of its pipeline (speech_voice.dispatch)."""
+    service, _, backend = _service(tmp_path, [1_700_000_000_000])
+    asked = []
+
+    async def voice(companion_id):
+        asked.append(companion_id)
+        return {"voice_key": "k", "reason": "selected"}
+
+    service._session_voice = voice
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+    payload = session_payload(operation=OPEN_SESSION)
+    payload['target_companion_id'] = 'visitor'
+    await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION))
+    assert asked == ['visitor']
+    assert backend.last_speech_voice == {"voice_key": "k", "reason": "selected"}
+
+    # No resolution (slow, failing, or no Companion): the job resolves it as before.
+    async def unresolved(companion_id):
+        return None
+
+    service._session_voice = unresolved
+    payload = session_payload(operation=OPEN_SESSION, conversation_id="conversation-9")
+    payload['target_companion_id'] = 'visitor'
+    await service.open_session(SessionRequest.parse(encoded(payload), expected=OPEN_SESSION))
+    assert backend.last_speech_voice is None
+
+
 @pytest.mark.parametrize("failure", ["error", "timeout", "invalid"])
 async def test_presence_keeps_unobservable_devices_unknown(tmp_path, monkeypatch, failure):
     # This is the production presence read; the removed shared preview must not
@@ -793,6 +821,27 @@ async def test_only_the_device_road_is_marked_as_the_devices_own(tmp_path) -> No
         )
     )
     assert backend.last_device_requested is False
+
+
+async def test_a_device_request_takes_its_entry_timing_to_the_dispatch(tmp_path) -> None:
+    """When the device was heard, for the job's entry record; only that road has one."""
+    clock = [1_700_000_000_000]
+    service, _store, backend = _service(tmp_path, clock)
+    await service.provision(ProvisionRequest.parse(encoded(provision_payload())))
+
+    await backend.device_asks(_DEVICE_1, ServingRequest(
+        ServingAction.START, "conversation-1", received_at_ms=1_700_000_000_500,
+        action_to_send_ms=35,
+    ))
+    assert backend.last_entry == {"requested_at_ms": 1_700_000_000_500, "action_to_send_ms": 35}
+
+    await service.open_session(
+        SessionRequest.parse(
+            encoded(session_payload(operation=OPEN_SESSION, conversation_id="conversation-2")),
+            expected=OPEN_SESSION,
+        )
+    )
+    assert backend.last_entry is None
 
 
 async def test_personal_selection_flows_only_from_control_request(tmp_path):

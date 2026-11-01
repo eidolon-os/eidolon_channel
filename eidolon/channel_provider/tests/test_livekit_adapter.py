@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -2069,3 +2070,68 @@ async def test_unserved_private_worker_requests_authoritative_cleanup(monkeypatc
         assert client.agent_dispatch.deleted == []
     finally:
         remove()
+
+
+# -- entry timing: when the request was heard, for the job's entry record -----
+
+
+@pytest.mark.parametrize(
+    ("reported", "kept"),
+    [(840, 840), (0, 0), (60_000, 60_000), (60_001, None), (-1, None), ("840", None),
+     (True, None), (None, None)],
+)
+async def test_a_request_carries_when_it_was_heard_and_the_devices_own_timing(
+    reported, kept
+) -> None:
+    adapter, _ = _adapter()
+    body = {
+        "schema_v": WIRE_SCHEMA_VERSION,
+        "type": SESSION_OPEN_TYPE,
+        SESSION_CONVERSATION_ID_FIELD: "conversation-1",
+    }
+    if reported is not None:
+        body["action_to_send_ms"] = reported
+    before = int(time.time() * 1000)
+
+    request = adapter._requested(
+        _packet(topic=SESSION_CONTROL_TOPIC, identity=_DEVICE_1, body=body),
+        device=_DEVICE_1, room="r",
+    )
+
+    # A figure that is not one is dropped, never a reason to refuse the start.
+    assert request is not None and request.action is ServingAction.START
+    assert before <= request.received_at_ms <= int(time.time() * 1000)
+    assert request.action_to_send_ms == kept
+
+
+async def test_the_dispatch_carries_the_entry_and_a_retry_still_converges() -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED,
+        device_requested=True, entry={"requested_at_ms": 1_700, "action_to_send_ms": 40},
+    )
+
+    metadata = json.loads(client.agent_dispatch.created[0][2])
+    assert metadata["entry"] == {"requested_at_ms": 1_700, "action_to_send_ms": 40}
+    # The device repeats its request (a reconnect): the same conversation, heard
+    # later. Timing is no part of what was asked, so nothing new is dispatched.
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED,
+        device_requested=True, entry={"requested_at_ms": 9_900},
+    )
+    assert len(client.agent_dispatch.created) == 1 and not client.agent_dispatch.deleted
+
+
+async def test_the_dispatch_carries_the_resolved_voice() -> None:
+    adapter, client = _adapter()
+    grant = await adapter.open(_spec(), issued_at_ms=1_000)
+    voice = {"voice_key": "k", "display_name": "龙婉", "reason": "selected"}
+
+    await adapter.open_session(
+        grant.handle, "conversation-1", session_intent=SESSION_INTENT_USER_INITIATED,
+        speech_voice=voice,
+    )
+
+    assert json.loads(client.agent_dispatch.created[0][2])["speech_voice"] == voice

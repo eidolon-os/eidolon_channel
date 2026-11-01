@@ -68,6 +68,14 @@ def main() -> None:
     from eidolon.livekit.agent.runtime.kernel_bodies import KernelBodyHttpClient
     companion_authority = CompanionAdmission(
         KernelBodyHttpClient(base_url=runtime_settings.kernel_api_url), personal_authority)
+    from eidolon.livekit.plugins.tts.voice_catalogs import all_adapter_classes, current_adapter
+    from eidolon.speech_voice.catalog import HostVoiceCatalogService
+    from eidolon.speech_voice.preview import VoicePreviews
+    from .speech_voices import ConfiguredSynthesis, SessionVoiceResolver, host_propagator
+    agent_config = load_effective_config()
+    voice_root = config.storage.path.parent / "speech-voices"
+    voice_catalog = HostVoiceCatalogService(
+        current_adapter(agent_config), all_adapter_classes(), voice_root / "catalog_snapshot.json")
     service = ChannelProviderService(
         store=store,
         registry=registry,
@@ -75,6 +83,7 @@ def main() -> None:
         smarthome=smarthome,
         personal_authority=personal_authority.resolve_person_memory,
         companion_authority=companion_authority.resolve,
+        session_voice=SessionVoiceResolver(personal_authority, voice_catalog),
     )
     service.initialize()
     speaker_engine = None
@@ -87,14 +96,6 @@ def main() -> None:
             ReferenceSpeakerExtractor,
         )
         speaker_engine = SpeakerInferenceEngine(ReferenceSpeakerExtractor(require_speaker_model_dir(config.speaker_model_dir)))
-    from eidolon.livekit.plugins.tts.voice_catalogs import all_adapter_classes, current_adapter
-    from eidolon.speech_voice.catalog import HostVoiceCatalogService
-    from eidolon.speech_voice.preview import VoicePreviews
-    from .speech_voices import ConfiguredSynthesis, host_propagator
-    agent_config = load_effective_config()
-    voice_root = config.storage.path.parent / "speech-voices"
-    voice_catalog = HostVoiceCatalogService(
-        current_adapter(agent_config), all_adapter_classes(), voice_root / "catalog_snapshot.json")
     voice_previews = VoicePreviews(voice_root / "previews", synthesize=ConfiguredSynthesis(agent_config),
         propagator=host_propagator(),
         max_bytes=int(os.environ.get("EIDOLON_VOICE_PREVIEW_CACHE_BYTES", str(64 * 1024 * 1024))))

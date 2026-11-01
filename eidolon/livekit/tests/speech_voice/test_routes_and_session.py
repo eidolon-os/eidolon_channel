@@ -185,3 +185,50 @@ async def test_a_provider_without_an_adapter_keeps_its_configured_voice() -> Non
     cfg = replace(EffectiveAgentConfig(), providers=ProvidersConfig(tts_provider="sensetime"))
     result = await session_voice.resolve_session_voice(cfg, companion_id=lambda: _ready("c"), authority=_Authority())
     assert (result.resolved.reason, result.resolved.ref) == ("host_fixed_voice", None)
+
+
+async def test_a_voice_the_dispatch_carries_is_used_without_any_call() -> None:
+    # 11-01: identity, the Companion's choice and resolution, one after another,
+    # cost every start ~90 ms in front of its pipeline. channel-provider now
+    # resolves the voice as it dispatches; the job makes none of those calls.
+    from eidolon.speech_voice.dispatch import dispatched_voice
+
+    async def never():
+        raise AssertionError("identity must not be awaited for a dispatched voice")
+
+    class _Untouched:
+        async def get_companion_speech_voice(self, companion_id):
+            raise AssertionError("the authority must not be asked")
+
+    metadata = {"speech_voice": {"ref": {"provider": "bailian", "model": "cosyvoice-v3-flash",
+                                         "voice_id": "longwan_v3"}, "voice_key": "k",
+                                 "display_name": "龙婉", "reason": "selected"}}
+    result = await session_voice.resolve_session_voice(
+        _bailian(), companion_id=never, authority=_Untouched(),
+        dispatched=dispatched_voice(metadata),
+    )
+    assert (result.resolved.reason, result.resolved.ref.voice_id) == ("selected", "longwan_v3")
+
+
+@pytest.mark.parametrize("metadata", [{}, {"speech_voice": "x"}, {"speech_voice": {"reason": 3}}])
+def test_a_dispatch_without_a_usable_voice_leaves_it_to_the_job(metadata) -> None:
+    from eidolon.speech_voice.dispatch import dispatched_voice
+
+    assert dispatched_voice(metadata) is None
+
+
+async def test_channel_provider_resolves_the_voice_with_the_same_function(tmp_path) -> None:
+    from eidolon.channel_provider.speech_voices import SessionVoiceResolver
+    from eidolon.speech_voice.resolve import resolve
+
+    cls = adapter_class(write_catalog(tmp_path / "v.yaml"))
+    catalog = HostVoiceCatalogService(cls(FakeConfig()), [cls], tmp_path / "s.json")
+    record = CompanionSpeechVoice(companion_id="c", revision=1)
+    resolver = SessionVoiceResolver(_Authority(record), catalog)
+
+    assert await resolver("c") == resolve(record, catalog.catalog(), catalog.overlay).model_dump(mode="json")
+    # An authority that predates voice choices reads as no choice, as /resolve does.
+    missing = await SessionVoiceResolver(_Authority(missing=True), catalog)("c")
+    assert missing["reason"] == resolve(None, catalog.catalog(), catalog.overlay).reason
+    # Slow or failing: nothing is dispatched, and the job resolves it as before.
+    assert await SessionVoiceResolver(_Authority(delay=2), catalog, deadline_s=0.05)("c") is None

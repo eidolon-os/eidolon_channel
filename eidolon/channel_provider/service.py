@@ -27,6 +27,7 @@ from eidolon_sdk.biz.control.shared_session import (
 from eidolon_sdk.biz.smarthome import VoiceResult
 
 from eidolon.capability_runtime.smarthome import SmartHomeRuntime
+from eidolon.livekit.common.entry_timing import dispatch_entry
 
 from .contracts import (
     BackendUnavailable,
@@ -83,6 +84,7 @@ class ChannelProviderService:
         smarthome: SmartHomeRuntime | None = None,
         personal_authority=None,
         companion_authority=None,
+        session_voice=None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -91,6 +93,8 @@ class ChannelProviderService:
         self._smarthome = smarthome
         self._personal_authority = personal_authority
         self._companion_authority = companion_authority
+        # Resolves a Companion's speech voice for the dispatch (SessionVoiceResolver).
+        self._session_voice = session_voice
         self._smarthome_poller: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._personal_sessions = PersonalSessions(store, registry, self._lock)
@@ -1077,7 +1081,7 @@ class ChannelProviderService:
     async def _converge_serving(
         self, device_ref, *, serving: bool, conversation_id: str | None, session_intent: str,
         target_companion_id: str | None = None, device_requested: bool = False,
-        personal_memory: dict | None = None,
+        personal_memory: dict | None = None, entry: dict | None = None,
     ) -> tuple[StoredProvision, list[str]]:
         """Converge one device's channel onto served or unserved.
 
@@ -1166,6 +1170,11 @@ class ChannelProviderService:
                 if target_companion_id is not None:
                     self._require_scene_companions_available(active.owner_id,
                         [target_companion_id], personal_session_id=conversation_id)
+                # Resolved here, once, so the job need not resolve it in front
+                # of its pipeline; None leaves that to the job as before.
+                speech_voice = (await self._session_voice(target_companion_id)
+                                if self._session_voice is not None and target_companion_id is not None
+                                else None)
                 durable = personal_memory is not None or (
                     self._companion_authority is not None and target_companion_id is not None)
                 if durable:
@@ -1180,6 +1189,8 @@ class ChannelProviderService:
                         target_companion_id=target_companion_id,
                         device_requested=device_requested,
                         **({"personal_memory": personal_memory} if personal_memory is not None else {}),
+                        **({"entry": entry} if entry is not None else {}),
+                        **({"speech_voice": speech_voice} if speech_voice is not None else {}),
                     )
                 except BaseException:
                     if durable:
@@ -1237,6 +1248,9 @@ class ChannelProviderService:
                 # sees a decision instead of an omission.
                 session_intent=SESSION_INTENT_USER_INITIATED,
                 device_requested=True,
+                entry=(dispatch_entry(requested_at_ms=request.received_at_ms,
+                                      action_to_send_ms=request.action_to_send_ms)
+                       if request.received_at_ms is not None else None),
             )
 
         return _requested

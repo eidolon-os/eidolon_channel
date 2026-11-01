@@ -37,6 +37,7 @@ from eidolon_sdk.biz.contracts import (
     SESSION_CLOSE_TYPE,
     SESSION_CONVERSATION_ID_FIELD,
     SESSION_APPLICATION_COMPANION,
+    SESSION_ACTION_TO_SEND_MS_FIELD,
     SESSION_APPLICATION_FIELD,
     SESSION_APPLICATION_HOME_COMMAND,
     VALID_SESSION_APPLICATIONS,
@@ -58,6 +59,9 @@ from livekit import api, rtc
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 from livekit.protocol.agent import JobStatus
 from livekit.protocol.models import ParticipantInfo
+
+from eidolon.livekit.common.entry_timing import DISPATCH_ENTRY_FIELD, action_to_send_ms
+from eidolon.speech_voice.dispatch import DISPATCH_SPEECH_VOICE_FIELD
 
 from ...contracts import BackendUnavailable, ChannelNotServable, InvalidTransition, canonical_json
 from ...ports import (
@@ -1113,7 +1117,10 @@ class LiveKitChannelAdapter:
         ):
             return None
         return ServingRequest(action=action, conversation_id=conversation_id,
-                              control_request_id=control_request_id)
+                              control_request_id=control_request_id,
+                              received_at_ms=int(time.time() * 1000),
+                              action_to_send_ms=action_to_send_ms(
+                                  body.get(SESSION_ACTION_TO_SEND_MS_FIELD)))
 
     def _note_serving_failure(self, packet: Any, *, device: str, room: str) -> None:
         """Hear the agent say it could not serve, since we are already in the room.
@@ -1287,7 +1294,8 @@ class LiveKitChannelAdapter:
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, presentation_endpoint: dict | None = None,
         team_dispatch: dict | None = None, device_requested: bool = False,
-        personal_memory: dict | None = None,
+        personal_memory: dict | None = None, entry: dict | None = None,
+        speech_voice: dict | None = None,
     ) -> None:
         """Place the standing order, and say on it why this session exists.
 
@@ -1435,6 +1443,14 @@ class LiveKitChannelAdapter:
                             **({"presentation_endpoint": presentation_endpoint} if presentation_endpoint else {}),
                             **({"team_dispatch": team_dispatch} if team_dispatch else {}),
                             **({_REQUESTED_BY_FIELD: _REQUESTED_BY_DEVICE} if device_requested else {}),
+                            # When the request was heard, for the job's entry
+                            # record (common.entry_timing). Not compared on a
+                            # retry: a timing is not part of what was asked.
+                            **({DISPATCH_ENTRY_FIELD: entry} if entry else {}),
+                            # The session's voice, already resolved, so the job
+                            # need not (speech_voice.dispatch). Not compared on a
+                            # retry either: it is derived, not asked for.
+                            **({DISPATCH_SPEECH_VOICE_FIELD: speech_voice} if speech_voice else {}),
                         }
                     ),
                 )

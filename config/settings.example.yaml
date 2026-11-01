@@ -18,9 +18,9 @@ worker:
   # Explicit LiveKit dispatch target. Override for isolated test workers that
   # share a LiveKit server with the product worker.
   agent_name: eidolon
-  # Set 1+ to keep idle prewarmed worker processes alive. 0 disables the
-  # startup prewarm process; omit the field to use env-specific defaults.
-  num_idle_processes: 1
+  # Omit to let the Host decide (server.host_warm_processes; 1 in dev). Set 1+
+  # to pin how many prewarmed job processes stay idle; 0 disables prewarming.
+  # num_idle_processes: 2
 
 behavior:
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.

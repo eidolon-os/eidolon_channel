@@ -49,9 +49,14 @@ def _provider_endpoint() -> tuple[str, str]:
 
 
 async def resolve_session_voice(
-    cfg, *, companion_id: Callable[[], Awaitable[str | None]], authority
+    cfg, *, companion_id: Callable[[], Awaitable[str | None]], authority,
+    dispatched: ResolvedSpeechVoice | None = None,
 ) -> SessionVoice:
-    """``companion_id()`` may be slow (it waits for identity); the deadline covers it too."""
+    """``companion_id()`` may be slow (it waits for identity); the deadline covers it too.
+
+    ``dispatched`` is what channel-provider resolved as it dispatched this job
+    (speech_voice.dispatch); with it, none of the calls below are made.
+    """
     started = time.monotonic()
     adapter = current_adapter(cfg)
     current = adapter.host_default() if adapter is not None else None
@@ -62,6 +67,8 @@ async def resolve_session_voice(
     if current is None:
         return done(ResolvedSpeechVoice(ref=None, voice_key=None, display_name="主机默认",
                                         reason="host_fixed_voice"))
+    if dispatched is not None:
+        return done(dispatched)
     record: CompanionSpeechVoice | None = None
     stage = "authority_unavailable"
     try:

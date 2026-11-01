@@ -56,6 +56,12 @@ class ServingRequest:
     action: ServingAction
     conversation_id: str
     control_request_id: str | None = None
+    #: When the adapter heard the request (wall ms), and how long the device
+    #: says it took to send it after the person's press. Timing only, for the
+    #: job's entry record; nothing is granted on them, and they are no part of
+    #: what was asked, so a request said twice is still one request.
+    received_at_ms: int | None = field(default=None, compare=False)
+    action_to_send_ms: int | None = field(default=None, compare=False)
 
 
 # Called by an adapter when the device on a channel asks. Awaited, so an adapter
@@ -168,7 +174,8 @@ class ChannelAdapter(Protocol):
     async def open_session(
         self, handle: dict[str, Any], conversation_id: str, *, session_intent: str,
         target_companion_id: str | None = None, device_requested: bool = False,
-        personal_memory: dict | None = None,
+        personal_memory: dict | None = None, entry: dict | None = None,
+        speech_voice: dict | None = None,
     ) -> None:
         """Bring this channel's agent to it, so a conversation can happen.
 

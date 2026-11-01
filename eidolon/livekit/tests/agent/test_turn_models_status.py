@@ -44,6 +44,24 @@ def test_loaded_models_are_published(runtime, monkeypatch) -> None:
     assert status["eot"] == {"state": "loaded", "provider": "firered"}
 
 
+def test_what_building_a_job_process_cost_is_published(runtime, monkeypatch) -> None:
+    # The next conversation waits this long if no warm process is left; on
+    # 11-01 it was ~10 s of mostly compiling transformers and torch from source.
+    monkeypatch.setattr(FireredPvadVAD, "load", Mock())
+    monkeypatch.setattr(eot, "ChineseModel", Mock())
+    monkeypatch.delenv("EIDOLON_CHANNEL_NUM_IDLE_PROCESSES", raising=False)
+    monkeypatch.setenv("EIDOLON_ENV", "product")
+    proc = SimpleNamespace(userdata={})
+
+    server._load_prewarm_models(proc)
+
+    status = _published(runtime)
+    assert status["ready_seconds"] > 0 and status["ready_cpu_seconds"] > 0
+    assert status["warm_processes"] >= 1
+    # The entry record tells a warm process from one built for its conversation.
+    assert proc.userdata["warmed_at"] > 0
+
+
 def test_a_model_that_will_not_load_is_published_as_failed(runtime, monkeypatch) -> None:
     pointer = RuntimeError("[ONNXRuntimeError] : 7 : INVALID_PROTOBUF")
     monkeypatch.setattr(FireredPvadVAD, "load", Mock(side_effect=pointer))

@@ -85,6 +85,12 @@ class AutomaticMemorySession:
                     observation = verify_observation(observation_token, secret=self.secret,
                         owner_id=context.owner_id, session_id=self.source_session_id,
                         turn_id=trace_id, text=text)
+                    if observation.reason == "recognition_pending":
+                        # Keep the current binding while the result is on its
+                        # way: it grants nothing by itself, and the Agent opens
+                        # memory only if the late result names this same
+                        # Person (design §3.4).
+                        person, mode = self._person, self._memory_mode
                     task = self._admission_task
                     if (observation.decided("personal_memory") is not None
                             and observation == self._admission_observation

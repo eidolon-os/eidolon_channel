@@ -137,6 +137,7 @@ def client(people=1, profiles=1, llr=MATCH):
         extract=AsyncMock(return_value=SAMPLE),
         record_candidate_evidence=AsyncMock(),
         discover_candidate=AsyncMock(),
+        submit_verdict=AsyncMock(return_value=SimpleNamespace(attribution_id="va_1")),
         backend=Backend(llrs),
     )
 
@@ -206,7 +207,7 @@ async def test_template_sides_are_prepared_once_per_household_revision():
 
 
 @pytest.mark.asyncio
-async def test_pending_result_is_frozen_and_late_feedback_never_changes_llm():
+async def test_a_pending_result_is_frozen_and_its_late_result_sent_once_for_that_turn():
     port = client()
     gate = asyncio.Event()
     async def slow(_, **kwargs):
@@ -230,7 +231,14 @@ async def test_pending_result_is_frozen_and_late_feedback_never_changes_llm():
         assert await observer.result("t") == result
         observer.deliver(result, text="hello", llm=llm, timeline=None)
         assert published[-1].decisions.addressing == "p0"
+        # The turn's own StartTurn keeps its frozen observation; the late
+        # result goes once on the stream, signed for that turn and text.
         assert llm.set_speaker_observation.call_count == 1
+        [late] = llm.send_late_speaker_observation.call_args_list
+        assert late.args[0] == "t"
+        accepted = verify_observation(late.args[1], secret="x" * 32, owner_id="o", session_id="s",
+                                      turn_id="t", text="hello")
+        assert accepted.decided("personal_memory").person_id == "p0"
         wrong = await observer.result("next")
         assert wrong.decisions == IdentityDecisions() and wrong.evidence == []
     finally:
@@ -978,3 +986,140 @@ async def test_a_turn_without_usable_speech_continues_no_track():
     port.extract.return_value = SAMPLE
     later = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2")
     assert later.track_id is not None and max(longest_track(port)) == SAMPLE.speech_ms
+
+
+
+async def settled(value):
+    await asyncio.gather(*list(value._submissions))
+
+
+@pytest.mark.asyncio
+async def test_a_turn_meeting_personal_memory_submits_its_verdict_after_the_observation():
+    port = client()
+    value = recognizer(port)
+    result = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    await settled(value)
+    [call] = port.submit_verdict.await_args_list
+    verdict = call.args[0]
+    assert (verdict.kind, verdict.person_id, verdict.snapshot_revision) == ("turn", "p0", "b" * 64)
+    assert [r.key() for r in verdict.refs] == [("o", "s", "t")] and verdict.refs[0].track_id == result.track_id
+    assert verdict.sample is None
+    assert port.candidates.await_args_list[0].kwargs == {"channel": CHANNEL, "session_id": "s"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("llr", [NO_MATCH, 2.0])
+async def test_no_verdict_without_a_personal_memory_decision(llr):
+    port = client(llr=llr)
+    value = recognizer(port)
+    await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    await settled(value)
+    port.submit_verdict.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_far_device_attributes_turns_but_submits_no_template():
+    port = client()
+    value = recognizer(port, channel="esp-box-3")
+    for n in range(6):
+        await value.recognize(evidence(), owner_id="o", session_id="s", turn_id=f"t{n}")
+    await settled(value)
+    verdicts = [c.args[0] for c in port.submit_verdict.await_args_list]
+    assert len(verdicts) == 6 and all(v.sample is None for v in verdicts)
+    assert {v.refs[0].source.channel for v in verdicts} == {"esp-box-3"}
+
+
+@pytest.mark.asyncio
+async def test_a_refused_verdict_changes_nothing_already_observed():
+    from eidolon_sdk.core.http.errors import ServiceUpstreamError
+    port = client()
+    port.submit_verdict.side_effect = ServiceUpstreamError(409, "refused")
+    value = recognizer(port)
+    result = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    await settled(value)
+    assert result.decisions.personal_memory == "p0" and port.submit_verdict.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_track_template_is_scored_as_the_mean_it_was_calibrated_on():
+    port = client()
+    track = ExtractedSample.track_mean([[1.0, 0.0], [0.0, 1.0]], 9000, model_id="m",
+                                       weights_hash="a" * 64, preprocessing_version="v")
+    value = snapshot()
+    value.persons[0].templates.append(VoiceTemplate(profile_id="vt", revision=1, sample=track,
+                                                    channel="esp-box-3"))
+    port.candidates.return_value = value
+    port.backend.llrs[tuple(track.scored_vector())] = MATCH
+    await recognizer(port, channel="esp-box-3").recognize(evidence(), owner_id="o", session_id="s",
+                                                          turn_id="t")
+    scored = [(v, ms) for v, ms, c in port.backend.sides if c == "esp-box-3" and ms == 9000]
+    assert len(scored) == 1 and scored[0][0] == pytest.approx((0.5, 0.5))
+
+
+@pytest.mark.asyncio
+async def test_the_data_client_scopes_candidates_and_posts_verdicts_with_its_token():
+    import httpx
+    from eidolon_sdk.biz.voice_attribution import turn_verdict
+    from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognitionClient
+
+    port = client()
+    observation = await recognizer(port).recognize(evidence(), owner_id="o", session_id="s",
+                                                    turn_id="t")
+    verdict = turn_verdict(observation, snapshot_revision="b" * 64)
+    seen = []
+
+    def data(request):
+        seen.append((request.method, request.url.path, dict(request.url.params),
+                     request.headers["authorization"]))
+        if request.method == "GET":
+            return httpx.Response(200, json=snapshot().model_dump(mode="json"))
+        return httpx.Response(200, json={
+            "attribution_id": "va_1", "revision": 1, "owner_id": "o", "person_id": "p0",
+            "person_revision": 1, "refs": [r.model_dump(mode="json") for r in verdict.refs],
+            "source": "turn", "recorded_at": 1.0})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(data)) as http:
+        data_port = SpeakerRecognitionClient(http, data_url="http://data", data_token="secret-token",
+                                             provider_url="http://unused", provider_token="x")
+        await data_port.candidates("o", channel="esp-box-3", session_id="s")
+        attribution = await data_port.submit_verdict(verdict)
+    base = "/api/companion-authority/v1/owners/o/voiceprints"
+    assert seen == [
+        ("GET", base + "/recognition-candidates", {"channel": "esp-box-3", "session_id": "s"},
+         "Bearer secret-token"),
+        ("POST", base + "/verdicts", {}, "Bearer secret-token"),
+    ]
+    assert attribution.attribution_id == "va_1"
+
+
+
+@pytest.mark.asyncio
+async def test_a_result_ready_at_commit_is_never_sent_again():
+    observer = ConversationSpeaker(recognizer=recognizer(client()), owner_id="o", session_id="s",
+                                   secret="x" * 32, publish=MagicMock())
+    try:
+        observer.begin_evidence(evidence(), "t")
+        await observer._task
+        llm = MagicMock()
+        observer.deliver(await observer.result("t"), text="hello", llm=llm, timeline=None)
+        await asyncio.sleep(0)
+        llm.send_late_speaker_observation.assert_not_called()
+    finally:
+        await observer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_session_writes_a_late_observation_frame():
+    from eidolon.livekit.agent.eidolon_agent_rpc.session import EidolonAgentSession
+
+    written = []
+    session = object.__new__(EidolonAgentSession)
+
+    async def write(request):
+        written.append(request)
+    session._write = write
+    await session.report_late_speaker_observation("trace-1", "token-1")
+    [frame] = written
+    assert frame.WhichOneof("payload") == "late_speaker_observation"
+    assert (frame.late_speaker_observation.trace_id, frame.late_speaker_observation.token) == (
+        "trace-1", "token-1")

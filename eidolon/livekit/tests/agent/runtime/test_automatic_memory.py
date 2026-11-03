@@ -336,3 +336,25 @@ async def test_candidate_pending_or_denied_policy_never_falls_back(denied):
         assert identity.person_id is None
     finally:
         await c.aclose()
+
+
+async def test_a_turn_whose_recognition_is_still_running_keeps_the_binding_it_cannot_use():
+    c, services, llm, stop = coordinator()
+    try:
+        await prepared(c, observation_token=observation(), trace_id="t", text="hello")
+        installs = llm.install_runtime.call_count
+        now = time.time()
+        pending = sign_observation(SpeakerIdentityObservation(
+            owner_id="owner", session_id="transport", turn_id="t2", status="unavailable",
+            reason="recognition_pending", issued_at=now, expires_at=now + 10), secret=SECRET, text="hello")
+        await prepared(c, observation_token=pending, trace_id="t2", text="hello")
+        # No rebinding: the Agent opens memory only if the late result names this Person.
+        assert llm.install_runtime.call_count == installs
+        identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
+        assert identity.person_id == "a"
+        await prepared(c, observation_token=observation(status="uncertain", trace="t3"), trace_id="t3",
+                       text="hello")
+        identity = await RuntimeTokenVerifier(secret=SECRET).verify(llm.install_runtime.call_args.args[0])
+        assert identity.person_id is None
+    finally:
+        await c.aclose()

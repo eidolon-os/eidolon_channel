@@ -49,6 +49,8 @@ class ConversationSpeaker:
         self.on_observation = None
         self._frozen = None
         self._delivered = False
+        # (turn_id, llm, text) of a turn delivered while its recognition ran.
+        self._late = None
         self._last_delivered_turn = None
         self._prefetch = None
         self._prefetch_config = None
@@ -84,6 +86,7 @@ class ConversationSpeaker:
         self._key = None
         self._frozen = None
         self._delivered = False
+        self._late = None
 
     def _evidence(self, coordinator):
         self._evidence_failure_reason = "audio_evidence_unavailable"
@@ -170,8 +173,15 @@ class ConversationSpeaker:
                 return
             value = task.result()
             if self._delivered and self._frozen != value and value.expires_at > time.time():
-                # Feedback only. Never sign or install a late result in the LLM.
                 self.publish(value)
+                # The turn went to the Agent while recognition ran: the Agent
+                # waits for this result at most 150 ms (design §3.4).
+                late = self._late
+                if late is not None and late[0] == value.turn_id:
+                    self._late = None
+                    send = getattr(late[1], "send_late_speaker_observation", None)
+                    if callable(send):
+                        send(value.turn_id, sign_observation(value, secret=self.secret, text=late[2]))
             if self.on_observation is not None:
                 try:
                     self.on_observation(value)
@@ -242,6 +252,8 @@ class ConversationSpeaker:
         setter = getattr(llm, "set_speaker_observation", None)
         if callable(setter):
             setter(sign_observation(value, secret=self.secret, text=text))
+            if value.reason == "recognition_pending":
+                self._late = (value.turn_id, llm, text)
         if timeline is not None:
             # No names/profile text, PCM, embeddings or signed token in traces.
             timeline.set_attr(

@@ -11,6 +11,13 @@ The utterance's segment continues the conversation track of its own voice,
 or opens one (design §3.2), and the evidence is the track's: one utterance
 across devices is weak, several of the same voice are not.
 
+A turn whose ``personal_memory`` decision names a Person is that turn's
+attribution: its verdict goes to Data in the background, never delaying the
+observation (design §3.5). It carries no observation template: segments that
+meet the bar on their own are the ones the phone template already
+recognises, and templates pooled from them added no coverage on far devices
+(design §3.2; ``evals/speaker-verification/tracks-20261102/pooled_eval.py``).
+
 The household guard (design §3.3 L7): members' registration windows, scored
 against each other's phone templates, are the only live different-speaker
 evidence on this household's channel. When one of them would already meet a
@@ -20,6 +27,7 @@ highest of them plus the policy's margin. It only ever makes a use stricter.
 
 import time
 import math
+import asyncio
 import logging
 import hashlib
 from urllib.parse import quote
@@ -37,6 +45,7 @@ from eidolon_sdk.biz.speaker_identity import (
     SpeakerIdentityObservation,
     comparison_condition,
 )
+from eidolon_sdk.biz.voice_attribution import turn_verdict
 from eidolon_sdk.biz.voiceprint import SpeakerAudioQuality
 from .speaker_extraction_client import SpeakerExtractionClient, SpeakerExtractionRejected
 from eidolon.livekit.plugins.speaker_verification.evidence import posteriors
@@ -50,12 +59,14 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
         super().__init__(http, data_url, default_headers=authorization_header(data_token))
         self._provider = SpeakerExtractionClient(http, provider_url, token=provider_token)
 
-    async def candidates(self, owner_id):
+    async def candidates(self, owner_id, *, channel=None, session_id=None):
+        params = {k: v for k, v in (("channel", channel), ("session_id", session_id)) if v}
         response = await self._request(
             "GET",
             "/api/companion-authority/v1/owners/"
             + quote(owner_id, safe="")
             + "/voiceprints/recognition-candidates",
+            params=params or None,
             timeout=1,
         )
         result = SpeakerCandidates.model_validate(response.json())
@@ -72,6 +83,13 @@ class SpeakerRecognitionClient(ServiceHTTPClient):
         if person.owner_id != request.observation.owner_id:
             raise ValueError("discovery owner mismatch")
         return person
+
+    async def submit_verdict(self, verdict):
+        from eidolon_sdk.biz.voice_attribution import VoiceAttribution
+        response = await self._request("POST", "/api/companion-authority/v1/owners/"
+            + quote(verdict.owner_id, safe="") + "/voiceprints/verdicts",
+            json=verdict.model_dump(mode="json"), timeout=1)
+        return VoiceAttribution.model_validate(response.json())
 
     async def record_candidate_evidence(self, request):
         await self._request("POST", "/api/companion-authority/v1/owners/"
@@ -93,6 +111,7 @@ class SpeakerRecognizer:
         self._busy = False
         self._templates = (None, None, {})
         self._tracks = Tracks()
+        self._submissions = set()
 
     def _track_side(self, track, condition):
         """The track as a probe, over at most the segments ``condition`` was calibrated on."""
@@ -104,8 +123,8 @@ class SpeakerRecognizer:
         if self._templates[0] != snapshot.revision:
             sides = {
                 person.person_id: [
-                    (template, self.backend.side(template.sample.vector, template.sample.speech_ms,
-                                                 template.channel))
+                    (template, self.backend.side(template.sample.scored_vector(),
+                                                 template.sample.speech_ms, template.channel))
                     for template in person.templates
                 ]
                 for person in snapshot.persons
@@ -182,7 +201,8 @@ class SpeakerRecognizer:
             return outcome("unavailable", "recognizer_busy")
         self._busy = True
         try:
-            snapshot = await self.client.candidates(owner_id)
+            scope = dict(channel=self.channel, session_id=session_id)
+            snapshot = await self.client.candidates(owner_id, **scope)
             if not snapshot.persons and snapshot.discovery_policy is None:
                 return outcome("uncertain", "no_enrolled_voices")
             probe = await self.client.extract(evidence.pcm, min_speech_ms=self.policy.min_speech_ms)
@@ -223,7 +243,7 @@ class SpeakerRecognizer:
                     if person.person_id not in best or llr > best[person.person_id][0]:
                         best[person.person_id] = (llr, person, template, condition)
             # Re-read authority after inference: changes never inherit a cached match.
-            current = await self.client.candidates(owner_id)
+            current = await self.client.candidates(owner_id, **scope)
             if current.revision != snapshot.revision:
                 return outcome("uncertain", "candidates_changed")
             observation = self._decide(base, best, probe.speech_ms)
@@ -238,6 +258,7 @@ class SpeakerRecognizer:
                 len(track.segments), self.policy.version,
             )
             await self._record(snapshot, observation, probe, evidence)
+            self._attribute(snapshot, observation)
             return observation
         except SpeakerExtractionRejected as exc:
             if exc.quality is not None:
@@ -302,6 +323,28 @@ class SpeakerRecognizer:
             evidence=evidence, posterior_unknown=unknown, condition=condition,
             decisions=IdentityDecisions(**decisions),
         )
+
+    def _attribute(self, snapshot, observation):
+        """Submit the turn's attribution, if it made one, without delaying the observation."""
+        verdict = turn_verdict(observation, snapshot_revision=snapshot.revision)
+        if verdict is None:
+            return
+        task = asyncio.get_running_loop().create_task(self._submit(verdict))
+        self._submissions.add(task)
+        task.add_done_callback(self._submissions.discard)
+
+    async def _submit(self, verdict):
+        log = logging.getLogger(__name__)
+        try:
+            attribution = await self.client.submit_verdict(verdict)
+        except (ServiceUpstreamError, ValueError, OSError) as exc:
+            # Refused (snapshot changed, already attributed) or unreachable:
+            # the turn simply stays unattributed; nothing here depends on it.
+            log.info("Voice verdict not recorded turn_id=%s reason=%s", verdict.refs[0].turn_id,
+                     getattr(exc, "status_code", None) or type(exc).__name__)
+            return
+        log.info("Voice attribution turn_id=%s attribution=%s", verdict.refs[0].turn_id,
+                 attribution.attribution_id)
 
     async def _record(self, snapshot, observation, probe, evidence):
         """Candidate evidence and discovery: Data decides; failures change nothing here."""

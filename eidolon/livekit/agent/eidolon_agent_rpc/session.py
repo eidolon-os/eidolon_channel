@@ -273,6 +273,11 @@ class EidolonAgentSession:
         await self._write(pb.ChatRequest(presentation_feedback=pb.PresentationFeedback(
             turn_id=turn_id, receipt=pb.PresentationReceipt(**receipt.model_dump()))))
 
+    async def report_late_speaker_observation(self, trace_id: str, token: str) -> None:
+        """The signed result of a turn committed while its recognition ran (design §3.4)."""
+        await self._write(pb.ChatRequest(late_speaker_observation=pb.LateSpeakerObservation(
+            trace_id=trace_id, token=token)))
+
     async def start_turn(
         self,
         *,

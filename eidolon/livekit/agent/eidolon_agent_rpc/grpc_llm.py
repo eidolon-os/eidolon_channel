@@ -180,6 +180,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self.memory_session = None
         self._runtime_generation = 0
         self._pending_speaker_observation: str | None = None
+        self._late_observations: set[asyncio.Task] = set()
         self._pending_turn_decision_metadata: dict[str, Any] | None = None
         self._pending_trace_id: str | None = None
         self._warmer: Any = None  # PreemptiveWarmer, lazily bound to the session
@@ -281,6 +282,26 @@ class EidolonAgentGrpcLlm(llm.LLM):
 
     def set_speaker_observation(self, token: str) -> None:
         self._pending_speaker_observation = token
+
+    def send_late_speaker_observation(self, trace_id: str, token: str) -> None:
+        """Send a committed turn's late recognition result on the open stream; best effort.
+
+        The Agent waits for it at most 150 ms (design §3.4); a result it never
+        receives only leaves that turn unidentified.
+        """
+        session = self._session
+        if session is None:
+            return
+
+        async def send():
+            try:
+                await session.report_late_speaker_observation(trace_id, token)
+            except Exception:
+                logger.debug("[EidolonAgentGrpcLlm] late speaker observation not sent", exc_info=True)
+
+        task = asyncio.get_running_loop().create_task(send())
+        self._late_observations.add(task)
+        task.add_done_callback(self._late_observations.discard)
 
     def pop_speaker_observation(self) -> str | None:
         token, self._pending_speaker_observation = self._pending_speaker_observation, None

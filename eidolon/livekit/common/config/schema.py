@@ -332,8 +332,8 @@ class WorkerConfig:
     # None lets the Host decide (agent.server.host_warm_processes; 1 in dev).
     # Set a number to pin how many prewarmed job processes stay idle.
     num_idle_processes: int | None = None
-    # Opt-in deterministic admission on shared Hosts; None keeps LiveKit CPU load.
-    max_concurrent_jobs: int | None = None
+    # None keeps LiveKit CPU load; "auto" budgets 25 jobs per 4 CPUs / 8 GiB.
+    max_concurrent_jobs: int | str | None = None
     # How long a worker process may spend in setup (model loading) before the
     # framework kills it. The framework's own default is 10s, which assumes
     # cloud hardware; a Raspberry Pi 5 needs ~21s just for the pVAD import and

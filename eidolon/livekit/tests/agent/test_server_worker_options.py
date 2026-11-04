@@ -131,7 +131,7 @@ def test_the_product_template_does_not_pin_the_pool() -> None:
     assert "num_idle_processes" not in worker
 
 
-@pytest.mark.parametrize("invalid", [0, -1, 65, True, 1.5])
+@pytest.mark.parametrize("invalid", [0, -1, "invalid", True, 1.5])
 def test_invalid_concurrency_capacity_is_rejected(invalid):
     with pytest.raises(ValueError, match="worker.max_concurrent_jobs"):
         validate_effective_config(AgentConfig(worker=WorkerConfig(max_concurrent_jobs=invalid)))
@@ -144,7 +144,7 @@ def test_default_admission_retains_livekit_cpu_policy(recorded_server, monkeypat
     assert "load_threshold" not in recorded_server.last_kwargs
 
 
-@pytest.mark.parametrize("capacity", range(1, 65))
+@pytest.mark.parametrize("capacity", [*range(1, 65), 75, 100, 128, 250])
 def test_concurrency_admission_counts_active_and_reserved_jobs(recorded_server, monkeypatch, capacity):
     from types import SimpleNamespace
     from livekit.agents.worker import AgentServer
@@ -154,7 +154,7 @@ def test_concurrency_admission_counts_active_and_reserved_jobs(recorded_server, 
         max_concurrent_jobs=capacity, num_idle_processes=64,
     )))
     options = recorded_server.last_kwargs
-    assert options["num_idle_processes"] == capacity
+    assert options["num_idle_processes"] == min(capacity, 64)
     # Use the installed LiveKit admission algorithm without RTC/network.
     worker = object.__new__(AgentServer)
     worker._load_threshold = options["load_threshold"]
@@ -171,3 +171,28 @@ def test_concurrency_admission_counts_active_and_reserved_jobs(recorded_server, 
         assert worker._is_available() is available
     worker._draining = True
     assert worker._is_available() is False
+
+
+@pytest.mark.parametrize("cpus,memory_gib,expected", [
+    (4, 8, 25), (12, 36, 75), (8, 8, 25), (4, 16, 25),
+    (2, 4, 12), (0.5, 1, 3), (1, 0.125, 1),
+])
+def test_auto_capacity_uses_smaller_resource_budget(cpus, memory_gib, expected):
+    assert server.host_conversation_capacity(
+        cpu_count=cpus, memory_bytes=int(memory_gib * 1024**3)) == expected
+
+
+def test_auto_capacity_is_valid_and_resolves_host_budget(monkeypatch):
+    import psutil
+    from types import SimpleNamespace
+    from livekit.agents.utils.hw import cpu
+    from dataclasses import replace
+    cfg = AgentConfig(worker=WorkerConfig(max_concurrent_jobs="auto"))
+    cfg = replace(cfg, llm=replace(cfg.llm, base_url="http://localhost:9999"))
+    validate_effective_config(cfg)
+    monkeypatch.setattr(cpu, "get_cpu_monitor", lambda: SimpleNamespace(cpu_count=lambda: 12))
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=36 * 1024**3))
+    monkeypatch.setattr(server.Path, "read_text", lambda self: "max")
+    assert server._resolve_max_concurrent_jobs(cfg) == 75
+    monkeypatch.setattr(server.Path, "read_text", lambda self: str(8 * 1024**3))
+    assert server._resolve_max_concurrent_jobs(cfg) == 25

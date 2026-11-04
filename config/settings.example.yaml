@@ -23,7 +23,8 @@ worker:
   # num_idle_processes: 2
   # Shared Hosts may use an explicit session capacity instead of whole-host CPU.
   # Omit to retain LiveKit CPU admission; tune to measured audio performance.
-  # max_concurrent_jobs: 1
+  # "auto": floor(min(CPUs / 4, memory_GiB / 8) * 25), minimum 1.
+  # max_concurrent_jobs: auto
 
 behavior:
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.

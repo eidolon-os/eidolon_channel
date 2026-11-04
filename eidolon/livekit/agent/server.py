@@ -1078,6 +1078,38 @@ def _resolve_num_idle_processes(
     )
 
 
+def host_conversation_capacity(*, cpu_count: float, memory_bytes: int) -> int:
+    """User-selected upper reference: 25 jobs per 4 CPUs and 8 GiB.
+
+    This is a resource budget, not a measured audio quality guarantee. Idle
+    prewarming remains independently bounded by host_warm_processes.
+    """
+    return max(1, min(int(cpu_count * 25 / 4), memory_bytes * 25 // (8 * 1024**3)))
+
+
+def _resolve_max_concurrent_jobs(cfg: AgentConfig) -> int | None:
+    configured = cfg.worker.max_concurrent_jobs
+    if configured != "auto":
+        return configured
+    import psutil
+    from livekit.agents.utils.hw.cpu import get_cpu_monitor
+
+    cpu_count = get_cpu_monitor().cpu_count()
+    memory_bytes = psutil.virtual_memory().total
+    # psutil reports physical memory on Linux too; respect container budgets.
+    for limit_path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            limit = int(Path(limit_path).read_text().strip())
+        except (OSError, ValueError):
+            continue
+        if limit > 0:
+            memory_bytes = min(memory_bytes, limit)
+    capacity = host_conversation_capacity(cpu_count=cpu_count, memory_bytes=memory_bytes)
+    logger.info("[worker] capacity=auto cpus=%s memory_bytes=%d max_jobs=%d reference=25/4cpu/8GiB",
+                cpu_count, memory_bytes, capacity)
+    return capacity
+
+
 def _build_server(cfg: AgentConfig) -> "AgentServer":
     from livekit.agents import AgentServer, JobExecutorType, WorkerType
 
@@ -1086,7 +1118,7 @@ def _build_server(cfg: AgentConfig) -> "AgentServer":
     num_idle = _resolve_num_idle_processes(cfg, env=env)
 
     admission = {}
-    max_jobs = cfg.worker.max_concurrent_jobs
+    max_jobs = _resolve_max_concurrent_jobs(cfg)
     if max_jobs is not None:
         # LiveKit includes accepted-but-not-launched reservations in its load.
         # Bound the idle pool too, so its first-job reservation estimate cannot
@@ -1095,9 +1127,10 @@ def _build_server(cfg: AgentConfig) -> "AgentServer":
         num_idle = min(num_idle, max_jobs)
         # Binary-exact units keep the SDK reservation arithmetic exact when
         # the idle pool equals capacity (e.g. 0.9 / 3 * 3 is below 0.9).
+        load_scale = 1 << max_jobs.bit_length()
         admission = {
-            "load_threshold": max_jobs / 128,
-            "load_fnc": lambda worker: min(len(worker.active_jobs) / 128, 1.0),
+            "load_threshold": max_jobs / load_scale,
+            "load_fnc": lambda worker: min(len(worker.active_jobs) / load_scale, 1.0),
         }
         logger.info("[worker] admission=concurrency max_jobs=%d idle_processes=%d", max_jobs, num_idle)
 

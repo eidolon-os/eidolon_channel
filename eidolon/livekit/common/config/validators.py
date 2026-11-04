@@ -57,11 +57,11 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("worker.agent_name must be non-empty")
     if worker.num_idle_processes is not None and not (0 <= worker.num_idle_processes <= 64):
         errors.append("worker.num_idle_processes must be in [0, 64]")
-    if worker.max_concurrent_jobs is not None and (
+    if worker.max_concurrent_jobs not in (None, "auto") and (
         type(worker.max_concurrent_jobs) is not int
-        or not 1 <= worker.max_concurrent_jobs <= 64
+        or worker.max_concurrent_jobs < 1
     ):
-        errors.append("worker.max_concurrent_jobs must be an integer in [1, 64]")
+        errors.append("worker.max_concurrent_jobs must be null, auto, or a positive integer")
     if not (1.0 <= worker.setup_timeout_sec <= 600.0):
         errors.append("worker.setup_timeout_sec must be in [1.0, 600.0]")
 

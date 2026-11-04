@@ -315,6 +315,11 @@ class EidolonAgentSession:
             md = struct_pb2.Struct()
             if metadata:
                 md.update(metadata)
+            from eidolon_sdk.biz.capabilities import installed_registry
+            md.update({"capability_set": installed_registry().snapshot(
+                self._channel_tool_capabilities, conversation_id=conversation_id,
+                policy_revision=(metadata or {}).get("capability_policy_revision", 0),
+            )})
             logger.debug(
                 "[EidolonAgentSession] start_turn turn_id=%s trace_id=%s conv=%s speculative=%s",
                 turn_id,

@@ -25,6 +25,11 @@ class SessionMusicRuntime:
 
         self.commands: MusicCommandService | None = None
 
+    @property
+    def capability_names(self):
+        from eidolon_sdk.biz.capabilities.music import definitions
+        return frozenset(d.name for d in definitions())
+
     @classmethod
     async def create(
         cls,

@@ -101,7 +101,7 @@ class BasePipeline(ABC):
         llm.configure_channel_tools(
             runtime.execute_channel_tool,
             runtime.cancel_channel_tool,
-            frozenset({"music.search", "music.play", "music.stop", "music.status"}),
+            runtime.capability_names,
         )
         self._music_runtime = runtime
 

@@ -9,7 +9,8 @@ vocabulary leaks back into the service.
 
 from __future__ import annotations
 
-from eidolon_sdk.biz.presentation.capability_rpc import actions
+from eidolon_sdk.biz.capabilities import installed_registry
+
 
 from dataclasses import dataclass
 from enum import Enum
@@ -230,10 +231,11 @@ def derive_spec(
         motion_profile=next((p["schema"]["const"] for p in manifest.get("properties", ())
             if selected and selected.motion and p.get("name") == "motion.profile"
             and p.get("writable") is False and isinstance(p.get("schema"), dict)
-            and p["schema"].get("const") in {"stackchan.head.v1", "eidolon.motion.v1"}), None),
+            and p["schema"].get("const") in {"stackchan.head.v1", "eidolon.motion.v1", "eidolon.motion.v2"}), None),
         motion_capabilities=tuple(a["name"] for a in manifest.get("actions", ())
             if selected and selected.motion and a.get("version") == 1
-            and a in actions()),
+            and a in [d.action() for d in installed_registry().definitions()
+                      if d.execution_location == "device" and d.required_output == "motion"]),
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
         or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,

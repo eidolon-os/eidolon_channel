@@ -93,7 +93,7 @@ class PresentationTransport:
         interruption or session teardown does. Draining the previous task keeps
         cancellation ordered before the next expression.play on the same peer.
         """
-        if self.output.motion_profile == "eidolon.motion.v1" and not self.output.outputs.expression:
+        if self.output.motion_profile in {"eidolon.motion.v1", "eidolon.motion.v2"} and not self.output.outputs.expression:
             return  # Explicit RPC and local speech motion own this platform.
         if self._closed or intent.turn_id in self._tasks:
             return

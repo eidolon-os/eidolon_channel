@@ -6,7 +6,7 @@ import time
 
 from eidolon_sdk.biz.presentation.capability_rpc import (
     CANCEL,
-    INVOKE,
+    INVOKE, INVOKE_V2, RegisteredInvocation, REGISTRY_PROFILE,
     STATUS,
     CapabilityInvocation,
     ExecutionScope,
@@ -20,6 +20,8 @@ class SessionCapabilityRPC:
     def __init__(self, room, plan):
         self.room, self.plan = room, plan
         self.pending = {}
+        from eidolon_sdk.biz.capabilities import installed_registry
+        self.registry = installed_registry()
 
     def identifier(self, call):
         return (
@@ -63,7 +65,20 @@ class SessionCapabilityRPC:
                 expires_at_ms=int(time.time() * 1000) + 10000,
                 max_duration_ms=30000,
             )
-            result = await self.rpc(peer, INVOKE, request)
+            method = INVOKE
+            if self.plan.motion_profile == REGISTRY_PROFILE:
+                definition = self.registry.get(call.name)
+                request = RegisteredInvocation(
+                    **request.model_dump(exclude={"protocol_version", "capability_version"}),
+                    capability_version=definition.version,
+                    contract_digest=definition.contract_digest,
+                    binding_ref="device:" + self.plan.session_id,
+                    capability_set_revision=self.registry.snapshot(
+                        self.plan.motion_capabilities, conversation_id=self.plan.session_id,
+                        policy_revision=self.plan.policy_revision)["revision"],
+                )
+                method = INVOKE_V2
+            result = await self.rpc(peer, method, request)
             async with asyncio.timeout(35):
                 while result.state in {"accepted", "running"}:
                     await asyncio.sleep(0.15)
@@ -78,7 +93,10 @@ class SessionCapabilityRPC:
                 outcome_state=result.state,
             )
         except BaseException:
-            await self.cancel(call)
+            try:
+                await self.cancel(call)
+            except Exception:
+                pass  # Preserve the original failure; cancellation was not confirmed.
             raise
         finally:
             self.pending.pop(self.identifier(call), None)

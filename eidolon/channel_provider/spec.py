@@ -9,6 +9,8 @@ vocabulary leaks back into the service.
 
 from __future__ import annotations
 
+from eidolon_sdk.biz.presentation.capability_rpc import actions
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -92,6 +94,7 @@ class ChannelSpec:
     media_declared: bool = False
     smarthome_panel: bool = False
     motion_profile: str | None = None
+    motion_capabilities: tuple[str, ...] = ()
 
     @property
     def needs_media(self) -> bool:
@@ -224,20 +227,13 @@ def derive_spec(
         serving=serving,
         output_policy=device.output_policy,
         selected_outputs=selected,
-        motion_profile=(
-            "stackchan.head.v1"
-            if selected
-            and selected.motion
-            and any(
-                p.get("name") == "motion.profile"
-                and p.get("writable") is False
-                and isinstance(p.get("schema"), dict)
-                and p["schema"].get("const") == "stackchan.head.v1"
-                for p in manifest.get("properties", ())
-                if isinstance(p, dict)
-            )
-            else None
-        ),
+        motion_profile=next((p["schema"]["const"] for p in manifest.get("properties", ())
+            if selected and selected.motion and p.get("name") == "motion.profile"
+            and p.get("writable") is False and isinstance(p.get("schema"), dict)
+            and p["schema"].get("const") in {"stackchan.head.v1", "eidolon.motion.v1"}), None),
+        motion_capabilities=tuple(a["name"] for a in manifest.get("actions", ())
+            if selected and selected.motion and a.get("version") == 1
+            and a in actions()),
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
         or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,

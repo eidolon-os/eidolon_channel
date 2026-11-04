@@ -269,3 +269,20 @@ def test_explicit_head_profile_requires_manifest_and_owner_selection(profile, se
         properties.append({'name':'motion.profile','observable':False,'writable':False,'schema':{'type':'string','const':profile}})
     payload['device']['manifest']['properties'] = properties
     assert spec(ProvisionRequest.parse(encoded(payload))).motion_profile == expected
+
+
+def test_rpc_actions_derive_from_exact_manifest_contracts():
+    from eidolon_sdk.biz.presentation.capability_rpc import actions
+    payload = provision_payload(output_policy=DeviceOutputPolicy(
+        revision=1, allowed=OutputSelection(speech=True, motion=True)).model_dump(mode="json"))
+    payload["device"]["manifest"]["properties"] += [
+        {"name": "output.motion", "observable": False, "writable": False, "schema": {"type": "boolean", "const": True}},
+        {"name": "motion.profile", "observable": False, "writable": False, "schema": {"type": "string", "const": "eidolon.motion.v1"}},
+    ]
+    payload["device"]["manifest"]["actions"] = actions()
+    selected = spec(ProvisionRequest.parse(encoded(payload)))
+    assert selected.motion_profile == "eidolon.motion.v1"
+    assert "motion.nod" in selected.motion_capabilities
+    payload["device"]["manifest"]["actions"][0]["input_schema"] = {"type": "object", "properties": {}}
+    selected = spec(ProvisionRequest.parse(encoded(payload)))
+    assert "motion.stop" not in selected.motion_capabilities

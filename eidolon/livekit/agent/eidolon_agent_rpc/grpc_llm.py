@@ -187,6 +187,12 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._channel_tool_handler = None
         self._channel_tool_cancel_handler = None
         self._channel_tool_capabilities: frozenset[str] = frozenset()
+        self._device_rpc = None
+        if output_plan is not None and output_plan.motion_profile == "eidolon.motion.v1":
+            from ..session.capability_rpc import SessionCapabilityRPC
+            self._device_rpc = SessionCapabilityRPC(presentation_room, output_plan)
+            self.configure_channel_tools(None, None, frozenset())
+
 
     def emit_provider_event(self, name: str, **payload: Any) -> None:
         """Emit provider-level timing events for Channel observability."""
@@ -236,6 +242,19 @@ class EidolonAgentGrpcLlm(llm.LLM):
         return self._session
 
     def configure_channel_tools(self, handler, cancel_handler, capabilities: frozenset[str]) -> None:
+        if self._device_rpc is not None:
+            other_handler, other_cancel = handler, cancel_handler
+            device = self._device_rpc
+            async def handler(call):
+                if call.name in device.plan.motion_capabilities:
+                    return await device.execute(call)
+                return await other_handler(call)
+            async def cancel_handler(call):
+                if call.name in device.plan.motion_capabilities:
+                    await device.cancel(call)
+                elif other_cancel is not None:
+                    await other_cancel(call)
+            capabilities = capabilities | frozenset(device.plan.motion_capabilities)
         self._channel_tool_handler = handler
         self._channel_tool_cancel_handler = cancel_handler
         self._channel_tool_capabilities = capabilities

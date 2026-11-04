@@ -231,6 +231,7 @@ class SpeakerRecognizer:
                 probe.vector, probe.speech_ms,
                 lambda t: self.backend.llr(self._track_side(t, same_device), segment),
                 self.policy.track_continuation_llr,
+                turn_id=turn_id,
             )
             base["track_id"] = track.track_id
             probes, best = {}, {}

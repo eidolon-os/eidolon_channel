@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 
@@ -104,6 +105,10 @@ class SessionCapabilityRPC:
                         policy_revision=self.plan.policy_revision)["revision"],
                 )
                 method = INVOKE_V2
+            logging.getLogger(__name__).info(
+                "capability invoke session=%s turn=%s call=%s execution=%s method=%s arguments=%s wait=%s",
+                self.plan.session_id, call.turn_id, call.call_id, identifier, method,
+                json.dumps(arguments, ensure_ascii=True, sort_keys=True)[:4096], wait_for_completion)
             result = await self.rpc(peer, method, request)
             if not wait_for_completion and result.state in {"accepted", "running"}:
                 stop = asyncio.Event()
@@ -134,6 +139,8 @@ class SessionCapabilityRPC:
     async def cancel(self, call):
         peer = self.pending.get(self.identifier(call))
         if peer is not None:
+            logging.getLogger(__name__).info("capability cancel turn=%s call=%s execution=%s",
+                call.turn_id, call.call_id, self.identifier(call))
             await self.rpc(peer, CANCEL, self.scope(call))
 
     async def _wait(self, call, peer, result):

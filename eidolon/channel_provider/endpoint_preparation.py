@@ -46,6 +46,11 @@ class EndpointPreparation:
     def closure_complete(self) -> bool:
         return self._cleanup_complete
 
+    @property
+    def control_recovery_ready(self) -> bool:
+        """Only transport can recover after producers are irrevocably withdrawn."""
+        return self._producers_revoked and not self._cleanup_complete
+
     def lifecycle_checkpoint(self) -> dict:
         return dict(state=self.state, error=self.error, primary_error=self.primary_error,
             cleanup_error=self.cleanup_error, sessions=dict(self.sessions),

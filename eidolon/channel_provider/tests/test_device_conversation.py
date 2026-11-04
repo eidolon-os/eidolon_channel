@@ -261,8 +261,11 @@ async def test_status_cannot_keep_ready_after_transport_was_lost(tmp_path):
     await service.shutdown()
 
 
-@pytest.mark.parametrize('closing', [False, True])
-@pytest.mark.parametrize('renewal', ['expired', 'runtime_changed'])
+@pytest.mark.parametrize(('closing', 'renewal'), [
+    (False, 'expired'), (True, 'expired'),
+    (False, 'runtime_changed'), (True, 'runtime_changed'),
+    (True, 'manifest_after_cleanup_started'),
+])
 async def test_standing_channel_renewal_never_waits_for_scene_cleanup(tmp_path, closing, renewal):
     service, backend, selection = await prepare(tmp_path)
     await service.open_device_conversation(selection, authenticated_owner_id='owner_1')
@@ -280,10 +283,15 @@ async def test_standing_channel_renewal_never_waits_for_scene_cleanup(tmp_path, 
         backend.binding_current = lambda handle: False
     payload = provision_payload(device_id=selection.input_device.device_instance_id)
     payload.update(operation='channel.refresh-device', operation_id='renew-to-reconnect')
+    if renewal == 'manifest_after_cleanup_started':
+        payload['device']['manifest_revision'] = 'new-client-capabilities'
     # A device cannot ACK anything until this credential response reaches it.
     response = await asyncio.wait_for(service.provision(ProvisionRequest.parse(encoded(payload))), 1)
     assert 'channel.provisioned-device' in response
     assert service._transport_scopes == original_scopes
+    if closing:
+        assert visit.control_recovery_ready and not visit.closure_complete
+        assert len(backend.directed) == 1  # Renewal cannot start a replacement scene.
     if not closing:
         assert visit.state == 'ready' and not visit.task.done()
         backend.quiesce_prepared_sessions.assert_not_awaited()

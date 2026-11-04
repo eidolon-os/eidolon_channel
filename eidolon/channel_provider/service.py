@@ -63,6 +63,7 @@ class _TransportScope:
     task: asyncio.Task
     cleanup: Callable[[], Awaitable[None]] | None = None
     request: Callable[[str, ServingRequest], None] | None = None
+    can_recover_control: Callable[[], bool] = lambda: False
 
 
 @dataclass
@@ -246,14 +247,22 @@ class ChannelProviderService:
                     and not adapter.binding_current(json.loads(previous.handle_json))):
                 runtime_refresh_of = previous
             reserved = request.device_id in self._transport_scopes
+            recovering_control = reserved and self._transport_scopes[
+                request.device_id
+            ].can_recover_control()
             # The standing control channel must be renewable while a scene is
             # active or awaiting exit ACKs. Otherwise renewal waits for cleanup
             # while cleanup waits for the disconnected device to renew.
+            # After producer withdrawal is confirmed, a new client manifest may
+            # renew that same control resource to deliver the missing leave ACK.
+            # Owner, policy and device generation remain fenced; the scene keeps
+            # its reservation and old plan until endpoint cleanup is confirmed.
             same_authority = (
                 request.operation == "channel.refresh-device" and previous is not None
                 and previous.device_ref == request.device_ref
                 and previous.owner_id == str(request.device.owner_id)
-                and previous.manifest_revision == request.device.manifest_revision
+                and (previous.manifest_revision == request.device.manifest_revision
+                     or recovering_control)
                 and previous.output_policy == request.device.output_policy
                 and previous.adapter_name == adapter.name
             )
@@ -517,7 +526,8 @@ class ChannelProviderService:
         team = catalog is self._team_conversations
         scenario = self._scene_kind(catalog)
         device_ids = tuple(ref.device_instance_id for ref in visit.selection.devices)
-        scope = _TransportScope(asyncio.current_task(), request=visit.request)
+        scope = _TransportScope(asyncio.current_task(), request=visit.request,
+            can_recover_control=lambda: visit.control_recovery_ready)
 
         def checkpoint():
             self._store.save_prepared_scene(*key, scenario, {

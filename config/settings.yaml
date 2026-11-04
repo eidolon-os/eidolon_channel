@@ -26,6 +26,8 @@ core:
   port: 8766
 
 worker:
+  # null keeps CPU admission; shared Hosts may overlay a bounded job capacity.
+  max_concurrent_jobs: null
   # num_idle_processes is left to the Host: one warm job process per
   # conversation that may start at once, within a quarter of memory and one per
   # two cores, up to 3 (server.host_warm_processes). Pinning 1 here made a

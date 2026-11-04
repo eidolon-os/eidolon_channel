@@ -437,10 +437,14 @@ class EidolonAgentGrpcLlm(llm.LLM):
             await self._warmer.discard()
 
     def cancel_response_outputs(self, turn_id: str | None = None) -> None:
+        if self._device_rpc is not None:
+            self._device_rpc.interrupt(turn_id)
         if self.presentation_transport is not None:
             self.presentation_transport.interrupt(turn_id)
 
     async def aclose(self) -> None:
+        if self._device_rpc is not None:
+            await self._device_rpc.close()
         if self.memory_session is not None:
             await self.memory_session.aclose()
         if self.presentation_transport is not None:
@@ -513,6 +517,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
         # The real turn supersedes any preemptive warm-up for this session.
         await llm_v.discard_warm()
         llm_v.cancel_response_outputs()
+        resource_hints = await llm_v._device_rpc.resource_hints() if llm_v._device_rpc is not None else {}
         try:
             turn_id, payloads = await asyncio.wait_for(
                 session.start_turn(
@@ -520,6 +525,8 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     conversation_id=conversation_id,
                     metadata=(
                         {
+                            **({"capability_resource_hints": resource_hints} if resource_hints else {}),
+                            **({"capability_execution_receipts": list(llm_v._device_rpc.receipts)} if llm_v._device_rpc is not None else {}),
                             **({"speaker_observation_token": self._speaker_observation} if self._speaker_observation else {}),
                             **(
                                 {"turn_decision": self._turn_decision_metadata}

@@ -177,6 +177,7 @@ class _ChannelToolServicer(pbg.EidolonAgentServicer):
                 continue
             start = request.start
             assert "music.status" in start.channel_tool_capabilities
+            assert "capability_set" not in start.metadata.fields  # legacy output-plan-less session
             yield _channel_tool_call(
                 start.turn_id,
                 "music-status-1",

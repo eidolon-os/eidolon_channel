@@ -316,10 +316,13 @@ class EidolonAgentSession:
             if metadata:
                 md.update(metadata)
             from eidolon_sdk.biz.capabilities import installed_registry
-            md.update({"capability_set": installed_registry().snapshot(
-                self._channel_tool_capabilities, conversation_id=conversation_id,
-                policy_revision=(metadata or {}).get("capability_policy_revision", 0),
-            )})
+            if "selected_outputs" in (metadata or {}):
+                md.update({"capability_set": installed_registry().snapshot(
+                    self._channel_tool_capabilities, conversation_id=conversation_id,
+                    policy_revision=(metadata or {}).get("capability_policy_revision", 0),
+                )})
+            # Legacy sessions without an output contract retain only registry-defined
+            # legacy capabilities at ingress; do not invent an output authorization.
             logger.debug(
                 "[EidolonAgentSession] start_turn turn_id=%s trace_id=%s conv=%s speculative=%s",
                 turn_id,

@@ -1085,12 +1085,29 @@ def _build_server(cfg: AgentConfig) -> "AgentServer":
     is_dev = env == "dev"
     num_idle = _resolve_num_idle_processes(cfg, env=env)
 
+    admission = {}
+    max_jobs = cfg.worker.max_concurrent_jobs
+    if max_jobs is not None:
+        # LiveKit includes accepted-but-not-launched reservations in its load.
+        # Bound the idle pool too, so its first-job reservation estimate cannot
+        # admit more jobs than the configured capacity. CPU-based default stays
+        # available for dedicated Hosts; shared workstations opt in explicitly.
+        num_idle = min(num_idle, max_jobs)
+        # Binary-exact units keep the SDK reservation arithmetic exact when
+        # the idle pool equals capacity (e.g. 0.9 / 3 * 3 is below 0.9).
+        admission = {
+            "load_threshold": max_jobs / 128,
+            "load_fnc": lambda worker: min(len(worker.active_jobs) / 128, 1.0),
+        }
+        logger.info("[worker] admission=concurrency max_jobs=%d idle_processes=%d", max_jobs, num_idle)
+
     prometheus_port = int(os.getenv("AGENT_PROMETHEUS_PORT", "0") or "0")
     prometheus_multiproc_dir = os.getenv("AGENT_PROMETHEUS_MULTIPROC_DIR", "")
     if prometheus_port and not prometheus_multiproc_dir:
         prometheus_multiproc_dir = "/tmp/eidolon_prom_multiproc"
 
     server = AgentServer(
+        **admission,
         ws_url=cfg.core.livekit_url,
         api_key=cfg.core.api_key,
         api_secret=cfg.core.api_secret,

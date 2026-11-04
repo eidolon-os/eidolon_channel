@@ -21,6 +21,9 @@ worker:
   # Omit to let the Host decide (server.host_warm_processes; 1 in dev). Set 1+
   # to pin how many prewarmed job processes stay idle; 0 disables prewarming.
   # num_idle_processes: 2
+  # Shared Hosts may use an explicit session capacity instead of whole-host CPU.
+  # Omit to retain LiveKit CPU admission; tune to measured audio performance.
+  # max_concurrent_jobs: 1
 
 behavior:
   instructions: You are a helpful, friendly voice assistant. Keep responses concise.

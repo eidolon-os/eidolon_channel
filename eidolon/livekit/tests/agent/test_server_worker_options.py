@@ -129,3 +129,45 @@ def test_the_product_template_does_not_pin_the_pool() -> None:
     template = Path(server.__file__).resolve().parents[3] / "config/settings.yaml"
     worker = yaml.safe_load(template.read_text(encoding="utf-8")).get("worker") or {}
     assert "num_idle_processes" not in worker
+
+
+@pytest.mark.parametrize("invalid", [0, -1, 65, True, 1.5])
+def test_invalid_concurrency_capacity_is_rejected(invalid):
+    with pytest.raises(ValueError, match="worker.max_concurrent_jobs"):
+        validate_effective_config(AgentConfig(worker=WorkerConfig(max_concurrent_jobs=invalid)))
+
+
+def test_default_admission_retains_livekit_cpu_policy(recorded_server, monkeypatch):
+    monkeypatch.setenv("EIDOLON_ENV", "dev")
+    server._build_server(AgentConfig())
+    assert "load_fnc" not in recorded_server.last_kwargs
+    assert "load_threshold" not in recorded_server.last_kwargs
+
+
+@pytest.mark.parametrize("capacity", range(1, 65))
+def test_concurrency_admission_counts_active_and_reserved_jobs(recorded_server, monkeypatch, capacity):
+    from types import SimpleNamespace
+    from livekit.agents.worker import AgentServer
+
+    monkeypatch.delenv("EIDOLON_CHANNEL_NUM_IDLE_PROCESSES", raising=False)
+    server._build_server(AgentConfig(worker=WorkerConfig(
+        max_concurrent_jobs=capacity, num_idle_processes=64,
+    )))
+    options = recorded_server.last_kwargs
+    assert options["num_idle_processes"] == capacity
+    # Use the installed LiveKit admission algorithm without RTC/network.
+    worker = object.__new__(AgentServer)
+    worker._load_threshold = options["load_threshold"]
+    worker._num_idle_processes = options["num_idle_processes"]
+    worker._devmode = False
+    worker._draining = False
+    worker._simulation = False
+    for active, reserved, available in [(0, 0, True), (0, capacity, False),
+                                       (capacity, 0, False), (capacity - 1, 0, True),
+                                       (capacity - 1, 1, False)]:
+        worker._proc_pool = SimpleNamespace(processes=[SimpleNamespace(running_job=object()) for _ in range(active)])
+        worker._reserved_slots = reserved
+        worker._worker_load = options["load_fnc"](worker)
+        assert worker._is_available() is available
+    worker._draining = True
+    assert worker._is_available() is False

@@ -302,6 +302,9 @@ class HalfDuplexPttPipeline(BasePipeline):
             # A start that failed takes its warmup with it, as full duplex does.
             await self._end_stage_warmup()
             raise
+        from ..session.interaction_facts import attach_interaction_publisher
+        self._interaction_publisher = attach_interaction_publisher(
+            session, output_room or room, getattr(self._factory, "output_plan", None))
         self.session_mark("session_started")
         if self._on_session_started is not None:
             await self._on_session_started()
@@ -358,6 +361,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         output_timeline = self._agent_output.active_timeline
         if output_timeline is not None:
             self._flush_output_timeline(output_timeline, "ptt_pipeline_shutdown")
+        interaction = getattr(self, "_interaction_publisher", None)
+        if interaction is not None:
+            await interaction.aclose()
+            self._interaction_publisher = None
         await self._close_music_runtime()
         session = self._session
         if session is not None:

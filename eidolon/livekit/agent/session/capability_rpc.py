@@ -163,8 +163,9 @@ class SessionCapabilityRPC:
                 "call_id": call.call_id, **result.model_dump(mode="json")})
             self.receipts = self.receipts[-16:]
             logging.getLogger(__name__).info(
-                "background capability receipt turn=%s execution=%s state=%s error=%s",
-                call.turn_id, result.execution_id, result.state, result.error)
+                "background capability receipt turn=%s execution=%s state=%s error=%s result=%s",
+                call.turn_id, result.execution_id, result.state, result.error,
+                json.dumps(result.result, ensure_ascii=True, sort_keys=True)[:4096])
         except Exception:
             logging.getLogger(__name__).exception("background capability failed execution=%s", self.identifier(call))
             try:

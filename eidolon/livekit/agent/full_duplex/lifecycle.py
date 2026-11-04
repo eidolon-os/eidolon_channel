@@ -169,6 +169,9 @@ class FullDuplexSessionLifecycle:
                 participant_identity=participant_identity,
             ),
         )
+        from ..session.interaction_facts import attach_interaction_publisher
+        pipeline._interaction_publisher = attach_interaction_publisher(
+            session, output_room or room, getattr(pipeline._factory, "output_plan", None))
         await pipeline._start_music_runtime(session)
         pipeline.session_mark("session_started")
         if pipeline._on_session_started is not None:
@@ -608,6 +611,10 @@ class FullDuplexSessionLifecycle:
         # backstop; the second call is a no-op.
         pipeline._session_trace_close_reason = close_reason
         pipeline.close_session_trace(close_reason)
+        interaction = getattr(pipeline, "_interaction_publisher", None)
+        if interaction is not None:
+            await interaction.aclose()
+            pipeline._interaction_publisher = None
         await pipeline._shutdown_stages()
         close_factory = getattr(pipeline._factory, "aclose", None)
         if callable(close_factory):

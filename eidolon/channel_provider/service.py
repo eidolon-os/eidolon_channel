@@ -100,6 +100,7 @@ class ChannelProviderService:
         self._personal_sessions = PersonalSessions(store, registry, self._lock)
         self._transport_scopes: dict[str, _TransportScope] = {}
         self._device_conversations: dict = {}
+        self._device_sessions: dict = {}
         self._team_conversations: dict = {}
         self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
         self._recovery_ready = asyncio.Event()
@@ -135,7 +136,7 @@ class ChannelProviderService:
                     stored.device_id,
                 )
 
-        for catalog in (self._device_conversations, self._team_conversations):
+        for catalog in (self._device_conversations, self._team_conversations, self._device_sessions):
             for visit in catalog.values():
                 if not visit.closure_complete:
                     try:
@@ -409,6 +410,17 @@ class ChannelProviderService:
         if self._transport_scopes.get(device_id) is scope and scope.cleanup is not None:
             await scope.cleanup()
 
+    async def open_device_session(self, selection, *, authenticated_owner_id):
+        from .device_session import DeviceSession
+        return await self._open_prepared_scene(selection, authenticated_owner_id,
+            self._device_sessions, "open_device_session",
+            lambda adapter, handles: DeviceSession(selection, authenticated_owner_id, adapter, handles))
+
+    def _scene_kind(self, catalog):
+        if catalog is self._device_sessions:
+            return "device_session"
+        return "ip_role_group" if catalog is self._team_conversations else "device_conversation"
+
     async def open_device_conversation(self, selection, *, authenticated_owner_id: str) -> dict:
         from .device_conversation import DeviceConversation
         return await self._open_prepared_scene(selection, authenticated_owner_id,
@@ -434,7 +446,7 @@ class ChannelProviderService:
         never releases it. Restored scenes enter these same catalogs before use.
         """
         requested = set(companion_ids)
-        for catalog in (self._team_conversations, self._device_conversations):
+        for catalog in (self._team_conversations, self._device_conversations, self._device_sessions):
             for (owner, session_id), visit in catalog.items():
                 if owner != owner_id or visit.closure_complete:
                     continue
@@ -458,7 +470,7 @@ class ChannelProviderService:
             raise Forbidden("authenticated Owner is required")
         key = (authenticated_owner_id, selection.session_id)
         async with self._lock:
-            scenario = "ip_role_group" if catalog is self._team_conversations else "device_conversation"
+            scenario = self._scene_kind(catalog)
             if self._store.scene_cancelled(*key, scenario):
                 raise InvalidTransition("conversation was cancelled; use a new session_id")
             previous = catalog.get(key)
@@ -473,12 +485,13 @@ class ChannelProviderService:
             if self._companion_authority is not None:
                 selected = ([(m.output_device, m.companion_id) for m in selection.members]
                             if catalog is self._team_conversations
-                            else [(selection.output_device, selection.target_companion_id)])
+                            else [(selection.device if catalog is self._device_sessions else selection.output_device,
+                                   selection.target_companion_id)])
                 for ref, companion in selected:
                     async with asyncio.timeout(5):
                         await self._companion_authority(owner_id=authenticated_owner_id,
                             device_ref=ref, target_companion_id=companion,
-                            require_attachment=catalog is self._team_conversations)
+                            require_attachment=catalog is not self._device_conversations)
             self._require_scene_companions_available(authenticated_owner_id, companions)
             records = []
             for ref in selection.devices:
@@ -502,7 +515,7 @@ class ChannelProviderService:
 
     def _attach_prepared_scene(self, visit, key, catalog, adapter_name, *, recovering=False):
         team = catalog is self._team_conversations
-        scenario = "ip_role_group" if team else "device_conversation"
+        scenario = self._scene_kind(catalog)
         device_ids = tuple(ref.device_instance_id for ref in visit.selection.devices)
         scope = _TransportScope(asyncio.current_task(), request=visit.request)
 
@@ -573,6 +586,12 @@ class ChannelProviderService:
                 catalog = self._team_conversations
                 if visit.opened.owner_id != owner:
                     raise InvalidTransition("persisted scene Owner mismatch")
+            elif scenario == "device_session":
+                from eidolon_sdk.biz.control.device_session import DeviceSessionSelection
+                from .device_session import DeviceSession
+                visit = DeviceSession(DeviceSessionSelection.model_validate(data["selection"]),
+                    owner, adapter, handles)
+                catalog = self._device_sessions
             elif scenario == "device_conversation":
                 visit = DeviceConversation(DeviceConversationSelection.model_validate(data["selection"]),
                     owner, adapter, handles)
@@ -587,9 +606,17 @@ class ChannelProviderService:
     async def device_conversation(self, session_id: str, *, authenticated_owner_id: str,
                                   close: bool = False, team: bool = False) -> dict:
         catalog = self._team_conversations if team else self._device_conversations
+        return await self._inspect_prepared_scene(session_id, authenticated_owner_id, close, catalog)
+
+    async def device_session(self, session_id, *, authenticated_owner_id, close=False):
+        return await self._inspect_prepared_scene(session_id, authenticated_owner_id, close,
+                                                   self._device_sessions)
+
+    async def _inspect_prepared_scene(self, session_id, authenticated_owner_id, close, catalog):
+        team = catalog is self._team_conversations
         if not authenticated_owner_id:
             raise Forbidden("authenticated Owner is required")
-        scenario = "ip_role_group" if team else "device_conversation"
+        scenario = self._scene_kind(catalog)
         async with self._lock:
             visit = catalog.get((authenticated_owner_id, session_id))
             if visit is None:
@@ -598,7 +625,7 @@ class ChannelProviderService:
                     # a checkpoint or will see this durable cancellation fence.
                     self._store.cancel_scene(authenticated_owner_id, session_id, scenario)
                 if self._store.scene_cancelled(authenticated_owner_id, session_id, scenario):
-                    return dict(session_id=session_id, state="closed", error="" if team else None,
+                    return dict(session_id=session_id, state="closed", error="",
                                 **({"scenario": scenario, "completion_basis": "native_playout"}
                                    if team else {}))
                 raise UnknownChannel("device conversation is not known on this Provider")

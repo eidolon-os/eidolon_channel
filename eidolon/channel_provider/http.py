@@ -262,6 +262,38 @@ def create_app(
     app.router.add_post("/v1/device-conversations/{action:open|status|close}",
                         device_conversation)
 
+    async def device_session(request: web.Request) -> web.Response:
+        from eidolon_sdk.biz.control.device_session import DeviceSessionSelection
+        from pydantic import BaseModel, ConfigDict, Field
+
+        class OpenRequest(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            owner_id: str = Field(min_length=1, max_length=255)
+            selection: DeviceSessionSelection
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            if request.match_info["action"] == "open":
+                payload = OpenRequest.model_validate_json(await request.read())
+                result = await service.open_device_session(payload.selection,
+                    authenticated_owner_id=payload.owner_id)
+            else:
+                payload = CloseSharedSession.model_validate_json(await request.read())
+                result = await service.device_session(payload.session_id,
+                    authenticated_owner_id=payload.owner_id,
+                    close=request.match_info["action"] == "close")
+            return _json_body(result)
+        except ValidationError as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
+
+    app.router.add_post("/v1/device-sessions/{action:open|status|close}",
+                        device_session)
+
 
     async def team_conversation(request):
         from eidolon_sdk.biz.control.coordination_stream import OpenScene

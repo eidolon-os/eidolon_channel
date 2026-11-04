@@ -678,6 +678,13 @@ class HalfDuplexPttPipeline(BasePipeline):
             result.reason,
             transcript=result.transcript,
         )
+        # This pipeline transcribes, not the session, so the session never says
+        # what was heard; say it the way LiveKit's own STT does, and RoomIO puts
+        # it on lk.transcription as this device's words, as in the other modes.
+        from livekit.agents.voice.events import UserInputTranscribedEvent
+
+        session.emit("user_input_transcribed",
+                     UserInputTranscribedEvent(transcript=result.transcript, is_final=True))
         committed_turn_decision = self._turn_runtime.committed_turn_decision(
             result.transcript,
             boundary=TurnCommitBoundary.PTT_SEGMENT,

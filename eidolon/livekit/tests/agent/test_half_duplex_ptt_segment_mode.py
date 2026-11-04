@@ -127,9 +127,13 @@ class _FakeSession:
     def __init__(self) -> None:
         self.generate_reply_calls: list[dict] = []
         self.interrupt_calls: list[dict] = []
+        self.emitted: list[tuple[str, object]] = []
 
     def generate_reply(self, **kwargs):
         self.generate_reply_calls.append(kwargs)
+
+    def emit(self, event: str, value) -> None:
+        self.emitted.append((event, value))
 
     def interrupt(self, *, force: bool):
         self.interrupt_calls.append({"force": force})
@@ -746,6 +750,10 @@ async def test_pipeline_release_commits_segment_text_to_agent_session() -> None:
     session = pipeline._session
     assert isinstance(session, _FakeSession)
     assert session.generate_reply_calls == [{"user_input": "告诉我时间", "input_modality": "audio"}]
+    # What was heard reaches the room's transcript as a final user line.
+    [(event, heard)] = session.emitted
+    assert event == "user_input_transcribed"
+    assert (heard.transcript, heard.is_final) == ("告诉我时间", True)
     turn_decisions = pipeline._factory.turn_decisions
     assert len(turn_decisions) == 1
     assert turn_decisions[0]["decision"] == "commit"

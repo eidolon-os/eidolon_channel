@@ -28,6 +28,7 @@ import logging
 import time
 import weakref
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Callable, ClassVar, Protocol
 
 import numpy as np
@@ -55,13 +56,16 @@ class WindowClassifier(Protocol):
     def new_stream(self) -> "WindowClassifier": ...
 
 
-class StreamingOptions(Protocol):
-    min_speech_duration: float
-    min_silence_duration: float
-    prefix_padding_duration: float
-    max_buffered_speech: float
-    activation_threshold: float
-    sample_rate: int
+@dataclass
+class StreamingVADOptions:
+    """Turn-taking thresholds every stream of one VAD follows (see update_options)."""
+
+    min_speech_duration: float = 0.1
+    min_silence_duration: float = 0.5
+    prefix_padding_duration: float = 0.3
+    max_buffered_speech: float = 60.0
+    activation_threshold: float = 0.5
+    sample_rate: int = 16000
 
 
 class StreamingVAD(agents.vad.VAD):
@@ -72,7 +76,12 @@ class StreamingVAD(agents.vad.VAD):
     # ExpFilter alpha: filtered = alpha * previous + (1 - alpha) * sample.
     smoothing_alpha: ClassVar[float] = 0.5
 
-    def __init__(self, *, processor: WindowClassifier, opts: StreamingOptions) -> None:
+    def __init__(self, *, processor: WindowClassifier, opts: StreamingVADOptions) -> None:
+        if opts.sample_rate != processor.sample_rate:
+            raise ValueError(
+                f"{type(self).__name__} classifies {processor.sample_rate} Hz audio, "
+                f"not {opts.sample_rate} Hz"
+            )
         super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.05))
         self._processor = processor
         self._opts = opts
@@ -140,7 +149,7 @@ class StreamingVADStream(agents.vad.VADStream):
         self,
         vad: StreamingVAD,
         processor: WindowClassifier,
-        opts: StreamingOptions,
+        opts: StreamingVADOptions,
         notify_pipeline: bool = True,
     ) -> None:
         super().__init__(vad)
@@ -227,6 +236,33 @@ class StreamingVADStream(agents.vad.VADStream):
         input_copy_remaining_fract = 0.0
 
         extra_inference_time = 0.0
+
+        def _reset_write_cursor() -> None:
+            # Keep only the prefix padding when no speech is open.
+            nonlocal speech_buffer_index
+            assert self._speech_buffer is not None
+
+            if speech_buffer_index <= self._prefix_padding_samples:
+                return
+
+            padding_data = self._speech_buffer[
+                speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
+            ]
+
+            self._speech_buffer_max_reached = False
+            self._speech_buffer[: self._prefix_padding_samples] = padding_data
+            speech_buffer_index = self._prefix_padding_samples
+
+        def _copy_speech_buffer() -> rtc.AudioFrame:
+            assert self._speech_buffer is not None
+            speech_data = self._speech_buffer[:speech_buffer_index].tobytes()
+
+            return rtc.AudioFrame(
+                sample_rate=self._input_sample_rate,
+                num_channels=1,
+                samples_per_channel=speech_buffer_index,
+                data=speech_data,
+            )
 
         async for input_frame in self._input_ch:
             if not isinstance(input_frame, rtc.AudioFrame):
@@ -327,35 +363,6 @@ class StreamingVADStream(agents.vad.VADStream):
                     self._logger.warning(
                         "inference is slower than realtime",
                         extra={"delay": extra_inference_time},
-                    )
-
-                # ------------------------------------------------------------------
-                # Helper closures (defined inside the loop to capture loop variables)
-                # ------------------------------------------------------------------
-                def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index
-                    assert self._speech_buffer is not None
-
-                    if speech_buffer_index <= self._prefix_padding_samples:
-                        return
-
-                    padding_data = self._speech_buffer[
-                        speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
-                    ]
-
-                    self._speech_buffer_max_reached = False
-                    self._speech_buffer[: self._prefix_padding_samples] = padding_data
-                    speech_buffer_index = self._prefix_padding_samples
-
-                def _copy_speech_buffer() -> rtc.AudioFrame:
-                    assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()
-
-                    return rtc.AudioFrame(
-                        sample_rate=self._input_sample_rate,
-                        num_channels=1,
-                        samples_per_channel=speech_buffer_index,
-                        data=speech_data,
                     )
 
                 # ------------------------------------------------------------------

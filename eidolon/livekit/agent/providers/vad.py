@@ -40,8 +40,10 @@ def canonical_vad_provider(provider: str) -> str:
 def load_vad(provider: str, vad_cfg: "VadPolicyConfig") -> "lk_vad.VAD | None":
     """Build the configured VAD; ``None`` only for an explicitly disabled VAD.
 
-    Turn-taking thresholds are provider-neutral: every provider runs the same
-    window-classifier state machine (``plugins/vad/streaming.py``).
+    Every provider reads the same turn-policy thresholds into the same
+    window-classifier state machine (``plugins/vad/streaming.py``). Their
+    probabilities are not recalibrated to each other, so the same threshold can
+    trip more or less readily after a provider change.
     """
     provider = provider.lower()
     if provider in DISABLED_PROVIDERS:

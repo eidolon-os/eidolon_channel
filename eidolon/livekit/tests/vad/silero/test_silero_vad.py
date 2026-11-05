@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import wave
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from eidolon.livekit.common.config.schema import VadPolicyConfig
 from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
 from eidolon.livekit.plugins.vad.silero import SileroClassifier, SileroVAD
 from eidolon.livekit.plugins.vad.silero import classifier as classifier_module
+from eidolon.livekit.plugins.vad.silero.classifier import DEFAULT_MODEL_PATH
 
 _SPEECH = Path(__file__).parent / "data" / "speech_zh_16k.wav"
 
@@ -68,7 +68,6 @@ def test_windows_of_the_wrong_size_are_refused():
 
 @pytest.mark.asyncio
 async def test_speech_opens_and_closes_one_turn():
-    SileroVAD._classifier = None
     vad = SileroVAD.load(min_silence_duration=0.5)
     stream = vad.stream()
     silence = np.zeros(8000, dtype="<i2")
@@ -98,14 +97,27 @@ def test_configured_provider_selects_the_model():
 
 
 def test_thresholds_come_from_the_shared_turn_policy():
-    SileroVAD._classifier = None
     vad = load_vad("silero", VadPolicyConfig(activation_threshold=0.6, min_speech_duration_ms=250))
 
     assert vad._opts.activation_threshold == 0.6
     assert vad._opts.min_speech_duration == pytest.approx(0.25)
 
 
-def test_event_loop_is_not_required_to_build_a_provider():
-    # The worker prewarm builds the VAD outside any running loop.
-    assert asyncio.get_event_loop_policy() is not None
-    assert SileroVAD.load() is not None
+def test_a_provider_is_built_outside_any_running_loop():
+    # The worker prewarm builds the VAD synchronously, before any session loop.
+    assert isinstance(SileroVAD.load(), SileroVAD)
+
+
+def test_each_model_file_loads_once_and_is_never_swapped(tmp_path):
+    custom = tmp_path / "custom.onnx"
+    custom.write_bytes(DEFAULT_MODEL_PATH.read_bytes())
+
+    bundled = SileroVAD.load()._processor
+
+    assert SileroVAD.load()._processor is bundled
+    assert SileroVAD.load(model_path=str(custom))._processor is not bundled
+
+
+def test_only_the_classifier_sample_rate_is_accepted():
+    with pytest.raises(ValueError, match="16000 Hz"):
+        SileroVAD.load(sample_rate=8000)

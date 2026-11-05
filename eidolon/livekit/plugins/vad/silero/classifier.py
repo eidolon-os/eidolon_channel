@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 MODEL_FILENAME = "silero_vad_16k_op15.onnx"
 MODEL_SHA256 = "7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49"
@@ -25,7 +29,7 @@ class SileroClassifier:
     sample_rate = 16000
     window_size_samples = 512
 
-    def __init__(self, session) -> None:
+    def __init__(self, session: ort.InferenceSession) -> None:
         self._session = session
         self._sr = np.array(self.sample_rate, dtype=np.int64)
         self.reset()

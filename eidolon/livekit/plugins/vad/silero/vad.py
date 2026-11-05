@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
+import functools
 import logging
-from dataclasses import dataclass
-from typing import Literal
 
-from ..streaming import StreamingVAD
+from ..streaming import StreamingVAD, StreamingVADOptions
 from .classifier import SileroClassifier
 
 logger = logging.getLogger("eidolon.livekit.plugins.vad.silero")
 
 
-@dataclass
-class SileroVadConfig:
-    min_speech_duration: float = 0.1
-    min_silence_duration: float = 0.5
-    prefix_padding_duration: float = 0.3
-    max_buffered_speech: float = 60.0
-    activation_threshold: float = 0.5
-    sample_rate: Literal[16000] = 16000
+@functools.cache
+def _shared_classifier(model_path: str | None) -> SileroClassifier:
+    # The worker prewarm and every session factory build through load(); keyed
+    # by path so a second model file is never served the first one's session.
+    classifier = SileroClassifier.load(model_path)
+    logger.info("Silero VAD ONNX model loaded model=%s", model_path or "bundled")
+    return classifier
 
 
 class SileroVAD(StreamingVAD):
@@ -30,31 +28,10 @@ class SileroVAD(StreamingVAD):
     # already smooths; heavier filtering only delays barge-in onset.
     smoothing_alpha = 0.35
 
-    _classifier: SileroClassifier | None = None
-
     @classmethod
-    def load(
-        cls,
-        *,
-        min_speech_duration: float = 0.1,
-        min_silence_duration: float = 0.5,
-        prefix_padding_duration: float = 0.3,
-        max_buffered_speech: float = 60.0,
-        activation_threshold: float = 0.5,
-        sample_rate: Literal[16000] = 16000,
-        model_path: str | None = None,
-    ) -> SileroVAD:
-        if sample_rate != 16000:
-            raise ValueError("Silero VAD is configured for 16 kHz only")
-        if cls._classifier is None:
-            cls._classifier = SileroClassifier.load(model_path)
-            logger.info("Silero VAD ONNX model preloaded")
-        opts = SileroVadConfig(
-            min_speech_duration=min_speech_duration,
-            min_silence_duration=min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech,
-            activation_threshold=activation_threshold,
-            sample_rate=sample_rate,
-        )
-        return cls(processor=cls._classifier, opts=opts)
+    def load(cls, *, model_path: str | None = None, **options: float) -> SileroVAD:
+        """Build a VAD over the process-wide Silero model.
+
+        ``options`` are :class:`StreamingVADOptions` fields.
+        """
+        return cls(processor=_shared_classifier(model_path), opts=StreamingVADOptions(**options))

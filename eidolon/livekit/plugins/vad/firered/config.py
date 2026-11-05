@@ -17,12 +17,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Optional
+
+from ..streaming import StreamingVADOptions
 
 
 @dataclass
-class FireredPvadConfig:
-    """Configuration options for the FireRedChat pVAD VAD plugin.
+class FireredPvadConfig(StreamingVADOptions):
+    """Shared streaming options plus FireRedChat pVAD model selection.
 
     Attributes:
         min_speech_duration: Minimum duration of speech to trigger START_OF_SPEECH.
@@ -41,11 +43,7 @@ class FireredPvadConfig:
             spkrec-ecapa-voxceleb/. Defaults to the bundled resources/ directory.
     """
 
-    min_speech_duration: float = 0.1
     min_silence_duration: float = 0.4
     prefix_padding_duration: float = 0.5
-    max_buffered_speech: float = 60.0
-    activation_threshold: float = 0.5
-    sample_rate: Literal[16000] = 16000
     force_cpu: bool = True
     model_dir: Optional[str] = None

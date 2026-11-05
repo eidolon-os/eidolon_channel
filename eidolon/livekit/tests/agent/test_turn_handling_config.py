@@ -110,6 +110,7 @@ async def test_session_uses_livekit_transcription_timeout_event(
         _build_agent=lambda **kwargs: object(),
         _build_turn_handling=lambda: {"interruption": {"enabled": False}},
         _aec_warmup_duration=0.4,
+        _audio_input_processing={},
         _stt_commit_transcript_timeout=1.5,
         _on_user_state_changed=MagicMock(),
         _on_agent_state_changed=MagicMock(),

@@ -55,6 +55,7 @@ class _Session:
 
     async def start(self, *, agent, room, room_options) -> None:
         self.agent = agent
+        self.room_options = room_options
 
     async def aclose(self) -> None:
         self.closed = True
@@ -80,12 +81,12 @@ def home_runtime(monkeypatch):
     monkeypatch.setattr(SharedStageFactory, "_build_stt", staticmethod(lambda _cfg: SimpleNamespace(stt=_Stt())))
 
     async def participant(_room):
-        return "device-instance-test"
+        return "device-instance-test", {}
 
     async def end_home_session(*_args, **_kwargs) -> None:
         pass
 
-    monkeypatch.setattr(resolver, "wait_for_runtime_participant_identity", participant)
+    monkeypatch.setattr(resolver, "wait_for_runtime_participant_metadata", participant)
     monkeypatch.setattr(smarthome, "end_home_session", end_home_session)
 
 
@@ -121,6 +122,17 @@ def _run(cfg, calls: dict, **kwargs):
         on_idle=on_idle,
         **kwargs,
     )
+
+
+async def test_a_home_session_adds_no_agc_to_a_device_that_runs_its_own(home_runtime, monkeypatch) -> None:
+    async def participant(_room):
+        return "device-instance-test", {"audio_input": {"agc": "device"}}
+
+    monkeypatch.setattr(resolver, "wait_for_runtime_participant_metadata", participant)
+
+    await asyncio.wait_for(_run(_cfg(idle_ms=50), {}), timeout=2.0)
+
+    assert _Session.instances[0].room_options.audio_input.auto_gain_control is False
 
 
 async def test_an_unused_home_session_ends_with_an_idle_notice(home_runtime) -> None:

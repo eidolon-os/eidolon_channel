@@ -40,5 +40,5 @@ def test_host_agc_stays_on_for_a_device_without_its_own():
 
 
 def test_host_agc_is_not_stacked_on_device_agc():
-    # Reachy Mini (XVF3800), phone and browser WebRTC already run AGC.
+    # Reachy Mini: the XVF3800 already runs AGC before publishing.
     assert inbound_audio_options({"aec": "device", "agc": "device"}).auto_gain_control is False

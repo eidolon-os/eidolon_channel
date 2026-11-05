@@ -145,24 +145,14 @@ def _declared_interaction_mode(manifest: dict[str, Any]) -> str:
     for prop in manifest.get("properties", ()):
         if not isinstance(prop, dict) or prop.get("name") != _MANIFEST_INTERACTION_MODE:
             continue
-        schema = prop.get("schema")
-        if not isinstance(schema, dict):
-            continue
-        declared = schema.get("const")
-        if declared is None:
-            choices = schema.get("enum")
-            if isinstance(choices, list) and len(choices) == 1:
-                declared = choices[0]
+        declared = _pinned_value(prop.get("schema"))
         if isinstance(declared, str) and declared in INTERACTION_MODES:
             return declared
     return DEFAULT_INTERACTION_MODE
 
 
-def _declared_const(prop: object) -> object:
-    """The single value a read-only property schema pins, or None."""
-    if not isinstance(prop, dict) or prop.get("writable") is not False:
-        return None
-    schema = prop.get("schema")
+def _pinned_value(schema: object) -> object:
+    """The single value a property schema pins (`const` or one-entry `enum`), or None."""
     if not isinstance(schema, dict):
         return None
     declared = schema.get("const")
@@ -184,7 +174,10 @@ def _declared_audio_input(manifest: dict[str, Any]) -> tuple[tuple[str, str], ..
     }
     declared: list[tuple[str, str]] = []
     for stage, name in AUDIO_INPUT_STAGE_PROPERTIES.items():
-        value = _declared_const(by_name.get(name))
+        prop = by_name.get(name)
+        if prop is None or prop.get("writable") is not False:
+            continue
+        value = _pinned_value(prop.get("schema"))
         if isinstance(value, str) and value in VALID_AUDIO_INPUT_PROCESSING:
             declared.append((stage, value))
     return tuple(declared)

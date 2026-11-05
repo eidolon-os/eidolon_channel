@@ -51,11 +51,15 @@ async def run_smarthome_session(
     from livekit.agents.voice.room_io import RoomOptions
 
     from eidolon.livekit.agent.factory import SharedStageFactory, _build_runtime_services
-    from eidolon.livekit.agent.runtime.interaction_mode import resolve_idle_policy
-    from eidolon.livekit.agent.runtime.resolver import wait_for_runtime_participant_identity
+    from eidolon.livekit.agent.runtime.interaction_mode import (
+        resolve_audio_input_processing,
+        resolve_idle_policy,
+    )
+    from eidolon.livekit.agent.runtime.resolver import wait_for_runtime_participant_metadata
     from eidolon.livekit.agent.session.idle import IdleWatchdog
+    from eidolon.livekit.agent.session.inbound_audio import inbound_audio_options
 
-    participant = await wait_for_runtime_participant_identity(room)
+    participant, metadata = await wait_for_runtime_participant_metadata(room)
     if participant != device_ref:
         raise ValueError("smart-home dispatch does not match room participant")
     if not cfg.runtime_authority.enabled:
@@ -146,6 +150,7 @@ async def run_smarthome_session(
             room=room,
             room_options=RoomOptions(
                 participant_identity=device_ref,
+                audio_input=inbound_audio_options(resolve_audio_input_processing(metadata)),
                 audio_output=False,
                 text_output=False,
                 text_input=False,

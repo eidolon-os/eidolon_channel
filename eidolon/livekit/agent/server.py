@@ -302,7 +302,7 @@ async def _resolve_session_metadata(ctx) -> tuple[str, bool, dict[str, str]]:
     itself: how its hardware takes turns and which microphone processing it
     already applies (device manifest facts the Channel Provider stamps into the
     channel credential) and whether it wants a face
-    (a web client's own declaration). Neither can be overclaimed into a
+    (a web client's own declaration). None of them can be overclaimed into a
     privilege — a wrong turn-taking mode only makes the claimant's own session
     worse, and the avatar is still gated by `cfg.avatar.enabled`, so asking is
     an opt-in within what the deployment already allows. That is why the actor

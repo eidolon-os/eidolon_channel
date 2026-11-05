@@ -67,6 +67,7 @@ from eidolon.locked_environment import require_locked_environment
 # already resident in the parent process.
 from eidolon.livekit.agent.runtime import (
     apply_interaction_mode,
+    resolve_audio_input_processing,
     resolve_avatar_requested,
     resolve_interaction_mode,
     resolve_session_intent,
@@ -294,12 +295,13 @@ def _load_turn_models(proc, loaded: dict) -> None:
 
 
 
-async def _resolve_session_metadata(ctx) -> tuple[str, bool]:
-    """Resolve ``(interaction_mode, avatar_requested)`` from the runtime actor.
+async def _resolve_session_metadata(ctx) -> tuple[str, bool, dict[str, str]]:
+    """Resolve ``(interaction_mode, avatar_requested, audio_input_processing)``.
 
     What this bus carries is what the joining actor is entitled to say about
-    itself: how its hardware takes turns (a device manifest fact the Channel
-    Provider stamps into the channel credential) and whether it wants a face
+    itself: how its hardware takes turns and which microphone processing it
+    already applies (device manifest facts the Channel Provider stamps into the
+    channel credential) and whether it wants a face
     (a web client's own declaration). Neither can be overclaimed into a
     privilege — a wrong turn-taking mode only makes the claimant's own session
     worse, and the avatar is still gated by `cfg.avatar.enabled`, so asking is
@@ -326,6 +328,7 @@ async def _resolve_session_metadata(ctx) -> tuple[str, bool]:
     return (
         resolve_interaction_mode(metadata),
         resolve_avatar_requested(metadata),
+        resolve_audio_input_processing(metadata),
     )
 
 
@@ -713,7 +716,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     # retired; the Channel worker now always chooses half/full duplex at the
     # session boundary.
     session_intent = _resolve_session_intent(ctx)
-    interaction_mode, avatar_requested = await _resolve_session_metadata(ctx)
+    interaction_mode, avatar_requested, audio_input_processing = await _resolve_session_metadata(ctx)
     # A remote speaker cannot supply the input board with its local AEC reference.
     # Preserve explicit PTT; directed open-mic sessions are half-duplex.
     if presentation_endpoint is not None and interaction_mode != INTERACTION_MODE_PTT:
@@ -777,13 +780,14 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     avatar_enabled = bool(cfg.avatar.enabled and avatar_requested)
     logger.info(
         "[Agent] interaction_mode=%s session_intent=%s allow_interruptions=%s "
-        "attention_enabled=%s avatar_requested=%s avatar_enabled=%s",
+        "attention_enabled=%s avatar_requested=%s avatar_enabled=%s audio_input=%s",
         interaction_mode,
         session_intent,
         allow_interruptions,
         session_turn_policy.attention.enabled,
         avatar_requested,
         avatar_enabled,
+        audio_input_processing or "undeclared",
     )
     # The existing manually driven pipeline also serves typed/output-only
     # sessions. No audio turn detector is needed when microphone input is off.
@@ -823,6 +827,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             ),
             turn_policy=session_turn_policy,
             interaction_mode=interaction_mode,
+            audio_input_processing=audio_input_processing,
             session_intent=session_intent,
             on_session_started=_publish_session_started,
             observability=cfg.observability,

@@ -241,6 +241,7 @@ def audio_manifest(
     direction: str = "bidirectional",
     interaction_mode: str | None = None,
     video: str | None = None,
+    extra_properties: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """A manifest that declares what a device can actually do."""
     media: list[dict[str, Any]] = []
@@ -258,6 +259,7 @@ def audio_manifest(
                 "writable": False,
             }
         )
+    properties.extend(extra_properties or ())
     return {
         "schema_version": 1,
         "title": "Eidolon Device",

@@ -18,7 +18,7 @@ async def run_team_dispatch(ctx, cfg, raw):
     if not token:
         raise ValueError('team Agent service credential is not configured')
     from ..server import _resolve_session_metadata
-    mode, _ = await _resolve_session_metadata(ctx)
+    mode, _, _ = await _resolve_session_metadata(ctx)
     if mode != 'ptt':
         raise ValueError('team input device must explicitly support PTT')
     rooms, factories, outputs = [], [], []

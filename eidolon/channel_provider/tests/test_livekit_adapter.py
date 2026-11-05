@@ -10,6 +10,12 @@ from unittest.mock import AsyncMock
 from dataclasses import replace
 
 import pytest
+from eidolon_sdk.biz.audio_input import (
+    AUDIO_INPUT_AEC_PROPERTY,
+    AUDIO_INPUT_AGC_PROPERTY,
+    AUDIO_INPUT_METADATA_FIELD,
+    AUDIO_INPUT_NS_PROPERTY,
+)
 from eidolon_sdk.biz.contracts import (
     SESSION_APPLICATION_COMPANION,
     SESSION_APPLICATION_FIELD,
@@ -721,6 +727,43 @@ async def test_interaction_mode_comes_from_the_device_not_the_deployment() -> No
     binding = json.loads(grant.payload)
     metadata = json.loads(_claims(binding["session"]["token"])["metadata"])
     assert metadata["interaction_mode"] == "ptt"
+
+
+def _const_property(name: str, value: str, *, writable: bool = False) -> dict:
+    return {
+        "name": name,
+        "schema": {"type": "string", "const": value},
+        "observable": False,
+        "writable": writable,
+    }
+
+
+async def test_declared_microphone_processing_travels_with_the_device() -> None:
+    adapter, _ = _adapter()
+    spec = _spec(
+        interaction_mode="full_duplex",
+        extra_properties=[
+            _const_property(AUDIO_INPUT_AEC_PROPERTY, "device"),
+            _const_property(AUDIO_INPUT_AGC_PROPERTY, "device"),
+            _const_property(AUDIO_INPUT_NS_PROPERTY, "loud"),  # not a known value
+        ],
+    )
+
+    grant = await adapter.open(spec, issued_at_ms=1_000)
+
+    metadata = json.loads(_claims(json.loads(grant.payload)["session"]["token"])["metadata"])
+    assert metadata[AUDIO_INPUT_METADATA_FIELD] == {"aec": "device", "agc": "device"}
+
+
+async def test_microphone_processing_is_a_read_only_fact_or_nothing() -> None:
+    """A writable property is a setting, not a statement about the hardware."""
+    adapter, _ = _adapter()
+    spec = _spec(extra_properties=[_const_property(AUDIO_INPUT_AGC_PROPERTY, "device", writable=True)])
+
+    grant = await adapter.open(spec, issued_at_ms=1_000)
+
+    metadata = json.loads(_claims(json.loads(grant.payload)["session"]["token"])["metadata"])
+    assert AUDIO_INPUT_METADATA_FIELD not in metadata
 
 
 async def test_token_carries_no_server_side_orchestration() -> None:

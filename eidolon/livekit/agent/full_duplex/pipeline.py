@@ -46,7 +46,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -177,6 +177,7 @@ class StreamingPipeline(BasePipeline):
         avatar_enabled: bool = False,
         avatar_config: AvatarConfig | None = None,
         core_config: CoreConfig | None = None,
+        audio_input_processing: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(factory=factory, callbacks=callbacks)
         # StreamingPipeline serves BOTH full_duplex and half_duplex: both do
@@ -192,6 +193,9 @@ class StreamingPipeline(BasePipeline):
                 f"HalfDuplexPttPipeline for interaction_mode={interaction_mode!r}"
             )
         self._interaction_mode = interaction_mode
+        # Microphone processing the device declared it applies; the RoomIO
+        # input adds only what is missing (see session/inbound_audio.py).
+        self._audio_input_processing = dict(audio_input_processing or {})
         # Session intent (plan §3.2/§3.3) is orthogonal to interaction_mode and
         # drives only idle window + teardown reason in the full-duplex pipeline.
         self._session_intent = session_intent

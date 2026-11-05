@@ -49,7 +49,7 @@ async def test_provider_owned_team_teardown_never_emits_competing_session_end(mo
         return room()
     monkeypatch.setenv('EIDOLON_AGENT_ADMIN_API_TOKEN', 'test-credential')
     monkeypatch.setattr(PresentationEndpoint, 'connect', connect)
-    monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(return_value=('ptt', None)))
+    monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(return_value=('ptt', None, {})))
     monkeypatch.setattr(entrypoint.SharedStageFactory, 'from_config', lambda *a, **kw:
         SimpleNamespace(tts=SimpleNamespace(tts=object()), aclose=AsyncMock()))
     class Worker:

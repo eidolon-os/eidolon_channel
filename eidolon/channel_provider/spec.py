@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from eidolon_sdk.biz.audio_input import AUDIO_INPUT_STAGE_PROPERTIES, VALID_AUDIO_INPUT_PROCESSING
 from eidolon_sdk.biz.contracts import (
     SESSION_APPLICATION_COMPANION,
     SESSION_APPLICATION_HOME_COMMAND,
@@ -78,6 +79,10 @@ class ServingSpec:
     agent_name: str
     interaction_mode: str
     application: str = SESSION_APPLICATION_COMPANION
+    # Declared microphone processing as (stage, "device"|"none") pairs; an
+    # undeclared stage is absent and the agent keeps its own default for it.
+    # A tuple keeps the spec hashable like every other field.
+    audio_input: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +158,38 @@ def _declared_interaction_mode(manifest: dict[str, Any]) -> str:
     return DEFAULT_INTERACTION_MODE
 
 
+def _declared_const(prop: object) -> object:
+    """The single value a read-only property schema pins, or None."""
+    if not isinstance(prop, dict) or prop.get("writable") is not False:
+        return None
+    schema = prop.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    declared = schema.get("const")
+    if declared is None:
+        choices = schema.get("enum")
+        if isinstance(choices, list) and len(choices) == 1:
+            declared = choices[0]
+    return declared
+
+
+def _declared_audio_input(manifest: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Microphone processing the device states it already applies.
+
+    Like `interaction_mode`, this is a fact about the hardware, so only a
+    read-only const property counts; anything else leaves the stage undeclared.
+    """
+    by_name = {
+        prop.get("name"): prop for prop in manifest.get("properties", ()) if isinstance(prop, dict)
+    }
+    declared: list[tuple[str, str]] = []
+    for stage, name in AUDIO_INPUT_STAGE_PROPERTIES.items():
+        value = _declared_const(by_name.get(name))
+        if isinstance(value, str) and value in VALID_AUDIO_INPUT_PROCESSING:
+            declared.append((stage, value))
+    return tuple(declared)
+
+
 def _declared_voice_application(manifest: dict[str, Any]) -> str:
     """The device's voice use case; display properties never select it."""
     for prop in manifest.get("properties", ()):
@@ -212,6 +249,7 @@ def derive_spec(
             agent_name=agent_name,
             interaction_mode=_declared_interaction_mode(manifest),
             application=_declared_voice_application(manifest),
+            audio_input=_declared_audio_input(manifest),
         )
         if _media_flow(manifest, "audio") is not MediaFlow.NONE or selected is not None
         else None

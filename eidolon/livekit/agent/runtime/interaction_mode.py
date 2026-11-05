@@ -53,6 +53,7 @@ from typing import Any
 from eidolon.livekit.common.config.schema import IdlePolicyConfig, TurnPolicyConfig
 from eidolon.livekit.common.welcome import WelcomeMessage, welcome_allowed
 from eidolon_sdk.biz.presentation import OutputSelection
+from eidolon_sdk.biz.audio_input import AUDIO_INPUT_METADATA_FIELD, normalize_audio_input_processing
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_HALF_DUPLEX,
     INTERACTION_MODE_PTT,
@@ -195,6 +196,21 @@ def _coerce_metadata_dict(raw_metadata: str | dict[str, Any] | None) -> dict[str
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def resolve_audio_input_processing(
+    raw_metadata: str | dict[str, Any] | None,
+) -> dict[str, str]:
+    """Microphone processing the device declared it applies before publishing.
+
+    Stamped by the Channel Provider from read-only manifest properties, so it
+    is a hardware fact like ``interaction_mode``. Missing, unparseable or
+    unknown values leave the stage undeclared, i.e. the Host default.
+    """
+    meta = _coerce_metadata_dict(raw_metadata)
+    if not meta:
+        return {}
+    return normalize_audio_input_processing(meta.get(AUDIO_INPUT_METADATA_FIELD))
 
 
 def resolve_avatar_requested(

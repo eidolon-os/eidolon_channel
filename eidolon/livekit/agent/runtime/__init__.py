@@ -2,6 +2,7 @@
 
 from eidolon.livekit.agent.runtime.interaction_mode import (
     apply_interaction_mode,
+    resolve_audio_input_processing,
     resolve_avatar_requested,
     resolve_device_id,
     resolve_interaction_mode,
@@ -25,6 +26,7 @@ __all__ = [
     "make_device_token_resolver",
     "resolve_channel_context",
     "apply_interaction_mode",
+    "resolve_audio_input_processing",
     "resolve_avatar_requested",
     "resolve_device_id",
     "resolve_interaction_mode",

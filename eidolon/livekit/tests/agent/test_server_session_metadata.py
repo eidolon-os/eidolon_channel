@@ -115,7 +115,7 @@ async def test_session_metadata_ignores_hub_control_participant():
         }
     )
 
-    mode, avatar = await _resolve_session_metadata(ctx)
+    mode, avatar, _audio_input = await _resolve_session_metadata(ctx)
 
     assert ctx.connect_calls == 1
     assert mode == "full_duplex"
@@ -162,7 +162,7 @@ async def test_a_participant_cannot_declare_its_own_session_intent() -> None:
         dispatch_metadata='{"conversation_id":"conversation-1"}',
     )
 
-    mode, _avatar = await _resolve_session_metadata(ctx)
+    mode, _avatar, _audio_input = await _resolve_session_metadata(ctx)
 
     assert mode == "full_duplex"  # the actor still describes its own hardware
     assert _resolve_session_intent(ctx) == SESSION_INTENT_USER_INITIATED
@@ -237,7 +237,7 @@ async def test_job_constructs_intent_only_for_its_selected_mode(monkeypatch, mod
         return factory
 
     monkeypatch.setattr(SharedStageFactory, 'from_config', factory_from_config)
-    resolve = AsyncMock(return_value=(mode, False))
+    resolve = AsyncMock(return_value=(mode, False, {}))
     monkeypatch.setattr(server, '_resolve_session_metadata', resolve)
     streaming = MagicMock(return_value=SimpleNamespace(run=AsyncMock()))
     ptt = MagicMock(return_value=SimpleNamespace(run=AsyncMock()))
@@ -293,7 +293,7 @@ async def test_the_dispatched_intent_reaches_the_pipeline(monkeypatch, intent):
     monkeypatch.setattr(full_duplex, "StreamingPipeline", streaming)
     # Only the participant bus is stubbed; the intent must come the real way.
     monkeypatch.setattr(
-        server, "_resolve_session_metadata", AsyncMock(return_value=("full_duplex", False))
+        server, "_resolve_session_metadata", AsyncMock(return_value=("full_duplex", False, {}))
     )
     ctx = _FakeContext(
         {},
@@ -349,7 +349,7 @@ async def test_microphone_disabled_dispatch_uses_existing_manual_session_without
     monkeypatch.setattr(manual, 'HalfDuplexPttPipeline', manual_pipeline)
     streaming = MagicMock(side_effect=AssertionError('Audio/EOT pipeline must not be constructed'))
     monkeypatch.setattr(full_duplex, 'StreamingPipeline', streaming)
-    monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(return_value=(mode, False)))
+    monkeypatch.setattr(server, '_resolve_session_metadata', AsyncMock(return_value=(mode, False, {})))
     ctx = _FakeContext({}, dispatch_metadata=json.dumps({'conversation_id': 'conversation-1', 'output_plan': plan.model_dump(mode='json'), 'target_companion_id': 'visitor'}))
     ctx.room.name = 'no-microphone'
     ctx.proc = SimpleNamespace(userdata={})
@@ -419,7 +419,7 @@ async def test_directed_worker_keeps_input_identity_and_starts_output_before_sou
     )
     build = MagicMock(return_value=SimpleNamespace(runtime_services=runtime_services))
     monkeypatch.setattr(SharedStageFactory, "from_config", build)
-    monkeypatch.setattr(server, "_resolve_session_metadata", AsyncMock(return_value=(mode, False)))
+    monkeypatch.setattr(server, "_resolve_session_metadata", AsyncMock(return_value=(mode, False, {})))
 
     def pipeline(factory, **kwargs):
         assert kwargs["welcome_message"] is None

@@ -93,6 +93,7 @@ class FullDuplexSessionLifecycle:
         """Start the full-duplex pipeline and block until the session closes."""
         from livekit.agents.voice import AgentSession
         from livekit.agents.voice.room_io import AudioOutputOptions, RoomOptions, TextInputOptions
+        from eidolon.livekit.agent.session.inbound_audio import inbound_audio_options
         from eidolon.livekit.agent.session.text_input import accept_text_input
 
         pipeline = self._pipeline
@@ -162,6 +163,9 @@ class FullDuplexSessionLifecycle:
             session=session, agent=agent, input_room=room,
             output_room=output_room, output_participant_identity=output_participant_identity,
             options=RoomOptions(
+                # Also inherited by EvidenceRoomInput when speaker observation
+                # takes over the microphone (see _prepare_session).
+                audio_input=inbound_audio_options(pipeline._audio_input_processing),
                 audio_output=room_audio_output,
                 text_input=TextInputOptions(text_input_cb=partial(accept_text_input,
                     prepare=getattr(pipeline, "_prepare_memory_turn", None))),

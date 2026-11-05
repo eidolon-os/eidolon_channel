@@ -30,6 +30,7 @@ from eidolon_sdk.biz.smarthome import PANEL_REQUEST_TOPIC
 from eidolon_sdk.biz.control.protocol import command_status_from_ack
 from eidolon.livekit.control_receipts import read_control_receipt
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
+from eidolon_sdk.biz.audio_input import AUDIO_INPUT_METADATA_FIELD
 from eidolon_sdk.biz.contracts import (
     CHANNEL_PROVIDER_IDENTITY_PREFIX,
     CONTROL_OP_PLAYBACK_STOP,
@@ -1814,7 +1815,7 @@ class LiveKitChannelAdapter:
             sources.append("microphone")
         if spec.video.publishes:
             sources.append("camera")
-        metadata: dict[str, str] = {
+        metadata: dict[str, object] = {
             "kind": "device",
             "device_id": spec.device_id,
             "owner_id": spec.owner_id,
@@ -1822,6 +1823,10 @@ class LiveKitChannelAdapter:
         }
         if spec.serving is not None:
             metadata["interaction_mode"] = spec.serving.interaction_mode
+            if spec.serving.audio_input:
+                # A hardware fact like interaction_mode: the agent adds only the
+                # microphone processing the device has not already applied.
+                metadata[AUDIO_INPUT_METADATA_FIELD] = dict(spec.serving.audio_input)
         return (
             api.AccessToken(self._config.api_key, self._config.api_secret)
             .with_identity(spec.device_id)

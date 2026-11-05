@@ -258,25 +258,21 @@ def _load_prewarm_models(proc) -> None:
 
 
 def _load_turn_models(proc, loaded: dict) -> None:
+    provider = "unknown"
     try:
-        from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
+        from eidolon.livekit.agent.providers.vad import canonical_vad_provider, load_vad
         from eidolon.livekit.common.config import load_effective_config
 
         cfg = load_effective_config()
-        vad_cfg = cfg.turn_policy.vad
-
-        proc.userdata["vad"] = FireredPvadVAD.load(
-            min_speech_duration=vad_cfg.min_speech_duration_ms / 1000.0,
-            min_silence_duration=vad_cfg.min_silence_duration_ms / 1000.0,
-            prefix_padding_duration=vad_cfg.prefix_padding_ms / 1000.0,
-            max_buffered_speech=vad_cfg.max_buffered_speech_ms / 1000.0,
-            activation_threshold=vad_cfg.activation_threshold,
-        )
-        logger.info("[Agent] prewarm: FireRed pVAD loaded")
-        loaded["vad"] = {"state": "loaded", "provider": "firered_pvad"}
+        provider = canonical_vad_provider(cfg.providers.vad_provider)
+        proc.userdata["vad"] = load_vad(cfg.providers.vad_provider, cfg.turn_policy.vad)
+        if proc.userdata["vad"] is None:
+            raise ValueError("VAD disabled by configuration")
+        logger.info("[Agent] prewarm: VAD %s loaded", provider)
+        loaded["vad"] = {"state": "loaded", "provider": provider}
     except Exception as e:
         logger.warning("[Agent] prewarm: VAD load failed: %s", e)
-        loaded["vad"] = {"state": "failed", "provider": "firered_pvad", "error": str(e)[:200]}
+        loaded["vad"] = {"state": "failed", "provider": provider, "error": str(e)[:200]}
 
     try:
         from eidolon.livekit.common.config import load_effective_config

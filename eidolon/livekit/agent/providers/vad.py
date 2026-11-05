@@ -7,9 +7,9 @@ same lifecycle hooks (warmup / shutdown) as :class:`SttStage` /
 wrapper exists for **dependency injection symmetry** and **lifecycle
 management**, not for driving VAD itself.
 
-To add a new VAD provider, edit
-``factory.py::SharedStageFactory._build_vad``. The stage layer doesn't
-need to change.
+To add a new VAD provider, add it to :func:`load_vad`. Both the worker
+prewarm and ``SharedStageFactory`` build through it, so a provider can never
+be warmed by one path and silently missing from the other.
 """
 
 from __future__ import annotations
@@ -20,7 +20,48 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit.agents import vad as lk_vad
 
+    from eidolon.livekit.common.config.schema import VadPolicyConfig
+
 logger = logging.getLogger("providers.vad")
+
+FIRERED_PROVIDERS = frozenset({"firered", "firered_pvad"})
+SILERO_PROVIDERS = frozenset({"silero"})
+DISABLED_PROVIDERS = frozenset({"none", "disabled"})
+
+
+def canonical_vad_provider(provider: str) -> str:
+    """The provider name reported in status and logs."""
+    provider = provider.lower()
+    if provider in FIRERED_PROVIDERS:
+        return "firered_pvad"
+    return provider
+
+
+def load_vad(provider: str, vad_cfg: "VadPolicyConfig") -> "lk_vad.VAD | None":
+    """Build the configured VAD; ``None`` only for an explicitly disabled VAD.
+
+    Turn-taking thresholds are provider-neutral: every provider runs the same
+    window-classifier state machine (``plugins/vad/streaming.py``).
+    """
+    provider = provider.lower()
+    if provider in DISABLED_PROVIDERS:
+        return None
+    options = dict(
+        min_speech_duration=vad_cfg.min_speech_duration_ms / 1000.0,
+        min_silence_duration=vad_cfg.min_silence_duration_ms / 1000.0,
+        prefix_padding_duration=vad_cfg.prefix_padding_ms / 1000.0,
+        max_buffered_speech=vad_cfg.max_buffered_speech_ms / 1000.0,
+        activation_threshold=vad_cfg.activation_threshold,
+    )
+    if provider in SILERO_PROVIDERS:
+        from eidolon.livekit.plugins.vad.silero import SileroVAD
+
+        return SileroVAD.load(**options)
+    if provider in FIRERED_PROVIDERS:
+        from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
+
+        return FireredPvadVAD.load(**options)
+    raise ValueError(f"unsupported VAD provider: {provider}")
 
 
 class VadStage:

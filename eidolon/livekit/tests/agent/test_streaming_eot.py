@@ -108,11 +108,11 @@ def test_mini_prewarm_does_not_load_firered(monkeypatch, tmp_path):
     monkeypatch.setenv('EIDOLON_RUNTIME_ROOT', str(tmp_path))
     from eidolon.livekit.common import config
     from eidolon.livekit.plugins import eot
-    from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
+    from eidolon.livekit.plugins.vad.silero import SileroVAD
     from livekit import local_inference
     cfg = replace(EffectiveAgentConfig(), turn_policy=mini_policy())
     monkeypatch.setattr(config, 'load_effective_config', lambda: cfg)
-    monkeypatch.setattr(FireredPvadVAD, 'load', Mock())
+    monkeypatch.setattr(SileroVAD, 'load', Mock())
     warm = Mock()
     fire = Mock(side_effect=AssertionError('unexpected FireRed'))
     monkeypatch.setattr(local_inference, 'init_eot', warm)

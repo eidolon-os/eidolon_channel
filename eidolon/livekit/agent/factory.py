@@ -601,35 +601,22 @@ class SharedStageFactory:
         Returns ``None`` for ``"none"`` / ``"disabled"`` providers, or when
         the chosen provider is unavailable in the runtime environment.
         """
+        from .providers.vad import DISABLED_PROVIDERS, canonical_vad_provider, load_vad
+
         provider = cfg.providers.vad_provider.lower()
-        vad_cfg = cfg.turn_policy.vad
-
-        if provider in ("firered", "firered_pvad"):
-            try:
-                from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
-
-                return FireredPvadVAD.load(
-                    min_speech_duration=vad_cfg.min_speech_duration_ms / 1000.0,
-                    min_silence_duration=vad_cfg.min_silence_duration_ms / 1000.0,
-                    prefix_padding_duration=vad_cfg.prefix_padding_ms / 1000.0,
-                    max_buffered_speech=vad_cfg.max_buffered_speech_ms / 1000.0,
-                    activation_threshold=vad_cfg.activation_threshold,
-                )
-            except Exception as e:
-                logger.warning("[SharedStageFactory] FireRed VAD not available: %s", e)
-                # Fall through to silero or None below
-
-        if provider in ("none", "disabled"):
+        if provider in DISABLED_PROVIDERS:
             return None
+        try:
+            return load_vad(provider, cfg.turn_policy.vad)
+        except Exception as e:
+            logger.warning(
+                "[SharedStageFactory] VAD provider %s not available: %s",
+                canonical_vad_provider(provider), e,
+            )
 
-        # There is no VAD fallback in this build, and saying "not installed"
-        # invited the reading that installing it would help. Two things are
-        # wrong at once: `livekit.agents.plugins` does not exist in
-        # livekit-agents 1.7.1, and the modern `livekit-plugins-silero` is not
-        # a declared dependency either (`silero` appears zero times in
-        # pyproject.toml and uv.lock). Correcting only the import would produce
-        # a fallback that looks repaired and behaves identically, which is
-        # worse than a message that is honest about arriving at None.
+        # There is no cross-provider fallback: the configured provider is a
+        # product decision, and quietly running another model would make its
+        # behaviour unreviewable.
         #
         # Losing VAD is a degradation, not deafness — the SDK substitutes
         # transcript activity for VAD activity (agent_activity.py:2313) and the

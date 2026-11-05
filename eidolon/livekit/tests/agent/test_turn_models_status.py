@@ -18,7 +18,7 @@ from eidolon.livekit.agent import server
 from eidolon.livekit.common import config
 from eidolon.livekit.common.config.schema import EffectiveAgentConfig
 from eidolon.livekit.plugins import eot
-from eidolon.livekit.plugins.vad.firered import FireredPvadVAD
+from eidolon.livekit.plugins.vad.silero import SileroVAD
 
 
 @pytest.fixture
@@ -33,21 +33,21 @@ def _published(path):
 
 
 def test_loaded_models_are_published(runtime, monkeypatch) -> None:
-    monkeypatch.setattr(FireredPvadVAD, "load", Mock())
+    monkeypatch.setattr(SileroVAD, "load", Mock())
     monkeypatch.setattr(eot, "ChineseModel", Mock())
 
     server._load_prewarm_models(SimpleNamespace(userdata={}))
 
     status = _published(runtime)
     assert status["state"] == "loaded"
-    assert status["vad"] == {"state": "loaded", "provider": "firered_pvad"}
+    assert status["vad"] == {"state": "loaded", "provider": "silero"}
     assert status["eot"] == {"state": "loaded", "provider": "firered"}
 
 
 def test_what_building_a_job_process_cost_is_published(runtime, monkeypatch) -> None:
     # The next conversation waits this long if no warm process is left; on
     # 11-01 it was ~10 s of mostly compiling transformers and torch from source.
-    monkeypatch.setattr(FireredPvadVAD, "load", Mock())
+    monkeypatch.setattr(SileroVAD, "load", Mock())
     monkeypatch.setattr(eot, "ChineseModel", Mock())
     monkeypatch.delenv("EIDOLON_CHANNEL_NUM_IDLE_PROCESSES", raising=False)
     monkeypatch.setenv("EIDOLON_ENV", "product")
@@ -64,7 +64,7 @@ def test_what_building_a_job_process_cost_is_published(runtime, monkeypatch) -> 
 
 def test_a_model_that_will_not_load_is_published_as_failed(runtime, monkeypatch) -> None:
     pointer = RuntimeError("[ONNXRuntimeError] : 7 : INVALID_PROTOBUF")
-    monkeypatch.setattr(FireredPvadVAD, "load", Mock(side_effect=pointer))
+    monkeypatch.setattr(SileroVAD, "load", Mock(side_effect=pointer))
     monkeypatch.setattr(eot, "ChineseModel", Mock())
 
     server._load_prewarm_models(SimpleNamespace(userdata={}))

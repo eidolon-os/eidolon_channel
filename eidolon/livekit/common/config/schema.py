@@ -45,7 +45,7 @@ class AgentBehaviorConfig:
 class ProvidersConfig:
     stt_provider: str = "sensetime"
     tts_provider: str | None = "sensetime"
-    vad_provider: str = "firered"
+    vad_provider: str = "silero"
     brain_provider: BrainProvider = "direct_llm"
 
 

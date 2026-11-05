@@ -67,7 +67,10 @@ llm:
 providers:
   stt_provider: bailian
   tts_provider: bailian
-  vad_provider: firered_pvad
+  # silero: the model the Reachy native app uses; robust to device echo and
+  # motor residue (docs/跨系统/设备音频输入能力与边说边动打断方案-20261105.md).
+  # firered_pvad remains available.
+  vad_provider: silero
   brain_provider: eidolon_agent  # [direct_llm", "eidolon_agent"]
 
 remote_agent_rpc:

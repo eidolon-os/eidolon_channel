@@ -21,6 +21,12 @@ from eidolon_sdk.biz.presentation.capability_rpc import (
 from ..eidolon_agent_rpc.channel_tools import ChannelToolResult
 from ..runtime.resolver import wait_for_runtime_participant_identity
 
+# A device registers its capability handlers once its hardware is ready, which
+# can be seconds after it joins (Reachy wakes first); discovery asks again until
+# it answers, within a bound for a device that never will.
+RESOURCE_RETRY_S = 0.5
+RESOURCE_DISCOVERY_S = 30.0
+
 
 class SessionCapabilityRPC:
     def __init__(self, room, plan):
@@ -186,6 +192,10 @@ class SessionCapabilityRPC:
 
     async def close(self):
         self.closed = True
+        discovery, self._resource_hints = self._resource_hints, None
+        if discovery is not None:
+            discovery.cancel()
+            await asyncio.gather(discovery, return_exceptions=True)
         foreground = list(self.foreground)
         for task in foreground:
             if not task.cancelling():
@@ -197,14 +207,35 @@ class SessionCapabilityRPC:
         self.interrupt()
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    def prefetch_resource_hints(self):
+        """Start discovery once per session so the first turn finds it done."""
+        if self._resource_hints is None and not self.closed:
+            self._resource_hints = asyncio.create_task(
+                self._discover_resources(), name="device-resource-discovery")
+
     async def resource_hints(self):
+        """Hints for a turn; waits on the session's one discovery for at most 2 s."""
+        self.prefetch_resource_hints()
+        discovery = self._resource_hints
+        if discovery is None:
+            return {}
+        await asyncio.wait({discovery}, timeout=2)
+        if not discovery.done():
+            return {}  # Still waiting for the device; a later turn gets the result.
+        hints = {} if discovery.cancelled() else discovery.result()
+        if not hints and self._resource_hints is discovery:
+            # A transient failure must not poison later turns.
+            self._resource_hints = None
+        return hints
+
+    async def _discover_resources(self):
         """Session-local, read-only discovery; no model round trip or new protocol."""
-        if self._resource_hints is not None:
-            return self._resource_hints
         from ..eidolon_agent_rpc.channel_tools import ChannelToolCall
-        hints = {}
-        try:
-            async with asyncio.timeout(2):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RESOURCE_DISCOVERY_S
+        while True:
+            hints = {}
+            try:
                 for name in self.plan.motion_capabilities:
                     definition = self.registry.get(name)
                     if definition.resource_preview_arguments is None or definition.side_effect:
@@ -217,9 +248,10 @@ class SessionCapabilityRPC:
                             value = value.get(key) if isinstance(value, dict) else None
                         if value:
                             hints[name] = value
-        except Exception:
-            logging.getLogger(__name__).warning("resource preview unavailable; ordinary discovery remains available")
-        # A transient failure must not poison later turns.
-        if hints:
-            self._resource_hints = hints
-        return hints
+                return hints
+            except Exception:
+                if self.closed or loop.time() >= deadline:
+                    logging.getLogger(__name__).warning(
+                        "resource preview unavailable; ordinary discovery remains available")
+                    return {}
+            await asyncio.sleep(RESOURCE_RETRY_S)

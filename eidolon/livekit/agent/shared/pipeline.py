@@ -245,6 +245,9 @@ class BasePipeline(ABC):
         # (e.g. FireredPvadVAD), this is effectively a no-op.
         if self._factory.vad is not None:
             stages.append(self._factory.vad)
+        # LivekitLlmStage warms the device resources its first turn reads.
+        if hasattr(self._factory.llm, "warmup"):
+            stages.append(self._factory.llm)
         return stages
 
     async def _warmup_stages(self) -> None:

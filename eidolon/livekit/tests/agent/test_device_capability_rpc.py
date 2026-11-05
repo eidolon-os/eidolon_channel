@@ -66,3 +66,139 @@ async def test_background_acceptance_does_not_wait_and_close_cancels_before_work
     await runtime.close()
     assert module.CANCEL in methods
     assert not runtime.executions and not runtime.pending
+
+
+CLIPS = ["emotion:cheerful1", "dance:simple_nod"]
+
+
+class CatalogDevice:
+    """A device that registers its handlers only once ``ready`` and, like the
+    Reachy client, first reports the catalog as running, then completed."""
+
+    def __init__(self, *, ready=True):
+        self.ready = asyncio.Event()
+        if ready:
+            self.ready.set()
+        self.methods = []
+
+    async def perform_rpc(self, **kwargs):
+        import json
+        from livekit.rtc import RpcError
+        self.methods.append(kwargs["method"])
+        if not self.ready.is_set():
+            raise RpcError(RpcError.ErrorCode.UNSUPPORTED_METHOD, "Method not supported at destination")
+        body = json.loads(kwargs["payload"])
+        if kwargs["method"] == module.STATUS:
+            return ExecutionSnapshot(execution_id=body["execution_id"], state="completed", sequence=2,
+                result={"clips": CLIPS}).model_dump_json()
+        return ExecutionSnapshot(execution_id=body["execution_id"], state="running",
+            sequence=1).model_dump_json()
+
+    def runtime(self):
+        plan = SessionOutputPlan(session_id="s", policy_revision=1, outputs=OutputSelection(motion=True),
+            motion_profile="eidolon.motion.v2", motion_capabilities=("motion.catalog", "motion.play"))
+        return module.SessionCapabilityRPC(SimpleNamespace(local_participant=self), plan)
+
+
+@pytest.fixture
+def device(monkeypatch):
+    async def peer(room):
+        return "device"
+    monkeypatch.setattr(module, "wait_for_runtime_participant_identity", peer)
+    monkeypatch.setattr(module, "RESOURCE_RETRY_S", 0.01)
+    return CatalogDevice
+
+
+async def settled(runtime):
+    await asyncio.wait({runtime._resource_hints}, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_first_turn_reads_prefetched_catalog_without_waiting_on_the_device(device):
+    loop = asyncio.get_running_loop()
+    lazy = device().runtime()
+    started = loop.time()
+    assert await lazy.resource_hints() == {"motion.catalog": CLIPS}
+    lazy_ms = 1000 * (loop.time() - started)
+
+    warm = device()
+    runtime = warm.runtime()
+    runtime.prefetch_resource_hints()  # session warmup
+    await settled(runtime)
+    calls = len(warm.methods)
+    started = loop.time()
+    assert await runtime.resource_hints() == {"motion.catalog": CLIPS}
+    first_turn_ms = 1000 * (loop.time() - started)
+    assert len(warm.methods) == calls  # the turn itself sent nothing to the device
+    # The status poll alone holds a lazy first turn for 150 ms.
+    assert lazy_ms >= 150 and first_turn_ms < 20, (lazy_ms, first_turn_ms)
+    await lazy.close()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_keeps_asking_until_the_device_registers_its_handlers(device):
+    waking = device(ready=False)
+    runtime = waking.runtime()
+    runtime.prefetch_resource_hints()
+    await asyncio.sleep(0.05)
+    assert waking.methods and not runtime._resource_hints.done()
+    waking.ready.set()
+    await settled(runtime)
+    assert await runtime.resource_hints() == {"motion.catalog": CLIPS}
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_shares_the_discovery_already_in_flight(device):
+    catalog = device()
+    runtime = catalog.runtime()
+    runtime.prefetch_resource_hints()
+    first, second = await asyncio.gather(runtime.resource_hints(), runtime.resource_hints())
+    assert first == second == {"motion.catalog": CLIPS}
+    assert catalog.methods.count(module.INVOKE_V2) == 1
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_device_that_never_answers_neither_blocks_a_turn_nor_poisons_the_next(device, monkeypatch):
+    monkeypatch.setattr(module, "RESOURCE_DISCOVERY_S", 0.05)
+    silent = device(ready=False)
+    runtime = silent.runtime()
+    assert await runtime.resource_hints() == {}
+    silent.ready.set()
+    assert await runtime.resource_hints() == {"motion.catalog": CLIPS}
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_close_stops_discovery_still_waiting_for_the_device(device):
+    silent = device(ready=False)
+    runtime = silent.runtime()
+    runtime.prefetch_resource_hints()
+    await asyncio.sleep(0.03)
+    discovery = runtime._resource_hints
+    await runtime.close()
+    asked = len(silent.methods)
+    await asyncio.sleep(0.05)
+    assert discovery.cancelled() and len(silent.methods) == asked
+    assert await runtime.resource_hints() == {}
+
+
+@pytest.mark.asyncio
+async def test_session_warmup_starts_device_discovery_without_waiting_for_it():
+    from eidolon.livekit.agent.providers.llm import LivekitLlmStage
+    from eidolon.livekit.agent.shared.pipeline import BasePipeline
+
+    started = []
+    stage = LivekitLlmStage(SimpleNamespace(prefetch_device_resources=lambda: started.append(True)))
+
+    class Pipeline(BasePipeline):
+        async def run(self, room):
+            pass
+
+    pipeline = Pipeline.__new__(Pipeline)
+    pipeline._factory = SimpleNamespace(stt=None, tts=None, vad=None, llm=stage)
+    assert pipeline._lifecycle_stages() == [stage]
+    await pipeline._warmup_stages()
+    assert started == [True]

@@ -241,6 +241,11 @@ class EidolonAgentGrpcLlm(llm.LLM):
                     )
         return self._session
 
+    def prefetch_device_resources(self) -> None:
+        """Begin the device resource discovery the first turn sends to the Brain."""
+        if self._device_rpc is not None:
+            self._device_rpc.prefetch_resource_hints()
+
     def configure_channel_tools(self, handler, cancel_handler, capabilities: frozenset[str]) -> None:
         from ..session.capability_router import CapabilityRouter
         router = CapabilityRouter()

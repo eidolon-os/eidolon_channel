@@ -95,6 +95,16 @@ class LivekitLlmStage(LlmStage):
         """The underlying LiveKit LLM instance."""
         return self._llm
 
+    async def warmup(self) -> None:
+        """Start what the first turn reads from the device; does not wait for it.
+
+        A device answers only once its hardware is up, seconds after joining,
+        so waiting here would hold the other stages' warmup back.
+        """
+        prefetch = getattr(self._llm, "prefetch_device_resources", None)
+        if prefetch is not None:
+            prefetch()
+
     async def chat(
         self,
         input: LlmInput,

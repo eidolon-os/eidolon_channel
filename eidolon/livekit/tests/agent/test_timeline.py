@@ -757,7 +757,7 @@ def test_nonrecoverable_llm_error_without_delta_announces_before_closing(tmp_pat
     )
 
     pipeline._session.say.assert_called_once_with(
-        "刚才卡了一下，请再说一遍好吗？",
+        "抱歉，这次没能完成回答。",
         add_to_chat_ctx=False,
     )
     rows = [json.loads(line) for line in debug_path.read_text().splitlines()]

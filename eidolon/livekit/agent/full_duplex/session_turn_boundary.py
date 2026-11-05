@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("agent")
 
-_SILENT_OUTPUT_FALLBACK_TEXT = "刚才卡了一下，请再说一遍好吗？"
+_SILENT_OUTPUT_FALLBACK_TEXT = "抱歉，这次没能完成回答。"
 
 
 class FullDuplexSessionTurnBoundary:

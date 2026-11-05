@@ -71,7 +71,7 @@ def test_terminal_llm_failure_without_delta_announces_once_outside_chat_context(
     ) is False
 
     p._session.say.assert_called_once_with(
-        "刚才卡了一下，请再说一遍好吗？",
+        "抱歉，这次没能完成回答。",
         add_to_chat_ctx=False,
     )
     p._mark_activity.assert_not_called()
@@ -136,6 +136,6 @@ async def test_terminal_error_fallback_produces_audio_through_real_session():
             recoverable=False,
         )))
         await handle.audio_out.wait_for_first_audio()
-        assert tts.synth_texts == ["刚才卡了一下，请再说一遍好吗？"]
+        assert tts.synth_texts == ["抱歉，这次没能完成回答。"]
         assert handle.audio_out.collected_pcm
         assert timeline.attrs["silent_failure_fallback"]["spoken"] is True

@@ -112,7 +112,10 @@ turn_policy:
     activation_threshold: 0.50
     prefix_padding_ms: 300
     min_speech_duration_ms: 100
-    min_silence_duration_ms: 500
+    # 350, not the balanced profile's 500: ends each user turn ~0.15 s sooner
+    # (fast_e2e_like's value). Shorter pauses now close a VAD segment; whether
+    # the turn commits is still decided by EOT and STT.
+    min_silence_duration_ms: 350
   eot:
     eot_unlikely_threshold: 0.50
     transcript_revision_min_normalized_chars: 4

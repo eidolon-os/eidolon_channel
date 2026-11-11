@@ -357,6 +357,52 @@ turn_policy:
         load_effective_config()
 
 
+@pytest.mark.parametrize("profile,expected_ms", [
+    ("balanced_semantic", 2000), ("custom", 2000), ("fast_e2e_like", 1500),
+    ("patient_companion", 3000),
+])
+def test_incomplete_turn_wait_profile_defaults(profile: str, expected_ms: int) -> None:
+    assert profile_defaults(profile).eot.max_endpointing_delay_ms == expected_ms
+
+
+@pytest.mark.parametrize("value,error", [(1800, None), (300, "max_endpointing_delay_ms")])
+def test_incomplete_turn_wait_loads_from_settings_and_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: int, error: str | None,
+) -> None:
+    settings = _write_settings(
+        tmp_path,
+        f"""
+core:
+  livekit_url: ws://127.0.0.1:7880
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+providers:
+  stt_provider: sensetime
+  tts_provider: bailian
+  vad_provider: firered
+  brain_provider: direct_llm
+llm:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: OPENAI_LLM_API_KEY
+turn_policy:
+  eot:
+    max_endpointing_delay_ms: {value}
+""",
+    )
+    monkeypatch.setenv("EIDOLON_CHANNEL_SETTINGS_YAML", str(settings))
+    monkeypatch.delenv("EIDOLON_CHANNEL_SETTINGS_OVERLAY_YAML", raising=False)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("OPENAI_LLM_API_KEY", "test")
+
+    if error is None:
+        assert load_effective_config().turn_policy.eot.max_endpointing_delay_ms == value
+    else:
+        with pytest.raises(ValueError, match=error):
+            load_effective_config()
+
+
 def test_settings_example_keeps_interrupt_lexicons_in_python_defaults() -> None:
     root = Path(__file__).resolve().parents[4]
     settings = yaml.safe_load(

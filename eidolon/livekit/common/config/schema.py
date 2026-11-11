@@ -124,6 +124,12 @@ class EotPolicyConfig:
     # Accepted, unsubmitted text stays in its product turn until commit/reject;
     # the coordinator does not own an independent timing default.
     speech_merge_grace_ms: int = 800
+    # How long a turn EOT scores below the unlikely threshold may stay silent,
+    # counted from the user's last speech, before it is committed anyway
+    # (LiveKit's own default is 3000). Real sessions 2026-11-04..11 had 15 of
+    # 71 committed turns wait out the full 3 s although the user had finished;
+    # the users who did resume after a low score had paused about 1.3 s at most.
+    max_endpointing_delay_ms: int = 2000
 
 
 @dataclass(frozen=True)

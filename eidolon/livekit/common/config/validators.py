@@ -121,6 +121,8 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("turn_policy.eot.transcript_revision_min_normalized_chars must be in [1, 20]")
     if not 0 <= eot.speech_merge_grace_ms <= 5_000:
         errors.append("turn_policy.eot.speech_merge_grace_ms must be in [0, 5000]")
+    if not 500 <= eot.max_endpointing_delay_ms <= 6_000:
+        errors.append("turn_policy.eot.max_endpointing_delay_ms must be in [500, 6000]")
 
     intr = cfg.turn_policy.interrupt
     if intr.intent_provider not in ("none", "llm", "systemone"):

@@ -336,11 +336,11 @@ def test_duck_active_transcript_has_one_interruption_decision_owner() -> None:
     apply_decision.assert_called_once()
 
 
-def test_agent_binds_complete_turn_minimum_without_shortening_incomplete_turns(
+def test_agent_binds_complete_turn_minimum_and_policy_incomplete_maximum(
     eot_model: ChineseModel,
 ) -> None:
-    """Speed up complete turns while preserving the session's maximum."""
-    from livekit.agents.types import NOT_GIVEN
+    """Complete turns take the fast bound; unlikely ones the policy maximum, not 3 s."""
+    from eidolon.livekit.common.config.schema import EotPolicyConfig
 
     pipeline = SimpleNamespace(
         _instructions="test",
@@ -360,4 +360,5 @@ def test_agent_binds_complete_turn_minimum_without_shortening_incomplete_turns(
         is_final=False,
     )
     assert agent.min_endpointing_delay == pytest.approx(expected_fast)
-    assert agent.max_endpointing_delay is NOT_GIVEN
+    assert agent.max_endpointing_delay == pytest.approx(
+        EotPolicyConfig().max_endpointing_delay_ms / 1000)

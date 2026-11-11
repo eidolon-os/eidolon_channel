@@ -73,7 +73,11 @@ async def test_endpointing_preserves_complete_text_after_interruption(
 async def test_confirmed_interrupt_does_not_finish_a_paused_user_turn(
     prefix, tail, monkeypatch, record_property,
 ):
-    """A user may still continue after the old reply has been interrupted."""
+    """A user may still continue after the old reply has been interrupted.
+
+    The pause (1.6 s from the last speech) stays inside the default
+    unlikely-complete wait, ``turn_policy.eot.max_endpointing_delay_ms``.
+    """
     reply = '收到完整的修改要求。'
     llm = MockLLM.scripted([('', reply)])
     async with production_session(
@@ -81,17 +85,17 @@ async def test_confirmed_interrupt_does_not_finish_a_paused_user_turn(
         llm=llm,
         stt=MockSTT.scripted([
             ScriptedTranscript(text=prefix, trigger_after_ms=700),
-            ScriptedTranscript(text=tail, trigger_after_ms=3150),
+            ScriptedTranscript(text=tail, trigger_after_ms=2650),
         ]),
         tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
         vad=MockVAD.scripted([
             MockVADEvent('start', 350), MockVADEvent('end', 1000, .1, silence_duration=.5),
-            MockVADEvent('start', 2600), MockVADEvent('end', 3500, .1, silence_duration=.5),
+            MockVADEvent('start', 2100), MockVADEvent('end', 3000, .1, silence_duration=.5),
         ]),
     ) as (pipeline, h):
         monkeypatch.setattr(pipeline._get_eot_model()._context_eot,
             'semantic_completeness_score', lambda text: .95 if tail in text else .424)
-        h.audio_in.feed_pcm(synth_voiced(3.7))
+        h.audio_in.feed_pcm(synth_voiced(3.2))
         await h.audio_out.wait_for_first_audio()
         old_speech = h.session.current_speech
         await h.events.wait_for(lambda e: e.type == 'user_state_changed'
@@ -351,7 +355,14 @@ async def test_complete_turn_does_not_add_a_second_endpoint_wait(overlap, intent
 async def test_incomplete_turn_survives_long_pause_then_replies_promptly(
     mode, intent_provider, prefix, continuation, record_property,
 ):
-    """A 2.2 s pause must not split one request, even if EOT misreads its prefix."""
+    """A 1.5 s pause must not split one request, even if EOT misreads its prefix.
+
+    The unlikely-complete wait is ``turn_policy.eot.max_endpointing_delay_ms``
+    (2 s from the last speech by default). Until 2026-11-12 it was the SDK's
+    3 s and this case paused 2.2 s; that wait also fell on complete questions
+    EOT misread (15 of 71 real turns), so a thinking pause longer than about
+    1.8 s now commits the prefix and the continuation becomes a new turn.
+    """
     classifier = SimpleNamespace(classify=AsyncMock())
     policy = TurnPolicyConfig()
     policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider=intent_provider))
@@ -361,12 +372,12 @@ async def test_incomplete_turn_survives_long_pause_then_replies_promptly(
         llm=MockLLM.scripted([('', reply)]),
         stt=MockSTT.scripted([
             ScriptedTranscript(text=prefix, trigger_after_ms=700),
-            ScriptedTranscript(text=continuation, trigger_after_ms=3550),
+            ScriptedTranscript(text=continuation, trigger_after_ms=2850),
         ]),
         tts=MockTTS(char_seconds=.01),
         vad=MockVAD.scripted([
             MockVADEvent('start', 350), MockVADEvent('end', 1000, .1),
-            MockVADEvent('start', 3200), MockVADEvent('end', 3900, .1),
+            MockVADEvent('start', 2500), MockVADEvent('end', 3200, .1),
         ]),
         turn_policy=policy, interrupt_classifier=classifier, real_time_audio=True,
     ) as (pipeline, h):
@@ -374,7 +385,7 @@ async def test_incomplete_turn_survives_long_pause_then_replies_promptly(
         record_property('prefix_eot_score', prefix_score)
         probe = ReplyLatencyProbe(pipeline, h)
         try:
-            pcm = (synth_silence(.35) + synth_voiced(.65) + synth_silence(2.2)
+            pcm = (synth_silence(.35) + synth_voiced(.65) + synth_silence(1.5)
                 + synth_voiced(.7) + synth_silence(.8))
             h.audio_in.feed_pcm(pcm)
             # Observe the actual second speech-start event, rather than racing

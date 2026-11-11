@@ -26,6 +26,7 @@ def profile_defaults(name: str) -> TurnPolicyConfig:
             ),
             eot=EotPolicyConfig(
                 eot_unlikely_threshold=0.50,
+                max_endpointing_delay_ms=1500,
             ),
             interrupt=InterruptPolicyConfig(
                 decision_timeout_ms=350,
@@ -52,6 +53,8 @@ def profile_defaults(name: str) -> TurnPolicyConfig:
             ),
             eot=EotPolicyConfig(
                 eot_unlikely_threshold=0.50,
+                # Patient: keeps LiveKit's 3 s for slow, thinking speakers.
+                max_endpointing_delay_ms=3000,
             ),
             interrupt=InterruptPolicyConfig(
                 decision_timeout_ms=700,

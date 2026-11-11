@@ -120,9 +120,12 @@ async def test_endpointing_context_is_a_snapshot_and_preserves_model_score(score
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
-def test_complete_turn_fast_path_preserves_session_endpoint_maximum(wrapped):
-    from livekit.agents.types import NOT_GIVEN
+@pytest.mark.parametrize('policy_max_ms,expected_max', [(None, 2.0), (1500, 1.5), (3000, 3.0)])
+def test_endpointing_binds_complete_fast_path_and_incomplete_maximum(
+    wrapped, policy_max_ms, expected_max,
+):
     from eidolon.livekit.agent.full_duplex.agent_builder import build_full_duplex_agent
+    from eidolon.livekit.common.config.schema import EotPolicyConfig, TurnPolicyConfig
     from eidolon.livekit.plugins.eot.models.base import EidolonEOTModel
 
     detector = MagicMock(spec=EidolonEOTModel)
@@ -134,9 +137,13 @@ def test_complete_turn_fast_path_preserves_session_endpoint_maximum(wrapped):
             tts=SimpleNamespace(tts=None), vad=None),
         _turn_detection=lambda: selected,
     )
+    if policy_max_ms is not None:
+        pipeline._turn_policy = TurnPolicyConfig(
+            eot=EotPolicyConfig(max_endpointing_delay_ms=policy_max_ms))
     agent = build_full_duplex_agent(pipeline)
     assert agent.min_endpointing_delay == .25
-    assert agent.max_endpointing_delay is NOT_GIVEN
+    # An unlikely-complete turn no longer inherits the SDK's 3 s by default.
+    assert agent.max_endpointing_delay == pytest.approx(expected_max)
 
 
 @pytest.mark.asyncio

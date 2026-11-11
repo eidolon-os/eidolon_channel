@@ -17,6 +17,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent")
 
 
+def _incomplete_turn_max_delay(pipeline: Any) -> float:
+    """Seconds an unlikely-complete turn waits after the user's last speech."""
+    from eidolon.livekit.common.config.schema import EotPolicyConfig
+
+    policy = getattr(pipeline, "_turn_policy", None)
+    eot = policy.eot if policy is not None else EotPolicyConfig()
+    return eot.max_endpointing_delay_ms / 1000.0
+
+
 def build_full_duplex_agent(
     pipeline: StreamingPipeline, *, ready: asyncio.Event | None = None,
 ) -> lk_Agent:
@@ -139,19 +148,22 @@ def build_full_duplex_agent(
 
     detector = pipeline._turn_detection()
     turn_handling: dict[str, Any] = {"turn_detection": detector}
+    incomplete_max = _incomplete_turn_max_delay(pipeline)
     if isinstance(detector, NativeAudioTurnDetector):
         # Match the deployed FireRed endpoint delays. Streaming SDK defaults
         # differ, which would otherwise confound a provider comparison.
-        turn_handling["endpointing"] = {"min_delay": 0.25, "max_delay": 3.0}
+        turn_handling["endpointing"] = {"min_delay": 0.25, "max_delay": incomplete_max}
     eot_model = detector.eot_model if isinstance(detector, InterruptAwareTurnDetector) else detector
     if isinstance(eot_model, EidolonEOTModel):
-        # Bind the complete-turn fast path through the public SDK contract.
-        # Incomplete turns retain the session's maximum (SDK default: 3 s);
-        # the model helper's 2 s bound can split a slowly completed question.
+        # Bind both bounds through the public SDK contract: a turn EOT scores
+        # complete waits the policy's fast bound; one it scores unlikely
+        # complete waits ``turn_policy.eot.max_endpointing_delay_ms`` instead
+        # of the SDK's 3 s, which also fell on complete questions EOT misread.
         turn_handling["endpointing"] = {
             "min_delay": eot_model.get_dynamic_silence_threshold(
                 "", p_complete=1.0, is_final=False,
             ),
+            "max_delay": incomplete_max,
         }
     return VoiceAgent(
         outputs=pipeline._factory.outputs,

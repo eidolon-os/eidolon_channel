@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from eidolon_sdk.biz.presentation.interaction import InteractionFacts, TOPIC
 
@@ -14,6 +15,9 @@ class InteractionPublisher:
         self.user = self.agent = False
         self.sequence = 0
         self.closed = False
+        # Told of each packet as it is built, in sequence order, before it is
+        # sent; e.g. gaze_addressee maps speech onsets to turns through it.
+        self.observers: list[Callable[[InteractionFacts], None]] = []
         self.changed = asyncio.Event()
         session.on("user_state_changed", self.on_user)
         session.on("agent_state_changed", self.on_agent)
@@ -36,6 +40,11 @@ class InteractionPublisher:
             facts = InteractionFacts(session_id=self.plan.session_id,
                 policy_revision=self.plan.policy_revision, sequence=self.sequence,
                 user_speaking=self.user, agent_speaking=self.agent)
+            for observer in tuple(self.observers):
+                try:
+                    observer(facts)
+                except Exception:
+                    log.exception("interaction facts observer failed sequence=%s", self.sequence)
             try:
                 async with asyncio.timeout(2):
                     await self.room.local_participant.publish_data(
@@ -44,6 +53,13 @@ class InteractionPublisher:
                 log.warning("interaction facts delivery unavailable sequence=%s", self.sequence)
                 await asyncio.sleep(0.25)
                 self.changed.set()
+
+    def add_observer(self, observer: Callable[[InteractionFacts], None]) -> None:
+        self.observers.append(observer)
+
+    def remove_observer(self, observer: Callable[[InteractionFacts], None]) -> None:
+        if observer in self.observers:
+            self.observers.remove(observer)
 
     async def aclose(self):
         self.closed = True

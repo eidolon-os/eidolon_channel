@@ -174,8 +174,17 @@ class FullDuplexSessionLifecycle:
             ),
         )
         from ..session.interaction_facts import attach_interaction_publisher
+        from ..session.gaze_addressee import attach_gaze_addressee
         pipeline._interaction_publisher = attach_interaction_publisher(
             session, output_room or room, getattr(pipeline._factory, "output_plan", None))
+        # Speaker reports arrive in the input room from the session's device;
+        # the lock goes back to that device, even when output is redirected.
+        pipeline._gaze_addressee = attach_gaze_addressee(
+            room, pipeline._interaction_publisher,
+            room_data=getattr(pipeline, "_room_data", None),
+            current_timeline=lambda: getattr(pipeline, "_timeline", None),
+            participant_identity=participant_identity,
+        )
         await pipeline._start_music_runtime(session)
         pipeline.session_mark("session_started")
         if pipeline._on_session_started is not None:
@@ -615,6 +624,10 @@ class FullDuplexSessionLifecycle:
         # backstop; the second call is a no-op.
         pipeline._session_trace_close_reason = close_reason
         pipeline.close_session_trace(close_reason)
+        gaze = getattr(pipeline, "_gaze_addressee", None)
+        if gaze is not None:
+            await gaze.aclose()
+            pipeline._gaze_addressee = None
         interaction = getattr(pipeline, "_interaction_publisher", None)
         if interaction is not None:
             await interaction.aclose()

@@ -1795,6 +1795,15 @@ class StreamingPipeline(BasePipeline):
             self._ensure_turn_event_sink().milestone(
                 timeline, "playback_done", reason="agent_playback_done"
             )
+        gaze = getattr(self, "_gaze_addressee", None)
+        if gaze is not None:
+            # ``timeline`` was read before the effects above; an accepted
+            # interruption has already released it, so the release keys on the
+            # module's own hold, not on this value.
+            try:
+                gaze.on_agent_state(old, new, timeline)
+            except Exception:
+                logger.exception("[StreamingPipeline] gaze addressee observer failed")
         if new:
             self._ensure_client_control_publisher().publish_companion_ui_state_for_agent_state(new)
 

@@ -44,6 +44,22 @@ class RoomDataHandler:
         self.client_audio_state_gap_count = 0
         self.client_audio_state_reordered_count = 0
         self._last_client_audio_seq: dict[str, int] = {}
+        self._topic_handlers: dict[str, list[Callable[[Any], None]]] = {}
+
+    def subscribe(self, topic: str, handler: Callable[[Any], None]) -> Callable[[], None]:
+        """Hand every packet on ``topic`` to ``handler``; returns the unsubscribe.
+
+        Keeps this the one inbound entry: other session modules read their own
+        topic here instead of installing another room listener.
+        """
+        handlers = self._topic_handlers.setdefault(topic, [])
+        handlers.append(handler)
+
+        def unsubscribe() -> None:
+            if handler in handlers:
+                handlers.remove(handler)
+
+        return unsubscribe
 
     def install(
         self,
@@ -92,6 +108,11 @@ class RoomDataHandler:
                 len(getattr(packet, "data", b"") or b""),
                 packet_count,
             )
+        for handler in tuple(self._topic_handlers.get(topic or "", ())):
+            try:
+                handler(packet)
+            except Exception:  # noqa: BLE001 - a subscriber must not break packet handling
+                logger.exception("[RoomDataHandler] topic subscriber failed topic=%s", topic)
         if topic != CLIENT_AUDIO_STATE_TOPIC:
             return
         identity = participant_identity_from_packet(packet)

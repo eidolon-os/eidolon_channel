@@ -277,7 +277,9 @@ class LiveKitChannelAdapter:
         self._input_locks: dict[str, asyncio.Lock] = {}
         self._input_revisions: dict[str, int] = {}
         self._input_applied: dict[str, int] = {}
-        self._session_end_observers: dict[str, tuple[str, Any]] = {}
+        # room -> (conversation_id, callback, agents of earlier conversations
+        # still in the room when the observer was registered).
+        self._session_end_observers: dict[str, tuple[str, Any, frozenset[str]]] = {}
         self._team_state_observers: dict[str, tuple[str, str, Any]] = {}
         self._control_receipts: dict[tuple[str, str], _ControlReceipt] = {}
 
@@ -810,12 +812,21 @@ class LiveKitChannelAdapter:
                 # would hold its caller — and the Provider lock — to the deadline.
                 self._fail_control_delivery(room)
             observer = self._session_end_observers.get(room)
-            if observer is not None and (
-                participant.identity == watch.device
-                or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
-            ):
-                observer[1](SESSION_END_DEVICE_LEFT if participant.identity == watch.device
-                            else "TEAM_WORKER_DISCONNECTED")
+            if observer is None:
+                return
+            if participant.identity == watch.device:
+                observer[1](SESSION_END_DEVICE_LEFT)
+            elif getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+                if participant.identity in observer[2]:
+                    # An earlier conversation's agent finishing its exit; the
+                    # conversation now observed has its own agent.
+                    logger.info(
+                        "room=%s agent=%s of an earlier conversation left; "
+                        "conversation_id=%s continues",
+                        room, participant.identity, observer[0],
+                    )
+                    return
+                observer[1]("TEAM_WORKER_DISCONNECTED")
 
         @connection.on("disconnected")
         def _dropped(reason: Any = None) -> None:
@@ -1494,8 +1505,20 @@ class LiveKitChannelAdapter:
             observer[2](status)
 
     def observe_session_end(self, handle: dict, session_id: str, callback):
+        """Call ``callback`` when ``session_id`` ends: its agent's own session_end,
+        its device or its agent leaving, or this listener losing the room.
+
+        Only the conversation's own agent ends it by leaving. Every caller
+        registers before the conversation's dispatch exists (``claim`` before
+        ``open_session``; an endpoint preparation before ``_activate``), so an
+        agent already in the room now is an earlier conversation's — and one
+        often stays for seconds after its dispatch is withdrawn. Measured
+        2026-11-11: an agent left 4.6 s after its conversation closed, 2.6 s
+        into the next one, and its departure closed the new conversation and
+        sent the device room.leave.
+        """
         room = str(handle["room"])
-        observer = (session_id, callback)
+        observer = (session_id, callback, self._agents_in(room))
         if room in self._session_end_observers:
             raise InvalidTransition("session end already observed")
         self._session_end_observers[room] = observer
@@ -1503,6 +1526,14 @@ class LiveKitChannelAdapter:
             if self._session_end_observers.get(room) is observer:
                 self._session_end_observers.pop(room)
         return remove
+
+    def _agents_in(self, room: str) -> frozenset[str]:
+        watch = self._listeners.get(room)
+        participants = getattr(getattr(watch, "connection", None), "remote_participants", None) or {}
+        return frozenset(
+            str(participant.identity) for participant in participants.values()
+            if getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+        )
 
     def _observe_session_end(self, packet, *, room: str) -> None:
         observer = self._session_end_observers.get(room)

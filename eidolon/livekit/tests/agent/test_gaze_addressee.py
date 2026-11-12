@@ -5,7 +5,9 @@ a new turn per non-merged speech onset and the speech lifecycle tells the
 addressee which turn that speech belongs to (as does a transcript that opens a
 turn no VAD edge opened); the real ``InteractionPublisher`` numbers facts
 packets, with ``user_speaking`` true while either the session VAD
-(``user_state``) or the speaker-evidence VAD state (``voice``) hears speech;
+(``user_state``) or the speaker-evidence VAD state (``voice``) hears speech,
+or from the first transcript of a turn neither opened to its final while the
+robot is silent (``transcript_turn_started`` / ``transcript_heard``);
 the real ``RoomDataHandler`` dispatches inbound packets; agent-state changes
 are forwarded with the timeline that owns the current output (None for
 welcome lines and proactive reports, and already None once an accepted
@@ -160,13 +162,22 @@ class Host:
         await settle()
         return self.facts_sent()[-1]["sequence"]
 
-    async def transcript_opens_turn(self) -> TurnTimeline:
+    async def transcript_opens_turn(self, *, vad: bool = False) -> TurnTimeline:
         """A transcript no session-VAD edge preceded opens a turn
-        (speech_lifecycle.handle_transcript_started)."""
+        (speech_lifecycle.handle_transcript_started); ``vad``: a VAD segment
+        is open, so the facts publisher is not told."""
         self._new_turn()
         self._speech_started()
+        if not vad:
+            self.facts.transcript_turn_started(self.timeline.turn_id)
         await settle()
         return self.timeline
+
+    async def transcript(self, *, final: bool) -> int:
+        """A later transcript (transcript_recorder.record)."""
+        self.facts.transcript_heard(final=final)
+        await settle()
+        return self.facts_sent()[-1]["sequence"]
 
     def user_speaking(self) -> list[bool]:
         return [body["user_speaking"] for body in self.facts_sent()]
@@ -496,6 +507,8 @@ async def test_a_question_only_the_evidence_vad_heard_still_gets_its_speaker_loc
     turn = await host.transcript_opens_turn()  # the first interim, ~0.1 s later
     host.report(3, opened, "k1", basis="voice", final=False)
     await host.evidence(False)
+    assert host.user_speaking()[-1] is True  # the transcript turn lasts to its final
+    await host.transcript(final=True)
     assert host.user_speaking()[-1] is False
     host.report(4, opened, "k1", final=True)
     host.adopt(turn)
@@ -553,20 +566,59 @@ async def test_a_sound_no_turn_was_made_of_does_not_take_the_lock(host):
 
 
 @pytest.mark.asyncio
-async def test_a_turn_no_vad_heard_lends_its_claim_to_no_later_segment(host):
+async def test_a_question_neither_vad_heard_gets_its_speaker_locked(host):
+    """2026-11-12 14:47:58-14:48:08 (after channel 3e05514): 15 s of silence
+    put the user away; neither VAD state rose for a quiet 1.2 s question that
+    STT and the voiceprint both heard. Its first interim opened the turn and
+    its final ended it, but user_speaking never rose, so the device opened no
+    segment and the hold went out with track=None."""
     first, _ = await ask(host, "k1", 1)
     host.adopt(first)
     await host.agent("speaking")
     await host.agent("listening")
-    turn = await host.transcript_opens_turn()  # neither VAD heard it: no segment
-    await host.agent("thinking")  # the next packet opens no segment; the claim lapses
+    await host.user_away()
+    before = len(host.facts_sent())
+    turn = await host.transcript_opens_turn()  # the first interim
+    opened = host.facts_sent()[-1]["sequence"]
+    assert host.user_speaking()[before:] == [True]
+    host.report(3, opened, "k1", final=False)
+    await host.transcript(final=False)
+    await host.transcript(final=True)
+    assert host.user_speaking()[before:] == [True, False]
+    host.report(4, opened, "k1", final=True)
+    host.adopt(turn)
+    await host.agent("thinking")
+    await host.agent("speaking")
+    hold = host.locks()[-1]
+    assert (hold.phase, hold.turn_id, hold.track_id, hold.speaker_sequence) == (
+        "hold", turn.turn_id, "k1", 4)
+
+
+@pytest.mark.asyncio
+async def test_words_only_stt_heard_during_the_reply_open_no_segment_and_claim_nothing(host):
+    """Two people: B talks during A's reply, heard by STT alone. The robot
+    speaking, user_speaking stays false (the device must not be let to turn
+    to B for it); the turn's claim lapses at once, so a cough after it opens
+    an unclaimed segment, and A keeps the lock."""
+    first, _ = await ask(host, "kA", 1)
+    host.adopt(first)
+    await host.agent("speaking")
+    before = len(host.facts_sent())
+    aside = await host.transcript_opens_turn()
+    assert host.user_speaking()[before:] == [False]
+    await host.transcript(final=True)
     cough = await host.evidence(True)
     host.report(3, cough, "kB", basis="voice")
     await host.evidence(False)
-    host.adopt(turn)
+    assert [(lock.phase, lock.turn_id, lock.track_id) for lock in host.locks()] == [
+        ("hold", first.turn_id, "kA")]
+    await host.agent("listening")
+    # Were the aside then answered, its hold would name no one.
+    host.adopt(aside)
     await host.agent("speaking")
     hold = host.locks()[-1]
-    assert (hold.turn_id, hold.track_id, hold.speaker_sequence) == (turn.turn_id, None, None)
+    assert (hold.phase, hold.turn_id, hold.track_id, hold.speaker_sequence) == (
+        "hold", aside.turn_id, None, None)
 
 
 @pytest.mark.asyncio

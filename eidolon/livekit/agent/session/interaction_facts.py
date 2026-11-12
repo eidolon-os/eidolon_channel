@@ -10,6 +10,11 @@ log = logging.getLogger(__name__)
 
 
 class InteractionPublisher:
+    # A turn opened on its transcript ends its speech at the final; this long
+    # without any transcript ends it too (a withdrawn interim never gets one).
+    # Within an utterance the provider sends a revision at least every ~0.8 s.
+    transcript_quiet_s = 2.0
+
     def __init__(self, session, room, plan, voice=None):
         self.session, self.room, self.plan = session, room, plan
         # ``user_speaking`` is true while either VAD state hears the user: the
@@ -20,6 +25,11 @@ class InteractionPublisher:
         # the turn still ran (opened by its transcript) but the device never
         # saw speech, so it had nothing to attribute.
         self.user_state_speaking = self.voice_speaking = False
+        # And from the first transcript of a turn neither VAD opened to its
+        # final, with the robot silent (see transcript_turn_started).
+        self.transcript_speaking = False
+        self._transcript_turn = None
+        self._transcript_quiet = None
         self.user = self.agent = False
         self.sequence = 0
         self.closed = False
@@ -36,21 +46,84 @@ class InteractionPublisher:
 
     def on_user(self, event):
         self.user_state_speaking = event.new_state == "speaking"
-        self.user = self.user_state_speaking or self.voice_speaking
+        self.user = self._user_speaking()
         self.changed.set()
 
     def on_voice(self, speaking: bool) -> None:
-        # Only an edge of the combined value is news; the other VAD state's
-        # own start or end inside one utterance publishes nothing.
         self.voice_speaking = speaking
-        user = self.user_state_speaking or speaking
-        if user != self.user:
-            self.user = user
-            self.changed.set()
+        self._update_user()
 
     def on_agent(self, event):
         self.agent = event.new_state == "speaking"
+        if self.agent:
+            self._end_transcript("agent_speaking")
+        self.user = self._user_speaking()
         self.changed.set()
+
+    def transcript_turn_started(self, turn_id: str = "") -> None:
+        """A turn opened on its first transcript, with neither VAD hearing speech.
+
+        2026-11-12 14:48:04: after 15 s of silence a quiet 1.2 s question
+        reached STT (and the voiceprint) while neither VAD state rose. The
+        turn ran, but without ``user_speaking`` the device opened no segment
+        and the reply's hold carried no track. Such a turn's speech now runs
+        from its first transcript, about 0.3 s into the words, to its final,
+        about 0.4 s after them, or until the robot starts speaking.
+
+        Not when the robot is speaking: its own voice mutes the device's
+        sampling then, and ``user_speaking`` is also what lets the device turn
+        toward a voice, so words only STT heard during a reply (often a
+        bystander's) get no such leave. The packet still goes out, so the
+        addressee's claim for that turn lapses at once instead of passing to
+        whatever speech starts next.
+        """
+        if self.agent:
+            log.info("interaction facts: transcript turn while the agent speaks, "
+                     "no user speech turn=%s", turn_id)
+            self.changed.set()
+            return
+        self.transcript_speaking = True
+        self._transcript_turn = turn_id
+        self._arm_transcript_quiet()
+        log.info("interaction facts: user speech from a transcript no VAD heard turn=%s", turn_id)
+        self._update_user()
+
+    def transcript_heard(self, *, final: bool) -> None:
+        """Any transcript: a final ends a transcript-opened turn's speech, others extend it."""
+        if not self.transcript_speaking:
+            return
+        if final:
+            self._end_transcript("final")
+        else:
+            self._arm_transcript_quiet()
+
+    def _arm_transcript_quiet(self) -> None:
+        if self._transcript_quiet is not None:
+            self._transcript_quiet.cancel()
+        self._transcript_quiet = asyncio.get_running_loop().call_later(
+            self.transcript_quiet_s, self._end_transcript, "quiet")
+
+    def _end_transcript(self, reason: str) -> None:
+        if self._transcript_quiet is not None:
+            self._transcript_quiet.cancel()
+            self._transcript_quiet = None
+        if not self.transcript_speaking:
+            return
+        self.transcript_speaking = False
+        log.info("interaction facts: transcript speech ended turn=%s reason=%s",
+                 self._transcript_turn, reason)
+        self._update_user()
+
+    def _user_speaking(self) -> bool:
+        return self.user_state_speaking or self.voice_speaking or self.transcript_speaking
+
+    def _update_user(self) -> None:
+        # Only an edge of the combined value is news; one source's own start
+        # or end inside an utterance another already covers publishes nothing.
+        user = self._user_speaking()
+        if user != self.user:
+            self.user = user
+            self.changed.set()
 
     async def run(self):
         while not self.closed:
@@ -83,6 +156,9 @@ class InteractionPublisher:
 
     async def aclose(self):
         self.closed = True
+        if self._transcript_quiet is not None:
+            self._transcript_quiet.cancel()
+            self._transcript_quiet = None
         if self._remove_voice is not None:
             self._remove_voice()
             self._remove_voice = None
@@ -93,7 +169,11 @@ class InteractionPublisher:
 
 
 def attach_interaction_publisher(session, room, plan, voice=None):
-    """``voice``: optional ``add_voice_listener`` source (the speaker observation)."""
+    """``voice``: optional ``add_voice_listener`` source (the speaker observation).
+
+    The full-duplex speech lifecycle also calls ``transcript_turn_started`` and
+    ``transcript_heard`` on the result when it has one.
+    """
     if plan is None or not plan.outputs.motion:
         return None
     return InteractionPublisher(session, room, plan, voice)

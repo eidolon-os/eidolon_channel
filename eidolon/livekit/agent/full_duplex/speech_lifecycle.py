@@ -92,6 +92,16 @@ class FullDuplexSpeechLifecycle:
                 gaze.on_speech_started(owner._timeline)
             except Exception:
                 logger.exception("[StreamingPipeline] gaze addressee speech start failed")
+        if not acoustic and owner._user_speaking_start_time is None:
+            # Words STT heard and no VAD did: tell the device the user is
+            # speaking, so the reply's speaker has a segment to come from.
+            facts = getattr(owner, "_interaction_publisher", None)
+            started = getattr(facts, "transcript_turn_started", None)
+            if callable(started):
+                try:
+                    started(owner._timeline.turn_id)
+                except Exception:
+                    logger.exception("[StreamingPipeline] transcript speech fact failed")
         if replaced_unmerged_timeline is not None:
             if superseding_pending_candidate:
                 _record_contract_transition(

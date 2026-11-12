@@ -58,6 +58,13 @@ class FullDuplexTranscriptRecorder:
                 and pipeline._timeline.attrs.get("candidate_origin") == "provider_transcript_without_vad"
                 and getattr(pipeline, "_user_speaking_start_time", None) is None):
             pipeline._user_turns.note_speech_stopped(eot_score=None)
+        facts = getattr(pipeline, "_interaction_publisher", None)
+        heard = getattr(facts, "transcript_heard", None)
+        if callable(heard):
+            try:
+                heard(final=transcript_event.is_final)
+            except Exception:
+                logger.exception("[StreamingPipeline] transcript speech fact failed")
         if receipt is not None:
             covered_segments = self._hypotheses.observe(
                 receipt,

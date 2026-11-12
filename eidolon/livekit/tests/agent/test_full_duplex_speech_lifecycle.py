@@ -458,3 +458,56 @@ def test_a_failing_gaze_addressee_does_not_stop_a_speech_start():
     FullDuplexSpeechLifecycle(owner).handle_started()
     owner._user_turns.start_speech.assert_called_once()
     owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)
+
+
+def test_only_a_transcript_that_opens_a_turn_without_vad_tells_the_facts_publisher():
+    owner = _owner()
+    started = []
+    owner._interaction_publisher = SimpleNamespace(transcript_turn_started=started.append)
+    owner._attention_effects.handle_transcript_started.return_value = True
+    lifecycle = FullDuplexSpeechLifecycle(owner)
+    lifecycle.handle_started()  # a VAD edge: user_speaking already follows it
+    assert started == []
+    owner._user_speaking_start_time = None
+    lifecycle.handle_transcript_started()
+    assert started == [owner._timeline.turn_id]
+    owner._user_speaking_start_time = 1.0  # a VAD segment is open: it covers the words
+    lifecycle.handle_transcript_started()
+    assert len(started) == 1
+
+
+def test_a_failing_facts_publisher_does_not_stop_a_transcript_turn():
+    owner = _owner()
+
+    def broken(turn_id):
+        raise RuntimeError("facts bug")
+
+    owner._interaction_publisher = SimpleNamespace(transcript_turn_started=broken)
+    FullDuplexSpeechLifecycle(owner).handle_transcript_started()
+    owner._user_turns.start_speech.assert_called_once()
+    owner._provider_events.observe_stt_turn_audio.assert_called_once_with()
+
+
+def test_every_recorded_transcript_tells_the_facts_publisher_whether_it_is_final():
+    from eidolon.livekit.agent.full_duplex.transcript_event import FullDuplexTranscriptEvent
+    from eidolon.livekit.agent.full_duplex.transcript_recorder import FullDuplexTranscriptRecorder
+    from eidolon.livekit.agent.session.user_turn_coordinator import UserTurnCoordinator
+    from eidolon.livekit.common.transcript_evidence import TranscriptEvidence, TranscriptSourceSpan
+
+    owner = _owner()
+    owner._mark_activity = MagicMock()
+    owner._user_turns = UserTurnCoordinator(speech_merge_grace_sec=.8)
+    calls = []
+    owner._interaction_publisher = SimpleNamespace(
+        transcript_turn_started=lambda turn_id: calls.append(("started", turn_id)),
+        transcript_heard=lambda *, final: calls.append(("heard", final)))
+    lifecycle = FullDuplexSpeechLifecycle(owner)
+    owner._ensure_speech_lifecycle = lambda: lifecycle
+    recorder = FullDuplexTranscriptRecorder(owner, transcript_revision_min_normalized_chars=4)
+    span = TranscriptSourceSpan(42.64, 43.84)
+    for text, final, revision in (("一", False, "r1"), ("一二", False, "r1"), ("一二三", True, "r1")):
+        recorder.record(FullDuplexTranscriptEvent(
+            transcript=text, is_final=final, evidence=TranscriptEvidence(
+                stream_key="stream", revision_key=revision, source_span=span)))
+    assert calls == [("started", owner._timeline.turn_id), ("heard", False),
+                     ("heard", False), ("heard", True)]

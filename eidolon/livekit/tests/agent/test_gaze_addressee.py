@@ -1,11 +1,15 @@
 """attention.speaker in, attention.lock out: bind reports to adopted turns.
 
 The harness mirrors production wiring: the pipeline's user-state handler opens
-a new turn per non-merged speech onset; the real ``InteractionPublisher``
-numbers facts packets; the real ``RoomDataHandler`` dispatches inbound
-packets; agent-state changes are forwarded with the timeline that owns the
-current output (None for welcome lines and proactive reports, and already None
-once an accepted interruption has released it).
+a new turn per non-merged speech onset and the speech lifecycle tells the
+addressee which turn that speech belongs to (as does a transcript that opens a
+turn no VAD edge opened); the real ``InteractionPublisher`` numbers facts
+packets, with ``user_speaking`` true while either the session VAD
+(``user_state``) or the speaker-evidence VAD state (``voice``) hears speech;
+the real ``RoomDataHandler`` dispatches inbound packets; agent-state changes
+are forwarded with the timeline that owns the current output (None for
+welcome lines and proactive reports, and already None once an accepted
+interruption has released it).
 """
 
 from __future__ import annotations
@@ -70,10 +74,27 @@ class FakeRoom:
         self.sent.append((topic, json.loads(data), destination_identities))
 
 
+class FakeVoice:
+    """ConversationSpeaker.add_voice_listener: the speaker-evidence VAD state."""
+
+    def __init__(self) -> None:
+        self.listeners: list = []
+
+    def add_voice_listener(self, listener):
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener)
+
+    def set(self, speaking: bool) -> None:
+        for listener in list(self.listeners):
+            listener(speaking)
+
+
 class Host:
     def __init__(self, *, motion: bool = True, facts_first: bool = False) -> None:
         self.session = FakeSession()
         self.room = FakeRoom()
+        self.voice = FakeVoice()
+        self.gaze = None
         self.timeline: TurnTimeline | None = None
         self.output: TurnTimeline | None = None
         self.merge_next = False
@@ -83,17 +104,18 @@ class Host:
         if facts_first:
             # Registration order must not matter: facts are built in their own
             # task, after every synchronous handler of the same event ran.
-            self.facts = attach_interaction_publisher(self.session, self.room, plan)
+            self.facts = attach_interaction_publisher(
+                self.session, self.room, plan, voice=self.voice)
             self.session.on("user_state_changed", self._open_turn)
         else:
             # Production: bind_session registers the pipeline handler first.
             self.session.on("user_state_changed", self._open_turn)
-            self.facts = attach_interaction_publisher(self.session, self.room, plan)
+            self.facts = attach_interaction_publisher(
+                self.session, self.room, plan, voice=self.voice)
         self.session.on("agent_state_changed", self._forward_agent_state)
         self.room_data = RoomDataHandler(get_timeline=lambda: self.timeline)
         self.gaze = attach_gaze_addressee(
-            self.room, self.facts, room_data=self.room_data,
-            current_timeline=lambda: self.timeline, participant_identity=DEVICE)
+            self.room, self.facts, room_data=self.room_data, participant_identity=DEVICE)
         self.agent_state = "listening"
 
     def _open_turn(self, event) -> None:
@@ -101,9 +123,18 @@ class Host:
             return
         if self.merge_next and self.timeline is not None:
             self.merge_next = False
-            return
+        else:
+            self._new_turn()
+        self._speech_started()
+
+    def _new_turn(self) -> None:
         self._turns += 1
         self.timeline = TurnTimeline(f"{self._turns:016x}")
+
+    def _speech_started(self) -> None:
+        """speech_lifecycle._start_candidate."""
+        if self.gaze is not None:
+            self.gaze.on_speech_started(self.timeline)
 
     def _forward_agent_state(self, event) -> None:
         if self.gaze is not None:
@@ -117,6 +148,28 @@ class Host:
     async def user_stops(self) -> None:
         self.session.emit("user_state_changed", old_state="speaking", new_state="listening")
         await settle()
+
+    async def user_away(self) -> None:
+        """LiveKit's user_away_timeout: 15 s with neither side speaking."""
+        self.session.emit("user_state_changed", old_state="listening", new_state="away")
+        await settle()
+
+    async def evidence(self, speaking: bool) -> int:
+        """The speaker-evidence VAD state starts or stops hearing speech."""
+        self.voice.set(speaking)
+        await settle()
+        return self.facts_sent()[-1]["sequence"]
+
+    async def transcript_opens_turn(self) -> TurnTimeline:
+        """A transcript no session-VAD edge preceded opens a turn
+        (speech_lifecycle.handle_transcript_started)."""
+        self._new_turn()
+        self._speech_started()
+        await settle()
+        return self.timeline
+
+    def user_speaking(self) -> list[bool]:
+        return [body["user_speaking"] for body in self.facts_sent()]
 
     def adopt(self, timeline: TurnTimeline) -> None:
         """framework_completed_turn claims the output for the committed turn."""
@@ -427,6 +480,117 @@ async def test_turn_onset_is_mapped_regardless_of_handler_registration_order():
 
 
 @pytest.mark.asyncio
+async def test_a_question_only_the_evidence_vad_heard_still_gets_its_speaker_locked(host):
+    """2026-11-12 11:45:51-11:46:14: 15 s of silence put the user away; the
+    session VAD then missed a quiet question that the speaker-evidence VAD and
+    STT heard, and the first transcript opened the turn. user_speaking used to
+    follow the session VAD only, so the device opened no segment, sent no
+    report, and the hold went out with track=None."""
+    first, _ = await ask(host, "k1", 1)
+    host.adopt(first)
+    await host.agent("speaking")
+    await host.agent("listening")
+    await host.user_away()
+    opened = await host.evidence(True)
+    assert host.user_speaking()[-2:] == [False, True]
+    turn = await host.transcript_opens_turn()  # the first interim, ~0.1 s later
+    host.report(3, opened, "k1", basis="voice", final=False)
+    await host.evidence(False)
+    assert host.user_speaking()[-1] is False
+    host.report(4, opened, "k1", final=True)
+    host.adopt(turn)
+    await host.agent("thinking")
+    await host.agent("speaking")
+    hold = host.locks()[-1]
+    assert (hold.phase, hold.turn_id, hold.track_id, hold.speaker_sequence) == (
+        "hold", turn.turn_id, "k1", 4)
+
+
+@pytest.mark.asyncio
+async def test_the_evidence_vad_starting_first_still_binds_to_the_turn_the_session_vad_opens(host):
+    """Today's log: the evidence VAD state started up to 1.4 s before the
+    session VAD six times out of 22. Its rising edge then precedes the new
+    turn, so the onset can no longer stand for "the turn current right now"
+    (that was the previous, already answered one)."""
+    first, _ = await ask(host, "k1", 1)
+    host.adopt(first)
+    await host.agent("speaking")
+    await host.agent("listening")
+    before = len(host.facts_sent())
+    opened = await host.evidence(True)
+    host.report(3, opened, "k2", basis="voice", final=False)  # before any turn exists
+    turn, _ = await host.user_speaks()
+    assert turn is not first
+    await host.user_stops()  # the session VAD ends first, the evidence one later
+    await host.evidence(False)
+    # One segment for the device: the session VAD's edges inside it change nothing.
+    assert host.user_speaking()[before:] == [True, True, True, False]
+    host.report(4, opened, "k2", final=True)
+    host.adopt(turn)
+    await host.agent("speaking")
+    hold = host.locks()[-1]
+    assert (hold.turn_id, hold.track_id, hold.speaker_sequence) == (turn.turn_id, "k2", 4)
+    assert first.attrs["gaze_addressee"]["track_id"] == "k1"
+
+
+@pytest.mark.asyncio
+async def test_a_sound_no_turn_was_made_of_does_not_take_the_lock(host):
+    turn, opened = await host.user_speaks()
+    host.report(1, opened, "kA", final=False)
+    await host.user_stops()
+    host.report(2, opened, "kA", final=True)
+    host.adopt(turn)
+    await host.agent("thinking")
+    # B coughs before the reply: only the evidence VAD hears it, STT makes
+    # nothing of it, so no turn claims the segment.
+    cough = await host.evidence(True)
+    host.report(3, cough, "kB", basis="voice", final=False)
+    await host.evidence(False)
+    host.report(4, cough, "kB", basis="voice", final=True)
+    await host.agent("speaking")
+    (hold,) = host.locks()
+    assert (hold.turn_id, hold.track_id, hold.speaker_sequence) == (turn.turn_id, "kA", 2)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_no_vad_heard_lends_its_claim_to_no_later_segment(host):
+    first, _ = await ask(host, "k1", 1)
+    host.adopt(first)
+    await host.agent("speaking")
+    await host.agent("listening")
+    turn = await host.transcript_opens_turn()  # neither VAD heard it: no segment
+    await host.agent("thinking")  # the next packet opens no segment; the claim lapses
+    cough = await host.evidence(True)
+    host.report(3, cough, "kB", basis="voice")
+    await host.evidence(False)
+    host.adopt(turn)
+    await host.agent("speaking")
+    hold = host.locks()[-1]
+    assert (hold.turn_id, hold.track_id, hold.speaker_sequence) == (turn.turn_id, None, None)
+
+
+@pytest.mark.asyncio
+async def test_the_next_turn_of_one_long_segment_takes_the_segments_report(host):
+    opened = await host.evidence(True)
+    first, _ = await host.user_speaks()
+    host.report(1, opened, "k1", basis="voice", final=False)
+    await host.user_stops()
+    host.adopt(first)
+    await host.agent("speaking")  # the reply starts; the evidence VAD still hears speech
+    second, _ = await host.user_speaks()
+    assert second is not first
+    await host.interrupt()
+    await host.user_stops()
+    host.report(2, opened, "k2", basis="voice", final=False)
+    await host.evidence(False)
+    host.adopt(second)
+    await host.agent("speaking")
+    assert [(lock.phase, lock.turn_id, lock.track_id) for lock in host.locks()] == [
+        ("hold", first.turn_id, "k1"), ("release", first.turn_id, "k1"),
+        ("hold", second.turn_id, "k2")]
+
+
+@pytest.mark.asyncio
 async def test_failed_delivery_is_not_retried_and_later_locks_still_go_out(host):
     calls = []
 
@@ -449,8 +613,7 @@ async def test_failed_delivery_is_not_retried_and_later_locks_still_go_out(host)
 async def test_no_motion_plan_attaches_nothing():
     host = Host(motion=False)
     assert host.facts is None and host.gaze is None
-    assert attach_gaze_addressee(host.room, None, room_data=host.room_data,
-                                 current_timeline=lambda: None) is None
+    assert attach_gaze_addressee(host.room, None, room_data=host.room_data) is None
 
 
 @pytest.mark.asyncio
@@ -536,3 +699,41 @@ def test_pipeline_without_the_module_is_unchanged():
     pipeline._on_agent_state_changed(SimpleNamespace(old_state="thinking", new_state="speaking"))
     pipeline._on_agent_state_changed(SimpleNamespace(old_state="speaking", new_state="listening"))
     assert getattr(pipeline, "_gaze_addressee", None) is None
+
+
+@pytest.mark.asyncio
+async def test_session_wiring_feeds_facts_from_the_evidence_vad_and_reports_to_the_addressee():
+    from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
+
+    voice, session, room, output_room = FakeVoice(), FakeSession(), FakeRoom(), FakeRoom()
+    plan = SessionOutputPlan(session_id=SESSION, policy_revision=1,
+                             outputs=OutputSelection(speech=True, motion=True))
+    pipeline = SimpleNamespace(
+        _factory=SimpleNamespace(output_plan=plan), _speaker_observation=voice,
+        _room_data=RoomDataHandler(get_timeline=lambda: None))
+    FullDuplexSessionLifecycle(pipeline).attach_motion_observers(
+        session, room, output_room, DEVICE)
+    facts, gaze = pipeline._interaction_publisher, pipeline._gaze_addressee
+    try:
+        await settle()
+        voice.set(True)
+        await settle()
+        # Facts go to the output room; the lock goes back to the input room.
+        assert output_room.sent[-1][1]["user_speaking"] is True and not room.sent
+        assert gaze.on_facts in facts.observers
+        gaze.on_speech_started(TurnTimeline("00000000000000ab"))
+        pipeline._room_data.handle_packet(SimpleNamespace(
+            topic=SPEAKER_TOPIC, participant=SimpleNamespace(identity=DEVICE),
+            data=AttentionSpeaker(
+                session_id=SESSION, policy_revision=1, sequence=1,
+                facts_sequence=output_room.sent[-1][1]["sequence"], final=False,
+                track_id="k1", basis="voice", confidence=0.6, in_view=False,
+            ).model_dump_json().encode()))
+        gaze.on_agent_state("thinking", "speaking", TurnTimeline("00000000000000ab"))
+        await settle()
+        ((topic, body, destination),) = room.sent
+        assert (topic, body["track_id"], destination) == (LOCK_TOPIC, "k1", [DEVICE])
+    finally:
+        await gaze.aclose()
+        await facts.aclose()
+    assert voice.listeners == []

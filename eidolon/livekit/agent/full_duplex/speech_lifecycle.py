@@ -86,6 +86,12 @@ class FullDuplexSpeechLifecycle:
 
         owner._user_turns.start_speech(timeline=owner._timeline, continue_pending=continue_pending)
         owner._ensure_agent_output_coordinator().link_interruption_candidate(owner._timeline)
+        gaze = getattr(owner, "_gaze_addressee", None)
+        if gaze is not None:
+            try:
+                gaze.on_speech_started(owner._timeline)
+            except Exception:
+                logger.exception("[StreamingPipeline] gaze addressee speech start failed")
         if replaced_unmerged_timeline is not None:
             if superseding_pending_candidate:
                 _record_contract_transition(

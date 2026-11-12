@@ -28,9 +28,14 @@ class SpeakerAudioPrefetch:
     interval_samples = 8000  # At most two launches per second.
     max_lag_samples = 16000
 
-    def __init__(self, *, capture, observer, coordinator, stream_factory):
+    def __init__(self, *, capture, observer, coordinator, stream_factory, on_voice=None):
         self.capture, self.observer, self.coordinator = capture, observer, coordinator
         self.stream_factory = stream_factory
+        # Told when this VAD state starts or stops hearing speech. It reads the
+        # audio STT reads, with state of its own, so it can hear quiet speech
+        # the session's VAD misses (interaction facts use it for that).
+        self.on_voice = on_voice
+        self.voice = False
         self.source = self.stream = self.task = None
         self.record = None
         self._closing = set()
@@ -49,6 +54,7 @@ class SpeakerAudioPrefetch:
         self.task = asyncio.create_task(self._consume(self.stream, source))
 
     def source_ended(self):
+        self._set_voice(False)
         self.record = None
         if self.source is not None:
             self.observer.cancel()
@@ -100,6 +106,7 @@ class SpeakerAudioPrefetch:
             count = sum(f.samples_per_channel for f in event.frames)
             self._start = max(0, index - count)
             self._voice_end = index
+            self._set_voice(True)
         elif event.type == VADEventType.INFERENCE_DONE:
             if event.probability >= 0.5:
                 self._voice_end = index
@@ -119,6 +126,14 @@ class SpeakerAudioPrefetch:
                     self._prefetch(index)
         elif event.type == VADEventType.END_OF_SPEECH:
             self._start = None
+            self._set_voice(False)
+
+    def _set_voice(self, speaking):
+        if speaking == self.voice:
+            return
+        self.voice = speaking
+        if self.on_voice is not None:
+            self.on_voice(speaking)
 
     def _prefetch(self, index):
         candidate = self.coordinator.active

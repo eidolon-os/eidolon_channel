@@ -55,9 +55,33 @@ class ConversationSpeaker:
         self._prefetch = None
         self._prefetch_config = None
         self._prefetch_closing = set()
+        self._voice_listeners = []
 
     def configure_prefetch(self, *, coordinator, stream_factory):
         self._prefetch_config = (coordinator, stream_factory)
+
+    def add_voice_listener(self, listener):
+        """Call ``listener(speaking)`` when the prefetch VAD starts or stops hearing speech.
+
+        Returns a function that removes it. Nothing is ever called when there is
+        no prefetch (STT without sample-addressed audio, or a VAD without an
+        evidence stream).
+        """
+        self._voice_listeners.append(listener)
+        if self._prefetch is not None and self._prefetch.voice:
+            listener(True)
+
+        def remove():
+            if listener in self._voice_listeners:
+                self._voice_listeners.remove(listener)
+        return remove
+
+    def _voice_changed(self, speaking):
+        for listener in tuple(self._voice_listeners):
+            try:
+                listener(speaking)
+            except Exception:
+                logging.getLogger(__name__).exception("voice listener failed")
 
     def bind_capture(self, capture):
         if capture is self._capture:
@@ -76,7 +100,8 @@ class ConversationSpeaker:
             from .speaker_audio_prefetch import SpeakerAudioPrefetch
             coordinator, stream_factory = self._prefetch_config
             self._prefetch = SpeakerAudioPrefetch(capture=capture, observer=self,
-                coordinator=coordinator, stream_factory=stream_factory)
+                coordinator=coordinator, stream_factory=stream_factory,
+                on_voice=self._voice_changed)
             capture.listener = self._prefetch
 
     def cancel(self):

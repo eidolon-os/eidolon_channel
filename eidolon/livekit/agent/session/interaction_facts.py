@@ -10,8 +10,16 @@ log = logging.getLogger(__name__)
 
 
 class InteractionPublisher:
-    def __init__(self, session, room, plan):
+    def __init__(self, session, room, plan, voice=None):
         self.session, self.room, self.plan = session, room, plan
+        # ``user_speaking`` is true while either VAD state hears the user: the
+        # session's own (LiveKit ``user_state``) or the speaker-evidence one in
+        # ``voice``. Both run the same model over the same audio with separate
+        # state, so quiet speech can trip one and not the other. On 2026-11-12,
+        # after 15 s of silence, only the evidence one heard a 2.6 s question;
+        # the turn still ran (opened by its transcript) but the device never
+        # saw speech, so it had nothing to attribute.
+        self.user_state_speaking = self.voice_speaking = False
         self.user = self.agent = False
         self.sequence = 0
         self.closed = False
@@ -23,10 +31,22 @@ class InteractionPublisher:
         session.on("agent_state_changed", self.on_agent)
         self.task = asyncio.create_task(self.run())
         self.changed.set()
+        add_listener = getattr(voice, "add_voice_listener", None)
+        self._remove_voice = add_listener(self.on_voice) if callable(add_listener) else None
 
     def on_user(self, event):
-        self.user = event.new_state == "speaking"
+        self.user_state_speaking = event.new_state == "speaking"
+        self.user = self.user_state_speaking or self.voice_speaking
         self.changed.set()
+
+    def on_voice(self, speaking: bool) -> None:
+        # Only an edge of the combined value is news; the other VAD state's
+        # own start or end inside one utterance publishes nothing.
+        self.voice_speaking = speaking
+        user = self.user_state_speaking or speaking
+        if user != self.user:
+            self.user = user
+            self.changed.set()
 
     def on_agent(self, event):
         self.agent = event.new_state == "speaking"
@@ -63,13 +83,17 @@ class InteractionPublisher:
 
     async def aclose(self):
         self.closed = True
+        if self._remove_voice is not None:
+            self._remove_voice()
+            self._remove_voice = None
         self.session.off("user_state_changed", self.on_user)
         self.session.off("agent_state_changed", self.on_agent)
         self.task.cancel()
         await asyncio.gather(self.task, return_exceptions=True)
 
 
-def attach_interaction_publisher(session, room, plan):
+def attach_interaction_publisher(session, room, plan, voice=None):
+    """``voice``: optional ``add_voice_listener`` source (the speaker observation)."""
     if plan is None or not plan.outputs.motion:
         return None
-    return InteractionPublisher(session, room, plan)
+    return InteractionPublisher(session, room, plan, voice)

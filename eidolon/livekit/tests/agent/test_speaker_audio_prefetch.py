@@ -262,3 +262,41 @@ async def test_audio_invalidation_never_reopens_an_already_delivered_turn():
         assert o.publish.call_count == 1
     finally:
         await o.aclose()
+
+
+@pytest.mark.asyncio
+async def test_voice_listeners_follow_the_prefetch_vad_and_its_source():
+    """The interaction facts read this VAD state: it hears what STT hears."""
+    c, cap, o, p, src = setup()  # setup's utterance has started and not ended
+    try:
+        heard = []
+        remove = o.add_voice_listener(heard.append)
+        assert heard == [True]  # registered mid-utterance: told at once
+        p.consume(event(E.END_OF_SPEECH, 34000))
+        p.consume(event(E.START_OF_SPEECH, 40000, frames=[SimpleNamespace(samples_per_channel=1600)]))
+        p.consume(event(E.INFERENCE_DONE, 40512, 1))
+        assert heard == [True, False, True]
+        # A new STT run restarts this VAD state; the old one stops hearing.
+        cap.begin_run(AudioSource("mic", 2, 16000))
+        assert heard == [True, False, True, False] and o._prefetch.voice is False
+
+        def broken(speaking):
+            raise RuntimeError("listener bug")
+
+        o.add_voice_listener(broken)
+        o._prefetch.consume(event(E.START_OF_SPEECH, 1600, frames=[SimpleNamespace(samples_per_channel=1600)]))
+        assert heard[-1] is True  # one failing listener does not stop the others
+        remove()
+        o._prefetch.consume(event(E.END_OF_SPEECH, 8000))
+        assert heard[-1] is True
+    finally:
+        await o.aclose()
+
+
+@pytest.mark.asyncio
+async def test_closing_the_observation_ends_an_utterance_it_was_hearing():
+    c, cap, o, p, src = setup()
+    heard = []
+    o.add_voice_listener(heard.append)
+    await o.aclose()
+    assert heard == [True, False]

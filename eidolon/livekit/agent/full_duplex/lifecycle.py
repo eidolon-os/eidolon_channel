@@ -78,6 +78,29 @@ class FullDuplexSessionLifecycle:
         )
 
 
+    def attach_motion_observers(self, session, room, output_room, participant_identity) -> None:
+        """Interaction facts and the gaze addressee; both only with a motion output.
+
+        Its own method so the wiring can be tested without an AgentSession.
+        """
+        from ..session.gaze_addressee import attach_gaze_addressee
+        from ..session.interaction_facts import attach_interaction_publisher
+
+        pipeline = self._pipeline
+        # user_speaking also follows the speaker-evidence VAD state, which
+        # hears quiet speech the session's VAD can miss.
+        pipeline._interaction_publisher = attach_interaction_publisher(
+            session, output_room or room, getattr(pipeline._factory, "output_plan", None),
+            voice=getattr(pipeline, "_speaker_observation", None))
+        # Speaker reports arrive in the input room from the session's device;
+        # the lock goes back to that device, even when output is redirected.
+        # The speech lifecycle tells it which turn each utterance belongs to.
+        pipeline._gaze_addressee = attach_gaze_addressee(
+            room, pipeline._interaction_publisher,
+            room_data=getattr(pipeline, "_room_data", None),
+            participant_identity=participant_identity,
+        )
+
     async def _close_speaker_observation(self) -> None:
         observation = getattr(self._pipeline, "_speaker_observation", None)
         try:
@@ -173,18 +196,7 @@ class FullDuplexSessionLifecycle:
                 participant_identity=participant_identity,
             ),
         )
-        from ..session.interaction_facts import attach_interaction_publisher
-        from ..session.gaze_addressee import attach_gaze_addressee
-        pipeline._interaction_publisher = attach_interaction_publisher(
-            session, output_room or room, getattr(pipeline._factory, "output_plan", None))
-        # Speaker reports arrive in the input room from the session's device;
-        # the lock goes back to that device, even when output is redirected.
-        pipeline._gaze_addressee = attach_gaze_addressee(
-            room, pipeline._interaction_publisher,
-            room_data=getattr(pipeline, "_room_data", None),
-            current_timeline=lambda: getattr(pipeline, "_timeline", None),
-            participant_identity=participant_identity,
-        )
+        self.attach_motion_observers(session, room, output_room, participant_identity)
         await pipeline._start_music_runtime(session)
         pipeline.session_mark("session_started")
         if pipeline._on_session_started is not None:

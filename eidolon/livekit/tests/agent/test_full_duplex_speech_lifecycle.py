@@ -430,3 +430,31 @@ def test_provider_only_candidate_does_not_claim_an_acoustic_start():
         timeline=owner._timeline, generation_id=1, already_suspended=False,
     )
     owner._output_flow.arm_evidence_timeout.assert_called_once_with()
+
+
+def test_each_speech_start_tells_the_gaze_addressee_which_turn_it_belongs_to():
+    owner = _owner()
+    seen = []
+    owner._gaze_addressee = SimpleNamespace(on_speech_started=seen.append)
+    lifecycle = FullDuplexSpeechLifecycle(owner)
+    lifecycle.handle_started()
+    first = owner._timeline
+    owner._user_turns.can_merge_new_speech.return_value = True
+    lifecycle.handle_started()  # a merged continuation stays in the same turn
+    owner._user_turns.can_merge_new_speech.return_value = False
+    owner._attention_effects.handle_transcript_started.return_value = True
+    lifecycle.handle_transcript_started()  # a transcript no VAD edge preceded
+    assert seen[:2] == [first, first]
+    assert seen[2] is owner._timeline and seen[2] is not first
+
+
+def test_a_failing_gaze_addressee_does_not_stop_a_speech_start():
+    owner = _owner()
+
+    def broken(timeline):
+        raise RuntimeError("gaze bug")
+
+    owner._gaze_addressee = SimpleNamespace(on_speech_started=broken)
+    FullDuplexSpeechLifecycle(owner).handle_started()
+    owner._user_turns.start_speech.assert_called_once()
+    owner._get_eot_model.return_value.update_vad.assert_called_once_with(True)

@@ -11,10 +11,18 @@ those decide whether an utterance was addressed to the assistant at all.
 
 Which turn a report belongs to comes from ``facts_sequence``: the
 ``InteractionFacts`` sequence whose ``user_speaking=true`` opened the device's
-segment. The facts publisher tells this module, packet by packet, which turn
-was current when it published each rising edge. Its run loop is a separate
-task, so by the time a packet is built every synchronous ``user_state_changed``
-handler, including the one that opens the new turn, has already run.
+segment. The facts publisher tells this module, packet by packet, where each
+segment opened; the speech lifecycle tells it which turn the speech it hears
+belongs to (``on_speech_started``, for a new turn, a merged continuation, or a
+turn its transcript opened without any VAD edge). A segment belongs to the
+turn that speech claimed while the segment was open, or just before its
+opening packet was built.
+
+The two do not arrive in a fixed order: ``user_speaking`` is true while either
+of two VAD states hears the user, and the one that opens turns can start up to
+about a second after the other or, for quiet speech, not at all. A segment no
+speech claimed (a sound no turn was made of) never lends its report to a turn,
+and a report that arrives before its segment is claimed waits on the segment.
 
 The binding window of a turn closes when its reply first speaks: a report that
 arrives later, or that refers to an earlier segment, never changes the lock.
@@ -60,6 +68,23 @@ class _Turn:
     report: AttentionSpeaker | None = None
     bound: bool = False
 
+    def take(self, report: AttentionSpeaker) -> None:
+        # Report sequences only increase, so this keeps the latest received.
+        if not self.bound and (self.report is None or report.sequence > self.report.sequence):
+            self.report = report
+
+
+@dataclass
+class _Segment:
+    opened_at: int
+    turn: _Turn | None = None
+    report: AttentionSpeaker | None = None
+
+    def claim(self, turn: _Turn) -> None:
+        self.turn = turn
+        if self.report is not None:
+            turn.take(self.report)
+
 
 def _sender(packet: Any) -> str:
     participant = getattr(packet, "participant", None)
@@ -72,16 +97,17 @@ class GazeAddressee:
         room: Any,
         plan: Any,
         *,
-        current_timeline: Callable[[], TurnTimeline | None],
         participant_identity: str | None = None,
     ) -> None:
         self._room = room
         self._plan = plan
-        self._current_timeline = current_timeline
         self._participant_identity = participant_identity or None
-        self._segments: deque[tuple[int, _Turn | None]] = deque(maxlen=_REMEMBERED)
+        self._segments: deque[_Segment] = deque(maxlen=_REMEMBERED)
         self._turns: OrderedDict[str, _Turn] = OrderedDict()
         self._user_speaking = False
+        # Speech claimed while no segment was open: the packet that opens one
+        # is being built. Taken by that packet, dropped by any other.
+        self._claim: _Turn | None = None
         self._reporter: str | None = None
         self._report_sequence = 0
         self._locked: _Turn | None = None
@@ -99,14 +125,22 @@ class GazeAddressee:
     # -- inputs ---------------------------------------------------------
 
     def on_facts(self, facts: InteractionFacts) -> None:
-        """Facts publisher observer: remember which turn each speech onset opened."""
+        """Facts publisher observer: remember where each device segment opens."""
         rising = facts.user_speaking and not self._user_speaking
         self._user_speaking = facts.user_speaking
-        if not rising:
+        claim, self._claim = self._claim, None
+        if rising:
+            self._segments.append(_Segment(facts.sequence, claim))
+
+    def on_speech_started(self, timeline: TurnTimeline | None) -> None:
+        """Speech lifecycle: the user speech now heard belongs to ``timeline``'s turn."""
+        if timeline is None:
             return
-        timeline = self._current_timeline()
-        turn = self._turn(timeline.turn_id) if timeline is not None else None
-        self._segments.append((facts.sequence, turn))
+        turn = self._turn(timeline.turn_id)
+        if self._user_speaking and self._segments:
+            self._segments[-1].claim(turn)
+        else:
+            self._claim = turn
 
     def on_packet(self, packet: Any) -> None:
         """Room data subscriber for ``attention.speaker``."""
@@ -132,15 +166,21 @@ class GazeAddressee:
         if self._reporter is None:
             log.info("[GazeAddressee] speaker reports enabled from=%s", identity or "unknown")
         self._reporter = identity
-        turn = self._segment_turn(report.facts_sequence)
-        if turn is None or turn.bound:
-            log.info(
-                "[GazeAddressee] speaker report dropped sequence=%s facts_sequence=%s reason=%s",
-                report.sequence, report.facts_sequence,
-                "no_turn" if turn is None else "reply_already_started",
-            )
+        segment = self._segment(report.facts_sequence)
+        if segment is None:
+            self._dropped(report, "no_turn")
             return
-        turn.report = report
+        # Kept on the segment too: a later claim (a turn opened after this
+        # report, or the next turn of one long segment) takes it from there.
+        segment.report = report
+        turn = segment.turn
+        if turn is None:
+            log.debug("[GazeAddressee] speaker report waits for its turn sequence=%s "
+                      "facts_sequence=%s", report.sequence, report.facts_sequence)
+        elif turn.bound:
+            self._dropped(report, "reply_already_started")
+        else:
+            turn.take(report)
 
     def on_agent_state(self, old_state: str, new_state: str, timeline: TurnTimeline | None) -> None:
         """Agent state observer; ``timeline`` owns the current output, if any."""
@@ -178,10 +218,17 @@ class GazeAddressee:
                 self._turns.popitem(last=False)
         return turn
 
-    def _segment_turn(self, facts_sequence: int) -> _Turn | None:
-        for opened_at, turn in reversed(self._segments):
-            if opened_at <= facts_sequence:
-                return turn
+    @staticmethod
+    def _dropped(report: AttentionSpeaker, reason: str) -> None:
+        log.info(
+            "[GazeAddressee] speaker report dropped sequence=%s facts_sequence=%s reason=%s",
+            report.sequence, report.facts_sequence, reason,
+        )
+
+    def _segment(self, facts_sequence: int) -> _Segment | None:
+        for segment in reversed(self._segments):
+            if segment.opened_at <= facts_sequence:
+                return segment
         return None
 
     # -- delivery -------------------------------------------------------
@@ -251,7 +298,6 @@ def attach_gaze_addressee(
     interaction: Any,
     *,
     room_data: Any,
-    current_timeline: Callable[[], TurnTimeline | None],
     participant_identity: str | None = None,
 ) -> GazeAddressee | None:
     """Attach only where the facts publisher runs, i.e. the plan includes motion."""
@@ -259,7 +305,6 @@ def attach_gaze_addressee(
         return None
     addressee = GazeAddressee(
         room, interaction.plan,
-        current_timeline=current_timeline,
         participant_identity=participant_identity,
     )
     addressee.bind(interaction, room_data)

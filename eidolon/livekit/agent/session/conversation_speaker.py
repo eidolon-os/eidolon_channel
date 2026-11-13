@@ -6,11 +6,23 @@ import logging
 import time
 from eidolon_sdk.biz.speaker_attestation import sign_observation
 from eidolon_sdk.biz.person_observation import PersonObservationFeedback
-from eidolon_sdk.biz.speaker_identity import SpeakerIdentityObservation
+from eidolon_sdk.biz.speaker_identity import PERSON_USES, SpeakerIdentityObservation
 from .speaker_recognition import SpeakerRecognizer
 
 TOPIC = "eidolon.speaker_observation"
 POLICY_FILE = "identity-policy.json"
+
+
+def log_view(value: SpeakerIdentityObservation) -> str:
+    """For the log: what the observation lets the Agent do, never who (no ids, no names)."""
+    uses = [use for use in PERSON_USES if value.decided(use) is not None]
+    quality = value.audio_quality
+    return "status=%s reason=%s uses=%s audio_ms=%s speech_ms=%s required_speech_ms=%s" % (
+        feedback_view(value)["status"], value.reason, ",".join(uses) or "none",
+        quality.audio_ms if quality is not None else None,
+        quality.speech_ms if quality is not None else None,
+        quality.required_speech_ms if quality is not None else None,
+    )
 
 
 def feedback_view(value: SpeakerIdentityObservation) -> dict:
@@ -55,6 +67,7 @@ class ConversationSpeaker:
         self._prefetch = None
         self._prefetch_config = None
         self._prefetch_closing = set()
+        self._prefetch_miss = None
         self._voice_listeners = []
 
     def configure_prefetch(self, *, coordinator, stream_factory):
@@ -137,6 +150,19 @@ class ConversationSpeaker:
             return None
         evidence = (self._prefetch.resolve(candidate, reference.span)
                     if self._prefetch is not None else None)
+        record = self._prefetch.record if self._prefetch is not None else None
+        if evidence is None and record is not None and record.candidate_id == candidate.candidate_id:
+            # Its result is thrown away and the turn's whole audio recognized
+            # again, usually after the turn went to the Agent.
+            miss = (candidate.candidate_id, reference.span,
+                    self._prefetch.mismatch(candidate, reference.span))
+            if miss != self._prefetch_miss:
+                self._prefetch_miss = miss
+                logging.getLogger(__name__).info(
+                    "Speaker prefetch not reused turn_id=%s reason=%s",
+                    candidate.timeline.turn_id if candidate.timeline is not None else None,
+                    miss[2],
+                )
         if candidate.timeline is not None:
             candidate.timeline.set_attr("speaker_audio_prefetched", evidence is not None)
         if evidence is None:
@@ -207,6 +233,13 @@ class ConversationSpeaker:
                     send = getattr(late[1], "send_late_speaker_observation", None)
                     if callable(send):
                         send(value.turn_id, sign_observation(value, secret=self.secret, text=late[2]))
+                        # The Agent applies it only within its wait (150 ms
+                        # since it took the turn); its turn metadata says which.
+                        logging.getLogger(__name__).info(
+                            "Speaker observation late to agent turn_id=%s after_ms=%d %s",
+                            value.turn_id, int((time.monotonic() - late[3]) * 1000),
+                            log_view(value),
+                        )
             if self.on_observation is not None:
                 try:
                     self.on_observation(value)
@@ -278,7 +311,9 @@ class ConversationSpeaker:
         if callable(setter):
             setter(sign_observation(value, secret=self.secret, text=text))
             if value.reason == "recognition_pending":
-                self._late = (value.turn_id, llm, text)
+                self._late = (value.turn_id, llm, text, time.monotonic())
+            logging.getLogger(__name__).info(
+                "Speaker observation to agent turn_id=%s %s", value.turn_id, log_view(value))
         if timeline is not None:
             # No names/profile text, PCM, embeddings or signed token in traces.
             timeline.set_attr(
@@ -390,8 +425,8 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
                     1,
                 )
                 logging.getLogger(__name__).info(
-                    "Speaker feedback published turn_id=%s status=%s",
-                    value.turn_id, payload["status"],
+                    "Speaker feedback published turn_id=%s status=%s reason=%s",
+                    value.turn_id, payload["status"], payload["reason"],
                 )
             except Exception:
                 logging.getLogger(__name__).warning(

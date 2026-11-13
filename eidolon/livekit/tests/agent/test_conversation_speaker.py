@@ -1123,3 +1123,144 @@ async def test_the_session_writes_a_late_observation_frame():
     assert frame.WhichOneof("payload") == "late_speaker_observation"
     assert (frame.late_speaker_observation.trace_id, frame.late_speaker_observation.token) == (
         "trace-1", "token-1")
+
+
+@pytest.mark.asyncio
+async def test_once_someone_was_seen_the_authority_read_runs_alongside_the_extraction():
+    """2026-11-13: a turn committed while its recognition ran gets the result
+    only within the Agent's 150 ms wait; two that made it waited 117 and 142
+    ms, and the authority read before the extraction took 15-60 ms of that."""
+    port = client()
+    value = recognizer(port)
+    assert (await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t1")).status == "compared"
+    order = []
+    gate = asyncio.Event()
+
+    async def read(owner_id, **scope):
+        order.append("candidates")
+        await gate.wait()
+        return snapshot()
+
+    async def extract(pcm, **kwargs):
+        order.append("extract")
+        return SAMPLE
+
+    port.candidates.side_effect, port.extract.side_effect = read, extract
+    second = asyncio.create_task(value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2"))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert order == ["candidates", "extract"] and not gate.is_set()  # the read has not answered
+    gate.set()
+    result = await second
+    assert result.decisions.addressing == "p0"
+    assert port.extract.await_count == 2 and port.candidates.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_with_nobody_enrolled_no_audio_goes_to_the_extractor():
+    port = client()
+    value = recognizer(port)
+    await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t1")
+    gate = asyncio.Event()
+    cancelled = []
+
+    async def extract(pcm, **kwargs):
+        try:
+            await gate.wait()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+        return SAMPLE
+
+    async def read(owner_id, **scope):
+        for _ in range(3):
+            await asyncio.sleep(0)
+        return snapshot(people=0)
+
+    port.extract.side_effect, port.candidates.side_effect = extract, read
+    # Someone was there last time: the extraction starts, and is dropped as
+    # soon as the read says nobody is enrolled now.
+    result = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2")
+    assert (result.status, result.reason) == ("uncertain", "no_enrolled_voices")
+    await asyncio.sleep(0)
+    assert cancelled == [True]
+    # From then on the read comes first again.
+    calls = port.extract.call_count
+    result = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t3")
+    assert result.reason == "no_enrolled_voices" and port.extract.call_count == calls
+
+
+@pytest.mark.asyncio
+async def test_a_failed_authority_read_cancels_the_extraction_beside_it():
+    from eidolon_sdk.core.http.errors import ServiceUpstreamError
+    port = client()
+    value = recognizer(port)
+    await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t1")
+    cancelled = []
+
+    async def extract(pcm, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    async def read(owner_id, **scope):
+        for _ in range(3):
+            await asyncio.sleep(0)
+        raise ServiceUpstreamError(503, "down")
+
+    port.extract.side_effect, port.candidates.side_effect = extract, read
+    result = await value.recognize(evidence(), owner_id="o", session_id="s", turn_id="t2")
+    assert (result.status, result.reason) == ("unavailable", "dependency_unavailable")
+    await asyncio.sleep(0)
+    assert cancelled == [True]
+
+
+@pytest.mark.asyncio
+async def test_too_little_speech_names_its_reason_and_quality_in_the_log(caplog):
+    """2026-11-13 14:32: three 422s from the Provider and nothing in the
+    Channel log but the status line; the Provider's body said speech_too_short."""
+    from eidolon_sdk.biz.voiceprint import SpeakerAudioQuality
+    from eidolon.livekit.agent.session.speaker_extraction_client import SpeakerExtractionRejected
+    port = client()
+    port.extract.side_effect = SpeakerExtractionRejected("speech_too_short", SpeakerAudioQuality(
+        audio_ms=976, required_speech_ms=600, speech_ms=460))
+    with caplog.at_level("INFO"):
+        result = await recognizer(port).recognize(evidence(), owner_id="o", session_id="s", turn_id="t")
+    assert (result.status, result.reason) == ("uncertain", "speech_too_short")
+    assert ("Speaker recognition turn_id=t status=uncertain reason=speech_too_short audio_ms=976 "
+            "speech_ms=460 required_speech_ms=600") in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_what_the_agent_gets_and_when_a_late_result_follows_is_logged_without_who(caplog):
+    port = client()
+    gate = asyncio.Event()
+
+    async def slow(_, **kwargs):
+        await gate.wait()
+        return SAMPLE
+
+    port.extract.side_effect = slow
+    observer = ConversationSpeaker(recognizer=recognizer(port),
+        owner_id="o", session_id="s", secret="x" * 32, publish=MagicMock())
+    try:
+        with caplog.at_level("INFO"):
+            observer.begin_evidence(evidence(), "t")
+            task = observer._task
+            observer.deliver(await observer.result("t"), text="hello", llm=MagicMock(), timeline=None)
+            gate.set()
+            await task
+            await asyncio.sleep(0)
+        lines = [r.getMessage() for r in caplog.records if "Speaker observation" in r.getMessage()]
+        assert lines[0] == ("Speaker observation to agent turn_id=t status=unavailable "
+                            "reason=recognition_pending uses=none audio_ms=None speech_ms=None "
+                            "required_speech_ms=None")
+        assert lines[1].startswith("Speaker observation late to agent turn_id=t after_ms=")
+        assert lines[1].endswith("status=identified reason=compared "
+                                 "uses=personal_memory,addressing,speaker_label "
+                                 "audio_ms=2000 speech_ms=2000 required_speech_ms=1500")
+        assert not any("p0" in line or "Person 0" in line for line in lines)
+    finally:
+        await observer.aclose()

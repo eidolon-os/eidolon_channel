@@ -166,23 +166,39 @@ class SpeakerAudioPrefetch:
 
     def resolve(self, candidate, span):
         """Only reuse when every ASR sample is covered or verified trailing silence."""
+        if self.mismatch(candidate, span) is not None:
+            return None
+        return self.record.evidence
+
+    def mismatch(self, candidate, span):
+        """Why ``resolve`` would not reuse the prefetched audio for ``span``; None if it would.
+
+        A short reason with the offset in ms where one applies, for the log
+        only: the turn then pays a whole recognition after it is committed.
+        """
         record = self.record
         if record is None or candidate is None or span is None:
-            return None
+            return "no_prefetch"
         evidence = record.evidence
-        if (
-            record.candidate_id != candidate.candidate_id
-            or record.generation != candidate.latest_generation_id
-            or self.source != self.capture.active_source
-            or not span.same_source(self.source)
-            or span.start < evidence.start
-            or span.end > record.validated_through
-            or span.end <= evidence.start
-            or span.start >= record.voice_end
-            or span.end > self._processed
-        ):
-            return None
-        return evidence
+
+        def ms(samples):
+            return int(samples * 1000 // 16000)
+
+        if record.candidate_id != candidate.candidate_id:
+            return "other_candidate"
+        if record.generation != candidate.latest_generation_id:
+            return "speech_continued"
+        if self.source != self.capture.active_source or not span.same_source(self.source):
+            return "source_changed"
+        if span.start < evidence.start:
+            return f"asr_starts_{ms(evidence.start - span.start)}ms_before_prefetch"
+        if span.end > record.validated_through:
+            return f"asr_ends_{ms(span.end - record.validated_through)}ms_after_verified_silence"
+        if span.end <= evidence.start or span.start >= record.voice_end:
+            return "asr_outside_prefetch"
+        if span.end > self._processed:
+            return f"vad_{ms(span.end - self._processed)}ms_behind_asr"
+        return None
 
     async def aclose(self):
         task = self.task

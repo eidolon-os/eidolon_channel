@@ -38,7 +38,8 @@ class Stream:
         self.closed = True
 
 
-def setup():
+def setup(prefix=1600):
+    """Two seconds of speech; the VAD's start carries ``prefix`` samples before 1600."""
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.5)
     coordinator.start_speech(timeline=TurnTimeline("t"))
     capture = AudioEvidenceCapture(session_id="s", endpoint_id="mic")
@@ -61,7 +62,7 @@ def setup():
         capture.append(source, start=start, pcm=b"\x01\0" * 1600)
         if start == 0:
             prefetch.consume(
-                event(E.START_OF_SPEECH, 1600, frames=[SimpleNamespace(samples_per_channel=1600)])
+                event(E.START_OF_SPEECH, 1600, frames=[SimpleNamespace(samples_per_channel=prefix)])
             )
         prefetch.consume(event(E.INFERENCE_DONE, start + 1600, 1))
     capture.append(source, start=32000, pcm=b"\0" * 3200)
@@ -300,3 +301,38 @@ async def test_closing_the_observation_ends_an_utterance_it_was_hearing():
     o.add_voice_listener(heard.append)
     await o.aclose()
     assert heard == [True, False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix,span,reason", [
+    (1600, AudioSpan("mic", 1, 16000, 0, 33600), None),
+    # ASR heard the onset 50 ms before the VAD's start (prefix included).
+    (800, AudioSpan("mic", 1, 16000, 0, 33600), "asr_starts_50ms_before_prefetch"),
+    (1600, AudioSpan("mic", 1, 16000, 0, 35200), "asr_ends_100ms_after_verified_silence"),
+    (1600, AudioSpan("mic", 2, 16000, 0, 33600), "source_changed"),
+])
+async def test_why_prefetched_audio_is_not_reused_is_named(prefix, span, reason):
+    c, cap, o, p, src = setup(prefix)
+    try:
+        assert p.mismatch(c.active, span) == reason
+        assert (p.resolve(c.active, span) is None) is (reason is not None)
+    finally:
+        await o.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_prefetch_thrown_away_at_the_final_is_logged_once_with_its_reason(caplog):
+    c, cap, o, p, src = setup(800)
+    try:
+        await o._task
+        c.note_speech_stopped(eot_score=None)
+        c.add_transcript("hello", is_final=True, evidence=TranscriptEvidence(
+            stream_key="asr", revision_key="1", audio_span=AudioSpan("mic", 1, 16000, 0, 33600)))
+        with caplog.at_level("INFO"):
+            o.begin(c, "t")
+            o.begin(c, "t")  # the turn's completion asks again: same audio, same miss
+        misses = [r.getMessage() for r in caplog.records if "prefetch not reused" in r.getMessage()]
+        assert misses == ["Speaker prefetch not reused turn_id=t reason=asr_starts_50ms_before_prefetch"]
+        assert o.recognizer.client.extract.await_count >= 1
+    finally:
+        await o.aclose()

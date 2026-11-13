@@ -54,6 +54,12 @@ from eidolon_sdk.core.http.errors import ServiceUpstreamError
 from eidolon_sdk.core.http.client import ServiceHTTPClient, authorization_header
 
 
+def _retrieve(task):
+    """An extraction abandoned after it failed is not an unretrieved exception."""
+    if not task.cancelled():
+        task.exception()
+
+
 class SpeakerRecognitionClient(ServiceHTTPClient):
     def __init__(self, http, *, data_url, data_token, provider_url, provider_token):
         super().__init__(http, data_url, default_headers=authorization_header(data_token))
@@ -109,6 +115,8 @@ class SpeakerRecognizer:
             policy = backend = None
         self.client, self.policy, self.backend, self.channel = client, policy, backend, channel
         self._busy = False
+        # Whether the last authority read had anyone to compare against.
+        self._voices = False
         self._templates = (None, None, {})
         self._tracks = Tracks()
         self._submissions = set()
@@ -172,7 +180,18 @@ class SpeakerRecognizer:
         )
 
         def outcome(status, reason):
-            return SpeakerIdentityObservation(**base, status=status, reason=reason)
+            # Every utterance that ends without a comparison says why here,
+            # e.g. the Provider's 422 for too little speech (its body names it).
+            value = SpeakerIdentityObservation(**base, status=status, reason=reason)
+            quality = value.audio_quality
+            logging.getLogger(__name__).info(
+                "Speaker recognition turn_id=%s status=%s reason=%s audio_ms=%s speech_ms=%s "
+                "required_speech_ms=%s", turn_id, status, reason,
+                quality.audio_ms if quality is not None else None,
+                quality.speech_ms if quality is not None else None,
+                quality.required_speech_ms if quality is not None else None,
+            )
+            return value
 
         if evidence is None or not evidence.complete:
             return outcome("uncertain", "audio_evidence_unavailable")
@@ -200,12 +219,31 @@ class SpeakerRecognizer:
         if self._busy:
             return outcome("unavailable", "recognizer_busy")
         self._busy = True
+        extraction = None
         try:
             scope = dict(channel=self.channel, session_id=session_id)
-            snapshot = await self.client.candidates(owner_id, **scope)
-            if not snapshot.persons and snapshot.discovery_policy is None:
+            if self._voices:
+                # A turn committed while this runs gets the result only if it
+                # comes within the Agent's short wait, so the authority read
+                # does not hold up the extraction. Not until this session has
+                # seen someone to compare against: nobody enrolled, no audio
+                # goes to the extractor.
+                extraction = asyncio.ensure_future(
+                    self.client.extract(evidence.pcm, min_speech_ms=self.policy.min_speech_ms))
+                extraction.add_done_callback(_retrieve)
+            try:
+                snapshot = await self.client.candidates(owner_id, **scope)
+            except BaseException:
+                if extraction is not None:
+                    extraction.cancel()
+                raise
+            self._voices = bool(snapshot.persons) or snapshot.discovery_policy is not None
+            if not self._voices:
+                if extraction is not None:
+                    extraction.cancel()
                 return outcome("uncertain", "no_enrolled_voices")
-            probe = await self.client.extract(evidence.pcm, min_speech_ms=self.policy.min_speech_ms)
+            probe = await (extraction if extraction is not None else self.client.extract(
+                evidence.pcm, min_speech_ms=self.policy.min_speech_ms))
             if probe.speech_ms > len(evidence.pcm) // 32:
                 return outcome("unavailable", "invalid_extraction_response")
             base["audio_quality"] = SpeakerAudioQuality(

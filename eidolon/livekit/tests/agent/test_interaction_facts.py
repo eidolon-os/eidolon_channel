@@ -23,6 +23,18 @@ async def test_motion_observer_keeps_duplex_facts_independent_and_closes():
     handlers["agent_state_changed"](SimpleNamespace(new_state="speaking"))
     await asyncio.sleep(0)
     assert packets[-1].user_speaking and packets[-1].agent_speaking
+    assert not packets[-1].agent_thinking
+    # Committed turn, reply not audible yet: thinking, until the first audio.
+    handlers["user_state_changed"](SimpleNamespace(new_state="listening"))
+    handlers["agent_state_changed"](SimpleNamespace(new_state="thinking"))
+    await asyncio.sleep(0)
+    assert packets[-1].agent_thinking and not packets[-1].agent_speaking
+    handlers["agent_state_changed"](SimpleNamespace(new_state="speaking"))
+    await asyncio.sleep(0)
+    assert packets[-1].agent_speaking and not packets[-1].agent_thinking
+    handlers["agent_state_changed"](SimpleNamespace(new_state="listening"))
+    await asyncio.sleep(0)
+    assert not packets[-1].agent_thinking and not packets[-1].agent_speaking
     await observer.aclose()
     assert observer.task.done() and not handlers
 

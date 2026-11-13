@@ -31,6 +31,9 @@ class InteractionPublisher:
         self._transcript_turn = None
         self._transcript_quiet = None
         self.user = self.agent = False
+        # Between the committed turn and the first audio of its reply. A device
+        # with a body shows it was heard instead of standing still meanwhile.
+        self.thinking = False
         self.sequence = 0
         self.closed = False
         # Told of each packet as it is built, in sequence order, before it is
@@ -55,6 +58,7 @@ class InteractionPublisher:
 
     def on_agent(self, event):
         self.agent = event.new_state == "speaking"
+        self.thinking = event.new_state == "thinking"
         if self.agent:
             self._end_transcript("agent_speaking")
         self.user = self._user_speaking()
@@ -132,7 +136,8 @@ class InteractionPublisher:
             self.sequence += 1
             facts = InteractionFacts(session_id=self.plan.session_id,
                 policy_revision=self.plan.policy_revision, sequence=self.sequence,
-                user_speaking=self.user, agent_speaking=self.agent)
+                user_speaking=self.user, agent_speaking=self.agent,
+                agent_thinking=self.thinking)
             for observer in tuple(self.observers):
                 try:
                     observer(facts)

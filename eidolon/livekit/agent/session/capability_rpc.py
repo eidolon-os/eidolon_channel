@@ -6,6 +6,14 @@ import json
 import logging
 import time
 
+from eidolon_sdk.biz.capabilities.camera import (
+    ATTRIBUTE_EXECUTION,
+    ATTRIBUTE_POLICY_REVISION,
+    ATTRIBUTE_SESSION,
+    FRAME_MEDIA_TYPE,
+    FRAME_TOPIC,
+    MAX_FRAME_BYTES,
+)
 from eidolon_sdk.biz.presentation.capability_rpc import (
     CANCEL,
     INVOKE,
@@ -26,6 +34,9 @@ from ..runtime.resolver import wait_for_runtime_participant_identity
 # it answers, within a bound for a device that never will.
 RESOURCE_RETRY_S = 0.5
 RESOURCE_DISCOVERY_S = 30.0
+# The device sends a still before it reports completion; this covers the rest
+# of the transfer when the receipt overtakes the last chunks.
+FRAME_WAIT_S = 3.0
 
 
 class SessionCapabilityRPC:
@@ -39,6 +50,81 @@ class SessionCapabilityRPC:
         self.receipts = []
         from eidolon_sdk.biz.capabilities import installed_registry
         self.registry = installed_registry()
+        # One set on both sides: the device binds every invocation to its revision.
+        self.names = tuple(dict.fromkeys((*plan.motion_capabilities, *plan.device_capabilities)))
+        self.frames = {}
+        self._frame_readers = set()
+        self._receives_frames = any(
+            self.registry.get(name).required_input == "camera" for name in plan.device_capabilities)
+        if self._receives_frames:
+            room.unregister_byte_stream_handler(FRAME_TOPIC)  # a previous session of this room
+            room.register_byte_stream_handler(FRAME_TOPIC, self._on_frame)
+
+    def _allowed(self, name):
+        return (name in self.plan.device_capabilities
+                or (self.plan.outputs.motion and name in self.plan.motion_capabilities))
+
+    def _on_frame(self, reader, participant_identity):
+        task = asyncio.create_task(self._read_frame(reader, participant_identity))
+        self._frame_readers.add(task)
+        task.add_done_callback(self._frame_readers.discard)
+
+    async def _read_frame(self, reader, participant_identity):
+        """Keep a still only for an execution this session is waiting on."""
+        attributes = dict(reader.info.attributes or {})
+        identifier = attributes.get(ATTRIBUTE_EXECUTION, "")
+        try:
+            if (
+                self.closed
+                or identifier not in self.frames
+                or self.pending.get(identifier) != participant_identity
+                or attributes.get(ATTRIBUTE_SESSION) != self.plan.session_id
+                or attributes.get(ATTRIBUTE_POLICY_REVISION) != str(self.plan.policy_revision)
+                or (reader.info.size or 0) > MAX_FRAME_BYTES
+            ):
+                logging.getLogger(__name__).warning(
+                    "camera frame dropped: no matching execution sender=%s execution=%s",
+                    participant_identity, identifier)
+                return
+            chunks, size = [], 0
+            async for chunk in reader:
+                size += len(chunk)
+                if size > MAX_FRAME_BYTES:
+                    logging.getLogger(__name__).warning(
+                        "camera frame dropped: oversized execution=%s", identifier)
+                    return
+                chunks.append(chunk)
+            future = self.frames.get(identifier)  # gone once the execution stopped waiting
+            if future is not None and not future.done():
+                future.set_result(b"".join(chunks))
+        except Exception:
+            logging.getLogger(__name__).exception("camera frame read failed execution=%s", identifier)
+        finally:
+            await reader.aclose()
+
+    async def _attach_frame(self, call, result):
+        """The still the device sent for this execution, checked against its receipt."""
+        identifier = self.identifier(call)
+        facts = result.result if isinstance(result.result, dict) else {}
+        try:
+            frame = await asyncio.wait_for(self.frames[identifier], FRAME_WAIT_S)
+        except TimeoutError:
+            frame = b""
+        if (
+            not frame
+            or len(frame) != facts.get("bytes")
+            or hashlib.sha256(frame).hexdigest() != facts.get("sha256")
+        ):
+            logging.getLogger(__name__).warning(
+                "camera frame missing or altered execution=%s received=%d", identifier, len(frame))
+            return ChannelToolResult(call.turn_id, call.call_id, call.name, False,
+                result.model_dump(mode="json"), error_code="transfer_failed", outcome_state="failed")
+        logging.getLogger(__name__).info(
+            "camera frame received execution=%s bytes=%d size=%sx%s", identifier, len(frame),
+            facts.get("width"), facts.get("height"))
+        return ChannelToolResult(call.turn_id, call.call_id, call.name, True,
+            result.model_dump(mode="json"), outcome_state=result.state,
+            attachment=frame, attachment_media_type=facts.get("media_type") or FRAME_MEDIA_TYPE)
 
     def identifier(self, call):
         return (
@@ -79,7 +165,7 @@ class SessionCapabilityRPC:
             self.foreground.discard(task)
 
     async def _execute(self, call):
-        if self.closed or not self.plan.outputs.motion or call.name not in self.plan.motion_capabilities:
+        if self.closed or not self._allowed(call.name):
             return ChannelToolResult(
                 call.turn_id, call.call_id, call.name, False, {}, error_code="UNAVAILABLE"
             )
@@ -90,6 +176,8 @@ class SessionCapabilityRPC:
         arguments = dict(call.arguments)
         definition = self.registry.get(call.name)
         wait_for_completion = arguments.pop("wait_for_completion", False) if definition.supports_background else True
+        if definition.required_input == "camera":
+            self.frames[identifier] = asyncio.get_running_loop().create_future()
         try:
             request = CapabilityInvocation(
                 **self.scope(call).model_dump(),
@@ -107,7 +195,7 @@ class SessionCapabilityRPC:
                     contract_digest=definition.contract_digest,
                     binding_ref="device:" + self.plan.session_id,
                     capability_set_revision=self.registry.snapshot(
-                        self.plan.motion_capabilities, conversation_id=self.plan.session_id,
+                        self.names, conversation_id=self.plan.session_id,
                         policy_revision=self.plan.policy_revision)["revision"],
                 )
                 method = INVOKE_V2
@@ -123,6 +211,8 @@ class SessionCapabilityRPC:
                 background = True
             else:
                 result = await self._wait(call, peer, result)
+            if definition.required_input == "camera" and result.state == "completed":
+                return await self._attach_frame(call, result)
             return ChannelToolResult(
                 call.turn_id,
                 call.call_id,
@@ -139,6 +229,7 @@ class SessionCapabilityRPC:
                 pass  # Preserve the original failure; cancellation was not confirmed.
             raise
         finally:
+            self.frames.pop(identifier, None)
             if not background:
                 self.pending.pop(self.identifier(call), None)
 
@@ -192,6 +283,12 @@ class SessionCapabilityRPC:
 
     async def close(self):
         self.closed = True
+        if self._receives_frames:
+            self.room.unregister_byte_stream_handler(FRAME_TOPIC)
+        readers = list(self._frame_readers)
+        for task in readers:
+            task.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
         discovery, self._resource_hints = self._resource_hints, None
         if discovery is not None:
             discovery.cancel()

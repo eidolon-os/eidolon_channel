@@ -202,3 +202,96 @@ async def test_session_warmup_starts_device_discovery_without_waiting_for_it():
     assert pipeline._lifecycle_stages() == [stage]
     await pipeline._warmup_stages()
     assert started == [True]
+
+
+class StillDevice:
+    """A device that answers ``camera.capture`` and sends the frame as one byte stream."""
+
+    def __init__(self, *, frame=b"\xff\xd8still\xff\xd9", claimed=None, sends=True, sender="device"):
+        self.frame, self.claimed, self.sends, self.sender = frame, claimed or frame, sends, sender
+        self.handlers = {}
+        self.local_participant = SimpleNamespace(perform_rpc=self.perform_rpc)
+
+    def register_byte_stream_handler(self, topic, handler):
+        self.handlers[topic] = handler
+
+    def unregister_byte_stream_handler(self, topic):
+        self.handlers.pop(topic, None)
+
+    async def perform_rpc(self, **kwargs):
+        import hashlib
+        import json
+
+        body = json.loads(kwargs["payload"])
+        if self.sends:
+            self.handlers["eidolon.camera.frame.v1"](
+                Stream(self.frame, {"execution_id": body["execution_id"],
+                    "session_id": body["session_id"], "policy_revision": str(body["policy_revision"])}),
+                self.sender)
+            await asyncio.sleep(0)
+        return ExecutionSnapshot(execution_id=body["execution_id"], state="completed", sequence=2,
+            completion_basis="software_sequence", result={"media_type": "image/jpeg",
+                "bytes": len(self.claimed), "sha256": hashlib.sha256(self.claimed).hexdigest(),
+                "width": 768, "height": 432}).model_dump_json()
+
+
+class Stream:
+    def __init__(self, data, attributes):
+        self.data, self.closed = data, False
+        self.info = SimpleNamespace(attributes=attributes, size=len(data))
+
+    async def __aiter__(self):
+        yield self.data[:4]
+        yield self.data[4:]
+
+    async def aclose(self):
+        self.closed = True
+
+
+def still_plan(**changes):
+    return SessionOutputPlan(**{"session_id": "s", "policy_revision": 3,
+        "outputs": OutputSelection(), "device_capabilities": ("camera.capture",), **changes})
+
+
+async def capture(monkeypatch, device, plan=None):
+    async def peer(room):
+        return "device"
+    monkeypatch.setattr(module, "wait_for_runtime_participant_identity", peer)
+    monkeypatch.setattr(module, "FRAME_WAIT_S", 0.05)
+    runtime = module.SessionCapabilityRPC(device, plan or still_plan())
+    result = await runtime.execute(ChannelToolCall("t", "c", "camera.capture", {"purpose": "look"}))
+    assert not runtime.frames and not runtime.pending
+    return runtime, result
+
+
+@pytest.mark.asyncio
+async def test_a_still_comes_back_attached_and_out_of_the_content(monkeypatch):
+    device = StillDevice()
+    runtime, result = await capture(monkeypatch, device)
+    assert result.ok and result.attachment == device.frame
+    assert result.attachment_media_type == "image/jpeg"
+    assert "still" not in repr(result) and result.content["result"]["bytes"] == len(device.frame)
+    await runtime.close()
+    assert not device.handlers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device", [
+    StillDevice(sends=False),
+    StillDevice(claimed=b"another frame"),
+    StillDevice(sender="someone-else"),
+])
+async def test_a_missing_altered_or_foreign_frame_fails_the_capture(monkeypatch, device):
+    _, result = await capture(monkeypatch, device)
+    assert not result.ok and result.error_code == "transfer_failed" and not result.attachment
+
+
+@pytest.mark.asyncio
+async def test_a_still_needs_the_plan_to_list_it_not_the_motion_output(monkeypatch):
+    plan = SessionOutputPlan(session_id="s", policy_revision=3, outputs=OutputSelection(motion=True),
+        motion_profile="eidolon.motion.v2", motion_capabilities=("motion.nod",))
+    runtime = module.SessionCapabilityRPC(StillDevice(), plan)
+    assert not (await runtime.execute(ChannelToolCall("t", "c", "camera.capture", {}))).ok
+    assert module.SessionCapabilityRPC(StillDevice(), still_plan(
+        outputs=OutputSelection(motion=True), motion_profile="eidolon.motion.v2",
+        motion_capabilities=("motion.nod",))).names == ("motion.nod", "camera.capture")

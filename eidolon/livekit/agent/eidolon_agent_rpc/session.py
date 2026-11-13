@@ -783,6 +783,8 @@ class EidolonAgentSession:
                     error_message=result.error_message,
                     outcome_state=result.outcome_state,
                     reference_context=references,
+                    attachment=result.attachment,
+                    attachment_media_type=result.attachment_media_type,
                 )
             )
         )

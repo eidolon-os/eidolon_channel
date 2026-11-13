@@ -24,3 +24,6 @@ class ChannelToolResult:
     error_message: str = ""
     outcome_state: str = ""
     reference_context: dict[str, Any] = field(default_factory=dict)
+    # A binary the result is about (a camera still). Never logged or put in content.
+    attachment: bytes = field(default=b"", repr=False)
+    attachment_media_type: str = ""

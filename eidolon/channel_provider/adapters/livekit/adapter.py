@@ -430,6 +430,7 @@ class LiveKitChannelAdapter:
                 "expression_profile": FACE_PROFILE if spec.selected_outputs.expression else None,
                 "motion_profile": spec.motion_profile,
                 **({"motion_capabilities": list(spec.motion_capabilities)} if spec.motion_capabilities else {}),
+                **({"device_capabilities": list(spec.device_capabilities)} if spec.device_capabilities else {}),
             }
         if spec.output_policy is not None and spec.output_policy.inputs is not None:
             handle["input_revision"] = spec.output_policy.revision

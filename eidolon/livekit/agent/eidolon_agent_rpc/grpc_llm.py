@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 
 from eidolon_sdk.biz.chat_stream import DeltaRole
-from eidolon_sdk.biz.presentation import ResponseIntent, SessionOutputPlan
+from eidolon_sdk.biz.presentation import CAMERA_CAPTURE, ResponseIntent, SessionOutputPlan
 from eidolon_sdk.biz.presentation.motion import MotionReceipt, MotionRequest
 from eidolon_sdk.core.grpc import build_channel_credentials, resolve_token_source
 from livekit.agents import llm
@@ -188,7 +188,10 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._channel_tool_cancel_handler = None
         self._channel_tool_capabilities: frozenset[str] = frozenset()
         self._device_rpc = None
-        if output_plan is not None and output_plan.motion_profile in {"eidolon.motion.v1", "eidolon.motion.v2"}:
+        if output_plan is not None and (
+            output_plan.motion_profile in {"eidolon.motion.v1", "eidolon.motion.v2"}
+            or output_plan.device_capabilities
+        ):
             from ..session.capability_rpc import SessionCapabilityRPC
             self._device_rpc = SessionCapabilityRPC(presentation_room, output_plan)
             self.configure_channel_tools(None, None, frozenset())
@@ -251,8 +254,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         router = CapabilityRouter()
         if self._device_rpc is not None:
             device = self._device_rpc
-            router.register(device.plan.motion_capabilities, device.execute, device.cancel,
-                            location="device")
+            router.register(device.names, device.execute, device.cancel, location="device")
         if capabilities:
             router.register(capabilities, handler, cancel_handler, location="channel")
         self._capability_router = router
@@ -545,6 +547,9 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                             ),
                             **(
                                 {"selected_outputs": llm_v.output_plan.outputs.model_dump(),
+                                 # The plan lists a camera still only when the Owner allowed capture.
+                                 "selected_inputs": {"camera": "capture"}
+                                 if CAMERA_CAPTURE in llm_v.output_plan.device_capabilities else {},
                                  "capability_policy_revision": llm_v.output_plan.policy_revision}
                                 if llm_v.output_plan
                                 else {}

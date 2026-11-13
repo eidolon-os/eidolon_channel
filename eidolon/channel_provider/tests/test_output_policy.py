@@ -286,3 +286,31 @@ def test_rpc_actions_derive_from_exact_manifest_contracts():
     payload["device"]["manifest"]["actions"][0]["input_schema"] = {"type": "object", "properties": {}}
     selected = spec(ProvisionRequest.parse(encoded(payload)))
     assert "motion.stop" not in selected.motion_capabilities
+
+
+@pytest.mark.parametrize("camera, grants_camera, stills", [
+    (None, True, False),       # undecided: the Manifest decides, as before
+    ("off", False, False),
+    ("local", True, False),
+    ("capture", True, True),
+])
+def test_camera_use_follows_the_owner_one_level_at_a_time(camera, grants_camera, stills):
+    from eidolon_sdk.biz.capabilities import installed_registry
+    from eidolon_sdk.biz.presentation import InputSelection
+
+    still = installed_registry().get("camera.capture").action()
+    payload = provision_payload(output_policy=DeviceOutputPolicy(
+        revision=1, allowed=OutputSelection(speech=True),
+        inputs=InputSelection(microphone=True, camera=camera)).model_dump(mode="json"))
+    payload["device"]["manifest"]["media"] = [
+        *payload["device"]["manifest"].get("media", ()),
+        {"kind": "video", "direction": "publish", "codecs": []}]
+    payload["device"]["manifest"]["actions"] = [still]
+    selected = spec(ProvisionRequest.parse(encoded(payload)))
+    assert selected.video.publishes == grants_camera
+    assert selected.device_capabilities == (("camera.capture",) if stills else ())
+    assert selected.audio.publishes  # the microphone is a separate decision
+
+    # A device that declared a different contract gets no still, whatever the Owner said.
+    payload["device"]["manifest"]["actions"] = [{**still, "input_schema": {"type": "object"}}]
+    assert spec(ProvisionRequest.parse(encoded(payload))).device_capabilities == ()

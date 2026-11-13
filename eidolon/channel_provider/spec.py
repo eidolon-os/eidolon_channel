@@ -101,6 +101,7 @@ class ChannelSpec:
     smarthome_panel: bool = False
     motion_profile: str | None = None
     motion_capabilities: tuple[str, ...] = ()
+    device_capabilities: tuple[str, ...] = ()
 
     @property
     def needs_media(self) -> bool:
@@ -234,9 +235,14 @@ def derive_spec(
         # New Companion clients require an explicit Owner policy. Missing or
         # corrupt policy must never silently restore legacy speech defaults.
         raise ContractError("OUTPUT_POLICY_REQUIRED")
+    camera = None
     if device.output_policy is not None and device.output_policy.inputs is not None:
         if not device.output_policy.inputs.microphone:
             audio = MediaFlow.SUBSCRIBE if audio.subscribes else MediaFlow.NONE
+        # None: the Owner has not decided, so the camera follows the Manifest as before.
+        camera = device.output_policy.inputs.camera
+        if camera == "off":
+            video = MediaFlow.SUBSCRIBE if video.subscribes else MediaFlow.NONE
     serving = (
         ServingSpec(
             agent_name=agent_name,
@@ -267,6 +273,12 @@ def derive_spec(
             if selected and selected.motion and a.get("version") == 1
             and a in [d.action() for d in installed_registry().definitions()
                       if d.execution_location == "device" and d.required_output == "motion"]),
+        # A still leaves the device only when the Owner allowed capture, and only
+        # through the contract this Host has installed.
+        device_capabilities=tuple(a["name"] for a in manifest.get("actions", ())
+            if camera == "capture" and a.get("version") == 1
+            and a in [d.action() for d in installed_registry().definitions()
+                      if d.execution_location == "device" and d.required_input == "camera"]),
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
         or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,

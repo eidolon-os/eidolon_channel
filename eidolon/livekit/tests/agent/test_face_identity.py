@@ -305,6 +305,28 @@ async def test_candidates_of_another_owner_are_refused():
     assert outcome.error_code == "recognition_unavailable"
 
 
+@pytest.mark.asyncio
+async def test_vision_is_sent_no_credential_when_none_is_configured():
+    # A Host's Vision listens on loopback and takes no token; Data still does.
+    seen = []
+
+    def services(request):
+        seen.append(request)
+        if request.url.host == "data":
+            assert request.headers["authorization"] == "Bearer data-token"
+            return httpx.Response(200, json=candidates(ADA).model_dump(mode="json"))
+        return httpx.Response(200, json={"faces": [], "faces_dropped": 0})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(services))
+    client = FaceIdentityClient(http, data_url="http://data", data_token="data-token",
+                                vision_url="http://vision", vision_token="", timeout_s=2)
+    await client.match(IMAGE, await client.candidates("owner"), device_id="device",
+                       correlation_id="c")
+    await http.aclose()
+    assert [request.url.host for request in seen] == ["data", "vision"]
+    assert "authorization" not in seen[1].headers
+
+
 # -- when it is offered --------------------------------------------------------
 
 
@@ -333,7 +355,7 @@ def config(url="http://vision"):
         ((), "http://vision", "t", False),       # camera level is not "capture"
         (None, "http://vision", "t", False),     # the device offers no capabilities
         (("camera.capture",), "", "t", False),   # Vision is not configured
-        (("camera.capture",), "http://vision", "", False),
+        (("camera.capture",), "http://vision", "", True),  # a Host's Vision takes no token
     ],
 )
 @pytest.mark.asyncio

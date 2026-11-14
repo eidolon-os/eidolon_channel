@@ -81,8 +81,9 @@ voiceprint:
 
 face_identity:
   # "Who is in view" on request (vision.who): the Host's Vision service compares
-  # one still with the faces the Owner enrolled. Empty URL = off. The token is
-  # read from the named environment variable, never from this file.
+  # one still with the faces the Owner enrolled. Empty URL = off. A token is
+  # optional: when Vision requires one it is read from the named environment
+  # variable, never from this file.
   vision_url: ""
   vision_token_env: EIDOLON_VISION_SERVICE_TOKEN
   timeout_sec: 4.0

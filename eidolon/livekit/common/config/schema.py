@@ -334,8 +334,8 @@ class VoiceprintConfig:
 class FaceIdentityConfig:
     """Who is in view, on request: where the Host's Vision service compares faces.
 
-    Off while ``vision_url`` is empty. The service token stays in the
-    environment. Nothing here is a model or a threshold: Vision owns both.
+    Off while ``vision_url`` is empty. A service token is optional and stays in
+    the environment. Nothing here is a model or a threshold: Vision owns both.
     """
     vision_url: str = ""
     vision_token_env: str = "EIDOLON_VISION_SERVICE_TOKEN"

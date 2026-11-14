@@ -67,7 +67,11 @@ class FaceIdentityClient:
         self._data = data_url.rstrip("/")
         self._data_headers = {"Authorization": f"Bearer {data_token}"}
         self._vision = vision_url.rstrip("/")
-        self._vision_headers = {"Authorization": f"Bearer {vision_token}"}
+        # A Host's Vision is loopback-only and takes no token; one is sent only
+        # when the deployment configured Vision with it.
+        self._vision_headers = (
+            {"Authorization": f"Bearer {vision_token}"} if vision_token else {}
+        )
         self._timeout_s = timeout_s
 
     async def candidates(self, owner_id: str) -> FaceCandidates:
@@ -355,15 +359,17 @@ async def attach_face_identity(llm, cfg, *, owner_id, device_id, speaker_observe
     """Offer ``vision.who`` in this session when everything it needs is present.
 
     Needs: a device that may take a still on request (the Owner's camera level
-    is ``capture``), a configured Vision service, and its token. Returns the
-    HTTP client to close with the session, or None when the capability is off.
+    is ``capture``) and a Vision address, which a Host that runs face identity
+    is given by its operations config. A Vision token is optional: it is sent
+    when the named environment variable holds one. Returns the HTTP client to
+    close with the session, or None when the capability is off.
     """
     device = getattr(llm, "device_capability_rpc", None)
     face = cfg.face_identity
     token = os.environ.get(face.vision_token_env, "")
     if device is None or CAMERA_CAPTURE not in device.plan.device_capabilities:
         return None
-    if not face.vision_url or not token:
+    if not face.vision_url:
         log.info("vision.who off: Vision service is not configured")
         return None
     from eidolon_sdk.core.http import create_async_client

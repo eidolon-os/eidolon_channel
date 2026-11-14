@@ -47,11 +47,6 @@ DATA_TIMEOUT_S = 1.5
 
 _CAPTURE_REFUSED = {"camera_disabled", "UNAVAILABLE"}
 
-_MULTIPLE = (
-    " Several people are in view: faces say who is present, never which of them is speaking."
-)
-
-
 class RecognitionUnavailable(Exception):
     """Data or Vision could not be asked, or answered something unusable."""
 
@@ -162,66 +157,54 @@ def read_faces(evidence: dict, names: dict[str, str]) -> list[dict]:
 
 
 def decide(faces: list[dict], voice: Voice, *, enrolled: int) -> dict:
-    """The capability result: what was seen, what was heard, and what may be said."""
+    """The capability result: what was seen, what was heard, and what may be said.
+
+    The guidance tells the model what to say, not how the answer was reached:
+    someone recognized is answered by name, plainly. Hedging every answer
+    ("looks like", "sounds like", "not verification") was tried and is what a
+    user hears as evasive; the limits of recognition are enforced here by
+    withholding the name, not recited by the model.
+    """
     seen = [f for f in faces if f["status"] == "identified"]
     heard = voice.person_id is not None and bool(voice.name)
     address = None
 
-    if len(faces) == 1 and seen:
-        face = seen[0]
-        if not heard:
-            agreement, address = "face_only", face["name"]
-            guidance = (
-                f"The person in view looks like {face['name']}; the voice was not recognized. "
-                f"You may say they look like {face['name']} and use the name, but keep it "
-                "tentative: this is resemblance, not confirmation."
-            )
-        elif face["person_id"] == voice.person_id:
-            agreement, address = "consistent", face["name"]
-            guidance = (
-                f"Voice and face both point to {face['name']}. You may address them by name; "
-                "if asked how you know, say they sound and look like them."
-            )
-        else:
-            agreement = "conflict"
-            guidance = (
-                f"The voice sounds like {voice.name} but the person in view looks like "
-                f"{face['name']}. Do not address anyone by name. If asked, say exactly that "
-                "you hear one and see the other, and do not share either person's private details."
-            )
+    if len(faces) == 1 and seen and heard and seen[0]["person_id"] != voice.person_id:
+        agreement = "conflict"
+        guidance = (
+            f"You cannot tell who this is: the voice points to {voice.name} and the person in "
+            f"view to {seen[0]['name']}. Do not use a name. Say briefly that you are not sure "
+            "who it is; give the reason only if asked."
+        )
+    elif len(faces) == 1 and seen:
+        agreement, address = ("consistent" if heard else "face_only"), seen[0]["name"]
+        guidance = _named(address)
     elif heard:
         in_view = any(f["person_id"] == voice.person_id for f in seen)
         agreement, address = ("consistent" if in_view else "voice_only"), voice.name
-        guidance = (
-            f"Voice and face both point to {voice.name}; you may address them by name."
-            if in_view
-            else f"The voice sounds like {voice.name}; no face in view confirms it. "
-            "Address them as you would from the voice alone."
-        )
+        guidance = _named(address)
     else:
         agreement = "none"
         if not faces:
-            guidance = "Nobody is in view and the voice was not recognized. You cannot tell who this is."
+            guidance = "You cannot see anyone and did not recognize the voice. Say so briefly."
         elif enrolled == 0:
             guidance = (
-                "Someone is in view, but nobody has enabled face recognition yet, so you "
-                "cannot tell who it is by sight. The Owner can enable it for a person in "
-                "the phone app. Do not guess a name."
+                "You see someone but nobody has enabled face recognition yet, so you cannot "
+                "tell who it is. Say so briefly; the Owner can enable it in the phone app. "
+                "Do not guess a name."
             )
         elif seen:
-            guidance = "You cannot tell who is speaking. Do not address anyone by name."
+            guidance = "You cannot tell which of the people in view is speaking. Do not use a name."
         else:
             guidance = (
-                "You do not recognize the person in view: they may not be enrolled, or the "
-                "view may be too far or unclear. Do not guess a name; you may ask them to "
-                "come closer and face you."
+                "You do not recognize this person. Say so briefly and do not guess a name; "
+                "you may ask them to come a little closer and face you."
             )
 
     if len(faces) > 1:
-        guidance += _MULTIPLE
         present = [f["name"] for f in seen]
         if present:
-            guidance += " Recognized in view: " + ", ".join(present) + "."
+            guidance += " In view you recognize: " + ", ".join(present) + "."
 
     result = {
         "faces": len(faces),
@@ -236,6 +219,28 @@ def decide(faces: list[dict], voice: Voice, *, enrolled: int) -> dict:
     if address:
         result["address_as"] = address
     return result
+
+
+def _named(name: str) -> str:
+    return (
+        f"This is {name}. Answer plainly, by name, in one short sentence. Do not hedge and do "
+        "not mention voices, faces, resemblance or verification unless they ask how you know."
+    )
+
+
+def describe(evidence: dict) -> str:
+    """Each face as ``<quality>:<leading band>:<width>px`` for the log.
+
+    Enough to tell a face that was too small from one that scored weakly,
+    without a name, a person or a score.
+    """
+    parts = []
+    for face in evidence.get("faces", []):
+        comparisons = face.get("comparisons") or []
+        band = comparisons[0].get("band", "-") if comparisons else "-"
+        distinct = "" if face.get("distinct", True) else ":close"
+        parts.append(f"{face.get('quality', '?')}:{band}{distinct}:{face.get('face_px', 0)}px")
+    return ",".join(parts) or "-"
 
 
 class SessionFaceIdentity:
@@ -253,7 +258,7 @@ class SessionFaceIdentity:
 
     async def execute_channel_tool(self, call: ChannelToolCall) -> ChannelToolResult:
         started = time.monotonic()
-        outcome = {"status": "failed", "faces": 0, "enrolled": 0, "image_bytes": 0}
+        outcome = {"status": "failed", "faces": 0, "enrolled": 0, "image_bytes": 0, "seen": "-"}
         try:
             async with asyncio.timeout(BUDGET_S):
                 content = await self._who(call, outcome)
@@ -268,11 +273,13 @@ class SessionFaceIdentity:
             outcome["status"] = "timeout"
             return self._failed(call, "timeout")
         finally:
-            # Counts and timings only: no name, person, score or feature.
+            # Counts, sizes, bands and timings only: no name, person, score or feature.
             log.info(
-                "vision_who turn=%s call=%s status=%s faces=%d enrolled=%d image_bytes=%d ms=%d",
+                "vision_who turn=%s call=%s status=%s faces=%d enrolled=%d seen=%s "
+                "image_bytes=%d ms=%d",
                 call.turn_id, call.call_id, outcome["status"], outcome["faces"],
-                outcome["enrolled"], outcome["image_bytes"], int((time.monotonic() - started) * 1000),
+                outcome["enrolled"], outcome["seen"], outcome["image_bytes"],
+                int((time.monotonic() - started) * 1000),
             )
 
     async def _who(self, call, outcome) -> dict:
@@ -316,6 +323,7 @@ class SessionFaceIdentity:
         names = {person.person_id: person.display_name for person in candidates.persons}
         faces = read_faces(evidence, names)
         outcome["faces"], outcome["enrolled"] = len(faces), len(names)
+        outcome["seen"] = describe(evidence)
         return decide(faces, self._voice(), enrolled=len(names))
 
     @staticmethod

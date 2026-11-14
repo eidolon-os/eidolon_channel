@@ -18,6 +18,7 @@ from eidolon.livekit.agent.session.face_identity import (
     Voice,
     attach_face_identity,
     decide,
+    describe,
     read_faces,
     voice_of,
 )
@@ -96,14 +97,30 @@ def test_voice_and_face_disagreeing_withhold_the_name_and_say_so():
     content = result([face((ADA, "strong"))], Voice(BOB, "Bob"))
     assert content["agreement"] == "conflict" and "address_as" not in content
     assert "Bob" in content["guidance"] and "Ada" in content["guidance"]
-    assert "Do not address anyone by name" in content["guidance"]
+    assert "Do not use a name" in content["guidance"]
 
 
-def test_a_face_alone_allows_a_tentative_name():
+def test_a_face_alone_names_the_person_plainly():
     content = result([face((ADA, "strong"))])
     assert (content["agreement"], content["address_as"]) == ("face_only", "Ada")
-    assert "tentative" in content["guidance"]
     assert content["voice"] == {"status": "unidentified"}
+
+
+@pytest.mark.parametrize(
+    ("faces", "voice"),
+    [
+        ([face((ADA, "strong"))], Voice()),              # face alone
+        ([face((ADA, "strong"))], Voice(ADA, "Ada")),    # both
+        ([face((ADA, "none"))], Voice(ADA, "Ada")),      # voice alone
+    ],
+)
+def test_someone_recognized_is_answered_by_name_without_hedging(faces, voice):
+    guidance = result(faces, voice)["guidance"]
+    assert guidance.startswith("This is Ada. Answer plainly, by name")
+    assert "Do not hedge" in guidance
+    # The model is told not to narrate the evidence, and is not handed hedges to repeat.
+    for hedge in ("looks like", "sounds like", "tentative", "not confirmation", "resemblance, not"):
+        assert hedge not in guidance
 
 
 @pytest.mark.parametrize("faces", [[], [face((ADA, "weak"))], [face((ADA, "none"))]])
@@ -115,7 +132,7 @@ def test_a_voice_alone_is_used_as_before(faces):
 @pytest.mark.parametrize(
     ("faces", "enrolled", "hint"),
     [
-        ([], 2, "Nobody is in view"),
+        ([], 2, "cannot see anyone"),
         ([face()], 0, "nobody has enabled face recognition"),
         ([face((ADA, "none"))], 2, "do not recognize"),
         ([face((ADA, "weak"))], 2, "do not recognize"),
@@ -131,7 +148,7 @@ def test_several_faces_say_who_is_present_not_who_is_speaking():
     both = [face((ADA, "strong")), face((BOB, "strong"))]
     silent = result(both)
     assert silent["agreement"] == "none" and "address_as" not in silent
-    assert "Recognized in view: Ada, Bob." in silent["guidance"]
+    assert "In view you recognize: Ada, Bob." in silent["guidance"]
     heard = result(both, Voice(BOB, "Bob"))
     assert (heard["agreement"], heard["address_as"]) == ("consistent", "Bob")
     elsewhere = result([face((ADA, "strong")), face((ADA, "none"))], Voice(BOB, "Bob"))
@@ -142,6 +159,20 @@ def test_the_result_carries_names_only():
     content = result([face((ADA, "strong")), face((BOB, "weak"))], Voice(ADA, "Ada"))
     text = json.dumps(content)
     assert ADA not in text and BOB not in text and "score" not in text and "band" not in text
+
+
+def test_the_log_tells_a_small_face_from_a_weak_match_without_saying_who():
+    evidence = {"faces": [
+        {"quality": "ok", "face_px": 180, "distinct": True,
+         "comparisons": [{"ref": ADA, "score": 0.71, "band": "strong"}]},
+        {"quality": "ok", "face_px": 44, "distinct": False,
+         "comparisons": [{"ref": BOB, "score": 0.41, "band": "weak"}]},
+        {"quality": "too_small", "face_px": 21, "comparisons": []},
+    ]}
+    text = describe(evidence)
+    assert text == "ok:strong:180px,ok:weak:close:44px,too_small:-:21px"
+    assert ADA not in text and "0.71" not in text
+    assert describe({"faces": []}) == "-"
 
 
 # -- the turn's voice ----------------------------------------------------------
@@ -216,7 +247,8 @@ async def test_a_request_takes_one_still_and_compares_it_with_the_enrolled(caplo
     templates = json.loads(sent.split(b'name="templates"\r\n\r\n')[1].split(b"\r\n--")[0])
     assert [t["ref"] for t in templates] == [ADA, BOB] and templates[0]["vector"] == [0.25, 0.5, 0.75]
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("vision_who"))
-    assert "status=consistent faces=1 enrolled=2" in line and f"image_bytes={len(IMAGE)}" in line
+    assert "status=consistent faces=1 enrolled=2 seen=ok:strong:0px" in line
+    assert f"image_bytes={len(IMAGE)}" in line
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "Ada" not in logged and ADA not in logged and "0.25" not in logged
 

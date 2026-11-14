@@ -142,6 +142,43 @@ async def test_real_adapter_creates_single_explicit_team_dispatch():
     assert len(client.agent_dispatch.created) == 1  # Idempotent dispatch.
     await adapter.shutdown()
 
+
+async def test_a_team_scene_grants_no_session_capabilities():
+    """Role replies cannot call tools, so no device in a team may be told it can be called.
+
+    Each member's standing template still lists what that device admits for its
+    own conversations — here its volume and brightness settings and a motion
+    capability — and the scene's plans must carry none of it, on the input or
+    on any presenting endpoint.
+    """
+    import json
+    from .test_livekit_adapter import _adapter
+    from eidolon_sdk.biz.presentation import InputSelection, OutputSelection, SessionOutputPlan
+    from eidolon.livekit.common.team_dispatch import TeamDispatch
+    adapter, client = _adapter()
+    refs = [ProvisionRequest.parse(encoded(provision_payload(
+        device_id=named_device_instance_id(name)))).device_ref for name in ('input', 'a', 'b')]
+    opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(
+        scenario='ip_role_group', session_id='demo', input_device=refs[0], members=[
+            dict(companion_id=key, output_device=ref) for key, ref in zip(('a', 'b'), refs[1:])])))
+    template = SessionOutputPlan(
+        session_id='unused', policy_revision=1, inputs=InputSelection(microphone=True),
+        outputs=OutputSelection(speech=True), motion_capabilities=('motion.nod',),
+        device_capabilities=('audio.volume.set', 'audio.volume.adjust'),
+    ).model_dump(mode='json', exclude={'session_id'})
+    assert template['device_capabilities']  # the standing template does carry them
+    handles = tuple(dict(device=ref.device_instance_id, room='room-' + str(i), agent='eidolon',
+                         output_template=template) for i, ref in enumerate(refs))
+    sessions = {h['device']: 'native-' + str(i) for i, h in enumerate(handles)}
+    await adapter.open_team_session(opened, handles, sessions)
+    metadata = json.loads(client.agent_dispatch.created[0][2])
+    team = TeamDispatch.model_validate(metadata['team_dispatch'])
+    for plan in (team.input_plan, *(endpoint.plan for endpoint in team.endpoints)):
+        assert plan.device_capabilities == () and plan.motion_capabilities == ()
+        wire = plan.model_dump(mode='json')
+        assert 'device_capabilities' not in wire and 'motion_capabilities' not in wire
+    await adapter.shutdown()
+
 async def test_legacy_order_checkpoint_recovers_closure_only(tmp_path):
     from eidolon.channel_provider.contracts import BackendUnavailable
     backend = TeamAdapter()

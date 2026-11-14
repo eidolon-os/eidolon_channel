@@ -1850,12 +1850,18 @@ class LiveKitChannelAdapter:
                  for h in handles]
         if not plans[0].inputs.microphone or any(not p.outputs.speech for p in plans[1:]):
             raise InvalidTransition("team endpoint capabilities do not match scene")
+        # A team has no tools: role replies never call one (IP team design). So
+        # no plan in the scene grants a session capability, and a device refuses
+        # an invocation here instead of the scene relying on nobody sending one.
+        no_capabilities = {'motion_capabilities': (), 'device_capabilities': ()}
         source_plan = plans[0].model_copy(update={'outputs': OutputSelection(),
-                                                'expression_profile': None})
+                                                'expression_profile': None,
+                                                **no_capabilities})
         endpoints = tuple(PresentationEndpoint(room=h['room'], participant_identity=h['device'],
             plan=p.model_copy(update={'inputs': InputSelection(microphone=False),
                 'outputs': OutputSelection(speech=True, dialogue_text=p.outputs.dialogue_text),
-                'expression_profile': None})) for h, p in zip(targets, plans[1:]))
+                'expression_profile': None, **no_capabilities}))
+            for h, p in zip(targets, plans[1:]))
         team = TeamDispatch(opened=opened, input_plan=source_plan, endpoints=endpoints)
         handle = dict(source)
         handle['output_template'] = source_plan.model_dump(mode='json', exclude={'session_id'})

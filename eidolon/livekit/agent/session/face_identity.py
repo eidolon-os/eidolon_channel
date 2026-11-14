@@ -324,7 +324,7 @@ class SessionFaceIdentity:
             elif not candidates_task.cancelled():
                 candidates_task.exception()  # retrieved: an abandoned failure is not an error
 
-        names = {person.person_id: person.display_name for person in candidates.persons}
+        names = {person.person_id: person.address_as for person in candidates.persons}
         faces = read_faces(evidence, names)
         outcome["faces"], outcome["enrolled"] = len(faces), len(names)
         outcome["seen"] = describe(evidence)

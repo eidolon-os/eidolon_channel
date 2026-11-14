@@ -43,7 +43,7 @@ def candidates(*people):
                 "vector": [0.25, 0.5, 0.75]}
     return FaceCandidates(
         owner_id="owner", revision="d" * 64,
-        persons=[{"person_id": pid, "display_name": NAMES[pid],
+        persons=[{"person_id": pid, "address_as": NAMES[pid],
                   "templates": [{"revision": 1, "features": features}]} for pid in people])
 
 

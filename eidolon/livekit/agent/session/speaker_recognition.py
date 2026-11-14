@@ -352,8 +352,7 @@ class SpeakerRecognizer:
         named = {}
         if "addressing" in decisions:
             person = best[decisions["addressing"]][1]
-            named = dict(display_name=person.profile.preferred_name or person.display_name,
-                         profile=person.profile)
+            named = dict(display_name=person.address_as, profile=person.profile)
         return SpeakerIdentityObservation(
             **base, **named, status="compared", reason="compared",
             model_id=self.backend.identity[0], weights_hash=self.backend.identity[1],

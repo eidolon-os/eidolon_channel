@@ -107,7 +107,7 @@ def snapshot(people=1, profiles=1):
             SpeakerCandidate(
                 person_id=f"p{i}",
                 person_revision=1,
-                display_name=f"Person {i}",
+                address_as=f"Person {i}",
                 profile=PersonProfile(),
                 templates=[
                     VoiceTemplate(profile_id=f"v{i}-{j}", revision=1,
@@ -634,7 +634,8 @@ async def test_a_short_candidate_match_is_not_a_receipt():
 async def test_each_use_reads_its_own_threshold_and_names_only_when_addressed(llr, uses):
     port = client(llr=llr)
     person = port.candidates.return_value.persons[0]
-    person.profile = PersonProfile(preferred_name='Ada')
+    # Data chose the name; the profile is carried, never consulted for one.
+    person.address_as, person.profile = 'Ada', PersonProfile(preferred_name='unread')
     result = await recognizer(port).recognize(evidence(), owner_id='o', session_id='s', turn_id='t')
     decided = {use for use, value in result.decisions.model_dump().items() if value == 'p0'}
     assert result.status == 'compared' and decided == uses

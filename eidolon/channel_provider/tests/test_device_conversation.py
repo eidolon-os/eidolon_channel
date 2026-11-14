@@ -7,7 +7,8 @@ from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelect
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from eidolon.channel_provider.contracts import BackendUnavailable, ProvisionRequest, Forbidden, InvalidTransition
 from eidolon.channel_provider.ports import ServingAction, ServingRequest
-from .helpers import FakeAdapter, provision_payload, encoded
+from eidolon.channel_provider.access import Role
+from .helpers import ROLE_CREDENTIALS, FakeAdapter, bearer, provision_payload, encoded
 from .test_service import _service
 
 
@@ -129,13 +130,12 @@ async def test_http_preparing_status_close_and_auth(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
     from eidolon.channel_provider.http import create_app
     service, backend, selection = await prepare(tmp_path)
-    token = 'directed-test-token-at-least-32-bytes'
     path = '/v1/device-conversations'
     body = dict(owner_id='owner_1', selection=selection.model_dump(mode='json'))
-    async with TestClient(TestServer(create_app(service=service, bearer_token=token))) as client:
+    async with TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS))) as client:
         assert (await client.post(f'{path}/open', json=body)).status == 401
         assert not backend.sent
-        headers = dict(Authorization=f'Bearer {token}')
+        headers = bearer(Role.HUB)
         response = await client.post(f'{path}/open', json=body, headers=headers)
         assert response.status == 200, await response.text()
         assert (await response.json())['state'] == 'preparing'

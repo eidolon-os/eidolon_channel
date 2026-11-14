@@ -72,14 +72,18 @@ behavior:
 
 `eidolon-channel-provider` 是独立于 Agent worker 的正式控制面进程。它在默认
 `127.0.0.1:8767` 上为 Hub 提供认证的 LiveKit room/token provision 与 revoke，使用自己
-的 SQLite 幂等状态，不占用 eidolond 的 8090 端口。
+的 SQLite 幂等状态，不占用 eidolond 的 8090 端口。Hub、Admin 与本仓 worker 各持一把
+角色凭据，每条路由只服务声明给它的角色（`eidolon/channel_provider/access.py`）。
 
 ```bash
 export EIDOLON_STATE_ROOT="$PWD/.state"
 export EIDOLON_LIVEKIT_CLIENT_URL="wss://livekit.example.test"
 export LIVEKIT_API_KEY="..."
 export LIVEKIT_API_SECRET="..."
-export EIDOLON_CHANNEL_PROVIDER_TOKEN="至少 32 bytes、与 Hub 配置相同的随机 secret"
+# 每个角色一把、互不相同、至少 32 bytes；Hub/Admin 侧持有同名同值的自己那一把
+export EIDOLON_CHANNEL_PROVIDER_HUB_TOKEN="..."
+export EIDOLON_CHANNEL_PROVIDER_MANAGEMENT_TOKEN="..."
+export EIDOLON_CHANNEL_PROVIDER_WORKER_TOKEN="..."
 eidolon-channel-provider
 ```
 

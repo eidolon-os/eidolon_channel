@@ -101,7 +101,7 @@ def main() -> None:
         max_bytes=int(os.environ.get("EIDOLON_VOICE_PREVIEW_CACHE_BYTES", str(64 * 1024 * 1024))))
     app = create_app(
         service=service,
-        bearer_token=config.bearer_token,
+        credentials=config.credentials,
         traces=SessionTraceReader(config.traces.root),
         speaker_engine=speaker_engine,
         speech_voices=(voice_catalog, voice_previews),

@@ -46,7 +46,9 @@ from eidolon.channel_provider.http import create_app
 from eidolon.channel_provider.ports import ChannelGrant
 from eidolon.channel_provider.spec import derive_spec
 
-from .helpers import FakeAdapter, encoded, provision_payload
+from eidolon.channel_provider.access import Role
+
+from .helpers import ROLE_CREDENTIALS, FakeAdapter, bearer, encoded, provision_payload
 from .test_livekit_adapter import _adapter
 from .test_service import _service
 
@@ -384,10 +386,10 @@ async def test_the_http_routes_carry_the_owner_scope(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     service, _backend, device = await _provisioned(tmp_path)
-    token = "provider-token-" + "x" * 32
-    client = TestClient(TestServer(create_app(service=service, bearer_token=token)))
+    client = TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS)))
     await client.start_server()
-    auth = {"Authorization": f"Bearer {token}"}
+    # Admin reads and changes a device's settings for the Owner.
+    auth = bearer(Role.MANAGEMENT)
 
     response = await client.post(
         f"/v1/device-channels/{device}/capabilities/{AUDIO_VOLUME_SET}",

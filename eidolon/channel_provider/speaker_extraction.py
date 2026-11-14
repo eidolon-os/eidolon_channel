@@ -1,4 +1,7 @@
-"""Internal authenticated extraction surface; not enrollment or authorization."""
+"""Internal extraction surface; not enrollment or authorization.
+
+Who may call it is declared with every other route, in ``access.py``.
+"""
 
 import asyncio
 import base64
@@ -63,27 +66,23 @@ def speaker_recognition_status(engine):
     return {"state": "ready", "model_id": policy.model_id, "policy_version": policy.version}
 
 
-def register_speaker_extraction(app, *, engine, authorized, problem):
+def register_speaker_extraction(app, *, engine, problem):
     warm_task = None
 
 
     def error(code, status, retryable=False, quality=None):
-        category = "auth" if status == 401 else ("unavailable" if retryable else "invalid")
+        category = "unavailable" if retryable else "invalid"
         return problem(
             code=code, category=category, retryable=retryable, status=status, detail=code.lower(),
             audio_quality=quality.model_dump(exclude_none=True) if quality is not None else None,
         )
 
     async def readiness(request):
-        if not authorized(request):
-            return error("UNAUTHENTICATED", 401)
         state = engine.state if engine is not None else "disabled"
         result = SpeakerExtractionReadiness(state=state, extraction_ready=state == "ready")
         return web.json_response(result.model_dump(mode="json"))
 
     async def extract(request):
-        if not authorized(request):
-            return error("UNAUTHENTICATED", 401)
         if request.content_type != "application/json":
             return error("INVALID_CONTENT_TYPE", 415)
         if engine is None or engine.state != "ready":
@@ -124,8 +123,6 @@ def register_speaker_extraction(app, *, engine, authorized, problem):
             logging.getLogger(__name__).warning("Speaker extraction model unavailable")
 
     async def evaluate(request):
-        if not authorized(request):
-            return error("UNAUTHENTICATED", 401)
         if request.content_type != "application/json":
             return error("INVALID_CONTENT_TYPE", 415)
         try:
@@ -136,8 +133,6 @@ def register_speaker_extraction(app, *, engine, authorized, problem):
         return web.json_response(result.model_dump(mode="json"))
 
     async def compare(request):
-        if not authorized(request):
-            return error("UNAUTHENTICATED", 401)
         if request.content_type != "application/json":
             return error("INVALID_CONTENT_TYPE", 415)
         try:

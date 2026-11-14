@@ -69,11 +69,12 @@ def _from_file(path: Path) -> list[dict[str, Any]]:
 
 
 def _provider_get(base: str, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
-    token = os.environ.get("EIDOLON_CHANNEL_PROVIDER_TOKEN", "").strip()
+    # Session traces are a management read: the same role Admin presents.
+    token = os.environ.get("EIDOLON_CHANNEL_PROVIDER_MANAGEMENT_TOKEN", "").strip()
     if not token:
         raise SystemExit(
-            "EIDOLON_CHANNEL_PROVIDER_TOKEN is not set — the Provider's read "
-            "surface is authenticated, same as its write surface."
+            "EIDOLON_CHANNEL_PROVIDER_MANAGEMENT_TOKEN is not set — the Provider's "
+            "read surface is authenticated, same as its write surface."
         )
     query = f"?{urllib.parse.urlencode(params)}" if params else ""
     request = urllib.request.Request(

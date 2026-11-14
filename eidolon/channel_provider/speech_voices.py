@@ -101,15 +101,15 @@ def host_propagator() -> str:
 
 
 def register_speech_voices(app, *, catalog: HostVoiceCatalogService, previews: VoicePreviews,
-                           authorized, problem) -> None:
+                           problem) -> None:
     def error(code: str, status: int, detail: str, retryable: bool = False) -> web.Response:
-        category = {401: "auth", 409: "conflict", 422: "invalid", 429: "unavailable"}.get(status, "unavailable")
+        category = {409: "conflict", 422: "invalid", 429: "unavailable"}.get(status, "unavailable")
         return problem(code=code, category=category, retryable=retryable, status=status, detail=detail)
 
     def guarded(handler):
+        # Refusals a handler raises, said as problems. Who may call is not a
+        # handler's question; ``access.py`` answers it for every route.
         async def wrapped(request: web.Request) -> web.StreamResponse:
-            if not authorized(request):
-                return error("UNAUTHENTICATED", 401, "provider token required")
             try:
                 return await handler(request)
             except ValidationError as exc:

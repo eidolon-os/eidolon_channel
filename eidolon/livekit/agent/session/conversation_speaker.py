@@ -408,7 +408,7 @@ async def create_conversation_speaker(factory, cfg, room, *, publish_room=None):
         data_url=cfg.runtime_authority.data_api_url,
         data_token=os.environ.get(cfg.runtime_authority.data_service_token_env, ""),
         provider_url=f"http://127.0.0.1:{provider.http.port}",
-        provider_token=provider.bearer_token,
+        provider_token=provider.credentials.worker,
     )
     target = publish_room or room
     tasks = set()

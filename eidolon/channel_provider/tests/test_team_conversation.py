@@ -3,7 +3,8 @@ import pytest
 from eidolon_sdk.biz.control.coordination_stream import OpenScene
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from eidolon.channel_provider.contracts import ProvisionRequest
-from .helpers import provision_payload, encoded
+from eidolon.channel_provider.access import Role
+from .helpers import ROLE_CREDENTIALS, bearer, provision_payload, encoded
 from .test_device_conversation import Adapter, wait_for
 from .test_service import _service
 
@@ -73,12 +74,11 @@ async def test_three_device_team_http_start_status_close_and_shared_occupancy(tm
     opened = OpenScene.model_validate(dict(type='open', owner_id='owner_1', selection=dict(scenario='ip_role_group', session_id='team', input_device=refs[0],
             members=[dict(companion_id=key, output_device=ref) for key, ref in zip(('a', 'b'), refs[1:])],
             goal="讨论旅行", reply_budget=4)))
-    token = 'test-team-service-token-at-least-32-bytes'
-    async with TestClient(TestServer(create_app(service=service, bearer_token=token))) as client:
+    async with TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS))) as client:
         body = opened.model_dump(mode='json')
         assert (await client.post('/v1/role-groups/open', json=body)).status == 401
         assert not backend.sent
-        headers = {'Authorization': 'Bearer ' + token}
+        headers = bearer(Role.HUB)
         response = await client.post('/v1/role-groups/open', json=body, headers=headers)
         assert response.status == 200, await response.text()
         visit = service._team_conversations[('owner_1', 'team')]
@@ -299,12 +299,11 @@ async def test_unknown_team_close_and_status_satisfy_hub_response_contract(tmp_p
     from eidolon.channel_provider.http import create_app
     from eidolon_sdk.biz.control.coordination import RoleGroupStatus
     service, _, _ = _service(tmp_path, [1700000000000], TeamAdapter())
-    token = 'test-team-service-token-at-least-32-bytes'
-    async with TestClient(TestServer(create_app(service=service, bearer_token=token))) as client:
+    async with TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS))) as client:
         for action in ('close', 'status', 'close'):
             response = await client.post('/v1/role-groups/' + action,
                 json={'owner_id': 'owner_1', 'session_id': 'refused-before-dispatch'},
-                headers={'Authorization': 'Bearer ' + token})
+                headers=bearer(Role.HUB))
             assert response.status == 200
             result = RoleGroupStatus.model_validate(await response.json())
             assert result.state == 'closed'

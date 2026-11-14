@@ -1,8 +1,12 @@
-"""Authenticated aiohttp entry surface for Hub Channel Provider control."""
+"""The Channel Provider's aiohttp surface.
+
+No handler here authenticates: which caller may reach each route is declared
+once in ``access.py`` and enforced by the middleware it installs, last thing in
+:func:`create_app`.
+"""
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 from datetime import datetime
@@ -22,8 +26,9 @@ from .contracts import (
     ProvisionRequest,
     RevokeRequest,
     SessionRequest,
-    Unauthenticated,
 )
+from .access import RoleCredentials, protect
+from .problems import problem, problem_body
 from .service import ChannelProviderService
 from .session_traces import SessionTraceReader, TraceQuery
 from .shared_session_contract import CloseSharedSession, OpenSharedSession
@@ -55,7 +60,7 @@ class _HomeResult(_HomeScope):
 def create_app(
     *,
     service: ChannelProviderService,
-    bearer_token: str,
+    credentials: RoleCredentials,
     traces: SessionTraceReader | None = None,
     speaker_engine=None,
     voice_capture=None,
@@ -63,18 +68,13 @@ def create_app(
 ) -> web.Application:
     app = web.Application(client_max_size=256 * 1024)
     from .speaker_extraction import register_speaker_extraction, speaker_recognition_status
-    register_speaker_extraction(app, engine=speaker_engine,
-                               authorized=lambda request: _authorized(request, bearer_token),
-                               problem=_problem_body)
+    register_speaker_extraction(app, engine=speaker_engine, problem=problem_body)
     from .voice_capture import register_voice_capture
-    register_voice_capture(app, capture=voice_capture,
-                           authorized=lambda request: _authorized(request, bearer_token))
+    register_voice_capture(app, capture=voice_capture)
     if speech_voices is not None:
         from .speech_voices import register_speech_voices
         catalog, previews = speech_voices
-        register_speech_voices(app, catalog=catalog, previews=previews,
-                               authorized=lambda request: _authorized(request, bearer_token),
-                               problem=_problem_body)
+        register_speech_voices(app, catalog=catalog, previews=previews, problem=problem_body)
     trace_reader = traces if traces is not None else SessionTraceReader(None)
 
     async def health(_request: web.Request) -> web.Response:
@@ -95,8 +95,6 @@ def create_app(
         )
 
     async def provision(request: web.Request) -> web.Response:
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -105,11 +103,9 @@ def create_app(
         except ContractError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     async def revoke(request: web.Request) -> web.Response:
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -118,11 +114,9 @@ def create_app(
         except ContractError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     async def current(request: web.Request) -> web.Response:
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -131,11 +125,9 @@ def create_app(
         except ContractError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     async def session(request: web.Request, *, expected: str) -> web.Response:
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -149,7 +141,7 @@ def create_app(
         except ContractError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     async def start(_app: web.Application) -> None:
         # Channels outlive this process, so resuming what we were listening to
@@ -171,12 +163,10 @@ def create_app(
         granted, and the caller keeps only the rows it has standing for.
         """
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         try:
             return web.Response(text=await service.presence(), content_type="application/json")
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     async def session_traces(request: web.Request) -> web.Response:
         """What voice sessions this Host recorded. A GET, because it asks nothing.
@@ -187,8 +177,6 @@ def create_app(
         root means none were recorded, which is an empty list and not an error.
         """
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         try:
             query = _trace_query(request)
         except ValueError as exc:
@@ -205,13 +193,11 @@ def create_app(
     async def session_trace(request: web.Request) -> web.Response:
         """One session's records, in the order they were written."""
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         session_id = request.match_info.get("session_id", "")
         kinds = _trace_kinds(request)
         found = trace_reader.read(session_id, kinds=kinds)
         if found is None:
-            return _problem_body(
+            return problem_body(
                 code="NOT_FOUND",
                 category="not_found",
                 retryable=False,
@@ -223,8 +209,6 @@ def create_app(
     async def device_properties(request: web.Request) -> web.Response:
         """What a device reports about its own observable properties. A read."""
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         owner_id = request.query.get("owner_id", "")
         if not owner_id or len(owner_id) > 128:
             return _contract_problem("owner_id is required", status=422)
@@ -235,13 +219,11 @@ def create_app(
                 content_type="application/json",
             )
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     async def owner_capability(request: web.Request) -> web.Response:
         """One Owner-controllable capability on a device, outside any session."""
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -257,7 +239,7 @@ def create_app(
         except (ValidationError, ContractError) as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     app.router.add_get("/v1/device-channels/{device_id}/properties", device_properties)
     app.router.add_post(
@@ -289,8 +271,6 @@ def create_app(
             owner_id: str = Field(min_length=1, max_length=255)
             selection: DeviceConversationSelection
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -307,7 +287,7 @@ def create_app(
         except ValidationError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     app.router.add_post("/v1/device-conversations/{action:open|status|close}",
                         device_conversation)
@@ -321,8 +301,6 @@ def create_app(
             owner_id: str = Field(min_length=1, max_length=255)
             request: DeviceSessionRequest
 
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -332,7 +310,7 @@ def create_app(
         except ValidationError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     app.router.add_post("/v1/device-sessions/{action:open|status|close}",
                         device_session)
@@ -340,8 +318,6 @@ def create_app(
 
     async def team_conversation(request):
         from eidolon_sdk.biz.control.coordination_stream import OpenScene
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -358,13 +334,11 @@ def create_app(
         except ValidationError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
 
     app.router.add_post('/v1/role-groups/{action:open|status|close}', team_conversation)
 
     async def shared_session(request: web.Request) -> web.Response:
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -388,18 +362,16 @@ def create_app(
             # or transport credentials. Keep the exact refusal at its boundary.
             logger.warning("shared action=%s code=%s detail=%s",
                            request.match_info["action"], exc.code, str(exc))
-            return _problem(exc)
+            return problem(exc)
         except TimeoutError:
             logger.warning("shared action=%s admission deadline elapsed",
                            request.match_info["action"])
-            return _problem_body(code="PROVIDER_UNAVAILABLE", category="unavailable", retryable=True,
+            return problem_body(code="PROVIDER_UNAVAILABLE", category="unavailable", retryable=True,
                                  status=503, detail="shared admission deadline elapsed")
 
     app.router.add_post("/v1/shared-sessions/{action:open|close}", shared_session)
 
     async def smarthome(request: web.Request) -> web.Response:
-        if not _authorized(request, bearer_token):
-            return _problem(Unauthenticated("bearer credential was not accepted"))
         if request.content_type != "application/json":
             return _contract_problem("content-type must be application/json", status=415)
         try:
@@ -413,20 +385,17 @@ def create_app(
         except ValidationError as exc:
             return _contract_problem(str(exc), status=422)
         except DomainError as exc:
-            return _problem(exc)
+            return problem(exc)
         except Exception:
             logger.exception("smart home %s failed", request.match_info["action"])
-            return _problem(BackendUnavailable("smart home service unavailable"))
+            return problem(BackendUnavailable("smart home service unavailable"))
 
     app.router.add_post("/v1/smarthome/{action:result}", smarthome)
     app.on_cleanup.append(close)
+    # Last, once every route exists: it refuses to protect a route that no
+    # role was declared for.
+    protect(app, credentials)
     return app
-
-
-def _authorized(request: web.Request, expected: str) -> bool:
-    prefix = "Bearer "
-    value = request.headers.get("Authorization", "")
-    return value.startswith(prefix) and hmac.compare_digest(value[len(prefix) :], expected)
 
 
 def _trace_query(request: web.Request) -> TraceQuery:
@@ -483,43 +452,10 @@ def _json(value: dict[str, str], *, status: int = 200) -> web.Response:
 
 
 def _contract_problem(detail: str, *, status: int) -> web.Response:
-    return _problem_body(
+    return problem_body(
         code="INVALID_ARGUMENT",
         category="invalid",
         retryable=False,
         status=status,
         detail=detail,
-    )
-
-
-def _problem(error: DomainError) -> web.Response:
-    return _problem_body(
-        code=error.code,
-        category=error.category,
-        retryable=error.retryable,
-        status=error.http_status,
-        detail=str(error),
-    )
-
-
-def _problem_body(
-    *, code: str, category: str, retryable: bool, status: int, detail: str,
-    audio_quality: dict | None = None,
-) -> web.Response:
-    value = {
-        "type": f"https://problems.eidolon.live/channel/{code.lower()}",
-        "title": code.replace("_", " ").title(),
-        "status": status,
-        "detail": detail,
-        "code": code,
-        "category": category,
-        "retryable": retryable,
-        "authority": "eidolon-channel-provider",
-    }
-    if audio_quality is not None:
-        value["audio_quality"] = audio_quality
-    return web.Response(
-        text=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
-        status=status,
-        content_type="application/problem+json",
     )

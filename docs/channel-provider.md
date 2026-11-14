@@ -13,8 +13,12 @@
 
 秘密只能从进程环境或 `EIDOLON_CHANNEL_PROVIDER_ENV_FILE` 指向的 dotenv 进入：
 
-- `EIDOLON_CHANNEL_PROVIDER_TOKEN`：至少 32 bytes。Hub 侧把同一个随机值放在
-  `EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN`；Provider 不接受 query credential。
+- 三把角色凭据，各至少 32 bytes 且互不相同（相同则无法判断是哪个角色出示的，Provider
+  拒绝启动）：`EIDOLON_CHANNEL_PROVIDER_HUB_TOKEN`（Hub 持同名同值）、
+  `EIDOLON_CHANNEL_PROVIDER_MANAGEMENT_TOKEN`（Admin 持同名同值）、
+  `EIDOLON_CHANNEL_PROVIDER_WORKER_TOKEN`（本仓 worker，与 Provider 同读 `channel.env`）。
+  旧的单一 `EIDOLON_CHANNEL_PROVIDER_TOKEN` 不再读取，也不作回退。Provider 不接受
+  query credential。
 - `LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`：只供 Provider 管理 room 和签发 JWT，绝不进入
   Hub handoff。
 - `EIDOLON_STATE_ROOT`：Provider 数据库默认位于
@@ -47,10 +51,23 @@ onboarding、设备可达的 LiveKit `wss://` origin 或 ESP TLS 端到端可用
 
 ## 认证与授权边界
 
-除 `GET /health` 外每个接口都要求精确的 `Authorization: Bearer <token>`；写接口
-（`provision`、`revoke`、`current`、`sessions/open`、`sessions/close`）还要求
-`Content-Type: application/json`。只读接口（`device-channels/presence`、
-`session-traces`）是 GET，不带请求体。Provider 只信任通过 bearer 认证的调用方：
+除 `GET /health` 外每个接口都要求精确的 `Authorization: Bearer <token>`，并且这把凭据的
+角色必须是该路由声明服务的角色。路由到角色的映射只在
+`eidolon/channel_provider/access.py` 的 `ROUTE_ROLES` 声明一次，由同文件的中间件统一执行，
+handler 不做认证；未声明角色的路由会让 Provider 拒绝启动。未出示或出示未知凭据返回 401
+`UNAUTHENTICATED`，出示了其他角色的凭据返回 403 `FORBIDDEN`。
+
+| 角色 | 持有方 | 路由 |
+| --- | --- | --- |
+| `hub` | Hub | `device-channels/{current,provision,revoke}`、`device-channels/sessions/{open,close}`、`device-conversations/*`、`device-sessions/*`、`role-groups/*`、`shared-sessions/*` |
+| `management` | Admin（含手机经 Local API 到 Admin、Admin 的通用服务代理） | `device-channels/presence`、`device-channels/{device}/properties`、`device-channels/{device}/capabilities/{capability}`、`session-traces*`、`voiceprints/{readiness,evaluate-enrollment,compare}`、`voiceprints/captures*`、`speech-voices` 及其目录/试听/参考音检查/定制音色路由 |
+| `management` + `worker` | Admin 与 worker 都调用 | `voiceprints/extract`（Admin 注册样本、worker 对话识别）、`speech-voices/resolve`（Admin 展示、worker 在 dispatch 未带音色时解析） |
+| `worker` | 本仓 Channel worker | `smarthome/result` |
+
+Agent 不调用 Provider，也不持有任何 Provider 凭据。写接口（`provision`、`revoke`、
+`current`、`sessions/open`、`sessions/close`）还要求 `Content-Type: application/json`。
+只读接口（`device-channels/presence`、`session-traces`）是 GET，不带请求体。Provider
+只信任通过 bearer 认证的调用方：
 
 1. 设备 Enrollment 后进入 `pending-approval`，不携带 Owner 认领 secret，也不要求屏幕。
 2. 持有 `hub-admin` 权限的管理员在 Hub 管理面选择 `owner_id` 并人工批准；普通 Owner 或

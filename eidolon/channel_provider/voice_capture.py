@@ -124,9 +124,10 @@ class VoiceCapture:
             await self.cancel(session.owner, key)
 
 
-def register_voice_capture(app, *, capture, authorized):
+def register_voice_capture(app, *, capture):
+    # Callers are authenticated before this runs (``access.py``); the body's
+    # owner_id is what binds a capture to one Owner.
     async def handle(request):
-        if not authorized(request): raise web.HTTPUnauthorized()
         if capture is None: raise web.HTTPServiceUnavailable()
         try: owner = CaptureOwner.model_validate_json(await request.read()).owner_id
         except (ValidationError, ValueError): raise web.HTTPBadRequest() from None

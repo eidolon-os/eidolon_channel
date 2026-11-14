@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from eidolon.channel_provider.access import Role, protect
 from eidolon.channel_provider.voice_capture import VoiceCapture, Capture, register_voice_capture
+
+from .helpers import ROLE_CREDENTIALS, bearer
 
 
 async def test_owner_scope_and_single_consumption():
@@ -45,14 +48,14 @@ async def test_owner_concurrency_limit_does_not_create_room():
 async def test_route_requires_service_auth_and_binds_owner():
     capture = SimpleNamespace(start=AsyncMock(return_value={'capture_id':'id'}), close=AsyncMock())
     app = web.Application()
-    register_voice_capture(app, capture=capture,
-        authorized=lambda request: request.headers.get('Authorization') == 'Bearer test')
+    register_voice_capture(app, capture=capture)
+    protect(app, ROLE_CREDENTIALS)
     async with TestClient(TestServer(app)) as client:
         r = await client.post('/v1/voiceprints/captures', json={'owner_id':'owner'})
         assert r.status == 401
         capture.start.assert_not_awaited()
         r = await client.post('/v1/voiceprints/captures', json={'owner_id':'owner'},
-                              headers={'Authorization':'Bearer test'})
+                              headers=bearer(Role.MANAGEMENT))
         assert r.status == 200 and r.headers['Cache-Control'] == 'no-store'
         capture.start.assert_awaited_once_with('owner')
 

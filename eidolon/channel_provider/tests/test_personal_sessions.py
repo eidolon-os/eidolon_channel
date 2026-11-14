@@ -176,13 +176,14 @@ def test_v5_database_upgrades_with_personal_reservation_constraints(tmp_path):
 
 async def test_http_personal_lifecycle_errors_and_retry(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
+    from eidolon.channel_provider.access import Role
     from eidolon.channel_provider.http import create_app
-    from .helpers import device_ref
+    from .helpers import ROLE_CREDENTIALS, bearer, device_ref
 
     adapter = PersonalAdapter()
     service, store, _ = _service(tmp_path, [1_700_000_000_000], adapter)
-    client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
-    headers = {"Authorization": "Bearer " + "s" * 32}
+    client = TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS)))
+    headers = bearer(Role.HUB)
     opening = session_payload(operation=OPEN_SESSION)
     opening.update(
         conversation_id="http-private", personal_memory={"person_id": "p", "person_revision":1, "identity_epoch": 0}

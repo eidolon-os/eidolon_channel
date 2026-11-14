@@ -5,9 +5,25 @@ from typing import Any
 
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
+from eidolon.channel_provider.access import Role, RoleCredentials
 from eidolon.channel_provider.adapters.livekit import LiveKitConfig
 from eidolon.channel_provider.ports import ChannelGrant, ServingRequest, ServingRequestSink
 from eidolon.channel_provider.spec import ChannelSpec
+
+
+#: One distinct credential per caller, so a test that sends the wrong role's
+#: is refused exactly as it would be on a Host.
+ROLE_CREDENTIALS = RoleCredentials(
+    hub="hub-role-test-credential-" + "h" * 16,
+    management="management-role-test-credential-" + "m" * 16,
+    worker="worker-role-test-credential-" + "w" * 16,
+)
+
+
+def bearer(role: Role) -> dict[str, str]:
+    """The header the caller in ``role`` sends."""
+
+    return {"Authorization": "Bearer " + getattr(ROLE_CREDENTIALS, role.value)}
 
 
 def livekit_config(**overrides: Any) -> LiveKitConfig:

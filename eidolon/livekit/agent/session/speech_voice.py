@@ -42,10 +42,11 @@ class SessionVoice:
 
 
 def _provider_endpoint() -> tuple[str, str]:
+    """Where channel-provider is, and the worker's own credential for it."""
     from eidolon.channel_provider.config import load_provider_config
 
     provider = load_provider_config()
-    return f"http://127.0.0.1:{provider.http.port}", provider.bearer_token
+    return f"http://127.0.0.1:{provider.http.port}", provider.credentials.worker
 
 
 async def resolve_session_voice(

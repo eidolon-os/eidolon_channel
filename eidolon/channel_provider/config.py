@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import yaml
 from dotenv import load_dotenv
 
+from .access import RoleCredentials
 from .adapters.livekit import LiveKitConfig
 from eidolon.livekit.common.config import load_voiceprint_config
 
@@ -54,7 +55,9 @@ class ProviderConfig:
     http: HttpConfig
     storage: StorageConfig
     livekit: LiveKitConfig
-    bearer_token: str
+    # One per caller: Hub, Admin and this repository's worker each present
+    # their own, and each route serves only the roles declared for it.
+    credentials: RoleCredentials
     traces: TracesConfig = TracesConfig()
     smarthome_hub_url: str | None = None
     smarthome_hub_token: str | None = None
@@ -264,7 +267,7 @@ def load_provider_config() -> ProviderConfig:
             sample_rate=sample_rate,
             channels=channels,
         ),
-        bearer_token=_required_secret("EIDOLON_CHANNEL_PROVIDER_TOKEN", minimum=32),
+        credentials=RoleCredentials.from_environment(),
         smarthome_hub_url=(
             _url(smarthome["hub_url"], name="smarthome.hub_url", client=False)
             if "hub_url" in smarthome else None

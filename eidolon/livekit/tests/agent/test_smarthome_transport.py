@@ -12,9 +12,11 @@ from eidolon.livekit.agent import smarthome
 @pytest.mark.asyncio
 async def test_transcript_keeps_session_scope_and_forwards_clarification(monkeypatch):
     requests = []
+    presented = {}
     def serve(request):
         body = json.loads(request.content)
         requests.append((request.url.path, body))
+        presented[request.url.path] = request.headers.get('Authorization')
         if request.url.path.endswith('/command'):
             return httpx.Response(200, json={
                 'turn_id': body['turn_id'], 'utterance': body['utterance'],
@@ -23,7 +25,9 @@ async def test_transcript_keeps_session_scope_and_forwards_clarification(monkeyp
         return httpx.Response(200, json={})
     original = httpx.AsyncClient
     monkeypatch.setenv('EIDOLON_AGENT_ADMIN_API_TOKEN', 'test-token')
-    monkeypatch.setenv('EIDOLON_CHANNEL_PROVIDER_TOKEN', 'test-token')
+    monkeypatch.setenv('EIDOLON_CHANNEL_PROVIDER_WORKER_TOKEN', 'worker-role-token')
+    # Present on every Channel Provider host; the worker must not present it.
+    monkeypatch.setenv('EIDOLON_CHANNEL_PROVIDER_HUB_TOKEN', 'hub-role-token')
     monkeypatch.setattr(smarthome.httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(serve), **kw))
     scope = HomeSessionScope(owner_id='o', companion_id='c', device_ref='d', session_id='voice-1')
     await smarthome.handle_transcript(scope, '调一下')
@@ -31,6 +35,8 @@ async def test_transcript_keeps_session_scope_and_forwards_clarification(monkeyp
     assert requests[0][1]['session_id'] == 'voice-1'
     assert requests[0][1]['companion_id'] == 'c'
     assert requests[1][1]['result']['outcome'] == 'clarification'
+    # The panel result goes to channel-provider with the worker's role only.
+    assert presented['/v1/smarthome/result'] == 'Bearer worker-role-token'
     assert requests[2] == ('/api/admin/smarthome/session/end', {
         'owner_id': 'o', 'companion_id': 'c', 'device_ref': 'd', 'session_id': 'voice-1',
     })
@@ -39,7 +45,7 @@ async def test_transcript_keeps_session_scope_and_forwards_clarification(monkeyp
 @pytest.mark.asyncio
 async def test_turn_stage_logs_correlate_agent_and_delivery(monkeypatch,caplog):
     monkeypatch.setenv('EIDOLON_AGENT_ADMIN_API_TOKEN','test-token')
-    monkeypatch.setenv('EIDOLON_CHANNEL_PROVIDER_TOKEN','test-token')
+    monkeypatch.setenv('EIDOLON_CHANNEL_PROVIDER_WORKER_TOKEN','worker-role-token')
     def serve(request):
         body=json.loads(request.content)
         if request.url.path.endswith('/command'):

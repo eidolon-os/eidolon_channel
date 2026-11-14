@@ -355,12 +355,15 @@ async def test_existing_provider_http_extraction_is_reused():
     import httpx
     from aiohttp.test_utils import TestServer
     from eidolon.channel_provider.http import create_app
+    from eidolon.channel_provider.tests.helpers import ROLE_CREDENTIALS
     from eidolon.channel_provider.tests.test_speaker_extraction_http import Engine, Service
     from eidolon.livekit.agent.session.speaker_recognition import SpeakerRecognitionClient
 
     engine = Engine()
     engine.ready.set()
-    server = TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+    server = TestServer(
+        create_app(service=Service(), credentials=ROLE_CREDENTIALS, speaker_engine=engine)
+    )
     await server.start_server()
     try:
         async with httpx.AsyncClient(trust_env=False) as http:
@@ -369,7 +372,8 @@ async def test_existing_provider_http_extraction_is_reused():
                 data_url="http://unused",
                 data_token="test",
                 provider_url=str(server.make_url("")).rstrip("/"),
-                provider_token="test",
+                # The worker's own role, as on a Host.
+                provider_token=ROLE_CREDENTIALS.worker,
             )
             sample = await port.extract(evidence().pcm, min_speech_ms=1500)
             assert type(sample) is ExtractedSample and sample.vector == [1.0, 0.0]

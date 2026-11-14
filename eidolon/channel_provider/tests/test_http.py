@@ -15,12 +15,16 @@ from eidolon.channel_provider.contracts import (
     StaleGeneration,
     Unauthenticated,
 )
-from eidolon.channel_provider.http import _problem, create_app
+from eidolon.channel_provider.access import Role
+from eidolon.channel_provider.http import create_app
+from eidolon.channel_provider.problems import problem
 from eidolon.channel_provider.selection import AdapterRegistry
 from eidolon.channel_provider.service import ChannelProviderService
 from eidolon.channel_provider.store import ChannelProviderStore
 
 from .helpers import (
+    ROLE_CREDENTIALS,
+    bearer,
     FakeAdapter,
     provision_payload,
     current_payload,
@@ -71,7 +75,7 @@ _NOBODY = named_device_instance_id("nobody")
 def test_domain_problems_keep_distinct_transport_mapping(
     error, status, code, category, retryable
 ) -> None:
-    response = _problem(error)
+    response = problem(error)
     body = json.loads(response.text)
 
     assert response.status == body["status"] == status
@@ -91,7 +95,7 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
         now_ms=lambda: 1_700_000_000_000,
     )
     service.initialize()
-    client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
+    client = TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS)))
     try:
         await client.start_server()
         health = await client.get("/health")
@@ -109,7 +113,7 @@ async def test_http_surface_auth_contract_health_and_revoke(tmp_path) -> None:
         assert unauthorized.content_type == "application/problem+json"
         assert (await unauthorized.json())["code"] == "UNAUTHENTICATED"
 
-        headers = {"Authorization": f"Bearer {'s' * 32}"}
+        headers = bearer(Role.HUB)
         provisioned = await client.post(
             "/v1/device-channels/provision",
             json=provision_payload(),
@@ -233,13 +237,13 @@ async def test_http_preserves_domain_error_codes_from_the_adapter(tmp_path) -> N
             now_ms=lambda: 1_700_000_000_000,
         )
         service.initialize()
-        client = TestClient(TestServer(create_app(service=service, bearer_token="s" * 32)))
+        client = TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS)))
         await client.start_server()
         try:
             response = await client.post(
                 "/v1/device-channels/provision",
                 json=provision_payload(),
-                headers={"Authorization": f"Bearer {'s' * 32}"},
+                headers=bearer(Role.HUB),
             )
             return response.status, await response.json()
         finally:

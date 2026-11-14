@@ -16,6 +16,7 @@ from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.voice.room_io import AudioInputOptions, RoomOptions
 
 from eidolon.channel_provider.http import create_app
+from eidolon.channel_provider.tests.helpers import ROLE_CREDENTIALS
 from eidolon.channel_provider.tests.test_speaker_extraction_http import Engine, Service
 from eidolon.livekit.agent.full_duplex.lifecycle import FullDuplexSessionLifecycle
 from eidolon.livekit.agent.observability import TurnTimeline
@@ -67,7 +68,9 @@ async def test_observation_outcome_preserves_session_input_commit_and_playout(mo
         return sample
 
     engine.extract = extract
-    server = TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+    server = TestServer(
+        create_app(service=Service(), credentials=ROLE_CREDENTIALS, speaker_engine=engine)
+    )
     await server.start_server()
     room, recognizer = Room(), MappedRecognizer()
     room.local_participant.sid = "agent-sid"
@@ -90,7 +93,7 @@ async def test_observation_outcome_preserves_session_input_commit_and_playout(mo
     pipeline._warmup_stages = AsyncMock()
     pipeline.session_mark = MagicMock()
     async with httpx.AsyncClient(trust_env=False) as http:
-        client = SpeakerExtractionClient(http, str(server.make_url("")), token="test")
+        client = SpeakerExtractionClient(http, str(server.make_url("")), token=ROLE_CREDENTIALS.worker)
         observation = SpeakerTurnObservation(extract=client.extract, record=records.append,
             timeout_sec=0.1 if outcome == "timeout" else 8,
             lifetime_sec=2 if outcome == "expired" else None)

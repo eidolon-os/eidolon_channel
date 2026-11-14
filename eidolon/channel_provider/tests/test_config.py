@@ -4,6 +4,7 @@ import textwrap
 
 import pytest
 
+from eidolon.channel_provider.access import CREDENTIAL_ENV, Role
 from eidolon.channel_provider.config import load_provider_config
 
 
@@ -14,7 +15,8 @@ def _environment(monkeypatch, tmp_path, yaml_text: str) -> None:
     environment.write_text("", encoding="utf-8")
     monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_SETTINGS_YAML", str(settings))
     monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_ENV_FILE", str(environment))
-    monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_TOKEN", "provider-token-" + "x" * 32)
+    for role in Role:
+        monkeypatch.setenv(CREDENTIAL_ENV[role], f"{role}-credential-" + "x" * 32)
     monkeypatch.setenv("LIVEKIT_API_KEY", "api-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "api-secret")
     monkeypatch.setenv("STATE_ROOT_FOR_TEST", str(tmp_path / "state"))
@@ -42,7 +44,9 @@ def test_config_expands_env_and_keeps_secrets_out_of_yaml(monkeypatch, tmp_path)
     assert config.http.port == 8767
     assert config.storage.path == tmp_path / "state" / "provider.sqlite3"
     assert config.livekit.client_url == "wss://livekit.example.test"
-    assert config.bearer_token.startswith("provider-token-")
+    assert config.credentials.hub.startswith("hub-credential-")
+    assert config.credentials.management.startswith("management-credential-")
+    assert config.credentials.worker.startswith("worker-credential-")
 
 
 @pytest.mark.parametrize(
@@ -179,4 +183,30 @@ def test_config_refuses_an_api_url_that_defers_its_host(monkeypatch, tmp_path) -
     )
 
     with pytest.raises(ValueError, match="livekit.api_url"):
+        load_provider_config()
+
+
+def test_config_needs_every_role_and_no_longer_reads_the_shared_token(monkeypatch, tmp_path) -> None:
+    """A Provider short of one role's credential refuses to start, naming it.
+
+    The single token every caller used to share is not a fallback: a Host still
+    holding only that is a Host whose convergence did not run, and serving it
+    would hand Hub's routes to whoever held the old copy.
+    """
+
+    _environment(
+        monkeypatch,
+        tmp_path,
+        """
+        storage:
+          path: $STATE_ROOT_FOR_TEST/provider.sqlite3
+        livekit:
+          api_url: http://127.0.0.1:7880
+          client_url: wss://livekit.example.test
+        """,
+    )
+    monkeypatch.delenv(CREDENTIAL_ENV[Role.WORKER])
+    monkeypatch.setenv("EIDOLON_CHANNEL_PROVIDER_TOKEN", "the-old-shared-token-" + "x" * 32)
+
+    with pytest.raises(ValueError, match=CREDENTIAL_ENV[Role.WORKER]):
         load_provider_config()

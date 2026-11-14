@@ -193,7 +193,12 @@ async def handle_transcript(scope: HomeSessionScope, transcript: str, *, client:
     logger.info("smart-home turn=%s stage=handler_started", turn_id)
     utterance = " ".join(transcript.split())[:200]
     agent_token = os.environ.get("EIDOLON_AGENT_ADMIN_API_TOKEN", "")
-    panel_token = os.environ.get("EIDOLON_CHANNEL_PROVIDER_TOKEN", "")
+    # The worker's role at channel-provider, which serves it the panel result
+    # and nothing that provisions or revokes a channel. Imported here, like
+    # the worker's other Provider calls, to keep it off the job's import path.
+    from eidolon.channel_provider.access import CREDENTIAL_ENV, Role
+
+    panel_token = os.environ.get(CREDENTIAL_ENV[Role.WORKER], "")
     if not agent_token or not panel_token:
         raise RuntimeError("smart-home service credentials are missing")
 

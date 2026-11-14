@@ -1,5 +1,6 @@
 # Dedicated Hub Channel Provider process. Secrets are environment-only:
-# LIVEKIT_API_KEY, LIVEKIT_API_SECRET, EIDOLON_CHANNEL_PROVIDER_TOKEN.
+# LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and one credential per caller role —
+# EIDOLON_CHANNEL_PROVIDER_{HUB,MANAGEMENT,WORKER}_TOKEN (see access.py).
 http:
   host: 127.0.0.1
   port: 8767

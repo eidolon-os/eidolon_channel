@@ -3,8 +3,13 @@ import base64
 
 from aiohttp.test_utils import TestClient, TestServer
 
+# Admin is the caller of every route here except the conversation's own
+# extraction, which the worker makes with its role.
+from eidolon.channel_provider.access import Role
 from eidolon.channel_provider.http import create_app
 from eidolon_sdk.biz.voiceprint import CalibrationCrop, EnrollmentSample, ExtractedSample
+
+from .helpers import ROLE_CREDENTIALS, bearer
 
 
 class Service:
@@ -56,9 +61,9 @@ async def test_registration_samples_carry_windows_and_probes_do_not():
     engine = Engine()
     engine.ready.set()
     client = TestClient(
-        TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+        TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS, speaker_engine=engine))
     )
-    headers = {"Authorization": "Bearer test"}
+    headers = bearer(Role.MANAGEMENT)
     pcm = base64.b64encode(b"\x01\x00" * 32000).decode()
     try:
         await client.start_server()
@@ -81,9 +86,9 @@ async def test_registration_samples_carry_windows_and_probes_do_not():
 async def test_warmup_does_not_block_provider_health_and_does_not_enable_admission():
     engine = Engine()
     client = TestClient(
-        TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+        TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS, speaker_engine=engine))
     )
-    headers = {"Authorization": "Bearer test"}
+    headers = bearer(Role.MANAGEMENT)
     try:
         await client.start_server()
         assert (await client.get("/health")).status == 200
@@ -118,11 +123,11 @@ async def test_warmup_does_not_block_provider_health_and_does_not_enable_admissi
 
 
 async def test_no_selected_engine_is_unavailable_without_affecting_core_health():
-    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    client = TestClient(TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS)))
     try:
         await client.start_server()
         response = await client.get(
-            "/v1/voiceprints/readiness", headers={"Authorization": "Bearer test"}
+            "/v1/voiceprints/readiness", headers=bearer(Role.MANAGEMENT)
         )
         assert (await response.json())["state"] == "disabled"
         assert (await client.get("/health")).status == 200
@@ -139,12 +144,12 @@ async def test_enrollment_evaluation_is_authenticated_and_never_certifies_identi
         speech_ms=4000,
     )
     body = dict(samples={str(i): sample for i in range(3)}, trial=sample, recording_sha256="b" * 64)
-    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    client = TestClient(TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS)))
     try:
         await client.start_server()
         path = "/v1/voiceprints/evaluate-enrollment"
         assert (await client.post(path, json=body)).status == 401
-        headers = {"Authorization": "Bearer test"}
+        headers = bearer(Role.MANAGEMENT)
         response = await client.post(path, headers=headers, json=body)
         assert response.status == 200
         result = await response.json()
@@ -166,12 +171,12 @@ async def test_comparison_requires_auth_and_has_no_identity_or_audio_output():
         speech_ms=3000,
     )
     body = dict(probe=sample, templates=[dict(profile_id="p", revision=1, sample=sample)])
-    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    client = TestClient(TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS)))
     try:
         await client.start_server()
         path = "/v1/voiceprints/compare"
         assert (await client.post(path, json=body)).status == 401
-        headers = {"Authorization": "Bearer test"}
+        headers = bearer(Role.MANAGEMENT)
         response = await client.post(path, headers=headers, json=body)
         assert response.status == 200
         result = await response.json()
@@ -187,7 +192,7 @@ async def test_comparison_requires_auth_and_has_no_identity_or_audio_output():
 
 
 async def test_retired_policy_endpoint_is_absent():
-    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    client = TestClient(TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS)))
     try:
         await client.start_server()
         assert (await client.post("/v1/voiceprints/approve-policy", json={})).status == 404
@@ -205,12 +210,12 @@ async def test_quality_rejection_roundtrips_from_provider_to_conversation(tmp_pa
     extractor, model = make_extractor(tmp_path)
     engine = SpeakerInferenceEngine(extractor)
     await engine.start()
-    server = TestServer(create_app(service=Service(), bearer_token='test', speaker_engine=engine))
+    server = TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS, speaker_engine=engine))
     await server.start_server()
     try:
         async with httpx.AsyncClient(trust_env=False) as http:
             port = SpeakerRecognitionClient(http, data_url='http://unused', data_token='test',
-                provider_url=str(server.make_url('')).rstrip('/'), provider_token='test')
+                provider_url=str(server.make_url('')).rstrip('/'), provider_token=ROLE_CREDENTIALS.worker)
             authority = candidates()
             port.candidates = authority.candidates
             pcm = b'\x01\x00' * 8000 + b'\x00\x00' * 24000
@@ -271,7 +276,7 @@ async def test_health_publishes_recognition_state_without_failing_the_provider(t
     engine = Engine()
     engine.model_dir = tmp_path
     client = TestClient(
-        TestServer(create_app(service=Service(), bearer_token="test", speaker_engine=engine))
+        TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS, speaker_engine=engine))
     )
     policy_file = tmp_path / "identity-policy.json"
 
@@ -320,7 +325,7 @@ async def test_health_publishes_recognition_state_without_failing_the_provider(t
 
 
 async def test_health_reports_recognition_disabled_when_capability_not_selected():
-    client = TestClient(TestServer(create_app(service=Service(), bearer_token="test")))
+    client = TestClient(TestServer(create_app(service=Service(), credentials=ROLE_CREDENTIALS)))
     try:
         await client.start_server()
         body = await (await client.get("/health")).json()

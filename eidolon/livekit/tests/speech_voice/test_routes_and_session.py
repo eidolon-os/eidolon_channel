@@ -15,7 +15,9 @@ from eidolon_sdk.biz.speech_voice import (
 )
 from eidolon_sdk.biz.system_data import SystemDataNotFound
 
-from eidolon.channel_provider.http import _problem_body
+from eidolon.channel_provider.access import Role, protect
+from eidolon.channel_provider.problems import problem_body
+from eidolon.channel_provider.tests.helpers import ROLE_CREDENTIALS, bearer
 from eidolon.channel_provider.speech_voices import register_speech_voices
 from eidolon.livekit.agent.session import speech_voice as session_voice
 from eidolon.livekit.common.config.schema import EffectiveAgentConfig, ProvidersConfig
@@ -26,7 +28,8 @@ from eidolon.speech_voice.preview import VoicePreviews
 
 from .fakes import FakeConfig, adapter_class, write_catalog
 
-AUTH = {"Authorization": "Bearer t"}
+# Admin shows and makes voices for the Owner.
+AUTH = bearer(Role.MANAGEMENT)
 
 
 @pytest.fixture
@@ -41,9 +44,8 @@ async def client(tmp_path, monkeypatch):
 
     previews = VoicePreviews(tmp_path / "p", synthesize=synthesize, propagator="eidolon-host-test")
     app = web.Application()
-    register_speech_voices(app, catalog=catalog, previews=previews,
-                           authorized=lambda r: r.headers.get("Authorization") == "Bearer t",
-                           problem=_problem_body)
+    register_speech_voices(app, catalog=catalog, previews=previews, problem=problem_body)
+    protect(app, ROLE_CREDENTIALS)
     async with TestClient(TestServer(app)) as c:
         await asyncio.sleep(0.05)  # the start-up refresh
         yield c
@@ -232,3 +234,14 @@ async def test_channel_provider_resolves_the_voice_with_the_same_function(tmp_pa
     assert missing["reason"] == resolve(None, catalog.catalog(), catalog.overlay).reason
     # Slow or failing: nothing is dispatched, and the job resolves it as before.
     assert await SessionVoiceResolver(_Authority(delay=2), catalog, deadline_s=0.05)("c") is None
+
+
+def test_a_session_resolves_its_voice_with_the_workers_own_credential(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from eidolon.channel_provider import config as provider_config
+
+    monkeypatch.setattr(provider_config, "load_provider_config", lambda: SimpleNamespace(
+        http=SimpleNamespace(port=8767), credentials=ROLE_CREDENTIALS))
+    assert session_voice._provider_endpoint() == (
+        "http://127.0.0.1:8767", ROLE_CREDENTIALS.worker)

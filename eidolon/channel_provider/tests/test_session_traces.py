@@ -21,10 +21,12 @@ from eidolon.channel_provider.service import ChannelProviderService
 from eidolon.channel_provider.session_traces import SessionTraceReader, TraceQuery
 from eidolon.channel_provider.store import ChannelProviderStore
 
-from .helpers import FakeAdapter
+from eidolon.channel_provider.access import Role
 
-_TOKEN = "s" * 32
-_HEADERS = {"Authorization": f"Bearer {_TOKEN}"}
+from .helpers import ROLE_CREDENTIALS, FakeAdapter, bearer
+
+# Admin reads traces for the Owner, and so does the operator's report script.
+_HEADERS = bearer(Role.MANAGEMENT)
 
 
 def _write_trace(
@@ -313,7 +315,7 @@ def service(tmp_path: Path) -> ChannelProviderService:
 async def _client(service: ChannelProviderService, root: Path | None) -> TestClient:
     app = create_app(
         service=service,
-        bearer_token=_TOKEN,
+        credentials=ROLE_CREDENTIALS,
         traces=SessionTraceReader(root),
     )
     client = TestClient(TestServer(app))

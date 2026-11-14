@@ -1,14 +1,14 @@
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from eidolon.channel_provider.http import create_app
+from eidolon.channel_provider.access import Role
+from .helpers import ROLE_CREDENTIALS, bearer
 from .test_shared_session_commands import fixture
-
-TOKEN = "provider-test-token-at-least-32-bytes"
 
 
 async def test_http_start_returns_without_closing_then_explicit_end(tmp_path):
     service, adapter, selection, specs = await fixture(tmp_path)
-    async with TestClient(TestServer(create_app(service=service, bearer_token=TOKEN))) as client:
+    async with TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS))) as client:
         body = {
             "owner_id": "owner_1",
             "selection": selection.model_dump(mode="json"),
@@ -16,7 +16,7 @@ async def test_http_start_returns_without_closing_then_explicit_end(tmp_path):
         }
         assert (await client.post("/v1/shared-sessions/open", json=body)).status == 401
         assert not adapter.shared_created
-        headers = {"Authorization": f"Bearer {TOKEN}"}
+        headers = bearer(Role.HUB)
         response = await client.post("/v1/shared-sessions/open", json=body, headers=headers)
         assert response.status == 200, await response.text()
         assert (await response.json())["state"] == "transport_ready"
@@ -34,7 +34,7 @@ async def test_http_start_returns_without_closing_then_explicit_end(tmp_path):
 @pytest.mark.parametrize("case", ["owner", "extra", "invalid_spec"])
 async def test_rejected_command_allocates_nothing(tmp_path, case):
     service, adapter, selection, specs = await fixture(tmp_path)
-    async with TestClient(TestServer(create_app(service=service, bearer_token=TOKEN))) as client:
+    async with TestClient(TestServer(create_app(service=service, credentials=ROLE_CREDENTIALS))) as client:
         body = {
             "owner_id": "owner_1",
             "selection": selection.model_dump(mode="json"),
@@ -47,7 +47,7 @@ async def test_rejected_command_allocates_nothing(tmp_path, case):
         if case == "invalid_spec":
             body["specifications"][0]["operation_id"] = "injected"
         response = await client.post(
-            "/v1/shared-sessions/open", json=body, headers={"Authorization": f"Bearer {TOKEN}"}
+            "/v1/shared-sessions/open", json=body, headers=bearer(Role.HUB)
         )
         assert response.status == (403 if case == "owner" else 422)
         assert not adapter.shared_created

@@ -77,7 +77,18 @@ class CapabilityRouter:
         if (result.turn_id, result.call_id, result.name) != (call.turn_id, call.call_id, call.name):
             raise ValueError("mismatched capability receipt")
         if result.ok:
-            validate(binding.definition.result_schema, result.content)
+            # The contract's result schema describes what the capability
+            # produced. A channel capability returns exactly that; a device
+            # capability returns its execution snapshot, whose ``result`` is
+            # the produced value — the field the device runtime itself checks
+            # against the same schema. Checking the whole snapshot instead
+            # refused every device whose contract states its result precisely.
+            produced = (
+                result.content.get("result", {})
+                if binding.location == "device" and isinstance(result.content, dict)
+                else result.content
+            )
+            validate(binding.definition.result_schema, produced)
         log.info(
             "capability receipt turn=%s call=%s name=%s state=%s error=%s",
             call.turn_id,

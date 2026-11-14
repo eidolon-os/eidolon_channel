@@ -381,6 +381,10 @@ class HalfDuplexPttPipeline(BasePipeline):
         http = getattr(self, "_speaker_observation_http", None)
         if http is not None:
             await http.aclose()
+        faces = getattr(self, "_face_identity_http", None)
+        if faces is not None:
+            await faces.aclose()
+            self._face_identity_http = None
         await self._shutdown_stages()
         close_factory = getattr(self._factory, "aclose", None)
         if callable(close_factory):

@@ -282,6 +282,17 @@ class ConversationSpeaker:
             return
         self.deliver(value, text=text, llm=llm, timeline=timeline)
 
+    def latest(self):
+        """The newest observation of the turn in progress, without waiting.
+
+        A recognition that finished after the turn was frozen as pending is
+        returned here: a reader later in the same turn sees the real result.
+        """
+        task = self._task
+        if task is not None and task.done() and not task.cancelled():
+            return task.result()
+        return self._frozen
+
     async def result(self, turn_id):
         """Freeze the already available observation; never yield for inference."""
         if self._closed or self._key is None or self._key[0] != turn_id:

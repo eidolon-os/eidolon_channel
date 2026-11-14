@@ -331,6 +331,21 @@ class VoiceprintConfig:
 
 
 @dataclass(frozen=True)
+class FaceIdentityConfig:
+    """Who is in view, on request: where the Host's Vision service compares faces.
+
+    Off while ``vision_url`` is empty. The service token stays in the
+    environment. Nothing here is a model or a threshold: Vision owns both.
+    """
+    vision_url: str = ""
+    vision_token_env: str = "EIDOLON_VISION_SERVICE_TOKEN"
+    timeout_sec: float = 4.0
+    # Longest edge asked of the device for this still. Larger than a look's
+    # 768: a face two metres away is about 30 px wide at 768 and 50 at 1280.
+    max_edge: int = 1280
+
+
+@dataclass(frozen=True)
 class WorkerConfig:
     # LiveKit explicit dispatch target. Keep the product default stable while
     # allowing isolated test workers to share one LiveKit deployment safely.
@@ -416,6 +431,7 @@ class EffectiveAgentConfig:
     turn_policy: TurnPolicyConfig = field(default_factory=TurnPolicyConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     voiceprint: VoiceprintConfig = field(default_factory=VoiceprintConfig)
+    face_identity: FaceIdentityConfig = field(default_factory=FaceIdentityConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     avatar: AvatarConfig = field(default_factory=AvatarConfig)
 

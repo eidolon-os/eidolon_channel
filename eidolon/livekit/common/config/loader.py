@@ -30,6 +30,7 @@ from .schema import (
     SenseTimeSTTConfig,
     SenseTimeTTSConfig,
     TurnPolicyConfig,
+    FaceIdentityConfig,
     VoiceprintConfig,
     WorkerConfig,
 )
@@ -372,6 +373,7 @@ def load_effective_config() -> EffectiveAgentConfig:
         turn_policy=_load_turn_policy(turn_y),
         observability=_merge_dataclass(ObservabilityConfig(), obs_y),
         voiceprint=_voiceprint_config(voiceprint_y),
+        face_identity=_merge_dataclass(FaceIdentityConfig(), _section(y, "face_identity")),
         worker=_merge_dataclass(WorkerConfig(), worker_y),
         avatar=_merge_dataclass(AvatarConfig(), avatar_y),
         # Non-secret Bailian STT/TTS config lives in settings.yaml; the API key

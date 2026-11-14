@@ -187,6 +187,10 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._channel_tool_handler = None
         self._channel_tool_cancel_handler = None
         self._channel_tool_capabilities: frozenset[str] = frozenset()
+        # Channel capabilities bound for the whole session, beside the one
+        # runtime configure_channel_tools swaps in and out (music).
+        self._standing_channel_tools: list[tuple[frozenset[str], Any, Any]] = []
+        self._swappable_channel_tools: tuple[Any, Any, frozenset[str]] = (None, None, frozenset())
         self._device_rpc = None
         if output_plan is not None and (
             output_plan.motion_profile in {"eidolon.motion.v1", "eidolon.motion.v2"}
@@ -257,12 +261,25 @@ class EidolonAgentGrpcLlm(llm.LLM):
             router.register(device.names, device.execute, device.cancel, location="device")
         if capabilities:
             router.register(capabilities, handler, cancel_handler, location="channel")
+        self._swappable_channel_tools = (handler, cancel_handler, frozenset(capabilities))
+        for names, execute, cancel in self._standing_channel_tools:
+            router.register(names, execute, cancel, location="channel")
         self._capability_router = router
         self._channel_tool_handler = router.execute
         self._channel_tool_cancel_handler = router.cancel
         self._channel_tool_capabilities = router.names
         if self._session is not None:
             self._session.configure_channel_tools(router.execute, router.cancel, router.names)
+
+    def add_channel_tools(self, handler, cancel_handler, capabilities: frozenset[str]) -> None:
+        """Bind Channel capabilities that stay for the session, whatever else is configured."""
+        self._standing_channel_tools.append((frozenset(capabilities), handler, cancel_handler))
+        self.configure_channel_tools(*self._swappable_channel_tools)
+
+    @property
+    def device_capability_rpc(self):
+        """The session's device capability transport, or None when the device offers none."""
+        return self._device_rpc
 
     def clear_channel_tools(self) -> None:
         self._channel_tool_handler = None

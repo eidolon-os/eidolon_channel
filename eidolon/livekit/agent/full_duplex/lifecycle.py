@@ -111,6 +111,10 @@ class FullDuplexSessionLifecycle:
             if http is not None:
                 await http.aclose()
                 self._pipeline._speaker_observation_http = None
+            faces = getattr(self._pipeline, "_face_identity_http", None)
+            if faces is not None:
+                await faces.aclose()
+                self._pipeline._face_identity_http = None
 
     async def run(self, room: Room, *, output_room=None, output_participant_identity=None) -> None:
         """Start the full-duplex pipeline and block until the session closes."""

@@ -265,6 +265,13 @@ def validate_effective_config(cfg: EffectiveAgentConfig) -> None:
         errors.append("observability.session_trace_retention_days must be in [0, 365]")
 
     errors.extend(voiceprint_config_errors(cfg.voiceprint))
+    face = cfg.face_identity
+    if not isinstance(face.vision_url, str) or len(face.vision_url) > 2048:
+        errors.append("face_identity.vision_url must be a bounded URL string")
+    if not 0.5 <= face.timeout_sec <= 10:
+        errors.append("face_identity.timeout_sec must be in [0.5, 10]")
+    if not 256 <= face.max_edge <= 1280:
+        errors.append("face_identity.max_edge must be in [256, 1280]")
     if errors:
         raise ValueError("EffectiveAgentConfig validation failed:\n  - " + "\n  - ".join(errors))
 

@@ -897,6 +897,19 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     pipeline._speaker_observation = speaker_observer
     pipeline._speaker_observation_http = speaker_http
 
+    # "Who is in view" on request: offered only where the Owner lets this device
+    # take a still and the Host's Vision service is configured.
+    pipeline._face_identity_http = None
+    if getattr(factory, "runtime_services", None) is not None and runtime_llm is not None:
+        from .session.face_identity import attach_face_identity
+        try:
+            identity = await factory.runtime_services.resolve_room(room)
+            pipeline._face_identity_http = await attach_face_identity(
+                runtime_llm, cfg, owner_id=identity.owner_id,
+                device_id=identity.device_id or "", speaker_observer=speaker_observer)
+        except Exception:
+            logger.warning("Face identity initialization unavailable")
+
     async def _end_serving_cb(reason: str) -> None:
         # The job is shutting down (user left, or an error tore the session down).
         # Send session_end first so the device — which is still connected, and

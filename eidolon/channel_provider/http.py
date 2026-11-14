@@ -36,6 +36,13 @@ class _HomeScope(BaseModel):
     owner_id: str = Field(min_length=1, max_length=128)
 
 
+class _OwnerCapability(_HomeScope):
+    #: The caller's, stable across retries of one intent. It names the
+    #: execution, so the device answers a retry with the outcome it reached.
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class _HomeExecute(_HomeScope):
     request: ExecuteRequest
 
@@ -213,6 +220,49 @@ def create_app(
             )
         return _json_body({"operation": "channel.session-trace", **found})
 
+    async def device_properties(request: web.Request) -> web.Response:
+        """What a device reports about its own observable properties. A read."""
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        owner_id = request.query.get("owner_id", "")
+        if not owner_id or len(owner_id) > 128:
+            return _contract_problem("owner_id is required", status=422)
+        try:
+            return web.Response(
+                text=await service.device_properties(
+                    owner_id=owner_id, device_id=request.match_info["device_id"]),
+                content_type="application/json",
+            )
+        except DomainError as exc:
+            return _problem(exc)
+
+    async def owner_capability(request: web.Request) -> web.Response:
+        """One Owner-controllable capability on a device, outside any session."""
+
+        if not _authorized(request, bearer_token):
+            return _problem(Unauthenticated("bearer credential was not accepted"))
+        if request.content_type != "application/json":
+            return _contract_problem("content-type must be application/json", status=415)
+        try:
+            body = _OwnerCapability.model_validate_json(await request.read())
+            result = await service.invoke_owner_capability(
+                owner_id=body.owner_id,
+                device_id=request.match_info["device_id"],
+                capability=request.match_info["capability"],
+                arguments=body.arguments,
+                request_id=body.request_id,
+            )
+            return web.Response(text=result, content_type="application/json")
+        except (ValidationError, ContractError) as exc:
+            return _contract_problem(str(exc), status=422)
+        except DomainError as exc:
+            return _problem(exc)
+
+    app.router.add_get("/v1/device-channels/{device_id}/properties", device_properties)
+    app.router.add_post(
+        "/v1/device-channels/{device_id}/capabilities/{capability}", owner_capability
+    )
     app.router.add_get("/health", health)
     app.router.add_get("/v1/session-traces", session_traces)
     app.router.add_get("/v1/session-traces/{session_id}", session_trace)

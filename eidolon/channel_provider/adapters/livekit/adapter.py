@@ -27,7 +27,22 @@ from urllib.parse import urlparse, urlunparse
 
 from eidolon_sdk.biz.control.shared_session import SharedSessionInvitation
 from eidolon_sdk.biz.smarthome import PANEL_REQUEST_TOPIC
+from eidolon_sdk.biz.capabilities import installed_properties
 from eidolon_sdk.biz.control.protocol import command_status_from_ack
+from eidolon_sdk.biz.presentation.capability_rpc import (
+    INVOKE,
+    STATUS,
+    CapabilityInvocation,
+    ExecutionScope,
+    ExecutionSnapshot,
+    standing_scope,
+)
+from eidolon_sdk.biz.presentation.device_properties import (
+    PROPERTIES_READ,
+    PropertyValues,
+    read_property_change,
+    read_property_values,
+)
 from eidolon.livekit.control_receipts import read_control_receipt
 from eidolon_sdk.biz.presentation import SessionOutputPlan, FACE_PROFILE
 from eidolon_sdk.biz.audio_input import AUDIO_INPUT_METADATA_FIELD
@@ -79,6 +94,9 @@ from .config import LiveKitConfig
 logger = logging.getLogger("eidolon.channel_provider.livekit")
 
 ADAPTER_NAME = "livekit"
+#: How long one RPC to a device may take before it is not going to answer. The
+#: same bound the session's capability transport uses.
+_DEVICE_RPC_TIMEOUT_S = 5.0
 BINDING_FORMAT = "application/vnd.eidolon.livekit-session+json;v=2"
 
 def _client_addresses(
@@ -282,6 +300,11 @@ class LiveKitChannelAdapter:
         self._session_end_observers: dict[str, tuple[str, Any, frozenset[str]]] = {}
         self._team_state_observers: dict[str, tuple[str, str, Any]] = {}
         self._control_receipts: dict[tuple[str, str], _ControlReceipt] = {}
+        #: What each present device last reported about its observable
+        #: properties, by room. A projection of a running device, never a store:
+        #: it is dropped when the device leaves or this listener reconnects, and
+        #: a gap is filled by asking the device, not by remembering.
+        self._device_properties: dict[str, dict[str, Any]] = {}
 
     @property
     def name(self) -> str:
@@ -431,6 +454,15 @@ class LiveKitChannelAdapter:
                 "motion_profile": spec.motion_profile,
                 **({"motion_capabilities": list(spec.motion_capabilities)} if spec.motion_capabilities else {}),
                 **({"device_capabilities": list(spec.device_capabilities)} if spec.device_capabilities else {}),
+            }
+        if spec.observable_properties:
+            handle["observable_properties"] = list(spec.observable_properties)
+        if spec.owner_capabilities and spec.output_policy is not None:
+            # What the Owner's own app may invoke on this channel outside a
+            # session, and the policy revision such an invocation is bound to.
+            handle["owner_control"] = {
+                "policy_revision": spec.output_policy.revision,
+                "capabilities": list(spec.owner_capabilities),
             }
         if spec.output_policy is not None and spec.output_policy.inputs is not None:
             handle["input_revision"] = spec.output_policy.revision
@@ -632,6 +664,135 @@ class LiveKitChannelAdapter:
                     room, device, pending.op, body["ref"], status, code)
         pending.future.set_result(status)
 
+    @staticmethod
+    def _declared_properties(handle: dict[str, Any]) -> dict[str, dict]:
+        installed = installed_properties()
+        return {
+            name: installed[name]["schema"]
+            for name in handle.get("observable_properties", ())
+            if name in installed
+        }
+
+    def _property_change(self, packet: Any, *, room: str, watch: _Listening) -> None:
+        change = read_property_change(
+            packet, device=watch.device, declared=self._declared_properties(watch.input_handle)
+        )
+        if change is None:
+            return
+        self._device_properties.setdefault(room, {})[change.name] = change.value
+        logger.info("device property room=%s device=%s name=%s value=%s event=%s",
+                    room, watch.device, change.name, change.value, change.event_id)
+
+    def _present(self, handle: dict[str, Any]) -> tuple[_Listening, str]:
+        room = str(handle.get("room") or "")
+        device = str(handle.get("device") or "")
+        watch = self._listeners.get(room)
+        if watch is None or watch.device != device or watch.connection is None:
+            raise BackendUnavailable("device control channel is not connected")
+        if device not in getattr(watch.connection, "remote_participants", {}):
+            raise BackendUnavailable("device is not on its channel")
+        return watch, device
+
+    async def device_properties(self, handle: dict[str, Any]) -> dict[str, Any]:
+        """The values this device reports for the observable properties it declared.
+
+        Answered from what the device said on its own; a declared property it
+        has not reported since this listener joined is asked for once, over
+        the channel. Only a value a declared schema admits is ever returned, and
+        a property the device cannot be reached to answer is absent, not zero.
+        """
+
+        declared = self._declared_properties(handle)
+        if not declared:
+            return {}
+        room = str(handle.get("room") or "")
+        known = self._device_properties.get(room, {})
+        if not set(declared) <= set(known):
+            try:
+                watch, device = self._present(handle)
+                async with asyncio.timeout(_DEVICE_RPC_TIMEOUT_S):
+                    answer = await watch.connection.local_participant.perform_rpc(
+                        destination_identity=device, method=PROPERTIES_READ, payload="{}",
+                        response_timeout=_DEVICE_RPC_TIMEOUT_S,
+                    )
+                values = read_property_values(
+                    PropertyValues.model_validate_json(answer), declared=declared
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("device properties unread room=%s: %s", room, type(exc).__name__)
+                values = {}
+            known = self._device_properties.setdefault(room, {})
+            # A change reported while the read was in flight is newer than it.
+            for name, value in values.items():
+                known.setdefault(name, value)
+        return {name: known[name] for name in declared if name in known}
+
+    async def invoke_standing(
+        self, handle: dict[str, Any], *, capability: str, arguments: dict[str, Any],
+        execution_id: str, timeout_s: float,
+    ) -> ExecutionSnapshot:
+        """Invoke one Owner-controllable capability on the device's own channel.
+
+        The same execution protocol a session uses, bound by ``standing_scope``
+        to this channel's room and the Owner's policy revision instead of to a
+        session. The device keeps the execution ledger, so a retried
+        ``execution_id`` answers with the outcome it already reached.
+        """
+
+        owner_control = handle.get("owner_control")
+        if not isinstance(owner_control, dict) or capability not in owner_control.get(
+            "capabilities", ()
+        ):
+            raise InvalidTransition("this channel offers no such capability to its Owner")
+        watch, device = self._present(handle)
+        scope = standing_scope(
+            execution_id=execution_id, room=str(handle["room"]),
+            policy_revision=int(owner_control["policy_revision"]),
+        )
+        request = CapabilityInvocation(
+            **scope.model_dump(),
+            capability=capability,
+            arguments=arguments,
+            expires_at_ms=int(time.time() * 1000) + 10_000,
+            max_duration_ms=max(1, min(30_000, int(timeout_s * 1000))),
+        )
+        logger.info("standing capability room=%s device=%s name=%s execution=%s",
+                    scope.session_id, device, capability, execution_id)
+        try:
+            async with asyncio.timeout(timeout_s + _DEVICE_RPC_TIMEOUT_S):
+                snapshot = await self._device_rpc(watch, device, INVOKE, request)
+                while snapshot.state in {"accepted", "running"}:
+                    await asyncio.sleep(0.1)
+                    snapshot = await self._device_rpc(watch, device, STATUS, scope)
+        except TimeoutError as exc:
+            raise BackendUnavailable("device did not report the capability's outcome") from exc
+        except asyncio.CancelledError:
+            raise
+        except (BackendUnavailable, InvalidTransition):
+            raise
+        except Exception as exc:
+            raise BackendUnavailable(
+                f"device did not accept the invocation: {type(exc).__name__}"
+            ) from exc
+        logger.info("standing capability room=%s execution=%s state=%s error=%s",
+                    scope.session_id, execution_id, snapshot.state, snapshot.error)
+        return snapshot
+
+    @staticmethod
+    async def _device_rpc(
+        watch: _Listening, device: str, method: str, request: ExecutionScope
+    ) -> ExecutionSnapshot:
+        answer = await watch.connection.local_participant.perform_rpc(
+            destination_identity=device, method=method, payload=request.model_dump_json(),
+            response_timeout=_DEVICE_RPC_TIMEOUT_S,
+        )
+        snapshot = ExecutionSnapshot.model_validate_json(answer)
+        if snapshot.execution_id != request.execution_id:
+            raise BackendUnavailable("device answered for another execution")
+        return snapshot
+
     def _fail_control_delivery(self, room: str) -> None:
         for (pending_room, _), pending in self._control_receipts.items():
             if pending_room == room and not pending.future.done():
@@ -650,6 +811,7 @@ class LiveKitChannelAdapter:
             raise BackendUnavailable("LiveKit room revocation failed") from exc
         self._input_revisions.pop(room, None)
         self._input_applied.pop(room, None)
+        self._device_properties.pop(room, None)
 
     # -- hearing the device -----------------------------------------------
 
@@ -781,6 +943,7 @@ class LiveKitChannelAdapter:
         def _received(packet: Any) -> None:
             if self._listeners.get(room) is watch and watch.connection is connection:
                 self._control_receipt(packet, room=room, device=watch.device)
+                self._property_change(packet, room=room, watch=watch)
             self._note_serving_failure(packet, device=watch.device, room=room)
             self._observe_session_end(packet, room=room)
             if self._listeners.get(room) is watch and watch.connection is connection:
@@ -812,6 +975,8 @@ class LiveKitChannelAdapter:
                 # and drops its channel, while a room.leave sent in that instant
                 # would hold its caller — and the Provider lock — to the deadline.
                 self._fail_control_delivery(room)
+                # Nor does what it last said describe it once it is gone.
+                self._device_properties.pop(room, None)
             observer = self._session_end_observers.get(room)
             if observer is None:
                 return
@@ -856,6 +1021,9 @@ class LiveKitChannelAdapter:
             raise
         watch.connection = connection
         watch.attempt = 0
+        # A new connection has heard nothing yet; what an earlier one heard may
+        # have changed while nobody was listening.
+        self._device_properties.pop(room, None)
 
     def _rejoin_later(self, room: str, watch: _Listening, reason: Any) -> None:
         if watch.retry is not None and not watch.retry.done():

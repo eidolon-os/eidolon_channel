@@ -9,7 +9,7 @@ vocabulary leaks back into the service.
 
 from __future__ import annotations
 
-from eidolon_sdk.biz.capabilities import installed_registry
+from eidolon_sdk.biz.capabilities import declared_observable_properties, installed_registry
 
 
 from dataclasses import dataclass
@@ -102,6 +102,12 @@ class ChannelSpec:
     motion_profile: str | None = None
     motion_capabilities: tuple[str, ...] = ()
     device_capabilities: tuple[str, ...] = ()
+    #: Installed contracts this device declared that the Owner's own app may
+    #: invoke outside a session. Not gated by the session selection: the Owner
+    #: is the authority that selection answers to.
+    owner_capabilities: tuple[str, ...] = ()
+    #: Installed observable properties this device declared exactly.
+    observable_properties: tuple[str, ...] = ()
 
     @property
     def needs_media(self) -> bool:
@@ -253,6 +259,20 @@ def derive_spec(
         if _media_flow(manifest, "audio") is not MediaFlow.NONE or selected is not None
         else None
     )
+    registry = installed_registry()
+    # A device action is read only when it equals the installed contract: the
+    # Host owns the schema, the device can only claim it. Version 1 because that
+    # is what a session's invocation carries.
+    installed = tuple(dict.fromkeys(
+        a["name"] for a in manifest.get("actions", ())
+        if isinstance(a, dict) and a.get("version") == 1 and a.get("name") in registry
+        and registry.get(a["name"]).execution_location == "device"
+        and a == registry.get(a["name"]).action()))
+    permitted = registry.permitted(
+        installed,
+        outputs=selected.model_dump() if selected is not None else {},
+        inputs={"camera": camera},
+    )
     if serving is not None and serving.application == SESSION_APPLICATION_HOME_COMMAND:
         if not smarthome_panel or not audio.publishes:
             raise ContractError("home.command.v1 requires a smart-home panel and microphone")
@@ -269,16 +289,19 @@ def derive_spec(
             if selected and selected.motion and p.get("name") == "motion.profile"
             and p.get("writable") is False and isinstance(p.get("schema"), dict)
             and p["schema"].get("const") in {"stackchan.head.v1", "eidolon.motion.v1", "eidolon.motion.v2"}), None),
-        motion_capabilities=tuple(a["name"] for a in manifest.get("actions", ())
-            if selected and selected.motion and a.get("version") == 1
-            and a in [d.action() for d in installed_registry().definitions()
-                      if d.execution_location == "device" and d.required_output == "motion"]),
-        # A still leaves the device only when the Owner allowed capture, and only
-        # through the contract this Host has installed.
-        device_capabilities=tuple(a["name"] for a in manifest.get("actions", ())
-            if camera == "capture" and a.get("version") == 1
-            and a in [d.action() for d in installed_registry().definitions()
-                      if d.execution_location == "device" and d.required_input == "camera"]),
+        motion_capabilities=tuple(
+            name for name in installed
+            if registry.get(name).required_output == "motion" and name in permitted),
+        # Every other installed device contract the Owner's selection allows: a
+        # still only when capture is allowed, a setting only with the output it
+        # tunes. One rule, the registry's, rather than a branch per gate.
+        device_capabilities=tuple(
+            name for name in installed
+            if registry.get(name).required_output != "motion" and name in permitted),
+        owner_capabilities=tuple(
+            name for name in installed
+            if registry.get(name).owner_control and device.output_policy is not None),
+        observable_properties=tuple(declared_observable_properties(manifest)),
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
         or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,

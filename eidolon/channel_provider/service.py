@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from eidolon_sdk.biz.contracts import CONTROL_OP_ROOM_JOIN, SESSION_INTENT_USER_INITIATED, SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
+from eidolon_sdk.biz.capabilities import installed_registry, validate
 from eidolon_sdk.biz.control.protocol import build_command_envelope
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
@@ -32,6 +33,8 @@ from eidolon.livekit.common.entry_timing import dispatch_entry
 
 from .contracts import (
     BackendUnavailable,
+    CapabilityNotOffered,
+    ContractError,
     CurrentRequest,
     Forbidden,
     IdempotencyConflict,
@@ -1064,6 +1067,84 @@ class ChannelProviderService:
                 }
             )
         return canonical_json({"operation": "channel.presence", "bodies": bodies})
+
+    async def _owned_channel(self, *, owner_id: str, device_id: str) -> StoredProvision:
+        """The current channel of a device this Owner holds, or the refusal that says why."""
+
+        async with self._lock:
+            self._store.expire_credentials(self._now_ms())
+            stored = next(
+                (item for item in self._store.observable_provisions()
+                 if item.device_id == device_id
+                 and self._store.current_channel(item.device_ref) == item),
+                None,
+            )
+        if stored is None:
+            raise UnknownChannel("device has no channel on this Host")
+        if stored.owner_id != owner_id:
+            raise Forbidden("device belongs to a different Owner")
+        return stored
+
+    async def device_properties(self, *, owner_id: str, device_id: str) -> str:
+        """What a device this Owner holds reports for the properties it declared.
+
+        Only values the device itself reported; a property it has not reported
+        and cannot be asked about right now is absent, never a default.
+        """
+
+        stored = await self._owned_channel(owner_id=owner_id, device_id=device_id)
+        adapter = self._registry.get(stored.adapter_name)
+        read = getattr(adapter, "device_properties", None)
+        values = await read(json.loads(stored.handle_json)) if read is not None else {}
+        return canonical_json({
+            "operation": "channel.device-properties",
+            "device_id": device_id,
+            "values": values,
+        })
+
+    async def invoke_owner_capability(
+        self, *, owner_id: str, device_id: str, capability: str,
+        arguments: dict, request_id: str,
+    ) -> str:
+        """Invoke one capability the Owner's app may use on a device outside a session.
+
+        The contract is the installed one: it must be marked ``owner_control``,
+        the device must have declared it, and the arguments must match its
+        schema before anything is sent. ``request_id`` is the caller's and stable
+        across retries; it names the execution, so the device's own ledger turns
+        a retry into the outcome it already reached.
+        """
+
+        registry = installed_registry()
+        if capability not in registry or not registry.get(capability).owner_control:
+            raise CapabilityNotOffered(f"{capability} is not offered to an Owner's app")
+        definition = registry.get(capability)
+        try:
+            validate(definition.input_schema, arguments)
+        except ValueError as exc:
+            raise ContractError(f"arguments for {capability}: {exc}") from exc
+        stored = await self._owned_channel(owner_id=owner_id, device_id=device_id)
+        handle = json.loads(stored.handle_json)
+        offered = handle.get("owner_control")
+        if not isinstance(offered, dict) or capability not in offered.get("capabilities", ()):
+            raise CapabilityNotOffered(f"device {device_id} does not offer {capability}")
+        adapter = self._registry.get(stored.adapter_name)
+        invoke = getattr(adapter, "invoke_standing", None)
+        if invoke is None:
+            raise CapabilityNotOffered(f"this channel cannot carry {capability}")
+        execution_id = "owner:" + hashlib.sha256(
+            f"{owner_id}\0{device_id}\0{request_id}".encode()
+        ).hexdigest()[:40]
+        snapshot = await invoke(
+            handle, capability=capability, arguments=arguments,
+            execution_id=execution_id, timeout_s=definition.timeout_s,
+        )
+        return canonical_json({
+            "operation": "channel.device-capability",
+            "device_id": device_id,
+            "capability": capability,
+            "execution": snapshot.model_dump(mode="json"),
+        })
 
     async def revoke(self, request: RevokeRequest) -> str:
         try:

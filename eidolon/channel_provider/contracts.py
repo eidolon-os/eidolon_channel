@@ -58,6 +58,20 @@ class InvalidTransition(DomainError):
     http_status = 409
 
 
+class CapabilityNotOffered(DomainError):
+    """The capability is not one this device's channel offers to its Owner.
+
+    Either the device did not declare the installed contract, the contract is
+    not one an Owner's app may invoke outside a session, or the channel predates
+    either. Distinct from ``INVALID_TRANSITION``, which says someone changed
+    something first and sends a client to re-read a screen that did not move.
+    """
+
+    code = "CAPABILITY_NOT_OFFERED"
+    category = "conflict"
+    http_status = 409
+
+
 class Unauthenticated(DomainError):
     code = "UNAUTHENTICATED"
     category = "auth"

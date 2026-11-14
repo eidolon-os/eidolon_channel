@@ -115,6 +115,13 @@ class ChannelProviderStore:
                                          json_extract(binding_json, '$.target_companion_id'))
                     WHERE state != 'closed'
                       AND json_extract(binding_json, '$.target_companion_id') IS NOT NULL""")
+                # A single device's conversation is a personal session; the scene
+                # rows an earlier version kept for it only record finished ones.
+                if connection.execute("""SELECT 1 FROM prepared_scenes WHERE scenario='device_session'
+                        AND json_extract(value_json, '$.cleanup_complete') IS NOT 1""").fetchone():
+                    raise RuntimeError("end the open device session before upgrading")
+                for table in ("prepared_scenes", "cancelled_scenes"):
+                    connection.execute(f"DELETE FROM {table} WHERE scenario='device_session'")
                 self._validate_schema(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()

@@ -19,7 +19,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
-from eidolon_sdk.biz.contracts import SESSION_INTENT_USER_INITIATED, SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
+from eidolon_sdk.biz.contracts import CONTROL_OP_ROOM_JOIN, SESSION_INTENT_USER_INITIATED, SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION
+from eidolon_sdk.biz.control.protocol import build_command_envelope
 from eidolon_sdk.biz.control.shared_session import (
     SharedSessionInvitation,
     SharedSessionSelection,
@@ -101,7 +102,6 @@ class ChannelProviderService:
         self._personal_sessions = PersonalSessions(store, registry, self._lock)
         self._transport_scopes: dict[str, _TransportScope] = {}
         self._device_conversations: dict = {}
-        self._device_sessions: dict = {}
         self._team_conversations: dict = {}
         self._shared_visits: dict[tuple[str, str], _SharedVisit] = {}
         self._recovery_ready = asyncio.Event()
@@ -137,7 +137,7 @@ class ChannelProviderService:
                     stored.device_id,
                 )
 
-        for catalog in (self._device_conversations, self._team_conversations, self._device_sessions):
+        for catalog in (self._device_conversations, self._team_conversations):
             for visit in catalog.values():
                 if not visit.closure_complete:
                     try:
@@ -419,15 +419,7 @@ class ChannelProviderService:
         if self._transport_scopes.get(device_id) is scope and scope.cleanup is not None:
             await scope.cleanup()
 
-    async def open_device_session(self, selection, *, authenticated_owner_id):
-        from .device_session import DeviceSession
-        return await self._open_prepared_scene(selection, authenticated_owner_id,
-            self._device_sessions, "open_device_session",
-            lambda adapter, handles: DeviceSession(selection, authenticated_owner_id, adapter, handles))
-
     def _scene_kind(self, catalog):
-        if catalog is self._device_sessions:
-            return "device_session"
         return "ip_role_group" if catalog is self._team_conversations else "device_conversation"
 
     async def open_device_conversation(self, selection, *, authenticated_owner_id: str) -> dict:
@@ -455,7 +447,7 @@ class ChannelProviderService:
         never releases it. Restored scenes enter these same catalogs before use.
         """
         requested = set(companion_ids)
-        for catalog in (self._team_conversations, self._device_conversations, self._device_sessions):
+        for catalog in (self._team_conversations, self._device_conversations):
             for (owner, session_id), visit in catalog.items():
                 if owner != owner_id or visit.closure_complete:
                     continue
@@ -494,8 +486,7 @@ class ChannelProviderService:
             if self._companion_authority is not None:
                 selected = ([(m.output_device, m.companion_id) for m in selection.members]
                             if catalog is self._team_conversations
-                            else [(selection.device if catalog is self._device_sessions else selection.output_device,
-                                   selection.target_companion_id)])
+                            else [(selection.output_device, selection.target_companion_id)])
                 for ref, companion in selected:
                     async with asyncio.timeout(5):
                         await self._companion_authority(owner_id=authenticated_owner_id,
@@ -596,12 +587,6 @@ class ChannelProviderService:
                 catalog = self._team_conversations
                 if visit.opened.owner_id != owner:
                     raise InvalidTransition("persisted scene Owner mismatch")
-            elif scenario == "device_session":
-                from eidolon_sdk.biz.control.device_session import DeviceSessionSelection
-                from .device_session import DeviceSession
-                visit = DeviceSession(DeviceSessionSelection.model_validate(data["selection"]),
-                    owner, adapter, handles)
-                catalog = self._device_sessions
             elif scenario == "device_conversation":
                 visit = DeviceConversation(DeviceConversationSelection.model_validate(data["selection"]),
                     owner, adapter, handles)
@@ -618,9 +603,71 @@ class ChannelProviderService:
         catalog = self._team_conversations if team else self._device_conversations
         return await self._inspect_prepared_scene(session_id, authenticated_owner_id, close, catalog)
 
-    async def device_session(self, session_id, *, authenticated_owner_id, close=False):
-        return await self._inspect_prepared_scene(session_id, authenticated_owner_id, close,
-                                                   self._device_sessions)
+    def _device_session(self, device_ref, owner_id):
+        """Caller holds the Provider lock: the device's channel and its one conversation.
+
+        Read from what already decides it. A scene holding the device says so
+        through its reservation; otherwise the device's unfinished personal
+        session is its conversation, whoever asked for it.
+        """
+        if not owner_id:
+            raise Forbidden("authenticated Owner is required")
+        stored = self._store.current_channel(device_ref)
+        if stored is None or stored.device_ref != device_ref:
+            raise UnknownChannel("device has no current channel")
+        if stored.owner_id != owner_id:
+            raise Forbidden("selected device belongs to another Owner")
+        pending = self._store.pending_personal_sessions(stored.device_id)
+        if stored.device_id in self._transport_scopes:
+            state, conversation_id = "occupied", None
+        elif pending:
+            state = "in_conversation" if pending[0]["state"] == "open" else "closing"
+            conversation_id = pending[0]["session_id"]
+        else:
+            state, conversation_id = "standby", None
+        return stored, dict(device_id=stored.device_id, state=state,
+                            conversation_id=conversation_id, error="")
+
+    async def device_session(self, request, *, authenticated_owner_id, action="status"):
+        """An Owner reads, starts or ends the conversation on one of their devices.
+
+        Starting asks the device to start one itself, the way a gesture at the
+        device does: the request comes back on the device's own channel and is
+        registered by ``_converge_serving`` like any other. Nothing is held
+        here in between, so there is nothing of the Owner's to recover, replay
+        or reconcile, and a busy device is answered with what it is doing.
+        """
+        async with self._lock:
+            stored, status = self._device_session(request.device, authenticated_owner_id)
+        if action == "status" or status["state"] == "occupied":
+            return status
+        if action == "close":
+            try:
+                await self._converge_serving(request.device, serving=False,
+                    conversation_id=request.conversation_id,
+                    session_intent=SESSION_INTENT_USER_INITIATED)
+            except BackendUnavailable:
+                pass  # The reservation stays and personal cleanup retries; status says closing.
+        elif status["state"] == "standby":
+            if stored.status != "active":
+                raise UnknownChannel("device has no active channel")
+            command = build_command_envelope(command_id=f"join:{uuid4().hex}",
+                device_id=stored.device_id, payload={}, op=CONTROL_OP_ROOM_JOIN,
+                src_type="channel", src_id="channel-provider", ttl_ms=20_000)
+            # First receipt only: the room carries one control exchange at a
+            # time, and a conversation being started must stay endable.
+            receipt = await self._registry.get(stored.adapter_name).deliver_control(
+                json.loads(stored.handle_json), command, wait_for_terminal=False)
+            async with self._lock:
+                _, status = self._device_session(request.device, authenticated_owner_id)
+            if status["state"] == "standby":
+                if receipt in {"accepted", "running", "succeeded"}:
+                    status["state"] = "starting"
+                else:
+                    status["error"] = "DEVICE_REFUSED"
+            return status
+        async with self._lock:
+            return self._device_session(request.device, authenticated_owner_id)[1]
 
     async def _inspect_prepared_scene(self, session_id, authenticated_owner_id, close, catalog):
         team = catalog is self._team_conversations

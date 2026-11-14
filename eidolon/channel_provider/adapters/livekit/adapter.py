@@ -1695,20 +1695,6 @@ class LiveKitChannelAdapter:
             session_intent=SESSION_INTENT_USER_INITIATED,
             team_dispatch=team.model_dump(mode='json'))
 
-    async def open_device_session(
-        self, handle: dict, *, conversation_id: str, target_companion_id: str,
-    ) -> None:
-        """Start one authorized device with its existing input/output policy."""
-        template = handle.get("output_template")
-        if template is None:
-            raise InvalidTransition("device sessions require an explicit endpoint policy")
-        plan = SessionOutputPlan(session_id=conversation_id, **template)
-        if not plan.inputs.microphone or not plan.outputs.speech:
-            raise InvalidTransition("device does not allow microphone input and speech output")
-        await self.open_session(handle, conversation_id,
-            session_intent=SESSION_INTENT_USER_INITIATED,
-            target_companion_id=target_companion_id)
-
     async def open_directed_session(
         self, source: dict, target: dict, *, source_session_id: str,
         target_session_id: str, target_companion_id: str,

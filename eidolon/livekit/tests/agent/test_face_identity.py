@@ -96,8 +96,11 @@ def test_voice_and_face_agreeing_allow_the_name():
 def test_voice_and_face_disagreeing_withhold_the_name_and_say_so():
     content = result([face((ADA, "strong"))], Voice(BOB, "Bob"))
     assert content["agreement"] == "conflict" and "address_as" not in content
-    assert "Bob" in content["guidance"] and "Ada" in content["guidance"]
-    assert "Do not use a name" in content["guidance"]
+    # Who each points to stays in the data; the words name nobody and forbid both names.
+    assert content["visible"] == [{"status": "identified", "name": "Ada"}]
+    assert content["voice"] == {"status": "identified", "name": "Bob"}
+    assert "Ada" not in content["summary"] and "Bob" not in content["summary"]
+    assert content["summary"].endswith("Do not call them by either name or guess who they are.")
 
 
 def test_a_face_alone_names_the_person_plainly():
@@ -114,13 +117,11 @@ def test_a_face_alone_names_the_person_plainly():
         ([face((ADA, "none"))], Voice(ADA, "Ada")),      # voice alone
     ],
 )
-def test_someone_recognized_is_answered_by_name_without_hedging(faces, voice):
-    guidance = result(faces, voice)["guidance"]
-    assert guidance.startswith("This is Ada. Answer plainly, by name")
-    assert "Do not hedge" in guidance
-    # The model is told not to narrate the evidence, and is not handed hedges to repeat.
-    for hedge in ("looks like", "sounds like", "tentative", "not confirmation", "resemblance, not"):
-        assert hedge not in guidance
+def test_someone_recognized_is_stated_and_the_answer_is_left_to_the_companion(faces, voice):
+    # Who it is, and nothing about the reply: "answer by name, in one short
+    # sentence" was repeated word for word (2026-11-14). No hedge is handed over
+    # to be recited either.
+    assert result(faces, voice)["summary"] == "This is Ada."
 
 
 @pytest.mark.parametrize("faces", [[], [face((ADA, "weak"))], [face((ADA, "none"))]])
@@ -132,27 +133,57 @@ def test_a_voice_alone_is_used_as_before(faces):
 @pytest.mark.parametrize(
     ("faces", "enrolled", "hint"),
     [
-        ([], 2, "cannot see anyone"),
+        ([], 2, "Nobody is in view"),
         ([face()], 0, "nobody has enabled face recognition"),
-        ([face((ADA, "none"))], 2, "do not recognize"),
-        ([face((ADA, "weak"))], 2, "do not recognize"),
+        ([face((ADA, "none"))], 2, "not recognized"),
+        ([face((ADA, "weak"))], 2, "not recognized"),
     ],
 )
 def test_no_evidence_means_no_name(faces, enrolled, hint):
     content = result(faces, enrolled=enrolled)
     assert content["agreement"] == "none" and "address_as" not in content
-    assert hint in content["guidance"]
+    assert hint in content["summary"]
 
 
 def test_several_faces_say_who_is_present_not_who_is_speaking():
     both = [face((ADA, "strong")), face((BOB, "strong"))]
     silent = result(both)
     assert silent["agreement"] == "none" and "address_as" not in silent
-    assert "In view you recognize: Ada, Bob." in silent["guidance"]
+    assert "Recognized in view: Ada, Bob." in silent["summary"]
+    assert silent["summary"].endswith("Do not call the speaker by a name.")
     heard = result(both, Voice(BOB, "Bob"))
     assert (heard["agreement"], heard["address_as"]) == ("consistent", "Bob")
     elsewhere = result([face((ADA, "strong")), face((ADA, "none"))], Voice(BOB, "Bob"))
     assert (elsewhere["agreement"], elsewhere["address_as"]) == ("voice_only", "Bob")
+
+
+#: One input per way decide() can come out.
+EVERY_OUTCOME = [
+    ([face((ADA, "strong"))], Voice(BOB, "Bob"), 2),                        # conflict
+    ([face((ADA, "strong"))], Voice(ADA, "Ada"), 2),                        # consistent
+    ([face((ADA, "strong"))], Voice(), 2),                                  # face only
+    ([face((ADA, "none"))], Voice(ADA, "Ada"), 2),                          # voice only
+    ([], Voice(), 2),                                                       # nobody in view
+    ([face()], Voice(), 0),                                                 # nobody enrolled
+    ([face((ADA, "strong")), face((BOB, "strong"))], Voice(), 2),           # who of several
+    ([face((ADA, "weak"))], Voice(), 2),                                    # not recognized
+]
+
+
+@pytest.mark.parametrize(("faces", "voice", "enrolled"), EVERY_OUTCOME)
+def test_the_summary_is_facts_then_what_not_to_do_and_names_only_whom_it_may(faces, voice, enrolled):
+    """The shape every outcome keeps (see decide()): facts, then "Do not ..." sentences.
+
+    Nothing in it tells the model how to word the reply; and the name the
+    speaker may be called by appears only when ``address_as`` allows one.
+    """
+    content = result(faces, voice, enrolled)
+    sentences = [s.strip() for s in content["summary"].split(".") if s.strip()]
+    limits = [s for s in sentences if s.startswith("Do not ")]
+    assert sentences == [s for s in sentences if s not in limits] + limits
+    named = content["agreement"] in {"consistent", "face_only", "voice_only"}
+    assert ("address_as" in content) == named
+    assert any(s.startswith("This is ") for s in sentences) == named
 
 
 def test_the_result_carries_names_only():

@@ -161,54 +161,62 @@ def read_faces(evidence: dict, names: dict[str, str]) -> list[dict]:
 
 
 def decide(faces: list[dict], voice: Voice, *, enrolled: int) -> dict:
-    """The capability result: what was seen, what was heard, and what may be said.
+    """The capability result: what was seen, what was heard, and whether a name may be used.
 
-    The guidance tells the model what to say, not how the answer was reached:
-    someone recognized is answered by name, plainly. Hedging every answer
-    ("looks like", "sounds like", "not verification") was tried and is what a
-    user hears as evasive; the limits of recognition are enforced here by
-    withholding the name, not recited by the model.
+    Whether a name may be used is decided here: ``address_as`` is present only
+    when voice and face do not point to different people. ``summary`` says the
+    outcome in words, as facts followed by what not to do ("Do not ..."), and
+    never how to word the reply. A wording order is followed word for word each
+    time: "answer by name, in one short sentence" gave four identical answers in
+    a row (2026-11-14), and an order to explain the basis had every answer
+    recite "not verification". The limits of recognition are kept by
+    withholding the name, not by telling the model what to say.
     """
     seen = [f for f in faces if f["status"] == "identified"]
     heard = voice.person_id is not None and bool(voice.name)
     address = None
+    facts: list[str] = []
+    forbidden: list[str] = []
 
     if len(faces) == 1 and seen and heard and seen[0]["person_id"] != voice.person_id:
         agreement = "conflict"
-        guidance = (
-            f"You cannot tell who this is: the voice points to {voice.name} and the person in "
-            f"view to {seen[0]['name']}. Do not use a name. Say briefly that you are not sure "
-            "who it is; give the reason only if asked."
+        facts.append(
+            "The voice and the face in view point to different people, so who is speaking "
+            "is not known."
         )
+        forbidden.append("call them by either name or guess who they are")
     elif len(faces) == 1 and seen:
         agreement, address = ("consistent" if heard else "face_only"), seen[0]["name"]
-        guidance = _named(address)
+        facts.append(f"This is {address}.")
     elif heard:
         in_view = any(f["person_id"] == voice.person_id for f in seen)
         agreement, address = ("consistent" if in_view else "voice_only"), voice.name
-        guidance = _named(address)
+        facts.append(f"This is {address}.")
     else:
         agreement = "none"
         if not faces:
-            guidance = "You cannot see anyone and did not recognize the voice. Say so briefly."
+            facts.append("Nobody is in view and the voice was not recognized.")
         elif enrolled == 0:
-            guidance = (
-                "You see someone but nobody has enabled face recognition yet, so you cannot "
-                "tell who it is. Say so briefly; the Owner can enable it in the phone app. "
-                "Do not guess a name."
-            )
+            facts += [
+                "Someone is in view, but nobody has enabled face recognition, so who it is "
+                "is not known.",
+                "The Owner can enable it in the phone app.",
+            ]
+            forbidden.append("guess a name")
         elif seen:
-            guidance = "You cannot tell which of the people in view is speaking. Do not use a name."
+            facts.append("Which of the people in view is speaking is not known.")
+            forbidden.append("call the speaker by a name")
         else:
-            guidance = (
-                "You do not recognize this person. Say so briefly and do not guess a name; "
-                "you may ask them to come a little closer and face you."
+            facts.append(
+                "This person is not recognized. A face close to the camera and turned toward "
+                "it compares best."
             )
+            forbidden.append("guess a name")
 
     if len(faces) > 1:
         present = [f["name"] for f in seen]
         if present:
-            guidance += " In view you recognize: " + ", ".join(present) + "."
+            facts.append("Recognized in view: " + ", ".join(present) + ".")
 
     result = {
         "faces": len(faces),
@@ -218,18 +226,11 @@ def decide(faces: list[dict], voice: Voice, *, enrolled: int) -> dict:
         ],
         "voice": {"status": "identified", "name": voice.name} if heard else {"status": "unidentified"},
         "agreement": agreement,
-        "guidance": guidance[:512],
+        "summary": " ".join(facts + [f"Do not {act}." for act in forbidden])[:512],
     }
     if address:
         result["address_as"] = address
     return result
-
-
-def _named(name: str) -> str:
-    return (
-        f"This is {name}. Answer plainly, by name, in one short sentence. Do not hedge and do "
-        "not mention voices, faces, resemblance or verification unless they ask how you know."
-    )
 
 
 def describe(evidence: dict) -> str:

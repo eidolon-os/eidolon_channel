@@ -2015,6 +2015,14 @@ class LiveKitChannelAdapter:
         device cannot reach it. `can_update_own_metadata=False` below is the
         other half of that: a body may not rewrite what it was issued, and the
         one thing worth rewriting is the thing that is no longer here.
+
+        The grants below derive from one Owner policy revision, and the token
+        names it as the attribute `_apply_input_permissions` later restates. A
+        device reads it to tell its configuration changed from a participant
+        update that only restates it. Without it here, the updates LiveKit
+        sends the device while it joins carry no revision until the Provider
+        stamps one, and the device fetched its configuration again on every
+        (re)join, seconds after fetching it to join (2026-11-16).
         """
         sources: list[str] = []
         if spec.audio.publishes:
@@ -2033,7 +2041,7 @@ class LiveKitChannelAdapter:
                 # A hardware fact like interaction_mode: the agent adds only the
                 # microphone processing the device has not already applied.
                 metadata[AUDIO_INPUT_METADATA_FIELD] = dict(spec.serving.audio_input)
-        return (
+        token = (
             api.AccessToken(self._config.api_key, self._config.api_secret)
             .with_identity(spec.device_id)
             .with_name(spec.device_id)
@@ -2051,5 +2059,9 @@ class LiveKitChannelAdapter:
                 )
             )
             .with_metadata(json.dumps(metadata, ensure_ascii=False, separators=(",", ":")))
-            .to_jwt()
         )
+        if spec.output_policy is not None and spec.output_policy.inputs is not None:
+            # The same condition under which the handle carries input_revision.
+            token = token.with_attributes(
+                {POLICY_REVISION_ATTRIBUTE: str(int(spec.output_policy.revision))})
+        return token.to_jwt()

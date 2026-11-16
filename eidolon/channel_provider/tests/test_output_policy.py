@@ -292,6 +292,43 @@ async def test_every_policy_revision_changes_the_device_participant():
     await adapter.shutdown()
 
 
+async def test_device_token_names_the_policy_revision_its_grants_derive_from():
+    """The device's participant carries the revision from the moment it joins.
+
+    LiveKit sends the device updates of its own participant while it joins,
+    before the Provider stamps the revision. Bare, those read as "configuration
+    may have changed" and the device fetched it again on every (re)join, seconds
+    after fetching it to join (2026-11-16). Issued with the revision, they
+    restate the one it holds.
+    """
+    import jwt
+    from eidolon_sdk.biz.presentation import InputSelection
+    from eidolon.channel_provider.adapters.livekit.adapter import POLICY_REVISION_ATTRIBUTE
+    adapter, client = _adapter()
+    req = request(speech=True)
+    policy = req.device.output_policy.model_copy(
+        update={'revision': 7, 'inputs': InputSelection(microphone=True)})
+    grant = await adapter.open(spec(replace(req, device=replace(req.device, output_policy=policy))),
+                               issued_at_ms=1700000000000)
+    claims = jwt.decode(json.loads(grant.payload)['session']['token'], options={'verify_signature': False})
+    assert claims['attributes'] == {POLICY_REVISION_ATTRIBUTE: '7'}
+    assert grant.handle['input_revision'] == 7
+    updates = []
+    async def apply(command):
+        updates.append(command)
+    client.room.update_participant = apply
+    await adapter._reconcile_input_permissions(grant.handle)
+    assert dict(updates[-1].attributes) == claims['attributes']
+    # Without committed inputs there is no live restatement, and no claim to make.
+    legacy = req.device.output_policy.model_copy(update={'revision': 7, 'inputs': None})
+    bare = await adapter.open(spec(replace(req, device=replace(req.device, output_policy=legacy))),
+                              issued_at_ms=1700000000000)
+    claims = jwt.decode(json.loads(bare.payload)['session']['token'], options={'verify_signature': False})
+    assert not claims.get('attributes')
+    assert 'input_revision' not in bare.handle
+    await adapter.shutdown()
+
+
 @pytest.mark.parametrize('profile,selected,expected', [(None,True,None), ('stackchan.head.v1',True,'stackchan.head.v1'), ('stackchan.head.v1',False,None)])
 def test_explicit_head_profile_requires_manifest_and_owner_selection(profile, selected, expected):
     payload = provision_payload(output_policy=DeviceOutputPolicy(revision=1,

@@ -132,7 +132,7 @@ async def test_http_error_has_no_retry_or_redirect(status):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fault', ['network', 'json', 'schema', 'timeout'])
-async def test_failure_uses_existing_channel_uncertainty_policy(fault):
+async def test_failure_degrades_to_ordinary_interruption(fault):
     async def handle(request):
         if fault == 'network':
             raise httpx.ConnectError('injected', request=request)
@@ -144,7 +144,9 @@ async def test_failure_uses_existing_channel_uncertainty_policy(fault):
         try:
             handler.run(state.text, is_final=True)
             await handler._intent_task
-            assert decisions[-1].action is Action.HOLD
+            assert decisions[-1].action is Action.CANCEL
+            assert decisions[-1].intent is InterruptIntent.NORMAL_INTERRUPT
+            assert decisions[-1].reason == 'intent_unavailable_interrupt'
             assert decisions[-1].intent_source == 'unavailable'
             assert not decisions[-1].rollback_drop_buffered
         finally:

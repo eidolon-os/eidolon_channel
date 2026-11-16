@@ -741,12 +741,17 @@ class UserTurnCoordinator:
                 reason=COMMITTED_TURN_REVISION_REASON,
             )
 
+        # Same identity rule as prepare_framework_completed: a completion with
+        # no turn timeline of its own belongs to the terminal candidate, which
+        # must not be committed a second time.
         if (
             candidate is not None
             and self._is_terminal(candidate)
-            and timeline is not None
-            and candidate.timeline is not None
-            and candidate.timeline.turn_id == timeline.turn_id
+            and (
+                timeline is None
+                or candidate.timeline is None
+                or candidate.timeline.turn_id == timeline.turn_id
+            )
         ):
             return UserTurnDecision(
                 action="none",

@@ -398,6 +398,31 @@ def test_materially_different_duplicate_completion_on_same_timeline_is_noop() ->
     assert coordinator.selected_text == "第一版"
 
 
+def test_completion_without_timeline_after_commit_is_noop() -> None:
+    # The SDK re-endpoints on a FINAL that lands after the commit; by then the
+    # pipeline has no current timeline, and the turn must not commit again.
+    coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
+    timeline = TurnTimeline("turn-late-final")
+    coordinator.start_speech(timeline=timeline)
+    coordinator.add_transcript("订一张桌子。", is_final=True)
+    coordinator.add_transcript("订一张七个人的桌子。", is_final=True)
+    first = coordinator.mark_framework_completed(
+        transcript="订一张桌子。",
+        reason="framework_completed_turn",
+        timeline=timeline,
+    )
+
+    late = coordinator.mark_framework_completed(
+        transcript="订一张七个人的桌子。",
+        reason="framework_completed_turn",
+        timeline=None,
+    )
+
+    assert first.action == "commit"
+    assert late.action == "none"
+    assert late.reason == "framework_completed_duplicate:committed"
+
+
 def test_duplicate_speech_start_does_not_replace_open_candidate() -> None:
     coordinator = UserTurnCoordinator(speech_merge_grace_sec=0.8)
     timeline = TurnTimeline("turn-duplicate-start")

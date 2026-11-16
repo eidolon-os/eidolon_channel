@@ -257,6 +257,41 @@ async def test_failed_input_revocation_stays_pending_and_stale_callbacks_cannot_
     assert len(updates) == 1 and updates[0].permission.can_publish is False
     await adapter.shutdown()
 
+async def test_every_policy_revision_changes_the_device_participant():
+    """A revision that leaves publish permissions alone still reaches the device.
+
+    The device's own participant update is its only notice to fetch the Owner's
+    configuration again. On StackChan (no video track) moving the camera use
+    between local and capture leaves permissions identical; without the
+    revision on the participant LiveKit sent nothing, the device kept the old
+    revision and refused every session planned under the new one (2026-11-16).
+    """
+    from eidolon_sdk.biz.presentation import InputSelection
+    from eidolon.channel_provider.adapters.livekit.adapter import POLICY_REVISION_ATTRIBUTE
+    adapter, client = _adapter()
+    req = request(speech=True)
+    def at(revision):
+        policy = req.device.output_policy.model_copy(
+            update={'revision': revision, 'inputs': InputSelection(microphone=True)})
+        return spec(replace(req, device=replace(req.device, output_policy=policy)))
+    first = await adapter.open(at(3), issued_at_ms=1700000000000)
+    second = await adapter.open(at(4), issued_at_ms=1700000000000)
+    updates = []
+    async def apply(command):
+        updates.append(command)
+    client.room.update_participant = apply
+    await adapter._reconcile_input_permissions(first.handle)
+    await adapter._reconcile_input_permissions(second.handle)
+    assert first.handle['input_permissions'] == second.handle['input_permissions']
+    assert [dict(u.attributes) for u in updates] == [
+        {POLICY_REVISION_ATTRIBUTE: '3'}, {POLICY_REVISION_ATTRIBUTE: '4'}]
+    assert updates[0].permission == updates[1].permission
+    # Re-applying a revision restates it; an unchanged participant is no notice.
+    await adapter._reconcile_input_permissions(second.handle)
+    assert dict(updates[-1].attributes) == {POLICY_REVISION_ATTRIBUTE: '4'}
+    await adapter.shutdown()
+
+
 @pytest.mark.parametrize('profile,selected,expected', [(None,True,None), ('stackchan.head.v1',True,'stackchan.head.v1'), ('stackchan.head.v1',False,None)])
 def test_explicit_head_profile_requires_manifest_and_owner_selection(profile, selected, expected):
     payload = provision_payload(output_policy=DeviceOutputPolicy(revision=1,

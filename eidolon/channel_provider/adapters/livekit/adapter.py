@@ -198,6 +198,12 @@ _REQUESTED_BY_FIELD = "requested_by"
 _REQUESTED_BY_DEVICE = "device"
 
 
+#: Participant attribute carrying the Owner policy revision a device's grant
+#: follows; written with every permission reconciliation (see
+#: ``LiveKitChannelAdapter._apply_input_permissions``).
+POLICY_REVISION_ATTRIBUTE = "eidolon.policy_revision"
+
+
 @dataclass
 class _Listening:
     """One channel this adapter has undertaken to carry requests for.
@@ -879,6 +885,13 @@ class LiveKitChannelAdapter:
             self._input_applied[room] = revision
 
     async def _apply_input_permissions(self, handle: dict[str, Any], permissions: dict[str, bool]) -> None:
+        # The device's own participant update is its only notice that the
+        # Owner's policy changed: it then fetches its configuration again. A
+        # revision that leaves publish permissions as they were (a camera use
+        # changed on a board without a video track, 2026-11-16) would make
+        # LiveKit send no update at all, so the revision itself rides along and
+        # every committed revision changes the participant.
+        attributes = {POLICY_REVISION_ATTRIBUTE: str(int(handle["input_revision"]))}
         sources = []
         if permissions["microphone"]:
             sources.append(api.TrackSource.MICROPHONE)
@@ -892,6 +905,7 @@ class LiveKitChannelAdapter:
                     can_subscribe=permissions["subscribe"], can_publish_data=True,
                     can_update_metadata=False,
                 ),
+                attributes=attributes,
             ))
         except TwirpError as exc:
             if exc.code != TwirpErrorCode.NOT_FOUND:

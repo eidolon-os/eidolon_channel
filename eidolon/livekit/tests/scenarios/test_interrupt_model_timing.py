@@ -8,11 +8,12 @@ from unittest.mock import AsyncMock
 import pytest
 from eidolon_sdk.biz.contracts import CLIENT_AUDIO_STATE_TOPIC, WIRE_SCHEMA_VERSION
 
+from eidolon.livekit.agent.session.transcript_revision import normalized_text_equal
 from eidolon.livekit.agent.turn_policy import InterruptIntent, InterruptIntentResult
 from eidolon.livekit.common.config import TurnPolicyConfig
 from .._harness.audio import synth_voiced
 from .._harness.headless import wait_until
-from .._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedTranscript
+from .._harness.mocks import MockLLM, MockSTT, MockTTS, MockVAD, MockVADEvent, ScriptedReply, ScriptedTranscript
 from .._harness.production import production_session
 
 
@@ -37,7 +38,9 @@ async def test_explicit_preempt_during_question_does_not_wait_for_old_model_requ
     reply = '现在介绍这个方案。'
     async with production_session(
         welcome='我正在说明原来的内容，还有几个细节需要慢慢介绍。',
-        llm=MockLLM.scripted([(text, reply)]),
+        # The two STT segments reach the LLM as the framework joins them; since
+        # 64723b7 that presentation is kept when it equals the assembled text.
+        llm=MockLLM.scripted([ScriptedReply(reply=reply, when=lambda m: normalized_text_equal(m, text))]),
         stt=MockSTT.scripted([
             ScriptedTranscript(text=prefix, trigger_after_ms=700),
             ScriptedTranscript(text=continuation, trigger_after_ms=2300),
@@ -70,7 +73,8 @@ async def test_explicit_preempt_during_question_does_not_wait_for_old_model_requ
             await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
                 and getattr(e.payload.item, 'text_content', '') == reply, timeout=4)
             assert old_task is not None and not old_task.done()
-            assert h.events.user_messages() == [text]
+            users = h.events.user_messages()
+            assert len(users) == 1 and normalized_text_equal(users[0], text)
             assert h.events.agent_messages()[-1] == reply
             user_event = await h.events.wait_for(lambda e: e.type == 'conversation_item_added'
                 and getattr(e.payload.item, 'role', None) == 'user')

@@ -344,14 +344,19 @@ def test_explicit_head_profile_requires_manifest_and_owner_selection(profile, se
 
 
 def test_rpc_actions_derive_from_exact_manifest_contracts():
-    from eidolon_sdk.biz.presentation.capability_rpc import actions
+    from eidolon_sdk.biz.capabilities import installed_registry
+    # A device declares the installed contract (as the Reachy client does), not
+    # the raw RPC definitions: the motion package adds wait_for_completion to
+    # the gesture schemas, so a raw motion.nod is rightly not admitted.
+    registry = installed_registry()
+    actions = [registry.get(n).action() for n in ("motion.stop", "motion.nod")]
     payload = provision_payload(output_policy=DeviceOutputPolicy(
         revision=1, allowed=OutputSelection(speech=True, motion=True)).model_dump(mode="json"))
     payload["device"]["manifest"]["properties"] += [
         {"name": "output.motion", "observable": False, "writable": False, "schema": {"type": "boolean", "const": True}},
         {"name": "motion.profile", "observable": False, "writable": False, "schema": {"type": "string", "const": "eidolon.motion.v1"}},
     ]
-    payload["device"]["manifest"]["actions"] = actions()
+    payload["device"]["manifest"]["actions"] = actions
     selected = spec(ProvisionRequest.parse(encoded(payload)))
     assert selected.motion_profile == "eidolon.motion.v1"
     assert "motion.nod" in selected.motion_capabilities

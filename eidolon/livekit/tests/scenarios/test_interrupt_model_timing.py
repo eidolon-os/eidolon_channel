@@ -403,17 +403,10 @@ async def test_incomplete_speech_resumes_output_then_expires_without_reply(recor
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['timeout', 'error', 'uncertain'])
 @pytest.mark.parametrize('eot_provider', ['firered', 'livekit_mini'])
-async def test_model_unavailable_resumes_original_speech_after_vad_end(failure, eot_provider):
-    async def classify(*args, **kwargs):
-        if failure == 'uncertain':
-            return InterruptIntentResult(InterruptIntent.UNCERTAIN, 0.0, 'fault_injection', '')
-        if failure == 'error':
-            raise ConnectionError('injected failure')
-        await asyncio.sleep(10)
-
-    classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
+async def test_uncertain_intent_resumes_original_speech_after_vad_end(eot_provider):
+    classifier = SimpleNamespace(classify=AsyncMock(return_value=InterruptIntentResult(
+        InterruptIntent.UNCERTAIN, 0.0, 'fault_injection', '')))
     policy = TurnPolicyConfig()
     policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm', intent_timeout_ms=150),
                      eot=replace(policy.eot, provider=eot_provider))
@@ -438,8 +431,8 @@ async def test_model_unavailable_resumes_original_speech_after_vad_end(failure, 
             return next((event for event in timeline.attrs.get('duck_events') or ()
                          if event['event'] == 'output_resumed_pending_evidence'), None)
 
-        # Failure and semantic uncertainty share bounded owner recovery, not
-        # a synthetic keep verdict. Playback resumes before candidate expiry.
+        # Semantic uncertainty gets bounded owner recovery, not a synthetic
+        # keep verdict. Playback resumes before candidate expiry.
         await wait_until(lambda: resume_event() is not None, timeout=4)
         assert pipeline._ducking.mixer.state == 'NORMAL'
         assert not speech.interrupted
@@ -457,6 +450,46 @@ async def test_model_unavailable_resumes_original_speech_after_vad_end(failure, 
         assert h.events.agent_messages() == [welcome]
         assert not h.events.user_messages()
         assert not any(s.cleared for s in h.audio_out.segments)
+        assert not pipeline._semantic_interrupts._intent_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['timeout', 'error'])
+@pytest.mark.parametrize('eot_provider', ['firered', 'livekit_mini'])
+async def test_model_unavailable_degrades_to_ordinary_interruption(failure, eot_provider):
+    # A failed or late classifier is not a semantic verdict: the admitted
+    # final cancels output and goes through the ordinary user-turn path.
+    async def classify(*args, **kwargs):
+        if failure == 'error':
+            raise ConnectionError('injected failure')
+        await asyncio.sleep(10)
+
+    classifier = SimpleNamespace(classify=AsyncMock(side_effect=classify))
+    policy = TurnPolicyConfig()
+    policy = replace(policy, interrupt=replace(policy.interrupt, intent_provider='llm', intent_timeout_ms=150),
+                     eot=replace(policy.eot, provider=eot_provider))
+    welcome = '原来的回答仍然在这里播放，模型暂时不可用时需要保留这段内容。'
+    async with production_session(
+        welcome=welcome, llm=MockLLM.scripted([('测试输入', '收到。')]),
+        interrupt_classifier=classifier, turn_policy=policy,
+        stt=MockSTT.scripted([ScriptedTranscript(text='测试输入', trigger_after_ms=700)]),
+        tts=MockTTS(char_seconds=.1, chunk_delay_ms=40),
+        vad=MockVAD.scripted([MockVADEvent('start', 350), MockVADEvent('end', 1550, .1, .5)]),
+    ) as (pipeline, h):
+        h.audio_in.feed_pcm(synth_voiced(1.1))
+        await h.audio_out.wait_for_first_audio()
+        speech = h.session.current_speech
+        await wait_until(lambda: pipeline._timeline is not None, timeout=3)
+        timeline = pipeline._timeline
+        await h.events.wait_for_agent_messages(2, timeout=8)
+        assert speech.interrupted
+        assert h.events.user_messages() == ['测试输入']
+        assert h.events.agent_messages() == [welcome, '收到。']
+        verdict = timeline.attrs['interruption_verdict']
+        assert verdict['action'] == 'confirmed_cancel'
+        assert verdict['continue_to_llm'] is True
+        assert not any(d['event'] == 'output_resumed_pending_evidence'
+                       for d in timeline.attrs.get('duck_events') or ())
         assert not pipeline._semantic_interrupts._intent_tasks
 
 

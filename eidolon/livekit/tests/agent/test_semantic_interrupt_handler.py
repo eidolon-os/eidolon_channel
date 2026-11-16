@@ -30,6 +30,9 @@ def _handler(
     vad_active: bool = True,
     soft_interrupt_active: bool = False,
 ) -> tuple[SemanticInterruptHandler, SimpleNamespace]:
+    # These cases cover the rule path (intent_provider "none"); a bare
+    # MagicMock config would read as truthy and route to model intent.
+    turn_runtime.config.interrupt.uses_model_intent = False
     calls = SimpleNamespace(
         apply_decision=MagicMock(),
         interrupt_current_turn=MagicMock(),

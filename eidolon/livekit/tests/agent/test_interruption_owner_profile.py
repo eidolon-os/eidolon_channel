@@ -76,6 +76,9 @@ def _transcript_pipeline(owner: str) -> StreamingPipeline:
     # the admission gate calls absorb_committed_transcript_revision() and a bare
     # MagicMock would return a truthy sentinel, wrongly rejecting the transcript.
     pipeline._user_turns.absorb_committed_transcript_revision.return_value = False
+    # Without provider revision/span evidence a transcript never opens a turn
+    # on its own (no VAD edge); the real coordinator answers False here.
+    pipeline._user_turns.transcript_starts_new_turn.return_value = False
     pipeline._interruption_orchestrator = MagicMock()
     pipeline._attention_effects = MagicMock()
     pipeline._attention_effects.allows_eot_check.return_value = True

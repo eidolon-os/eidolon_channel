@@ -22,7 +22,7 @@ backchannel-holds, normal-turn commit, topic-switch/correction/hard-stop.
 
 from __future__ import annotations
 
-from benchmark.policy_runner import run_policy_suite
+from benchmark.policy_runner import rule_turn_policy, run_policy_suite
 from benchmark.schema import RunResult, load_suite
 
 # Enforced FD suites carrying the 2a/2c decision expectations, plus the shared
@@ -49,7 +49,7 @@ def run_fd_safety_corpus(run_id: str = "fd-safety") -> RunResult:
     """Replay the FD safety corpus through the deterministic policy runner."""
 
     suites = [load_suite(path) for path in FD_SAFETY_SUITES]
-    return run_policy_suite(suites, run_id=run_id)
+    return run_policy_suite(suites, run_id=run_id, turn_policy=rule_turn_policy())
 
 
 def false_cancel_violations(run: RunResult) -> list[str]:

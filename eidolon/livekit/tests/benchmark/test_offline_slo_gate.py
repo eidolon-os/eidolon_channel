@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from benchmark.dashboard import DashboardRunner, write_dashboard
-from benchmark.policy_runner import run_policy_suite
+from benchmark.policy_runner import rule_turn_policy, run_policy_suite
 from benchmark.report import write_repeated_reports
 from benchmark.schema import load_suite
 from benchmark.slo import enforcement_failures
@@ -24,7 +24,7 @@ from scripts.bench_voice import _default_cases
 
 def _policy_runner_payload(tmp_path: Path) -> dict:
     suites = [load_suite(path) for path in _default_cases()]
-    run = run_policy_suite(suites, run_id="offline-slo")
+    run = run_policy_suite(suites, run_id="offline-slo", turn_policy=rule_turn_policy())
     run_dir = tmp_path / "policy"
     run_dir.mkdir(parents=True)
     write_repeated_reports([run], run_dir)

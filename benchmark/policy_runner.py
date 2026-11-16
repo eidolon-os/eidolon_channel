@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,19 @@ def _git_sha() -> str:
         ).strip()
     except Exception:
         return "unknown"
+
+
+def rule_turn_policy() -> TurnPolicyConfig:
+    """The deployment's turn policy with interruption decided by rules alone.
+
+    This runner replays scripted transcripts and never runs an intent
+    classifier, so a policy that waits for model intent (``intent_provider``
+    llm/systemone, the deployed setting) can only ever hold. The offline
+    gates replay the deterministic rule policy instead.
+    """
+
+    policy = load_effective_config().turn_policy
+    return replace(policy, interrupt=replace(policy.interrupt, intent_provider="none"))
 
 
 def run_policy_suite(

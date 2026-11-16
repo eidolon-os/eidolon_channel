@@ -78,7 +78,8 @@ async def test_silent_warmup_only_visits_input_stages():
 
     pipeline = InputOnlyPipeline.__new__(InputOnlyPipeline)
     pipeline._factory = factory
-    assert pipeline._lifecycle_stages() == [stt]
+    # No TTS stage; the LLM stage warms device resources since 76a6caf.
+    assert pipeline._lifecycle_stages() == [stt, factory.llm]
     await pipeline._warmup_stages()
     stt.warmup.assert_awaited_once()
 
@@ -188,7 +189,7 @@ def test_input_disabled_manual_pipeline_keeps_text_and_speech_without_ptt_captur
         output_plan=plan, runtime_session_id='text')
     pipeline = HalfDuplexPttPipeline(factory)
     assert pipeline._ptt_controller is None
-    assert pipeline._lifecycle_stages() == [factory.tts]
+    assert pipeline._lifecycle_stages() == [factory.tts, factory.llm]
     pipeline._maybe_start_audio_stream(object(), object())
     assert not pipeline._track_tasks
     options = pipeline._build_room_options()

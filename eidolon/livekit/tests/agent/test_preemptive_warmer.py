@@ -17,11 +17,12 @@ class _FakeSession:
         self.cancelled: list[str] = []
         self._n = 0
 
-    async def start_turn(self, *, text, conversation_id, trace_id=None, speculative=False):
+    async def start_turn(self, *, text, conversation_id, metadata=None, trace_id=None,
+                         speculative=False):
         self._n += 1
         turn_id = f"spec-{self._n}"
         self.started.append(
-            {"turn_id": turn_id, "text": text, "speculative": speculative}
+            {"turn_id": turn_id, "text": text, "speculative": speculative, "metadata": metadata}
         )
 
         async def _payloads():

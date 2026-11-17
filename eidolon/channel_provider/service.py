@@ -27,6 +27,7 @@ from eidolon_sdk.biz.control.shared_session import (
     SharedSessionSelection,
 )
 from eidolon_sdk.biz.smarthome import VoiceResult
+from eidolon_sdk.biz.tools import DeviceToolOffer
 
 from eidolon.capability_runtime.smarthome import SmartHomeRuntime
 from eidolon.livekit.common.entry_timing import dispatch_entry
@@ -41,6 +42,7 @@ from .contracts import (
     InvalidTransition,
     ProvisionRequest,
     RevokeRequest,
+    TOOL_RESTRICTION,
     SessionRequest,
     UnknownChannel,
     canonical_json,
@@ -52,7 +54,7 @@ from .selection import AdapterRegistry
 from .shared_admission import SharedAdmission
 from .shared_invitation import SHARED_VISIT_MAX_SECONDS, invitation_command
 from .spec import ChannelSpec, MediaFlow, derive_spec
-from .store import ChannelProviderStore, StoredProvision
+from .store import ChannelProviderStore, StoredProvision, revision_regresses
 
 logger = logging.getLogger("eidolon.channel_provider.service")
 PRESENCE_READ_TIMEOUT_SECONDS = 3.0
@@ -228,14 +230,15 @@ class ChannelProviderService:
 
             previous = self._store.current_channel(request.device_ref)
             if previous is not None and previous.device_ref == request.device_ref:
-                old, new = previous.output_policy, request.device.output_policy
-                if old is not None and (new is None or new.revision < old.revision
-                        or (new.revision == old.revision and new != old)):
+                if revision_regresses(previous.output_policy, request.device.output_policy):
                     raise InvalidTransition("output policy cannot regress or reuse a revision")
+                if revision_regresses(previous.tool_restriction, request.tool_restriction):
+                    raise InvalidTransition("tool restriction cannot regress or reuse a revision")
             spec = derive_spec(
                 request.device,
                 device_instance_id=request.device_ref.device_instance_id,
                 agent_name=self._agent_name,
+                tool_restriction=request.tool_restriction,
             )
             adapter = (
                 self._registry.get(previous.adapter_name)
@@ -267,6 +270,7 @@ class ChannelProviderService:
                 and (previous.manifest_revision == request.device.manifest_revision
                      or recovering_control)
                 and previous.output_policy == request.device.output_policy
+                and previous.tool_restriction == request.tool_restriction
                 and previous.adapter_name == adapter.name
             )
             if reserved and not same_authority:
@@ -841,9 +845,14 @@ class ChannelProviderService:
                     raise UnknownChannel("selected device has no current channel")
                 if stored.owner_id != authenticated_owner_id:
                     raise Forbidden("selected device belongs to another Owner")
+                # Hub's specification is the device's; the restriction is not
+                # part of it, so it comes from the provision it must match.
+                restriction = stored.tool_restriction
                 requests.append(ProvisionRequest.parse(json.dumps({
                     "operation": stored.operation_kind,
                     "operation_id": stored.operation_id,
+                    **({TOOL_RESTRICTION: restriction.model_dump(mode="json")}
+                       if restriction is not None else {}),
                     **specification,
                 }).encode()))
         async with self.shared_transport(
@@ -900,7 +909,8 @@ class ChannelProviderService:
                        ("open_shared", "deliver_shared_invitation", "device_is_on_channel")):
                 raise InvalidTransition("selected transport does not support shared invitations")
             specs = tuple(derive_spec(by_id[device_id].device,
-                          device_instance_id=device_id, agent_name=self._agent_name)
+                          device_instance_id=device_id, agent_name=self._agent_name,
+                          tool_restriction=by_id[device_id].tool_restriction)
                           for device_id in device_ids)
             scope = _TransportScope(asyncio.current_task())
             for device_id in device_ids:
@@ -1101,6 +1111,34 @@ class ChannelProviderService:
             "device_id": device_id,
             "values": values,
         })
+
+    async def device_offer(self, *, owner_id: str, device_id: str) -> str:
+        """What this device's channel offers a session, as it was granted. A read.
+
+        Read from the stored grant, never re-derived: what the Manifest
+        declared beside what the Owner's output policy lets a session use of it.
+        """
+
+        stored = await self._owned_channel(owner_id=owner_id, device_id=device_id)
+        handle = json.loads(stored.handle_json)
+        declared = handle.get("declared")
+        if not isinstance(declared, dict):
+            # A transport that does not record what its device declared has
+            # nothing to offer from; no grant here can answer yet.
+            raise UnknownChannel("device channel does not record what its Manifest declared")
+        # No template: the Owner has not decided this device's outputs, and the
+        # grant offers a session no device contract.
+        template = handle.get("output_template") or {}
+        offer = DeviceToolOffer(
+            device_id=device_id,
+            declared_capabilities=declared["capabilities"],
+            declared_motion_profile=declared["motion_profile"],
+            policy_revision=template.get("policy_revision"),
+            outputs=template.get("outputs"),
+            session_capabilities=(*template.get("motion_capabilities", ()),
+                                  *template.get("device_capabilities", ())),
+        )
+        return canonical_json(offer.model_dump(mode="json"))
 
     async def invoke_owner_capability(
         self, *, owner_id: str, device_id: str, capability: str,
@@ -1452,6 +1490,10 @@ class ChannelProviderService:
                 "manifest_revision": request.device.manifest_revision,
                 **({"output_policy": request.device.output_policy.model_dump(mode="json")}
                    if request.device.output_policy is not None else {}),
+                # Echoed so the Authority can tell its restriction reached this
+                # grant; absent exactly when it sent none.
+                **({TOOL_RESTRICTION: request.tool_restriction.model_dump(mode="json")}
+                   if request.tool_restriction is not None else {}),
                 "channels": [
                     {
                         "channel_id": channel_id,

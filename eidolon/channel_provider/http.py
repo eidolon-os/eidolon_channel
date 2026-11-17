@@ -221,6 +221,21 @@ def create_app(
         except DomainError as exc:
             return problem(exc)
 
+    async def device_offer(request: web.Request) -> web.Response:
+        """What a device's channel offers a session, as it was granted. A read."""
+
+        owner_id = request.query.get("owner_id", "")
+        if not owner_id or len(owner_id) > 128:
+            return _contract_problem("owner_id is required", status=422)
+        try:
+            return web.Response(
+                text=await service.device_offer(
+                    owner_id=owner_id, device_id=request.match_info["device_id"]),
+                content_type="application/json",
+            )
+        except DomainError as exc:
+            return problem(exc)
+
     async def owner_capability(request: web.Request) -> web.Response:
         """One Owner-controllable capability on a device, outside any session."""
 
@@ -242,6 +257,7 @@ def create_app(
             return problem(exc)
 
     app.router.add_get("/v1/device-channels/{device_id}/properties", device_properties)
+    app.router.add_get("/v1/device-channels/{device_id}/offer", device_offer)
     app.router.add_post(
         "/v1/device-channels/{device_id}/capabilities/{capability}", owner_capability
     )

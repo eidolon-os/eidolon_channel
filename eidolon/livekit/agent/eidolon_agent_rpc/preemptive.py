@@ -49,8 +49,13 @@ class PreemptiveWarmer:
         *,
         conversation_id: str,
         trace_id: str | None = None,
+        metadata: dict | None = None,
     ) -> None:
-        """Speculatively start a turn on a partial transcript (best effort)."""
+        """Speculatively start a turn on a partial transcript (best effort).
+
+        ``metadata`` is what the brain must know of every turn, a warm-up
+        included: the device's tool restriction shapes the prompt it compiles.
+        """
         text = (text or "").strip()
         if len(text) < self._min_chars or text == self._active_text:
             return
@@ -59,6 +64,7 @@ class PreemptiveWarmer:
             turn_id, payloads = await self._session.start_turn(
                 text=text,
                 conversation_id=conversation_id,
+                metadata=metadata,
                 trace_id=trace_id,
                 speculative=True,
             )

@@ -382,7 +382,12 @@ class LiveKitChannelAdapter:
         return VoiceCapture(self._config, self._client_urls)
 
     def binding_current(self, handle: dict[str, Any]) -> bool:
-        return (handle.get("server_urls") == self._client_urls()
+        # A handle minted before `declared` existed is refreshed once through
+        # the ordinary `current` -> `refresh_required` -> Hub refresh path, which
+        # re-derives it from the Manifest the Hub sends. Every reader can then
+        # rely on the key instead of coping with a handle that lacks it.
+        return ("declared" in handle
+                and handle.get("server_urls") == self._client_urls()
                 and ("input_revision" not in handle or
                      self._input_applied.get(str(handle.get("room"))) == handle["input_revision"]))
 
@@ -449,6 +454,14 @@ class LiveKitChannelAdapter:
         # an Authority that then refreshes it, on every configuration pull,
         # forever.
         handle: dict[str, Any] = {"room": room, "device": spec.device_id, "server_urls": urls}
+        # What the Manifest declared, whatever the Owner selected, so the
+        # Owner's app can tell "the device cannot" from "not allowed" without
+        # anyone re-deriving it. Its own key, never `output_template`: that one
+        # is sent to devices, whose parsers refuse a field they do not know.
+        handle["declared"] = {
+            "capabilities": list(spec.declared_capabilities),
+            "motion_profile": spec.declared_motion_profile,
+        }
         if spec.smarthome_panel:
             handle["smarthome_owner"] = spec.owner_id
         if spec.output_policy is not None and spec.selected_outputs is not None:
@@ -461,6 +474,12 @@ class LiveKitChannelAdapter:
                 **({"motion_capabilities": list(spec.motion_capabilities)} if spec.motion_capabilities else {}),
                 **({"device_capabilities": list(spec.device_capabilities)} if spec.device_capabilities else {}),
             }
+        if spec.tool_restriction is not None:
+            # Beside `output_template`, never in it, for the same reason as
+            # `declared`. The session tables in the template are already
+            # narrowed; this is what the Agent and the worker still need for
+            # the tools no device runs (the weather, music, a look).
+            handle["tool_restriction"] = spec.tool_restriction.model_dump(mode="json")
         if spec.observable_properties:
             handle["observable_properties"] = list(spec.observable_properties)
         if spec.owner_capabilities and spec.output_policy is not None:
@@ -931,7 +950,11 @@ class LiveKitChannelAdapter:
                     await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
                 continue
             plan = metadata.get("output_plan")
-            compatible = (isinstance(plan, dict) and all(plan.get(k) == v for k,v in template.items()))
+            # A restriction on a tool no device runs leaves the template as it
+            # was, so it is compared on its own: the session holding the old
+            # one must still end.
+            compatible = (isinstance(plan, dict) and all(plan.get(k) == v for k,v in template.items())
+                          and metadata.get("tool_restriction") == handle.get("tool_restriction"))
             if not compatible:
                 await self._client().agent_dispatch.delete_dispatch(dispatch_id=dispatch.id, room_name=room)
 
@@ -1579,6 +1602,7 @@ class LiveKitChannelAdapter:
                 if (
                     metadata.get(SESSION_INTENT_FIELD, SESSION_INTENT_USER_INITIATED) != session_intent
                     or metadata.get("output_plan") != (output_plan.model_dump(mode="json") if output_plan else None)
+                    or metadata.get("tool_restriction") != handle.get("tool_restriction")
                     or metadata.get("presentation_endpoint") != presentation_endpoint
                     or metadata.get("team_dispatch") != team_dispatch
                     or metadata.get(SESSION_APPLICATION_FIELD, SESSION_APPLICATION_COMPANION) != application
@@ -1636,6 +1660,10 @@ class LiveKitChannelAdapter:
                             **({"target_companion_id": target_companion_id}
                                if target_companion_id is not None else {}),
                             **({"output_plan": output_plan.model_dump(mode="json")} if output_plan else {}),
+                            # Same bus as the plan, for the same reason: only
+                            # this adapter writes it, so the worker can trust it.
+                            **({"tool_restriction": handle["tool_restriction"]}
+                               if "tool_restriction" in handle else {}),
                             **({"presentation_endpoint": presentation_endpoint} if presentation_endpoint else {}),
                             **({"team_dispatch": team_dispatch} if team_dispatch else {}),
                             **({_REQUESTED_BY_FIELD: _REQUESTED_BY_DEVICE} if device_requested else {}),
@@ -1879,6 +1907,8 @@ class LiveKitChannelAdapter:
         team = TeamDispatch(opened=opened, input_plan=source_plan, endpoints=endpoints)
         handle = dict(source)
         handle['output_template'] = source_plan.model_dump(mode='json', exclude={'session_id'})
+        # Nothing to restrict in a scene that offers no tool.
+        handle.pop('tool_restriction', None)
         await self.open_session(handle, source_plan.session_id,
             session_intent=SESSION_INTENT_USER_INITIATED,
             team_dispatch=team.model_dump(mode='json'))

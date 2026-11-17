@@ -58,13 +58,15 @@ async def test_provision_replay_preserves_shared_scope_but_refresh_retires_it(tm
     assert not service._transport_scopes
 
 
-async def setup(tmp_path):
+async def setup(tmp_path, *, restriction=None):
     clock = [1700000000000]
     service, store, adapter = _service(tmp_path, clock)
     requests = []
     for i in range(2):
         raw = provision_payload(device_id=named_device_instance_id(f"endpoint-{i}"))
         raw["operation_id"] = f"enrollment-{i}"
+        if restriction is not None and i == 0:
+            raw["tool_restriction"] = restriction
         req = ProvisionRequest.parse(encoded(raw))
         await service.provision(req)
         requests.append(req)
@@ -345,6 +347,28 @@ async def test_current_specifications_use_provider_ledger_and_reject_tampering(t
             ):
                 pytest.fail("tampered specification admitted")
         assert not adapter.shared_created
+
+
+async def test_a_restricted_device_joins_a_shared_session_from_hubs_specification(tmp_path):
+    """Hub's specification is the device's alone; the restriction is the ledger's.
+
+    It is part of the stored provision's fingerprint, so a specification
+    rebuilt without it would read as a different ask and be refused.
+    """
+    restriction = {"revision": 2, "denied": ["get_weather"]}
+    service, _, adapter, _, selected, requests = await setup(tmp_path, restriction=restriction)
+    specifications = tuple(
+        {"device_ref": request.device_ref.model_dump(mode="json"),
+         "device": provision_payload(device_id=request.device_id)["device"]}
+        for request in requests
+    )
+    async with service.shared_transport_from_specifications(
+        selected, specifications, authenticated_owner_id="owner_1",
+    ) as ready:
+        assert ready["state"] == "transport_ready"
+    (restricted, unrestricted), = adapter.shared_created
+    assert restricted.tool_restriction.model_dump(mode="json") == restriction
+    assert unrestricted.tool_restriction is None
 
 
 async def test_recovering_control_room_is_observed_before_new_invitation(tmp_path):

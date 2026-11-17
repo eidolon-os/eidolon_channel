@@ -11,6 +11,7 @@ from pathlib import Path
 
 from eidolon_sdk.device_foundation.v1 import DeviceRef
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy
+from eidolon_sdk.biz.tools import DeviceToolRestriction
 
 from .contracts import IdempotencyConflict, InvalidTransition, StaleGeneration
 
@@ -43,6 +44,10 @@ class StoredProvision:
         return _output_policy(self.response_json)
 
     @property
+    def tool_restriction(self) -> DeviceToolRestriction | None:
+        return _tool_restriction(self.response_json)
+
+    @property
     def owner_domain_id(self) -> str:
         return str(self.device_ref.owner_domain_id)
 
@@ -68,9 +73,29 @@ def _output_policy(response_json: str) -> DeviceOutputPolicy | None:
     return DeviceOutputPolicy.model_validate(value) if value is not None else None
 
 
+def _tool_restriction(response_json: str) -> DeviceToolRestriction | None:
+    value = json.loads(response_json).get("tool_restriction")
+    return DeviceToolRestriction.model_validate(value) if value is not None else None
+
+
+def revision_regresses(old, new) -> bool:
+    """Whether ``new`` takes a revisioned device fact back, or reuses its revision.
+
+    One rule for the output policy and the tool restriction alike: once the
+    Authority sent one, it never goes away, never goes back, and a revision
+    names one content.
+    """
+    return old is not None and (new is None or new.revision < old.revision
+                                or (new.revision == old.revision and new != old))
+
+
 def _policy_advances(previous: str, incoming: str) -> bool:
-    old, new = _output_policy(previous), _output_policy(incoming)
-    return new is not None and new.revision > (old.revision if old else 0)
+    """Whether the incoming answer carries a newer output policy or tool restriction."""
+    for read in (_output_policy, _tool_restriction):
+        old, new = read(previous), read(incoming)
+        if new is not None and new.revision > (old.revision if old else 0):
+            return True
+    return False
 
 
 class ChannelProviderStore:
@@ -419,11 +444,13 @@ class ChannelProviderStore:
                 for row in same_generation:
                     if row["operation_kind"] not in {PROVISION, REFRESH}:
                         continue
-                    old, new = _output_policy(row["response_json"]), value.output_policy
-                    if old is not None and (new is None or new.revision < old.revision
-                            or (new.revision == old.revision and new != old)):
+                    if revision_regresses(_output_policy(row["response_json"]), value.output_policy):
                         connection.rollback()
                         raise InvalidTransition("output policy cannot regress or reuse a revision")
+                    if revision_regresses(_tool_restriction(row["response_json"]),
+                                          value.tool_restriction):
+                        connection.rollback()
+                        raise InvalidTransition("tool restriction cannot regress or reuse a revision")
                 if value.operation_kind == PROVISION and same_generation:
                     connection.rollback()
                     raise InvalidTransition(

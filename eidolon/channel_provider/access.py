@@ -96,6 +96,7 @@ ROUTE_ROLES: Mapping[tuple[str, str], frozenset[Role]] = MappingProxyType(
         # (eidolon_admin_server/app/management/*, app/mission_control).
         ("GET", "/v1/device-channels/presence"): _MANAGEMENT,
         ("GET", "/v1/device-channels/{device_id}/properties"): _MANAGEMENT,
+        ("GET", "/v1/device-channels/{device_id}/offer"): _MANAGEMENT,
         ("POST", "/v1/device-channels/{device_id}/capabilities/{capability}"): _MANAGEMENT,
         ("GET", "/v1/session-traces"): _MANAGEMENT,
         ("GET", "/v1/session-traces/{session_id}"): _MANAGEMENT,

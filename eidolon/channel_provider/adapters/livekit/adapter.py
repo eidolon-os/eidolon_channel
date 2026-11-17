@@ -382,7 +382,12 @@ class LiveKitChannelAdapter:
         return VoiceCapture(self._config, self._client_urls)
 
     def binding_current(self, handle: dict[str, Any]) -> bool:
-        return (handle.get("server_urls") == self._client_urls()
+        # A handle minted before `declared` existed is refreshed once through
+        # the ordinary `current` -> `refresh_required` -> Hub refresh path, which
+        # re-derives it from the Manifest the Hub sends. Every reader can then
+        # rely on the key instead of coping with a handle that lacks it.
+        return ("declared" in handle
+                and handle.get("server_urls") == self._client_urls()
                 and ("input_revision" not in handle or
                      self._input_applied.get(str(handle.get("room"))) == handle["input_revision"]))
 
@@ -449,6 +454,14 @@ class LiveKitChannelAdapter:
         # an Authority that then refreshes it, on every configuration pull,
         # forever.
         handle: dict[str, Any] = {"room": room, "device": spec.device_id, "server_urls": urls}
+        # What the Manifest declared, whatever the Owner selected, so the
+        # Owner's app can tell "the device cannot" from "not allowed" without
+        # anyone re-deriving it. Its own key, never `output_template`: that one
+        # is sent to devices, whose parsers refuse a field they do not know.
+        handle["declared"] = {
+            "capabilities": list(spec.declared_capabilities),
+            "motion_profile": spec.declared_motion_profile,
+        }
         if spec.smarthome_panel:
             handle["smarthome_owner"] = spec.owner_id
         if spec.output_policy is not None and spec.selected_outputs is not None:

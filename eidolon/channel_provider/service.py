@@ -27,6 +27,7 @@ from eidolon_sdk.biz.control.shared_session import (
     SharedSessionSelection,
 )
 from eidolon_sdk.biz.smarthome import VoiceResult
+from eidolon_sdk.biz.tools import DeviceToolOffer
 
 from eidolon.capability_runtime.smarthome import SmartHomeRuntime
 from eidolon.livekit.common.entry_timing import dispatch_entry
@@ -1101,6 +1102,34 @@ class ChannelProviderService:
             "device_id": device_id,
             "values": values,
         })
+
+    async def device_offer(self, *, owner_id: str, device_id: str) -> str:
+        """What this device's channel offers a session, as it was granted. A read.
+
+        Read from the stored grant, never re-derived: what the Manifest
+        declared beside what the Owner's output policy lets a session use of it.
+        """
+
+        stored = await self._owned_channel(owner_id=owner_id, device_id=device_id)
+        handle = json.loads(stored.handle_json)
+        declared = handle.get("declared")
+        if not isinstance(declared, dict):
+            # A transport that does not record what its device declared has
+            # nothing to offer from; no grant here can answer yet.
+            raise UnknownChannel("device channel does not record what its Manifest declared")
+        # No template: the Owner has not decided this device's outputs, and the
+        # grant offers a session no device contract.
+        template = handle.get("output_template") or {}
+        offer = DeviceToolOffer(
+            device_id=device_id,
+            declared_capabilities=declared["capabilities"],
+            declared_motion_profile=declared["motion_profile"],
+            policy_revision=template.get("policy_revision"),
+            outputs=template.get("outputs"),
+            session_capabilities=(*template.get("motion_capabilities", ()),
+                                  *template.get("device_capabilities", ())),
+        )
+        return canonical_json(offer.model_dump(mode="json"))
 
     async def invoke_owner_capability(
         self, *, owner_id: str, device_id: str, capability: str,

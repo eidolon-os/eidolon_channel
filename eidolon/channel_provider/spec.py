@@ -108,6 +108,11 @@ class ChannelSpec:
     owner_capabilities: tuple[str, ...] = ()
     #: Installed observable properties this device declared exactly.
     observable_properties: tuple[str, ...] = ()
+    #: What the accepted Manifest declares whatever the Owner selected: every
+    #: installed device contract and the head profile. Beside what a session
+    #: may use, it tells "the device cannot" from "the Owner has not allowed it".
+    declared_capabilities: tuple[str, ...] = ()
+    declared_motion_profile: str | None = None
 
     @property
     def needs_media(self) -> bool:
@@ -276,6 +281,12 @@ def derive_spec(
     if serving is not None and serving.application == SESSION_APPLICATION_HOME_COMMAND:
         if not smarthome_panel or not audio.publishes:
             raise ContractError("home.command.v1 requires a smart-home panel and microphone")
+    # The head profile the device states about itself; a session gets it only
+    # when the Owner selected motion.
+    declared_motion_profile = next((p["schema"]["const"] for p in manifest.get("properties", ())
+        if p.get("name") == "motion.profile"
+        and p.get("writable") is False and isinstance(p.get("schema"), dict)
+        and p["schema"].get("const") in {"stackchan.head.v1", "eidolon.motion.v1", "eidolon.motion.v2"}), None)
     return ChannelSpec(
         device_id=device_instance_id,
         owner_id=str(device.owner_id),
@@ -285,10 +296,7 @@ def derive_spec(
         serving=serving,
         output_policy=device.output_policy,
         selected_outputs=selected,
-        motion_profile=next((p["schema"]["const"] for p in manifest.get("properties", ())
-            if selected and selected.motion and p.get("name") == "motion.profile"
-            and p.get("writable") is False and isinstance(p.get("schema"), dict)
-            and p["schema"].get("const") in {"stackchan.head.v1", "eidolon.motion.v1", "eidolon.motion.v2"}), None),
+        motion_profile=declared_motion_profile if selected and selected.motion else None,
         motion_capabilities=tuple(
             name for name in installed
             if registry.get(name).required_output == "motion" and name in permitted),
@@ -302,6 +310,8 @@ def derive_spec(
             name for name in installed
             if registry.get(name).owner_control and device.output_policy is not None),
         observable_properties=tuple(declared_observable_properties(manifest)),
+        declared_capabilities=installed,
+        declared_motion_profile=declared_motion_profile,
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
         or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,

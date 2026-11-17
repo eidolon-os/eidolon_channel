@@ -391,6 +391,21 @@ def _resolve_output_plan(ctx, session_id: str) -> SessionOutputPlan | None:
     return plan
 
 
+def _resolve_device_tool_deny(ctx) -> frozenset[str]:
+    """The tools this device's Owner withholds from every session on it.
+
+    Same authority as ``_resolve_output_plan``: only the Provider's dispatch
+    carries it, and a participant cannot write that. Absent means the device
+    was never restricted.
+    """
+    from eidolon_sdk.biz.tools import DeviceToolRestriction
+
+    metadata = json.loads(str(getattr(ctx.job, "metadata", "") or "{}"))
+    if "tool_restriction" not in metadata:
+        return frozenset()
+    return frozenset(DeviceToolRestriction.model_validate(metadata["tool_restriction"]).denied)
+
+
 def _resolve_presentation_endpoint(ctx):
     from eidolon.livekit.common.presentation_endpoint import PresentationEndpoint
 
@@ -472,6 +487,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
     room = ctx.room
     runtime_session_id = _resolve_runtime_session_id(ctx)
     output_plan = _resolve_output_plan(ctx, runtime_session_id)
+    device_tool_deny = _resolve_device_tool_deny(ctx)
     target_companion_id = _resolve_session_target(ctx)
     presentation_endpoint = _resolve_presentation_endpoint(ctx)
     presentation_room = None
@@ -756,6 +772,7 @@ async def run_agent(ctx, cfg: AgentConfig, *, started: asyncio.Event | None = No
             livekit_room=room,
             runtime_session_id=runtime_session_id,
             output_plan=stage_output_plan,
+            device_tool_deny=device_tool_deny,
             target_companion_id=target_companion_id,
             personal_memory=personal_memory,
             runtime_services=runtime_services,

@@ -128,6 +128,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         conversation_id: str | Callable[[], str],
         display_model: str = "eidolon_agent",
         output_plan: SessionOutputPlan | None = None,
+        device_tool_deny: frozenset[str] = frozenset(),
         presentation_room: Any = None,
         tls: TlsConfig | None = None,
     ) -> None:
@@ -148,6 +149,10 @@ class EidolonAgentGrpcLlm(llm.LLM):
         ``participant.metadata`` for kind + identity, resolves Kernel Mount and
         System Data runtime facts, then signs a fresh narrow JWT.
 
+        ``device_tool_deny`` is the device's tool restriction from the
+        Provider's dispatch: told to the brain on every turn, and never offered
+        or routed among the Channel's own tools.
+
         D1, plan Phase D.
         """
         super().__init__()
@@ -158,6 +163,7 @@ class EidolonAgentGrpcLlm(llm.LLM):
         self._device_token_source: DeviceTokenSource = device_token
         self._target = target.strip()
         self.output_plan = output_plan
+        self._device_tool_deny = frozenset(device_tool_deny)
         self.presentation_transport = None
         if output_plan is not None and (output_plan.outputs.expression or output_plan.outputs.motion):
             from ..session.presentation import PresentationTransport
@@ -257,13 +263,18 @@ class EidolonAgentGrpcLlm(llm.LLM):
         from ..session.capability_router import CapabilityRouter
         router = CapabilityRouter()
         if self._device_rpc is not None:
+            # Already narrowed: the plan these come from is the Provider's.
             device = self._device_rpc
             router.register(device.names, device.execute, device.cancel, location="device")
+        # The Channel's own tools (music, vision.who) are the ones no plan
+        # lists, so the device's restriction is applied here: a withheld one is
+        # neither offered nor routed.
+        denied = self._device_tool_deny
         if capabilities:
-            router.register(capabilities, handler, cancel_handler, location="channel")
+            router.register(frozenset(capabilities) - denied, handler, cancel_handler, location="channel")
         self._swappable_channel_tools = (handler, cancel_handler, frozenset(capabilities))
         for names, execute, cancel in self._standing_channel_tools:
-            router.register(names, execute, cancel, location="channel")
+            router.register(names - denied, execute, cancel, location="channel")
         self._capability_router = router
         self._channel_tool_handler = router.execute
         self._channel_tool_cancel_handler = router.cancel
@@ -453,7 +464,17 @@ class EidolonAgentGrpcLlm(llm.LLM):
             )
 
             self._warmer = PreemptiveWarmer(session, spawn=session.spawn)
-        await self._warmer.warm(text, conversation_id=self._resolve_conversation_id_for_chat())
+        await self._warmer.warm(text, conversation_id=self._resolve_conversation_id_for_chat(),
+                                metadata=self.device_tool_deny_metadata())
+
+    def device_tool_deny_metadata(self) -> dict[str, list[str]]:
+        """What every turn tells the brain about this device's restriction.
+
+        Always present, empty when there is none: a brain that does not find
+        it on a device turn cannot tell an unrestricted device from a Channel
+        that predates restrictions.
+        """
+        return {"device_tool_deny": sorted(self._device_tool_deny)}
 
     async def discard_warm(self) -> None:
         """Cancel any in-flight speculative warm-up (real turn supersedes it)."""
@@ -549,6 +570,7 @@ class EidolonAgentGrpcLlmStream(llm.LLMStream):
                     conversation_id=conversation_id,
                     metadata=(
                         {
+                            **llm_v.device_tool_deny_metadata(),
                             **({"capability_resource_hints": resource_hints} if resource_hints else {}),
                             **({"capability_execution_receipts": list(llm_v._device_rpc.receipts)} if llm_v._device_rpc is not None else {}),
                             **({"speaker_observation_token": self._speaker_observation} if self._speaker_observation else {}),

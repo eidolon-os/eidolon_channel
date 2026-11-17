@@ -256,6 +256,7 @@ class SharedStageFactory:
         livekit_room: "Any | None" = None,
         runtime_session_id: str = "",
         output_plan: SessionOutputPlan | None = None,
+        device_tool_deny: frozenset[str] = frozenset(),
         target_companion_id: str | None = None,
         personal_memory=None,
         runtime_services=None,
@@ -291,6 +292,9 @@ class SharedStageFactory:
                 (to choose the voice). Built here otherwise.
             speech_voice: The voice this session speaks with, resolved at
                 session start. ``None`` keeps the configured voice.
+            device_tool_deny: The tools the device's Owner withholds from
+                every session on it, from the Provider's dispatch. Carried on
+                every turn to the brain and kept out of the Channel's own tools.
             target_companion_id: Optional same-Owner target from the Provider's
                 trusted dispatch. Bound to this session's runtime resolver;
                 never inferred from user text or persisted as a device assignment.
@@ -357,6 +361,7 @@ class SharedStageFactory:
                 conversation_id=conversation_id,
                 display_model=cfg.llm.model or "eidolon_agent",
                 output_plan=output_plan,
+                device_tool_deny=device_tool_deny,
                 presentation_room=livekit_room,
                 tls=tls,
             )

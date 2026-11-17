@@ -464,8 +464,8 @@ async def test_user_text_and_turn_metadata_survive_retry_attempt() -> None:
     assert session.starts == ["第一轮 canonical", "第一轮 canonical"]
     assert session.conversations == ["livekit:retry-1", "livekit:retry-1"]
     assert session.metadata == [
-        {"turn_decision": turn_decision},
-        {"turn_decision": turn_decision},
+        {"device_tool_deny": [], "turn_decision": turn_decision},
+        {"device_tool_deny": [], "turn_decision": turn_decision},
     ]
     assert session.trace_ids == ["channel-turn-trace", "channel-turn-trace"]
 

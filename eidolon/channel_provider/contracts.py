@@ -23,6 +23,7 @@ from eidolon_sdk.biz.contracts import (
 from pydantic import ValidationError
 from eidolon.interaction_context import PersonalMemorySelection
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy
+from eidolon_sdk.biz.tools import DeviceToolRestriction
 
 MAX_REQUEST_BYTES = 256 * 1024
 
@@ -173,6 +174,12 @@ def _text(value: Any, *, name: str, minimum: int = 1, maximum: int) -> str:
 #: the connection carrying the ask.
 OBSERVED_HOST_ADDRESS = "observed_host_address"
 
+#: The tools the device's Owner withholds from every session on it, as Hub keeps
+#: them. Root-level like the observation: the device never reads it, only the
+#: session plan this Provider narrows with it. Absent for a device never
+#: restricted, so such a request is the one sent before restrictions existed.
+TOOL_RESTRICTION = "tool_restriction"
+
 
 def _observed_host_address(value: Any) -> str:
     """The Host address a device reached, as the Authority observed it.
@@ -248,6 +255,7 @@ class ProvisionRequest:
     #: Empty whenever the Authority had nothing to observe — a reconcile with no
     #: device request in flight, or one that reached it over loopback.
     observed_host_address: str = ""
+    tool_restriction: DeviceToolRestriction | None = None
 
     @classmethod
     def parse(cls, raw: bytes) -> ProvisionRequest:
@@ -256,7 +264,7 @@ class ProvisionRequest:
             value,
             name="provision request",
             required={"operation", "operation_id", "device_ref", "device"},
-            optional={OBSERVED_HOST_ADDRESS},
+            optional={OBSERVED_HOST_ADDRESS, TOOL_RESTRICTION},
         )
         if root["operation"] not in {"channel.provision-device", "channel.refresh-device"}:
             raise ContractError(
@@ -281,6 +289,11 @@ class ProvisionRequest:
                              if "output_policy" in device_value else None)
         except ValidationError as exc:
             raise ContractError("device_ref or business owner id is invalid") from exc
+        try:
+            tool_restriction = (DeviceToolRestriction.model_validate(root[TOOL_RESTRICTION])
+                                if TOOL_RESTRICTION in root else None)
+        except ValidationError as exc:
+            raise ContractError("tool_restriction is invalid") from exc
         device = ProvisionDevice(
             owner_id=owner_id,
             output_policy=output_policy,
@@ -320,6 +333,7 @@ class ProvisionRequest:
                 if OBSERVED_HOST_ADDRESS in root
                 else ""
             ),
+            tool_restriction=tool_restriction,
         )
 
         return replace(request, fingerprint=request.content_fingerprint())
@@ -329,12 +343,17 @@ class ProvisionRequest:
 
         Re-read mutable nested data instead of trusting a copied fingerprint.
         Network observations remain outside the persisted operation identity.
+        A tool restriction is part of the ask, but only present when there is
+        one: every unrestricted request, and every row stored before
+        restrictions existed, keeps the fingerprint it always had.
         """
         device = self.device
         return request_fingerprint({
             "operation": self.operation,
             "operation_id": self.operation_id,
             "device_ref": self.device_ref.model_dump(mode="json"),
+            **({TOOL_RESTRICTION: self.tool_restriction.model_dump(mode="json")}
+               if self.tool_restriction is not None else {}),
             "device": {
                 "owner_id": str(device.owner_id), "display_name": device.display_name,
                 "device_kind": device.manifest_id, "manifest": device.manifest,

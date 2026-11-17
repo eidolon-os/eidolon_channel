@@ -167,11 +167,16 @@ async def test_a_team_scene_grants_no_session_capabilities():
         device_capabilities=('audio.volume.set', 'audio.volume.adjust'),
     ).model_dump(mode='json', exclude={'session_id'})
     assert template['device_capabilities']  # the standing template does carry them
+    # A restricted device keeps its restriction for its own conversations; a
+    # scene that offers no tool has nothing to restrict.
     handles = tuple(dict(device=ref.device_instance_id, room='room-' + str(i), agent='eidolon',
-                         output_template=template) for i, ref in enumerate(refs))
+                         output_template=template,
+                         tool_restriction={'revision': 1, 'denied': ['get_weather']})
+                    for i, ref in enumerate(refs))
     sessions = {h['device']: 'native-' + str(i) for i, h in enumerate(handles)}
     await adapter.open_team_session(opened, handles, sessions)
     metadata = json.loads(client.agent_dispatch.created[0][2])
+    assert 'tool_restriction' not in metadata
     team = TeamDispatch.model_validate(metadata['team_dispatch'])
     for plan in (team.input_plan, *(endpoint.plan for endpoint in team.endpoints)):
         assert plan.device_capabilities == () and plan.motion_capabilities == ()

@@ -122,6 +122,7 @@ CALLS = (
     # Admin — app/management/device_settings_router.py
     (Role.MANAGEMENT, "GET", "/v1/device-channels/device-1/properties"),
     (Role.MANAGEMENT, "POST", "/v1/device-channels/device-1/capabilities/volume.set"),
+    (Role.MANAGEMENT, "GET", "/v1/device-channels/device-1/offer"),
     # Admin — app/management/session_traces_router.py
     (Role.MANAGEMENT, "GET", "/v1/session-traces"),
     (Role.MANAGEMENT, "GET", "/v1/session-traces/session-1"),

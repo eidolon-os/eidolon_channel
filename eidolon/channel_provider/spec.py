@@ -31,6 +31,7 @@ from eidolon_sdk.biz.presentation.negotiation import (
     validate_output_contract,
 )
 from eidolon_sdk.biz.smarthome import PANEL_PROFILE, PANEL_PROFILE_PROPERTY
+from eidolon_sdk.biz.tools import DeviceToolRestriction
 
 from .contracts import ContractError, ProvisionDevice
 
@@ -113,6 +114,9 @@ class ChannelSpec:
     #: may use, it tells "the device cannot" from "the Owner has not allowed it".
     declared_capabilities: tuple[str, ...] = ()
     declared_motion_profile: str | None = None
+    #: The Owner's restriction on this device, already taken out of the two
+    #: session tables above; carried so the grant can say which one it applied.
+    tool_restriction: DeviceToolRestriction | None = None
 
     @property
     def needs_media(self) -> bool:
@@ -209,9 +213,15 @@ def _declared_voice_application(manifest: dict[str, Any]) -> str:
 
 
 def derive_spec(
-    device: ProvisionDevice, *, device_instance_id: str, agent_name: str
+    device: ProvisionDevice, *, device_instance_id: str, agent_name: str,
+    tool_restriction: DeviceToolRestriction | None = None,
 ) -> ChannelSpec:
-    """Turn one device's declaration into what its channel must provide."""
+    """Turn one device's declaration into what its channel must provide.
+
+    ``tool_restriction`` only narrows what a session may use. What the device
+    declared, and what the Owner's own app may invoke on it, stay as they are:
+    keeping a Companion from the volume must not take the Owner's slider away.
+    """
     manifest = device.manifest
     smarthome_panel = any(
         isinstance(prop, dict)
@@ -278,6 +288,11 @@ def derive_spec(
         outputs=selected.model_dump() if selected is not None else {},
         inputs={"camera": camera},
     )
+    # What a session may use: what the selection permits, less what the Owner
+    # restricted on this device. Only the two session tables read it; the
+    # Owner's own controls and the declaration below do not.
+    denied = frozenset(tool_restriction.denied) if tool_restriction is not None else frozenset()
+    session = [name for name in installed if name in permitted and name not in denied]
     if serving is not None and serving.application == SESSION_APPLICATION_HOME_COMMAND:
         if not smarthome_panel or not audio.publishes:
             raise ContractError("home.command.v1 requires a smart-home panel and microphone")
@@ -298,20 +313,19 @@ def derive_spec(
         selected_outputs=selected,
         motion_profile=declared_motion_profile if selected and selected.motion else None,
         motion_capabilities=tuple(
-            name for name in installed
-            if registry.get(name).required_output == "motion" and name in permitted),
+            name for name in session if registry.get(name).required_output == "motion"),
         # Every other installed device contract the Owner's selection allows: a
         # still only when capture is allowed, a setting only with the output it
         # tunes. One rule, the registry's, rather than a branch per gate.
         device_capabilities=tuple(
-            name for name in installed
-            if registry.get(name).required_output != "motion" and name in permitted),
+            name for name in session if registry.get(name).required_output != "motion"),
         owner_capabilities=tuple(
             name for name in installed
             if registry.get(name).owner_control and device.output_policy is not None),
         observable_properties=tuple(declared_observable_properties(manifest)),
         declared_capabilities=installed,
         declared_motion_profile=declared_motion_profile,
+        tool_restriction=tool_restriction,
         media_declared=_media_flow(manifest, "audio") is not MediaFlow.NONE
         or _media_flow(manifest, "video") is not MediaFlow.NONE,
         smarthome_panel=smarthome_panel,
